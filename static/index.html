@@ -2075,7 +2075,6 @@
           else if (c.has_commit) reviewInfo = '\u2713 Committed';
           if (reviewInfo) html += '<div class="kanban-review-info">' + escapeHtml(reviewInfo) + '</div>';
           html += '<div class="kanban-review-actions">'
-            + '<button class="kanban-verify-btn" data-action="review-verify" title="Mark verified">&#10003; Verified</button>'
             + '<button class="kanban-sendback" data-action="review-sendback" title="Send feedback">Send back</button>'
             + '<button class="kanban-archive-btn" data-action="review-archive" title="Archive without verifying">Archive</button>'
             + '</div>';
@@ -3262,8 +3261,14 @@
     q = (q || '').toLowerCase();
     const recentCutoff = Date.now() / 1000 - RECENT_HOURS * 3600;
     const filtered = conversationsData.filter(c => {
-      // Recent-only filter (last 10h) — skip Backlog so it's always visible
-      if (showRecentOnly && c.source !== 'backlog' && (c.modified || 0) < recentCutoff) return false;
+      // Recent-only filter (last N hours) — applies to everything, backlog included.
+      // Backlog items use issue_created_at (falls back to modified).
+      if (showRecentOnly) {
+        const ts = (c.source === 'backlog')
+          ? (c.issue_created_at || c.modified || 0)
+          : (c.modified || 0);
+        if (ts < recentCutoff) return false;
+      }
       // Archive filter — in kanban mode, show all (kanban has its own Archived column)
       if (!kanbanView) {
         if (showArchived && !c.archived) return false;

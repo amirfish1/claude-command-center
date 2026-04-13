@@ -2622,7 +2622,8 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/")
 
         if path == "" or path == "/":
-            self.send_html(HTML_PAGE)
+            # Re-read on every request so edits to static/index.html are live.
+            self.send_html(_load_index_html())
         elif path == "/api/logs":
             logs = find_log_files()
             # Strip internal path from response
