@@ -705,6 +705,21 @@
     animation: working-glow 1.6s ease-in-out infinite !important;
     border: 1px solid rgba(251,202,4,0.4) !important;
   }
+  .kanban-card.pending-spawn {
+    border: 1px dashed var(--accent) !important;
+    background: linear-gradient(90deg, var(--surface) 0%, rgba(88,166,255,0.08) 50%, var(--surface) 100%);
+    background-size: 200% 100%;
+    animation: pending-shimmer 1.4s linear infinite;
+    position: relative;
+  }
+  .kanban-card.pending-spawn .kanban-card-title::after {
+    content: ' · spawning...';
+    font-weight: 400; color: var(--accent); font-size: 11px;
+  }
+  @keyframes pending-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
 
   .kanban-cards {
     padding: 4px 0; overflow-y: auto; flex: 1; min-height: 0;
@@ -1664,10 +1679,57 @@
   let convLastLine = 0;
   let convEventSource = null;  // SSE connection for tailing live conversations
 
+  // Pending spawn placeholders (optimistic UI) — keyed by pid.
+  const pendingSpawns = new Map();
+
+  function insertPendingSpawnCard(pid, subject, usePkood) {
+    if (!pid) return;
+    const id = 'spawning-' + pid;
+    const card = {
+      id, session_id: id,
+      display_name: subject || ('Spawning #' + pid),
+      first_message: '',
+      source: usePkood ? 'pkood' : 'interactive',
+      is_live: true, archived: false, verified: false,
+      spawn_pid: pid, pending_spawn: true,
+      has_edit: false, has_commit: false, has_push: false,
+      sidecar_status: 'active', sidecar_has_writes: false,
+      modified: Date.now() / 1000, size: 0, branch: '',
+      last_event_type: null, pending_tool: null, pending_file: null,
+      name_overridden: false,
+    };
+    pendingSpawns.set(pid, card);
+    conversationsData = [card, ...conversationsData];
+    // Pin to Working column for the moment
+    columnOverrides[id] = 'working';
+    try { localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
+    renderSidebar(filterConversations($convSearch.value));
+    // Auto-cleanup after 30s regardless of refresh cadence
+    setTimeout(() => {
+      if (pendingSpawns.has(pid)) {
+        pendingSpawns.delete(pid);
+        delete columnOverrides[id];
+        conversationsData = conversationsData.filter(x => x.id !== id);
+        renderSidebar(filterConversations($convSearch.value));
+      }
+    }, 30000);
+  }
+
   async function loadConversationList() {
     try {
       const res = await fetch('/api/sessions');
-      conversationsData = await res.json();
+      const fresh = await res.json();
+      // Drop pending placeholders whose real session has appeared (matched by spawn_pid).
+      const realPids = new Set(fresh.filter(c => c.spawn_pid).map(c => c.spawn_pid));
+      for (const pid of Array.from(pendingSpawns.keys())) {
+        if (realPids.has(pid)) {
+          delete columnOverrides['spawning-' + pid];
+          pendingSpawns.delete(pid);
+        }
+      }
+      // Keep still-pending placeholders on top until they materialize.
+      const placeholders = Array.from(pendingSpawns.values());
+      conversationsData = [...placeholders, ...fresh];
       conversationsLoaded = true;
       // Cache session IDs / cwds / sources so Resume+Jump work
       sessionIdByConv = {};
@@ -1969,7 +2031,8 @@
         const archiveTitle = c.archived ? 'Unarchive' : 'Archive';
         // "Truly active" = live + sidecar shows active work (glow animation)
         const trulyActive = c.is_live && c.sidecar_status === 'active' && c.sidecar_has_writes ? ' truly-active' : '';
-        html += '<div class="kanban-card' + active + trulyActive + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
+        const pendingSpawn = c.pending_spawn ? ' pending-spawn' : '';
+        html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
         // Issue link icon / Create Issue button
         const linkedIssue = c.linked_issue || c.issue_number || '';
         const issueAction = linkedIssue
@@ -3672,7 +3735,11 @@
       const data = await res.json();
       if (data.ok) {
         closeNewSessionModal();
-        setTimeout(refreshConversationList, 2000);
+        insertPendingSpawnCard(data.pid, effectiveSubject, usePkood);
+        // Tight poll schedule so the real card replaces the placeholder fast.
+        setTimeout(refreshConversationList, 600);
+        setTimeout(refreshConversationList, 1500);
+        setTimeout(refreshConversationList, 3000);
       } else {
         $nsmSubmit.textContent = 'Failed';
       }
