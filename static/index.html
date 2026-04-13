@@ -2145,42 +2145,8 @@
       card.addEventListener('dragend', () => {
         targetEl.querySelectorAll('.kanban-card.dragging').forEach(el => el.classList.remove('dragging'));
       });
-      // Allow dropping a backlog card onto another card → link/inject
-      card.addEventListener('dragover', (ev) => {
-        const srcId = ev.dataTransfer && ev.dataTransfer.types.includes('text/plain');
-        // Can't check source id during dragover reliably, just allow
-        ev.preventDefault();
-        ev.stopPropagation();
-        card.classList.add('drop-link-target');
-      });
-      card.addEventListener('dragleave', () => card.classList.remove('drop-link-target'));
-      card.addEventListener('drop', async (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        card.classList.remove('drop-link-target');
-        const srcId = ev.dataTransfer.getData('text/plain');
-        if (!srcId || srcId === card.dataset.id) return;
-        const src = conversationsData.find(x => x.id === srcId);
-        const dst = conversationsData.find(x => x.id === card.dataset.id);
-        if (!src || !dst) return;
-        // If source is a backlog item and destination is a session, link them
-        if (src.source === 'backlog' && dst.source !== 'backlog') {
-          const issueNum = src.issue_number;
-          const msg = issueNum
-            ? `Please also work on GitHub issue #${issueNum}: ${src.display_name}. Read it with \`gh issue view ${issueNum}\`.`
-            : `Please also work on: ${src.display_name}`;
-          await fetch('/api/inject-input', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ session_id: dst.session_id || dst.id, text: msg }),
-          }).catch(() => {});
-          // Hide the backlog card locally (it's now handled)
-          columnOverrides[src.session_id || src.id] = 'archived';
-          try { localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
-          renderSidebar(filterConversations($convSearch.value));
-        } else {
-          // Regular column move handled by the column drop
-        }
-      });
+      // Cards are not drop targets — columns are the only drop targets.
+      // (Drags fall through the card to its parent column.)
     });
     // Column drop targets — see moveCardToColumn below
     targetEl.querySelectorAll('.kanban-column').forEach(col => {
