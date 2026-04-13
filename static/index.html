@@ -1,0 +1,3850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Log Viewer</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --purple: #bc8cff;
+    --red: #f85149;
+    --cyan: #39d2c0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; height: 100vh; overflow: hidden;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 380px; min-width: 240px; max-width: 60vw;
+    background: var(--surface);
+    display: flex; flex-direction: column; overflow: hidden;
+    flex-shrink: 0;
+  }
+  .sidebar-resizer {
+    width: 6px; cursor: col-resize; flex-shrink: 0;
+    background: var(--border);
+    transition: background 0.15s;
+    position: relative;
+  }
+  .sidebar-resizer:hover,
+  .sidebar-resizer.dragging {
+    background: var(--accent);
+  }
+  .sidebar-resizer::before {
+    content: ''; position: absolute;
+    left: -4px; right: -4px; top: 0; bottom: 0;
+  }
+  body.resizing { cursor: col-resize; user-select: none; }
+  body.resizing * { pointer-events: none; }
+  .sidebar-header {
+    padding: 16px; border-bottom: 1px solid var(--border);
+    font-weight: 600; font-size: 14px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .sidebar-header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+  .log-list { overflow-y: auto; padding: 8px; flex: 0 1 auto; max-height: 50vh; }
+
+  /* Tool filters */
+  .tool-filters {
+    border-top: 1px solid var(--border); padding: 10px 12px;
+    overflow-y: auto; min-height: 0; flex-shrink: 0;
+  }
+  .tool-filters-header {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 8px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .tool-filters-header .toggle-all {
+    font-size: 10px; cursor: pointer; color: var(--accent);
+    font-weight: 400; text-transform: none;
+  }
+  .tool-filters-header .toggle-all:hover { text-decoration: underline; }
+  .tool-filter-item {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 0; font-size: 12px; cursor: pointer;
+  }
+  .tool-filter-item input { accent-color: var(--orange); cursor: pointer; }
+  .tool-filter-item .tool-label { color: var(--text); }
+  .tool-filter-item .tool-count { color: var(--text-muted); font-size: 10px; margin-left: auto; }
+
+  /* Watcher control */
+  .watcher-panel {
+    border-top: 1px solid var(--border); padding: 12px;
+    flex: 1; display: flex; flex-direction: column; min-height: 0;
+  }
+  .watcher-header {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 8px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .watcher-header .watcher-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .watcher-header .watcher-dot.running { background: var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .watcher-btn {
+    width: 100%; padding: 6px 12px; border-radius: 6px;
+    border: 1px solid var(--border); cursor: pointer;
+    font-size: 12px; font-weight: 600;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .watcher-btn.start {
+    background: rgba(63, 185, 80, 0.12); color: var(--green);
+    border-color: rgba(63, 185, 80, 0.3);
+  }
+  .watcher-btn.start:hover { background: rgba(63, 185, 80, 0.2); }
+  .watcher-btn.stop {
+    background: rgba(248, 81, 73, 0.12); color: var(--red);
+    border-color: rgba(248, 81, 73, 0.3);
+  }
+  .watcher-btn.stop:hover { background: rgba(248, 81, 73, 0.2); }
+  .watcher-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .watcher-output {
+    margin-top: 8px; flex: 1; overflow-y: auto; min-height: 60px; height: 0;
+    font-size: 10px; font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    color: var(--text-muted); line-height: 1.4;
+    background: var(--bg); border-radius: 4px; padding: 6px;
+  }
+  .watcher-output:empty::after { content: 'No output yet'; color: var(--text-muted); opacity: 0.4; }
+
+  /* Vercel deploy status */
+  .deploy-panel {
+    border-top: 1px solid var(--border); padding: 12px;
+  }
+  .deploy-header {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 8px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .deploy-header .deploy-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .deploy-header .deploy-dot.ready { background: var(--green); }
+  .deploy-header .deploy-dot.error { background: var(--red); }
+  .deploy-header .deploy-dot.building { background: #FBCA04; animation: pulse 2s infinite; }
+  .deploy-info {
+    font-size: 11px; color: var(--text-secondary); line-height: 1.5;
+  }
+  .deploy-info .deploy-state { font-weight: 600; }
+  .deploy-info .deploy-state.ready { color: var(--green); }
+  .deploy-info .deploy-state.error { color: var(--red); }
+  .deploy-info .deploy-state.building { color: #FBCA04; }
+  .deploy-info .deploy-commit {
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    font-size: 10px; color: var(--text-muted);
+    margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .deploy-info a { color: var(--accent); text-decoration: none; }
+  .deploy-info a:hover { text-decoration: underline; }
+
+  .log-item {
+    padding: 10px 12px; border-radius: 6px; cursor: pointer;
+    margin-bottom: 4px; transition: background 0.15s;
+  }
+  .log-item:hover { background: #1c2128; }
+  .log-item.active { background: #1c2128; border-left: 3px solid var(--accent); }
+  .log-item .issue { font-weight: 600; color: var(--accent); font-size: 14px; }
+  .log-item .meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+  /* Main */
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .toolbar {
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px;
+    background: var(--surface); font-size: 13px;
+  }
+  .toolbar label { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-muted); }
+  .toolbar input[type="checkbox"] { accent-color: var(--accent); }
+  .toolbar .status { margin-left: auto; color: var(--text-muted); }
+  .toolbar .resume-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer;
+    background: rgba(57, 210, 192, 0.12); color: var(--cyan);
+    border: 1px solid rgba(57, 210, 192, 0.3);
+    font-size: 12px; font-weight: 600; font-family: inherit;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .toolbar .resume-btn:hover { background: rgba(57, 210, 192, 0.2); }
+  .toolbar .resume-btn:active { transform: scale(0.97); }
+  .toolbar .resume-btn.copied {
+    background: rgba(63, 185, 80, 0.2); color: var(--green);
+    border-color: rgba(63, 185, 80, 0.4);
+  }
+  .toolbar .resume-btn.stale {
+    background: rgba(210, 153, 34, 0.12); color: var(--orange);
+    border-color: rgba(210, 153, 34, 0.35);
+  }
+  .toolbar .resume-btn.stale:hover { background: rgba(210, 153, 34, 0.2); }
+  .toolbar .resume-btn.stale.copied {
+    background: rgba(63, 185, 80, 0.2); color: var(--green);
+    border-color: rgba(63, 185, 80, 0.4);
+  }
+  .toolbar .resume-btn .resume-icon { font-size: 10px; }
+  .toolbar .jump-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer;
+    background: rgba(188, 140, 255, 0.12); color: var(--purple);
+    border: 1px solid rgba(188, 140, 255, 0.35);
+    font-size: 12px; font-weight: 600; font-family: inherit;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .toolbar .jump-btn:hover { background: rgba(188, 140, 255, 0.22); }
+  .toolbar .jump-btn:active { transform: scale(0.97); }
+  .toolbar .jump-btn.pulsing {
+    animation: pulse 2s infinite;
+  }
+  .toolbar .jump-btn .jump-icon { font-size: 13px; line-height: 1; }
+  .toolbar .launch-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer;
+    background: rgba(88, 166, 255, 0.12); color: var(--accent);
+    border: 1px solid rgba(88, 166, 255, 0.35);
+    font-size: 12px; font-weight: 600; font-family: inherit;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .toolbar .launch-btn:hover { background: rgba(88, 166, 255, 0.22); }
+  .toolbar .launch-btn:active { transform: scale(0.97); }
+  .toolbar .launch-btn.launching { opacity: 0.6; }
+
+  .content {
+    flex: 1; overflow-y: auto; padding: 16px 20px;
+    scroll-behavior: smooth;
+  }
+  .empty-state {
+    display: flex; align-items: center; justify-content: center;
+    height: 100%; color: var(--text-muted); font-size: 15px;
+  }
+
+  /* Events */
+  .event { margin-bottom: 12px; padding: 10px 14px; border-radius: 6px; border-left: 3px solid transparent; }
+
+  .event.system {
+    background: rgba(56, 139, 253, 0.08); border-left-color: var(--accent);
+    font-size: 13px; color: var(--text-muted);
+  }
+  .event.system .label { color: var(--accent); font-weight: 600; text-transform: uppercase; font-size: 11px; }
+
+  .event.assistant { background: rgba(188, 140, 255, 0.06); border-left-color: var(--purple); }
+  .event.tool_result { display: none; } /* hide tool results - they're noise */
+
+  .event.user_text {
+    background: rgba(63, 185, 80, 0.08); border-left-color: var(--green);
+  }
+  .event.user_text .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  .event.user_text .user-msg { margin-top: 6px; white-space: pre-wrap; font-size: 15px; }
+
+  .event.result {
+    background: rgba(57, 210, 192, 0.08); border-left-color: var(--cyan);
+    font-size: 12px;
+  }
+  .event.result .label { color: var(--cyan); font-weight: 600; text-transform: uppercase; font-size: 11px; }
+  .event.result .stats { margin-top: 4px; }
+  .event.result .stats span { margin-right: 16px; }
+
+  .tool-call {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 4px 0; font-size: 14px;
+  }
+  .tool-call .arrow { color: var(--orange); font-weight: bold; }
+  .tool-call .tool-name { color: var(--orange); font-weight: 600; }
+  .tool-call .tool-detail {
+    color: var(--text-muted); font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    font-size: 13px; word-break: break-all;
+  }
+
+  .assistant-text {
+    font-size: 15px; padding: 4px 0;
+    line-height: 1.5;
+  }
+  .md-table {
+    border-collapse: collapse; margin: 8px 0; font-size: 13px;
+    border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+  }
+  .md-table th, .md-table td {
+    padding: 6px 10px; border: 1px solid var(--border);
+    text-align: left; vertical-align: top;
+  }
+  .md-table th { background: var(--surface); font-weight: 600; color: var(--text); }
+  .md-table tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  .md-code {
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    background: rgba(110,118,129,0.2); padding: 1px 5px;
+    border-radius: 3px; font-size: 0.9em;
+    color: var(--cyan);
+  }
+  .md-h {
+    margin: 12px 0 6px; font-weight: 600;
+    color: var(--text);
+  }
+  h1.md-h { font-size: 20px; }
+  h2.md-h { font-size: 17px; }
+  h3.md-h { font-size: 15px; }
+  .assistant-text a { color: var(--accent); }
+
+  .thinking-block {
+    font-size: 12px; color: var(--text-muted); padding: 4px 8px;
+    border-left: 2px solid var(--border); margin: 4px 0;
+    font-style: italic;
+  }
+  .thinking-toggle {
+    cursor: pointer; font-size: 11px; color: var(--text-muted);
+    text-transform: uppercase; font-weight: 600;
+    user-select: none;
+  }
+  .thinking-toggle:hover { color: var(--text); }
+  .t-body { white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
+
+  .line-num { font-size: 10px; color: var(--text-muted); opacity: 0.5; float: right; }
+
+  /* Tabs */
+  .tab-bar {
+    display: flex; gap: 0; border-bottom: 1px solid var(--border);
+    background: var(--surface); padding: 0 16px;
+  }
+  .tab {
+    padding: 10px 16px; font-size: 13px; font-weight: 500;
+    color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab .badge {
+    display: inline-block; background: var(--accent); color: #0d1117;
+    font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px;
+    margin-left: 6px; vertical-align: middle;
+  }
+
+  /* Issues dashboard */
+  .issues-view { flex: 1; overflow-y: auto; padding: 16px 20px; }
+  .issues-view.hidden { display: none; }
+  .issue-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; border-radius: 6px; margin-bottom: 6px;
+    background: var(--surface); border: 1px solid var(--border);
+    transition: border-color 0.15s;
+  }
+  .issue-row:hover { border-color: var(--text-muted); }
+  .issue-row .issue-num {
+    font-weight: 600; color: var(--accent); font-size: 13px;
+    min-width: 44px; cursor: pointer;
+  }
+  .issue-row .issue-num:hover { text-decoration: underline; }
+  .issue-row .issue-title { flex: 1; font-size: 13px; }
+  .issue-row .issue-labels { display: flex; gap: 4px; flex-wrap: wrap; }
+  .issue-label {
+    font-size: 10px; padding: 2px 6px; border-radius: 10px;
+    font-weight: 600; white-space: nowrap;
+  }
+  .issue-label.claude-fix { background: #0E8A16; color: #fff; }
+  .issue-label.claude-in-progress { background: #FBCA04; color: #000; }
+  .issue-label.claude-failed { background: #D93F0B; color: #fff; }
+  .issue-label.other { background: var(--border); color: var(--text-muted); }
+
+  .issue-status {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 4px; white-space: nowrap;
+  }
+  .issue-status.in_progress { background: rgba(251, 202, 4, 0.15); color: #FBCA04; animation: pulse 2s infinite; }
+  .issue-status.queued { background: rgba(14, 138, 22, 0.15); color: var(--green); }
+  .issue-status.failed { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+  .issue-status.open { background: rgba(139, 148, 158, 0.1); color: var(--text-muted); }
+  .issue-status.closed { background: rgba(188, 140, 255, 0.1); color: var(--purple); }
+
+  .issue-actions { display: flex; gap: 6px; }
+  .issue-action-btn {
+    font-size: 11px; padding: 3px 8px; border-radius: 4px;
+    border: 1px solid var(--border); cursor: pointer;
+    background: transparent; color: var(--text-muted);
+    transition: background 0.15s, color 0.15s;
+  }
+  .issue-action-btn:hover { background: var(--border); color: var(--text); }
+  .issue-action-btn.fix { color: var(--green); border-color: rgba(63, 185, 80, 0.3); }
+  .issue-action-btn.fix:hover { background: rgba(63, 185, 80, 0.15); }
+  .issue-action-btn.spawn-fix-btn { color: var(--accent); border-color: rgba(88, 166, 255, 0.3); }
+  .issue-action-btn.spawn-fix-btn:hover { background: rgba(88, 166, 255, 0.15); }
+  .issue-action-btn.log { color: var(--accent); border-color: rgba(88, 166, 255, 0.3); }
+  .issue-action-btn.log:hover { background: rgba(88, 166, 255, 0.15); }
+  .issue-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .issue-summary {
+    margin: 4px 0 0 56px; padding: 8px 12px;
+    background: var(--bg); border-radius: 4px;
+    font-size: 12px; color: var(--text-muted); line-height: 1.5;
+    white-space: pre-wrap; max-height: 150px; overflow-y: auto;
+    display: none;
+  }
+  .issue-summary.visible { display: block; }
+
+  .issues-section-header {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    color: var(--text-muted); padding: 12px 0 6px; margin-top: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .issues-section-header:first-child { margin-top: 0; }
+
+  /* Conversations view */
+  .conversations-view { flex: 1; overflow-y: auto; padding: 0 20px 16px; position: relative; }
+  .conv-sticky-header {
+    position: sticky; top: 0; z-index: 5;
+    padding: 12px 0 10px; margin-bottom: 8px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .conv-sticky-header .user-msg {
+    font-size: 14px; color: var(--text); line-height: 1.4;
+    max-height: 3.6em; overflow: hidden;
+  }
+  .conv-sticky-header .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }
+  .conversations-view .event { margin-bottom: 12px; padding: 10px 14px; border-radius: 6px; border-left: 3px solid transparent; }
+  .conversations-view .event.assistant { background: rgba(188, 140, 255, 0.06); border-left-color: var(--purple); }
+  .conversations-view .event.user_text { background: rgba(63, 185, 80, 0.08); border-left-color: var(--green); }
+  .conversations-view .event.user_text .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  .conversations-view .event.user_text .user-msg { margin-top: 6px; white-space: pre-wrap; font-size: 15px; }
+  .conversations-view .event.tool_result { display: none; }
+  .conversations-view .event.result { background: rgba(57, 210, 192, 0.08); border-left-color: var(--cyan); font-size: 12px; }
+  .conversations-view .event.result .label { color: var(--cyan); font-weight: 600; text-transform: uppercase; font-size: 11px; }
+  .conversations-view .event.result .stats { margin-top: 4px; }
+  .conversations-view .event.result .stats span { margin-right: 16px; }
+  .font-size-controls {
+    display: flex; gap: 2px; align-items: center;
+  }
+  .font-size-btn {
+    width: 28px; height: 28px;
+    border-radius: 4px; border: 1px solid var(--border);
+    background: transparent; color: var(--text-muted);
+    cursor: pointer; font-size: 13px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s;
+    font-family: inherit;
+  }
+  .font-size-btn:hover { color: var(--text); background: #1c2128; }
+  .conv-item {
+    padding: 12px 14px; border-radius: 6px; cursor: pointer;
+    margin-bottom: 6px; transition: background 0.15s;
+    border-left: 3px solid transparent;
+  }
+  .conv-item:hover { background: #1c2128; }
+  .conv-item.active { background: #1c2128; border-left-color: var(--purple); }
+  .conv-item .conv-title-row {
+    display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap;
+  }
+  .conv-item .conv-title {
+    font-size: 17px; font-weight: 600; color: var(--text);
+    line-height: 1.3; flex: 1;
+    word-break: break-word;
+  }
+  .conv-item .conv-title.untitled {
+    font-weight: 500; color: var(--text-muted); font-style: italic;
+  }
+  /* Teal marker: "I renamed this from the log viewer" */
+  .conv-item .conv-title.user-renamed { color: var(--cyan); }
+  .conv-item .conv-edit-btn {
+    opacity: 0; font-size: 13px; cursor: pointer;
+    background: none; border: none; color: var(--text-muted);
+    padding: 2px 4px; border-radius: 3px; flex-shrink: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s;
+  }
+  .conv-item:hover .conv-edit-btn { opacity: 0.7; }
+  .conv-item .conv-edit-btn:hover { opacity: 1; color: var(--accent); background: rgba(88,166,255,0.12); }
+  .conv-item .conv-archive-btn {
+    opacity: 0; font-size: 13px; cursor: pointer;
+    background: none; border: none; color: var(--text-muted);
+    padding: 2px 4px; border-radius: 3px; flex-shrink: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s;
+  }
+  .conv-item:hover .conv-archive-btn { opacity: 0.7; }
+  .conv-item .conv-archive-btn:hover { opacity: 1; color: var(--orange); background: rgba(255,166,87,0.12); }
+  .conv-item .conv-title-input {
+    flex: 1; font-size: 15px; font-weight: 600; color: var(--text);
+    background: var(--bg); border: 1px solid var(--accent);
+    border-radius: 4px; padding: 4px 6px; outline: none;
+    font-family: inherit;
+  }
+  .conv-item .conv-last {
+    font-size: 14px; color: var(--text-muted); margin-top: 4px;
+    line-height: 1.3;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .conv-item .conv-last .label { color: var(--text-muted); opacity: 0.7; margin-right: 4px; }
+  .conv-item .meta {
+    font-size: 13px; color: var(--text-muted); margin-top: 4px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .conv-item .meta .sep { opacity: 0.4; }
+  .conv-item .branch-badge {
+    display: inline-block; font-size: 12px; padding: 2px 6px; border-radius: 3px;
+    background: rgba(188, 140, 255, 0.15); color: var(--purple);
+  }
+  .conv-item .live-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green); animation: pulse 2s infinite;
+    display: inline-block; flex-shrink: 0;
+  }
+  .conv-signal {
+    font-size: 12px; padding: 2px 7px; border-radius: 3px;
+    font-weight: 600; white-space: nowrap; flex-shrink: 0;
+  }
+  .conv-signal.stage { background: rgba(188,140,255,0.15); color: var(--purple); }
+  .conv-signal.committed { background: rgba(63,185,80,0.15); color: var(--green); }
+  .conv-signal.pushed { background: rgba(57,210,192,0.15); color: var(--cyan); }
+  .conv-signal.activity-working { background: rgba(251,202,4,0.15); color: #FBCA04; animation: pulse 2s infinite; }
+  .conv-signal.activity-waiting { background: rgba(88,166,255,0.1); color: var(--accent); }
+  .conv-signal.activity-idle { background: rgba(139,148,158,0.08); color: var(--text-muted); }
+  .conv-signal.activity-blocked { background: rgba(248,81,73,0.15); color: var(--red); animation: pulse 2s infinite; }
+  .conv-signal.pkood-running { background: rgba(63,185,80,0.15); color: var(--green); }
+  .conv-signal.pkood-idle { background: rgba(88,166,255,0.1); color: var(--accent); }
+  .conv-signal.pkood-blocked { background: rgba(248,81,73,0.15); color: var(--red); animation: pulse 2s infinite; }
+  .conv-signal.pkood-stuck { background: rgba(248,81,73,0.25); color: var(--red); font-weight: 700; }
+  .conv-item .source-badge.pkood { background: rgba(210,153,34,0.2); color: var(--orange); }
+  .pkood-tail-output {
+    white-space: pre-wrap; word-break: break-word; font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
+    font-size: 13px; line-height: 1.5; padding: 16px 20px; color: var(--text);
+  }
+  .pkood-kill-btn {
+    padding: 4px 10px; font-size: 12px; border-radius: 6px; border: 1px solid var(--red);
+    background: rgba(248,81,73,0.1); color: var(--red); cursor: pointer; font-weight: 600;
+  }
+  .pkood-kill-btn:hover { background: rgba(248,81,73,0.25); }
+  .pkood-toggle-label {
+    font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none;
+  }
+  .pkood-toggle-label input { margin: 0; cursor: pointer; }
+
+  /* Inject input box */
+  .conv-input-bar {
+    display: none; /* shown via JS when live */
+    padding: 10px 20px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .conv-input-bar.visible { display: flex; align-items: center; gap: 8px; }
+  .conv-input-bar input {
+    flex: 1; padding: 10px 14px;
+    border-radius: 8px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text);
+    font-size: 14px; font-family: inherit; outline: none;
+    transition: border-color 0.15s;
+  }
+  .conv-input-bar input:focus { border-color: var(--accent); }
+  .conv-input-bar input::placeholder { color: var(--text-muted); opacity: 0.5; }
+  .conv-input-bar .send-btn {
+    width: 36px; height: 36px; flex-shrink: 0;
+    border-radius: 8px; border: none; cursor: pointer;
+    background: var(--accent); color: #0d1117;
+    font-size: 18px; font-weight: 700; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .conv-input-bar .send-btn:hover { background: #79bbff; }
+  .conv-input-bar .send-btn:active { transform: scale(0.93); }
+  .conv-input-bar .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .conv-input-bar .tty-label {
+    font-size: 11px; color: var(--text-muted); opacity: 0.6;
+    white-space: nowrap;
+  }
+  .conv-item.dragging {
+    opacity: 0.4; transform: scale(0.98);
+  }
+  .conv-item.drop-above {
+    box-shadow: inset 0 2px 0 0 var(--accent);
+  }
+  .conv-item.drop-below {
+    box-shadow: inset 0 -2px 0 0 var(--accent);
+  }
+  .conv-item .drag-handle {
+    display: none;
+    position: absolute; left: 2px; top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted); opacity: 0.5;
+    font-size: 14px; cursor: grab; user-select: none;
+  }
+  .conv-item { position: relative; }
+  .conv-item:hover .drag-handle { display: block; }
+  .conv-item.dragging .drag-handle { cursor: grabbing; }
+
+  .conv-list-panel {
+    display: flex; flex-direction: column;
+    flex: 1; min-height: 0;
+    border-top: 1px solid var(--border);
+  }
+  /* Conversation list header with search + refresh */
+  .conv-list-header {
+    display: flex; gap: 6px; align-items: center;
+    padding: 8px 12px 0;
+  }
+  .conv-list-header .search-wrap { flex: 1; }
+  .conv-refresh-btn {
+    width: 28px; height: 28px; flex-shrink: 0;
+    border-radius: 4px; border: 1px solid var(--border);
+    background: transparent; color: var(--text-muted);
+    cursor: pointer; font-size: 14px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s, transform 0.4s;
+  }
+  .conv-refresh-btn:hover { color: var(--text); background: #1c2128; }
+  .conv-refresh-btn.spinning { transform: rotate(360deg); }
+  .conv-sort-btn {
+    width: 28px; height: 28px; flex-shrink: 0;
+    border-radius: 4px; border: 1px solid var(--border);
+    background: transparent; color: var(--text-muted);
+    cursor: pointer; font-size: 14px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .conv-sort-btn:hover { color: var(--text); background: #1c2128; }
+  .conv-sort-btn.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
+  .conv-archive-toggle {
+    width: 28px; height: 28px; flex-shrink: 0;
+    border-radius: 4px; border: 1px solid var(--border);
+    background: transparent; color: var(--text-muted);
+    cursor: pointer; font-size: 14px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .conv-archive-toggle:hover { color: var(--text); background: #1c2128; }
+  .conv-archive-toggle.active { color: var(--orange); border-color: rgba(255,166,87,0.4); }
+
+  .conv-item .source-badge {
+    display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 3px;
+    background: rgba(210, 153, 34, 0.15); color: var(--orange);
+    font-weight: 600; white-space: nowrap; flex-shrink: 0;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+  /* ── Kanban board (vertical stacked columns in sidebar) ── */
+  .conv-kanban-toggle {
+    width: 28px; height: 28px; flex-shrink: 0;
+    border-radius: 4px; border: 1px solid var(--border);
+    background: transparent; color: var(--text-muted);
+    cursor: pointer; font-size: 14px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .conv-kanban-toggle:hover { color: var(--text); background: #1c2128; }
+  .conv-kanban-toggle.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
+
+  .kanban-board {
+    display: flex; gap: 12px; padding: 8px;
+    flex: 1; min-height: 0; overflow-x: auto;
+  }
+  .kanban-column {
+    min-width: 200px; flex: 1;
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .kanban-column-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px; cursor: pointer; user-select: none;
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    color: var(--text-muted); border-radius: 4px;
+    transition: background 0.15s;
+  }
+  .kanban-column-header:hover { background: #1c2128; }
+  .kanban-column-header .arrow { font-size: 10px; transition: transform 0.2s; }
+  .kanban-column-header.collapsed .arrow { transform: rotate(-90deg); }
+  .kanban-column-header .count {
+    font-size: 10px; padding: 1px 6px; border-radius: 10px;
+    background: var(--border); color: var(--text-muted);
+    font-weight: 700;
+  }
+  /* Column-specific header colors */
+  .kanban-column.blocked .kanban-column-header { color: var(--red); }
+  .kanban-column.blocked .count { background: rgba(248,81,73,0.2); color: var(--red); }
+  .kanban-column.working .kanban-column-header { color: #FBCA04; }
+  .kanban-column.working .count { background: rgba(251,202,4,0.2); color: #FBCA04; }
+  .kanban-column.waiting .kanban-column-header { color: var(--accent); }
+  .kanban-column.waiting .count { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .kanban-column.idle .kanban-column-header { color: var(--text-muted); }
+  .kanban-column.planning .kanban-column-header { color: var(--purple); }
+  .kanban-column.planning .count { background: rgba(188,140,255,0.2); color: var(--purple); }
+  .kanban-column.coding .kanban-column-header { color: var(--orange); }
+  .kanban-column.coding .count { background: rgba(210,153,34,0.2); color: var(--orange); }
+  .kanban-column.review .kanban-column-header { color: var(--cyan); }
+  .kanban-column.review .count { background: rgba(57,210,192,0.2); color: var(--cyan); }
+  .kanban-column.backlog .kanban-column-header { color: var(--text-muted); }
+  .kanban-column.backlog .count { background: rgba(139,148,158,0.15); color: var(--text-muted); }
+  .kanban-column.inactive .kanban-column-header { color: var(--text-muted); }
+  .kanban-column.inactive .count { background: rgba(139,148,158,0.15); color: var(--text-muted); }
+  .kanban-column.testing .kanban-column-header { color: #FBCA04; }
+  .kanban-column.testing .count { background: rgba(251,202,4,0.2); color: #FBCA04; }
+  .kanban-column.archived .kanban-column-header { color: var(--text-muted); opacity: 0.6; }
+  .kanban-column.archived .count { background: rgba(139,148,158,0.1); color: var(--text-muted); }
+  .kanban-column.verified .kanban-column-header { color: var(--green); }
+  .kanban-column.verified .count { background: rgba(63,185,80,0.2); color: var(--green); }
+
+  /* Animated glow on Working column cards */
+  @keyframes working-glow {
+    0%, 100% {
+      border-color: rgba(251,202,4,0.4) !important;
+      box-shadow: 0 0 6px rgba(251,202,4,0.2);
+    }
+    50% {
+      border-color: rgba(251,202,4,0.9) !important;
+      box-shadow: 0 0 18px rgba(251,202,4,0.55);
+    }
+  }
+  .kanban-card.truly-active {
+    animation: working-glow 1.6s ease-in-out infinite !important;
+    border: 1px solid rgba(251,202,4,0.4) !important;
+  }
+
+  .kanban-cards {
+    padding: 4px 0; overflow-y: auto; flex: 1; min-height: 0;
+  }
+  .kanban-column.collapsed .kanban-cards { display: none; }
+  .kanban-column.collapsed { flex: 0; min-width: auto; }
+
+  .kanban-card {
+    padding: 10px 12px; margin-bottom: 6px; border-radius: 6px;
+    background: var(--surface); border: 1px solid var(--border);
+    cursor: pointer; transition: border-color 0.15s;
+  }
+  .kanban-card:hover { border-color: var(--text-muted); }
+  .kanban-card.active { border-color: var(--accent); }
+  .kanban-card .kanban-card-title {
+    font-size: 14px; font-weight: 600; color: var(--text);
+    line-height: 1.3; word-break: break-word;
+  }
+  .kanban-card .kanban-card-title.user-renamed { color: var(--cyan); }
+  .kanban-card .kanban-card-actions {
+    display: flex; gap: 4px; position: absolute; top: 6px; right: 6px; opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .kanban-card { position: relative; cursor: grab; }
+  .kanban-card.dragging { opacity: 0.4; cursor: grabbing; }
+  .kanban-card.selected {
+    box-shadow: 0 0 0 2px var(--accent) !important;
+    background: rgba(88,166,255,0.08) !important;
+  }
+  .kanban-column.drag-over { background: rgba(88,166,255,0.08); outline: 2px dashed var(--accent); outline-offset: -2px; }
+  .kanban-card.drop-link-target { outline: 2px dashed var(--green); outline-offset: 2px; }
+  .kanban-card:hover .kanban-card-actions { opacity: 1; }
+  .kanban-card .kanban-action-btn {
+    width: 22px; height: 22px; border-radius: 3px; border: none;
+    background: var(--bg); color: var(--text-muted); cursor: pointer;
+    font-size: 12px; display: flex; align-items: center; justify-content: center;
+    transition: color 0.15s, background 0.15s;
+  }
+  .kanban-card .kanban-action-btn:hover { color: var(--text); background: var(--border); }
+  .kanban-card .kanban-card-meta {
+    font-size: 11px; color: var(--text-muted); margin-top: 3px;
+  }
+  .kanban-card .kanban-card-stage {
+    display: inline-block; margin-top: 4px;
+    font-size: 10px; padding: 1px 6px; border-radius: 3px;
+    font-weight: 600;
+  }
+  .kanban-card .kanban-card-stage.stage { background: rgba(188,140,255,0.15); color: var(--purple); }
+  .kanban-card .kanban-card-stage.committed { background: rgba(63,185,80,0.15); color: var(--green); }
+  .kanban-card .kanban-card-stage.testing { background: rgba(251,202,4,0.15); color: #FBCA04; }
+  .kanban-issue-badge {
+    display: inline-block; font-size: 10px; padding: 1px 6px;
+    border-radius: 3px; margin-right: 6px; font-weight: 600;
+    background: rgba(63,185,80,0.15); color: var(--green);
+    vertical-align: middle;
+  }
+  .kanban-card .kanban-card-stage.pushed { background: rgba(57,210,192,0.15); color: var(--cyan); }
+  .kanban-show-all {
+    padding: 6px 12px; font-size: 11px; color: var(--accent);
+    cursor: pointer; text-align: center;
+  }
+  .kanban-show-all:hover { text-decoration: underline; }
+
+  /* ── Split Kanban Layout (Tasks 6-9) ── */
+  #kanbanLayout {
+    display: none; height: 100vh; overflow: hidden;
+  }
+  #kanbanLayout.active { display: flex; }
+  body.kanban-split .sidebar { display: none !important; }
+  body.kanban-split #sidebarResizer { display: none !important; }
+  body.kanban-split .main { display: none !important; }
+
+  .kanban-panel {
+    flex: 3; display: flex; flex-direction: column;
+    background: var(--surface); overflow: hidden; min-width: 400px;
+    border-right: 1px solid var(--border);
+  }
+  .kanban-panel-toolbar {
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    background: var(--surface);
+  }
+  .kanban-panel-toolbar input[type="text"] {
+    padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font-size: 12px; outline: none;
+  }
+  .kanban-panel-toolbar .kpt-search { width: 180px; }
+  .kanban-panel-toolbar .kpt-new-session { flex: 1; min-width: 120px; }
+  .kanban-panel-toolbar button {
+    padding: 5px 10px; font-size: 12px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    cursor: pointer; white-space: nowrap;
+  }
+  .kanban-panel-toolbar button:hover { background: #1c2128; }
+  .kanban-panel-toolbar button.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
+  .kanban-panel-toolbar .kpt-label {
+    font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; cursor: pointer;
+  }
+  .kanban-panel .kanban-board-split {
+    display: flex; gap: 12px; padding: 12px;
+    flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden;
+  }
+  .nsm-overlay { position: fixed; inset: 0; z-index: 9999; display: flex;
+    align-items: center; justify-content: center; }
+  .nsm-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.65);
+    backdrop-filter: blur(4px); }
+  .nsm-dialog { position: relative; width: min(900px, 80vw);
+    max-height: 85vh; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+  .nsm-header { display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
+  .nsm-header span:first-child { font-size: 16px; color: var(--text); font-weight: 600; }
+  .nsm-hint { font-size: 11px; }
+  #nsmSubject { font-size: 22px; padding: 12px 14px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+    outline: none; font-weight: 500; }
+  #nsmSubject:focus { border-color: var(--accent); }
+  #nsmBody { font-size: 15px; padding: 14px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+    outline: none; min-height: 320px; resize: vertical; font-family: inherit;
+    line-height: 1.5; }
+  #nsmBody:focus { border-color: var(--accent); }
+  .nsm-actions { display: flex; gap: 8px; align-items: center; }
+  .nsm-pkood { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .nsm-btn { padding: 8px 16px; font-size: 13px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    cursor: pointer; }
+  .nsm-btn:hover { background: #1c2128; }
+  .nsm-primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+  .nsm-primary:hover { opacity: 0.9; background: var(--accent); }
+  .nsm-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .kanban-panel .kanban-board-split .kanban-column[data-col="backlog"] {
+    position: sticky; left: 0; z-index: 2;
+    background: var(--surface);
+    box-shadow: 2px 0 6px rgba(0,0,0,0.25);
+  }
+  /* Reuse kanban column/card styles in split mode */
+  .kanban-board-split .kanban-column,
+  .kanban-board-split .kanban-column-header,
+  .kanban-board-split .kanban-cards,
+  .kanban-board-split .kanban-card,
+  .kanban-board-split .kanban-card-title,
+  .kanban-board-split .kanban-card-meta,
+  .kanban-board-split .kanban-card-stage,
+  .kanban-board-split .kanban-card-actions,
+  .kanban-board-split .kanban-action-btn,
+  .kanban-board-split .kanban-show-all {
+    /* Inherited from main kanban styles above */
+  }
+
+  .split-resizer {
+    width: 6px; cursor: col-resize; background: var(--border);
+    flex-shrink: 0; transition: background 0.15s;
+  }
+  .split-resizer:hover { background: var(--accent); }
+  .split-resizer.dragging { background: var(--accent); }
+
+  .conv-panel {
+    flex: 2; display: flex; flex-direction: column;
+    overflow: hidden; min-width: 300px;
+  }
+  .conv-panel-toolbar {
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    background: var(--surface); display: flex; gap: 8px; align-items: center;
+    flex-wrap: wrap;
+  }
+  .conv-panel-toolbar button {
+    padding: 5px 10px; font-size: 12px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    cursor: pointer; white-space: nowrap;
+  }
+  .conv-panel-toolbar button:hover { background: #1c2128; }
+  .conv-panel-toolbar .cpt-session-id {
+    font-size: 11px; color: var(--text-muted); font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    opacity: 0.6; cursor: pointer; user-select: all; margin-left: auto;
+  }
+  .conv-panel-view {
+    flex: 1; overflow-y: auto; padding: 16px 20px;
+  }
+  .conv-panel-view .empty-state {
+    display: flex; align-items: center; justify-content: center;
+    height: 100%; color: var(--text-muted); font-size: 14px;
+  }
+  .conv-panel-input {
+    display: none; padding: 8px 12px; border-top: 1px solid var(--border);
+    background: var(--surface); align-items: center; gap: 8px;
+  }
+  .conv-panel-input.visible { display: flex; }
+  .conv-panel-input input {
+    flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font-size: 13px; outline: none;
+  }
+  .conv-panel-input .send-btn {
+    padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--accent); color: #fff; cursor: pointer; font-size: 14px;
+  }
+  .conv-panel-input .tty-label {
+    font-size: 10px; color: var(--text-muted); font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+  }
+
+  /* ── Task 7: Inline input on waiting cards ── */
+  .kanban-inline-input {
+    display: flex; gap: 4px; margin-top: 6px; align-items: center;
+  }
+  .kanban-inline-input input {
+    flex: 1; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font-size: 11px; outline: none;
+    min-width: 0;
+  }
+  .kanban-inline-input input:focus { border-color: var(--accent); }
+  .kanban-inline-input button {
+    padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); cursor: pointer; font-size: 11px;
+    white-space: nowrap;
+  }
+  .kanban-inline-input button:hover { background: #1c2128; }
+
+  /* ── Task 8: Approve/Deny buttons ── */
+  .kanban-tool-info {
+    font-size: 11px; color: var(--text-muted); margin-top: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .kanban-approve-deny {
+    display: flex; gap: 4px; margin-top: 4px;
+  }
+  .kanban-approve {
+    padding: 3px 10px; border-radius: 4px; border: 1px solid rgba(63,185,80,0.4);
+    background: rgba(63,185,80,0.1); color: var(--green); cursor: pointer;
+    font-size: 11px; font-weight: 600;
+  }
+  .kanban-approve:hover { background: rgba(63,185,80,0.25); }
+  .kanban-deny {
+    padding: 3px 10px; border-radius: 4px; border: 1px solid rgba(248,81,73,0.4);
+    background: rgba(248,81,73,0.1); color: var(--red); cursor: pointer;
+    font-size: 11px; font-weight: 600;
+  }
+  .kanban-deny:hover { background: rgba(248,81,73,0.25); }
+
+  /* ── Task 9: Review card actions ── */
+  .kanban-review-info {
+    font-size: 11px; color: var(--text-muted); margin-top: 4px;
+  }
+  .kanban-review-actions {
+    display: flex; gap: 4px; margin-top: 4px;
+  }
+  .kanban-review-actions button {
+    padding: 3px 10px; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); cursor: pointer;
+    font-size: 11px;
+  }
+  .kanban-review-actions button:hover { background: #1c2128; }
+  .kanban-sendback {
+    color: var(--accent) !important; border-color: rgba(88,166,255,0.4) !important;
+  }
+  .kanban-archive-btn {
+    color: var(--text-muted) !important;
+  }
+  .kanban-verify-btn {
+    color: var(--green) !important; border-color: rgba(63,185,80,0.4) !important;
+    background: rgba(63,185,80,0.1) !important; font-weight: 600 !important;
+  }
+  .kanban-verify-btn:hover { background: rgba(63,185,80,0.2) !important; }
+</style>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="sidebar-header"><span class="dot"></span> Claude Log Viewer</div>
+    <div class="deploy-panel" id="deployPanel">
+      <div class="deploy-header">
+        <span class="deploy-dot" id="deployDot"></span>
+        <span>Vercel Deploy</span>
+      </div>
+      <div class="deploy-info" id="deployInfo">Loading...</div>
+    </div>
+    <div class="conv-list-panel" id="convListPanel">
+      <div class="conv-list-header">
+        <div class="search-wrap">
+          <input type="text" id="convSearch" placeholder="Search conversations..." style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none;">
+        </div>
+        <button class="conv-kanban-toggle" id="convKanbanToggle" title="Toggle Kanban board view">&#9783;</button>
+        <button class="conv-archive-toggle" id="convArchiveToggle" title="Show archived">&#128230;</button>
+        <button class="conv-sort-btn" id="convSortBtn" title="Sort by latest response (ignores custom order)">&#8693;</button>
+        <button class="conv-refresh-btn" id="convRefreshBtn" title="Refresh conversation list">&#8634;</button>
+      </div>
+      <div class="log-list" id="convList" style="overflow-y:auto;flex:1;min-height:0;max-height:none;">
+        <div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Loading...</div>
+      </div>
+      <div class="kanban-board" id="kanbanBoard" style="display:none;"></div>
+    </div>
+    <div class="watcher-panel" id="watcherPanel">
+      <div class="watcher-header">
+        <span class="watcher-dot" id="watcherDot"></span>
+        <span>Issue Watcher</span>
+      </div>
+      <button class="watcher-btn start" id="watcherBtn" disabled>Loading...</button>
+      <div class="watcher-output" id="watcherOutput"></div>
+    </div>
+  </div>
+  <div class="sidebar-resizer" id="sidebarResizer" title="Drag to resize"></div>
+  <div class="main">
+    <div class="tab-bar">
+      <div class="tab" id="tabIssues" data-tab="issues">Issues <span class="badge" id="issuesBadge" style="display:none">0</span></div>
+      <div class="tab active" id="tabSessions" data-tab="sessions">Sessions</div>
+    </div>
+    <div class="toolbar" id="convToolbar">
+      <input type="text" id="newSessionInput" placeholder="New session prompt..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;min-width:0;">
+      <label class="pkood-toggle-label"><input type="checkbox" id="pkoodToggle"> pkood</label>
+      <button class="launch-btn" id="newSessionBtn" style="padding:5px 10px;font-size:12px;" title="Spawn headless Claude session">Run</button>
+      <button class="pkood-kill-btn" id="pkoodKillBtn" style="display:none;" title="Kill this pkood agent">Kill</button>
+      <button class="resume-btn" id="resumeBtnConv" style="display:none;" title="Copy CLI command to resume this session">
+        <span class="resume-icon">&#9654;</span>
+        <span class="resume-label">Resume in CLI</span>
+      </button>
+      <button class="jump-btn" id="jumpBtnConv" style="display:none;" title="Bring the terminal running this session to the front">
+        <span class="jump-icon">&#8599;</span>
+        <span class="jump-label">Jump to Terminal</span>
+      </button>
+      <button class="launch-btn" id="launchBtnConv" style="display:none;" title="Open a new terminal and resume this session">
+        <span class="jump-icon">&#43;</span>
+        <span class="jump-label">Launch in Terminal</span>
+      </button>
+      <span class="status" id="convStatus"></span>
+      <div class="font-size-controls" style="margin-left:auto;">
+        <button class="font-size-btn" id="fontMinus" title="Decrease font size">A-</button>
+        <button class="font-size-btn" id="fontPlus" title="Increase font size">A+</button>
+      </div>
+      <span style="font-size:11px;color:var(--text-muted);font-family:'SF Mono',SFMono-Regular,Consolas,monospace;opacity:0.6;cursor:pointer;user-select:all;margin-left:8px;" id="convSessionId" title="Click to copy session ID"></span>
+    </div>
+    <div class="issues-view" id="issuesView" style="display:none;">
+      <div class="empty-state" style="height:auto;padding:40px;">Loading issues...</div>
+    </div>
+    <div class="conversations-view" id="conversationsView">
+      <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
+    </div>
+    <div class="conv-input-bar" id="convInputBar">
+      <input type="text" id="convInput" placeholder="Send to terminal..." autocomplete="off">
+      <button class="send-btn" id="convSendBtn" title="Send to terminal">&gt;</button>
+      <span class="tty-label" id="convTtyLabel"></span>
+    </div>
+  </div>
+
+  <!-- ── Split Kanban Layout (hidden by default) ── -->
+  <div id="kanbanLayout">
+    <div class="kanban-panel">
+      <div class="kanban-panel-toolbar">
+        <input type="text" class="kpt-search" id="kptSearch" placeholder="Search sessions...">
+        <button id="kptRefreshBtn" title="Refresh">&#8634;</button>
+        <button id="kptRecentBtn" title="Show only last 10 hours">Recent</button>
+        <label class="kpt-label"><input type="checkbox" id="kptPkoodToggle"> pkood</label>
+        <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
+        <button id="kptRunBtn">Run</button>
+        <button id="kptListViewBtn" title="Back to list view">&#9783;</button>
+        <button id="kptOpenConvBtn" title="Open conversation panel" style="display:none;">&#9664;</button>
+        <span class="kpt-deploy" id="kptDeployStatus" title="Vercel deploy status" style="margin-left:auto;font-size:11px;display:flex;align-items:center;gap:4px;color:var(--text-muted);white-space:nowrap;"></span>
+      </div>
+      <div class="kanban-board-split" id="kanbanBoardSplit"></div>
+    </div>
+    <div class="split-resizer" id="splitResizer"></div>
+    <div class="conv-panel">
+      <div class="conv-panel-toolbar" id="convPanelToolbar">
+        <button id="cpJumpBtn" style="display:none;" title="Jump to Terminal"><span>&#8599;</span> Jump</button>
+        <button id="cpLaunchBtn" style="display:none;" title="Launch in Terminal"><span>&#43;</span> Launch</button>
+        <button id="cpKillBtn" style="display:none;" title="Kill agent">Kill</button>
+        <div style="display:flex;gap:4px;margin-left:auto;">
+          <button id="cpFontMinus" title="Decrease font size">A-</button>
+          <button id="cpFontPlus" title="Increase font size">A+</button>
+        </div>
+        <span class="cpt-session-id" id="cpSessionId"></span>
+        <button id="cpCloseBtn" title="Close panel" style="margin-left:8px;font-size:16px;line-height:1;">&times;</button>
+      </div>
+      <div class="conv-panel-view" id="convPanelView">
+        <div class="empty-state">Select a session from the board</div>
+      </div>
+      <div class="conv-panel-input" id="convPanelInput">
+        <input type="text" id="cpInput" placeholder="Send to terminal..." autocomplete="off">
+        <button class="send-btn" id="cpSendBtn">&gt;</button>
+        <span class="tty-label" id="cpTtyLabel"></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="newSessionModal" class="nsm-overlay" style="display:none;" role="dialog" aria-modal="true">
+    <div class="nsm-backdrop" id="nsmBackdrop"></div>
+    <div class="nsm-dialog">
+      <div class="nsm-header">
+        <span>New session</span>
+        <span class="nsm-hint">Esc to cancel · &#8984;&#9166; to launch</span>
+      </div>
+      <input id="nsmSubject" type="text" placeholder="Subject (becomes the card title)" autocomplete="off" />
+      <textarea id="nsmBody" placeholder="Full prompt sent to Claude / git / etc..."></textarea>
+      <div class="nsm-actions">
+        <label class="nsm-pkood"><input type="checkbox" id="nsmPkood"> pkood</label>
+        <span style="flex:1;"></span>
+        <button id="nsmCancel" class="nsm-btn">Cancel</button>
+        <button id="nsmSubmit" class="nsm-btn nsm-primary">Launch</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function() {
+  let sessionIdByConv = {}; // {convId: sessionId}
+  let sessionCwdByConv = {}; // {convId: originalCwd}
+  let sessionCwdExistsByConv = {}; // {convId: bool}
+  let sessionSourceByConv = {}; // {convId: 'interactive'|'watcher'}
+  let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
+  let sessionIssueByConv = {}; // {convId: issueNumber} for watcher sessions
+  // Currently-focused session and its live-process state
+  let currentSession = { id: null, cwd: null, cwdExists: false, source: null };
+  let liveStatus = { live: false, pid: null, tty: null, terminalApp: null };
+  let liveStatusTimer = null;
+
+  const $resumeBtnConv = document.getElementById('resumeBtnConv');
+  const $jumpBtnConv = document.getElementById('jumpBtnConv');
+  const $launchBtnConv = document.getElementById('launchBtnConv');
+  const $convToolbar = document.getElementById('convToolbar');
+  const $newSessionInput = document.getElementById('newSessionInput');
+  const $newSessionBtn = document.getElementById('newSessionBtn');
+  const $pkoodToggle = document.getElementById('pkoodToggle');
+  const $pkoodKillBtn = document.getElementById('pkoodKillBtn');
+  let pkoodTailPoller = null; // interval ID for polling pkood tail
+  let issueLogPoller = null; // interval ID for polling issue log tail
+  let issueLogLastLine = 0; // last line loaded for current issue log
+  const $watcherPanel = document.getElementById('watcherPanel');
+  const $convRefreshBtn = document.getElementById('convRefreshBtn');
+
+  function shellQuote(s) {
+    return "'" + String(s).replace(/'/g, "'\\''") + "'";
+  }
+
+  function buildResumeCommand(sid, cwd, cwdExists) {
+    if (!cwd) return 'claude --resume ' + sid;
+    // Derive worktree branch from a watcher worktree path:
+    // e.g. /Users/.../.claude/worktrees/claude-fix/issue-88 -> branch "claude-fix/issue-88"
+    const wtMatch = cwd.match(/\/\.claude\/worktrees\/(.+)$/);
+    const quotedCwd = shellQuote(cwd);
+    if (cwdExists) {
+      return 'cd ' + quotedCwd + ' && claude --resume ' + sid;
+    }
+    // Directory missing — try to recreate the worktree first, then resume.
+    if (wtMatch) {
+      const branch = wtMatch[1];
+      const repoRoot = cwd.split('/.claude/worktrees/')[0];
+      const quotedRepo = shellQuote(repoRoot);
+      const quotedBranch = shellQuote(branch);
+      return '(cd ' + quotedRepo + ' && git worktree add ' + quotedCwd + ' ' + quotedBranch +
+             ' 2>/dev/null || git worktree add ' + quotedCwd + ' -b ' + quotedBranch + ' origin/main)' +
+             ' && cd ' + quotedCwd + ' && claude --resume ' + sid;
+    }
+    return 'cd ' + quotedCwd + ' && claude --resume ' + sid;
+  }
+
+  function resumeButtonsForActiveTab() {
+    if (activeTab === 'sessions') return [$resumeBtnConv];
+    return [];
+  }
+  function jumpButtonsForActiveTab() {
+    if (activeTab === 'sessions') return [$jumpBtnConv];
+    return [];
+  }
+  function launchButtonsForActiveTab() {
+    if (activeTab === 'sessions') return [$launchBtnConv];
+    return [];
+  }
+  function allResumeButtons() { return [$resumeBtnConv].filter(Boolean); }
+  function allJumpButtons() { return [$jumpBtnConv].filter(Boolean); }
+  function allLaunchButtons() { return [$launchBtnConv].filter(Boolean); }
+
+  function updateResumeButton() {
+    const sid = currentSession.id;
+    const cwd = currentSession.cwd;
+    const cwdExists = currentSession.cwdExists;
+    const isPkood = currentSession.source === 'pkood';
+    const activeBtns = resumeButtonsForActiveTab();
+    // Hide buttons in non-active toolbars
+    for (const btn of allResumeButtons()) {
+      if (!activeBtns.includes(btn)) btn.style.display = 'none';
+    }
+    for (const btn of activeBtns) {
+      if (!btn) continue;
+      if (!sid || isPkood) {
+        btn.style.display = 'none';
+        delete btn.dataset.sessionId;
+        delete btn.dataset.resumeCmd;
+        continue;
+      }
+      const cmd = buildResumeCommand(sid, cwd, cwdExists);
+      btn.style.display = 'inline-flex';
+      btn.dataset.sessionId = sid;
+      btn.dataset.resumeCmd = cmd;
+      btn.classList.remove('copied');
+      btn.classList.toggle('stale', !cwdExists);
+      const label = cwdExists ? 'Resume in CLI' : 'Resume (worktree gone — will recreate)';
+      btn.querySelector('.resume-label').textContent = label;
+      btn.title = cmd;
+    }
+  }
+
+  function updateJumpButton() {
+    const live = liveStatus.live;
+    const sid = currentSession.id;
+    const canJump = live && liveStatus.tty && liveStatus.terminalApp;
+    const canLaunch = !!sid && !canJump;  // only show Launch when Jump isn't available
+
+    // Jump buttons
+    const activeJump = jumpButtonsForActiveTab();
+    for (const btn of allJumpButtons()) {
+      if (!activeJump.includes(btn)) btn.style.display = 'none';
+    }
+    for (const btn of activeJump) {
+      if (!btn) continue;
+      if (canJump) {
+        btn.style.display = 'inline-flex';
+        btn.title = 'Focus ' + liveStatus.terminalApp + ' (' + liveStatus.tty + ') running this session';
+        btn.querySelector('.jump-label').textContent = 'Jump to Terminal (' + liveStatus.terminalApp + ')';
+      } else {
+        btn.style.display = 'none';
+      }
+    }
+
+    // Launch buttons (dormant sessions)
+    const activeLaunch = launchButtonsForActiveTab();
+    for (const btn of allLaunchButtons()) {
+      if (!activeLaunch.includes(btn)) btn.style.display = 'none';
+    }
+    for (const btn of activeLaunch) {
+      if (!btn) continue;
+      if (canLaunch) {
+        btn.style.display = 'inline-flex';
+        btn.title = 'Open a new Terminal window and run claude --resume';
+        btn.querySelector('.jump-label').textContent = 'Launch in Terminal';
+      } else {
+        btn.style.display = 'none';
+      }
+    }
+  }
+
+  async function copyResumeCommand(ev) {
+    const btn = ev && ev.currentTarget;
+    if (!btn) return;
+    const sid = btn.dataset.sessionId;
+    if (!sid) return;
+    const cmd = btn.dataset.resumeCmd || ('claude --resume ' + sid);
+    try {
+      await navigator.clipboard.writeText(cmd);
+    } catch (err) {
+      // Fallback for non-secure contexts
+      const ta = document.createElement('textarea');
+      ta.value = cmd;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+    btn.classList.add('copied');
+    const originalLabel = btn.querySelector('.resume-label').textContent;
+    btn.querySelector('.resume-label').textContent = 'Copied!';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      btn.querySelector('.resume-label').textContent = originalLabel;
+    }, 1500);
+  }
+
+  async function jumpToTerminal(ev) {
+    const btn = ev && ev.currentTarget;
+    if (!btn) return;
+    if (!liveStatus.live) return;
+    const origLabel = btn.querySelector('.jump-label').textContent;
+    btn.querySelector('.jump-label').textContent = 'Jumping...';
+    try {
+      const res = await fetch('/api/jump-terminal', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          session_id: currentSession.id,
+          cwd: currentSession.cwd,
+          tty: liveStatus.tty,
+          terminal_app: liveStatus.terminalApp,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        btn.querySelector('.jump-label').textContent = 'Focused!';
+        setTimeout(() => { btn.querySelector('.jump-label').textContent = origLabel; }, 1500);
+      } else {
+        btn.querySelector('.jump-label').textContent = 'Failed: ' + (data.error || 'unknown');
+        setTimeout(() => { btn.querySelector('.jump-label').textContent = origLabel; }, 3000);
+      }
+    } catch (err) {
+      btn.querySelector('.jump-label').textContent = 'Error';
+      setTimeout(() => { btn.querySelector('.jump-label').textContent = origLabel; }, 2000);
+    }
+  }
+
+  async function refreshLiveStatus() {
+    if (!currentSession.id) {
+      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0 };
+      updateJumpButton();
+      updateInputBar();
+      return;
+    }
+    try {
+      const params = new URLSearchParams({
+        session_id: currentSession.id,
+        cwd: currentSession.cwd || '',
+      });
+      const res = await fetch('/api/session-status?' + params.toString());
+      const data = await res.json();
+      liveStatus = {
+        live: !!data.live,
+        pid: data.pid || null,
+        tty: data.tty || null,
+        terminalApp: data.terminal_app || null,
+        ambiguous: !!data.ambiguous,
+        matchCount: data.match_count || 0,
+      };
+    } catch (err) {
+      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0 };
+    }
+    updateJumpButton();
+    updateInputBar();
+    if (typeof updateSplitToolbar === 'function') updateSplitToolbar();
+  }
+
+  function startLiveStatusPolling() {
+    if (liveStatusTimer) clearInterval(liveStatusTimer);
+    refreshLiveStatus();
+    liveStatusTimer = setInterval(refreshLiveStatus, 5000);
+  }
+
+  const $convSessionId = document.getElementById('convSessionId');
+
+  function setCurrentSession(source, sid, cwd, cwdExists, spawnPid) {
+    currentSession = {
+      id: sid || null,
+      cwd: cwd || null,
+      cwdExists: !!cwdExists,
+      source: source,
+      spawnPid: spawnPid || null,
+    };
+    if ($convSessionId) {
+      $convSessionId.textContent = sid || '';
+      $convSessionId.onclick = () => {
+        if (!sid) return;
+        navigator.clipboard.writeText(sid).then(() => {
+          const orig = $convSessionId.textContent;
+          $convSessionId.textContent = 'copied!';
+          setTimeout(() => { $convSessionId.textContent = orig; }, 1000);
+        });
+      };
+    }
+    if (source === 'pkood') {
+      // Pkood sessions don't need live status polling or resume button
+      if (liveStatusTimer) { clearInterval(liveStatusTimer); liveStatusTimer = null; }
+      liveStatus = { live: false, pid: null, tty: null, terminalApp: null };
+      updateResumeButton();
+      updateJumpButton();
+      updateInputBar();
+    } else {
+      updateResumeButton();
+      startLiveStatusPolling();
+    }
+  }
+
+  async function launchTerminal(ev) {
+    const btn = ev && ev.currentTarget;
+    if (!btn || !currentSession.id) return;
+    const origLabel = btn.querySelector('.jump-label').textContent;
+    btn.classList.add('launching');
+    btn.querySelector('.jump-label').textContent = 'Launching…';
+    try {
+      const res = await fetch('/api/launch-terminal', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          session_id: currentSession.id,
+          cwd: currentSession.cwd,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        btn.querySelector('.jump-label').textContent = 'Launched!';
+        setTimeout(() => {
+          btn.classList.remove('launching');
+          btn.querySelector('.jump-label').textContent = origLabel;
+        }, 1500);
+        // The launched terminal will become live shortly — poll right away
+        setTimeout(refreshLiveStatus, 1500);
+      } else {
+        btn.querySelector('.jump-label').textContent = 'Failed: ' + (data.error || 'unknown');
+        setTimeout(() => {
+          btn.classList.remove('launching');
+          btn.querySelector('.jump-label').textContent = origLabel;
+        }, 3000);
+      }
+    } catch (err) {
+      btn.classList.remove('launching');
+      btn.querySelector('.jump-label').textContent = 'Error';
+      setTimeout(() => { btn.querySelector('.jump-label').textContent = origLabel; }, 2000);
+    }
+  }
+
+  // ── Inject-to-terminal input bar ──
+  const $convInputBar = document.getElementById('convInputBar');
+  const $convInput = document.getElementById('convInput');
+  const $convSendBtn = document.getElementById('convSendBtn');
+  const $convTtyLabel = document.getElementById('convTtyLabel');
+
+  function updateInputBar() {
+    if (!$convInputBar) return;
+    const isPkood = currentSession.source === 'pkood';
+    const live = liveStatus.live && liveStatus.tty;
+    const isConvTab = activeTab === 'sessions';
+    const hasSession = !!currentSession.id;
+    if ((live || isPkood) && isConvTab && hasSession) {
+      $convInputBar.classList.add('visible');
+      $convTtyLabel.textContent = isPkood ? 'pkood' : liveStatus.tty;
+      $convInput.placeholder = isPkood ? 'Send to pkood agent...' : 'Send to terminal...';
+    } else {
+      $convInputBar.classList.remove('visible');
+    }
+  }
+
+  async function sendToTerminal() {
+    const text = ($convInput && $convInput.value || '').trim();
+    if (!text || !currentSession.id) return;
+    $convSendBtn.disabled = true;
+    try {
+      let res;
+      if (currentSession.source === 'pkood') {
+        const agentId = currentConversation.replace(/^pkood-/, '');
+        res = await fetch('/api/pkood/inject', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ agent_id: agentId, message: text }),
+        });
+      } else {
+        res = await fetch('/api/inject-input', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ session_id: currentSession.id, text }),
+        });
+      }
+      const data = await res.json();
+      if (data.ok) {
+        $convInput.value = '';
+      } else {
+        $convInput.style.borderColor = 'var(--red)';
+        setTimeout(() => { $convInput.style.borderColor = ''; }, 1500);
+      }
+    } catch (err) {
+      $convInput.style.borderColor = 'var(--red)';
+      setTimeout(() => { $convInput.style.borderColor = ''; }, 1500);
+    }
+    $convSendBtn.disabled = false;
+    $convInput.focus();
+  }
+
+  if ($convSendBtn) $convSendBtn.addEventListener('click', sendToTerminal);
+  if ($convInput) $convInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); sendToTerminal(); }
+  });
+
+  for (const btn of allResumeButtons()) btn.addEventListener('click', copyResumeCommand);
+  for (const btn of allJumpButtons()) btn.addEventListener('click', jumpToTerminal);
+  for (const btn of allLaunchButtons()) btn.addEventListener('click', launchTerminal);
+
+  function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  // Minimal markdown renderer for assistant text — tables, inline code, bold, headers
+  function renderMarkdown(text) {
+    const lines = text.split('\n');
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      // Detect a table: header | sep | rows
+      if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s\-:|]+\|\s*$/.test(lines[i + 1])) {
+        const cells = (s) => s.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+        const header = cells(line);
+        const rows = [];
+        i += 2;
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+          rows.push(cells(lines[i]));
+          i++;
+        }
+        let html = '<table class="md-table"><thead><tr>';
+        for (const h of header) html += '<th>' + renderInline(h) + '</th>';
+        html += '</tr></thead><tbody>';
+        for (const r of rows) {
+          html += '<tr>';
+          for (const c of r) html += '<td>' + renderInline(c) + '</td>';
+          html += '</tr>';
+        }
+        html += '</tbody></table>';
+        out.push(html);
+        continue;
+      }
+      // Headers
+      const h = line.match(/^(#{1,6})\s+(.+)$/);
+      if (h) {
+        const level = h[1].length;
+        out.push('<h' + level + ' class="md-h">' + renderInline(h[2]) + '</h' + level + '>');
+        i++;
+        continue;
+      }
+      // Regular text line (preserve as-is with <br>)
+      if (line.trim() === '') {
+        out.push('<br>');
+      } else {
+        out.push('<div>' + renderInline(line) + '</div>');
+      }
+      i++;
+    }
+    return out.join('');
+  }
+
+  function renderInline(s) {
+    // Escape HTML first
+    s = escapeHtml(s);
+    // Inline code `x`
+    s = s.replace(/`([^`]+)`/g, '<code class="md-code">$1</code>');
+    // Bold **x**
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    // Links [text](url)
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    return s;
+  }
+
+  // ── Tabs ──
+  const $tabIssues = document.getElementById('tabIssues');
+  const $tabSessions = document.getElementById('tabSessions');
+  const $issuesView = document.getElementById('issuesView');
+  const $issuesBadge = document.getElementById('issuesBadge');
+  const $conversationsView = document.getElementById('conversationsView');
+  const $convListPanel = document.getElementById('convListPanel');
+  const $convList = document.getElementById('convList');
+  const $convSearch = document.getElementById('convSearch');
+  const $kanbanBoard = document.getElementById('kanbanBoard');
+  const $convKanbanToggle = document.getElementById('convKanbanToggle');
+  let kanbanView = localStorage.getItem('clv-kanban-view') === 'true';
+  let kanbanCollapsed = {}; // column_key -> bool, tracks user collapse state
+  try { kanbanCollapsed = JSON.parse(localStorage.getItem('clv-kanban-collapsed') || '{}'); } catch (_) {}
+  let kanbanShowAll = {};   // column_key -> bool, tracks "show all" state for large columns
+  let activeTab = 'sessions';
+
+  // ── Split layout elements ──
+  const $kanbanLayout = document.getElementById('kanbanLayout');
+  const $kanbanBoardSplit = document.getElementById('kanbanBoardSplit');
+  const $convPanelView = document.getElementById('convPanelView');
+  const $convPanelInput = document.getElementById('convPanelInput');
+  const $cpInput = document.getElementById('cpInput');
+  const $cpSendBtn = document.getElementById('cpSendBtn');
+  const $cpTtyLabel = document.getElementById('cpTtyLabel');
+  const $cpSessionId = document.getElementById('cpSessionId');
+  const $splitResizer = document.getElementById('splitResizer');
+  const $kanbanPanel = $kanbanLayout ? $kanbanLayout.querySelector('.kanban-panel') : null;
+  const $convPanel = $kanbanLayout ? $kanbanLayout.querySelector('.conv-panel') : null;
+  const $cpCloseBtn = document.getElementById('cpCloseBtn');
+  let convPanelOpen = true;
+
+  const $kptOpenConvBtn = document.getElementById('kptOpenConvBtn');
+  let savedKanbanWidth = '';
+  function setConvPanelOpen(open) {
+    convPanelOpen = open;
+    if ($convPanel) $convPanel.style.display = open ? '' : 'none';
+    if ($splitResizer) $splitResizer.style.display = open ? '' : 'none';
+    if ($kanbanPanel) {
+      if (open) {
+        if (savedKanbanWidth) {
+          $kanbanPanel.style.flex = 'none';
+          $kanbanPanel.style.width = savedKanbanWidth;
+        }
+      } else {
+        savedKanbanWidth = $kanbanPanel.style.width || '';
+        $kanbanPanel.style.flex = '1';
+        $kanbanPanel.style.width = 'auto';
+      }
+    }
+    if ($kptOpenConvBtn) $kptOpenConvBtn.style.display = open ? 'none' : '';
+    try { localStorage.setItem('clv-conv-panel-open', open ? '1' : '0'); } catch (_) {}
+  }
+  if ($cpCloseBtn) $cpCloseBtn.addEventListener('click', () => setConvPanelOpen(!convPanelOpen));
+  if ($kptOpenConvBtn) $kptOpenConvBtn.addEventListener('click', () => setConvPanelOpen(true));
+  // Restore last state
+  try {
+    if (localStorage.getItem('clv-conv-panel-open') === '0') setConvPanelOpen(false);
+  } catch (_) {}
+
+  // Font scale controls for conversations view
+  let convFontScale = parseFloat(localStorage.getItem('clv-conv-font-scale') || '1');
+  const $fontMinus = document.getElementById('fontMinus');
+  const $fontPlus = document.getElementById('fontPlus');
+
+  function applyConvFontScale() {
+    if ($conversationsView) $conversationsView.style.zoom = convFontScale;
+    if ($convPanelView) $convPanelView.style.zoom = convFontScale;
+  }
+  applyConvFontScale();
+
+  if ($fontMinus) $fontMinus.addEventListener('click', () => {
+    convFontScale = Math.max(0.7, +(convFontScale - 0.1).toFixed(1));
+    localStorage.setItem('clv-conv-font-scale', String(convFontScale));
+    applyConvFontScale();
+  });
+  if ($fontPlus) $fontPlus.addEventListener('click', () => {
+    convFontScale = Math.min(1.5, +(convFontScale + 0.1).toFixed(1));
+    localStorage.setItem('clv-conv-font-scale', String(convFontScale));
+    applyConvFontScale();
+  });
+
+  function switchTab(tab) {
+    activeTab = tab;
+    $tabIssues.classList.toggle('active', tab === 'issues');
+    $tabSessions.classList.toggle('active', tab === 'sessions');
+    $issuesView.style.display = tab === 'issues' ? '' : 'none';
+    if ($convToolbar) $convToolbar.style.display = tab === 'sessions' ? '' : 'none';
+    $conversationsView.style.display = tab === 'sessions' ? '' : 'none';
+    // Show/hide sidebar sections
+    $convListPanel.style.display = tab === 'sessions' ? 'flex' : 'none';
+    if ($watcherPanel) $watcherPanel.style.display = tab === 'sessions' ? 'none' : '';
+    if (tab === 'sessions' && !conversationsLoaded) {
+      loadConversationList();
+    }
+    // Stop SSE stream when leaving sessions tab
+    if (tab !== 'sessions') {
+      stopConvStream();
+    }
+    // Re-apply the current session to the newly-active toolbar's buttons
+    updateResumeButton();
+    updateJumpButton();
+    updateInputBar();
+    if (typeof updateSplitToolbar === 'function') updateSplitToolbar();
+  }
+  $tabIssues.addEventListener('click', () => switchTab('issues'));
+  $tabSessions.addEventListener('click', () => switchTab('sessions'));
+
+  // ── Conversations ──
+  let conversationsData = [];
+  let conversationsLoaded = false;
+  let currentConversation = null;
+  let showArchived = false;  // false = show non-archived, true = show only archived
+  let convLastLine = 0;
+  let convEventSource = null;  // SSE connection for tailing live conversations
+
+  async function loadConversationList() {
+    try {
+      const res = await fetch('/api/sessions');
+      conversationsData = await res.json();
+      conversationsLoaded = true;
+      // Cache session IDs / cwds / sources so Resume+Jump work
+      sessionIdByConv = {};
+      sessionCwdByConv = {};
+      sessionCwdExistsByConv = {};
+      sessionSourceByConv = {};
+      sessionIssueByConv = {};
+      sessionSpawnPidByConv = {};
+      for (const c of conversationsData) {
+        if (c.session_id) sessionIdByConv[c.id] = c.session_id;
+        if (c.session_cwd) sessionCwdByConv[c.id] = c.session_cwd;
+        sessionCwdExistsByConv[c.id] = !!c.session_cwd_exists;
+        sessionSourceByConv[c.id] = c.source || 'interactive';
+        if (c.issue_number) sessionIssueByConv[c.id] = c.issue_number;
+        if (c.spawn_pid) sessionSpawnPidByConv[c.id] = c.spawn_pid;
+      }
+      renderSidebar(filterConversations($convSearch.value));
+    } catch (err) {
+      $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Failed to load: ' + escapeHtml(err.message) + '</div>';
+    }
+  }
+
+  function relativeTime(ts) {
+    const nowSec = Date.now() / 1000;
+    const diff = Math.max(0, nowSec - ts);
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
+    return Math.floor(diff / 604800) + 'w ago';
+  }
+
+  // ── Unified render dispatcher: list vs kanban ──
+  // Shared stage logic — simple watermark
+  function sessionStage(c) {
+    if (c.has_push) return 'pushed';
+    if (c.has_commit) return 'committed';
+    if (c.has_edit) return 'coding';
+    return 'planning';
+  }
+  function stageClass(stage) {
+    if (stage === 'pushed') return 'pushed';
+    if (stage === 'committed') return 'committed';
+    return 'stage';
+  }
+
+  function renderSidebar(convs) {
+    // Preserve scroll across ALL re-renders (board + per-column + list)
+    const scrolls = {};
+    document.querySelectorAll('.kanban-board, .kanban-board-split, #convList').forEach(el => {
+      if (el.scrollLeft > 0 || el.scrollTop > 0) {
+        const key = el.id || (el.className.split(' ')[0] + (el.closest('.kanban-panel') ? '-split' : ''));
+        scrolls[key] = [el.scrollLeft, el.scrollTop];
+      }
+    });
+    document.querySelectorAll('.kanban-column').forEach(el => {
+      const cards = el.querySelector('.kanban-cards');
+      if (cards && cards.scrollTop > 0) {
+        const inSplit = el.closest('.kanban-panel') ? '-split' : '';
+        scrolls['col-' + el.dataset.col + inSplit] = [0, cards.scrollTop];
+      }
+    });
+
+    if (kanbanView) {
+      $convList.style.display = 'none';
+      $kanbanBoard.style.display = '';
+      renderKanbanBoard(convs, $kanbanBoard, false);
+      if ($kanbanBoardSplit) renderKanbanBoard(convs, $kanbanBoardSplit, true);
+    } else {
+      $convList.style.display = '';
+      $kanbanBoard.style.display = 'none';
+      renderConversationList(convs);
+    }
+
+    // Restore scroll
+    requestAnimationFrame(() => {
+      for (const [key, [left, top]] of Object.entries(scrolls)) {
+        if (key.startsWith('col-')) {
+          const isSplit = key.endsWith('-split');
+          const colKey = isSplit ? key.slice(4, -6) : key.slice(4);
+          const scope = isSplit ? '.kanban-panel' : '';
+          const selector = scope + ' .kanban-column[data-col="' + colKey + '"] .kanban-cards';
+          const cards = document.querySelector(selector);
+          if (cards) cards.scrollTop = top;
+        } else {
+          const el = document.getElementById(key) || document.querySelector('.' + key.replace('-split', ''));
+          if (el) { el.scrollLeft = left; el.scrollTop = top; }
+        }
+      }
+    });
+  }
+
+  // Manual column overrides (drag-and-drop) — session_id → column key
+  let columnOverrides = {};
+  try { columnOverrides = JSON.parse(localStorage.getItem('clv-column-overrides') || '{}'); } catch (_) {}
+
+  // Multi-select state for kanban cards
+  let selectedCardIds = new Set();
+
+  async function moveCardsToColumn(cardIds, targetCol) {
+    for (const cardId of cardIds) {
+      await moveCardToColumn(cardId, targetCol);
+    }
+    selectedCardIds.clear();
+  }
+
+  async function moveCardToColumn(cardId, targetCol) {
+    const c = conversationsData.find(x => x.id === cardId);
+    if (!c) return;
+    const sid = c.session_id || cardId;
+
+    // Special columns: flip backend flags instead of just overriding
+    if (targetCol === 'verified') {
+      if (!c.verified) {
+        await fetch('/api/conversations/' + cardId + '/verify', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ session_id: sid }),
+        }).catch(() => {});
+        c.verified = true;
+      }
+      delete columnOverrides[sid];
+    } else if (targetCol === 'archived') {
+      if (!c.archived) {
+        await fetch('/api/conversations/' + cardId + '/archive', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ session_id: sid }),
+        }).catch(() => {});
+        c.archived = true;
+      }
+      delete columnOverrides[sid];
+    } else {
+      // Moving OUT of verified/archived? unflip the backend
+      if (c.verified) {
+        await fetch('/api/conversations/' + cardId + '/verify', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ session_id: sid }),
+        }).catch(() => {});
+        c.verified = false;
+      }
+      if (c.archived) {
+        await fetch('/api/conversations/' + cardId + '/archive', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ session_id: sid }),
+        }).catch(() => {});
+        c.archived = false;
+      }
+      columnOverrides[sid] = targetCol;
+    }
+    try { localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
+    renderSidebar(filterConversations($convSearch.value));
+  }
+
+  function classifyKanbanColumn(c) {
+    // Manual override from drag-drop takes priority
+    const ov = columnOverrides[c.session_id || c.id];
+    if (ov) return ov;
+    if (c.verified) return 'verified';
+    if (c.archived) return 'archived';
+    if (c.source === 'backlog') return 'backlog';
+    const live = !!c.is_live;
+    const hasSidecar = !!c.sidecar_status;
+    const stage = sessionStage(c);
+
+    // Live sessions with sidecar: trust sidecar state over past commit/push
+    // (the session is still open and between turns, not done)
+    if (live && hasSidecar) {
+      if (c.sidecar_status === 'waiting') return 'waiting';
+      if (c.sidecar_has_writes) return 'working';
+      return 'planning';
+    }
+
+    // Review: committed/pushed (dead sessions, or live without sidecar)
+    if (stage === 'pushed' || stage === 'committed') return 'review';
+
+    // Dead sessions without commits: inactive (never hide — every session has a column)
+    if (!live && !hasSidecar) return 'inactive';
+
+    // Live sessions with sidecar: use real-time state
+    if (live && hasSidecar) {
+      if (c.sidecar_status === 'waiting') return 'waiting';
+      if (c.sidecar_has_writes) return 'working';
+      return 'planning';
+    }
+
+    // Live but no sidecar: JSONL fallback + pkood
+    if (live) {
+      if (c.source === 'pkood') {
+        const ps = (c.pkood_status || '').toUpperCase();
+        if (ps === 'BLOCKED' || ps === 'IDLE') return 'waiting';
+        if (ps === 'RUNNING') return 'working';
+        return 'planning';
+      }
+      if (c.pending_tool && c.last_event_type === 'assistant' && !c.sidecar_status) return 'waiting';
+      if (c.last_event_type === 'result') return 'waiting';
+      if (c.has_edit) return 'working';
+      return 'planning';
+    }
+
+    // Fallback: never hide anything — every session gets a column
+    return 'inactive';
+  }
+
+  function renderKanbanBoard(convs, targetEl, isSplit) {
+    if (!targetEl) targetEl = $kanbanBoard;
+    const columns = [
+      { key: 'backlog',  label: 'Backlog',  defaultExpanded: true },
+      { key: 'planning', label: 'Planning', defaultExpanded: true },
+      { key: 'working',  label: 'Working',  defaultExpanded: true },
+      { key: 'waiting',  label: 'Waiting',  defaultExpanded: true },
+      { key: 'review',   label: 'Review',   defaultExpanded: true },
+      { key: 'testing',  label: 'In Testing', defaultExpanded: true },
+      { key: 'inactive', label: 'Inactive', defaultExpanded: false },
+      { key: 'verified', label: 'Verified', defaultExpanded: false },
+      { key: 'archived', label: 'Archived', defaultExpanded: false },
+    ];
+    // Group sessions into columns
+    const groups = {};
+    for (const col of columns) groups[col.key] = [];
+    for (const c of convs) {
+      const col = classifyKanbanColumn(c);
+      if (col && groups[col]) groups[col].push(c);
+    }
+    let html = '';
+    for (const col of columns) {
+      const items = groups[col.key];
+      const isCollapsed = kanbanCollapsed.hasOwnProperty(col.key)
+        ? kanbanCollapsed[col.key]
+        : !col.defaultExpanded;
+      const showAll = kanbanShowAll[col.key] || false;
+      const maxVisible = 20;
+      const visibleItems = (!showAll && items.length > maxVisible) ? items.slice(0, maxVisible) : items;
+      const hasMore = !showAll && items.length > maxVisible;
+
+      html += '<div class="kanban-column ' + col.key + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '">';
+      html += '<div class="kanban-column-header' + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '">';
+      html += '<span class="arrow">' + (isCollapsed ? '&#9656;' : '&#9662;') + '</span>';
+      html += '<span>' + escapeHtml(col.label) + '</span>';
+      html += '<span class="count">' + items.length + '</span>';
+      html += '</div>';
+      html += '<div class="kanban-cards">';
+      for (const c of visibleItems) {
+        const rawTitle = c.display_name || (c.first_message ? c.first_message.slice(0, 40) : '(untitled)');
+        // Replace dashes with spaces for display (storage keeps the slug); strip [BYM ...] noise
+        const title = rawTitle.replace(/\s*\[BYM[^\]]*\]\s*/gi, ' ').replace(/-/g, ' ').trim();
+
+        // ── Backlog cards: special rendering ──
+        if (c.source === 'backlog') {
+          const labels = (c.issue_labels || []).map(function(l) {
+            const color = l === 'bug' ? 'var(--red)' : 'var(--accent)';
+            return '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(139,148,158,0.15);color:' + color + ';font-weight:600;margin-right:3px;">' + escapeHtml(l) + '</span>';
+          }).join('');
+          const sourceTag = c.backlog_type === 'github'
+            ? '<span style="font-size:10px;color:var(--text-muted);">#' + escapeHtml(c.issue_number || '') + '</span>'
+            : '<span style="font-size:10px;color:var(--accent);">TODO.md</span>';
+          // Date + relative time for GitHub issues
+          let dateInfo = '';
+          if (c.modified && c.modified > 0) {
+            const d = new Date(c.modified * 1000);
+            const abs = d.toLocaleDateString(undefined, {month:'short',day:'numeric'}) + ' ' +
+                        d.toLocaleTimeString(undefined, {hour:'2-digit',minute:'2-digit'});
+            dateInfo = '<span style="font-size:10px;color:var(--text-muted);margin-left:8px;">' +
+                       escapeHtml(abs) + ' &middot; ' + escapeHtml(relativeTime(c.modified)) + '</span>';
+          }
+          html += '<div class="kanban-card backlog-card" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="backlog">';
+          html += '<div class="kanban-card-title">' + escapeHtml(title) + '</div>';
+          if (labels) html += '<div style="margin-top:3px;">' + labels + '</div>';
+          html += '<div style="margin-top:4px;">' + sourceTag + dateInfo + '</div>';
+          html += '<button class="kanban-start-btn" data-issue="' + escapeHtml(c.issue_number || '') + '" data-title="' + escapeHtml(c.display_name || c.first_message || '') + '" style="margin-top:6px;padding:4px 10px;border-radius:4px;border:1px solid rgba(63,185,80,0.3);background:rgba(63,185,80,0.1);color:var(--green);font-size:11px;font-weight:600;cursor:pointer;width:100%;">Start Session</button>';
+          html += '</div>';
+          continue;
+        }
+
+        let titleClass = '';
+        if (c.name_overridden) titleClass = ' user-renamed';
+        const rel = relativeTime(c.modified);
+        const sizeStr = formatSize(c.size);
+        const branch = c.branch || '';
+        const metaParts = [rel, sizeStr];
+        if (branch) metaParts.push(branch);
+        const colKey = classifyKanbanColumn(c);
+        let stageLabel, stageCls;
+        // Column-derived stage overrides the raw session stage
+        if (colKey === 'testing') {
+          stageLabel = 'testing'; stageCls = 'testing';
+        } else if (colKey === 'verified') {
+          stageLabel = 'verified'; stageCls = 'committed';
+        } else if (colKey === 'archived') {
+          stageLabel = 'archived'; stageCls = 'stage';
+        } else if (c.source === 'pkood') {
+          const ps = (c.pkood_status || '').toUpperCase();
+          stageLabel = ps.toLowerCase() || 'unknown';
+          stageCls = 'stage';
+        } else {
+          stageLabel = sessionStage(c);
+          stageCls = stageClass(stageLabel);
+        }
+        const active = currentConversation === c.id ? ' active' : '';
+        const archiveIcon = c.archived ? '&#8617;' : '&#128229;';
+        const archiveTitle = c.archived ? 'Unarchive' : 'Archive';
+        // "Truly active" = live + sidecar shows active work (glow animation)
+        const trulyActive = c.is_live && c.sidecar_status === 'active' && c.sidecar_has_writes ? ' truly-active' : '';
+        html += '<div class="kanban-card' + active + trulyActive + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
+        // Issue link icon / Create Issue button
+        const linkedIssue = c.linked_issue || c.issue_number || '';
+        const issueAction = linkedIssue
+          ? '<button class="kanban-action-btn" data-action="view-issue" data-issue="' + escapeHtml(linkedIssue) + '" title="View GitHub issue #' + escapeHtml(linkedIssue) + '" style="color:var(--green);">&#128279;</button>'
+          : '<button class="kanban-action-btn" data-action="create-issue" title="Create GitHub issue">&#128221;</button>';
+        html += '<div class="kanban-card-actions">'
+          + '<button class="kanban-action-btn" data-action="edit" title="Rename">&#9998;</button>'
+          + issueAction
+          + '<button class="kanban-action-btn" data-action="archive" title="' + archiveTitle + '">' + archiveIcon + '</button>'
+          + '</div>';
+        const issueBadge = linkedIssue
+          ? '<span class="kanban-issue-badge" title="Linked to GitHub issue">#' + escapeHtml(linkedIssue) + '</span>'
+          : '';
+        html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open &amp; rename">' + issueBadge + escapeHtml(title) + '</div>';
+        html += '<div class="kanban-card-meta">' + escapeHtml(metaParts.join(' \u00b7 ')) + '</div>';
+        html += '<div class="kanban-card-stage ' + stageCls + '">' + escapeHtml(stageLabel) + '</div>';
+
+        // ── Task 8: Approve/Deny for waiting cards with pending_tool ──
+        if (colKey === 'waiting' && c.pending_tool && !c.sidecar_status) {
+          const shortFile = c.pending_file ? c.pending_file.split('/').pop() : '';
+          html += '<div class="kanban-tool-info">\u23f3 ' + escapeHtml(c.pending_tool) + (shortFile ? ': ' + escapeHtml(shortFile) : '') + '</div>';
+          html += '<div class="kanban-approve-deny">'
+            + '<button class="kanban-approve" data-action="approve" title="Approve (send y)">Approve</button>'
+            + '<button class="kanban-deny" data-action="deny" title="Deny (send n)">Deny</button>'
+            + '</div>';
+        }
+
+        // ── Task 7: Inline input on waiting cards ──
+        if (colKey === 'waiting') {
+          html += '<div class="kanban-inline-input">'
+            + '<input type="text" placeholder="Send to terminal..." data-action="inline-input" autocomplete="off">'
+            + '<button data-action="inline-send">&gt;</button>'
+            + '</div>';
+        }
+
+        // ── Task 9: Review card actions ──
+        if (colKey === 'review') {
+          let reviewInfo = '';
+          if (c.has_push) reviewInfo = '\u2713 Pushed to main';
+          else if (c.has_commit) reviewInfo = '\u2713 Committed';
+          if (reviewInfo) html += '<div class="kanban-review-info">' + escapeHtml(reviewInfo) + '</div>';
+          html += '<div class="kanban-review-actions">'
+            + '<button class="kanban-verify-btn" data-action="review-verify" title="Mark verified">&#10003; Verified</button>'
+            + '<button class="kanban-sendback" data-action="review-sendback" title="Send feedback">Send back</button>'
+            + '<button class="kanban-archive-btn" data-action="review-archive" title="Archive without verifying">Archive</button>'
+            + '</div>';
+        }
+
+        html += '</div>';
+      }
+      if (hasMore) {
+        html += '<div class="kanban-show-all" data-col="' + col.key + '">Show all ' + items.length + ' sessions</div>';
+      }
+      html += '</div></div>';
+    }
+    targetEl.innerHTML = html;
+
+    // Attach event handlers
+    targetEl.querySelectorAll('.kanban-column-header').forEach(hdr => {
+      hdr.addEventListener('click', () => {
+        const colKey = hdr.dataset.col;
+        const col = hdr.closest('.kanban-column');
+        const nowCollapsed = !col.classList.contains('collapsed');
+        kanbanCollapsed[colKey] = nowCollapsed;
+        try { localStorage.setItem('clv-kanban-collapsed', JSON.stringify(kanbanCollapsed)); } catch (_) {}
+        col.classList.toggle('collapsed', nowCollapsed);
+        hdr.classList.toggle('collapsed', nowCollapsed);
+        hdr.querySelector('.arrow').innerHTML = nowCollapsed ? '&#9656;' : '&#9662;';
+      });
+    });
+    targetEl.querySelectorAll('.kanban-card').forEach(card => {
+      card.addEventListener('click', (ev) => {
+        if (ev.target.closest('[data-action]')) return;
+        // Ctrl/Cmd/Shift click: toggle multi-select instead of opening
+        if (ev.metaKey || ev.ctrlKey || ev.shiftKey) {
+          ev.preventDefault();
+          if (selectedCardIds.has(card.dataset.id)) {
+            selectedCardIds.delete(card.dataset.id);
+            card.classList.remove('selected');
+          } else {
+            selectedCardIds.add(card.dataset.id);
+            card.classList.add('selected');
+          }
+          return;
+        }
+        // Clear multi-selection on normal click
+        if (selectedCardIds.size > 0) {
+          targetEl.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+          selectedCardIds.clear();
+        }
+        // Re-open conv panel if closed
+        if (!convPanelOpen && $cpCloseBtn) $cpCloseBtn.click();
+        selectConversation(card.dataset.id);
+      });
+      // Restore selected state after re-render
+      if (selectedCardIds.has(card.dataset.id)) card.classList.add('selected');
+      // Drag-and-drop between columns
+      card.addEventListener('dragstart', (ev) => {
+        // If this card is part of a multi-select, include all selected IDs
+        const ids = selectedCardIds.has(card.dataset.id)
+          ? Array.from(selectedCardIds)
+          : [card.dataset.id];
+        ev.dataTransfer.setData('text/plain', ids.join(','));
+        ev.dataTransfer.effectAllowed = 'move';
+        card.classList.add('dragging');
+        // Mark all selected cards as dragging too
+        if (ids.length > 1) {
+          targetEl.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.add('dragging'));
+        }
+      });
+      card.addEventListener('dragend', () => {
+        targetEl.querySelectorAll('.kanban-card.dragging').forEach(el => el.classList.remove('dragging'));
+      });
+      // Allow dropping a backlog card onto another card → link/inject
+      card.addEventListener('dragover', (ev) => {
+        const srcId = ev.dataTransfer && ev.dataTransfer.types.includes('text/plain');
+        // Can't check source id during dragover reliably, just allow
+        ev.preventDefault();
+        ev.stopPropagation();
+        card.classList.add('drop-link-target');
+      });
+      card.addEventListener('dragleave', () => card.classList.remove('drop-link-target'));
+      card.addEventListener('drop', async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        card.classList.remove('drop-link-target');
+        const srcId = ev.dataTransfer.getData('text/plain');
+        if (!srcId || srcId === card.dataset.id) return;
+        const src = conversationsData.find(x => x.id === srcId);
+        const dst = conversationsData.find(x => x.id === card.dataset.id);
+        if (!src || !dst) return;
+        // If source is a backlog item and destination is a session, link them
+        if (src.source === 'backlog' && dst.source !== 'backlog') {
+          const issueNum = src.issue_number;
+          const msg = issueNum
+            ? `Please also work on GitHub issue #${issueNum}: ${src.display_name}. Read it with \`gh issue view ${issueNum}\`.`
+            : `Please also work on: ${src.display_name}`;
+          await fetch('/api/inject-input', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: dst.session_id || dst.id, text: msg }),
+          }).catch(() => {});
+          // Hide the backlog card locally (it's now handled)
+          columnOverrides[src.session_id || src.id] = 'archived';
+          try { localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
+          renderSidebar(filterConversations($convSearch.value));
+        } else {
+          // Regular column move handled by the column drop
+        }
+      });
+    });
+    // Column drop targets — see moveCardToColumn below
+    targetEl.querySelectorAll('.kanban-column').forEach(col => {
+      col.addEventListener('dragover', (ev) => {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = 'move';
+        col.classList.add('drag-over');
+      });
+      col.addEventListener('dragleave', (ev) => {
+        // Only remove if leaving the column entirely
+        if (!col.contains(ev.relatedTarget)) col.classList.remove('drag-over');
+      });
+      col.addEventListener('drop', async (ev) => {
+        ev.preventDefault();
+        col.classList.remove('drag-over');
+        const ids = (ev.dataTransfer.getData('text/plain') || '').split(',').filter(Boolean);
+        const targetCol = col.dataset.col;
+        if (ids.length > 1) {
+          await moveCardsToColumn(ids, targetCol);
+        } else if (ids.length === 1) {
+          await moveCardToColumn(ids[0], targetCol);
+        }
+        targetEl.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+        selectedCardIds.clear();
+      });
+    });
+    // Rename action
+    // Title click: select conversation AND open edit mode
+    targetEl.querySelectorAll('[data-action="edit-title"]').forEach(el => {
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const card = el.closest('.kanban-card');
+        // 1. Select the conversation (open in right panel)
+        if (!convPanelOpen && $cpCloseBtn) $cpCloseBtn.click();
+        selectConversation(card.dataset.id);
+        // 2. Trigger the edit flow
+        const editBtn = card.querySelector('[data-action="edit"]');
+        if (editBtn) editBtn.click();
+      });
+    });
+    // View linked GitHub issue
+    targetEl.querySelectorAll('[data-action="view-issue"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const issueNum = btn.dataset.issue;
+        if (!issueNum) return;
+        // Open GitHub issue in browser (requires repo name — best effort via gh)
+        const repo = document.body.dataset.repo || 'amirfish1/my-finance-app';
+        window.open('https://github.com/' + repo + '/issues/' + issueNum, '_blank');
+      });
+    });
+    // Create new GitHub issue for this session
+    targetEl.querySelectorAll('[data-action="create-issue"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const card = btn.closest('.kanban-card');
+        const c = conversationsData.find(x => x.id === card.dataset.id);
+        if (!c) return;
+        if (!confirm('Create a GitHub issue for this session?')) return;
+        btn.disabled = true;
+        const origHtml = btn.innerHTML;
+        btn.innerHTML = '\u2026';
+        try {
+          const res = await fetch('/api/conversations/' + card.dataset.id + '/create-issue', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              session_id: c.session_id,
+              display_name: c.display_name,
+              first_message: c.first_message,
+              last_prompt: c.last_prompt,
+              branch: c.branch,
+            }),
+          });
+          const data = await res.json();
+          if (data.ok && data.issue_number) {
+            c.linked_issue = data.issue_number;
+            renderSidebar(filterConversations($convSearch.value));
+          } else {
+            alert('Failed: ' + (data.error || 'unknown'));
+            btn.disabled = false;
+            btn.innerHTML = origHtml;
+          }
+        } catch (err) {
+          alert('Error: ' + err.message);
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
+      });
+    });
+    targetEl.querySelectorAll('[data-action="edit"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const card = btn.closest('.kanban-card');
+        const titleEl = card.querySelector('.kanban-card-title');
+        if (!titleEl || card.querySelector('.kanban-rename-input')) return;
+        // Use the real stored display_name (with dashes), not the display-only version
+        const c = conversationsData.find(x => x.id === card.dataset.id);
+        const currentText = (c && c.display_name) || titleEl.textContent;
+        const input = document.createElement('textarea');
+        input.className = 'kanban-rename-input';
+        input.value = currentText;
+        input.rows = 2;
+        input.style.cssText = 'width:100%;font-size:14px;font-weight:600;padding:6px 8px;border-radius:4px;border:1px solid var(--accent);background:var(--bg);color:var(--text);font-family:inherit;outline:none;resize:vertical;min-height:40px;line-height:1.4;white-space:pre-wrap;word-wrap:break-word;';
+        titleEl.replaceWith(input);
+        // Auto-size to content
+        input.style.height = 'auto';
+        input.style.height = Math.max(40, input.scrollHeight) + 'px';
+        input.focus(); input.select();
+        input.addEventListener('input', () => {
+          input.style.height = 'auto';
+          input.style.height = Math.max(40, input.scrollHeight) + 'px';
+        });
+        let done = false;
+        async function commit(save) {
+          if (done) return; done = true;
+          if (save) {
+            const newName = input.value.trim();
+            // Only call rename API if the name actually changed
+            if (newName !== currentText) {
+              try {
+                await fetch('/api/conversations/' + card.dataset.id + '/rename', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({ session_id: card.dataset.sessionId, name: newName }),
+                });
+                const c = conversationsData.find(x => x.id === card.dataset.id);
+                if (c) { c.display_name = newName || null; c.name_overridden = !!newName; }
+              } catch (_) {}
+            }
+          }
+          renderSidebar(filterConversations($convSearch.value));
+        }
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit(true); }
+          else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+        });
+        input.addEventListener('blur', () => commit(true));
+      });
+    });
+    // Archive action
+    targetEl.querySelectorAll('[data-action="archive"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const card = btn.closest('.kanban-card');
+        try {
+          const res = await fetch('/api/conversations/' + card.dataset.id + '/archive', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: card.dataset.sessionId }),
+          });
+          const data = await res.json();
+          const c = conversationsData.find(x => x.id === card.dataset.id);
+          if (c) c.archived = !!data.archived;
+          renderSidebar(filterConversations($convSearch.value));
+        } catch (_) {}
+      });
+    });
+    targetEl.querySelectorAll('.kanban-show-all').forEach(link => {
+      link.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        kanbanShowAll[link.dataset.col] = true;
+        renderKanbanBoard(convs, targetEl, isSplit);
+      });
+    });
+
+    // ── Marquee (rubber-band) multi-select ──
+    // Drag on empty area of the board to select multiple cards.
+    if (!targetEl._marqueeInstalled) {
+      targetEl._marqueeInstalled = true;
+      let marquee = null;
+      let startX = 0, startY = 0;
+      let isMarquee = false;
+
+      targetEl.addEventListener('mousedown', (ev) => {
+        // Only start marquee if the click is on empty space (not on a card or button)
+        if (ev.target.closest('.kanban-card') || ev.target.closest('button') ||
+            ev.target.closest('input') || ev.target.closest('textarea') ||
+            ev.target.closest('.kanban-column-header')) return;
+        if (ev.button !== 0) return; // left-click only
+        isMarquee = true;
+        const rect = targetEl.getBoundingClientRect();
+        startX = ev.clientX - rect.left + targetEl.scrollLeft;
+        startY = ev.clientY - rect.top + targetEl.scrollTop;
+        marquee = document.createElement('div');
+        marquee.className = 'kanban-marquee';
+        marquee.style.cssText = 'position:absolute;border:1px dashed var(--accent);background:rgba(88,166,255,0.08);pointer-events:none;z-index:1000;';
+        targetEl.style.position = 'relative';
+        targetEl.appendChild(marquee);
+        // If not holding ctrl/cmd, clear previous selection
+        if (!ev.metaKey && !ev.ctrlKey && !ev.shiftKey) {
+          targetEl.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+          selectedCardIds.clear();
+        }
+      });
+
+      document.addEventListener('mousemove', (ev) => {
+        if (!isMarquee || !marquee) return;
+        const rect = targetEl.getBoundingClientRect();
+        const curX = ev.clientX - rect.left + targetEl.scrollLeft;
+        const curY = ev.clientY - rect.top + targetEl.scrollTop;
+        const left = Math.min(startX, curX);
+        const top = Math.min(startY, curY);
+        const width = Math.abs(curX - startX);
+        const height = Math.abs(curY - startY);
+        marquee.style.left = left + 'px';
+        marquee.style.top = top + 'px';
+        marquee.style.width = width + 'px';
+        marquee.style.height = height + 'px';
+        // Highlight cards intersecting the marquee
+        targetEl.querySelectorAll('.kanban-card').forEach(card => {
+          const cr = card.getBoundingClientRect();
+          const cardLeft = cr.left - rect.left + targetEl.scrollLeft;
+          const cardTop = cr.top - rect.top + targetEl.scrollTop;
+          const cardRight = cardLeft + cr.width;
+          const cardBottom = cardTop + cr.height;
+          const intersects = !(cardRight < left || cardLeft > left + width ||
+                               cardBottom < top || cardTop > top + height);
+          if (intersects) {
+            card.classList.add('selected');
+            selectedCardIds.add(card.dataset.id);
+          }
+        });
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (!isMarquee) return;
+        isMarquee = false;
+        if (marquee) { marquee.remove(); marquee = null; }
+      });
+
+      // ── Auto-scroll horizontally during drag near edges ──
+      let autoScrollRaf = null;
+      let lastPointerX = 0;
+
+      targetEl.addEventListener('dragover', (ev) => {
+        lastPointerX = ev.clientX;
+        if (autoScrollRaf) return;
+        const tick = () => {
+          const rect = targetEl.getBoundingClientRect();
+          const EDGE = 80;
+          const SPEED = 15;
+          if (lastPointerX > rect.right - EDGE) {
+            targetEl.scrollLeft += SPEED;
+          } else if (lastPointerX < rect.left + EDGE) {
+            targetEl.scrollLeft -= SPEED;
+          }
+          autoScrollRaf = requestAnimationFrame(tick);
+        };
+        autoScrollRaf = requestAnimationFrame(tick);
+      });
+
+      targetEl.addEventListener('dragleave', (ev) => {
+        // Cancel auto-scroll when pointer leaves the container entirely
+        if (!targetEl.contains(ev.relatedTarget)) {
+          if (autoScrollRaf) { cancelAnimationFrame(autoScrollRaf); autoScrollRaf = null; }
+        }
+      });
+      targetEl.addEventListener('drop', () => {
+        if (autoScrollRaf) { cancelAnimationFrame(autoScrollRaf); autoScrollRaf = null; }
+      });
+      document.addEventListener('dragend', () => {
+        if (autoScrollRaf) { cancelAnimationFrame(autoScrollRaf); autoScrollRaf = null; }
+      });
+    }
+
+    // ── Task 7: Inline input send handler ──
+    targetEl.querySelectorAll('[data-action="inline-send"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const card = btn.closest('.kanban-card');
+        const inp = card.querySelector('[data-action="inline-input"]');
+        const text = (inp && inp.value || '').trim();
+        if (!text) return;
+        const sid = card.dataset.sessionId;
+        injectToSession(sid, text, btn, inp);
+      });
+    });
+    targetEl.querySelectorAll('[data-action="inline-input"]').forEach(inp => {
+      inp.addEventListener('click', (ev) => ev.stopPropagation());
+      inp.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          ev.preventDefault(); ev.stopPropagation();
+          const card = inp.closest('.kanban-card');
+          const text = inp.value.trim();
+          if (!text) return;
+          const sid = card.dataset.sessionId;
+          const btn = card.querySelector('[data-action="inline-send"]');
+          injectToSession(sid, text, btn, inp);
+        }
+      });
+    });
+
+    // ── Task 8: Approve/Deny handlers ──
+    targetEl.querySelectorAll('[data-action="approve"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const card = btn.closest('.kanban-card');
+        injectToSession(card.dataset.sessionId, 'y', btn);
+      });
+    });
+    targetEl.querySelectorAll('[data-action="deny"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const card = btn.closest('.kanban-card');
+        injectToSession(card.dataset.sessionId, 'n', btn);
+      });
+    });
+
+    // ── Task 9: Review archive + send-back handlers ──
+    targetEl.querySelectorAll('[data-action="review-verify"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const card = btn.closest('.kanban-card');
+        try {
+          const res = await fetch('/api/conversations/' + card.dataset.id + '/verify', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: card.dataset.sessionId }),
+          });
+          const data = await res.json();
+          const c = conversationsData.find(x => x.id === card.dataset.id);
+          if (c) c.verified = !!data.verified;
+          renderSidebar(filterConversations($convSearch.value));
+        } catch (_) {}
+      });
+    });
+    targetEl.querySelectorAll('[data-action="review-archive"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const card = btn.closest('.kanban-card');
+        try {
+          const res = await fetch('/api/conversations/' + card.dataset.id + '/archive', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: card.dataset.sessionId }),
+          });
+          const data = await res.json();
+          const c = conversationsData.find(x => x.id === card.dataset.id);
+          if (c) c.archived = !!data.archived;
+          renderSidebar(filterConversations($convSearch.value));
+        } catch (_) {}
+      });
+    });
+    targetEl.querySelectorAll('[data-action="review-sendback"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const card = btn.closest('.kanban-card');
+        const sid = card.dataset.sessionId;
+        const feedback = prompt('Enter feedback to send back:');
+        if (!feedback) return;
+        // Clear committed/pushed flags so card moves out of Review
+        const c = conversationsData.find(x => x.id === card.dataset.id);
+        if (c) {
+          c.has_push = false;
+          c.has_commit = false;
+        }
+        const isLive = c && c.is_live;
+        if (!isLive) {
+          btn.textContent = 'Launching...';
+          try {
+            await fetch('/api/launch-terminal', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ session_id: sid, cwd: c && c.session_cwd }),
+            });
+            // Wait for terminal to be ready
+            await new Promise(r => setTimeout(r, 3000));
+          } catch (_) {}
+        }
+        btn.textContent = 'Sending...';
+        await injectToSession(sid, feedback, btn);
+        // Re-render so card moves out of Review
+        renderSidebar(filterConversations($convSearch ? $convSearch.value : ''));
+      });
+    });
+
+    // ── Task 10: Start Session from backlog ──
+    targetEl.querySelectorAll('.kanban-start-btn').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const issueNum = btn.dataset.issue;
+        const title = btn.dataset.title;
+        // Clean title for use as session name: strip #N: prefix, strip [BYM...] tags, clean chars
+        let cleanTitle = (title || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
+        const sessionName = issueNum ? ('issue-' + issueNum) : cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
+        const prompt = issueNum
+          ? 'Fix GitHub issue #' + issueNum + ': ' + cleanTitle + '. Read the issue first with `gh issue view ' + issueNum + '`, then implement the fix.'
+          : cleanTitle;
+        btn.disabled = true;
+        btn.textContent = 'Starting...';
+        // Optimistically hide the backlog card immediately
+        const card = btn.closest('.kanban-card');
+        const cardId = card && card.dataset.id;
+        if (cardId) {
+          const c = conversationsData.find(x => x.id === cardId);
+          if (c) {
+            // Store override so it's hidden until the real session replaces it
+            columnOverrides[c.session_id || c.id] = 'archived';
+            try { localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
+          }
+        }
+        try {
+          await fetch('/api/sessions/spawn', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ prompt: prompt, name: sessionName }),
+          });
+        } catch (_) {}
+        // Re-render immediately to hide backlog, then refresh for the new session
+        renderSidebar(filterConversations($convSearch.value));
+        setTimeout(function() { refreshConversationList(); }, 3000);
+      });
+    });
+  }
+
+  // Shared helper: inject text to a session via API
+  async function injectToSession(sessionId, text, feedbackEl, clearInput) {
+    try {
+      const res = await fetch('/api/inject-input', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ session_id: sessionId, text }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        if (feedbackEl) {
+          const orig = feedbackEl.textContent;
+          feedbackEl.textContent = '\u2713';
+          feedbackEl.style.color = 'var(--green)';
+          setTimeout(() => { feedbackEl.textContent = orig; feedbackEl.style.color = ''; }, 1200);
+        }
+        if (clearInput) clearInput.value = '';
+      } else {
+        if (feedbackEl) {
+          feedbackEl.style.borderColor = 'var(--red)';
+          setTimeout(() => { feedbackEl.style.borderColor = ''; }, 1500);
+        }
+      }
+    } catch (_) {
+      if (feedbackEl) {
+        feedbackEl.style.borderColor = 'var(--red)';
+        setTimeout(() => { feedbackEl.style.borderColor = ''; }, 1500);
+      }
+    }
+  }
+
+  function renderConversationList(convs) {
+    if (!convs.length) {
+      $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">No conversations found</div>';
+      return;
+    }
+    $convList.innerHTML = convs.map(c => {
+      const rawTitle = c.display_name || (c.first_message ? c.first_message.slice(0, 60) : '(untitled)');
+      const title = rawTitle.replace(/-/g, ' ');
+      let titleClass = '';
+      if (c.name_overridden) titleClass = 'user-renamed';
+      else if (!c.display_name && !c.first_message) titleClass = 'untitled';
+      // Show the original ask (first_message) when we have a display_name title,
+      // so the user always sees what this session was about
+      const ask = (c.display_name && c.first_message)
+        ? '<div class="conv-last">' + escapeHtml(c.first_message.slice(0, 100)) + '</div>'
+        : '';
+      const last = c.last_prompt
+        ? '<div class="conv-last"><span class="label">last:</span>' + escapeHtml(c.last_prompt.slice(0, 80)) + '</div>'
+        : '';
+      const branch = c.branch ? '<span class="branch-badge">' + escapeHtml(c.branch) + '</span>' : '';
+      let sourceBadge = '';
+      if (c.source === 'watcher') sourceBadge = '<span class="source-badge">watcher</span>';
+      else if (c.source === 'pkood') sourceBadge = '<span class="source-badge pkood">pkood</span>';
+      const rel = relativeTime(c.modified);
+      const active = currentConversation === c.id ? ' active' : '';
+
+      // Session signals
+      let signals = '';
+      if (c.source === 'pkood') {
+        // Pkood status signals
+        const ps = (c.pkood_status || '').toUpperCase();
+        if (ps === 'RUNNING') signals += '<span class="conv-signal pkood-running">running</span>';
+        else if (ps === 'IDLE') signals += '<span class="conv-signal pkood-idle">idle</span>';
+        else if (ps === 'BLOCKED') signals += '<span class="conv-signal pkood-blocked">blocked</span>';
+        if (c.pkood_is_stuck) signals += '<span class="conv-signal pkood-stuck">stuck</span>';
+      } else {
+        const stage = sessionStage(c);
+        const stageCls = stageClass(stage);
+        signals += '<span class="conv-signal ' + stageCls + '">' + stage + '</span>';
+
+        // Activity: working / blocked on approval / waiting for input / idle
+        const ageSec = Date.now() / 1000 - c.modified;
+        let activity, actClass;
+        if (c.pending_tool && c.last_event_type === 'assistant' && ageSec > 10 && ageSec < 300 && !c.sidecar_status) {
+          const shortFile = c.pending_file ? c.pending_file.split('/').pop() : '';
+          activity = '\u23f3 ' + c.pending_tool + (shortFile ? ': ' + shortFile : '');
+          actClass = 'activity-blocked';
+        } else if (ageSec < 30 && c.last_event_type === 'assistant') {
+          activity = 'working'; actClass = 'activity-working';
+        } else if (ageSec < 120 && c.last_event_type === 'result') {
+          activity = 'waiting for input'; actClass = 'activity-waiting';
+        } else if (ageSec < 300) {
+          activity = 'idle'; actClass = 'activity-idle';
+        } else {
+          activity = ''; actClass = '';
+        }
+        if (activity) signals += '<span class="conv-signal ' + actClass + '">' + escapeHtml(activity) + '</span>';
+      }
+
+      return '<div class="conv-item' + active + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
+        + '<span class="drag-handle" data-role="drag">&#10495;</span>'
+        + '<div class="conv-title-row">'
+          + '<div class="conv-title ' + titleClass + '" data-role="title">' + escapeHtml(title) + '</div>'
+          + signals
+          + '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>'
+          + '<button class="conv-edit-btn" data-role="edit" title="Rename">&#9998;</button>'
+        + '</div>'
+        + ask
+        + last
+        + '<div class="meta">'
+          + '<span data-role="rel">' + escapeHtml(rel) + '</span>'
+          + '<span class="sep">&middot;</span>'
+          + '<span>' + formatSize(c.size) + '</span>'
+          + (branch ? '<span class="sep">&middot;</span>' + branch : '')
+          + (sourceBadge ? '<span class="sep">&middot;</span>' + sourceBadge : '')
+        + '</div>'
+      + '</div>';
+    }).join('');
+    $convList.querySelectorAll('.conv-item').forEach(el => {
+      el.addEventListener('click', (ev) => {
+        // Ignore clicks that started the inline editor or archive button
+        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('.conv-title-input')) return;
+        selectConversation(el.dataset.id);
+      });
+      attachDragHandlers(el);
+    });
+    $convList.querySelectorAll('.conv-edit-btn').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        startInlineRename(btn.closest('.conv-item'));
+      });
+    });
+    $convList.querySelectorAll('.conv-archive-btn').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const item = btn.closest('.conv-item');
+        const convId = item.dataset.id;
+        const sessionId = item.dataset.sessionId;
+        try {
+          const res = await fetch('/api/conversations/' + convId + '/archive', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: sessionId }),
+          });
+          const data = await res.json();
+          if (data.ok) {
+            const c = conversationsData.find(x => x.id === convId);
+            if (c) c.archived = data.archived;
+            renderSidebar(filterConversations($convSearch.value));
+          }
+        } catch (err) { /* swallow */ }
+      });
+    });
+  }
+
+  // ── Drag-to-reorder ──
+  let dragSourceId = null;
+
+  function attachDragHandlers(el) {
+    el.addEventListener('dragstart', (ev) => {
+      dragSourceId = el.dataset.id;
+      el.classList.add('dragging');
+      try { ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+      try { ev.dataTransfer.setData('text/plain', el.dataset.id); } catch (_) {}
+    });
+    el.addEventListener('dragend', () => {
+      dragSourceId = null;
+      $convList.querySelectorAll('.conv-item').forEach(n => {
+        n.classList.remove('dragging', 'drop-above', 'drop-below');
+      });
+    });
+    el.addEventListener('dragover', (ev) => {
+      if (!dragSourceId || dragSourceId === el.dataset.id) return;
+      ev.preventDefault();
+      try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+      const rect = el.getBoundingClientRect();
+      const before = (ev.clientY - rect.top) < rect.height / 2;
+      el.classList.toggle('drop-above', before);
+      el.classList.toggle('drop-below', !before);
+    });
+    el.addEventListener('dragleave', () => {
+      el.classList.remove('drop-above', 'drop-below');
+    });
+    el.addEventListener('drop', async (ev) => {
+      ev.preventDefault();
+      const src = dragSourceId;
+      const dstId = el.dataset.id;
+      if (!src || src === dstId) return;
+      const before = el.classList.contains('drop-above');
+      el.classList.remove('drop-above', 'drop-below');
+      // Reorder conversationsData: remove src, insert relative to dst
+      const srcIdx = conversationsData.findIndex(c => c.id === src);
+      if (srcIdx < 0) return;
+      const [moved] = conversationsData.splice(srcIdx, 1);
+      const dstIdx = conversationsData.findIndex(c => c.id === dstId);
+      const insertAt = before ? dstIdx : dstIdx + 1;
+      conversationsData.splice(insertAt, 0, moved);
+      // Save + re-render
+      await saveConversationOrder();
+      renderSidebar(filterConversations($convSearch.value));
+    });
+  }
+
+  async function saveConversationOrder() {
+    try {
+      const order = conversationsData.map(c => c.session_id || c.id);
+      await fetch('/api/conversations/order', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ order }),
+      });
+    } catch (err) { /* swallow */ }
+  }
+
+  // Sort toggle: "custom" (drag order) vs "recent" (by mtime)
+  let convSortMode = 'recent';  // always latest-first
+  let showRecentOnly = localStorage.getItem('clv-show-recent') === '1';
+  const RECENT_HOURS = 10;
+  const $convSortBtn = document.getElementById('convSortBtn');
+
+  function applyConvSort(data) {
+    if (convSortMode === 'recent') {
+      return [...data].sort((a, b) => b.modified - a.modified);
+    }
+    return data; // custom/default order from server
+  }
+
+  function updateSortBtn() {
+    if (!$convSortBtn) return;
+    const isRecent = convSortMode === 'recent';
+    $convSortBtn.classList.toggle('active', isRecent);
+    $convSortBtn.title = isRecent
+      ? 'Sorted by latest response (click for custom order)'
+      : 'Sort by latest response (ignores custom order)';
+  }
+
+  if ($convSortBtn) {
+    updateSortBtn();
+    $convSortBtn.addEventListener('click', () => {
+      convSortMode = convSortMode === 'recent' ? 'custom' : 'recent';
+      localStorage.setItem('clv-conv-sort', convSortMode);
+      updateSortBtn();
+      renderSidebar(filterConversations($convSearch.value));
+    });
+  }
+
+  // ── Kanban toggle ──
+  function activateSplitMode(active) {
+    if (active) {
+      document.body.classList.add('kanban-split');
+      if ($kanbanLayout) $kanbanLayout.classList.add('active');
+    } else {
+      document.body.classList.remove('kanban-split');
+      if ($kanbanLayout) $kanbanLayout.classList.remove('active');
+    }
+  }
+  function updateKanbanToggle() {
+    if ($convKanbanToggle) $convKanbanToggle.classList.toggle('active', kanbanView);
+    activateSplitMode(kanbanView);
+  }
+  updateKanbanToggle();
+  // Apply initial state if kanban was persisted on
+  if (kanbanView) {
+    $convList.style.display = 'none';
+    $kanbanBoard.style.display = '';
+  }
+  if ($convKanbanToggle) {
+    $convKanbanToggle.addEventListener('click', () => {
+      kanbanView = !kanbanView;
+      localStorage.setItem('clv-kanban-view', kanbanView ? 'true' : 'false');
+      updateKanbanToggle();
+      renderSidebar(filterConversations($convSearch.value));
+    });
+  }
+  // Back-to-list button in split toolbar
+  const $kptListViewBtn = document.getElementById('kptListViewBtn');
+  if ($kptListViewBtn) {
+    $kptListViewBtn.addEventListener('click', () => {
+      kanbanView = false;
+      localStorage.setItem('clv-kanban-view', 'false');
+      updateKanbanToggle();
+      renderSidebar(filterConversations($convSearch.value));
+    });
+  }
+
+  async function refreshConversationList() {
+    if ($convRefreshBtn) $convRefreshBtn.classList.add('spinning');
+    conversationsLoaded = false;
+    await loadConversationList();
+    setTimeout(() => {
+      if ($convRefreshBtn) $convRefreshBtn.classList.remove('spinning');
+    }, 400);
+  }
+
+  if ($convRefreshBtn) $convRefreshBtn.addEventListener('click', refreshConversationList);
+
+  // Archive toggle
+  const $convArchiveToggle = document.getElementById('convArchiveToggle');
+  if ($convArchiveToggle) {
+    $convArchiveToggle.addEventListener('click', () => {
+      showArchived = !showArchived;
+      $convArchiveToggle.classList.toggle('active', showArchived);
+      $convArchiveToggle.title = showArchived ? 'Show active' : 'Show archived';
+      renderSidebar(filterConversations($convSearch.value));
+    });
+  }
+
+  function startInlineRename(item) {
+    if (!item) return;
+    const titleEl = item.querySelector('[data-role="title"]');
+    if (!titleEl || item.querySelector('.conv-title-input')) return;
+    const currentText = titleEl.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'conv-title-input';
+    input.value = currentText.startsWith('(') && currentText.endsWith(')') ? '' : currentText;
+    input.placeholder = 'Session name…';
+    titleEl.replaceWith(input);
+    // hide edit button while editing
+    const editBtn = item.querySelector('.conv-edit-btn');
+    if (editBtn) editBtn.style.display = 'none';
+    input.focus();
+    input.select();
+
+    let finished = false;
+    async function commit(save) {
+      if (finished) return;
+      finished = true;
+      if (save) {
+        const newName = input.value.trim();
+        try {
+          const res = await fetch('/api/conversations/' + item.dataset.id + '/rename', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: item.dataset.sessionId, name: newName }),
+          });
+          const data = await res.json();
+          // Update cached data so next render reflects the change
+          const c = conversationsData.find(x => x.id === item.dataset.id);
+          if (c) {
+            c.display_name = newName || null;
+            // User just renamed from the viewer → always teal regardless of
+            // storage path (jsonl write-through vs. side-car fallback).
+            c.name_overridden = !!newName;
+          }
+          // Brief toast on the item title
+          const toast = document.createElement('div');
+          toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:12px;color:var(--text);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
+          if (data.method === 'jsonl') {
+            toast.innerHTML = '<span style="color:var(--green)">\u2713</span> Saved to .jsonl &mdash; <code>claude --resume</code> will see it';
+          } else if (data.method === 'sidecar' && data.live) {
+            toast.innerHTML = '<span style="color:var(--orange)">!</span> Session is currently running &mdash; use <code>/rename</code> inside claude for a persistent rename';
+          } else {
+            toast.innerHTML = '<span style="color:var(--accent)">i</span> Saved to side-car only (jsonl missing)';
+          }
+          document.body.appendChild(toast);
+          setTimeout(() => toast.remove(), 3500);
+        } catch (err) { /* swallow */ }
+      }
+      // Re-render
+      renderSidebar(filterConversations($convSearch.value));
+    }
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+    });
+    input.addEventListener('blur', () => commit(true));
+  }
+
+  // Return the active conversation view element (split panel or main)
+  function getConvView() {
+    return (kanbanView && $convPanelView) ? $convPanelView : $conversationsView;
+  }
+
+  async function selectConversation(id) {
+    // Stop any existing SSE stream or pollers
+    stopConvStream();
+    stopIssueLogPoller();
+    currentConversation = id;
+    convLastLine = 0;
+    _firstUserMsgRendered = false;
+    const $view = getConvView();
+    $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading...</div>';
+    // Update active state in sidebar (list view)
+    $convList.querySelectorAll('.conv-item').forEach(el => {
+      el.classList.toggle('active', el.dataset.id === id);
+    });
+    // Update active state in kanban views (sidebar + split)
+    $kanbanBoard.querySelectorAll('.kanban-card').forEach(el => {
+      el.classList.toggle('active', el.dataset.id === id);
+    });
+    if ($kanbanBoardSplit) {
+      $kanbanBoardSplit.querySelectorAll('.kanban-card').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === id);
+      });
+    }
+    // Update split panel session ID display
+    if ($cpSessionId) {
+      const sid = sessionIdByConv[id] || '';
+      $cpSessionId.textContent = sid;
+      $cpSessionId.onclick = () => {
+        if (!sid) return;
+        navigator.clipboard.writeText(sid).then(() => {
+          $cpSessionId.textContent = 'copied!';
+          setTimeout(() => { $cpSessionId.textContent = sid; }, 1000);
+        });
+      };
+    }
+    const source = sessionSourceByConv[id] || 'interactive';
+    setCurrentSession(
+      source,
+      sessionIdByConv[id],
+      sessionCwdByConv[id],
+      sessionCwdExistsByConv[id],
+      sessionSpawnPidByConv[id]
+    );
+    // Update split panel input bar visibility
+    updateSplitInputBar();
+    // Update split panel toolbar buttons
+    updateSplitToolbar();
+
+    if (source === 'pkood') {
+      stopPkoodTailPoller();
+      const agentId = id.replace(/^pkood-/, '');
+      if ($pkoodKillBtn) {
+        $pkoodKillBtn.style.display = '';
+        $pkoodKillBtn.onclick = async () => {
+          if (!confirm('Kill pkood agent "' + agentId + '"?')) return;
+          try {
+            const res = await fetch('/api/pkood/kill', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ agent_id: agentId }),
+            });
+            const data = await res.json();
+            if (data.ok) {
+              $pkoodKillBtn.textContent = 'Killed';
+              setTimeout(() => { $pkoodKillBtn.textContent = 'Kill'; refreshConversationList(); }, 1500);
+            }
+          } catch (err) {}
+        };
+      }
+      await loadPkoodTail(agentId);
+      pkoodTailPoller = setInterval(() => loadPkoodTail(agentId), 2000);
+    } else if (source === 'watcher') {
+      stopPkoodTailPoller();
+      stopIssueLogPoller();
+      if ($pkoodKillBtn) $pkoodKillBtn.style.display = 'none';
+      const issue = sessionIssueByConv[id];
+      if (!issue) return;
+      try {
+        const res = await fetch('/api/logs/' + issue);
+        const data = await res.json();
+        $view.innerHTML = '';
+        renderConversationEvents(data.events || []);
+        issueLogLastLine = data.last_line || 0;
+      } catch (err) {
+        $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Error: ' + escapeHtml(err.message) + '</div>';
+      }
+      issueLogPoller = setInterval(() => pollIssueLogs(issue), 2000);
+    } else {
+      stopPkoodTailPoller();
+      if ($pkoodKillBtn) $pkoodKillBtn.style.display = 'none';
+      await fetchConversationEvents();
+      startConvStream();
+    }
+  }
+
+  // ── Split panel input bar ──
+  function updateSplitInputBar() {
+    if (!$convPanelInput) return;
+    const isPkood = currentSession.source === 'pkood';
+    const live = liveStatus.live && liveStatus.tty;
+    const hasSession = !!currentSession.id;
+    if ((live || isPkood) && hasSession && kanbanView) {
+      $convPanelInput.classList.add('visible');
+      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (liveStatus.tty || '');
+      if ($cpInput) $cpInput.placeholder = isPkood ? 'Send to pkood agent...' : 'Send to terminal...';
+    } else {
+      $convPanelInput.classList.remove('visible');
+    }
+  }
+  // ── Split panel toolbar buttons ──
+  function updateSplitToolbar() {
+    const $cpJumpBtn = document.getElementById('cpJumpBtn');
+    const $cpLaunchBtn = document.getElementById('cpLaunchBtn');
+    const $cpKillBtn = document.getElementById('cpKillBtn');
+    if (!$cpJumpBtn) return;
+    const sid = currentSession.id;
+    const live = liveStatus.live;
+    const isPkood = currentSession.source === 'pkood';
+    // Jump: show when live with tty
+    $cpJumpBtn.style.display = (live && liveStatus.tty && !isPkood) ? '' : 'none';
+    $cpJumpBtn.onclick = async () => {
+      if (!liveStatus.tty) return;
+      try {
+        await fetch('/api/jump-terminal', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ tty: liveStatus.tty, terminal_app: liveStatus.terminalApp }),
+        });
+      } catch (_) {}
+    };
+    // Launch: show when not live and has session
+    $cpLaunchBtn.style.display = (!live && sid && !isPkood) ? '' : 'none';
+    $cpLaunchBtn.onclick = async () => {
+      if (!sid) return;
+      $cpLaunchBtn.textContent = 'Launching...';
+      try {
+        await fetch('/api/launch-terminal', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ session_id: sid, cwd: currentSession.cwd }),
+        });
+        $cpLaunchBtn.textContent = 'Launched!';
+        setTimeout(() => { $cpLaunchBtn.innerHTML = '<span>&#43;</span> Launch'; }, 1500);
+      } catch (_) {
+        $cpLaunchBtn.innerHTML = '<span>&#43;</span> Launch';
+      }
+    };
+    // Kill: show for pkood
+    $cpKillBtn.style.display = isPkood ? '' : 'none';
+  }
+
+  function startConvStream() {
+    stopConvStream();
+    if (!currentConversation) return;
+    const url = '/api/conversations/' + currentConversation + '/stream?after=' + convLastLine;
+    convEventSource = new EventSource(url);
+    convEventSource.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        if (data.events && data.events.length > 0) {
+          renderConversationEvents(data.events);
+          convLastLine = data.last_line;
+        }
+      } catch (err) {}
+    };
+    convEventSource.onerror = () => {
+      stopConvStream();
+      setTimeout(startConvStream, 2000);
+    };
+  }
+
+  function stopConvStream() {
+    if (convEventSource) {
+      convEventSource.close();
+      convEventSource = null;
+    }
+  }
+
+  function stopPkoodTailPoller() {
+    if (pkoodTailPoller) {
+      clearInterval(pkoodTailPoller);
+      pkoodTailPoller = null;
+    }
+  }
+
+  function stopIssueLogPoller() {
+    if (issueLogPoller) {
+      clearInterval(issueLogPoller);
+      issueLogPoller = null;
+    }
+    issueLogLastLine = 0;
+  }
+
+  async function pollIssueLogs(issueNum) {
+    try {
+      const res = await fetch('/api/logs/' + issueNum + '?after=' + issueLogLastLine);
+      const data = await res.json();
+      if (data.events && data.events.length > 0) {
+        renderConversationEvents(data.events);
+        issueLogLastLine = data.last_line;
+      }
+    } catch (err) {}
+  }
+
+  async function loadPkoodTail(agentId) {
+    const $view = getConvView();
+    try {
+      const res = await fetch('/api/pkood/tail?id=' + encodeURIComponent(agentId));
+      const data = await res.json();
+      if (data.ok) {
+        const atBottom = $view.scrollHeight - $view.scrollTop - $view.clientHeight < 40;
+        $view.innerHTML = '<pre class="pkood-tail-output">' + escapeHtml(data.output || '(no output yet)') + '</pre>';
+        if (atBottom) $view.scrollTop = $view.scrollHeight;
+      } else {
+        $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Error: ' + escapeHtml(data.error || 'unknown') + '</div>';
+      }
+    } catch (err) {
+      // Keep existing content on transient fetch errors
+    }
+  }
+
+  async function fetchConversationEvents() {
+    if (!currentConversation) return;
+    const id = currentConversation;
+    const $view = getConvView();
+    try {
+      const res = await fetch('/api/conversations/' + id + '?after=' + convLastLine);
+      const data = await res.json();
+      if (id !== currentConversation) return;
+      if (convLastLine === 0) {
+        $view.innerHTML = '';
+      }
+      renderConversationEvents(data.events);
+      convLastLine = data.last_line;
+    } catch (err) {
+      if (convLastLine === 0) {
+        $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Error: ' + escapeHtml(err.message) + '</div>';
+      }
+    }
+  }
+
+  let _firstUserMsgRendered = false;
+
+  function renderConversationEvents(events) {
+    const $view = getConvView();
+    for (const ev of events) {
+      const div = document.createElement('div');
+      div.className = 'event ' + ev.type;
+
+      // Make the first user message sticky at the top
+      if (ev.type === 'user_text' && !_firstUserMsgRendered) {
+        _firstUserMsgRendered = true;
+        let sticky = $view.querySelector('.conv-sticky-header');
+        if (!sticky) {
+          sticky = document.createElement('div');
+          sticky.className = 'conv-sticky-header';
+          sticky.innerHTML = '<div class="label">Original ask</div>'
+            + '<div class="user-msg">' + escapeHtml(ev.text) + '</div>';
+          $view.insertBefore(sticky, $view.firstChild);
+        }
+      }
+
+      if (ev.type === 'system') {
+        div.innerHTML = '<span class="label">System</span>'
+          + '<span class="line-num">L' + ev.line + '</span>'
+          + '<span>' + escapeHtml(ev.subtype || '') + (ev.model ? ' &middot; ' + escapeHtml(ev.model) : '') + (ev.session ? ' &middot; ' + escapeHtml(ev.session) : '') + '</span>';
+      } else if (ev.type === 'user_text') {
+        div.innerHTML = '<span class="label">User</span>'
+          + '<span class="line-num">L' + ev.line + '</span>'
+          + '<div class="user-msg">' + escapeHtml(ev.text) + '</div>';
+      } else if (ev.type === 'assistant') {
+        let html = '<span class="line-num">L' + ev.line + '</span>';
+        for (const b of ev.blocks) {
+          if (b.kind === 'tool_use') {
+            html += '<div class="tool-call"><span class="arrow">-></span> <span class="tool-name">' + escapeHtml(b.name) + '</span> <span class="tool-detail">' + escapeHtml(b.detail) + '</span></div>';
+          } else if (b.kind === 'text') {
+            html += '<div class="assistant-text">' + renderMarkdown(b.text) + '</div>';
+          } else if (b.kind === 'thinking') {
+            html += '<div class="thinking-block" style="display:none"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">Thinking</span><div class="t-body">' + escapeHtml(b.text) + '</div></div>';
+          }
+        }
+        div.innerHTML = html;
+      } else if (ev.type === 'result') {
+        const cost = typeof ev.cost_usd === 'number' ? '$' + ev.cost_usd.toFixed(4) : ev.cost_usd;
+        const dur = typeof ev.duration_ms === 'number' ? (ev.duration_ms / 1000).toFixed(1) + 's' : ev.duration_ms;
+        div.innerHTML = '<span class="label">Done</span>'
+          + '<span class="line-num">L' + ev.line + '</span>'
+          + '<div class="stats"><span>Cost: ' + escapeHtml(String(cost)) + '</span><span>Duration: ' + escapeHtml(String(dur)) + '</span></div>';
+      } else if (ev.type === 'tool_result') {
+        // Hidden by CSS
+      }
+
+      $view.appendChild(div);
+    }
+    if (events.length > 0) {
+      $view.scrollTop = $view.scrollHeight;
+    }
+  }
+
+  function filterConversations(q) {
+    q = (q || '').toLowerCase();
+    const recentCutoff = Date.now() / 1000 - RECENT_HOURS * 3600;
+    const filtered = conversationsData.filter(c => {
+      // Recent-only filter (last 10h) — skip Backlog so it's always visible
+      if (showRecentOnly && c.source !== 'backlog' && (c.modified || 0) < recentCutoff) return false;
+      // Archive filter — in kanban mode, show all (kanban has its own Archived column)
+      if (!kanbanView) {
+        if (showArchived && !c.archived) return false;
+        if (!showArchived && c.archived) return false;
+      }
+      // Text search
+      if (!q) return true;
+      return (c.display_name || '').toLowerCase().includes(q)
+        || (c.first_message || '').toLowerCase().includes(q)
+        || (c.last_prompt || '').toLowerCase().includes(q)
+        || (c.branch || '').toLowerCase().includes(q)
+        || (c.source || '').toLowerCase().includes(q);
+    });
+    return applyConvSort(filtered);
+  }
+
+  // Conversation search filter
+  $convSearch.addEventListener('input', () => {
+    renderSidebar(filterConversations($convSearch.value));
+  });
+
+  // ── Issues dashboard ──
+  let issuesPolling = null;
+  let issuesData = [];
+
+  async function loadIssues() {
+    try {
+      const res = await fetch('/api/issues');
+      issuesData = await res.json();
+      renderIssues(issuesData);
+    } catch (err) {
+      $issuesView.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load issues: ' + escapeHtml(err.message) + '</div>';
+    }
+  }
+
+  function renderIssues(issues) {
+    if (!issues.length) {
+      $issuesView.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">No issues found</div>';
+      return;
+    }
+
+    // Count active (in_progress + queued)
+    const activeCount = issues.filter(i => i.claude_status === 'in_progress' || i.claude_status === 'queued').length;
+    if (activeCount > 0) {
+      $issuesBadge.textContent = activeCount;
+      $issuesBadge.style.display = '';
+    } else {
+      $issuesBadge.style.display = 'none';
+    }
+
+    // Group issues
+    const open = issues.filter(i => i.state === 'open');
+    const closed = issues.filter(i => i.state === 'closed');
+
+    let html = '';
+    if (open.length) {
+      html += '<div class="issues-section-header">Open Issues (' + open.length + ')</div>';
+      html += open.map(renderIssueRow).join('');
+    }
+    if (closed.length) {
+      html += '<div class="issues-section-header">Recently Closed (' + closed.length + ')</div>';
+      html += closed.map(renderIssueRow).join('');
+    }
+    $issuesView.innerHTML = html;
+
+    // Bind events
+    $issuesView.querySelectorAll('.fix-btn').forEach(btn => {
+      btn.addEventListener('click', () => addFixLabel(btn.dataset.num, btn));
+    });
+    $issuesView.querySelectorAll('.spawn-fix-btn').forEach(btn => {
+      btn.addEventListener('click', () => spawnIssueFix(btn.dataset.num, btn));
+    });
+    $issuesView.querySelectorAll('.log-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        // Find the watcher session in the unified list and select it
+        const issueId = 'issue-' + btn.dataset.num;
+        switchTab('sessions');
+        selectConversation(issueId);
+      });
+    });
+    $issuesView.querySelectorAll('.issue-num').forEach(el => {
+      el.addEventListener('click', () => {
+        window.open('https://github.com/' + getRepo() + '/issues/' + el.dataset.num, '_blank');
+      });
+    });
+    $issuesView.querySelectorAll('.summary-toggle').forEach(btn => {
+      btn.addEventListener('click', () => toggleSummary(btn.dataset.num));
+    });
+  }
+
+  function getRepo() {
+    // Will be set from server, fallback
+    return document.body.dataset.repo || '';
+  }
+
+  function renderIssueRow(issue) {
+    const statusLabels = { in_progress: 'Working', queued: 'Queued', failed: 'Failed', open: 'Open', closed: 'Closed' };
+    const labels = issue.labels
+      .filter(l => !['claude-fix','claude-in-progress','claude-failed'].includes(l))
+      .map(l => '<span class="issue-label other">' + escapeHtml(l) + '</span>')
+      .join('');
+    const claudeLabels = issue.labels
+      .filter(l => ['claude-fix','claude-in-progress','claude-failed'].includes(l))
+      .map(l => '<span class="issue-label ' + l + '">' + escapeHtml(l) + '</span>')
+      .join('');
+
+    const canFix = issue.state === 'open' && issue.claude_status === 'open';
+    const hasLog = issue.has_log;
+    const showSummary = issue.state === 'closed' || issue.claude_status === 'failed';
+
+    let actions = '';
+    if (canFix) actions += '<button class="issue-action-btn fix fix-btn" data-num="' + issue.number + '">Fix (worktree)</button>';
+    if (canFix) actions += '<button class="issue-action-btn fix spawn-fix-btn" data-num="' + issue.number + '">Fix (inline)</button>';
+    if (hasLog) actions += '<button class="issue-action-btn log log-btn" data-num="' + issue.number + '">View Log</button>';
+    if (showSummary) actions += '<button class="issue-action-btn summary-toggle" data-num="' + issue.number + '">Summary</button>';
+
+    return '<div class="issue-row" data-num="' + issue.number + '">'
+      + '<span class="issue-num" data-num="' + issue.number + '">#' + issue.number + '</span>'
+      + '<span class="issue-title">' + escapeHtml(issue.title) + '</span>'
+      + '<span class="issue-labels">' + claudeLabels + labels + '</span>'
+      + '<span class="issue-status ' + issue.claude_status + '">' + statusLabels[issue.claude_status] + '</span>'
+      + '<span class="issue-actions">' + actions + '</span>'
+      + '</div>'
+      + '<div class="issue-summary" id="summary-' + issue.number + '"></div>';
+  }
+
+  async function addFixLabel(num, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Adding...';
+    try {
+      const res = await fetch('/api/issues/' + num + '/add-label', { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) {
+        btn.textContent = 'Queued';
+        btn.classList.remove('fix');
+        // Refresh issues
+        setTimeout(loadIssues, 500);
+      } else {
+        btn.textContent = data.error || 'Error';
+        setTimeout(() => { btn.textContent = 'Fix (worktree)'; btn.disabled = false; }, 2000);
+      }
+    } catch (err) {
+      btn.textContent = 'Error';
+      setTimeout(() => { btn.textContent = 'Fix (worktree)'; btn.disabled = false; }, 2000);
+    }
+  }
+
+  async function spawnIssueFix(num, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Spawning...';
+    try {
+      const res = await fetch('/api/issues/' + num + '/spawn', { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) {
+        btn.textContent = 'Running';
+        btn.classList.remove('fix');
+        // Refresh issues + sessions after a short delay
+        setTimeout(() => { loadIssues(); loadConversationList(); }, 1000);
+      } else {
+        btn.textContent = data.error || 'Error';
+        setTimeout(() => { btn.textContent = 'Fix (inline)'; btn.disabled = false; }, 2000);
+      }
+    } catch (err) {
+      btn.textContent = 'Error';
+      setTimeout(() => { btn.textContent = 'Fix (inline)'; btn.disabled = false; }, 2000);
+    }
+  }
+
+  async function toggleSummary(num) {
+    const el = document.getElementById('summary-' + num);
+    if (!el) return;
+    if (el.classList.contains('visible')) {
+      el.classList.remove('visible');
+      return;
+    }
+    el.textContent = 'Loading...';
+    el.classList.add('visible');
+    try {
+      const res = await fetch('/api/issues/' + num + '/summary');
+      const data = await res.json();
+      el.textContent = data.summary || 'No Claude summary found on this issue.';
+    } catch {
+      el.textContent = 'Failed to load summary.';
+    }
+  }
+
+  // Start polling issues + log list every 10s for real-time status
+  function startIssuesPolling() {
+    if (issuesPolling) return;
+    issuesPolling = setInterval(() => {
+      loadIssues();
+    }, 10000);
+  }
+
+  // ── Vercel deploy status ──
+  const $deployDot = document.getElementById('deployDot');
+  const $deployInfo = document.getElementById('deployInfo');
+
+  async function pollVercelDeploy() {
+    try {
+      const res = await fetch('/api/vercel-deploy');
+      const d = await res.json();
+      if (d.error) {
+        $deployDot.className = 'deploy-dot';
+        $deployInfo.textContent = d.error;
+        return;
+      }
+      const st = d.state || 'UNKNOWN';
+      const stLower = st === 'READY' ? 'ready' : st === 'ERROR' || st === 'CANCELED' ? 'error' : st === 'BUILDING' || st === 'INITIALIZING' || st === 'QUEUED' ? 'building' : '';
+      $deployDot.className = 'deploy-dot' + (stLower ? ' ' + stLower : '');
+
+      const age = d.created_at ? timeAgo(d.created_at) : '';
+      const dur = d.duration_s ? d.duration_s + 's' : '';
+      const commitInfo = d.commit_sha ? d.commit_sha + (d.commit_ref ? ' (' + d.commit_ref + ')' : '') : '';
+      const link = d.url ? 'https://' + d.url : '';
+
+      let html = '<span class="deploy-state ' + stLower + '">' + st + '</span>';
+      if (age) html += ' &middot; ' + age;
+      if (dur) html += ' &middot; ' + dur;
+      if (link) html += ' &middot; <a href="' + link + '" target="_blank">↗</a>';
+      if (commitInfo || d.commit_msg) {
+        html += '<div class="deploy-commit">';
+        if (commitInfo) html += commitInfo;
+        if (d.commit_msg) html += ' ' + d.commit_msg.replace(/</g, '&lt;');
+        html += '</div>';
+      }
+      $deployInfo.innerHTML = html;
+      // Also update the compact kanban toolbar indicator
+      const $kptDeploy = document.getElementById('kptDeployStatus');
+      if ($kptDeploy) {
+        const dotColor = stLower === 'ready' ? 'var(--green)' : stLower === 'error' ? 'var(--red)' : stLower === 'building' ? '#FBCA04' : 'var(--text-muted)';
+        let khtml = '<span style="width:6px;height:6px;border-radius:50%;background:' + dotColor + ';display:inline-block;"></span>';
+        khtml += '<span>' + st + '</span>';
+        if (age) khtml += '<span style="opacity:0.6;"> &middot; ' + age + '</span>';
+        if (link) khtml += '<a href="' + link + '" target="_blank" style="color:var(--accent);text-decoration:none;"> ↗</a>';
+        $kptDeploy.innerHTML = khtml;
+      }
+    } catch {}
+  }
+
+  function timeAgo(ts) {
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s / 60) + 'm ago';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+    return Math.floor(s / 86400) + 'd ago';
+  }
+
+  // ── Watcher control ──
+  const $watcherBtn = document.getElementById('watcherBtn');
+  const $watcherDot = document.getElementById('watcherDot');
+  const $watcherOutput = document.getElementById('watcherOutput');
+  let watcherPolling = null;
+
+  async function pollWatcher() {
+    try {
+      const res = await fetch('/api/watcher');
+      const data = await res.json();
+      updateWatcherUI(data);
+    } catch {}
+  }
+
+  function updateWatcherUI(data) {
+    const running = data.running;
+    const zombies = data.zombies || [];
+    $watcherDot.className = 'watcher-dot' + (running ? ' running' : '');
+    $watcherBtn.disabled = false;
+    if (running) {
+      $watcherBtn.textContent = 'Stop Watcher';
+      $watcherBtn.className = 'watcher-btn stop';
+      if (!watcherPolling) watcherPolling = setInterval(pollWatcher, 3000);
+    } else {
+      $watcherBtn.textContent = 'Start Watcher';
+      $watcherBtn.className = 'watcher-btn start';
+      if (watcherPolling) { clearInterval(watcherPolling); watcherPolling = null; }
+    }
+    let outputLines = (data.output || []).slice();
+    if (zombies.length && !running) {
+      outputLines.unshift('Warning: Orphan watcher PIDs: ' + zombies.join(', ') + ' (will be killed on next start)');
+    }
+    if (outputLines.length) {
+      $watcherOutput.textContent = outputLines.join('\n');
+      $watcherOutput.scrollTop = $watcherOutput.scrollHeight;
+    }
+  }
+
+  $watcherBtn.addEventListener('click', async () => {
+    const running = $watcherDot.classList.contains('running');
+    $watcherBtn.disabled = true;
+    $watcherBtn.textContent = running ? 'Stopping...' : 'Starting...';
+    try {
+      const res = await fetch(running ? '/api/watcher/stop' : '/api/watcher/start', { method: 'POST' });
+      const data = await res.json();
+      if (data.error && !data.running) {
+        $watcherOutput.textContent = data.error;
+      }
+      await pollWatcher();
+    } catch (err) {
+      $watcherBtn.disabled = false;
+      $watcherOutput.textContent = 'Error: ' + err.message;
+    }
+  });
+
+  // ── Sidebar resizer ──
+  const $sidebar = document.querySelector('.sidebar');
+  const $resizer = document.getElementById('sidebarResizer');
+  if ($sidebar && $resizer) {
+    const saved = parseInt(localStorage.getItem('clv-sidebar-width') || '0', 10);
+    if (saved >= 240 && saved <= window.innerWidth * 0.6) {
+      $sidebar.style.width = saved + 'px';
+    }
+    let startX = 0, startWidth = 0;
+    $resizer.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      startX = e.clientX;
+      startWidth = $sidebar.getBoundingClientRect().width;
+      $resizer.classList.add('dragging');
+      document.body.classList.add('resizing');
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+    function onMove(e) {
+      const w = Math.max(240, Math.min(window.innerWidth * 0.6, startWidth + (e.clientX - startX)));
+      $sidebar.style.width = w + 'px';
+    }
+    function onUp() {
+      $resizer.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      const w = parseInt($sidebar.style.width, 10);
+      if (w) localStorage.setItem('clv-sidebar-width', String(w));
+    }
+  }
+
+  // ── Split resizer ──
+  if ($splitResizer && $kanbanPanel) {
+    const savedSplit = parseInt(localStorage.getItem('clv-split-width') || '0', 10);
+    if (savedSplit >= 400 && savedSplit <= window.innerWidth * 0.8) {
+      $kanbanPanel.style.flex = 'none';
+      $kanbanPanel.style.width = savedSplit + 'px';
+    }
+    let splitStartX = 0, splitStartW = 0;
+    $splitResizer.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      splitStartX = e.clientX;
+      splitStartW = $kanbanPanel.getBoundingClientRect().width;
+      $splitResizer.classList.add('dragging');
+      document.body.classList.add('resizing');
+      document.addEventListener('mousemove', onSplitMove);
+      document.addEventListener('mouseup', onSplitUp);
+    });
+    function onSplitMove(e) {
+      const w = Math.max(400, Math.min(window.innerWidth * 0.8, splitStartW + (e.clientX - splitStartX)));
+      $kanbanPanel.style.flex = 'none';
+      $kanbanPanel.style.width = w + 'px';
+    }
+    function onSplitUp() {
+      $splitResizer.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      document.removeEventListener('mousemove', onSplitMove);
+      document.removeEventListener('mouseup', onSplitUp);
+      const w = parseInt($kanbanPanel.style.width, 10);
+      if (w) localStorage.setItem('clv-split-width', String(w));
+    }
+  }
+
+  // ── Split panel toolbar controls ──
+  const $kptSearch = document.getElementById('kptSearch');
+  const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
+  const $kptRecentBtn = document.getElementById('kptRecentBtn');
+  const $kptPkoodToggle = document.getElementById('kptPkoodToggle');
+  const $kptNewSession = document.getElementById('kptNewSession');
+  const $kptRunBtn = document.getElementById('kptRunBtn');
+
+  // Search: sync with sidebar search
+  if ($kptSearch) {
+    $kptSearch.addEventListener('input', () => {
+      $convSearch.value = $kptSearch.value;
+      renderSidebar(filterConversations($kptSearch.value));
+    });
+  }
+  // Recent toggle (last 10h)
+  function updateRecentBtn() {
+    if (!$kptRecentBtn) return;
+    $kptRecentBtn.classList.toggle('active', showRecentOnly);
+  }
+  updateRecentBtn();
+  if ($kptRecentBtn) {
+    $kptRecentBtn.addEventListener('click', () => {
+      showRecentOnly = !showRecentOnly;
+      localStorage.setItem('clv-show-recent', showRecentOnly ? '1' : '0');
+      updateRecentBtn();
+      renderSidebar(filterConversations($convSearch.value));
+    });
+  }
+  // Refresh
+  if ($kptRefreshBtn) {
+    $kptRefreshBtn.addEventListener('click', refreshConversationList);
+  }
+  // New session + Run
+  if ($kptRunBtn) {
+    $kptRunBtn.addEventListener('click', async () => {
+      let prompt = ($kptNewSession && $kptNewSession.value || '').trim();
+      if (!prompt) return;
+      const usePkood = ($kptPkoodToggle && $kptPkoodToggle.checked) || prompt.startsWith('pkood:');
+      if (prompt.startsWith('pkood:')) prompt = prompt.slice(6).trim();
+      if (!prompt) return;
+      $kptRunBtn.disabled = true;
+      $kptRunBtn.textContent = 'Spawning...';
+      try {
+        const endpoint = usePkood ? '/api/pkood/spawn' : '/api/sessions/spawn';
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ prompt }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          $kptNewSession.value = '';
+          $kptRunBtn.textContent = 'Spawned!';
+          setTimeout(refreshConversationList, 3000);
+        } else {
+          $kptRunBtn.textContent = data.error ? 'Failed' : 'Failed';
+        }
+      } catch (err) {
+        $kptRunBtn.textContent = 'Error';
+      }
+      setTimeout(() => { $kptRunBtn.disabled = false; $kptRunBtn.textContent = 'Run'; }, 2000);
+    });
+  }
+  // ── New-session modal ──
+  const $nsm = document.getElementById('newSessionModal');
+  const $nsmSubject = document.getElementById('nsmSubject');
+  const $nsmBody = document.getElementById('nsmBody');
+  const $nsmSubmit = document.getElementById('nsmSubmit');
+  const $nsmCancel = document.getElementById('nsmCancel');
+  const $nsmBackdrop = document.getElementById('nsmBackdrop');
+  const $nsmPkood = document.getElementById('nsmPkood');
+  function openNewSessionModal(seed = '') {
+    if (!$nsm) return;
+    $nsmSubject.value = seed || '';
+    $nsmBody.value = '';
+    if ($nsmPkood && $kptPkoodToggle) $nsmPkood.checked = $kptPkoodToggle.checked;
+    $nsm.style.display = 'flex';
+    setTimeout(() => {
+      if (seed) { $nsmBody.focus(); } else { $nsmSubject.focus(); }
+    }, 30);
+  }
+  function closeNewSessionModal() {
+    if ($nsm) $nsm.style.display = 'none';
+    if ($kptNewSession) $kptNewSession.value = '';
+  }
+  async function submitNewSessionModal() {
+    const subject = ($nsmSubject.value || '').trim();
+    const body = ($nsmBody.value || '').trim();
+    if (!subject && !body) return;
+    const effectiveSubject = subject || body.slice(0, 60);
+    const prompt = body ? (subject ? (subject + '\n\n' + body) : body) : subject;
+    const usePkood = !!($nsmPkood && $nsmPkood.checked);
+    $nsmSubmit.disabled = true;
+    $nsmSubmit.textContent = 'Launching...';
+    try {
+      const endpoint = usePkood ? '/api/pkood/spawn' : '/api/sessions/spawn';
+      const res = await fetch(endpoint, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ prompt, name: effectiveSubject }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        closeNewSessionModal();
+        setTimeout(refreshConversationList, 2000);
+      } else {
+        $nsmSubmit.textContent = 'Failed';
+      }
+    } catch (_) {
+      $nsmSubmit.textContent = 'Error';
+    }
+    setTimeout(() => { $nsmSubmit.disabled = false; $nsmSubmit.textContent = 'Launch'; }, 2000);
+  }
+  if ($kptNewSession) {
+    // Open modal the moment the user starts typing (or focuses)
+    $kptNewSession.addEventListener('focus', () => openNewSessionModal($kptNewSession.value));
+    $kptNewSession.addEventListener('input', () => {
+      if (!$nsm || $nsm.style.display === 'none') openNewSessionModal($kptNewSession.value);
+    });
+    $kptNewSession.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); openNewSessionModal($kptNewSession.value); }
+    });
+  }
+  if ($nsmCancel) $nsmCancel.addEventListener('click', closeNewSessionModal);
+  if ($nsmBackdrop) $nsmBackdrop.addEventListener('click', closeNewSessionModal);
+  if ($nsmSubmit) $nsmSubmit.addEventListener('click', submitNewSessionModal);
+  document.addEventListener('keydown', (e) => {
+    if (!$nsm || $nsm.style.display === 'none') return;
+    if (e.key === 'Escape') { e.preventDefault(); closeNewSessionModal(); }
+    else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submitNewSessionModal(); }
+  });
+
+  // ── Split panel input bar send handler ──
+  if ($cpSendBtn && $cpInput) {
+    async function sendToSplitTerminal() {
+      const text = ($cpInput.value || '').trim();
+      if (!text || !currentSession.id) return;
+      $cpSendBtn.disabled = true;
+      try {
+        let res;
+        if (currentSession.source === 'pkood') {
+          const agentId = currentConversation.replace(/^pkood-/, '');
+          res = await fetch('/api/pkood/inject', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ agent_id: agentId, message: text }),
+          });
+        } else if (currentSession.spawnPid) {
+          // Headless session we spawned — push via stdin pipe
+          res = await fetch('/api/sessions/spawned/' + currentSession.spawnPid + '/inject', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ text }),
+          });
+        } else {
+          res = await fetch('/api/inject-input', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: currentSession.id, text }),
+          });
+        }
+        const data = await res.json();
+        if (data.ok) {
+          $cpInput.value = '';
+        } else {
+          $cpInput.style.borderColor = 'var(--red)';
+          setTimeout(() => { $cpInput.style.borderColor = ''; }, 1500);
+        }
+      } catch (err) {
+        $cpInput.style.borderColor = 'var(--red)';
+        setTimeout(() => { $cpInput.style.borderColor = ''; }, 1500);
+      }
+      $cpSendBtn.disabled = false;
+    }
+    $cpSendBtn.addEventListener('click', sendToSplitTerminal);
+    $cpInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); sendToSplitTerminal(); }
+    });
+  }
+
+  // ── Split panel font controls ──
+  const $cpFontMinus = document.getElementById('cpFontMinus');
+  const $cpFontPlus = document.getElementById('cpFontPlus');
+  if ($cpFontMinus) $cpFontMinus.addEventListener('click', () => {
+    convFontScale = Math.max(0.7, +(convFontScale - 0.1).toFixed(1));
+    localStorage.setItem('clv-conv-font-scale', String(convFontScale));
+    if ($convPanelView) $convPanelView.style.zoom = convFontScale;
+    applyConvFontScale();
+  });
+  if ($cpFontPlus) $cpFontPlus.addEventListener('click', () => {
+    convFontScale = Math.min(1.5, +(convFontScale + 0.1).toFixed(1));
+    localStorage.setItem('clv-conv-font-scale', String(convFontScale));
+    if ($convPanelView) $convPanelView.style.zoom = convFontScale;
+    applyConvFontScale();
+  });
+  // Apply initial font scale to split view
+  if ($convPanelView) $convPanelView.style.zoom = convFontScale;
+
+  // Auto-refresh session data every 10s — keeps kanban columns, signals,
+  // and relative times up to date without manual refresh.
+  setInterval(async () => {
+    if (activeTab !== 'sessions') return;
+    try {
+      const res = await fetch('/api/sessions');
+      const fresh = await res.json();
+      // Preserve user-set fields from cached data (display_name overrides, etc.)
+      const oldBySessionId = {};
+      for (const c of conversationsData) oldBySessionId[c.session_id] = c;
+      for (const c of fresh) {
+        const old = oldBySessionId[c.session_id];
+        if (old && old.name_overridden && !c.name_overridden) {
+          c.display_name = old.display_name;
+          c.name_overridden = true;
+        }
+      }
+      conversationsData = fresh;
+      // Re-cache session IDs/cwds for Resume/Jump
+      sessionIdByConv = {};
+      sessionCwdByConv = {};
+      sessionCwdExistsByConv = {};
+      for (const c of conversationsData) {
+        if (c.session_id) sessionIdByConv[c.id] = c.session_id;
+        if (c.session_cwd) sessionCwdByConv[c.id] = c.session_cwd;
+        sessionCwdExistsByConv[c.id] = !!c.session_cwd_exists;
+      }
+      renderSidebar(filterConversations($convSearch.value));
+    } catch (_) {}
+  }, 10000);
+
+  // --- Spawn new session ---
+  async function spawnNewSession() {
+    let prompt = ($newSessionInput && $newSessionInput.value || '').trim();
+    if (!prompt) return;
+    const usePkood = ($pkoodToggle && $pkoodToggle.checked) || prompt.startsWith('pkood:');
+    if (prompt.startsWith('pkood:')) prompt = prompt.slice(6).trim();
+    if (!prompt) return;
+    $newSessionBtn.disabled = true;
+    $newSessionBtn.textContent = 'Spawning...';
+    try {
+      const endpoint = usePkood ? '/api/pkood/spawn' : '/api/sessions/spawn';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ prompt }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        $newSessionInput.value = '';
+        $newSessionBtn.textContent = 'Spawned!';
+        setTimeout(refreshConversationList, 3000);
+      } else {
+        $newSessionBtn.textContent = data.error ? 'Failed: ' + data.error.slice(0, 30) : 'Failed';
+      }
+    } catch (err) {
+      $newSessionBtn.textContent = 'Error';
+    }
+    setTimeout(() => {
+      $newSessionBtn.disabled = false;
+      $newSessionBtn.textContent = 'Run';
+    }, 2000);
+  }
+  if ($newSessionBtn) $newSessionBtn.addEventListener('click', spawnNewSession);
+  if ($newSessionInput) $newSessionInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); spawnNewSession(); }
+  });
+
+  // Init — default to Sessions tab
+  loadConversationList();
+  // Hide sidebar sections that don't apply to Sessions
+  if ($watcherPanel) $watcherPanel.style.display = 'none';
+  // Lazy-load the issues tab data
+  loadIssues();
+  startIssuesPolling();
+  pollWatcher();
+  pollVercelDeploy();
+  setInterval(pollVercelDeploy, 15000);
+})();
+</script>
+</body>
+</html>
