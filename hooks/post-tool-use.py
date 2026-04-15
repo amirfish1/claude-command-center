@@ -7,7 +7,9 @@ import sys
 import time
 
 LIVE_STATE_DIR = os.path.expanduser("~/.claude/log-viewer/live-state")
-WRITE_TOOLS = {"Edit", "Write", "NotebookEdit", "Bash"}
+# Any tool invocation counts as "working" for kanban purposes.
+# (File was originally limited to writers but UX feedback: move to Working ASAP.)
+WRITE_TOOLS = None  # None = all tools
 
 
 def main():
@@ -26,7 +28,7 @@ def main():
 
         # Set _writes flag if this is a write-capable tool
         writes_flag = os.path.join(LIVE_STATE_DIR, f"{session_id}_writes")
-        if tool_name in WRITE_TOOLS:
+        if tool_name and (WRITE_TOOLS is None or tool_name in WRITE_TOOLS):
             with open(writes_flag, "w") as f:
                 f.write("1")
 

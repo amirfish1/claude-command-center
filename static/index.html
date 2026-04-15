@@ -265,6 +265,18 @@
     color: var(--text-muted); font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
     font-size: 13px; word-break: break-all;
   }
+  .hide-tools .tool-call { display: none !important; }
+  .hide-tools .event.tool-only { display: none !important; }
+  a.path-link { color: var(--accent); text-decoration: underline dotted; cursor: pointer; }
+  a.path-link:hover { text-decoration: underline; }
+  .conv-sticky-header .tools-toggle {
+    position: absolute; top: 10px; right: 12px;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-muted); font-size: 11px; padding: 3px 8px;
+    border-radius: 4px; cursor: pointer;
+  }
+  .conv-sticky-header .tools-toggle:hover { color: var(--text); background: #1c2128; }
+  .conv-sticky-header .tools-toggle.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
 
   .assistant-text {
     font-size: 15px; padding: 4px 0;
@@ -399,10 +411,11 @@
   /* Conversations view */
   .conversations-view { flex: 1; overflow-y: auto; padding: 0 20px 16px; position: relative; }
   .conv-sticky-header {
-    position: sticky; top: 0; z-index: 5;
-    padding: 12px 0 10px; margin-bottom: 8px;
-    background: var(--bg);
+    position: sticky; top: -20px; z-index: 5;
+    padding: 36px 12px 12px; margin: -20px -12px 8px;
+    background: #10151c;
     border-bottom: 1px solid var(--border);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.45);
   }
   .conv-sticky-header .user-msg {
     font-size: 14px; color: var(--text); line-height: 1.4;
@@ -647,9 +660,13 @@
     flex: 1; min-height: 0; overflow-x: auto;
   }
   .kanban-column {
-    min-width: 200px; flex: 1;
+    min-width: 260px; flex: 1;
     display: flex; flex-direction: column; min-height: 0;
   }
+  .kanban-board-split .kanban-column { min-width: 280px; }
+  .kanban-column-header { cursor: grab; }
+  .kanban-column-header.dragging-header { opacity: 0.5; }
+  .kanban-column-header.drop-target-header { background: rgba(88,166,255,0.18); outline: 1px dashed var(--accent); }
   .kanban-column-header {
     display: flex; align-items: center; gap: 6px;
     padding: 6px 8px; cursor: pointer; user-select: none;
@@ -738,6 +755,12 @@
     font-size: 14px; font-weight: 600; color: var(--text);
     line-height: 1.3; word-break: break-word;
   }
+  .kanban-card .kanban-card-desc {
+    font-size: 12px; color: var(--text-muted);
+    line-height: 1.4; margin-top: 4px; word-break: break-word;
+    display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
   .kanban-card .kanban-card-title.user-renamed { color: var(--cyan); }
   .kanban-card .kanban-card-actions {
     display: flex; gap: 4px; position: absolute; top: 6px; right: 6px; opacity: 0;
@@ -751,6 +774,12 @@
   }
   .kanban-column.drag-over { background: rgba(88,166,255,0.08); outline: 2px dashed var(--accent); outline-offset: -2px; }
   .kanban-card.drop-link-target { outline: 2px dashed var(--green); outline-offset: 2px; }
+  @keyframes cardJustMoved {
+    0%   { box-shadow: 0 0 0 0 rgba(88,166,255,0.0); background-color: rgba(88,166,255,0.28); }
+    40%  { box-shadow: 0 0 18px 4px rgba(88,166,255,0.55); background-color: rgba(88,166,255,0.18); }
+    100% { box-shadow: 0 0 0 0 rgba(88,166,255,0.0); background-color: inherit; }
+  }
+  .kanban-card.just-moved { animation: cardJustMoved 2.2s ease-out; }
   .kanban-card:hover .kanban-card-actions { opacity: 1; }
   .kanban-card .kanban-action-btn {
     width: 22px; height: 22px; border-radius: 3px; border: none;
@@ -807,7 +836,8 @@
     background: var(--bg); color: var(--text); font-size: 12px; outline: none;
   }
   .kanban-panel-toolbar .kpt-search { width: 180px; }
-  .kanban-panel-toolbar .kpt-new-session { flex: 1; min-width: 120px; }
+  .kanban-panel-toolbar .kpt-new-session { flex: 0 1 260px; min-width: 120px; }
+  .hide-descs .kanban-card-desc { display: none !important; }
   .kanban-panel-toolbar button {
     padding: 5px 10px; font-size: 12px; border-radius: 6px;
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
@@ -880,7 +910,8 @@
   .split-resizer.dragging { background: var(--accent); }
 
   .conv-panel {
-    flex: 2; display: flex; flex-direction: column;
+    flex: none; width: 680px;
+    display: flex; flex-direction: column;
     overflow: hidden; min-width: 300px;
   }
   .conv-panel-toolbar {
@@ -1073,6 +1104,7 @@
         <label class="kpt-label"><input type="checkbox" id="kptPkoodToggle"> pkood</label>
         <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
         <button id="kptRunBtn">Run</button>
+        <button id="kptDescToggle" title="Hide descriptions on cards">Hide desc</button>
         <button id="kptListViewBtn" title="Back to list view">&#9783;</button>
         <button id="kptOpenConvBtn" title="Open conversation panel" style="display:none;">&#9664;</button>
         <span class="kpt-deploy" id="kptDeployStatus" title="Vercel deploy status" style="margin-left:auto;font-size:11px;display:flex;align-items:center;gap:4px;color:var(--text-muted);white-space:nowrap;"></span>
@@ -1554,14 +1586,63 @@
   function renderInline(s) {
     // Escape HTML first
     s = escapeHtml(s);
-    // Inline code `x`
-    s = s.replace(/`([^`]+)`/g, '<code class="md-code">$1</code>');
+    // Inline code `x` (also make paths inside code clickable)
+    s = s.replace(/`([^`]+)`/g, (m, inner) => {
+      if (/^(https?:\/\/\S+|\/[\w./@#:\-+]*|[\w./@#:\-+]+\.(md|ts|tsx|js|jsx|py|json|yaml|yml|css|html|sql|prisma|sh))$/.test(inner)) {
+        return '<code class="md-code">' + linkifyPath(inner) + '</code>';
+      }
+      return '<code class="md-code">' + inner + '</code>';
+    });
     // Bold **x**
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    // Links [text](url)
-    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    // Markdown links [text](url)
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, text, url) => {
+      if (/^https?:\/\//i.test(url)) {
+        return '<a href="' + url + '" target="_blank" rel="noopener">' + text + '</a>';
+      }
+      return '<a href="#" class="path-link" data-path="' + url + '">' + text + '</a>';
+    });
+    // Bare http(s) URLs
+    s = s.replace(/(^|[\s(])((?:https?:\/\/)[^\s<>"')]+)/g,
+      (m, pre, url) => pre + '<a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>');
+    // Bare file paths (relative like docs/foo/bar.md or absolute /Users/...)
+    s = s.replace(/(^|[\s(])((?:\/|(?:[\w.\-]+\/)+)[\w.\-/]+\.(?:md|ts|tsx|js|jsx|py|json|yaml|yml|css|html|sql|prisma|sh))\b/g,
+      (m, pre, p) => pre + '<a href="#" class="path-link" data-path="' + p + '">' + p + '</a>');
     return s;
   }
+
+  function linkifyPath(p) {
+    if (/^https?:\/\//i.test(p)) {
+      return '<a href="' + p + '" target="_blank" rel="noopener">' + p + '</a>';
+    }
+    return '<a href="#" class="path-link" data-path="' + p + '">' + p + '</a>';
+  }
+
+  document.addEventListener('click', async (ev) => {
+    const a = ev.target.closest('a.path-link');
+    if (!a) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const p = a.dataset.path;
+    if (!p) return;
+    a.style.opacity = '0.5';
+    try {
+      const res = await fetch('/api/open', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ path: p }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) {
+        a.title = data.error || 'open failed';
+        a.style.color = 'var(--red)';
+      }
+    } catch (e) {
+      a.title = String(e);
+    } finally {
+      setTimeout(() => { a.style.opacity = ''; }, 600);
+    }
+  });
 
   // ── Tabs ──
   const $tabIssues = document.getElementById('tabIssues');
@@ -1834,6 +1915,16 @@
       await moveCardToColumn(cardId, targetCol);
     }
     selectedCardIds.clear();
+    requestAnimationFrame(() => {
+      cardIds.forEach(id => {
+        document.querySelectorAll('.kanban-card[data-id="' + CSS.escape(id) + '"]').forEach(el => {
+          el.classList.remove('just-moved');
+          void el.offsetWidth;
+          el.classList.add('just-moved');
+          setTimeout(() => el.classList.remove('just-moved'), 2400);
+        });
+      });
+    });
   }
 
   async function moveCardToColumn(cardId, targetCol) {
@@ -1846,7 +1937,7 @@
       if (!c.verified) {
         await fetch('/api/conversations/' + cardId + '/verify', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ session_id: sid }),
+          body: JSON.stringify({ session_id: sid, display_name: c.display_name || '', cwd: c.session_cwd || '' }),
         }).catch(() => {});
         c.verified = true;
       }
@@ -1896,7 +1987,7 @@
     // Live sessions with sidecar: trust sidecar state over past commit/push
     // (the session is still open and between turns, not done)
     if (live && hasSidecar) {
-      if (c.sidecar_status === 'waiting') return 'waiting';
+      if (c.sidecar_status === 'waiting') return 'working';
       if (c.sidecar_has_writes) return 'working';
       return 'planning';
     }
@@ -1907,23 +1998,16 @@
     // Dead sessions without commits: inactive (never hide — every session has a column)
     if (!live && !hasSidecar) return 'inactive';
 
-    // Live sessions with sidecar: use real-time state
-    if (live && hasSidecar) {
-      if (c.sidecar_status === 'waiting') return 'waiting';
-      if (c.sidecar_has_writes) return 'working';
-      return 'planning';
-    }
-
     // Live but no sidecar: JSONL fallback + pkood
     if (live) {
       if (c.source === 'pkood') {
         const ps = (c.pkood_status || '').toUpperCase();
-        if (ps === 'BLOCKED' || ps === 'IDLE') return 'waiting';
+        if (ps === 'BLOCKED' || ps === 'IDLE') return 'working';
         if (ps === 'RUNNING') return 'working';
         return 'planning';
       }
-      if (c.pending_tool && c.last_event_type === 'assistant' && !c.sidecar_status) return 'waiting';
-      if (c.last_event_type === 'result') return 'waiting';
+      if (c.pending_tool && c.last_event_type === 'assistant' && !c.sidecar_status) return 'working';
+      if (c.last_event_type === 'result') return 'working';
       if (c.has_edit) return 'working';
       return 'planning';
     }
@@ -1934,23 +2018,38 @@
 
   function renderKanbanBoard(convs, targetEl, isSplit) {
     if (!targetEl) targetEl = $kanbanBoard;
-    const columns = [
+    const defaultColumns = [
       { key: 'backlog',  label: 'Backlog',  defaultExpanded: true },
       { key: 'planning', label: 'Planning', defaultExpanded: true },
       { key: 'working',  label: 'Working',  defaultExpanded: true },
-      { key: 'waiting',  label: 'Waiting',  defaultExpanded: true },
       { key: 'review',   label: 'Review',   defaultExpanded: true },
       { key: 'testing',  label: 'In Testing', defaultExpanded: true },
       { key: 'inactive', label: 'Inactive', defaultExpanded: false },
       { key: 'verified', label: 'Verified', defaultExpanded: false },
       { key: 'archived', label: 'Archived', defaultExpanded: false },
     ];
+    // Apply user-defined column order from localStorage.
+    let savedOrder = [];
+    try { savedOrder = JSON.parse(localStorage.getItem('clv-column-order') || '[]'); } catch (_) {}
+    const byKey = Object.fromEntries(defaultColumns.map(c => [c.key, c]));
+    const ordered = [];
+    for (const k of savedOrder) if (byKey[k]) ordered.push(byKey[k]);
+    for (const c of defaultColumns) if (!ordered.includes(c)) ordered.push(c);
+    const columns = ordered;
     // Group sessions into columns
     const groups = {};
     for (const col of columns) groups[col.key] = [];
     for (const c of convs) {
       const col = classifyKanbanColumn(c);
       if (col && groups[col]) groups[col].push(c);
+    }
+    // Within "Working", sort actively-writing sessions to the top.
+    if (groups.working) {
+      groups.working.sort((a, b) => {
+        const aActive = a.is_live && a.sidecar_status === 'active' && a.sidecar_has_writes ? 1 : 0;
+        const bActive = b.is_live && b.sidecar_status === 'active' && b.sidecar_has_writes ? 1 : 0;
+        return bActive - aActive;
+      });
     }
     let html = '';
     for (const col of columns) {
@@ -1964,16 +2063,37 @@
       const hasMore = !showAll && items.length > maxVisible;
 
       html += '<div class="kanban-column ' + col.key + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '">';
-      html += '<div class="kanban-column-header' + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '">';
+      html += '<div class="kanban-column-header' + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '" draggable="true">';
       html += '<span class="arrow">' + (isCollapsed ? '&#9656;' : '&#9662;') + '</span>';
       html += '<span>' + escapeHtml(col.label) + '</span>';
       html += '<span class="count">' + items.length + '</span>';
       html += '</div>';
       html += '<div class="kanban-cards">';
       for (const c of visibleItems) {
-        const rawTitle = c.display_name || (c.first_message ? c.first_message.slice(0, 40) : '(untitled)');
+        // Prefer first_message for the title unless the user explicitly renamed it.
+        // Auto-generated display_names (from claude /rename) tend to be awkwardly truncated.
+        const rawTitle = c.name_overridden
+          ? c.display_name
+          : (c.first_message ? c.first_message.slice(0, 160) : (c.display_name || '(untitled)'));
         // Replace dashes with spaces for display (storage keeps the slug); strip [BYM ...] noise
         const title = rawTitle.replace(/\s*\[BYM[^\]]*\]\s*/gi, ' ').replace(/-/g, ' ').trim();
+        // Description: only show content beyond what the title already reveals.
+        let desc = '';
+        if (c.first_message) {
+          const fm = c.first_message.replace(/\s*\[BYM[^\]]*\]\s*/gi, ' ').trim();
+          const stripEllipsis = (s) => s.replace(/[.\u2026\s]+$/, '');
+          const norm = (s) => stripEllipsis(s).toLowerCase().replace(/\s+/g, ' ').trim();
+          const titleNorm = norm(title);
+          const fmNorm = norm(fm).slice(0, titleNorm.length);
+          if (titleNorm && fmNorm === titleNorm) {
+            // Title is a prefix of the first message — show continuation only.
+            const cleanTitleLen = stripEllipsis(title).length;
+            const rest = fm.slice(cleanTitleLen).replace(/^[\s\-–—:,.]+/, '');
+            if (rest.length > 10) desc = rest.slice(0, 320);
+          } else {
+            desc = fm.slice(0, 320);
+          }
+        }
 
         // ── Backlog cards: special rendering ──
         if (c.source === 'backlog') {
@@ -1982,7 +2102,7 @@
             return '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(139,148,158,0.15);color:' + color + ';font-weight:600;margin-right:3px;">' + escapeHtml(l) + '</span>';
           }).join('');
           const sourceTag = c.backlog_type === 'github'
-            ? '<span style="font-size:10px;color:var(--text-muted);">#' + escapeHtml(c.issue_number || '') + '</span>'
+            ? '<button class="kanban-action-btn" data-action="view-issue" data-issue="' + escapeHtml(c.issue_number || '') + '" title="Open issue #' + escapeHtml(c.issue_number || '') + ' on GitHub (full body + images)" style="display:inline-flex;align-items:center;gap:3px;padding:0 4px;font-size:10px;color:var(--text-muted);border:1px solid var(--border);border-radius:3px;background:transparent;cursor:pointer;">#' + escapeHtml(c.issue_number || '') + ' &#x2197;</button>'
             : '<span style="font-size:10px;color:var(--accent);">TODO.md</span>';
           // Date + relative time for GitHub issues
           let dateInfo = '';
@@ -2039,6 +2159,7 @@
           ? '<button class="kanban-action-btn" data-action="view-issue" data-issue="' + escapeHtml(linkedIssue) + '" title="View GitHub issue #' + escapeHtml(linkedIssue) + '" style="color:var(--green);">&#128279;</button>'
           : '<button class="kanban-action-btn" data-action="create-issue" title="Create GitHub issue">&#128221;</button>';
         html += '<div class="kanban-card-actions">'
+          + '<button class="kanban-action-btn" data-action="summarize" title="Regenerate title with Claude">&#10024;</button>'
           + '<button class="kanban-action-btn" data-action="edit" title="Rename">&#9998;</button>'
           + issueAction
           + '<button class="kanban-action-btn" data-action="archive" title="' + archiveTitle + '">' + archiveIcon + '</button>'
@@ -2047,6 +2168,9 @@
           ? '<span class="kanban-issue-badge" title="Linked to GitHub issue">#' + escapeHtml(linkedIssue) + '</span>'
           : '';
         html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open &amp; rename">' + issueBadge + escapeHtml(title) + '</div>';
+        if (desc) {
+          html += '<div class="kanban-card-desc">' + escapeHtml(desc) + '</div>';
+        }
         html += '<div class="kanban-card-meta">' + escapeHtml(metaParts.join(' \u00b7 ')) + '</div>';
         html += '<div class="kanban-card-stage ' + stageCls + '">' + escapeHtml(stageLabel) + '</div>';
 
@@ -2090,8 +2214,10 @@
     targetEl.innerHTML = html;
 
     // Attach event handlers
+    let _headerDragSuppressClick = false;
     targetEl.querySelectorAll('.kanban-column-header').forEach(hdr => {
       hdr.addEventListener('click', () => {
+        if (_headerDragSuppressClick) { _headerDragSuppressClick = false; return; }
         const colKey = hdr.dataset.col;
         const col = hdr.closest('.kanban-column');
         const nowCollapsed = !col.classList.contains('collapsed');
@@ -2101,6 +2227,41 @@
         hdr.classList.toggle('collapsed', nowCollapsed);
         hdr.querySelector('.arrow').innerHTML = nowCollapsed ? '&#9656;' : '&#9662;';
       });
+      // Header drag-to-reorder columns
+      hdr.addEventListener('dragstart', (ev) => {
+        ev.stopPropagation();
+        ev.dataTransfer.effectAllowed = 'move';
+        ev.dataTransfer.setData('application/x-column-drag', hdr.dataset.col);
+        hdr.classList.add('dragging-header');
+      });
+      hdr.addEventListener('dragover', (ev) => {
+        const types = ev.dataTransfer.types;
+        if (!types || !Array.from(types).includes('application/x-column-drag')) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        ev.dataTransfer.dropEffect = 'move';
+        hdr.classList.add('drop-target-header');
+      });
+      hdr.addEventListener('dragleave', () => hdr.classList.remove('drop-target-header'));
+      hdr.addEventListener('drop', (ev) => {
+        const src = ev.dataTransfer.getData('application/x-column-drag');
+        hdr.classList.remove('drop-target-header');
+        if (!src) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const dst = hdr.dataset.col;
+        if (src === dst) return;
+        _headerDragSuppressClick = true;
+        // Build current order from DOM, move src before dst.
+        const current = Array.from(targetEl.querySelectorAll(':scope > .kanban-column')).map(c => c.dataset.col);
+        const srcIdx = current.indexOf(src);
+        if (srcIdx >= 0) current.splice(srcIdx, 1);
+        const dstIdx = current.indexOf(dst);
+        current.splice(dstIdx, 0, src);
+        try { localStorage.setItem('clv-column-order', JSON.stringify(current)); } catch (_) {}
+        renderSidebar(filterConversations($convSearch.value));
+      });
+      hdr.addEventListener('dragend', () => hdr.classList.remove('dragging-header'));
     });
     targetEl.querySelectorAll('.kanban-card').forEach(card => {
       card.addEventListener('click', (ev) => {
@@ -2124,6 +2285,12 @@
         }
         // Re-open conv panel if closed
         if (!convPanelOpen && $cpCloseBtn) $cpCloseBtn.click();
+        // Backlog GitHub issue cards: render full issue in the conv pane
+        if (card.classList.contains('backlog-card') && card.dataset.id.startsWith('backlog-issue-')) {
+          const issueNum = card.dataset.id.replace('backlog-issue-', '');
+          renderIssueInConvPane(issueNum);
+          return;
+        }
         selectConversation(card.dataset.id);
       });
       // Restore selected state after re-render
@@ -2286,6 +2453,39 @@
         input.addEventListener('blur', () => commit(true));
       });
     });
+    // Summarize-with-Claude action
+    targetEl.querySelectorAll('[data-action="summarize"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const card = btn.closest('.kanban-card');
+        const origText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '⏳';
+        try {
+          const res = await fetch('/api/conversations/' + card.dataset.id + '/summarize', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: card.dataset.sessionId }),
+          });
+          const data = await res.json();
+          if (data.ok && data.title) {
+            const c = conversationsData.find(x => x.id === card.dataset.id);
+            if (c) { c.display_name = data.title; c.name_overridden = true; }
+            renderSidebar(filterConversations($convSearch.value));
+          } else {
+            btn.title = data.error || 'summarize failed';
+            btn.textContent = '⚠';
+            setTimeout(() => { btn.textContent = origText; btn.title = 'Regenerate title with Claude'; }, 2500);
+          }
+        } catch (e) {
+          btn.title = String(e && e.message || e);
+          btn.textContent = '⚠';
+          setTimeout(() => { btn.textContent = origText; btn.title = 'Regenerate title with Claude'; }, 2500);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
     // Archive action
     targetEl.querySelectorAll('[data-action="archive"]').forEach(btn => {
       btn.addEventListener('click', async (ev) => {
@@ -2312,37 +2512,58 @@
       });
     });
 
-    // ── Marquee (rubber-band) multi-select ──
-    // Drag on empty area of the board to select multiple cards.
+    // ── Background drag: pan/scroll (default) or marquee multi-select (with modifier) ──
+    // Plain drag on empty area = horizontal+vertical pan.
+    // Shift/Cmd/Ctrl + drag = rubber-band multi-select.
     if (!targetEl._marqueeInstalled) {
       targetEl._marqueeInstalled = true;
       let marquee = null;
       let startX = 0, startY = 0;
       let isMarquee = false;
+      let isPanning = false;
+      let panStartX = 0, panStartY = 0;
+      let panScrollLeft = 0, panScrollTop = 0;
 
       targetEl.addEventListener('mousedown', (ev) => {
-        // Only start marquee if the click is on empty space (not on a card or button)
         if (ev.target.closest('.kanban-card') || ev.target.closest('button') ||
             ev.target.closest('input') || ev.target.closest('textarea') ||
             ev.target.closest('.kanban-column-header')) return;
-        if (ev.button !== 0) return; // left-click only
-        isMarquee = true;
-        const rect = targetEl.getBoundingClientRect();
-        startX = ev.clientX - rect.left + targetEl.scrollLeft;
-        startY = ev.clientY - rect.top + targetEl.scrollTop;
-        marquee = document.createElement('div');
-        marquee.className = 'kanban-marquee';
-        marquee.style.cssText = 'position:absolute;border:1px dashed var(--accent);background:rgba(88,166,255,0.08);pointer-events:none;z-index:1000;';
-        targetEl.style.position = 'relative';
-        targetEl.appendChild(marquee);
-        // If not holding ctrl/cmd, clear previous selection
-        if (!ev.metaKey && !ev.ctrlKey && !ev.shiftKey) {
-          targetEl.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
-          selectedCardIds.clear();
+        if (ev.button !== 0) return;
+
+        // Default = marquee (multi-select). Hold Alt/Option to pan.
+        const wantPan = ev.altKey;
+        if (!wantPan) {
+          isMarquee = true;
+          const rect = targetEl.getBoundingClientRect();
+          startX = ev.clientX - rect.left + targetEl.scrollLeft;
+          startY = ev.clientY - rect.top + targetEl.scrollTop;
+          marquee = document.createElement('div');
+          marquee.className = 'kanban-marquee';
+          marquee.style.cssText = 'position:absolute;border:1px dashed var(--accent);background:rgba(88,166,255,0.08);pointer-events:none;z-index:1000;';
+          targetEl.style.position = 'relative';
+          targetEl.appendChild(marquee);
+          if (!ev.metaKey && !ev.ctrlKey && !ev.shiftKey) {
+            targetEl.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+            selectedCardIds.clear();
+          }
+        } else {
+          isPanning = true;
+          panStartX = ev.clientX;
+          panStartY = ev.clientY;
+          panScrollLeft = targetEl.scrollLeft;
+          panScrollTop = targetEl.scrollTop;
+          targetEl.style.cursor = 'grabbing';
+          targetEl.style.userSelect = 'none';
+          ev.preventDefault();
         }
       });
 
       document.addEventListener('mousemove', (ev) => {
+        if (isPanning) {
+          targetEl.scrollLeft = panScrollLeft - (ev.clientX - panStartX);
+          targetEl.scrollTop = panScrollTop - (ev.clientY - panStartY);
+          return;
+        }
         if (!isMarquee || !marquee) return;
         const rect = targetEl.getBoundingClientRect();
         const curX = ev.clientX - rect.left + targetEl.scrollLeft;
@@ -2355,7 +2576,6 @@
         marquee.style.top = top + 'px';
         marquee.style.width = width + 'px';
         marquee.style.height = height + 'px';
-        // Highlight cards intersecting the marquee
         targetEl.querySelectorAll('.kanban-card').forEach(card => {
           const cr = card.getBoundingClientRect();
           const cardLeft = cr.left - rect.left + targetEl.scrollLeft;
@@ -2372,6 +2592,11 @@
       });
 
       document.addEventListener('mouseup', () => {
+        if (isPanning) {
+          isPanning = false;
+          targetEl.style.cursor = '';
+          targetEl.style.userSelect = '';
+        }
         if (!isMarquee) return;
         isMarquee = false;
         if (marquee) { marquee.remove(); marquee = null; }
@@ -2461,10 +2686,11 @@
         ev.stopPropagation();
         const card = btn.closest('.kanban-card');
         try {
+          const conv = conversationsData.find(x => x.id === card.dataset.id) || {};
           const res = await fetch('/api/conversations/' + card.dataset.id + '/verify', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ session_id: card.dataset.sessionId }),
+            body: JSON.stringify({ session_id: card.dataset.sessionId, display_name: conv.display_name || '', cwd: conv.session_cwd || '' }),
           });
           const data = await res.json();
           const c = conversationsData.find(x => x.id === card.dataset.id);
@@ -2572,24 +2798,36 @@
       });
       const data = await res.json();
       if (data.ok) {
-        if (feedbackEl) {
+        if (clearInput) {
+          const orig = clearInput.placeholder;
+          clearInput.value = '';
+          clearInput.placeholder = 'sent to terminal ✓';
+          clearInput.style.color = 'var(--green)';
+          setTimeout(() => {
+            clearInput.placeholder = orig;
+            clearInput.style.color = '';
+          }, 1500);
+        } else if (feedbackEl) {
           const orig = feedbackEl.textContent;
           feedbackEl.textContent = '\u2713';
           feedbackEl.style.color = 'var(--green)';
           setTimeout(() => { feedbackEl.textContent = orig; feedbackEl.style.color = ''; }, 1200);
         }
-        if (clearInput) clearInput.value = '';
       } else {
-        if (feedbackEl) {
-          feedbackEl.style.borderColor = 'var(--red)';
-          setTimeout(() => { feedbackEl.style.borderColor = ''; }, 1500);
-        }
+        showInjectError(clearInput, feedbackEl, data.error || 'failed');
       }
-    } catch (_) {
-      if (feedbackEl) {
-        feedbackEl.style.borderColor = 'var(--red)';
-        setTimeout(() => { feedbackEl.style.borderColor = ''; }, 1500);
-      }
+    } catch (e) {
+      showInjectError(clearInput, feedbackEl, String(e && e.message || e));
+    }
+  }
+
+  function showInjectError(inp, btn, msg) {
+    if (inp) {
+      const orig = inp.placeholder;
+      inp.placeholder = 'failed — ' + msg;
+      inp.title = msg;
+      inp.style.color = 'var(--text-muted)';
+      setTimeout(() => { inp.placeholder = orig; inp.style.color = ''; inp.title = ''; }, 2500);
     }
   }
 
@@ -2927,6 +3165,125 @@
     return (kanbanView && $convPanelView) ? $convPanelView : $conversationsView;
   }
 
+  async function renderIssueInConvPane(issueNum) {
+    const $view = getConvView();
+    stopConvStream();
+    stopIssueLogPoller();
+    currentConversation = 'backlog-issue-' + issueNum;
+    $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading issue #' + issueNum + '...</div>';
+    try {
+      const res = await fetch('/api/issues/' + issueNum + '/details');
+      const data = await res.json();
+      if (!data.ok) {
+        $view.innerHTML = '<div class="empty-state" style="padding:40px;color:var(--red);">Failed to load issue #' + issueNum + ': ' + escapeHtml(data.error || 'unknown') + '</div>';
+        return;
+      }
+      const issue = data.issue || {};
+      const labels = (issue.labels || []).map(l => '<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(139,148,158,0.2);color:var(--text-muted);margin-right:6px;">' + escapeHtml(l.name || '') + '</span>').join('');
+      const created = issue.createdAt ? new Date(issue.createdAt).toLocaleString() : '';
+      const url = issue.url || '';
+      let html = '<div style="padding:20px;max-width:900px;">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;">';
+      html += '<div><h1 style="margin:0 0 6px;font-size:20px;">' + escapeHtml(issue.title || '(no title)') + ' <span style="color:var(--text-muted);font-weight:400;">#' + escapeHtml(String(issueNum)) + '</span></h1>';
+      html += '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtml((issue.author && issue.author.login) || '') + ' &middot; ' + escapeHtml(created) + ' &middot; <span style="color:' + (issue.state === 'OPEN' ? 'var(--green)' : 'var(--text-muted)') + ';">' + escapeHtml(issue.state || '') + '</span></div></div>';
+      if (url) html += '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener" style="font-size:12px;color:var(--accent);">Open on GitHub &#x2197;</a>';
+      html += '</div>';
+      if (labels) html += '<div style="margin-bottom:16px;">' + labels + '</div>';
+      if ((issue.state || '').toUpperCase() === 'OPEN') {
+        html += '<div id="issueCloseActions" data-issue-num="' + escapeHtml(String(issueNum)) + '" style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">';
+        html += '<button data-close-reason="completed" style="padding:6px 12px;font-size:12px;border-radius:6px;border:1px solid rgba(63,185,80,0.4);background:rgba(63,185,80,0.1);color:var(--green);cursor:pointer;font-weight:600;">Close as completed</button>';
+        html += '<button data-close-reason="not planned" style="padding:6px 12px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;">Close as not planned</button>';
+        html += '<button data-close-reason="duplicate" style="padding:6px 12px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;">Close as duplicate</button>';
+        html += '<span data-close-status style="font-size:12px;color:var(--text-muted);align-self:center;"></span>';
+        html += '</div>';
+      }
+      html += '<div class="assistant-text" style="font-size:14px;line-height:1.55;">' + renderIssueMarkdown(issue.body || '') + '</div>';
+      const comments = issue.comments || [];
+      if (comments.length) {
+        html += '<div style="margin-top:24px;font-size:12px;font-weight:600;text-transform:uppercase;color:var(--text-muted);">Comments (' + comments.length + ')</div>';
+        for (const cm of comments) {
+          const who = (cm.author && cm.author.login) || '';
+          const when = cm.createdAt ? new Date(cm.createdAt).toLocaleString() : '';
+          html += '<div style="margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:6px;">';
+          html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">' + escapeHtml(who) + ' &middot; ' + escapeHtml(when) + '</div>';
+          html += '<div class="assistant-text" style="font-size:13px;line-height:1.5;">' + renderIssueMarkdown(cm.body || '') + '</div>';
+          html += '</div>';
+        }
+      }
+      html += '</div>';
+      $view.innerHTML = html;
+      $view.scrollTop = 0;
+      wireIssueCloseButtons($view, issueNum);
+    } catch (e) {
+      $view.innerHTML = '<div class="empty-state" style="padding:40px;color:var(--red);">Error: ' + escapeHtml(String(e && e.message || e)) + '</div>';
+    }
+  }
+
+  function wireIssueCloseButtons($view, issueNum) {
+    const container = $view.querySelector('#issueCloseActions');
+    if (!container) return;
+    const status = container.querySelector('[data-close-status]');
+    container.querySelectorAll('button[data-close-reason]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const reason = btn.dataset.closeReason;
+        const body = { reason };
+        if (reason === 'duplicate') {
+          const ans = window.prompt('Duplicate of which issue number? (e.g. 42)');
+          if (!ans) return;
+          body.duplicate_of = ans.replace(/[^0-9]/g, '');
+          if (!body.duplicate_of) { status.textContent = 'invalid number'; return; }
+        }
+        const orig = btn.textContent;
+        container.querySelectorAll('button').forEach(b => b.disabled = true);
+        btn.textContent = 'Closing...';
+        status.textContent = '';
+        try {
+          const res = await fetch('/api/issues/' + issueNum + '/close', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+          });
+          const data = await res.json();
+          if (data.ok) {
+            status.textContent = 'closed as ' + reason + ' ✓';
+            status.style.color = 'var(--green)';
+            // Refresh card list so closed issue drops from backlog
+            setTimeout(() => refreshConversationList(), 600);
+            // Re-render issue pane in closed state
+            setTimeout(() => renderIssueInConvPane(issueNum), 1200);
+          } else {
+            status.textContent = 'failed: ' + (data.error || 'unknown');
+            status.style.color = 'var(--red)';
+            btn.textContent = orig;
+            container.querySelectorAll('button').forEach(b => b.disabled = false);
+          }
+        } catch (e) {
+          status.textContent = 'error: ' + (e && e.message || e);
+          status.style.color = 'var(--red)';
+          btn.textContent = orig;
+          container.querySelectorAll('button').forEach(b => b.disabled = false);
+        }
+      });
+    });
+  }
+
+  // GitHub markdown tends to include image refs like ![alt](url) — let images render inline.
+  function renderIssueMarkdown(md) {
+    if (!md) return '<em style="color:var(--text-muted);">(no description)</em>';
+    // Handle images first (before escape)
+    const imgs = [];
+    md = md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, url) => {
+      imgs.push({ alt, url });
+      return '\u0000IMG' + (imgs.length - 1) + '\u0000';
+    });
+    let html = renderMarkdown(md);
+    html = html.replace(/\u0000IMG(\d+)\u0000/g, (m, idx) => {
+      const { alt, url } = imgs[+idx];
+      return '<img src="' + escapeHtml(url) + '" alt="' + escapeHtml(alt) + '" style="max-width:100%;border-radius:6px;margin:8px 0;" loading="lazy">';
+    });
+    return html;
+  }
+
   async function selectConversation(id) {
     // Stop any existing SSE stream or pollers
     stopConvStream();
@@ -3027,10 +3384,14 @@
     const isPkood = currentSession.source === 'pkood';
     const live = liveStatus.live && liveStatus.tty;
     const hasSession = !!currentSession.id;
-    if ((live || isPkood) && hasSession && kanbanView) {
+    if (hasSession && kanbanView) {
       $convPanelInput.classList.add('visible');
-      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (liveStatus.tty || '');
-      if ($cpInput) $cpInput.placeholder = isPkood ? 'Send to pkood agent...' : 'Send to terminal...';
+      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (liveStatus.tty || (live ? '' : 'offline'));
+      if ($cpInput) {
+        if (isPkood) $cpInput.placeholder = 'Send to pkood agent...';
+        else if (live) $cpInput.placeholder = 'Send to terminal...';
+        else $cpInput.placeholder = 'Send to terminal (offline — will queue / may fail)...';
+      }
     } else {
       $convPanelInput.classList.remove('visible');
     }
@@ -3055,8 +3416,10 @@
         });
       } catch (_) {}
     };
-    // Launch: show when not live and has session
-    $cpLaunchBtn.style.display = (!live && sid && !isPkood) ? '' : 'none';
+    // Launch: show whenever we have a session id (not pkood). Useful even when
+    // live — spawned-stdin sessions need this as an escape hatch if the server
+    // restarts, and for regular live sessions a new terminal is harmless.
+    $cpLaunchBtn.style.display = (sid && !isPkood) ? '' : 'none';
     $cpLaunchBtn.onclick = async () => {
       if (!sid) return;
       $cpLaunchBtn.textContent = 'Launching...';
@@ -3180,9 +3543,47 @@
         if (!sticky) {
           sticky = document.createElement('div');
           sticky.className = 'conv-sticky-header';
-          sticky.innerHTML = '<div class="label">Original ask</div>'
+          sticky.style.position = sticky.style.position || 'sticky';
+          const hidden = localStorage.getItem('hideToolCalls') === '1';
+          if (hidden) $view.classList.add('hide-tools');
+          // Resolve linked issue number for this conversation (if any)
+          const conv = conversationsData.find(x => x.id === currentConversation) || {};
+          let issueNum = conv.linked_issue || conv.issue_number || '';
+          if (!issueNum) {
+            const dm = /^issue-(\d+)$/.exec(conv.display_name || '');
+            if (dm) issueNum = dm[1];
+          }
+          const issueBtn = issueNum
+            ? '<button class="tools-toggle issue-link-btn" data-issue="' + escapeHtml(String(issueNum)) + '" title="View GitHub issue #' + escapeHtml(String(issueNum)) + '" style="right:120px;color:var(--green);border-color:rgba(63,185,80,0.4);">Issue #' + escapeHtml(String(issueNum)) + ' &#x2197;</button>'
+            : '';
+          sticky.innerHTML = issueBtn
+            + '<button class="tools-toggle" data-tools-toggle' + (hidden ? ' class="active"' : '') + ' title="Toggle tool-call visibility">'
+            + (hidden ? 'Show tools' : 'Hide tools') + '</button>'
+            + '<div class="label">Original ask</div>'
             + '<div class="user-msg">' + escapeHtml(ev.text) + '</div>';
           $view.insertBefore(sticky, $view.firstChild);
+          sticky.querySelector('[data-tools-toggle]').addEventListener('click', (e) => {
+            e.stopPropagation();
+            const nowHidden = !$view.classList.contains('hide-tools');
+            $view.classList.toggle('hide-tools', nowHidden);
+            localStorage.setItem('hideToolCalls', nowHidden ? '1' : '0');
+            const btn = e.currentTarget;
+            btn.classList.toggle('active', nowHidden);
+            btn.textContent = nowHidden ? 'Show tools' : 'Hide tools';
+          });
+          const issueLinkBtn = sticky.querySelector('.issue-link-btn');
+          if (issueLinkBtn) {
+            issueLinkBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              const n = issueLinkBtn.dataset.issue;
+              if (e.metaKey || e.ctrlKey || e.shiftKey) {
+                const repo = document.body.dataset.repo || 'amirfish1/my-finance-app';
+                window.open('https://github.com/' + repo + '/issues/' + n, '_blank');
+              } else {
+                renderIssueInConvPane(n);
+              }
+            });
+          }
         }
       }
 
@@ -3196,15 +3597,19 @@
           + '<div class="user-msg">' + escapeHtml(ev.text) + '</div>';
       } else if (ev.type === 'assistant') {
         let html = '<span class="line-num">L' + ev.line + '</span>';
+        let hasNonTool = false;
         for (const b of ev.blocks) {
           if (b.kind === 'tool_use') {
             html += '<div class="tool-call"><span class="arrow">-></span> <span class="tool-name">' + escapeHtml(b.name) + '</span> <span class="tool-detail">' + escapeHtml(b.detail) + '</span></div>';
           } else if (b.kind === 'text') {
             html += '<div class="assistant-text">' + renderMarkdown(b.text) + '</div>';
+            hasNonTool = true;
           } else if (b.kind === 'thinking') {
             html += '<div class="thinking-block" style="display:none"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">Thinking</span><div class="t-body">' + escapeHtml(b.text) + '</div></div>';
+            hasNonTool = true;
           }
         }
+        if (!hasNonTool) div.classList.add('tool-only');
         div.innerHTML = html;
       } else if (ev.type === 'result') {
         const cost = typeof ev.cost_usd === 'number' ? '$' + ev.cost_usd.toFixed(4) : ev.cost_usd;
@@ -3571,34 +3976,37 @@
   }
 
   // ── Split resizer ──
-  if ($splitResizer && $kanbanPanel) {
-    const savedSplit = parseInt(localStorage.getItem('clv-split-width') || '0', 10);
-    if (savedSplit >= 400 && savedSplit <= window.innerWidth * 0.8) {
-      $kanbanPanel.style.flex = 'none';
-      $kanbanPanel.style.width = savedSplit + 'px';
+  // conv-panel has a fixed width (stays constant on window resize),
+  // kanban-panel flexes to fill remaining space.
+  if ($splitResizer && $convPanel && $kanbanPanel) {
+    $kanbanPanel.style.flex = '1';
+    $kanbanPanel.style.width = '';
+    const savedConv = parseInt(localStorage.getItem('clv-conv-width') || '0', 10);
+    if (savedConv >= 300) {
+      $convPanel.style.width = savedConv + 'px';
     }
     let splitStartX = 0, splitStartW = 0;
     $splitResizer.addEventListener('mousedown', (e) => {
       e.preventDefault();
       splitStartX = e.clientX;
-      splitStartW = $kanbanPanel.getBoundingClientRect().width;
+      splitStartW = $convPanel.getBoundingClientRect().width;
       $splitResizer.classList.add('dragging');
       document.body.classList.add('resizing');
       document.addEventListener('mousemove', onSplitMove);
       document.addEventListener('mouseup', onSplitUp);
     });
     function onSplitMove(e) {
-      const w = Math.max(400, Math.min(window.innerWidth * 0.8, splitStartW + (e.clientX - splitStartX)));
-      $kanbanPanel.style.flex = 'none';
-      $kanbanPanel.style.width = w + 'px';
+      // Moving mouse right shrinks conv-panel (right-side panel), left grows it.
+      const w = Math.max(300, Math.min(window.innerWidth - 300, splitStartW - (e.clientX - splitStartX)));
+      $convPanel.style.width = w + 'px';
     }
     function onSplitUp() {
       $splitResizer.classList.remove('dragging');
       document.body.classList.remove('resizing');
       document.removeEventListener('mousemove', onSplitMove);
       document.removeEventListener('mouseup', onSplitUp);
-      const w = parseInt($kanbanPanel.style.width, 10);
-      if (w) localStorage.setItem('clv-split-width', String(w));
+      const w = parseInt($convPanel.style.width, 10);
+      if (w) localStorage.setItem('clv-conv-width', String(w));
     }
   }
 
@@ -3607,6 +4015,21 @@
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
   const $kptPkoodToggle = document.getElementById('kptPkoodToggle');
+  // Hide-descriptions toggle
+  const $kptDescToggle = document.getElementById('kptDescToggle');
+  if ($kptDescToggle) {
+    const applyDescHidden = (hidden) => {
+      document.body.classList.toggle('hide-descs', hidden);
+      $kptDescToggle.classList.toggle('active', hidden);
+      $kptDescToggle.textContent = hidden ? 'Show desc' : 'Hide desc';
+    };
+    applyDescHidden(localStorage.getItem('clv-hide-descs') === '1');
+    $kptDescToggle.addEventListener('click', () => {
+      const nowHidden = !document.body.classList.contains('hide-descs');
+      localStorage.setItem('clv-hide-descs', nowHidden ? '1' : '0');
+      applyDescHidden(nowHidden);
+    });
+  }
   const $kptNewSession = document.getElementById('kptNewSession');
   const $kptRunBtn = document.getElementById('kptRunBtn');
 
@@ -3692,7 +4115,14 @@
     const subject = ($nsmSubject.value || '').trim();
     const body = ($nsmBody.value || '').trim();
     if (!subject && !body) return;
-    const effectiveSubject = subject || body.slice(0, 60);
+    function firstSentence(text) {
+      if (!text) return '';
+      // Split on sentence enders or newlines; take first non-empty chunk.
+      const chunks = text.split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
+      const first = chunks[0] || text.trim();
+      return first.length > 120 ? first.slice(0, 120).trim() + '...' : first;
+    }
+    const effectiveSubject = subject || firstSentence(body);
     const prompt = body ? (subject ? (subject + '\n\n' + body) : body) : subject;
     const usePkood = !!($nsmPkood && $nsmPkood.checked);
     $nsmSubmit.disabled = true;
@@ -3719,6 +4149,54 @@
     }
     setTimeout(() => { $nsmSubmit.disabled = false; $nsmSubmit.textContent = 'Launch'; }, 2000);
   }
+  // ── Paste-image support ──
+  async function uploadPastedImage(blob) {
+    const res = await fetch('/api/upload-image', {
+      method: 'POST',
+      headers: {'Content-Type': blob.type || 'image/png'},
+      body: blob,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!data.ok) throw new Error(data.error || 'upload failed');
+    return data.path;
+  }
+  function insertAtCursor(el, text) {
+    if (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type === 'text')) {
+      const start = el.selectionStart || 0;
+      const end = el.selectionEnd || 0;
+      el.value = el.value.slice(0, start) + text + el.value.slice(end);
+      el.selectionStart = el.selectionEnd = start + text.length;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+  function attachImagePaste(el) {
+    if (!el || el._imgPasteBound) return;
+    el._imgPasteBound = true;
+    el.addEventListener('paste', async (ev) => {
+      const items = ev.clipboardData && ev.clipboardData.items;
+      if (!items) return;
+      for (const it of items) {
+        if (it.kind === 'file' && it.type.startsWith('image/')) {
+          ev.preventDefault();
+          const blob = it.getAsFile();
+          const placeholder = ' [uploading image...] ';
+          insertAtCursor(el, placeholder);
+          try {
+            const p = await uploadPastedImage(blob);
+            el.value = el.value.replace(placeholder, ' ' + p + ' ');
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          } catch (e) {
+            el.value = el.value.replace(placeholder, ' [upload failed: ' + e.message + '] ');
+          }
+          return;
+        }
+      }
+    });
+  }
+  [document.getElementById('nsmBody'), document.getElementById('nsmSubject'),
+   document.getElementById('kptNewSession'), document.getElementById('cpInput'),
+   document.getElementById('convInput')].forEach(attachImagePaste);
+
   if ($kptNewSession) {
     // Open modal the moment the user starts typing (or focuses)
     $kptNewSession.addEventListener('focus', () => openNewSessionModal($kptNewSession.value));

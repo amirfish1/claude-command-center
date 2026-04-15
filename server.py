@@ -569,6 +569,94 @@ def rename_session(session_id, name):
     result["method"] = "sidecar"
     return result
 
+
+def _extract_first_message(session_id):
+    """Read a session's opening user prompt from its .jsonl."""
+    path = _find_session_jsonl(session_id)
+    if not path:
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "user":
+                    continue
+                content = ev.get("message", {}).get("content", "")
+                if isinstance(content, str):
+                    text = content
+                elif isinstance(content, list):
+                    parts = [b.get("text", "") for b in content if b.get("type") == "text"]
+                    text = "\n".join(parts)
+                else:
+                    text = ""
+                text = text.strip()
+                if text and not text.startswith("<system-reminder>") and not text.startswith("<command-"):
+                    return text[:1500]
+    except OSError:
+        pass
+    return ""
+
+
+def summarize_session_title(session_id):
+    """Use `claude -p` to produce a concise title for a session's opening prompt."""
+    result = {"ok": False}
+    first_msg = _extract_first_message(session_id)
+    if not first_msg:
+        result["error"] = "no opening prompt found"
+        return result
+
+    instruction = (
+        "Produce a concise 4-8 word title summarizing what the user is trying to do "
+        "below. No quotes, no trailing punctuation, just the title itself on a single "
+        "line. Skip image references and boilerplate.\n\n"
+        "Opening prompt:\n"
+        + first_msg
+        + "\n\nTitle:"
+    )
+
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", "--model", "claude-haiku-4-5-20251001", instruction],
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+    except FileNotFoundError:
+        result["error"] = "claude CLI not in PATH"
+        return result
+    except subprocess.TimeoutExpired:
+        result["error"] = "claude -p timed out"
+        return result
+
+    if proc.returncode != 0:
+        result["error"] = (proc.stderr or "").strip()[:300] or f"claude exited {proc.returncode}"
+        return result
+
+    raw = (proc.stdout or "").strip().splitlines()
+    title = ""
+    for line in reversed(raw):
+        s = line.strip().strip('"').strip("'").rstrip(".")
+        if s:
+            title = s
+            break
+    if not title:
+        result["error"] = "empty response"
+        return result
+
+    # Cap length defensively
+    title = title[:120]
+    rename_result = rename_session(session_id, title)
+    result["ok"] = bool(rename_result.get("ok"))
+    result["title"] = title
+    result["rename_method"] = rename_result.get("method")
+    if not result["ok"]:
+        result["error"] = rename_result.get("error") or "rename failed"
+    return result
+
+
 # Terminal apps we know how to focus via AppleScript. Matched case-insensitively
 # against the comm of an ancestor process of the running claude.
 _TERMINAL_APPS = {
@@ -2180,6 +2268,60 @@ def inject_into_spawned(pid, text):
     return {"ok": False, "error": "unknown pid (not spawned by this server)"}
 
 
+def resume_session_headless(session_id, text):
+    """Resume a dormant session headlessly (`claude --resume`) and send text.
+
+    If we already resumed this session and the process is still alive, reuse it.
+    """
+    # Reuse existing resumed process
+    for s in _spawned_sessions:
+        if s.get("resumed_sid") == session_id and s["proc"].poll() is None:
+            ok = _write_stream_json_user_message(s["proc"], text)
+            return {"ok": ok, "pid": s["pid"], "resumed": True, "reused": True}
+
+    cwd = find_session_cwd(session_id) or str(REPO_ROOT)
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"resume-{session_id[:8]}-{timestamp}.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / log_filename
+
+    cmd = [
+        "claude", "-p", "--verbose",
+        "--resume", session_id,
+        "--input-format", "stream-json",
+        "--output-format", "stream-json",
+        "--dangerously-skip-permissions",
+    ]
+
+    log_fh = open(log_path, "w")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            cwd=cwd,
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        log_fh.close()
+        return {"ok": False, "error": "claude CLI not in PATH"}
+
+    ok = _write_stream_json_user_message(proc, text)
+    entry = {
+        "pid": proc.pid,
+        "name": f"resume-{session_id[:8]}",
+        "log": str(log_path),
+        "prompt": text[:200],
+        "started": timestamp,
+        "proc": proc,
+        "log_fh": log_fh,
+        "resumed_sid": session_id,
+    }
+    _spawned_sessions.append(entry)
+    return {"ok": ok, "pid": proc.pid, "log": str(log_path), "resumed": True}
+
+
 def list_spawned_sessions():
     """Return spawned sessions with running/finished status."""
     result = []
@@ -2583,6 +2725,62 @@ def vercel_deploy_status_with_autofix():
     return status
 
 
+def close_issue(issue_number, reason, duplicate_of=None):
+    """Close a GitHub issue with the given reason.
+
+    reason ∈ {'completed', 'not planned', 'duplicate'}
+    For 'duplicate', we close with reason='not planned' and add a comment
+    "Duplicate of #N" (GitHub doesn't have a native 'duplicate' close reason).
+    """
+    global _backlog_issues_cache_ts
+    reason = (reason or "").strip().lower()
+    result = {"ok": False}
+    try:
+        if reason == "duplicate":
+            if not duplicate_of:
+                result["error"] = "duplicate_of is required for duplicate close"
+                return result
+            dup = str(duplicate_of).lstrip("#")
+            comment = f"Duplicate of #{dup}"
+            subprocess.run(
+                ["gh", "issue", "comment", str(issue_number), "--body", comment],
+                check=True, capture_output=True, text=True,
+            )
+            subprocess.run(
+                ["gh", "issue", "close", str(issue_number), "--reason", "not planned"],
+                check=True, capture_output=True, text=True,
+            )
+            _backlog_issues_cache_ts = 0
+            result["ok"] = True
+            result["comment"] = comment
+            return result
+        elif reason in ("completed", "not planned"):
+            subprocess.run(
+                ["gh", "issue", "close", str(issue_number), "--reason", reason],
+                check=True, capture_output=True, text=True,
+            )
+            _backlog_issues_cache_ts = 0
+            result["ok"] = True
+            return result
+        else:
+            result["error"] = f"unknown reason: {reason}"
+            return result
+    except subprocess.CalledProcessError as e:
+        result["error"] = (e.stderr or e.stdout or str(e)).strip()[:300]
+        return result
+
+
+def get_issue_details(issue_number):
+    """Return the full GitHub issue (title, body, labels, comments, URL)."""
+    data = _gh(
+        "issue", "view", str(issue_number),
+        "--json", "title,body,labels,comments,url,author,state,createdAt,updatedAt",
+    )
+    if not data:
+        return {"ok": False, "error": "gh issue view failed"}
+    return {"ok": True, "issue": data}
+
+
 def get_issue_summary(issue_number):
     """Get Claude's summary comment from a closed issue."""
     comments = _gh(
@@ -2639,6 +2837,9 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
         elif re.match(r"^/api/issues/\d+/summary$", path):
             num = path.split("/")[3]
             self.send_json(get_issue_summary(num))
+        elif re.match(r"^/api/issues/\d+/details$", path):
+            num = path.split("/")[3]
+            self.send_json(get_issue_details(num))
         elif path == "/api/sessions/spawned":
             self.send_json(list_spawned_sessions())
         elif path == "/api/sessions":
@@ -2696,7 +2897,60 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
-        if path == "/api/watcher/start":
+        if path == "/api/upload-image":
+            ctype = self.headers.get("Content-Type", "")
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 25 * 1024 * 1024:
+                self.send_json({"ok": False, "error": "bad length"}, 400)
+            else:
+                raw = self.rfile.read(length)
+                # Determine extension from content type
+                ext_map = {
+                    "image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
+                    "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg",
+                }
+                ext = ext_map.get(ctype.split(";")[0].strip().lower(), "png")
+                repo = os.environ.get("CCC_WATCH_REPO") or os.getcwd()
+                img_dir = os.path.join(repo, ".claude", "pasted-images")
+                os.makedirs(img_dir, exist_ok=True)
+                fname = f"paste-{int(time.time()*1000)}.{ext}"
+                fpath = os.path.join(img_dir, fname)
+                try:
+                    with open(fpath, "wb") as f:
+                        f.write(raw)
+                    self.send_json({"ok": True, "path": fpath, "name": fname, "bytes": len(raw)})
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/open":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            target = (payload.get("path") or "").strip()
+            if not target:
+                self.send_json({"ok": False, "error": "missing path"}, 400)
+            else:
+                candidates = []
+                if os.path.isabs(target):
+                    candidates.append(target)
+                else:
+                    cwd = os.getcwd()
+                    candidates.append(os.path.join(cwd, target))
+                    home = os.path.expanduser("~")
+                    for root in ("dev/my-finance-app", "dev/claude-command-center", "dev"):
+                        candidates.append(os.path.join(home, root, target))
+                resolved = next((p for p in candidates if os.path.exists(p)), None)
+                if not resolved:
+                    self.send_json({"ok": False, "error": "not found", "tried": candidates}, 404)
+                else:
+                    try:
+                        subprocess.Popen(["open", resolved])
+                        self.send_json({"ok": True, "path": resolved})
+                    except Exception as e:
+                        self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/watcher/start":
             self.send_json(watcher_start())
         elif path == "/api/watcher/stop":
             self.send_json(watcher_stop())
@@ -2750,6 +3004,32 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 _save_conversation_order(order)
                 self.send_json({"ok": True, "count": len(order)})
             except OSError as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/issues/\d+/close$", path):
+            num = path.split("/")[3]
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            reason = payload.get("reason") or "completed"
+            duplicate_of = payload.get("duplicate_of")
+            self.send_json(close_issue(num, reason, duplicate_of))
+        elif re.match(r"^/api/conversations/[a-f0-9-]+/summarize$", path):
+            conv_id = path.split("/")[-2]
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = payload.get("session_id") or conv_id
+            try:
+                result = summarize_session_title(sid)
+                result["session_id"] = sid
+                self.send_json(result)
+            except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/rename$", path) or re.match(r"^/api/conversations/issue-\d+/rename$", path) or re.match(r"^/api/conversations/pkood-[^/]+/rename$", path):
             conv_id = path.split("/")[-2]
@@ -2851,13 +3131,20 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 # Also close linked GitHub issue with commit SHA comment
                 gh_result = None
                 if now_verified:
-                    # Find the issue: from watcher id OR side-car mapping OR heuristic
+                    # Find the issue: from watcher id OR side-car mapping OR
+                    # fallback: parse "issue-N" display name (how /Start Session names sessions).
                     issue_num = None
                     m = re.match(r"^issue-(\d+)$", conv_id)
                     if m:
                         issue_num = m.group(1)
                     else:
                         issue_num = _load_session_issues().get(sid)
+                    if not issue_num:
+                        display_name = payload.get("display_name") or ""
+                        dm = re.match(r"^issue-(\d+)$", display_name)
+                        if dm:
+                            issue_num = dm.group(1)
+                            _save_session_issue(sid, issue_num)
                     if issue_num:
                         # Build a minimal conv dict for helper
                         conv_info = {
@@ -2960,7 +3247,9 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 tty = status.get("tty")
                 term_app = status.get("terminal_app")
                 if not status.get("live") or not tty:
-                    self.send_json({"ok": False, "error": "session not live or no tty"})
+                    # Fall back: resume the session headlessly and inject via stream-json
+                    result = resume_session_headless(sid, text)
+                    self.send_json(result)
                 else:
                     result = inject_input_via_keystroke(
                         tty, term_app or "Terminal", text
