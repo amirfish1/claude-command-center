@@ -972,7 +972,7 @@
   .conv-panel {
     flex: none; width: 680px;
     display: flex; flex-direction: column;
-    overflow: hidden; min-width: 300px;
+    overflow: hidden; min-width: 100px;
   }
   .conv-panel-toolbar {
     padding: 10px 16px; border-bottom: 1px solid var(--border);
@@ -1085,6 +1085,8 @@
      Both toggled via body classes (`mobile-show-main`, `mobile-conv-open`).
   */
   .mobile-back-btn { display: none; }
+  /* Floating reload button is mobile-only; desktop has an inline button in the
+     kanban-panel-toolbar (#kptReloadPageBtn). */
   .mobile-reload-btn { display: none; }
   @media (max-width: 768px) {
     body {
@@ -1157,46 +1159,99 @@
     .kanban-panel-toolbar .kpt-label,
     .kanban-panel-toolbar #kptListViewBtn,
     .kanban-panel-toolbar #kptOpenConvBtn,
+    .kanban-panel-toolbar #kptReloadPageBtn,
     .kanban-panel-toolbar #kptDeployStatus { display: none !important; }
 
-    /* Columns a little narrower so ~1.5 fit on screen */
-    .kanban-board-split .kanban-column {
-      min-width: 240px !important; width: 240px !important;
-    }
-
-    /* Clamp card descriptions tightly on phones */
-    .kanban-card .kanban-card-desc {
-      -webkit-line-clamp: 3 !important;
-    }
-
-    /* Conv-panel toolbar controls */
-    #cpFontMinus, #cpFontPlus { display: none !important; }
-    .conv-panel-toolbar .cpt-session-id { display: none !important; }
-
-    /* Kill iOS double-tap-to-click on cards (hover states triggered first tap) */
-    .kanban-card { touch-action: manipulation; -webkit-tap-highlight-color: rgba(88,166,255,0.15); }
-    /* Card action buttons are always visible on touch (no hover to reveal) */
-    .kanban-card .kanban-card-actions { opacity: 1 !important; }
-
-    /* Give the "Original ask" sticky header more room to breathe */
-    .conv-sticky-header .user-msg { max-height: 9em !important; }
-
-    /* Floating reload button (mobile has no pull-to-refresh because body is fixed) */
+    /* Floating reload visible on mobile only */
     .mobile-reload-btn {
       display: inline-flex !important;
       position: fixed;
-      top: calc(env(safe-area-inset-top) + 8px);
-      right: 8px;
+      bottom: calc(env(safe-area-inset-bottom) + 12px);
+      right: 12px;
       z-index: 1500;
-      width: 38px; height: 38px; border-radius: 50%;
+      width: 44px; height: 44px; border-radius: 50%;
       background: rgba(13,17,23,0.85);
       border: 1px solid var(--border);
       color: var(--text);
       align-items: center; justify-content: center;
-      font-size: 18px; line-height: 1; cursor: pointer;
+      font-size: 20px; line-height: 1; cursor: pointer;
       -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
       font-family: inherit;
       touch-action: manipulation;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    }
+    .mobile-reload-btn:active { background: var(--accent); color: #fff; }
+
+    /* Narrower board gutter + magnetic center-snap on horizontal swipe */
+    .kanban-board-split {
+      padding: 8px 4px !important;
+      gap: 8px !important;
+      scroll-snap-type: x mandatory;
+      scroll-padding: 0 50%;
+    }
+    .kanban-board-split .kanban-column {
+      min-width: 300px !important; width: 300px !important;
+      scroll-snap-align: center;
+      scroll-snap-stop: always;
+    }
+
+    /* Show more of the outcome on phones — summaries often need 5–7 lines */
+    .kanban-card .kanban-card-desc {
+      -webkit-line-clamp: 8 !important;
+    }
+    /* The "Hide desc" button is a desktop power-user toggle. On mobile the
+       summary IS the card — always show it regardless of that setting. */
+    body.hide-descs .kanban-card .kanban-card-desc {
+      display: -webkit-box !important;
+    }
+    /* Tighter card padding on mobile so the description gets more real estate */
+    .kanban-card { padding: 8px 10px !important; }
+
+    /* Conv-panel toolbar controls */
+    #cpFontMinus, #cpFontPlus { display: none !important; }
+    .conv-panel-toolbar .cpt-session-id { display: none !important; }
+    /* Jump/Launch only affect the Mac's Terminal.app — useless when viewed
+       from a phone via Tailscale. Hide to avoid the "clicked, nothing happened" UX. */
+    #cpJumpBtn, #cpLaunchBtn,
+    #jumpBtnConv, #launchBtnConv,
+    .toolbar .resume-btn { display: none !important; }
+
+    /* Kill iOS double-tap-to-click on cards (hover states triggered first tap) */
+    .kanban-card {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: rgba(88,166,255,0.15);
+    }
+    /* Card action buttons: always visible on touch, pinned bottom-right so they
+       sit next to the stage chip instead of covering the title. */
+    .kanban-card .kanban-card-actions {
+      opacity: 1 !important;
+      top: auto !important;
+      left: auto !important;
+      bottom: 4px !important;
+      right: 4px !important;
+    }
+
+    /* Give the "Original ask" sticky header more room to breathe */
+    .conv-sticky-header .user-msg { max-height: 9em !important; }
+
+    /* Floating reload button — bottom-right to avoid overlap with conv-panel X.
+       (Safe-area padding keeps it above the home indicator.) */
+    .mobile-reload-btn {
+      display: inline-flex !important;
+      position: fixed;
+      bottom: calc(env(safe-area-inset-bottom) + 12px);
+      right: 12px;
+      z-index: 1500;
+      width: 44px; height: 44px; border-radius: 50%;
+      background: rgba(13,17,23,0.85);
+      border: 1px solid var(--border);
+      color: var(--text);
+      align-items: center; justify-content: center;
+      font-size: 20px; line-height: 1; cursor: pointer;
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      font-family: inherit;
+      touch-action: manipulation;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
     }
     .mobile-reload-btn:active { background: var(--accent); color: #fff; }
   }
@@ -1285,7 +1340,8 @@
     <div class="kanban-panel">
       <div class="kanban-panel-toolbar">
         <input type="text" class="kpt-search" id="kptSearch" placeholder="Search sessions...">
-        <button id="kptRefreshBtn" title="Refresh">&#8634;</button>
+        <button id="kptRefreshBtn" title="Refresh data">&#8634;</button>
+        <button id="kptReloadPageBtn" title="Full page reload (fresh HTML + JS)">&#10227;</button>
         <button id="kptRecentBtn" title="Show only last 10 hours">Recent</button>
         <label class="kpt-label"><input type="checkbox" id="kptPkoodToggle"> pkood</label>
         <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
@@ -1293,14 +1349,15 @@
         <button id="kptDescToggle" title="Hide descriptions on cards">Hide desc</button>
         <button id="kptGitOnlyToggle" title="Show only cards linked to a GitHub issue">Git only</button>
         <button id="kptListViewBtn" title="Back to list view">&#9783;</button>
-        <button id="kptOpenConvBtn" title="Open conversation panel" style="display:none;">&#9664;</button>
         <span class="kpt-deploy" id="kptDeployStatus" title="Vercel deploy status" style="margin-left:auto;font-size:11px;display:flex;align-items:center;gap:4px;color:var(--text-muted);white-space:nowrap;"></span>
+        <button id="kptOpenConvBtn" title="Open conversation panel" style="display:none;">&#9664;</button>
       </div>
       <div class="kanban-board-split" id="kanbanBoardSplit"></div>
     </div>
     <div class="split-resizer" id="splitResizer"></div>
     <div class="conv-panel">
       <div class="conv-panel-toolbar" id="convPanelToolbar">
+        <button class="mobile-back-btn" id="cpMobileBackBtn" title="Back to board">&#8592; Back</button>
         <button id="cpJumpBtn" style="display:none;" title="Jump to terminal"><span>&#8599;</span> Jump</button>
         <button id="cpLaunchBtn" style="display:none;" title="Launch in terminal"><span>&#43;</span> Launch</button>
         <button id="cpKillBtn" style="display:none;" title="Kill agent">Kill</button>
@@ -1339,6 +1396,7 @@
         <button id="nsmCancel" class="nsm-btn">Cancel</button>
         <button id="nsmSubmit" class="nsm-btn nsm-primary">Launch</button>
       </div>
+      <div id="nsmError" style="display:none;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;font-size:12px;color:var(--red);background:rgba(248,81,73,0.1);border:1px solid rgba(248,81,73,0.3);border-radius:6px;padding:10px 12px;user-select:text;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow:auto;"></div>
     </div>
   </div>
 
@@ -1366,6 +1424,41 @@
   function stripTitle(s) {
     if (!s) return s;
     return _titleStripRe ? s.replace(_titleStripRe, ' ') : s;
+  }
+  // Strip the "Fix GitHub issue #N: ... Read the issue first with `gh issue view N`,
+  // then implement the fix." boilerplate from older spawn prompts. Kept here so it
+  // retroactively cleans cards spawned before the prompt-template cleanup.
+  function cleanIssuePrompt(s) {
+    if (!s) return s;
+    return String(s)
+      .replace(/^\s*Fix GitHub issue #\d+:\s*/i, '')
+      .replace(/\.?\s*Read the issue first with[^.]*?,\s*then implement the fix\.?\s*$/i, '')
+      .trim();
+  }
+  // Extract the first sentence / line from a blob of text. Used to derive a
+  // usable title when the original prompt is a multi-paragraph body.
+  function firstSentenceOf(text, maxLen = 90) {
+    if (!text) return '';
+    const chunks = String(text).split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
+    let first = chunks[0] || String(text).trim();
+    if (first.length > maxLen) first = first.slice(0, maxLen).trim() + '…';
+    return first;
+  }
+  // Tiny inline-markdown renderer for card descriptions. Handles bold, code,
+  // headings and bullet lines — enough to preserve Claude's summary formatting
+  // without pulling in a full markdown lib.
+  function renderInlineMd(raw) {
+    if (!raw) return '';
+    let s = String(raw)
+      .replace(/```[\s\S]*?```/g, '')   // drop fenced code blocks
+      .replace(/^#{1,6}\s+/gm, '')       // drop heading markers
+      .trim();
+    let html = escapeHtml(s)
+      .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`\n]+?)`/g, '<code>$1</code>');
+    // Bullet lines → glyph; otherwise hard line breaks
+    html = html.replace(/^\s*[-*]\s+/gm, '• ').replace(/\n/g, '<br>');
+    return html;
   }
   async function loadAppConfig() {
     try {
@@ -1951,6 +2044,8 @@
   }
   const $mobileBackBtn = document.getElementById('mobileBackBtn');
   if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => mobileShowMain(false));
+  const $cpMobileBackBtn = document.getElementById('cpMobileBackBtn');
+  if ($cpMobileBackBtn) $cpMobileBackBtn.addEventListener('click', () => mobileShowConv(false));
   const $mobileReloadBtn = document.getElementById('mobileReloadBtn');
   if ($mobileReloadBtn) $mobileReloadBtn.addEventListener('click', () => {
     // Bypass cache where supported (Firefox); Safari treats it as a normal reload.
@@ -2163,14 +2258,35 @@
           if (el) { el.scrollLeft = left; el.scrollTop = top; }
         }
       }
+      // First render on mobile: center the Working column so users land on
+      // what they're most likely looking at.
+      if (!_didInitialWorkingScroll && isMobile() && $kanbanBoardSplit && !scrolls['kanbanBoardSplit']) {
+        const workingCol = $kanbanBoardSplit.querySelector('.kanban-column[data-col="working"]');
+        if (workingCol) {
+          workingCol.scrollIntoView({ inline: 'center', block: 'nearest' });
+          _didInitialWorkingScroll = true;
+        }
+      }
     });
   }
+  let _didInitialWorkingScroll = false;
 
   // Manual column overrides (drag-and-drop) — session_id → column key
   let columnOverrides = {};
   try { columnOverrides = JSON.parse(localStorage.getItem('clv-column-overrides') || '{}'); } catch (_) {}
   // Guard against double-spawn from rapid mobile taps. Key is "issue-<num>" or session name.
   const _spawningKeys = new Set();
+  // Client-side persistence for archived TODO.md / PARKING_LOT.md backlog cards.
+  // (The server re-parses those files on every request, so archive state has to
+  // live in the browser to stick.)
+  let _archivedBacklogIds = new Set();
+  try {
+    const saved = JSON.parse(localStorage.getItem('clv-archived-backlog') || '[]');
+    if (Array.isArray(saved)) _archivedBacklogIds = new Set(saved);
+  } catch (_) {}
+  function _persistArchivedBacklog() {
+    try { localStorage.setItem('clv-archived-backlog', JSON.stringify([..._archivedBacklogIds])); } catch (_) {}
+  }
 
   // Multi-select state for kanban cards
   let selectedCardIds = new Set();
@@ -2231,12 +2347,20 @@
         return m ? m[1] : null;
       })() || ((c.id || '').startsWith('backlog-issue-') ? c.id.split('-').pop() : null);
       if (issueNum) {
-        fetch('/api/issues/' + issueNum + '/mark-in-progress', { method: 'POST' })
+        // Planning → `icebox` label ("parked, not active"); Working → `claude-in-progress`.
+        const endpoint = targetCol === 'planning' ? 'mark-icebox' : 'mark-in-progress';
+        fetch('/api/issues/' + issueNum + '/' + endpoint, { method: 'POST' })
           .then(() => setTimeout(refreshConversationList, 800))
           .catch(() => {});
       }
     } else if (targetCol === 'archived') {
-      if (!c.archived) {
+      // TODO.md / PARKING_LOT.md cards have no server-side archive — persist locally
+      // so the state sticks across reloads (server re-parses the files every time).
+      if ((cardId || '').startsWith('backlog-todo-') || (cardId || '').startsWith('backlog-parking-')) {
+        _archivedBacklogIds.add(cardId);
+        _persistArchivedBacklog();
+        c.archived = true;
+      } else if (!c.archived) {
         await fetch('/api/conversations/' + cardId + '/archive', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ session_id: sid }),
@@ -2317,6 +2441,11 @@
     // Review: committed/pushed (dead sessions, or live without sidecar)
     if (stage === 'pushed' || stage === 'committed') return 'review';
 
+    // Dormant session that made edits and finished its last turn with an assistant
+    // message (typically a "done, here's the summary" reply). The work is sitting
+    // in the working tree waiting for human review — belongs in Review, not Inactive.
+    if (!live && stage === 'coding' && c.last_event_type === 'assistant') return 'review';
+
     // Linked-issue label overrides for dead sessions (before falling to Inactive)
     if (hasLabel('needs-attention')) return 'needs-attention';
     if (hasLabel('icebox')) return 'planning';
@@ -2354,9 +2483,9 @@
       { key: 'working',        label: 'Working',        defaultExpanded: true },
       { key: 'review',         label: 'Review',         defaultExpanded: true },
       { key: 'testing',        label: 'In Testing',     defaultExpanded: true },
-      { key: 'inactive',       label: 'Inactive',       defaultExpanded: false },
       { key: 'verified',       label: 'Verified',       defaultExpanded: false },
       { key: 'archived',       label: 'Archived',       defaultExpanded: false },
+      { key: 'inactive',       label: 'Inactive',       defaultExpanded: false },
     ];
     // Apply user-defined column order from localStorage.
     let savedOrder = [];
@@ -2424,27 +2553,43 @@
         }
         // Prefer first_message for the title unless the user explicitly renamed it.
         // Auto-generated display_names (from claude /rename) tend to be awkwardly truncated.
+        // For backlog cards, `first_message` is the issue body (which often
+        // starts with a markdown heading like "## Feature request"), so using
+        // it as a title fallback produces garbage. Prefer display_name there.
+        const isBacklog = c.source === 'backlog';
+        const rawFirst = (!isBacklog && c.first_message)
+          ? firstSentenceOf(cleanIssuePrompt(c.first_message), 90)
+          : '';
         const rawTitle = c.name_overridden
           ? c.display_name
-          : (c.first_message ? c.first_message.slice(0, 160) : (c.display_name || '(untitled)'));
+          : (isBacklog
+              ? (c.display_name || rawFirst || '(untitled)')
+              : (rawFirst || c.display_name || '(untitled)'));
         // Replace dashes with spaces for display (storage keeps the slug); strip user-configured title prefixes
         const title = stripTitle(rawTitle).replace(/-/g, ' ').trim();
-        // Description: only show content beyond what the title already reveals.
-        let desc = '';
-        if (c.first_message) {
-          const fm = stripTitle(c.first_message).trim();
+        // Description: prefer the last assistant "outcome" message (so cards
+        // show progress/result without opening them). Fall back to the original
+        // ask if Claude hasn't responded yet.
+        // descHtml is already escaped+rendered; descPlain is for the fallback path.
+        let descHtml = '';
+        if (c.last_assistant_text) {
+          const raw = String(c.last_assistant_text).trim().slice(0, 700);
+          descHtml = renderInlineMd(raw);
+        } else if (c.first_message) {
+          const fm = cleanIssuePrompt(stripTitle(c.first_message)).trim();
           const stripEllipsis = (s) => s.replace(/[.\u2026\s]+$/, '');
           const norm = (s) => stripEllipsis(s).toLowerCase().replace(/\s+/g, ' ').trim();
           const titleNorm = norm(title);
           const fmNorm = norm(fm).slice(0, titleNorm.length);
+          let plain = '';
           if (titleNorm && fmNorm === titleNorm) {
-            // Title is a prefix of the first message — show continuation only.
             const cleanTitleLen = stripEllipsis(title).length;
             const rest = fm.slice(cleanTitleLen).replace(/^[\s\-–—:,.]+/, '');
-            if (rest.length > 10) desc = rest.slice(0, 320);
+            if (rest.length > 10) plain = rest.slice(0, 320);
           } else {
-            desc = fm.slice(0, 320);
+            plain = fm.slice(0, 320);
           }
+          if (plain) descHtml = escapeHtml(plain);
         }
 
         // ── Backlog cards: special rendering ──
@@ -2453,9 +2598,14 @@
             const color = l === 'bug' ? 'var(--red)' : 'var(--accent)';
             return '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(139,148,158,0.15);color:' + color + ';font-weight:600;margin-right:3px;">' + escapeHtml(l) + '</span>';
           }).join('');
-          const sourceTag = c.backlog_type === 'github'
-            ? '<button class="kanban-action-btn" data-action="view-issue" data-issue="' + escapeHtml(c.issue_number || '') + '" title="Open issue #' + escapeHtml(c.issue_number || '') + ' on GitHub (full body + images)" style="display:inline-flex;align-items:center;gap:3px;padding:0 4px;font-size:10px;color:var(--text-muted);border:1px solid var(--border);border-radius:3px;background:transparent;cursor:pointer;">#' + escapeHtml(c.issue_number || '') + ' &#x2197;</button>'
-            : '<span style="font-size:10px;color:var(--accent);">TODO.md</span>';
+          let sourceTag = '';
+          if (c.backlog_type === 'github') {
+            sourceTag = '<button class="kanban-action-btn" data-action="view-issue" data-issue="' + escapeHtml(c.issue_number || '') + '" title="Open issue #' + escapeHtml(c.issue_number || '') + ' on GitHub (full body + images)" style="display:inline-flex;align-items:center;gap:3px;padding:0 4px;font-size:10px;color:var(--text-muted);border:1px solid var(--border);border-radius:3px;background:transparent;cursor:pointer;">#' + escapeHtml(c.issue_number || '') + ' &#x2197;</button>';
+          } else if (c.backlog_type === 'parking') {
+            sourceTag = '<span style="font-size:10px;color:var(--cyan);">PARKING_LOT.md</span>';
+          } else {
+            sourceTag = '<span style="font-size:10px;color:var(--accent);">TODO.md</span>';
+          }
           // Date + relative time for GitHub issues
           let dateInfo = '';
           if (c.modified && c.modified > 0) {
@@ -2485,8 +2635,10 @@
         const rel = relativeTime(c.modified);
         const sizeStr = formatSize(c.size);
         const branch = c.branch || '';
-        const metaParts = [rel, sizeStr];
-        if (branch) metaParts.push(branch);
+        // File size (sizeStr) dropped — not useful at a glance. Relative time +
+        // branch are enough for scanning cards.
+        const metaParts = ['<span class="meta-rel">' + escapeHtml(rel) + '</span>'];
+        if (branch) metaParts.push('<span class="meta-branch">' + escapeHtml(branch) + '</span>');
         const colKey = classifyKanbanColumn(c);
         let stageLabel, stageCls;
         // Column-derived stage overrides the raw session stage
@@ -2515,37 +2667,40 @@
         const trulyActive = c.is_live && c.sidecar_status === 'active' && (sidecarAge < 300 || midTurn) ? ' truly-active' : '';
         const pendingSpawn = c.pending_spawn ? ' pending-spawn' : '';
         html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
-        // Issue link icon / Create Issue button
+        // Create-issue button only when no issue is linked. The "view issue" link
+        // was removed — tapping the #NNN badge in the title opens the issue.
         const linkedIssue = c.linked_issue || c.issue_number || '';
-        const issueAction = linkedIssue
-          ? '<button class="kanban-action-btn" data-action="view-issue" data-issue="' + escapeHtml(linkedIssue) + '" title="View GitHub issue #' + escapeHtml(linkedIssue) + '" style="color:var(--green);">&#128279;</button>'
+        const createIssueBtn = linkedIssue
+          ? ''
           : '<button class="kanban-action-btn" data-action="create-issue" title="Create GitHub issue">&#128221;</button>';
         html += '<div class="kanban-card-actions">'
           + '<button class="kanban-action-btn" data-action="summarize" title="Regenerate title with Claude">&#10024;</button>'
-          + issueAction
+          + createIssueBtn
           + '<button class="kanban-action-btn" data-action="archive" title="' + archiveTitle + '">' + archiveIcon + '</button>'
           + '</div>';
         let issueBadge = '';
         if (linkedIssue) {
           const ghState = (c.gh_state || '').toUpperCase();
-          const ghStateCls = ghState === 'CLOSED' ? 'gh-closed' : 'gh-open';
-          const ghStateLabel = ghState ? (ghState === 'CLOSED' ? 'closed' : 'open') : '';
-          const stateChip = ghStateLabel
-            ? '<span class="kanban-gh-state ' + ghStateCls + '" title="GitHub issue state: ' + ghStateLabel + '">' + ghStateLabel + '</span>'
-            : '';
-          const wipChip = c.gh_in_progress
-            ? '<span class="kanban-gh-wip" title="claude-in-progress label on GitHub">WIP</span>'
-            : '';
+          // Single state chip: WIP absorbs "open" when the claude-in-progress
+          // label is present — avoids showing both "open" and "WIP" side by side.
+          let stateChip = '';
+          if (ghState === 'CLOSED') {
+            stateChip = '<span class="kanban-gh-state gh-closed" title="GitHub issue state: closed">closed</span>';
+          } else if (c.gh_in_progress) {
+            stateChip = '<span class="kanban-gh-wip" title="Open · claude-in-progress label on GitHub">WIP</span>';
+          } else if (ghState) {
+            stateChip = '<span class="kanban-gh-state gh-open" title="GitHub issue state: open">open</span>';
+          }
           const desktopChip = c.desktop_app
             ? '<span class="kanban-desktop-badge" title="Session is tracked by the Claude desktop app">Desktop</span>'
             : '';
-          issueBadge = '<span class="kanban-issue-badge" title="Linked to GitHub issue">#' + escapeHtml(linkedIssue) + '</span>' + stateChip + wipChip + desktopChip;
+          issueBadge = '<span class="kanban-issue-badge" title="Linked to GitHub issue">#' + escapeHtml(linkedIssue) + '</span>' + stateChip + desktopChip;
         }
         html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open &amp; rename">' + issueBadge + escapeHtml(title) + '</div>';
-        if (desc) {
-          html += '<div class="kanban-card-desc">' + escapeHtml(desc) + '</div>';
+        if (descHtml) {
+          html += '<div class="kanban-card-desc">' + descHtml + '</div>';
         }
-        html += '<div class="kanban-card-meta">' + escapeHtml(metaParts.join(' \u00b7 ')) + '</div>';
+        html += '<div class="kanban-card-meta">' + metaParts.join(' \u00b7 ') + '</div>';
         html += '<div class="kanban-card-stage ' + stageCls + '">' + escapeHtml(stageLabel) + '</div>';
 
         // ── Task 8: Approve/Deny for waiting cards with pending_tool ──
@@ -2663,6 +2818,13 @@
         if (card.classList.contains('backlog-card') && card.dataset.id.startsWith('backlog-issue-')) {
           const issueNum = card.dataset.id.replace('backlog-issue-', '');
           renderIssueInConvPane(issueNum);
+          return;
+        }
+        // Backlog TODO.md / PARKING_LOT.md cards: no conversation yet — show the text.
+        if (card.classList.contains('backlog-card') && (
+              card.dataset.id.startsWith('backlog-todo-') ||
+              card.dataset.id.startsWith('backlog-parking-'))) {
+          renderTodoInConvPane(card.dataset.id);
           return;
         }
         selectConversation(card.dataset.id);
@@ -3253,16 +3415,22 @@
       return;
     }
     $convList.innerHTML = convs.map(c => {
-      const rawTitle = c.display_name || (c.first_message ? c.first_message.slice(0, 60) : '(untitled)');
+      const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
+      const rawTitle = c.display_name || (cleanFirst ? firstSentenceOf(cleanFirst, 60) : '(untitled)');
       const title = rawTitle.replace(/-/g, ' ');
       let titleClass = '';
       if (c.name_overridden) titleClass = 'user-renamed';
       else if (!c.display_name && !c.first_message) titleClass = 'untitled';
-      // Show the original ask (first_message) when we have a display_name title,
-      // so the user always sees what this session was about
-      const ask = (c.display_name && c.first_message)
-        ? '<div class="conv-last">' + escapeHtml(c.first_message.slice(0, 100)) + '</div>'
-        : '';
+      // Prefer the last assistant "outcome" (summary) over the original ask —
+      // mirrors the kanban card behavior so list view shows what the session did.
+      let askHtml = '';
+      if (c.last_assistant_text) {
+        const raw = String(c.last_assistant_text).trim().slice(0, 140);
+        askHtml = '<div class="conv-last">' + escapeHtml(raw) + '</div>';
+      } else if (c.display_name && cleanFirst) {
+        askHtml = '<div class="conv-last">' + escapeHtml(cleanFirst.slice(0, 100)) + '</div>';
+      }
+      const ask = askHtml;
       const last = c.last_prompt
         ? '<div class="conv-last"><span class="label">last:</span>' + escapeHtml(c.last_prompt.slice(0, 80)) + '</div>'
         : '';
@@ -3968,7 +4136,31 @@
 
   let _firstUserMsgRendered = false;
 
+  // Render a TODO.md backlog card in the conv pane. No session exists yet —
+  // just show the TODO text and the two spawn buttons so the user can start one.
+  function renderTodoInConvPane(backlogId) {
+    const $view = getConvView();
+    stopConvStream();
+    stopIssueLogPoller();
+    currentConversation = backlogId;
+    const c = conversationsData.find(x => x.id === backlogId) || {};
+    const title = stripTitle(c.display_name || '(todo)').replace(/-/g, ' ').trim();
+    const body = c.first_message || '';
+    const sourceLabel = backlogId.startsWith('backlog-parking-') ? 'PARKING_LOT.md' : 'TODO.md';
+    let html = '<div style="padding:20px;max-width:900px;">';
+    html += '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">' + sourceLabel + '</div>';
+    html += '<h1 style="margin:0 0 12px;font-size:20px;line-height:1.3;">' + escapeHtml(title) + '</h1>';
+    if (body) {
+      html += '<div class="assistant-text" style="font-size:14px;line-height:1.55;white-space:pre-wrap;">' + escapeHtml(body) + '</div>';
+    }
+    html += '<div style="margin-top:20px;color:var(--text-muted);font-size:13px;">No conversation yet — tap <strong>Start session</strong> on the card to spawn one.</div>';
+    html += '</div>';
+    $view.innerHTML = html;
+    $view.scrollTop = 0;
+  }
+
   function renderConversationEvents(events) {
+    if (!Array.isArray(events)) return;  // defensive: backlog/unknown responses
     const $view = getConvView();
     for (const ev of events) {
       const div = document.createElement('div');
@@ -3997,11 +4189,14 @@
           const resolveBtn = issueNum
             ? '<button class="tools-toggle resolve-btn" data-issue="' + escapeHtml(String(issueNum)) + '" data-session="' + escapeHtml(conv.session_id || '') + '" title="Commit changes and close issue #' + escapeHtml(String(issueNum)) + '" style="right:240px;color:#fff;background:var(--green);border-color:var(--green);">Commit &amp; resolve</button>'
             : '';
-          sticky.innerHTML = resolveBtn + issueBtn
+          // "Close & announce" — injects /announce-feature into the session to run the
+          // full ship+broadcast flow (GH issue with ALL-ORGS sentinel, commit, push, close).
+          const announceBtn = '<button class="tools-toggle announce-btn" data-session="' + escapeHtml(conv.session_id || '') + '" title="Run /announce-feature — ships and broadcasts to every studio" style="right:380px;color:#fff;background:var(--purple);border-color:var(--purple);">Close &amp; announce</button>';
+          sticky.innerHTML = announceBtn + resolveBtn + issueBtn
             + '<button class="tools-toggle" data-tools-toggle' + (hidden ? ' class="active"' : '') + ' title="Toggle tool-call visibility">'
             + (hidden ? 'Show tools' : 'Hide tools') + '</button>'
             + '<div class="label">Original ask</div>'
-            + '<div class="user-msg">' + escapeHtml(ev.text) + '</div>';
+            + '<div class="user-msg">' + escapeHtml(cleanIssuePrompt(ev.text)) + '</div>';
           $view.insertBefore(sticky, $view.firstChild);
           sticky.querySelector('[data-tools-toggle]').addEventListener('click', (e) => {
             e.stopPropagation();
@@ -4049,6 +4244,34 @@
               }
             });
           }
+          const announceClickBtn = sticky.querySelector('.announce-btn');
+          if (announceClickBtn) {
+            announceClickBtn.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              const sid = announceClickBtn.dataset.session;
+              if (!sid) return;
+              // Optional feature name: what the session was working on
+              const feature = prompt('Announce what? (short feature name)\n\nLeave blank and /announce-feature will ask.', '');
+              if (feature === null) return;  // user cancelled
+              announceClickBtn.disabled = true;
+              announceClickBtn.textContent = 'Sending...';
+              const cmd = feature.trim()
+                ? '/announce-feature ' + feature.trim()
+                : '/announce-feature';
+              try {
+                await fetch('/api/inject-input', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({ session_id: sid, text: cmd }),
+                });
+                announceClickBtn.textContent = 'Sent ✓';
+                announceClickBtn.style.opacity = '0.6';
+              } catch (err) {
+                announceClickBtn.textContent = 'Failed';
+                setTimeout(() => { announceClickBtn.textContent = 'Close & announce'; announceClickBtn.disabled = false; }, 2000);
+              }
+            });
+          }
         }
       }
 
@@ -4059,7 +4282,7 @@
       } else if (ev.type === 'user_text') {
         div.innerHTML = '<span class="label">User</span>'
           + '<span class="line-num">L' + ev.line + '</span>'
-          + '<div class="user-msg">' + escapeHtml(ev.text) + '</div>';
+          + '<div class="user-msg">' + escapeHtml(cleanIssuePrompt(ev.text)) + '</div>';
       } else if (ev.type === 'assistant') {
         let html = '<span class="line-num">L' + ev.line + '</span>';
         let hasNonTool = false;
@@ -4096,6 +4319,11 @@
   function filterConversations(q) {
     q = (q || '').toLowerCase();
     const recentCutoff = Date.now() / 1000 - RECENT_HOURS * 3600;
+    // Re-apply persisted local archive for TODO/parking cards on every filter pass
+    // (each server response sets c.archived=false for them; we flip it back).
+    for (const c of conversationsData) {
+      if (_archivedBacklogIds.has(c.id)) c.archived = true;
+    }
     const filtered = conversationsData.filter(c => {
       // Recent-only filter (last N hours) — applies to everything, backlog included.
       // Backlog items use issue_created_at (falls back to modified).
@@ -4466,8 +4694,10 @@
       document.addEventListener('mouseup', onSplitUp);
     });
     function onSplitMove(e) {
-      // Moving mouse right shrinks conv-panel (right-side panel), left grows it.
-      const w = Math.max(300, Math.min(window.innerWidth - 300, splitStartW - (e.clientX - splitStartX)));
+      // Moving mouse right shrinks conv-panel, left grows it.
+      // Allow dragging down to 100px (raw preview); snap-to-closed happens on mouseup.
+      const raw = splitStartW - (e.clientX - splitStartX);
+      const w = Math.max(100, Math.min(window.innerWidth - 300, raw));
       $convPanel.style.width = w + 'px';
     }
     function onSplitUp() {
@@ -4476,6 +4706,12 @@
       document.removeEventListener('mousemove', onSplitMove);
       document.removeEventListener('mouseup', onSplitUp);
       const w = parseInt($convPanel.style.width, 10);
+      // Snap fully closed if the user dragged below the usable threshold.
+      if (w && w < 240) {
+        $convPanel.style.width = '';  // clear the inline width
+        setConvPanelOpen(false);
+        return;
+      }
       if (w) localStorage.setItem('clv-conv-width', String(w));
     }
   }
@@ -4539,6 +4775,12 @@
     });
   }
   // Refresh
+  const $kptReloadPageBtn = document.getElementById('kptReloadPageBtn');
+  if ($kptReloadPageBtn) {
+    $kptReloadPageBtn.addEventListener('click', () => {
+      try { location.reload(true); } catch (_) { location.reload(); }
+    });
+  }
   if ($kptRefreshBtn) {
     $kptRefreshBtn.addEventListener('click', refreshConversationList);
   }
@@ -4583,6 +4825,7 @@
   const $nsmPkood = document.getElementById('nsmPkood');
   function openNewSessionModal(seed = '', body = '') {
     if (!$nsm) return;
+    _clearNsmError();
     $nsmSubject.value = seed || '';
     $nsmBody.value = body || '';
     if ($nsmPkood && $kptPkoodToggle) $nsmPkood.checked = $kptPkoodToggle.checked;
@@ -4617,7 +4860,7 @@
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ prompt, name: effectiveSubject }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
         closeNewSessionModal();
         insertPendingSpawnCard(data.pid, effectiveSubject, usePkood);
@@ -4626,12 +4869,26 @@
         setTimeout(refreshConversationList, 1500);
         setTimeout(refreshConversationList, 3000);
       } else {
-        $nsmSubmit.textContent = 'Failed';
+        _showNsmError('Spawn failed — status ' + res.status + '\n' + JSON.stringify(data, null, 2));
+        console.error('[New session] spawn failed', data);
       }
-    } catch (_) {
-      $nsmSubmit.textContent = 'Error';
+    } catch (err) {
+      _showNsmError('Request error: ' + (err && err.message || 'network') + '\n' + (err && err.stack || ''));
+      console.error('[New session] submit error', err);
     }
-    setTimeout(() => { $nsmSubmit.disabled = false; $nsmSubmit.textContent = 'Launch'; }, 2000);
+    // Reset button label but keep any visible error until the user dismisses it.
+    setTimeout(() => { $nsmSubmit.disabled = false; $nsmSubmit.textContent = 'Launch'; }, 1500);
+  }
+  // Show/hide a persistent copyable error box inside the new-session modal.
+  function _showNsmError(text) {
+    const el = document.getElementById('nsmError');
+    if (!el) return;
+    el.textContent = text;
+    el.style.display = '';
+  }
+  function _clearNsmError() {
+    const el = document.getElementById('nsmError');
+    if (el) { el.textContent = ''; el.style.display = 'none'; }
   }
   // ── Paste-image support ──
   async function uploadPastedImage(blob) {

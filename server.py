@@ -183,7 +183,15 @@ def _extract_tail_meta(path):
         "last_event_type": None,  # "assistant", "result", "user", etc.
         "pending_tool": None,     # tool awaiting approval (last assistant had tool_use, no result yet)
         "pending_file": None,     # file path from pending tool
+        "last_assistant_text": None,  # last text block from an assistant message (the "outcome")
+        # Issue number detected from Bash/commit content — covers sessions where the
+        # issue wasn't in the spawn prompt (e.g. Claude ran `gh issue create` mid-session).
+        "tail_issue_number": None,
     }
+    # Regexes compiled once per call; order matters — earlier = higher confidence.
+    _gh_issue_cmd_re = re.compile(r'gh\s+issue\s+(?:view|edit|close|comment|reopen|create)\s+(?:.*?)(?<!\d)(\d{1,6})(?!\d)')
+    _closes_re = re.compile(r'(?i)\bClos(?:es|e|ed|ing)\s+#(\d{1,6})\b')
+    _gh_url_re = re.compile(r'github\.com/[^/\s]+/[^/\s]+/issues/(\d{1,6})')
     _pos = 0
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -234,6 +242,12 @@ def _extract_tail_meta(path):
                 elif t == "assistant":
                     last_tool_name = None
                     last_tool_file = None
+                    # Capture last text block from this assistant turn as the "outcome"
+                    for block in ev.get("message", {}).get("content", []):
+                        if block.get("type") == "text":
+                            txt = (block.get("text") or "").strip()
+                            if txt:
+                                meta["last_assistant_text"] = txt
                     for block in ev.get("message", {}).get("content", []):
                         if block.get("type") != "tool_use":
                             continue
@@ -252,6 +266,12 @@ def _extract_tail_meta(path):
                             if "git push" in cmd:
                                 meta["has_push"] = True
                                 meta["last_push_pos"] = _pos
+                            # Detect issue number from high-confidence signals
+                            mi = (_gh_issue_cmd_re.search(cmd)
+                                  or _closes_re.search(cmd)
+                                  or _gh_url_re.search(cmd))
+                            if mi:
+                                meta["tail_issue_number"] = mi.group(1)
                     # The last assistant message's tool_use is "pending" until
                     # a tool_result or user message clears it
                     if last_tool_name:
@@ -397,6 +417,12 @@ def _detect_issue_number_for_session(conv):
     m = strong.search(fm[:200])  # only head; avoids body noise
     if m:
         return m.group(1)
+    # Last resort: high-confidence signals mined from the jsonl tail (gh issue cmds,
+    # "Closes #N" in commits, github.com/.../issues/N URLs). Covers sessions where
+    # Claude created or touched an issue mid-conversation.
+    tail_num = conv.get("tail_issue_number")
+    if tail_num:
+        return str(tail_num)
     return None
 
 
@@ -1556,6 +1582,42 @@ def _parse_todo_md():
     return items
 
 
+def _parse_parking_lot_md():
+    """Parse PARKING_LOT.md for `## heading` items; body = text until the next
+    heading or `---` separator. Returns [{title, body}] in file order."""
+    # Case-insensitive filename match for the two common spellings
+    candidates = [REPO_ROOT / "PARKING_LOT.md", REPO_ROOT / "parking-lot.md", REPO_ROOT / "parking_lot.md"]
+    path = next((p for p in candidates if p.is_file()), None)
+    if not path:
+        return []
+    items = []
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    current_title = None
+    current_body = []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if current_title:
+                items.append({"title": current_title, "body": "\n".join(current_body).strip()})
+            current_title = line[3:].strip()
+            current_body = []
+            continue
+        # `---` is a section separator — flush the current item but don't start a new one
+        if line.strip() == "---":
+            if current_title:
+                items.append({"title": current_title, "body": "\n".join(current_body).strip()})
+                current_title = None
+                current_body = []
+            continue
+        if current_title is not None:
+            current_body.append(line)
+    if current_title:
+        items.append({"title": current_title, "body": "\n".join(current_body).strip()})
+    return items
+
+
 def find_backlog_items():
     """Return backlog cards from GitHub issues + TODO.md."""
     items = []
@@ -1621,6 +1683,39 @@ def find_backlog_items():
             "first_message": text,
             "source": "backlog",
             "backlog_type": "todo",
+            "issue_number": "",
+            "issue_labels": [],
+            "modified": 0,
+            "size": 0,
+            "branch": "",
+            "is_live": False,
+            "archived": False,
+            "verified": False,
+            "has_edit": False,
+            "has_commit": False,
+            "has_push": False,
+            "last_event_type": None,
+            "pending_tool": None,
+            "pending_file": None,
+            "sidecar_status": None,
+            "sidecar_tool": None,
+            "sidecar_file": None,
+            "sidecar_has_writes": False,
+            "sidecar_ts": 0,
+            "name_overridden": False,
+        })
+
+    # Source 3: PARKING_LOT.md — richer items (heading + body)
+    for i, it in enumerate(_parse_parking_lot_md()):
+        title = it["title"]
+        body = it["body"]
+        items.append({
+            "id": f"backlog-parking-{i}",
+            "session_id": f"backlog-parking-{i}",
+            "display_name": title[:120],
+            "first_message": (title + "\n\n" + body) if body else title,
+            "source": "backlog",
+            "backlog_type": "parking",
             "issue_number": "",
             "issue_labels": [],
             "modified": 0,
@@ -1950,6 +2045,8 @@ def find_conversations():
             "last_event_type": tail_meta.get("last_event_type"),
             "pending_tool": tail_meta.get("pending_tool"),
             "pending_file": tail_meta.get("pending_file"),
+            "last_assistant_text": tail_meta.get("last_assistant_text"),
+            "tail_issue_number": tail_meta.get("tail_issue_number"),
             "archived": sid in archived_set,
             "verified": sid in verified_set,
         })
@@ -2421,7 +2518,9 @@ def _slugify(text, max_len=40):
 
 def spawn_session(prompt, name=None):
     """Spawn a headless Claude Code session and return tracking info."""
-    session_name = name or _slugify(prompt)
+    # Always slugify — name may come from firstSentence(body) and contain
+    # filesystem-hostile chars like quotes, colons, slashes.
+    session_name = _slugify(name or prompt)
     if not session_name:
         session_name = "unnamed"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
@@ -2995,6 +3094,10 @@ def auto_verify_closed_issues():
             if m:
                 inum = m.group(1)
         if not inum:
+            # Last resort: the full detector (includes tail_issue_number from
+            # in-session `gh issue` / `Closes #N` signals)
+            inum = _detect_issue_number_for_session(c)
+        if not inum:
             continue
         st = issue_states.get(str(inum))
         if not st or st["state"] != "CLOSED":
@@ -3081,6 +3184,31 @@ def mark_issue_in_progress(issue_number):
             ["gh", "issue", "edit", str(issue_number),
              "--add-label", "claude-in-progress",
              "--add-assignee", "@me"],
+            capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
+        )
+        if out.returncode == 0:
+            result["ok"] = True
+            _backlog_issues_cache_ts = 0
+            _issue_state_cache_ts = 0
+        else:
+            result["error"] = (out.stderr or out.stdout or "").strip()[:300]
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        result["error"] = str(e)
+    return result
+
+
+def mark_issue_icebox(issue_number):
+    """Signal that an issue is parked in the icebox (Planning column in the UI):
+    - adds the `icebox` label
+    - removes `claude-in-progress` since the issue is parked, not being worked
+    """
+    global _backlog_issues_cache_ts, _issue_state_cache_ts
+    result = {"ok": False, "issue_number": str(issue_number)}
+    try:
+        out = subprocess.run(
+            ["gh", "issue", "edit", str(issue_number),
+             "--add-label", "icebox",
+             "--remove-label", "claude-in-progress"],
             capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
         )
         if out.returncode == 0:
@@ -3392,6 +3520,9 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "count": len(order)})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/issues/\d+/mark-icebox$", path):
+            num = re.findall(r"\d+", path)[-1]
+            self.send_json(mark_issue_icebox(num))
         elif re.match(r"^/api/issues/\d+/mark-in-progress$", path):
             num = path.split("/")[3]
             self.send_json(mark_issue_in_progress(num))
@@ -3749,6 +3880,10 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
         content = content.replace('<body>', f'<body data-repo="{repo}">', 1)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        # Never cache the single-page app. The server re-reads index.html on every
+        # request; this header stops browsers from serving a stale JS snapshot
+        # after edits (main cause of "I clicked the button and nothing happened").
+        self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(content.encode())
 
