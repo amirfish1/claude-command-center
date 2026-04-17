@@ -291,9 +291,48 @@ def load_all_goals(goals_dir=None):
     return goals
 
 
+def save_strategy_session_id(goal_slug, strategy_id, session_id):
+    """Text-edit goal.md to set a specific strategy's claude_session_id.
+
+    Returns True on success, False if the goal or strategy couldn't be found.
+    """
+    path = goals_dir_default() / goal_slug / "goal.md"
+    if not path.is_file():
+        return False
+    text = path.read_text()
+    lines = text.splitlines()
+    out = []
+    in_block = False
+    replaced = False
+    target_header_re = re.compile(r"^  - id: " + re.escape(strategy_id) + r"\s*$")
+    sibling_re = re.compile(r"^(    claude_session_id:\s*).+$")
+    for line in lines:
+        if target_header_re.match(line):
+            in_block = True
+            out.append(line)
+            continue
+        if in_block:
+            # End of the strategy block: next list item or outdented content
+            if re.match(r"^  - id: ", line) or re.match(r"^[^ ]", line) or line.startswith("---"):
+                in_block = False
+            elif not replaced and sibling_re.match(line):
+                out.append(f"    claude_session_id: \"{session_id}\"")
+                replaced = True
+                continue
+        out.append(line)
+    if not replaced:
+        return False
+    new_text = "\n".join(out)
+    if text.endswith("\n") and not new_text.endswith("\n"):
+        new_text += "\n"
+    path.write_text(new_text)
+    return True
+
+
 __all__ = [
     "parse_goal_md",
     "load_goal",
     "load_all_goals",
     "goals_dir_default",
+    "save_strategy_session_id",
 ]

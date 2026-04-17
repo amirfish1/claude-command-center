@@ -3318,6 +3318,134 @@ def get_issue_summary(issue_number):
 
 
 # ---------------------------------------------------------------------------
+# Morning launch — spawn-or-resume for a strategy's Claude session.
+# Called from the POST /api/morning/launch route. Lives here (not in
+# morning.py) because it calls spawn_session / resume_session_headless /
+# _extract_spawn_meta, which are server-side process primitives.
+# ---------------------------------------------------------------------------
+
+def _morning_resume_framing(goal_name, strategy_text):
+    return (
+        f"Still working on the overall goal \"{goal_name}\". "
+        f"Let's focus right now on:\n\n{strategy_text}"
+    )
+
+
+def _morning_spawn_prompt(goal_name, intent_markdown, strategy_text):
+    # Full context for a never-seen-before strategy session.
+    return (
+        f"You're picking up a new focused work session on the goal \"{goal_name}\" "
+        f"(from my Morning view in Claude Command Center).\n\n"
+        f"## Goal intent\n\n{intent_markdown}\n\n"
+        f"## Current strategy\n\n{strategy_text}\n\n"
+        f"This is a fresh session for this strategy. Please help me move forward "
+        f"on it, asking any clarifying questions first if needed."
+    )
+
+
+def _morning_resolve_session_id_from_log(log_path, max_wait_s=2.5, interval_s=0.25):
+    """Poll the spawn log file for a resolved session_id (written by Claude
+    Code into the first few jsonl lines). Returns the session_id string, or
+    None if not resolved within the timeout.
+    """
+    deadline = time.time() + max_wait_s
+    while time.time() < deadline:
+        meta = _extract_spawn_meta(log_path)
+        if meta and meta.get("session_id"):
+            return meta["session_id"]
+        time.sleep(interval_s)
+    meta = _extract_spawn_meta(log_path)
+    return (meta or {}).get("session_id")
+
+
+def morning_launch(goal_slug, strategy_id):
+    """Spawn a new Claude session for the strategy, or resume/inject if one
+    already exists. Returns a dict describing the action taken.
+    """
+    # Lazy import to avoid a cycle at module import time.
+    import morning as _morning
+    import morning_store as _store
+
+    detail = _morning.get_goal_detail(goal_slug)
+    if detail is None:
+        return {"ok": False, "error": f"unknown goal: {goal_slug}"}
+    strategy = next(
+        (s for s in detail.get("strategies", []) if s.get("id") == strategy_id),
+        None,
+    )
+    if strategy is None:
+        return {"ok": False, "error": f"unknown strategy: {strategy_id}"}
+    if strategy.get("status") == "dropped":
+        return {"ok": False, "error": "strategy is dropped"}
+
+    goal_name = detail.get("name") or goal_slug
+    intent = detail.get("intent_markdown") or ""
+    strategy_text = strategy.get("text") or strategy_id
+    session_id = strategy.get("claude_session_id")
+
+    if session_id:
+        # Resume into the existing session and inject the framing message.
+        try:
+            result = resume_session_headless(
+                session_id,
+                _morning_resume_framing(goal_name, strategy_text),
+            )
+        except Exception as e:  # pragma: no cover — best-effort
+            return {"ok": False, "error": f"resume failed: {e}"}
+        if not result.get("ok"):
+            return {
+                "ok": False,
+                "error": result.get("error") or "resume_session_headless failed",
+                "action": "resume",
+            }
+        return {
+            "ok": True,
+            "action": "resumed",
+            "session_id": session_id,
+            "pid": result.get("pid"),
+        }
+
+    # Fresh spawn.
+    name = f"{goal_slug}--{strategy_id}"
+    try:
+        spawn = spawn_session(
+            _morning_spawn_prompt(goal_name, intent, strategy_text),
+            name=name,
+        )
+    except Exception as e:  # pragma: no cover
+        return {"ok": False, "error": f"spawn failed: {e}"}
+
+    if not spawn.get("ok"):
+        return {
+            "ok": False,
+            "error": spawn.get("error") or "spawn_session failed",
+            "action": "spawn",
+        }
+
+    # Try to resolve the session_id from the spawn log so we can persist it.
+    resolved_sid = None
+    log_path = spawn.get("log")
+    if log_path:
+        resolved_sid = _morning_resolve_session_id_from_log(log_path)
+
+    saved = False
+    if resolved_sid:
+        try:
+            saved = _store.save_strategy_session_id(goal_slug, strategy_id, resolved_sid)
+        except Exception:
+            saved = False
+
+    return {
+        "ok": True,
+        "action": "spawned",
+        "pid": spawn.get("pid"),
+        "name": name,
+        "session_id": resolved_sid,
+        "session_id_saved": saved,
+    }
+
+
+# ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
 
@@ -3469,7 +3597,23 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
-        if path == "/api/upload-image":
+        if path == "/api/morning/launch":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            goal_slug = (payload.get("goal_slug") or "").strip()
+            strategy_id = (payload.get("strategy_id") or "").strip()
+            if not goal_slug or not strategy_id:
+                self.send_json({"ok": False, "error": "missing goal_slug or strategy_id"}, 400)
+            else:
+                try:
+                    self.send_json(morning_launch(goal_slug, strategy_id))
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/upload-image":
             ctype = self.headers.get("Content-Type", "")
             length = int(self.headers.get("Content-Length", "0"))
             if length <= 0 or length > 25 * 1024 * 1024:

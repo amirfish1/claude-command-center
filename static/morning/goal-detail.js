@@ -46,12 +46,55 @@
     return "—";
   }
 
-  function renderStrategy(s) {
+  async function launchStrategy(goalSlug, strategyId, btn) {
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "launching…";
+    try {
+      const r = await fetch("/api/morning/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goal_slug: goalSlug, strategy_id: strategyId }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        btn.textContent = "error";
+        alert("Launch failed: " + (data.error || ("HTTP " + r.status)));
+        setTimeout(() => { btn.textContent = originalLabel; btn.disabled = false; }, 2500);
+        return;
+      }
+      const tag =
+        data.action === "resumed" ? "✓ resumed"
+        : data.action === "spawned" ? (data.session_id_saved ? "✓ spawned" : "✓ spawned*")
+        : "✓ ok";
+      btn.textContent = tag;
+      // Reload so the strategy row picks up the new session_id / state.
+      setTimeout(() => load(), 1500);
+    } catch (e) {
+      btn.textContent = "error";
+      alert("Launch failed: " + e.message);
+      setTimeout(() => { btn.textContent = originalLabel; btn.disabled = false; }, 2500);
+    }
+  }
+
+  function renderStrategy(goalSlug, s) {
     const statusClass = s.status === "done" ? " done" : (s.status === "dropped" ? " dropped" : "");
     const dot = el("span", { class: "sess-dot " + s.session_state });
-    const btn = s.session_state === "dropped"
-      ? null
-      : el("button", { class: "launch " + (s.session_state === "dormant" ? "dormant" : s.session_state === "never" ? "new" : "") }, launchLabel(s.session_state));
+    let btn = null;
+    if (s.session_state !== "dropped") {
+      btn = el(
+        "button",
+        {
+          class: "launch " + (
+            s.session_state === "dormant" ? "dormant"
+            : s.session_state === "never" ? "new"
+            : ""
+          ),
+        },
+        launchLabel(s.session_state)
+      );
+      btn.addEventListener("click", () => launchStrategy(goalSlug, s.id, btn));
+    }
     return el("div", { class: "strat-row" + statusClass },
       dot,
       el("div", { class: "body" },
@@ -90,7 +133,7 @@
 
     const strats = document.getElementById("gd-strategies");
     strats.innerHTML = "";
-    for (const s of (detail.strategies || [])) strats.appendChild(renderStrategy(s));
+    for (const s of (detail.strategies || [])) strats.appendChild(renderStrategy(slug, s));
 
     const tact = document.getElementById("gd-tactical");
     tact.innerHTML = "";
