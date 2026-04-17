@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CCC · Goal</title>
+  <link rel="stylesheet" href="/static/morning/morning.css">
+</head>
+<body>
+  <div class="mv-wrap">
+    <div class="gd-header" id="gd-header">
+      <span class="cat" id="gd-life-area"></span>
+      <span class="name" id="gd-name"></span>
+      <div class="actions">
+        <a class="mv-nav-link" href="/morning">← Morning</a>
+      </div>
+    </div>
+
+    <div class="gd-grid">
+      <div>
+        <section class="gd-panel">
+          <h4>Intent</h4>
+          <div id="gd-intent"></div>
+        </section>
+        <section class="gd-panel">
+          <h4>Strategies <span class="muted">— each owns a persistent Claude session</span></h4>
+          <div id="gd-strategies"></div>
+        </section>
+        <section class="gd-panel">
+          <h4>Tactical items tagged to this goal</h4>
+          <div id="gd-tactical"></div>
+        </section>
+      </div>
+
+      <div>
+        <section class="gd-panel">
+          <h4>Deliverables <span class="muted">— derived from session transcripts</span></h4>
+          <div id="gd-deliverables"></div>
+        </section>
+        <section class="gd-panel">
+          <h4>Context library</h4>
+          <div id="gd-context"></div>
+        </section>
+        <section class="gd-panel">
+          <h4>Recent Claude sessions</h4>
+          <div id="gd-sessions"></div>
+        </section>
+      </div>
+    </div>
+
+    <div id="gd-error" class="gd-error" hidden></div>
+  </div>
+
+  <script src="/static/morning/goal-detail.js"></script>
+</body>
+</html>
