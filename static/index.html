@@ -1258,6 +1258,9 @@
 </style>
 </head>
 <body>
+  <div class="ccc-top-nav" style="position:fixed; top:8px; right:12px; z-index:1000; font-size:12px;">
+    <a href="/morning" style="color:#5ac8fa; text-decoration:none; background:#23272e; padding:6px 10px; border-radius:4px;">→ Morning</a>
+  </div>
   <div class="sidebar">
     <div class="sidebar-header"><span class="dot"></span> Claude Command Center</div>
     <div class="deploy-panel" id="deployPanel">
@@ -4011,8 +4014,11 @@
     const sid = currentSession.id;
     const live = liveStatus.live;
     const isPkood = currentSession.source === 'pkood';
-    // Jump: show when live with tty
-    $cpJumpBtn.style.display = (live && liveStatus.tty && !isPkood) ? '' : 'none';
+    // Jump / Launch are mutually exclusive: live-with-tty → Jump, else → Launch.
+    // Showing both made it easy to accidentally spawn a duplicate terminal on
+    // a session that already has one open.
+    const hasLiveTty = live && !!liveStatus.tty && !isPkood;
+    $cpJumpBtn.style.display = hasLiveTty ? '' : 'none';
     $cpJumpBtn.onclick = async () => {
       if (!liveStatus.tty) return;
       try {
@@ -4022,10 +4028,7 @@
         });
       } catch (_) {}
     };
-    // Launch: show whenever we have a session id (not pkood). Useful even when
-    // live — spawned-stdin sessions need this as an escape hatch if the server
-    // restarts, and for regular live sessions a new terminal is harmless.
-    $cpLaunchBtn.style.display = (sid && !isPkood) ? '' : 'none';
+    $cpLaunchBtn.style.display = (sid && !isPkood && !hasLiveTty) ? '' : 'none';
     $cpLaunchBtn.onclick = async () => {
       if (!sid) return;
       $cpLaunchBtn.textContent = 'Launching...';
@@ -4035,6 +4038,10 @@
           body: JSON.stringify({ session_id: sid, cwd: currentSession.cwd }),
         });
         $cpLaunchBtn.textContent = 'Launched!';
+        // Refresh live status quickly so the button flips to Jump without the
+        // usual 5s poll wait.
+        setTimeout(refreshLiveStatus, 400);
+        setTimeout(refreshLiveStatus, 1500);
         setTimeout(() => { $cpLaunchBtn.innerHTML = '<span>&#43;</span> Launch'; }, 1500);
       } catch (_) {
         $cpLaunchBtn.innerHTML = '<span>&#43;</span> Launch';
