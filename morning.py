@@ -154,6 +154,165 @@ def _strategic_from_goals(goals):
     return rows
 
 
+def _upgrade_session_states(goals):
+    """Upgrade each strategy's session_state from the on-disk default
+    ("dormant" whenever a claude_session_id exists) to "alive" when CCC's
+    session registry shows a running process, and annotate session_summary
+    with concrete pid / tty / mtime information.
+
+    Imports `server` lazily to avoid a circular import at module load time.
+    """
+    try:
+        import server as _server  # lazy — server.py also imports morning
+    except Exception:
+        return
+    for g in goals:
+        for s in g.get("strategies", []):
+            sid = s.get("claude_session_id")
+            if not sid:
+                continue
+            try:
+                cwd = _server.find_session_cwd(sid)
+                status = _server.session_live_status(sid, cwd)
+            except Exception:
+                continue
+            if status.get("live"):
+                s["session_state"] = "alive"
+                pid = status.get("pid")
+                tty = status.get("tty")
+                bits = [f"session {sid[:8]}", "alive"]
+                if pid:
+                    bits.append(f"pid {pid}")
+                if tty:
+                    bits.append(f"tty {tty}")
+                s["session_summary"] = " · ".join(bits)
+            else:
+                s["session_state"] = "dormant"
+                bits = [f"session {sid[:8]}", "dormant"]
+                if status.get("recently_written"):
+                    bits.append("recent activity")
+                s["session_summary"] = " · ".join(bits)
+
+
+def _deliverables_for_goal(goal):
+    """Scan each strategy's session transcript and extract tool-use events
+    that correspond to durable artifacts: Write/Edit target paths and
+    git-commit Bash commands. Returns a deduplicated list capped at 20.
+
+    Transcripts live under ~/.claude/projects/*/<session_id>.jsonl. Each
+    assistant message may contain one or more `tool_use` content blocks.
+    """
+    sids = {
+        s.get("claude_session_id"): s.get("id")
+        for s in goal.get("strategies", [])
+        if s.get("claude_session_id")
+    }
+    if not sids:
+        return []
+    projects_root = Path.home() / ".claude" / "projects"
+    if not projects_root.is_dir():
+        return []
+
+    deliverables = []
+    seen = set()
+
+    def _add(kind, label, sess_label):
+        key = (kind, label)
+        if not label or key in seen:
+            return
+        seen.add(key)
+        deliverables.append({
+            "type": kind,
+            "label": label,
+            "source": f"{kind.lower()} · {sess_label}",
+        })
+
+    _commit_msg_re = re.compile(r"""-m\s+(?:"([^"]+)"|'([^']+)')""")
+    for sid, strat_id in sids.items():
+        jsonl = None
+        for pd in projects_root.iterdir():
+            cand = pd / f"{sid}.jsonl"
+            if cand.is_file():
+                jsonl = cand
+                break
+        if not jsonl:
+            continue
+        try:
+            f = open(jsonl, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        try:
+            for line in f:
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "assistant":
+                    continue
+                for block in (ev.get("message") or {}).get("content", []) or []:
+                    if block.get("type") != "tool_use":
+                        continue
+                    name = block.get("name") or ""
+                    inp = block.get("input") or {}
+                    if name == "Write":
+                        _add("FILE", inp.get("file_path", ""), strat_id)
+                    elif name in ("Edit", "MultiEdit"):
+                        _add("EDIT", inp.get("file_path", ""), strat_id)
+                    elif name == "Bash":
+                        cmd = inp.get("command", "") or ""
+                        if "git commit" in cmd:
+                            m = _commit_msg_re.search(cmd)
+                            msg = ""
+                            if m:
+                                msg = (m.group(1) or m.group(2) or "").split("\n")[0][:80]
+                            _add("COMMIT", msg or "(no message)", strat_id)
+        finally:
+            f.close()
+
+    return deliverables[:20]
+
+
+def _recent_sessions_for_goal(goal):
+    """Return a list of recent Claude sessions whose session_id appears in
+    any strategy of the given goal. Pulled from CCC's find_all_sessions()
+    so we inherit its ordering and metadata.
+    """
+    sids = {
+        s.get("claude_session_id")
+        for s in goal.get("strategies", [])
+        if s.get("claude_session_id")
+    }
+    if not sids:
+        return []
+    try:
+        import server as _server
+    except Exception:
+        return []
+    try:
+        all_sessions = _server.find_all_sessions() or []
+    except Exception:
+        return []
+    out = []
+    for sess in all_sessions:
+        sid = sess.get("session_id")
+        if sid not in sids:
+            continue
+        summary = (
+            sess.get("display_name")
+            or (sess.get("first_message") or "")[:80]
+            or f"session {sid[:8]}"
+        )
+        when = sess.get("modified_human") or ""
+        if sess.get("is_live"):
+            when = (when + " · alive").strip(" ·")
+        out.append({
+            "summary": summary,
+            "when": when,
+            "session_id": sid,
+        })
+    return out
+
+
 def _scan_all_repos():
     cfg = _load_config()
     items = []
@@ -189,6 +348,8 @@ def get_morning_state():
             "last_refreshed": datetime.now(timezone.utc).isoformat(),
         }
 
+    _upgrade_session_states(goals)
+
     goal_cards = [{
         "slug": g["slug"],
         "name": g["name"],
@@ -220,6 +381,8 @@ def get_goal_detail(slug):
         # for demo parity).
         return None
 
+    _upgrade_session_states([goal])
+
     tactical = _scan_all_repos()
     _tag_tactical(tactical, goals)
     tagged = [t for t in tactical if t.get("goal_slug") == slug]
@@ -236,7 +399,7 @@ def get_goal_detail(slug):
             "source": t["source"],
             "strategy_id": t.get("strategy_id"),
         } for t in tagged],
-        "deliverables": [],   # Phase 3: transcript-derived
+        "deliverables": _deliverables_for_goal(goal),
         "context_library": [],  # Phase 4: ingested inputs
-        "recent_sessions": [],  # Phase 3: transcript-indexed
+        "recent_sessions": _recent_sessions_for_goal(goal),
     }
