@@ -1,0 +1,83 @@
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #14171c;
+  color: #ddd;
+  margin: 0;
+  padding: 0;
+}
+
+.mv-wrap { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+.mv-nav {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 12px;
+  background: #1a1d23; border-radius: 8px;
+  font-size: 13px; color: #9aa;
+  margin-bottom: 20px;
+}
+.mv-nav a { color: #5ac8fa; text-decoration: none; cursor: pointer; }
+.mv-nav .active { color: #fff; font-weight: 600; cursor: default; }
+.mv-nav-meta { margin-left: auto; font-size: 11px; color: #666; }
+.mv-nav button {
+  background: #2b3038; border: 1px solid #444; color: #9aa;
+  padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;
+}
+
+.mv-section { margin-bottom: 24px; }
+.mv-section h3 {
+  font-size: 13px; text-transform: uppercase; letter-spacing: 1.2px;
+  color: #aaa; border-bottom: 1px solid #333;
+  padding-bottom: 6px; margin-bottom: 10px;
+}
+
+.muted { color: #888; font-weight: 400; font-size: 11px; }
+
+/* Goals */
+.mv-goals {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+}
+.mv-goal {
+  background: #23272e; border-radius: 10px; padding: 14px;
+  border-left: 4px solid var(--accent, #5ac8fa);
+  cursor: pointer; transition: background 0.1s;
+}
+.mv-goal:hover { background: #2a2f37; }
+.mv-goal .cat { font-size: 10px; text-transform: uppercase; color: #888; letter-spacing: 1px; }
+.mv-goal .name { font-weight: 600; font-size: 15px; margin: 4px 0 10px; }
+.mv-goal .ribbon {
+  font-size: 12px; color: #ccc; background: #2b3038;
+  padding: 6px 8px; border-radius: 4px; border-left: 3px solid var(--accent, #5ac8fa);
+}
+.mv-goal .ribbon .date { color: #888; font-size: 10px; display: block; margin-bottom: 2px; }
+
+/* Task rows (strategic + tactical share this) */
+.mv-task {
+  display: flex; gap: 10px; padding: 8px 0;
+  border-bottom: 1px dashed #2a2e35; font-size: 14px; align-items: center;
+}
+.mv-task .pri {
+  font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 3px;
+  min-width: 22px; text-align: center;
+}
+.mv-task .pri.P0 { background: #c0392b; color: #fff; }
+.mv-task .pri.P1 { background: #e67e22; color: #fff; }
+.mv-task .pri.P2 { background: #555; color: #eee; }
+.mv-task .src { font-size: 10px; color: #888; background: #2a2e35; padding: 2px 6px; border-radius: 3px; }
+.mv-task .goal-chip { font-size: 10px; color: #5ac8fa; }
+.mv-task .text { flex: 1; color: #ddd; }
+.mv-task .ago { font-size: 10px; color: #666; }
+
+/* Inbox */
+.mv-inbox-item {
+  background: #2a2e35; padding: 10px 12px; border-radius: 6px;
+  margin-bottom: 8px; font-size: 13px; color: #ccc;
+  display: flex; gap: 10px; align-items: flex-start;
+}
+.mv-inbox-item .src { font-size: 10px; color: #888; white-space: nowrap; }
+.mv-inbox-item .actions { display: flex; gap: 6px; }
+.mv-inbox-item button {
+  font-size: 11px; padding: 3px 8px; border-radius: 3px;
+  border: 1px solid #444; background: #1a1d23; color: #9aa; cursor: pointer;
+}
+.mv-inbox-item button.promote { border-color: #3a7; color: #3a7; }
