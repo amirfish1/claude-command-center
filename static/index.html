@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Log Viewer</title>
+<title>Claude Command Center</title>
 <style>
   :root {
     --bg: #0d1117;
@@ -23,6 +23,19 @@
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
     background: var(--bg); color: var(--text);
     display: flex; height: 100vh; overflow: hidden;
+  }
+  /* Keyboard-nav focus ring — only shown when focusing via keyboard */
+  :focus { outline: none; }
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible,
+  .kanban-card:focus-visible,
+  .conv-item:focus-visible,
+  .tab:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
 
   /* Sidebar */
@@ -664,6 +677,24 @@
     display: flex; flex-direction: column; min-height: 0;
   }
   .kanban-board-split .kanban-column { min-width: 280px; }
+  /* Subtle per-column background tints */
+  .kanban-column { border-radius: 8px; padding: 4px; transition: background 0.2s; }
+  /* Cards pick up a matching tint on top of their default surface */
+  .kanban-column.backlog  .kanban-card { background: linear-gradient(rgba(139,148,158,0.10), rgba(139,148,158,0.10)), var(--surface); }
+  .kanban-column.needs-attention .kanban-card { background: linear-gradient(rgba(248,81,73,0.16), rgba(248,81,73,0.16)), var(--surface); }
+  .kanban-org-header {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;
+    color: var(--text-muted); padding: 6px 4px 2px; margin-top: 4px;
+    border-top: 1px solid var(--border);
+  }
+  .kanban-cards > .kanban-org-header:first-child { border-top: 0; margin-top: 0; padding-top: 2px; }
+  .kanban-column.planning .kanban-card { background: linear-gradient(rgba(188,140,255,0.14), rgba(188,140,255,0.14)), var(--surface); }
+  .kanban-column.working  .kanban-card { background: linear-gradient(rgba(210,153,34,0.16), rgba(210,153,34,0.16)), var(--surface); }
+  .kanban-column.review   .kanban-card { background: linear-gradient(rgba(57,210,192,0.14), rgba(57,210,192,0.14)), var(--surface); }
+  .kanban-column.testing  .kanban-card { background: linear-gradient(rgba(251,202,4,0.14), rgba(251,202,4,0.14)), var(--surface); }
+  .kanban-column.inactive .kanban-card { background: linear-gradient(rgba(139,148,158,0.06), rgba(139,148,158,0.06)), var(--surface); }
+  .kanban-column.verified .kanban-card { background: linear-gradient(rgba(63,185,80,0.16), rgba(63,185,80,0.16)), var(--surface); }
+  .kanban-column.archived .kanban-card { background: linear-gradient(rgba(139,148,158,0.04), rgba(139,148,158,0.04)), var(--surface); }
   .kanban-column-header { cursor: grab; }
   .kanban-column-header.dragging-header { opacity: 0.5; }
   .kanban-column-header.drop-target-header { background: rgba(88,166,255,0.18); outline: 1px dashed var(--accent); }
@@ -687,6 +718,8 @@
   .kanban-column.blocked .count { background: rgba(248,81,73,0.2); color: var(--red); }
   .kanban-column.working .kanban-column-header { color: #FBCA04; }
   .kanban-column.working .count { background: rgba(251,202,4,0.2); color: #FBCA04; }
+  .kanban-column.needs-attention .kanban-column-header { color: var(--red); }
+  .kanban-column.needs-attention .count { background: rgba(248,81,73,0.2); color: var(--red); }
   .kanban-column.waiting .kanban-column-header { color: var(--accent); }
   .kanban-column.waiting .count { background: rgba(88,166,255,0.15); color: var(--accent); }
   .kanban-column.idle .kanban-column-header { color: var(--text-muted); }
@@ -800,10 +833,41 @@
   .kanban-card .kanban-card-stage.committed { background: rgba(63,185,80,0.15); color: var(--green); }
   .kanban-card .kanban-card-stage.testing { background: rgba(251,202,4,0.15); color: #FBCA04; }
   .kanban-issue-badge {
+    display: inline-block; font-size: 14px; padding: 2px 8px;
+    border-radius: 4px; margin-right: 8px; font-weight: 700;
+    background: rgba(63,185,80,0.18); color: var(--green);
+    vertical-align: middle; letter-spacing: 0.3px;
+  }
+  .kanban-gh-state {
     display: inline-block; font-size: 10px; padding: 1px 6px;
-    border-radius: 3px; margin-right: 6px; font-weight: 600;
-    background: rgba(63,185,80,0.15); color: var(--green);
-    vertical-align: middle;
+    border-radius: 3px; margin-right: 6px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.5px; vertical-align: middle;
+  }
+  .kanban-gh-state.gh-open {
+    background: rgba(63,185,80,0.18); color: var(--green);
+  }
+  .kanban-gh-state.gh-closed {
+    background: rgba(188,140,255,0.18); color: var(--purple);
+  }
+  .kanban-gh-wip {
+    display: inline-block; font-size: 10px; padding: 1px 6px;
+    border-radius: 3px; margin-right: 6px; font-weight: 700;
+    background: rgba(251,202,4,0.22); color: #FBCA04;
+    text-transform: uppercase; letter-spacing: 0.5px; vertical-align: middle;
+  }
+  .kanban-desktop-badge {
+    display: inline-block; font-size: 10px; padding: 1px 6px;
+    border-radius: 3px; margin-right: 6px; font-weight: 700;
+    background: rgba(188,140,255,0.18); color: var(--purple);
+    text-transform: uppercase; letter-spacing: 0.5px; vertical-align: middle;
+  }
+  /* Backlog card issue chip (the "#NNN ↗" button) */
+  .kanban-card.backlog-card [data-action="view-issue"] {
+    font-size: 14px !important;
+    font-weight: 700 !important;
+    padding: 2px 8px !important;
+    color: var(--accent) !important;
+    border-color: rgba(88,166,255,0.35) !important;
   }
   .kanban-card .kanban-card-stage.pushed { background: rgba(57,210,192,0.15); color: var(--cyan); }
   .kanban-show-all {
@@ -883,11 +947,7 @@
   .nsm-primary:hover { opacity: 0.9; background: var(--accent); }
   .nsm-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  .kanban-panel .kanban-board-split .kanban-column[data-col="backlog"] {
-    position: sticky; left: 0; z-index: 2;
-    background: var(--surface);
-    box-shadow: 2px 0 6px rgba(0,0,0,0.25);
-  }
+  /* Backlog column — no longer sticky, scrolls with the rest */
   /* Reuse kanban column/card styles in split mode */
   .kanban-board-split .kanban-column,
   .kanban-board-split .kanban-column-header,
@@ -1015,11 +1075,136 @@
     background: rgba(63,185,80,0.1) !important; font-weight: 600 !important;
   }
   .kanban-verify-btn:hover { background: rgba(63,185,80,0.2) !important; }
+
+  /* ── Mobile MVP (≤ 768px) ─────────────────────────────────────────
+     Two overlay patterns:
+       - Classic layout: tapping a card slides `.main` in from the right
+         over the full-width sidebar. `.mobile-back-btn` slides it out.
+       - Kanban-split: tapping a card slides `.conv-panel` up from the
+         bottom over the full-width board. cpCloseBtn slides it down.
+     Both toggled via body classes (`mobile-show-main`, `mobile-conv-open`).
+  */
+  .mobile-back-btn { display: none; }
+  .mobile-reload-btn { display: none; }
+  @media (max-width: 768px) {
+    body {
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    /* --- Classic (sidebar + main) --- */
+    .sidebar {
+      width: 100% !important; min-width: 0 !important; max-width: none !important;
+    }
+    .sidebar-resizer { display: none !important; }
+
+    body:not(.kanban-split) .main {
+      position: fixed; inset: 0; z-index: 800; background: var(--bg);
+      transform: translateX(100%); transition: transform 0.2s ease-out;
+    }
+    body:not(.kanban-split).mobile-show-main .main {
+      transform: translateX(0);
+    }
+
+    .mobile-back-btn {
+      display: inline-flex !important;
+      align-items: center; gap: 4px;
+      background: transparent; border: none; color: var(--accent);
+      font-size: 14px; padding: 8px 12px; cursor: pointer;
+      font-family: inherit;
+    }
+    .mobile-back-btn:active { opacity: 0.6; }
+
+    /* Hide non-essential controls in classic main toolbar */
+    .toolbar .font-size-controls { display: none !important; }
+    #convSessionId { display: none !important; }
+
+    /* Panels that don't make sense on phones */
+    .watcher-panel { display: none !important; }
+    .deploy-panel { display: none !important; }
+
+    /* --- Kanban-split --- */
+    #kanbanLayout.active { flex-direction: column; }
+    .kanban-panel {
+      flex: 1 !important; width: 100% !important; min-width: 0 !important;
+      border-right: none;
+    }
+    .split-resizer { display: none !important; }
+
+    .conv-panel {
+      position: fixed !important; inset: 0; z-index: 900;
+      width: 100% !important; min-width: 0 !important;
+      background: var(--bg);
+      transform: translateY(100%); transition: transform 0.2s ease-out;
+      display: flex !important;
+    }
+    body.mobile-conv-open .conv-panel { transform: translateY(0); }
+
+    /* Compact kanban-split toolbar: keep search + Run + close (back), drop the rest */
+    .kanban-panel-toolbar {
+      padding: 8px; gap: 6px; flex-wrap: nowrap; overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .kanban-panel-toolbar .kpt-search {
+      width: 120px !important; min-width: 100px; flex-shrink: 1;
+    }
+    .kanban-panel-toolbar .kpt-new-session,
+    .kanban-panel-toolbar #kptRunBtn,
+    .kanban-panel-toolbar #kptRecentBtn,
+    .kanban-panel-toolbar #kptPkoodToggle,
+    .kanban-panel-toolbar #kptGitOnlyToggle,
+    .kanban-panel-toolbar #kptDescToggle,
+    .kanban-panel-toolbar .kpt-label,
+    .kanban-panel-toolbar #kptListViewBtn,
+    .kanban-panel-toolbar #kptOpenConvBtn,
+    .kanban-panel-toolbar #kptDeployStatus { display: none !important; }
+
+    /* Columns a little narrower so ~1.5 fit on screen */
+    .kanban-board-split .kanban-column {
+      min-width: 240px !important; width: 240px !important;
+    }
+
+    /* Clamp card descriptions tightly on phones */
+    .kanban-card .kanban-card-desc {
+      -webkit-line-clamp: 3 !important;
+    }
+
+    /* Conv-panel toolbar controls */
+    #cpFontMinus, #cpFontPlus { display: none !important; }
+    .conv-panel-toolbar .cpt-session-id { display: none !important; }
+
+    /* Kill iOS double-tap-to-click on cards (hover states triggered first tap) */
+    .kanban-card { touch-action: manipulation; -webkit-tap-highlight-color: rgba(88,166,255,0.15); }
+    /* Card action buttons are always visible on touch (no hover to reveal) */
+    .kanban-card .kanban-card-actions { opacity: 1 !important; }
+
+    /* Give the "Original ask" sticky header more room to breathe */
+    .conv-sticky-header .user-msg { max-height: 9em !important; }
+
+    /* Floating reload button (mobile has no pull-to-refresh because body is fixed) */
+    .mobile-reload-btn {
+      display: inline-flex !important;
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 8px);
+      right: 8px;
+      z-index: 1500;
+      width: 38px; height: 38px; border-radius: 50%;
+      background: rgba(13,17,23,0.85);
+      border: 1px solid var(--border);
+      color: var(--text);
+      align-items: center; justify-content: center;
+      font-size: 18px; line-height: 1; cursor: pointer;
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      font-family: inherit;
+      touch-action: manipulation;
+    }
+    .mobile-reload-btn:active { background: var(--accent); color: #fff; }
+  }
 </style>
 </head>
 <body>
   <div class="sidebar">
-    <div class="sidebar-header"><span class="dot"></span> Claude Log Viewer</div>
+    <div class="sidebar-header"><span class="dot"></span> Claude Command Center</div>
     <div class="deploy-panel" id="deployPanel">
       <div class="deploy-header">
         <span class="deploy-dot" id="deployDot"></span>
@@ -1054,6 +1239,7 @@
   <div class="sidebar-resizer" id="sidebarResizer" title="Drag to resize"></div>
   <div class="main">
     <div class="tab-bar">
+      <button class="mobile-back-btn" id="mobileBackBtn" title="Back to sidebar">&#8592; Back</button>
       <div class="tab" id="tabIssues" data-tab="issues">Issues <span class="badge" id="issuesBadge" style="display:none">0</span></div>
       <div class="tab active" id="tabSessions" data-tab="sessions">Sessions</div>
     </div>
@@ -1068,11 +1254,11 @@
       </button>
       <button class="jump-btn" id="jumpBtnConv" style="display:none;" title="Bring the terminal running this session to the front">
         <span class="jump-icon">&#8599;</span>
-        <span class="jump-label">Jump to Terminal</span>
+        <span class="jump-label">Jump to terminal</span>
       </button>
       <button class="launch-btn" id="launchBtnConv" style="display:none;" title="Open a new terminal and resume this session">
         <span class="jump-icon">&#43;</span>
-        <span class="jump-label">Launch in Terminal</span>
+        <span class="jump-label">Launch in terminal</span>
       </button>
       <span class="status" id="convStatus"></span>
       <div class="font-size-controls" style="margin-left:auto;">
@@ -1105,6 +1291,7 @@
         <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
         <button id="kptRunBtn">Run</button>
         <button id="kptDescToggle" title="Hide descriptions on cards">Hide desc</button>
+        <button id="kptGitOnlyToggle" title="Show only cards linked to a GitHub issue">Git only</button>
         <button id="kptListViewBtn" title="Back to list view">&#9783;</button>
         <button id="kptOpenConvBtn" title="Open conversation panel" style="display:none;">&#9664;</button>
         <span class="kpt-deploy" id="kptDeployStatus" title="Vercel deploy status" style="margin-left:auto;font-size:11px;display:flex;align-items:center;gap:4px;color:var(--text-muted);white-space:nowrap;"></span>
@@ -1114,8 +1301,8 @@
     <div class="split-resizer" id="splitResizer"></div>
     <div class="conv-panel">
       <div class="conv-panel-toolbar" id="convPanelToolbar">
-        <button id="cpJumpBtn" style="display:none;" title="Jump to Terminal"><span>&#8599;</span> Jump</button>
-        <button id="cpLaunchBtn" style="display:none;" title="Launch in Terminal"><span>&#43;</span> Launch</button>
+        <button id="cpJumpBtn" style="display:none;" title="Jump to terminal"><span>&#8599;</span> Jump</button>
+        <button id="cpLaunchBtn" style="display:none;" title="Launch in terminal"><span>&#43;</span> Launch</button>
         <button id="cpKillBtn" style="display:none;" title="Kill agent">Kill</button>
         <div style="display:flex;gap:4px;margin-left:auto;">
           <button id="cpFontMinus" title="Decrease font size">A-</button>
@@ -1134,6 +1321,8 @@
       </div>
     </div>
   </div>
+
+  <button class="mobile-reload-btn" id="mobileReloadBtn" title="Reload page" aria-label="Reload">&#8634;</button>
 
   <div id="newSessionModal" class="nsm-overlay" style="display:none;" role="dialog" aria-modal="true">
     <div class="nsm-backdrop" id="nsmBackdrop"></div>
@@ -1155,6 +1344,55 @@
 
 <script>
 (function() {
+  // App config from server — populated before anything else renders.
+  let APP_CONFIG = {
+    app_name: 'Claude Command Center',
+    title_strip: ['BYM'],
+    repo: '',
+    vercel_enabled: false,
+    vercel_project: '',
+    pkood_enabled: false,
+    watcher_enabled: false,
+    gh_enabled: true,
+  };
+  // Regex compiled from APP_CONFIG.title_strip at load; used to strip
+  // user-specific prefixes like "[BYM ...]" from session titles.
+  let _titleStripRe = /\s*\[BYM[^\]]*\]\s*/gi;  // fallback until config loads
+  function rebuildTitleStripRe(prefixes) {
+    if (!prefixes || !prefixes.length) { _titleStripRe = null; return; }
+    const alt = prefixes.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    _titleStripRe = new RegExp('\\s*\\[(?:' + alt + ')[^\\]]*\\]\\s*', 'gi');
+  }
+  function stripTitle(s) {
+    if (!s) return s;
+    return _titleStripRe ? s.replace(_titleStripRe, ' ') : s;
+  }
+  async function loadAppConfig() {
+    try {
+      const res = await fetch('/api/config');
+      if (res.ok) {
+        const cfg = await res.json();
+        APP_CONFIG = Object.assign(APP_CONFIG, cfg);
+      }
+    } catch (_) {}
+    rebuildTitleStripRe(APP_CONFIG.title_strip);
+    applyConfigToDom();
+  }
+  function applyConfigToDom() {
+    // Hide optional panels that aren't configured on this machine.
+    const $deployPanel = document.getElementById('deployPanel');
+    if ($deployPanel) $deployPanel.style.display = APP_CONFIG.vercel_enabled ? '' : 'none';
+    const $watcherPanel = document.getElementById('watcherPanel');
+    if ($watcherPanel) $watcherPanel.style.display = APP_CONFIG.watcher_enabled ? '' : 'none';
+    const $kptDeploy = document.getElementById('kptDeployStatus');
+    if ($kptDeploy && !APP_CONFIG.vercel_enabled) $kptDeploy.style.display = 'none';
+    document.querySelectorAll('.pkood-toggle-label, .kpt-label, .nsm-pkood').forEach(el => {
+      if (!APP_CONFIG.pkood_enabled) el.style.display = 'none';
+    });
+    if (APP_CONFIG.repo) document.body.dataset.repo = APP_CONFIG.repo;
+  }
+  loadAppConfig();
+
   let sessionIdByConv = {}; // {convId: sessionId}
   let sessionCwdByConv = {}; // {convId: originalCwd}
   let sessionCwdExistsByConv = {}; // {convId: bool}
@@ -1268,7 +1506,7 @@
       if (canJump) {
         btn.style.display = 'inline-flex';
         btn.title = 'Focus ' + liveStatus.terminalApp + ' (' + liveStatus.tty + ') running this session';
-        btn.querySelector('.jump-label').textContent = 'Jump to Terminal (' + liveStatus.terminalApp + ')';
+        btn.querySelector('.jump-label').textContent = 'Jump to terminal (' + liveStatus.terminalApp + ')';
       } else {
         btn.style.display = 'none';
       }
@@ -1284,7 +1522,7 @@
       if (canLaunch) {
         btn.style.display = 'inline-flex';
         btn.title = 'Open a new Terminal window and run claude --resume';
-        btn.querySelector('.jump-label').textContent = 'Launch in Terminal';
+        btn.querySelector('.jump-label').textContent = 'Launch in terminal';
       } else {
         btn.style.display = 'none';
       }
@@ -1697,7 +1935,32 @@
     if ($kptOpenConvBtn) $kptOpenConvBtn.style.display = open ? 'none' : '';
     try { localStorage.setItem('clv-conv-panel-open', open ? '1' : '0'); } catch (_) {}
   }
-  if ($cpCloseBtn) $cpCloseBtn.addEventListener('click', () => setConvPanelOpen(!convPanelOpen));
+  // ── Mobile overlay helpers ──
+  const _mobileMQ = window.matchMedia('(max-width: 768px)');
+  function isMobile() { return _mobileMQ.matches; }
+  function mobileShowMain(on) {
+    document.body.classList.toggle('mobile-show-main', !!on);
+  }
+  function mobileShowConv(on) {
+    document.body.classList.toggle('mobile-conv-open', !!on);
+  }
+  function mobileShowForCurrentMode() {
+    if (!isMobile()) return;
+    if (document.body.classList.contains('kanban-split')) mobileShowConv(true);
+    else mobileShowMain(true);
+  }
+  const $mobileBackBtn = document.getElementById('mobileBackBtn');
+  if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => mobileShowMain(false));
+  const $mobileReloadBtn = document.getElementById('mobileReloadBtn');
+  if ($mobileReloadBtn) $mobileReloadBtn.addEventListener('click', () => {
+    // Bypass cache where supported (Firefox); Safari treats it as a normal reload.
+    try { location.reload(true); } catch (_) { location.reload(); }
+  });
+
+  if ($cpCloseBtn) $cpCloseBtn.addEventListener('click', () => {
+    if (isMobile()) { mobileShowConv(false); return; }
+    setConvPanelOpen(!convPanelOpen);
+  });
   if ($kptOpenConvBtn) $kptOpenConvBtn.addEventListener('click', () => setConvPanelOpen(true));
   // Restore last state
   try {
@@ -1829,7 +2092,7 @@
       }
       renderSidebar(filterConversations($convSearch.value));
     } catch (err) {
-      $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Failed to load: ' + escapeHtml(err.message) + '</div>';
+      $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Failed to load sessions: ' + escapeHtml(err.message) + '</div>';
     }
   }
 
@@ -1906,6 +2169,8 @@
   // Manual column overrides (drag-and-drop) — session_id → column key
   let columnOverrides = {};
   try { columnOverrides = JSON.parse(localStorage.getItem('clv-column-overrides') || '{}'); } catch (_) {}
+  // Guard against double-spawn from rapid mobile taps. Key is "issue-<num>" or session name.
+  const _spawningKeys = new Set();
 
   // Multi-select state for kanban cards
   let selectedCardIds = new Set();
@@ -1942,6 +2207,34 @@
         c.verified = true;
       }
       delete columnOverrides[sid];
+    }
+    // Moving into working/planning: set override + signal to GitHub
+    if (targetCol === 'working' || targetCol === 'planning') {
+      columnOverrides[sid] = targetCol;
+      // Unflip backend verified/archived if needed
+      if (c.verified) {
+        await fetch('/api/conversations/' + cardId + '/verify', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ session_id: sid }),
+        }).catch(() => {});
+        c.verified = false;
+      }
+      if (c.archived) {
+        await fetch('/api/conversations/' + cardId + '/archive', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ session_id: sid }),
+        }).catch(() => {});
+        c.archived = false;
+      }
+      const issueNum = c.linked_issue || c.issue_number || (() => {
+        const m = /^issue-(\d+)$/.exec(c.display_name || '');
+        return m ? m[1] : null;
+      })() || ((c.id || '').startsWith('backlog-issue-') ? c.id.split('-').pop() : null);
+      if (issueNum) {
+        fetch('/api/issues/' + issueNum + '/mark-in-progress', { method: 'POST' })
+          .then(() => setTimeout(refreshConversationList, 800))
+          .catch(() => {});
+      }
     } else if (targetCol === 'archived') {
       if (!c.archived) {
         await fetch('/api/conversations/' + cardId + '/archive', {
@@ -1976,10 +2269,39 @@
   function classifyKanbanColumn(c) {
     // Manual override from drag-drop takes priority
     const ov = columnOverrides[c.session_id || c.id];
-    if (ov) return ov;
+    if (ov) {
+      // Auto-clear stale overrides only when the session has ADVANCED past the
+      // override (e.g., pushed/committed while override=working). Do NOT clear
+      // just because the session went idle — user explicitly placed it here.
+      const stage = sessionStage(c);
+      const stale =
+        (ov === 'working' || ov === 'planning') && stage === 'pushed' ||
+        (ov === 'archived') && c.id && c.id.startsWith('backlog-issue-') && (c.issue_state || '').toUpperCase() === 'OPEN';
+      if (stale) {
+        delete columnOverrides[c.session_id || c.id];
+        try { localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
+      } else {
+        return ov;
+      }
+    }
     if (c.verified) return 'verified';
     if (c.archived) return 'archived';
-    if (c.source === 'backlog') return 'backlog';
+
+    // GitHub-label-driven routing (applies to backlog cards AND linked sessions
+    // whose linked issue carries these labels)
+    const ghLabels = c.gh_labels || c.issue_labels || [];
+    const hasLabel = (name) => Array.isArray(ghLabels) && ghLabels.indexOf(name) >= 0;
+
+    if (c.source === 'backlog') {
+      if (c.issue_state === 'CLOSED') {
+        const reason = (c.issue_state_reason || '').toUpperCase();
+        if (reason === 'COMPLETED') return 'verified';
+        return 'archived';  // not planned / duplicate / unspecified
+      }
+      if (hasLabel('needs-attention')) return 'needs-attention';
+      if (hasLabel('icebox')) return 'planning';
+      return 'backlog';
+    }
     const live = !!c.is_live;
     const hasSidecar = !!c.sidecar_status;
     const stage = sessionStage(c);
@@ -1994,6 +2316,13 @@
 
     // Review: committed/pushed (dead sessions, or live without sidecar)
     if (stage === 'pushed' || stage === 'committed') return 'review';
+
+    // Linked-issue label overrides for dead sessions (before falling to Inactive)
+    if (hasLabel('needs-attention')) return 'needs-attention';
+    if (hasLabel('icebox')) return 'planning';
+    // A session marked claude-in-progress but not actually running:
+    // belongs in Working (the label says this is the active work).
+    if (hasLabel('claude-in-progress')) return 'working';
 
     // Dead sessions without commits: inactive (never hide — every session has a column)
     if (!live && !hasSidecar) return 'inactive';
@@ -2019,14 +2348,15 @@
   function renderKanbanBoard(convs, targetEl, isSplit) {
     if (!targetEl) targetEl = $kanbanBoard;
     const defaultColumns = [
-      { key: 'backlog',  label: 'Backlog',  defaultExpanded: true },
-      { key: 'planning', label: 'Planning', defaultExpanded: true },
-      { key: 'working',  label: 'Working',  defaultExpanded: true },
-      { key: 'review',   label: 'Review',   defaultExpanded: true },
-      { key: 'testing',  label: 'In Testing', defaultExpanded: true },
-      { key: 'inactive', label: 'Inactive', defaultExpanded: false },
-      { key: 'verified', label: 'Verified', defaultExpanded: false },
-      { key: 'archived', label: 'Archived', defaultExpanded: false },
+      { key: 'backlog',        label: 'Backlog',        defaultExpanded: true },
+      { key: 'needs-attention', label: 'Needs attention', defaultExpanded: true },
+      { key: 'planning',       label: 'Planning',       defaultExpanded: true },
+      { key: 'working',        label: 'Working',        defaultExpanded: true },
+      { key: 'review',         label: 'Review',         defaultExpanded: true },
+      { key: 'testing',        label: 'In Testing',     defaultExpanded: true },
+      { key: 'inactive',       label: 'Inactive',       defaultExpanded: false },
+      { key: 'verified',       label: 'Verified',       defaultExpanded: false },
+      { key: 'archived',       label: 'Archived',       defaultExpanded: false },
     ];
     // Apply user-defined column order from localStorage.
     let savedOrder = [];
@@ -2069,18 +2399,40 @@
       html += '<span class="count">' + items.length + '</span>';
       html += '</div>';
       html += '<div class="kanban-cards">';
-      for (const c of visibleItems) {
+      // In Backlog only: group by org (if org tags are configured).
+      // Sort by org so same-org cards cluster; emit a small sub-header on change.
+      let sortedItems = visibleItems;
+      const orgsOrder = APP_CONFIG.orgs || [];
+      if (col.key === 'backlog' && orgsOrder.length > 0) {
+        const rank = (c) => {
+          const o = c.org || '';
+          const idx = orgsOrder.indexOf(o);
+          // Known orgs keep their configured order; unknowns sink to the bottom.
+          return idx === -1 ? (orgsOrder.length + 1) : idx;
+        };
+        sortedItems = visibleItems.slice().sort((a, b) => rank(a) - rank(b));
+      }
+      let lastOrg = undefined;
+      for (const c of sortedItems) {
+        if (col.key === 'backlog' && orgsOrder.length > 0) {
+          const o = c.org || null;
+          if (o !== lastOrg) {
+            const label = o || 'Project';
+            html += '<div class="kanban-org-header">' + escapeHtml(label) + '</div>';
+            lastOrg = o;
+          }
+        }
         // Prefer first_message for the title unless the user explicitly renamed it.
         // Auto-generated display_names (from claude /rename) tend to be awkwardly truncated.
         const rawTitle = c.name_overridden
           ? c.display_name
           : (c.first_message ? c.first_message.slice(0, 160) : (c.display_name || '(untitled)'));
-        // Replace dashes with spaces for display (storage keeps the slug); strip [BYM ...] noise
-        const title = rawTitle.replace(/\s*\[BYM[^\]]*\]\s*/gi, ' ').replace(/-/g, ' ').trim();
+        // Replace dashes with spaces for display (storage keeps the slug); strip user-configured title prefixes
+        const title = stripTitle(rawTitle).replace(/-/g, ' ').trim();
         // Description: only show content beyond what the title already reveals.
         let desc = '';
         if (c.first_message) {
-          const fm = c.first_message.replace(/\s*\[BYM[^\]]*\]\s*/gi, ' ').trim();
+          const fm = stripTitle(c.first_message).trim();
           const stripEllipsis = (s) => s.replace(/[.\u2026\s]+$/, '');
           const norm = (s) => stripEllipsis(s).toLowerCase().replace(/\s+/g, ' ').trim();
           const titleNorm = norm(title);
@@ -2116,8 +2468,14 @@
           html += '<div class="kanban-card backlog-card" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="backlog">';
           html += '<div class="kanban-card-title">' + escapeHtml(title) + '</div>';
           if (labels) html += '<div style="margin-top:3px;">' + labels + '</div>';
-          html += '<div style="margin-top:4px;">' + sourceTag + dateInfo + '</div>';
-          html += '<button class="kanban-start-btn" data-issue="' + escapeHtml(c.issue_number || '') + '" data-title="' + escapeHtml(c.display_name || c.first_message || '') + '" style="margin-top:6px;padding:4px 10px;border-radius:4px;border:1px solid rgba(63,185,80,0.3);background:rgba(63,185,80,0.1);color:var(--green);font-size:11px;font-weight:600;cursor:pointer;width:100%;">Start Session</button>';
+          const wipChip = c.gh_in_progress
+            ? '<span class="kanban-gh-wip" style="margin-left:6px;" title="claude-in-progress label on GitHub">WIP</span>'
+            : '';
+          html += '<div style="margin-top:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' + sourceTag + wipChip + dateInfo + '</div>';
+          html += '<div style="display:flex;gap:4px;margin-top:6px;">';
+          html += '<button class="kanban-start-btn" data-issue="' + escapeHtml(c.issue_number || '') + '" data-title="' + escapeHtml(c.display_name || c.first_message || '') + '" style="flex:1;padding:4px 10px;border-radius:4px;border:1px solid rgba(63,185,80,0.3);background:rgba(63,185,80,0.1);color:var(--green);font-size:11px;font-weight:600;cursor:pointer;">Start session</button>';
+          html += '<button class="kanban-start-edit-btn" data-issue="' + escapeHtml(c.issue_number || '') + '" data-title="' + escapeHtml(c.display_name || c.first_message || '') + '" data-body="' + escapeHtml(c.first_message || '') + '" title="Edit the prompt before launching" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text-muted);font-size:11px;cursor:pointer;">Edit &amp; start</button>';
+          html += '</div>';
           html += '</div>';
           continue;
         }
@@ -2150,7 +2508,11 @@
         const archiveIcon = c.archived ? '&#8617;' : '&#128229;';
         const archiveTitle = c.archived ? 'Unarchive' : 'Archive';
         // "Truly active" = live + sidecar shows active work (glow animation)
-        const trulyActive = c.is_live && c.sidecar_status === 'active' && c.sidecar_has_writes ? ' truly-active' : '';
+        // Glow if sidecar was updated within last 5 min OR the session's last event
+        // was an assistant response (Claude is mid-turn, possibly thinking without tools).
+        const sidecarAge = c.sidecar_ts ? (Date.now() / 1000 - c.sidecar_ts) : 9999;
+        const midTurn = c.last_event_type === 'assistant';
+        const trulyActive = c.is_live && c.sidecar_status === 'active' && (sidecarAge < 300 || midTurn) ? ' truly-active' : '';
         const pendingSpawn = c.pending_spawn ? ' pending-spawn' : '';
         html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
         // Issue link icon / Create Issue button
@@ -2160,13 +2522,25 @@
           : '<button class="kanban-action-btn" data-action="create-issue" title="Create GitHub issue">&#128221;</button>';
         html += '<div class="kanban-card-actions">'
           + '<button class="kanban-action-btn" data-action="summarize" title="Regenerate title with Claude">&#10024;</button>'
-          + '<button class="kanban-action-btn" data-action="edit" title="Rename">&#9998;</button>'
           + issueAction
           + '<button class="kanban-action-btn" data-action="archive" title="' + archiveTitle + '">' + archiveIcon + '</button>'
           + '</div>';
-        const issueBadge = linkedIssue
-          ? '<span class="kanban-issue-badge" title="Linked to GitHub issue">#' + escapeHtml(linkedIssue) + '</span>'
-          : '';
+        let issueBadge = '';
+        if (linkedIssue) {
+          const ghState = (c.gh_state || '').toUpperCase();
+          const ghStateCls = ghState === 'CLOSED' ? 'gh-closed' : 'gh-open';
+          const ghStateLabel = ghState ? (ghState === 'CLOSED' ? 'closed' : 'open') : '';
+          const stateChip = ghStateLabel
+            ? '<span class="kanban-gh-state ' + ghStateCls + '" title="GitHub issue state: ' + ghStateLabel + '">' + ghStateLabel + '</span>'
+            : '';
+          const wipChip = c.gh_in_progress
+            ? '<span class="kanban-gh-wip" title="claude-in-progress label on GitHub">WIP</span>'
+            : '';
+          const desktopChip = c.desktop_app
+            ? '<span class="kanban-desktop-badge" title="Session is tracked by the Claude desktop app">Desktop</span>'
+            : '';
+          issueBadge = '<span class="kanban-issue-badge" title="Linked to GitHub issue">#' + escapeHtml(linkedIssue) + '</span>' + stateChip + wipChip + desktopChip;
+        }
         html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open &amp; rename">' + issueBadge + escapeHtml(title) + '</div>';
         if (desc) {
           html += '<div class="kanban-card-desc">' + escapeHtml(desc) + '</div>';
@@ -2195,7 +2569,7 @@
         // ── Task 9: Review card actions ──
         if (colKey === 'review') {
           let reviewInfo = '';
-          if (c.has_push) reviewInfo = '\u2713 Pushed to main';
+          if (c.has_push) reviewInfo = '\u2713 Pushed' + (c.branch ? ' (' + c.branch + ')' : '');
           else if (c.has_commit) reviewInfo = '\u2713 Committed';
           if (reviewInfo) html += '<div class="kanban-review-info">' + escapeHtml(reviewInfo) + '</div>';
           html += '<div class="kanban-review-actions">'
@@ -2360,8 +2734,11 @@
         ev.stopPropagation();
         const issueNum = btn.dataset.issue;
         if (!issueNum) return;
-        // Open GitHub issue in browser (requires repo name — best effort via gh)
-        const repo = document.body.dataset.repo || 'amirfish1/my-finance-app';
+        const repo = document.body.dataset.repo || APP_CONFIG.repo;
+        if (!repo) {
+          btn.title = 'No GitHub repo detected (run inside a repo with `gh` set up)';
+          return;
+        }
         window.open('https://github.com/' + repo + '/issues/' + issueNum, '_blank');
       });
     });
@@ -2749,41 +3126,75 @@
       });
     });
 
-    // ── Task 10: Start Session from backlog ──
+    // ── Edit prompt before launching — opens the new-session modal pre-filled ──
+    targetEl.querySelectorAll('.kanban-start-edit-btn').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const issueNum = btn.dataset.issue;
+        const title = btn.dataset.title;
+        const cleanTitle = (title || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
+        const subject = issueNum ? ('issue-' + issueNum) : cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
+        const body = cleanTitle;
+        openNewSessionModal(subject, body);
+      });
+    });
+    // ── Start session from a backlog card ──
     targetEl.querySelectorAll('.kanban-start-btn').forEach(btn => {
       btn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
         const issueNum = btn.dataset.issue;
         const title = btn.dataset.title;
-        // Clean title for use as session name: strip #N: prefix, strip [BYM...] tags, clean chars
+        // Clean title for use as session name: strip #N: prefix, strip [bracket] tags, clean chars
         let cleanTitle = (title || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
         const sessionName = issueNum ? ('issue-' + issueNum) : cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
-        const prompt = issueNum
-          ? 'Fix GitHub issue #' + issueNum + ': ' + cleanTitle + '. Read the issue first with `gh issue view ' + issueNum + '`, then implement the fix.'
-          : cleanTitle;
+        const prompt = cleanTitle;
+        const spawnKey = issueNum ? ('issue-' + issueNum) : sessionName;
+        if (_spawningKeys.has(spawnKey)) return;  // already spawning — ignore duplicate tap
+        _spawningKeys.add(spawnKey);
         btn.disabled = true;
         btn.textContent = 'Starting...';
-        // Optimistically hide the backlog card immediately
+        // Remove the backlog card from DOM immediately so repeated taps can't hit it
         const card = btn.closest('.kanban-card');
         const cardId = card && card.dataset.id;
         if (cardId) {
           const c = conversationsData.find(x => x.id === cardId);
           if (c) {
-            // Store override so it's hidden until the real session replaces it
             columnOverrides[c.session_id || c.id] = 'archived';
             try { localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
           }
         }
-        try {
-          await fetch('/api/sessions/spawn', {
+        if (card && card.parentNode) card.parentNode.removeChild(card);
+        // Optimistically insert a pending-spawn card in Working using a temp id.
+        // The real card replaces it once the spawn_pid matches (see loadConversationList).
+        const tempPid = 'tmp-' + Date.now();
+        insertPendingSpawnCard(tempPid, sessionName, false);
+        // No need for a second render — insertPendingSpawnCard already renders.
+        // Fire spawn in background so it doesn't block UI.
+        (async () => { try {
+          const res = await fetch('/api/sessions/spawn', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ prompt: prompt, name: sessionName }),
           });
+          const data = await res.json().catch(() => ({}));
+          if (data.ok && data.pid) {
+            const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
+            if (placeholder) {
+              placeholder.spawn_pid = data.pid;
+              pendingSpawns.delete(tempPid);
+              pendingSpawns.set(data.pid, placeholder);
+            }
+          }
+          // Fire-and-forget: signal to GitHub that this issue is being worked on
+          if (issueNum) {
+            fetch('/api/issues/' + issueNum + '/mark-in-progress', { method: 'POST' }).catch(() => {});
+          }
         } catch (_) {}
-        // Re-render immediately to hide backlog, then refresh for the new session
-        renderSidebar(filterConversations($convSearch.value));
-        setTimeout(function() { refreshConversationList(); }, 3000);
+        setTimeout(function() { refreshConversationList(); }, 800);
+        setTimeout(function() { refreshConversationList(); }, 2500);
+        // Release the duplicate-tap guard after the refresh window closes.
+        setTimeout(function() { _spawningKeys.delete(spawnKey); }, 8000);
+        })();
       });
     });
   }
@@ -2833,7 +3244,12 @@
 
   function renderConversationList(convs) {
     if (!convs.length) {
-      $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">No conversations found</div>';
+      $convList.innerHTML =
+        '<div class="empty-state first-run" style="height:auto;padding:28px 20px;font-size:13px;flex-direction:column;gap:10px;align-items:flex-start;color:var(--text-muted);">'
+        + '<div style="font-size:14px;color:var(--text);font-weight:600;">No sessions yet</div>'
+        + '<div style="line-height:1.5;">Open a terminal and run <code style="background:var(--bg);padding:2px 6px;border-radius:3px;color:var(--text);">claude</code> to start one — it\'ll show up here automatically.</div>'
+        + '<div style="line-height:1.5;">Or type a prompt in the <strong style="color:var(--text);">New session prompt</strong> field above and click <strong style="color:var(--text);">Run</strong>.</div>'
+        + '</div>';
       return;
     }
     $convList.innerHTML = convs.map(c => {
@@ -3046,6 +3462,9 @@
       document.body.classList.remove('kanban-split');
       if ($kanbanLayout) $kanbanLayout.classList.remove('active');
     }
+    // Reset mobile overlays when layout changes so nothing lingers
+    document.body.classList.remove('mobile-conv-open');
+    document.body.classList.remove('mobile-show-main');
   }
   function updateKanbanToggle() {
     if ($convKanbanToggle) $convKanbanToggle.classList.toggle('active', kanbanView);
@@ -3215,7 +3634,7 @@
       $view.scrollTop = 0;
       wireIssueCloseButtons($view, issueNum);
     } catch (e) {
-      $view.innerHTML = '<div class="empty-state" style="padding:40px;color:var(--red);">Error: ' + escapeHtml(String(e && e.message || e)) + '</div>';
+      $view.innerHTML = '<div class="empty-state" style="padding:40px;color:var(--red);">Failed to load issue: ' + escapeHtml(String(e && e.message || e)) + '</div>';
     }
   }
 
@@ -3247,12 +3666,30 @@
           if (data.ok) {
             status.textContent = 'closed as ' + reason + ' ✓';
             status.style.color = 'var(--green)';
+            // Find the next backlog card before refreshing
+            const currentCard = document.querySelector('.kanban-card[data-id="backlog-issue-' + issueNum + '"]');
+            let nextCard = currentCard && currentCard.nextElementSibling;
+            // Skip non-card elements (e.g. "show all" links)
+            while (nextCard && !nextCard.classList.contains('kanban-card')) nextCard = nextCard.nextElementSibling;
+            // Fall back to previous card if no next
+            if (!nextCard && currentCard) {
+              nextCard = currentCard.previousElementSibling;
+              while (nextCard && !nextCard.classList.contains('kanban-card')) nextCard = nextCard.previousElementSibling;
+            }
+            const nextIssueId = nextCard && nextCard.dataset.id;
+            const nextIssueNum = nextIssueId && nextIssueId.startsWith('backlog-issue-') ? nextIssueId.replace('backlog-issue-', '') : null;
             // Refresh card list so closed issue drops from backlog
             setTimeout(() => refreshConversationList(), 600);
-            // Re-render issue pane in closed state
-            setTimeout(() => renderIssueInConvPane(issueNum), 1200);
+            // Navigate to next backlog issue (or re-render current in closed state)
+            setTimeout(() => {
+              if (nextIssueNum) {
+                renderIssueInConvPane(nextIssueNum);
+              } else {
+                renderIssueInConvPane(issueNum);
+              }
+            }, 800);
           } else {
-            status.textContent = 'failed: ' + (data.error || 'unknown');
+            status.textContent = 'Failed: ' + (data.error || 'unknown');
             status.style.color = 'var(--red)';
             btn.textContent = orig;
             container.querySelectorAll('button').forEach(b => b.disabled = false);
@@ -3288,6 +3725,7 @@
     // Stop any existing SSE stream or pollers
     stopConvStream();
     stopIssueLogPoller();
+    mobileShowForCurrentMode();
     currentConversation = id;
     convLastLine = 0;
     _firstUserMsgRendered = false;
@@ -3367,7 +3805,7 @@
         renderConversationEvents(data.events || []);
         issueLogLastLine = data.last_line || 0;
       } catch (err) {
-        $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Error: ' + escapeHtml(err.message) + '</div>';
+        $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load issue log: ' + escapeHtml(err.message) + '</div>';
       }
       issueLogPoller = setInterval(() => pollIssueLogs(issue), 2000);
     } else {
@@ -3390,7 +3828,7 @@
       if ($cpInput) {
         if (isPkood) $cpInput.placeholder = 'Send to pkood agent...';
         else if (live) $cpInput.placeholder = 'Send to terminal...';
-        else $cpInput.placeholder = 'Send to terminal (offline — will queue / may fail)...';
+        else $cpInput.placeholder = 'Send to terminal (offline)...';
       }
     } else {
       $convPanelInput.classList.remove('visible');
@@ -3501,7 +3939,7 @@
         $view.innerHTML = '<pre class="pkood-tail-output">' + escapeHtml(data.output || '(no output yet)') + '</pre>';
         if (atBottom) $view.scrollTop = $view.scrollHeight;
       } else {
-        $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Error: ' + escapeHtml(data.error || 'unknown') + '</div>';
+        $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load agent output: ' + escapeHtml(data.error || 'unknown') + '</div>';
       }
     } catch (err) {
       // Keep existing content on transient fetch errors
@@ -3523,7 +3961,7 @@
       convLastLine = data.last_line;
     } catch (err) {
       if (convLastLine === 0) {
-        $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Error: ' + escapeHtml(err.message) + '</div>';
+        $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load conversation: ' + escapeHtml(err.message) + '</div>';
       }
     }
   }
@@ -3556,7 +3994,10 @@
           const issueBtn = issueNum
             ? '<button class="tools-toggle issue-link-btn" data-issue="' + escapeHtml(String(issueNum)) + '" title="View GitHub issue #' + escapeHtml(String(issueNum)) + '" style="right:120px;color:var(--green);border-color:rgba(63,185,80,0.4);">Issue #' + escapeHtml(String(issueNum)) + ' &#x2197;</button>'
             : '';
-          sticky.innerHTML = issueBtn
+          const resolveBtn = issueNum
+            ? '<button class="tools-toggle resolve-btn" data-issue="' + escapeHtml(String(issueNum)) + '" data-session="' + escapeHtml(conv.session_id || '') + '" title="Commit changes and close issue #' + escapeHtml(String(issueNum)) + '" style="right:240px;color:#fff;background:var(--green);border-color:var(--green);">Commit &amp; resolve</button>'
+            : '';
+          sticky.innerHTML = resolveBtn + issueBtn
             + '<button class="tools-toggle" data-tools-toggle' + (hidden ? ' class="active"' : '') + ' title="Toggle tool-call visibility">'
             + (hidden ? 'Show tools' : 'Hide tools') + '</button>'
             + '<div class="label">Original ask</div>'
@@ -3571,14 +4012,38 @@
             btn.classList.toggle('active', nowHidden);
             btn.textContent = nowHidden ? 'Show tools' : 'Hide tools';
           });
+          const resolveClickBtn = sticky.querySelector('.resolve-btn');
+          if (resolveClickBtn) {
+            resolveClickBtn.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              const n = resolveClickBtn.dataset.issue;
+              const sid = resolveClickBtn.dataset.session;
+              resolveClickBtn.disabled = true;
+              resolveClickBtn.textContent = 'Sending...';
+              const msg = 'Please commit all your changes with a clear commit message referencing issue #' + n + ', then push. Use /commit if available. Once pushed, the issue will be closed automatically.';
+              try {
+                await fetch('/api/inject-input', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({ session_id: sid, text: msg }),
+                });
+                resolveClickBtn.textContent = 'Sent ✓';
+                resolveClickBtn.style.opacity = '0.6';
+              } catch (err) {
+                resolveClickBtn.textContent = 'Failed';
+                setTimeout(() => { resolveClickBtn.textContent = 'Commit & resolve'; resolveClickBtn.disabled = false; }, 2000);
+              }
+            });
+          }
           const issueLinkBtn = sticky.querySelector('.issue-link-btn');
           if (issueLinkBtn) {
             issueLinkBtn.addEventListener('click', (e) => {
               e.stopPropagation();
               const n = issueLinkBtn.dataset.issue;
               if (e.metaKey || e.ctrlKey || e.shiftKey) {
-                const repo = document.body.dataset.repo || 'amirfish1/my-finance-app';
-                window.open('https://github.com/' + repo + '/issues/' + n, '_blank');
+                const repo = document.body.dataset.repo || APP_CONFIG.repo;
+                if (repo) window.open('https://github.com/' + repo + '/issues/' + n, '_blank');
+                else renderIssueInConvPane(n);
               } else {
                 renderIssueInConvPane(n);
               }
@@ -3644,6 +4109,11 @@
       if (!kanbanView) {
         if (showArchived && !c.archived) return false;
         if (!showArchived && c.archived) return false;
+      }
+      // Git-only filter: cards without a linked issue are hidden
+      if (window._gitOnlyFilter) {
+        const hasIssue = c.linked_issue || c.issue_number || (c.id || '').startsWith('backlog-issue-');
+        if (!hasIssue) return false;
       }
       // Text search
       if (!q) return true;
@@ -3908,11 +4378,11 @@
     $watcherDot.className = 'watcher-dot' + (running ? ' running' : '');
     $watcherBtn.disabled = false;
     if (running) {
-      $watcherBtn.textContent = 'Stop Watcher';
+      $watcherBtn.textContent = 'Stop watcher';
       $watcherBtn.className = 'watcher-btn stop';
       if (!watcherPolling) watcherPolling = setInterval(pollWatcher, 3000);
     } else {
-      $watcherBtn.textContent = 'Start Watcher';
+      $watcherBtn.textContent = 'Start watcher';
       $watcherBtn.className = 'watcher-btn start';
       if (watcherPolling) { clearInterval(watcherPolling); watcherPolling = null; }
     }
@@ -4030,6 +4500,20 @@
       applyDescHidden(nowHidden);
     });
   }
+  // Git-only toggle: hide cards not linked to a GitHub issue
+  const $kptGitOnlyToggle = document.getElementById('kptGitOnlyToggle');
+  if ($kptGitOnlyToggle) {
+    const applyGitOnly = (on) => {
+      window._gitOnlyFilter = on;
+      $kptGitOnlyToggle.classList.toggle('active', on);
+      renderSidebar(filterConversations($convSearch.value));
+    };
+    $kptGitOnlyToggle.addEventListener('click', () => {
+      applyGitOnly(!window._gitOnlyFilter);
+      localStorage.setItem('clv-git-only', window._gitOnlyFilter ? '1' : '0');
+    });
+    if (localStorage.getItem('clv-git-only') === '1') applyGitOnly(true);
+  }
   const $kptNewSession = document.getElementById('kptNewSession');
   const $kptRunBtn = document.getElementById('kptRunBtn');
 
@@ -4097,14 +4581,14 @@
   const $nsmCancel = document.getElementById('nsmCancel');
   const $nsmBackdrop = document.getElementById('nsmBackdrop');
   const $nsmPkood = document.getElementById('nsmPkood');
-  function openNewSessionModal(seed = '') {
+  function openNewSessionModal(seed = '', body = '') {
     if (!$nsm) return;
     $nsmSubject.value = seed || '';
-    $nsmBody.value = '';
+    $nsmBody.value = body || '';
     if ($nsmPkood && $kptPkoodToggle) $nsmPkood.checked = $kptPkoodToggle.checked;
     $nsm.style.display = 'flex';
     setTimeout(() => {
-      if (seed) { $nsmBody.focus(); } else { $nsmSubject.focus(); }
+      if (body || seed) { $nsmBody.focus(); } else { $nsmSubject.focus(); }
     }, 30);
   }
   function closeNewSessionModal() {

@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Obsidian vault (local notes — not part of the project)
+.obsidian/
+
+# Local scratch
+/tmp/
+/scratch/
+
+# Build output (none today, but don't commit if any tooling is added later)
+/dist/
+/build/
+
+# Local logs or state that might end up in-tree
+/.claude/logs/
+/.claude/pasted-images/
+*.log

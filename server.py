@@ -37,7 +37,36 @@ CCC_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = CCC_ROOT / "static"
 PORT = int(os.environ.get("PORT", 8090))
 # Optional title-prefix noise stripper (e.g. "[BYM Problem]"). Comma-separated prefixes.
-TITLE_STRIP_PREFIXES = [p for p in os.environ.get("CCC_TITLE_STRIP", "BYM").split(",") if p]
+# Empty by default; set `CCC_TITLE_STRIP=BYM,FOO` to strip `[BYM ...]` and `[FOO ...]` from titles.
+TITLE_STRIP_PREFIXES = [p for p in os.environ.get("CCC_TITLE_STRIP", "").split(",") if p]
+
+# Optional org-tagger for multi-tenant apps. Set CCC_ORG_PATTERNS as
+# `Label1:pat1a|pat1b;Label2:pat2`. The server scans each GitHub issue body
+# for the patterns and tags the card with `org: "Label1"`, letting the UI
+# group backlog by org. Leave unset and every issue is tagged `org: null`.
+_org_spec = os.environ.get("CCC_ORG_PATTERNS", "")
+ORG_PATTERNS = []
+for chunk in _org_spec.split(";"):
+    if ":" not in chunk:
+        continue
+    label, pats = chunk.split(":", 1)
+    label = label.strip()
+    alts = [p.strip() for p in pats.split("|") if p.strip()]
+    if label and alts:
+        try:
+            ORG_PATTERNS.append((label, re.compile("|".join(alts), re.IGNORECASE)))
+        except re.error:
+            pass
+
+
+def _detect_issue_org(body):
+    """Return the first matching org label for an issue body, or None."""
+    if not body or not ORG_PATTERNS:
+        return None
+    for label, rx in ORG_PATTERNS:
+        if rx.search(body):
+            return label
+    return None
 _TITLE_STRIP_RE = re.compile(
     r"^\s*\[(?:" + "|".join(re.escape(p) for p in TITLE_STRIP_PREFIXES) + r")[^\]]*\]\s*"
 ) if TITLE_STRIP_PREFIXES else None
@@ -345,8 +374,12 @@ def _detect_issue_number_for_session(conv):
         return str(explicit)
     # Strong patterns only (avoid "Image #1" false positives):
     #   - branch like "issue-91", "fix/91", "fix-91"
-    #   - display_name starting with "#NN: " or "issue-NN"
-    strong = re.compile(r"(?:issue|fix)[/-](\d+)", re.IGNORECASE)
+    #   - display_name or first_message containing "issue 91", "issue-91",
+    #     "issue/91", "fix-91", or "GitHub issue #91" / "GitHub issue 91"
+    strong = re.compile(
+        r"(?:github\s+)?(?:issue|fix)[\s/-]+#?(\d+)",
+        re.IGNORECASE,
+    )
     branch = conv.get("branch", "") or ""
     m = strong.search(branch)
     if m:
@@ -357,6 +390,11 @@ def _detect_issue_number_for_session(conv):
         return m.group(1)
     # display_name that starts with "#NN: " or "#NN " is a prefix style
     m = re.match(r"^#(\d+)[:\s]", dname)
+    if m:
+        return m.group(1)
+    # Fall back to first_message — spawn prompts include "Fix GitHub issue #N: ..."
+    fm = conv.get("first_message", "") or ""
+    m = strong.search(fm[:200])  # only head; avoids body noise
     if m:
         return m.group(1)
     return None
@@ -440,7 +478,18 @@ def close_github_issue_with_commit(issue_number, conv):
             ["gh", "issue", "close", str(issue_number)],
             capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
         )
-        return out.returncode == 0
+        ok = out.returncode == 0
+        if ok:
+            # We need the global declared in mark_issue_in_progress; use the helper.
+            # remove_in_progress_label is defined later in this module.
+            try:
+                _globals = globals()
+                fn = _globals.get("remove_in_progress_label")
+                if fn:
+                    fn(issue_number)
+            except Exception:
+                pass
+        return ok
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
 
@@ -593,7 +642,7 @@ def _extract_first_message(session_id):
                 else:
                     text = ""
                 text = text.strip()
-                if text and not text.startswith("<system-reminder>") and not text.startswith("<command-"):
+                if text and not text.startswith("<system-reminder>") and not text.startswith("<command-") and not text.startswith("<local-command"):
                     return text[:1500]
     except OSError:
         pass
@@ -974,6 +1023,22 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None):
         return s.replace("\\", "\\\\").replace('"', '\\"')
     cmd_lit = as_literal(command)
 
+    # Use a human-readable name for the terminal tab.
+    # Look up display_name from conversations, fall back to session name or ID prefix.
+    rename_target = None
+    try:
+        convs = find_all_sessions() or []
+        for c in convs:
+            if c.get("session_id") == session_id:
+                rename_target = c.get("display_name") or c.get("name")
+                break
+    except Exception:
+        pass
+    if not rename_target:
+        rename_target = (session_id or "")[:12]
+    # Sanitize for AppleScript (no quotes/backslashes)
+    rename_target = rename_target.replace('"', '').replace('\\', '').replace("'", "")[:60]
+    color = _pick_color_for_session(rename_target)
     if target == "iTerm2":
         script = f'''
         tell application "iTerm2"
@@ -982,33 +1047,60 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None):
           tell current session of newWin
             write text "{cmd_lit}"
           end tell
-          return "ok"
         end tell
+        delay 2.0
+        tell application "iTerm2" to activate
+        delay 0.3
+        tell application "System Events" to keystroke "/rename {rename_target}"
+        delay 0.25
+        tell application "System Events" to key code 36
+        delay 0.7
+        tell application "iTerm2" to activate
+        delay 0.2
+        tell application "System Events" to keystroke "/color {color}"
+        delay 0.25
+        tell application "System Events" to key code 36
+        return "ok"
         '''
     else:
-        # Terminal.app: `do script` without a target opens a new window.
+        # Terminal.app: explicitly create a new window, hold onto it, and keep
+        # it frontmost across the keystrokes. `do script` returns a tab whose
+        # window we can reference.
         script = f'''
+        set winId to 0
         tell application "Terminal"
           activate
-          do script "{cmd_lit}"
-          return "ok"
+          set newTab to do script "{cmd_lit}"
+          set winId to id of window 1
         end tell
+        delay 2.0
+        tell application "Terminal"
+          activate
+          set frontmost of (first window whose id is winId) to true
+        end tell
+        delay 0.3
+        tell application "System Events" to keystroke "/rename {rename_target}"
+        delay 0.25
+        tell application "System Events" to key code 36
+        delay 0.7
+        tell application "Terminal"
+          activate
+          set frontmost of (first window whose id is winId) to true
+        end tell
+        delay 0.2
+        tell application "System Events" to keystroke "/color {color}"
+        delay 0.25
+        tell application "System Events" to key code 36
+        return "ok"
         '''
 
+    # Run the osascript in the background (captures stderr to a log for debugging).
     try:
-        out = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=5,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        log_path = LOG_DIR / f"jump-{(session_id or 'x')[:8]}.log"
+        lf = open(log_path, "w")
+        subprocess.Popen(["osascript", "-e", script], stdout=lf, stderr=lf)
+    except (FileNotFoundError, OSError) as e:
         return {"ok": False, "error": str(e)}
-    if out.returncode != 0:
-        return {
-            "ok": False,
-            "error": (out.stderr or "").strip() or "AppleScript failed",
-            "terminal_app": target,
-            "command": command,
-        }
     return {"ok": True, "terminal_app": target, "command": command}
 
 
@@ -1303,6 +1395,87 @@ def _extract_spawn_meta(path):
 _issue_titles_cache = {}
 _issue_titles_cache_ts = 0
 
+# Per-issue state map: {number_str: {'state': 'OPEN'|'CLOSED', 'labels': [..], 'title': ..}}
+_issue_state_cache = {}
+_issue_state_cache_ts = 0
+
+
+_desktop_meta_cache = {}
+_desktop_meta_cache_mtime = 0
+
+
+def _load_desktop_app_metadata():
+    """Read the Claude desktop app's per-session metadata overlay.
+
+    The desktop app stores session metadata at
+      ~/Library/Application Support/Claude/claude-code-sessions/<org>/<ws>/local_<sid>.json
+    Each file has `cliSessionId` linking back to the CLI's .jsonl, plus
+    human-friendly fields (title, model, cwd) the desktop UI surfaces.
+
+    Returns {cliSessionId: {title, model, cwd, is_archived}}.
+    Re-scans only when the root directory mtime changes; cheap enough
+    to call on every request.
+    """
+    global _desktop_meta_cache, _desktop_meta_cache_mtime
+    root = Path.home() / "Library" / "Application Support" / "Claude" / "claude-code-sessions"
+    if not root.is_dir():
+        return {}
+    try:
+        mtime = root.stat().st_mtime
+    except OSError:
+        return _desktop_meta_cache
+    if mtime == _desktop_meta_cache_mtime and _desktop_meta_cache:
+        return _desktop_meta_cache
+    out = {}
+    try:
+        for path in root.glob("*/*/local_*.json"):
+            try:
+                data = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            cli_sid = data.get("cliSessionId")
+            if not cli_sid:
+                continue
+            out[cli_sid] = {
+                "title": data.get("title") or None,
+                "model": data.get("model") or None,
+                "cwd": data.get("cwd") or None,
+                "is_archived": bool(data.get("isArchived")),
+                "last_activity_at": data.get("lastActivityAt") or None,
+            }
+    except OSError:
+        pass
+    _desktop_meta_cache = out
+    _desktop_meta_cache_mtime = mtime
+    return out
+
+
+def _fetch_issue_states():
+    """Bulk-fetch state+labels+title for all issues. Cached 5 min."""
+    global _issue_state_cache, _issue_state_cache_ts
+    if time.time() - _issue_state_cache_ts < 300 and _issue_state_cache:
+        return _issue_state_cache
+    try:
+        out = subprocess.run(
+            ["gh", "issue", "list", "--state", "all", "--limit", "500",
+             "--json", "number,title,state,labels"],
+            capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
+        )
+        if out.returncode == 0:
+            issues = json.loads(out.stdout)
+            _issue_state_cache = {
+                str(i["number"]): {
+                    "state": i.get("state") or "OPEN",
+                    "labels": [l.get("name", "") for l in (i.get("labels") or [])],
+                    "title": _strip_title_prefix(i.get("title", "")),
+                }
+                for i in issues
+            }
+            _issue_state_cache_ts = time.time()
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        pass
+    return _issue_state_cache
+
 # Backlog: full issue data (labels, body) for open issues
 _backlog_issues_cache = []
 _backlog_issues_cache_ts = 0
@@ -1332,21 +1505,37 @@ def _fetch_issue_titles():
 
 
 def _fetch_backlog_issues():
-    """Fetch open GitHub issues with labels and body. Cached 5 minutes."""
+    """Fetch open + recently-closed GitHub issues with labels and body.
+    Cached 5 minutes. Closed issues get a `state_reason` field so the UI
+    can route them (completed -> Verified, not planned -> Archived).
+    """
     global _backlog_issues_cache, _backlog_issues_cache_ts
     if time.time() - _backlog_issues_cache_ts < 300 and _backlog_issues_cache is not None:
         return _backlog_issues_cache
+    merged = []
     try:
-        out = subprocess.run(
+        open_out = subprocess.run(
             ["gh", "issue", "list", "--state", "open", "--limit", "100",
-             "--json", "number,title,labels,body,createdAt,updatedAt"],
+             "--json", "number,title,labels,body,createdAt,updatedAt,state,stateReason"],
             capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
         )
-        if out.returncode == 0:
-            _backlog_issues_cache = json.loads(out.stdout)
-            _backlog_issues_cache_ts = time.time()
+        if open_out.returncode == 0:
+            merged.extend(json.loads(open_out.stdout))
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass
+    try:
+        closed_out = subprocess.run(
+            ["gh", "issue", "list", "--state", "closed", "--limit", "60",
+             "--json", "number,title,labels,body,createdAt,updatedAt,closedAt,state,stateReason"],
+            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+        )
+        if closed_out.returncode == 0:
+            merged.extend(json.loads(closed_out.stdout))
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        pass
+    if merged:
+        _backlog_issues_cache = merged
+        _backlog_issues_cache_ts = time.time()
     return _backlog_issues_cache or []
 
 
@@ -1388,6 +1577,8 @@ def find_backlog_items():
                 created_ts = dt.timestamp()
             except (ValueError, ImportError):
                 pass
+        state = (issue.get("state") or "OPEN").upper()
+        reason = (issue.get("stateReason") or "").upper()  # COMPLETED, NOT_PLANNED, DUPLICATE, ""
         items.append({
             "id": f"backlog-issue-{number}",
             "session_id": f"backlog-issue-{number}",
@@ -1398,6 +1589,9 @@ def find_backlog_items():
             "issue_number": str(number),
             "issue_labels": labels,
             "issue_created_at": created_at,
+            "issue_state": state,
+            "issue_state_reason": reason,
+            "org": _detect_issue_org(body),
             "modified": created_ts,
             "size": 0,
             "branch": "",
@@ -1914,8 +2108,21 @@ def find_all_sessions():
 
     # Sidecar: clean up stale files, then enrich every entry
     _cleanup_stale_sidecars(live_sids)
+    issue_states = _fetch_issue_states()
+    desktop_meta = _load_desktop_app_metadata()
     for c in conversations:
         _add_sidecar_fields(c)
+        # Desktop-app metadata decoration: use human-friendly title if present,
+        # and flag the session as having been touched by the desktop app.
+        dm = desktop_meta.get(c.get("session_id"))
+        if dm:
+            c["desktop_app"] = True
+            if dm.get("title") and not c.get("name_overridden"):
+                # Only replace auto-slug / CLI-generated names; never overwrite a user rename.
+                raw_name = (c.get("display_name") or "").strip()
+                looks_like_slug = bool(re.match(r"^[a-z0-9\-]+$", raw_name))
+                if not raw_name or looks_like_slug or raw_name.lower().startswith("issue-"):
+                    c["display_name"] = dm["title"]
         # Link to GitHub issue (from side-car mapping or heuristic)
         if c.get("source") != "backlog":
             c["linked_issue"] = _detect_issue_number_for_session(c)
@@ -1928,6 +2135,18 @@ def find_all_sessions():
                     # Replace generic slugs like "issue-110" with the real title
                     if not raw_name or raw_name == f"issue-{c['linked_issue']}" or raw_name.startswith("fix-github-issue"):
                         c["display_name"] = f"#{c['linked_issue']}: {title}"
+        # Attach GitHub state/labels if a linked issue is known
+        inum = c.get("linked_issue") or c.get("issue_number")
+        if inum:
+            st = issue_states.get(str(inum))
+            if st:
+                c["gh_state"] = st["state"]  # "OPEN" / "CLOSED"
+                c["gh_labels"] = st["labels"]
+                c["gh_in_progress"] = "claude-in-progress" in st["labels"]
+        # Backlog cards: mark WIP from their own labels
+        if c.get("source") == "backlog":
+            c["gh_state"] = "OPEN"
+            c["gh_in_progress"] = "claude-in-progress" in (c.get("issue_labels") or [])
 
     # Sort by mtime desc, then apply custom order
     conversations.sort(key=lambda x: x["modified"], reverse=True)
@@ -1946,6 +2165,13 @@ def find_all_sessions():
             if c["session_id"] not in seen:
                 ordered.append(c)
         conversations = ordered
+
+    # Auto-verify: sessions with has_push linked to closed GH issues get verified.
+    # Runs inline (cheap — just reads cached issue states + verified list).
+    try:
+        auto_verify_closed_issues()
+    except Exception:
+        pass
 
     return conversations
 
@@ -2223,6 +2449,9 @@ def spawn_session(prompt, name=None):
     )
 
     # Write the initial prompt as the first stream-json user message.
+    # Note: headless `claude -p` doesn't support TUI slash commands like /rename
+    # or /color — they're treated as unknown skills. Tab naming/coloring only
+    # happens when the user "jumps" into the TUI (see launch_terminal_for_session).
     _write_stream_json_user_message(proc, prompt)
 
     entry = {
@@ -2237,6 +2466,21 @@ def spawn_session(prompt, name=None):
     _spawned_sessions.append(entry)
 
     return {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)}
+
+
+_COLOR_PALETTE = [
+    "red", "orange", "yellow", "green", "cyan", "blue", "purple", "magenta", "pink",
+]
+
+
+def _pick_color_for_session(name):
+    """Deterministic color from a session name so the same session always gets the same color."""
+    if not name:
+        return "blue"
+    h = 0
+    for ch in name:
+        h = (h * 131 + ord(ch)) & 0xFFFF
+    return _COLOR_PALETTE[h % len(_COLOR_PALETTE)]
 
 
 def _write_stream_json_user_message(proc, text):
@@ -2644,11 +2888,16 @@ Instructions:
     return {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)}
 
 
-VERCEL_PROJECT = os.environ.get("VERCEL_PROJECT", "bookyourmat-app")
+VERCEL_PROJECT = os.environ.get("VERCEL_PROJECT", "")
 
 
 def vercel_deploy_status():
-    """Return latest production deployment status from Vercel CLI."""
+    """Return latest production deployment status from Vercel CLI.
+
+    No-op when VERCEL_PROJECT isn't set — Vercel integration is opt-in.
+    """
+    if not VERCEL_PROJECT:
+        return {"error": "VERCEL_PROJECT not configured", "disabled": True}
     try:
         result = subprocess.run(
             ["vercel", "ls", VERCEL_PROJECT, "--environment", "production", "-F", "json"],
@@ -2725,6 +2974,140 @@ def vercel_deploy_status_with_autofix():
     return status
 
 
+def auto_verify_closed_issues():
+    """For any session with has_push + linked to a CLOSED GitHub issue,
+    auto-set verified=True if not already. Returns what was changed."""
+    verified_list = _load_verified_conversations()
+    verified_set = set(verified_list)
+    issue_states = _fetch_issue_states()
+    convs = find_conversations() or []
+    newly_verified = []
+
+    for c in convs:
+        if c.get("verified") or c.get("archived"):
+            continue
+        if not c.get("has_push"):
+            continue
+        inum = c.get("linked_issue")
+        if not inum:
+            # Heuristic: parse display_name
+            m = re.match(r"^issue-(\d+)$", c.get("display_name") or "")
+            if m:
+                inum = m.group(1)
+        if not inum:
+            continue
+        st = issue_states.get(str(inum))
+        if not st or st["state"] != "CLOSED":
+            continue
+        sid = c.get("session_id") or c.get("id")
+        if sid in verified_set:
+            continue
+        verified_list.append(sid)
+        verified_set.add(sid)
+        newly_verified.append({"session_id": sid, "issue": inum, "display_name": c.get("display_name", "")[:80]})
+        # Also strip in-progress label
+        remove_in_progress_label(inum)
+
+    if newly_verified:
+        _save_verified_conversations(verified_list)
+
+    return {"ok": True, "newly_verified": newly_verified, "count": len(newly_verified)}
+
+
+def backfill_in_progress_labels():
+    """Scan current conversations; for each session whose display_name looks like
+    'issue-N' and isn't verified/archived, mark its linked issue as in-progress.
+    Skips issues that are already closed on GitHub.
+    """
+    marked = []
+    skipped = []
+    errors = []
+    convs = find_conversations() or []
+    # Collect currently-open issue numbers to avoid marking closed issues.
+    open_issues = _fetch_backlog_issues() or []
+    open_set = {str(i.get("number")) for i in open_issues}
+
+    seen = set()
+    for c in convs:
+        if c.get("verified") or c.get("archived"):
+            continue
+        issue_num = None
+        dn = c.get("display_name") or ""
+        m = re.match(r"^issue-(\d+)$", dn)
+        if m:
+            issue_num = m.group(1)
+        elif c.get("linked_issue"):
+            issue_num = str(c["linked_issue"])
+        if not issue_num or issue_num in seen:
+            continue
+        seen.add(issue_num)
+        if issue_num not in open_set:
+            skipped.append({"issue": issue_num, "reason": "not open"})
+            continue
+        r = mark_issue_in_progress(issue_num)
+        if r.get("ok"):
+            marked.append(issue_num)
+        else:
+            errors.append({"issue": issue_num, "error": r.get("error", "?")})
+    return {"ok": True, "marked": marked, "skipped": skipped, "errors": errors}
+
+
+def mark_issue_in_progress(issue_number):
+    """Signal to GitHub that work is starting on an issue:
+    - reopens the issue if closed
+    - adds 'claude-in-progress' label
+    - self-assigns to the authenticated gh user (@me)
+    """
+    global _backlog_issues_cache_ts, _issue_state_cache_ts
+    result = {"ok": False, "issue_number": str(issue_number)}
+    # Reopen if closed
+    try:
+        st_out = subprocess.run(
+            ["gh", "issue", "view", str(issue_number), "--json", "state"],
+            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+        )
+        if st_out.returncode == 0:
+            st = json.loads(st_out.stdout).get("state", "").upper()
+            if st == "CLOSED":
+                subprocess.run(
+                    ["gh", "issue", "reopen", str(issue_number)],
+                    capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+                )
+                result["reopened"] = True
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        pass
+    try:
+        out = subprocess.run(
+            ["gh", "issue", "edit", str(issue_number),
+             "--add-label", "claude-in-progress",
+             "--add-assignee", "@me"],
+            capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
+        )
+        if out.returncode == 0:
+            result["ok"] = True
+            _backlog_issues_cache_ts = 0
+            _issue_state_cache_ts = 0
+        else:
+            result["error"] = (out.stderr or out.stdout or "").strip()[:300]
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        result["error"] = str(e)
+    return result
+
+
+def remove_in_progress_label(issue_number):
+    """Strip the claude-in-progress label (ignore if absent)."""
+    global _backlog_issues_cache_ts
+    try:
+        subprocess.run(
+            ["gh", "issue", "edit", str(issue_number),
+             "--remove-label", "claude-in-progress"],
+            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+        )
+        _backlog_issues_cache_ts = 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+
 def close_issue(issue_number, reason, duplicate_of=None):
     """Close a GitHub issue with the given reason.
 
@@ -2750,6 +3133,7 @@ def close_issue(issue_number, reason, duplicate_of=None):
                 ["gh", "issue", "close", str(issue_number), "--reason", "not planned"],
                 check=True, capture_output=True, text=True,
             )
+            remove_in_progress_label(issue_number)
             _backlog_issues_cache_ts = 0
             result["ok"] = True
             result["comment"] = comment
@@ -2759,6 +3143,7 @@ def close_issue(issue_number, reason, duplicate_of=None):
                 ["gh", "issue", "close", str(issue_number), "--reason", reason],
                 check=True, capture_output=True, text=True,
             )
+            remove_in_progress_label(issue_number)
             _backlog_issues_cache_ts = 0
             result["ok"] = True
             return result
@@ -2822,6 +3207,8 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
         if path == "" or path == "/":
             # Re-read on every request so edits to static/index.html are live.
             self.send_html(_load_index_html())
+        elif path == "/api/config":
+            self.send_json(get_app_config())
         elif path == "/api/logs":
             logs = find_log_files()
             # Strip internal path from response
@@ -3005,6 +3392,13 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "count": len(order)})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/issues/\d+/mark-in-progress$", path):
+            num = path.split("/")[3]
+            self.send_json(mark_issue_in_progress(num))
+        elif path == "/api/issues/auto-verify":
+            self.send_json(auto_verify_closed_issues())
+        elif path == "/api/issues/backfill-in-progress":
+            self.send_json(backfill_in_progress_labels())
         elif re.match(r"^/api/issues/\d+/close$", path):
             num = path.split("/")[3]
             length = int(self.headers.get("Content-Length", "0"))
@@ -3391,8 +3785,69 @@ def _warm_cache():
         print(f"  Cache warm failed: {e}")
 
 
+_app_config_cache = None
+_app_config_cache_ts = 0
+
+
+def get_app_config():
+    """Surface the detected environment to the frontend so the UI can
+    conditionally render panels (Vercel, Watcher, pkood) and avoid hardcoded
+    user-specific defaults. Cached 30s."""
+    global _app_config_cache, _app_config_cache_ts
+    if _app_config_cache and time.time() - _app_config_cache_ts < 30:
+        return _app_config_cache
+    import shutil
+    # Detect GitHub repo via gh
+    repo_slug = ""
+    try:
+        out = subprocess.run(
+            ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
+            capture_output=True, text=True, timeout=5, cwd=str(REPO_ROOT),
+        )
+        if out.returncode == 0:
+            repo_slug = (out.stdout or "").strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    config = {
+        "app_name": "Claude Command Center",
+        "title_strip": TITLE_STRIP_PREFIXES,
+        "repo": repo_slug,
+        "vercel_enabled": bool(VERCEL_PROJECT),
+        "vercel_project": VERCEL_PROJECT,
+        "pkood_enabled": bool(shutil.which("pkood")),
+        "watcher_enabled": WATCHER_SCRIPT.exists(),
+        "gh_enabled": bool(shutil.which("gh")),
+        "orgs": [label for label, _ in ORG_PATTERNS],
+    }
+    _app_config_cache = config
+    _app_config_cache_ts = time.time()
+    return config
+
+
 def ensure_hooks_installed():
-    """Ensure our PostToolUse and Stop hooks are registered in ~/.claude/settings.json."""
+    """Ensure our PostToolUse and Stop hooks are registered in ~/.claude/settings.json.
+
+    Also copies the hook scripts from this repo's hooks/ into
+    ~/.claude/log-viewer/hooks/ so ~/.claude/settings.json can reference them
+    from a stable location independent of where this repo is checked out.
+    """
+    # Copy hook scripts into the well-known install location, keeping them
+    # in sync with whatever version is in this repo.
+    import shutil
+    repo_hooks = CCC_ROOT / "hooks"
+    HOOK_SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    for name in ("post-tool-use.py", "stop.py"):
+        src = repo_hooks / name
+        if not src.exists():
+            continue
+        dst = HOOK_SCRIPTS_DIR / name
+        try:
+            if not dst.exists() or dst.read_bytes() != src.read_bytes():
+                shutil.copy2(src, dst)
+                print(f"  [hooks] Synced {name} -> {dst}")
+        except OSError as e:
+            print(f"  [hooks] Could not copy {name}: {e}")
+
     settings_path = Path.home() / ".claude" / "settings.json"
     try:
         if settings_path.exists():
