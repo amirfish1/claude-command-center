@@ -36,5 +36,31 @@ class TestGetMorningState(unittest.TestCase):
                               f"tactical item references unknown goal: {t}")
 
 
+class TestGetGoalDetail(unittest.TestCase):
+    def test_returns_none_for_unknown_slug(self):
+        from morning import get_goal_detail
+        self.assertIsNone(get_goal_detail("does-not-exist"))
+
+    def test_returns_expected_shape_for_known_slug(self):
+        from morning import get_goal_detail
+        detail = get_goal_detail("bym-growth")
+        self.assertIsNotNone(detail)
+        for key in ("slug", "name", "life_area", "intent_markdown",
+                    "strategies", "tactical_tagged", "deliverables",
+                    "context_library", "recent_sessions"):
+            self.assertIn(key, detail, f"missing key {key!r}")
+
+    def test_strategies_have_session_state(self):
+        from morning import get_goal_detail
+        detail = get_goal_detail("bym-growth")
+        self.assertGreaterEqual(len(detail["strategies"]), 1)
+        for s in detail["strategies"]:
+            self.assertIn("id", s)
+            self.assertIn("text", s)
+            self.assertIn("status", s)
+            self.assertIn("session_state", s)
+            self.assertIn(s["session_state"], ("alive", "dormant", "never", "dropped"))
+
+
 if __name__ == "__main__":
     unittest.main()
