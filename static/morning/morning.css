@@ -143,3 +143,8 @@ body {
   padding: 14px; background: #3a1a1a; border: 1px solid #c0392b;
   border-radius: 6px; color: #f2d2d2;
 }
+
+#gd-intent p { margin: 0 0 10px; font-size: 13px; color: #ccc; line-height: 1.5; }
+#gd-intent p:last-child { margin-bottom: 0; }
+#gd-intent .md-h { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #888; margin: 12px 0 6px; }
+#gd-intent strong { color: #eaeaea; }
