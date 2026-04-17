@@ -6,6 +6,7 @@ will swap the constant-backed implementations for real ingestion without
 changing these signatures.
 """
 
+import copy
 from datetime import datetime, timezone
 
 
@@ -120,10 +121,10 @@ def get_morning_state():
     ingestion workers without changing this shape.
     """
     return {
-        "goals": list(_SAMPLE_GOALS),
-        "strategic": list(_SAMPLE_STRATEGIC),
-        "tactical": list(_SAMPLE_TACTICAL),
-        "inbox": list(_SAMPLE_INBOX),
+        "goals": copy.deepcopy(_SAMPLE_GOALS),
+        "strategic": copy.deepcopy(_SAMPLE_STRATEGIC),
+        "tactical": copy.deepcopy(_SAMPLE_TACTICAL),
+        "inbox": copy.deepcopy(_SAMPLE_INBOX),
         "last_refreshed": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -194,5 +195,4 @@ def get_goal_detail(slug):
     data = _SAMPLE_GOAL_DETAILS.get(slug)
     if data is None:
         return None
-    # Shallow copy so callers can't mutate our constant.
-    return dict(data)
+    return copy.deepcopy(data)
