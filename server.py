@@ -35,6 +35,9 @@ CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
 # Tool's own assets live next to this file.
 CCC_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = CCC_ROOT / "static"
+MORNING_STATIC_DIR = STATIC_DIR / "morning"
+
+import morning  # morning.py — goals/tasks/inbox API (Phase 1 sample data)
 PORT = int(os.environ.get("PORT", 8090))
 # Optional title-prefix noise stripper (e.g. "[BYM Problem]"). Comma-separated prefixes.
 # Empty by default; set `CCC_TITLE_STRIP=BYM,FOO` to strip `[BYM ...]` and `[FOO ...]` from titles.
@@ -3407,6 +3410,49 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
 
             result = parse_log_file(log_file, after_line)
             self.send_json(result)
+        elif path.startswith("/static/morning/"):
+            rel = path[len("/static/morning/"):]
+            target = MORNING_STATIC_DIR / rel
+            if not target.is_file():
+                self.send_json({"error": f"not found: {path}"}, 404)
+            else:
+                try:
+                    body = target.read_bytes()
+                except OSError as e:
+                    self.send_json({"error": str(e)}, 500)
+                    return
+                # Content-Type from extension
+                ct = "text/plain"
+                if rel.endswith(".js"):
+                    ct = "application/javascript"
+                elif rel.endswith(".css"):
+                    ct = "text/css"
+                elif rel.endswith(".html"):
+                    ct = "text/html; charset=utf-8"
+                self.send_response(200)
+                self.send_header("Content-Type", ct)
+                self.send_header("Cache-Control", "no-store, must-revalidate")
+                self.end_headers()
+                self.wfile.write(body)
+        elif path == "/morning":
+            try:
+                self.send_html((MORNING_STATIC_DIR / "index.html").read_text())
+            except OSError as e:
+                self.send_json({"error": "morning/index.html missing", "detail": str(e)}, 500)
+        elif re.match(r"^/morning/goals/[A-Za-z0-9_-]+$", path):
+            try:
+                self.send_html((MORNING_STATIC_DIR / "goal-detail.html").read_text())
+            except OSError as e:
+                self.send_json({"error": "morning/goal-detail.html missing", "detail": str(e)}, 500)
+        elif path == "/api/morning/state":
+            self.send_json(morning.get_morning_state())
+        elif re.match(r"^/api/morning/goals/[A-Za-z0-9_-]+$", path):
+            slug = path.rsplit("/", 1)[-1]
+            detail = morning.get_goal_detail(slug)
+            if detail is None:
+                self.send_json({"error": f"unknown goal: {slug}"}, 404)
+            else:
+                self.send_json(detail)
         else:
             self.send_json({"error": "Not found"}, 404)
 
