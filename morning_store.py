@@ -291,6 +291,81 @@ def load_all_goals(goals_dir=None):
     return goals
 
 
+def attach_context(goal_slug, source, source_id, title, body_markdown):
+    """Persist a context artifact for a goal.
+
+    Writes a markdown file under `goals/<slug>/context/` and appends a
+    provenance record to `goals/<slug>/attachments.jsonl`. Idempotent on
+    (source, source_id): re-attaching the same artifact overwrites the
+    body and appends a new attach event (not dedupes — the log is a
+    timeline).
+
+    Returns {"ok": True, "path": str} or {"ok": False, "error": str}.
+    """
+    import json
+    import time as _time
+
+    goals_dir = goals_dir_default()
+    goal_dir = goals_dir / goal_slug
+    if not (goal_dir / "goal.md").is_file():
+        return {"ok": False, "error": f"unknown goal: {goal_slug}"}
+    ctx_dir = goal_dir / "context"
+    ctx_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build a filename. Prefix by source type + sanitized source_id.
+    safe_title = re.sub(r"[^A-Za-z0-9_-]+", "-", (title or source_id or "untitled"))[:60].strip("-") or "untitled"
+    safe_source = re.sub(r"[^A-Za-z0-9_-]+", "_", (source or "doc"))[:20]
+    filename = f"{safe_source}--{safe_title}.md"
+    target = ctx_dir / filename
+    try:
+        target.write_text(body_markdown or "")
+    except OSError as e:
+        return {"ok": False, "error": f"write failed: {e}"}
+
+    rel_path = f"context/{filename}"
+    entry = {
+        "source": source,
+        "source_id": source_id,
+        "title": title,
+        "path": rel_path,
+        "fetched_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+    }
+    attach_log = goal_dir / "attachments.jsonl"
+    try:
+        with open(attach_log, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass  # non-fatal; markdown is still on disk
+    return {"ok": True, "path": str(target)}
+
+
+def mark_inbox_item(candidate_id, **update):
+    """Append a shadow record to an inbox jsonl file marking a candidate
+    promoted or dismissed. The _load_inbox reader filters items that have
+    `promoted_to` or `dismissed_at` set in any record matching their id.
+
+    We don't rewrite existing jsonl files — we append a minimal
+    "update" record keyed by the candidate_id. That matches the append-only
+    convention of the morning-view jsonl artifacts (progress, attachments,
+    inbox).
+    """
+    import json
+    import time as _time
+
+    inbox_dir = Path.home() / ".claude" / "log-viewer" / "morning" / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    today = _time.strftime("%Y-%m-%d")
+    jsonl = inbox_dir / f"{today}.jsonl"
+    entry = {"id": candidate_id, "updated_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())}
+    entry.update(update)
+    try:
+        with open(jsonl, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
 def save_strategy_session_id(goal_slug, strategy_id, session_id):
     """Text-edit goal.md to set a specific strategy's claude_session_id.
 
@@ -335,4 +410,6 @@ __all__ = [
     "load_all_goals",
     "goals_dir_default",
     "save_strategy_session_id",
+    "attach_context",
+    "mark_inbox_item",
 ]

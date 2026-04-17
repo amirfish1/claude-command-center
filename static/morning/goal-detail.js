@@ -160,7 +160,7 @@
     const ctx = document.getElementById("gd-context");
     ctx.innerHTML = "";
     if (!(detail.context_library || []).length) {
-      ctx.appendChild(el("div", { class: "muted" }, "No attachments yet — Phase 4 wires this up."));
+      ctx.appendChild(el("div", { class: "muted" }, "No attachments yet."));
     } else {
       for (const c of detail.context_library) {
         ctx.appendChild(el("div", { class: "deliv-row" },
@@ -170,6 +170,41 @@
         ));
       }
     }
+    // "Attach manually..." entry — prompts for title + markdown body and POSTs
+    // to the attach endpoint. Intended as a stopgap; the natural attach path
+    // is from inside a launched Claude session that has access to the source
+    // (Notion meeting, Gmail thread, Google Doc).
+    const attachLink = el("a", {
+      href: "#",
+      style: { "font-size": "11px", "color": "#5ac8fa", "margin-top": "8px", "display": "inline-block" },
+    }, "+ Attach manually");
+    attachLink.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const title = window.prompt("Title for this attachment:");
+      if (!title) return;
+      const source = window.prompt("Source type (notion_meeting / gmail_thread / gdoc / other):", "other");
+      if (!source) return;
+      const body = window.prompt("Paste markdown body (single-line prompt — use real API for multi-line):");
+      if (body == null) return;
+      try {
+        const r = await fetch(`/api/morning/goals/${encodeURIComponent(slug)}/context/attach`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            source,
+            source_id: title.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+            title,
+            body_markdown: body,
+          }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) throw new Error(data.error || "HTTP " + r.status);
+        load();
+      } catch (err) {
+        alert("Attach failed: " + err.message);
+      }
+    });
+    ctx.appendChild(attachLink);
 
     const sess = document.getElementById("gd-sessions");
     sess.innerHTML = "";

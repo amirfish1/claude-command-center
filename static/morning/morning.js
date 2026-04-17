@@ -51,15 +51,75 @@
     );
   }
 
-  function renderInboxItem(item) {
-    return el("div", { class: "mv-inbox-item" },
-      el("span", { class: "src" }, item.source + "\n" + age(item.age_days) + " ago"),
-      el("span", { style: { flex: "1" } }, item.text),
-      el("span", { class: "actions" },
-        el("button", { class: "promote" }, "promote →"),
-        el("button", {}, "dismiss")
-      )
+  async function promoteInboxItem(item, btn, row, goalSlugs) {
+    // Minimal picker via prompt() — upgrade later to a styled popover.
+    const choices = goalSlugs.join(" / ");
+    const slug = window.prompt(`Promote to which goal?\n\n${choices}`, goalSlugs[0] || "");
+    if (!slug) return;
+    if (!goalSlugs.includes(slug)) {
+      alert(`Unknown goal slug: ${slug}`);
+      return;
+    }
+    const as = window.prompt("Promote as: tactical / strategy / context", "tactical");
+    if (!as) return;
+    btn.disabled = true;
+    btn.textContent = "promoting…";
+    try {
+      const r = await fetch("/api/morning/inbox/promote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: item.id, goal_slug: slug, as }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) throw new Error(data.error || "HTTP " + r.status);
+      row.style.opacity = "0.4";
+      btn.textContent = `✓ → ${slug}`;
+      setTimeout(load, 1200);
+    } catch (e) {
+      btn.textContent = "error";
+      alert("Promote failed: " + e.message);
+      btn.disabled = false;
+    }
+  }
+
+  async function dismissInboxItem(item, btn, row) {
+    btn.disabled = true;
+    btn.textContent = "dismissing…";
+    try {
+      const r = await fetch("/api/morning/inbox/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: item.id }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) throw new Error(data.error || "HTTP " + r.status);
+      row.style.opacity = "0.3";
+      btn.textContent = "✓ dismissed";
+      setTimeout(load, 800);
+    } catch (e) {
+      btn.textContent = "error";
+      alert("Dismiss failed: " + e.message);
+      btn.disabled = false;
+    }
+  }
+
+  function renderInboxItem(item, goalSlugs) {
+    const promoteBtn = el("button", { class: "promote" }, "promote →");
+    const dismissBtn = el("button", {}, "dismiss");
+    const row = el("div", { class: "mv-inbox-item" },
+      el("span", { class: "src" }, (item.source || "") + "\n" + age(item.age_days || 0) + " ago"),
+      el("span", { style: { flex: "1" } }, item.text || ""),
+      el("span", { class: "actions" }, promoteBtn, dismissBtn)
     );
+    if (!item.id) {
+      promoteBtn.disabled = true;
+      promoteBtn.title = "candidate missing id — can't promote";
+      dismissBtn.disabled = true;
+    } else {
+      promoteBtn.addEventListener("click", () => promoteInboxItem(item, promoteBtn, row, goalSlugs));
+      dismissBtn.addEventListener("click", () => dismissInboxItem(item, dismissBtn, row));
+    }
+    return row;
   }
 
   async function load() {
@@ -87,7 +147,8 @@
 
     const inb = document.getElementById("inbox-list");
     inb.innerHTML = "";
-    for (const i of state.inbox) inb.appendChild(renderInboxItem(i));
+    const goalSlugs = state.goals.map(g => g.slug);
+    for (const i of state.inbox) inb.appendChild(renderInboxItem(i, goalSlugs));
     document.getElementById("inbox-count").textContent =
       "— " + state.inbox.length + " candidates from free-form sources";
 
@@ -96,6 +157,24 @@
       ts ? ("last refreshed " + ts.toLocaleTimeString()) : "";
   }
 
-  document.getElementById("scan-now").addEventListener("click", load);
+  async function scanNow() {
+    const btn = document.getElementById("scan-now");
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.textContent = "ingesting…";
+    try {
+      // Fire the Apple Notes extractor in background (non-blocking on the
+      // server side — this call returns immediately). Then reload state so
+      // the rest of the page refreshes.
+      await fetch("/api/morning/ingest/run", { method: "POST" });
+    } catch (e) {
+      // Non-fatal; state refresh still worth doing.
+    }
+    await load();
+    btn.textContent = originalLabel;
+    btn.disabled = false;
+  }
+
+  document.getElementById("scan-now").addEventListener("click", scanNow);
   load();
 })();

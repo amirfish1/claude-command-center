@@ -154,6 +154,88 @@ def _strategic_from_goals(goals):
     return rows
 
 
+def _load_context_library(goal_slug):
+    """Return context artifacts attached to this goal.
+
+    Reads `goals/<slug>/context/*.md` and enriches with metadata from
+    `goals/<slug>/attachments.jsonl` (provenance: source type, source_id,
+    fetched_at). Files without a matching jsonl entry still surface — the
+    attachments log is a convenience, not a requirement.
+    """
+    goal_dir = morning_store.goals_dir_default() / goal_slug
+    ctx_dir = goal_dir / "context"
+    if not ctx_dir.is_dir():
+        return []
+
+    # Build provenance map from attachments.jsonl, if present.
+    provenance = {}
+    attach_log = goal_dir / "attachments.jsonl"
+    if attach_log.is_file():
+        try:
+            with open(attach_log, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    rel = ev.get("path")
+                    if rel:
+                        provenance[rel] = ev
+        except OSError:
+            pass
+
+    out = []
+    for md in sorted(ctx_dir.glob("*.md")):
+        rel = f"context/{md.name}"
+        p = provenance.get(rel) or {}
+        out.append({
+            "type": (p.get("source") or "DOC").upper().replace("_", " "),
+            "label": p.get("title") or md.stem,
+            "source": p.get("source_id") or rel,
+            "path": str(md),
+            "fetched_at": p.get("fetched_at"),
+        })
+    return out
+
+
+def _load_inbox():
+    """Read recent inbox jsonl files and return candidates that haven't
+    been promoted or dismissed.
+
+    The jsonl files are append-only. A candidate is the first record with
+    a given `id`. Subsequent records with the same `id` and a
+    `promoted_to` / `dismissed_at` field mark the candidate as handled —
+    we filter those out of the returned set. Capped at the last 7 days.
+    """
+    inbox_dir = Path.home() / ".claude" / "log-viewer" / "morning" / "inbox"
+    if not inbox_dir.is_dir():
+        return []
+    candidates_by_id = {}
+    handled_ids = set()
+    for jsonl in sorted(inbox_dir.glob("*.jsonl"))[-7:]:  # last 7 days, chronological
+        try:
+            f = open(jsonl, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        try:
+            for line in f:
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                cid = ev.get("id")
+                if not cid:
+                    continue
+                if ev.get("promoted_to") or ev.get("dismissed_at"):
+                    handled_ids.add(cid)
+                    continue
+                # First record seen wins as the candidate.
+                candidates_by_id.setdefault(cid, ev)
+        finally:
+            f.close()
+    return [c for cid, c in candidates_by_id.items() if cid not in handled_ids]
+
+
 def _upgrade_session_states(goals):
     """Upgrade each strategy's session_state from the on-disk default
     ("dormant" whenever a claude_session_id exists) to "alive" when CCC's
@@ -366,7 +448,7 @@ def get_morning_state():
         "goals": goal_cards,
         "strategic": strategic,
         "tactical": tactical,
-        "inbox": [],  # Phase 5: LLM extraction from free-form sources
+        "inbox": _load_inbox(),
         "last_refreshed": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -400,6 +482,6 @@ def get_goal_detail(slug):
             "strategy_id": t.get("strategy_id"),
         } for t in tagged],
         "deliverables": _deliverables_for_goal(goal),
-        "context_library": [],  # Phase 4: ingested inputs
+        "context_library": _load_context_library(slug),
         "recent_sessions": _recent_sessions_for_goal(goal),
     }

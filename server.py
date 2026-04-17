@@ -36,8 +36,10 @@ CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
 CCC_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = CCC_ROOT / "static"
 MORNING_STATIC_DIR = STATIC_DIR / "morning"
+AFFILIATES_STATIC_DIR = STATIC_DIR / "affiliates"
 
 import morning  # morning.py — goals/tasks/inbox API (Phase 1 sample data)
+import affiliates_store  # JSON-backed store for the Affiliates section
 PORT = int(os.environ.get("PORT", 8090))
 # Optional title-prefix noise stripper (e.g. "[BYM Problem]"). Comma-separated prefixes.
 # Empty by default; set `CCC_TITLE_STRIP=BYM,FOO` to strip `[BYM ...]` and `[FOO ...]` from titles.
@@ -3592,12 +3594,124 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": f"unknown goal: {slug}"}, 404)
             else:
                 self.send_json(detail)
+        elif path.startswith("/static/affiliates/"):
+            rel = path[len("/static/affiliates/"):]
+            target = AFFILIATES_STATIC_DIR / rel
+            try:
+                resolved = target.resolve(strict=False)
+                base = AFFILIATES_STATIC_DIR.resolve()
+            except OSError as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            try:
+                resolved.relative_to(base)
+            except ValueError:
+                self.send_json({"error": f"not found: {path}"}, 404)
+                return
+            if not resolved.is_file():
+                self.send_json({"error": f"not found: {path}"}, 404)
+            else:
+                try:
+                    body = resolved.read_bytes()
+                except OSError as e:
+                    self.send_json({"error": str(e)}, 500)
+                    return
+                ct = "text/plain"
+                if rel.endswith(".js"):
+                    ct = "application/javascript"
+                elif rel.endswith(".css"):
+                    ct = "text/css"
+                elif rel.endswith(".html"):
+                    ct = "text/html; charset=utf-8"
+                self.send_response(200)
+                self.send_header("Content-Type", ct)
+                self.send_header("Cache-Control", "no-store, must-revalidate")
+                self.end_headers()
+                self.wfile.write(body)
+        elif path == "/affiliates":
+            try:
+                self.send_html((AFFILIATES_STATIC_DIR / "index.html").read_text())
+            except OSError as e:
+                self.send_json({"error": "affiliates/index.html missing", "detail": str(e)}, 500)
+        elif path == "/api/affiliates":
+            self.send_json({"leads": affiliates_store.list_leads()})
         else:
             self.send_json({"error": "Not found"}, 404)
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
-        if path == "/api/morning/launch":
+        if path == "/api/morning/ingest/run":
+            # Fire-and-forget: spawn the Apple Notes ingester in the background.
+            # The morning page refreshes its state right after this call returns,
+            # so new candidates will appear on the *next* scan (after Claude -p
+            # finishes extracting).
+            script = CCC_ROOT / "scripts" / "ingest_apple_notes.py"
+            if not script.is_file():
+                self.send_json({"ok": False, "error": "ingester not found"}, 500)
+            else:
+                log_path = LOG_DIR / f"ingest-{int(time.time())}.log"
+                try:
+                    lf = open(log_path, "w")
+                    subprocess.Popen(
+                        ["python3", str(script)],
+                        stdout=lf, stderr=subprocess.STDOUT,
+                        cwd=str(CCC_ROOT),
+                    )
+                    self.send_json({"ok": True, "log": str(log_path), "script": str(script)})
+                except (OSError, subprocess.SubprocessError) as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/morning/goals/[A-Za-z0-9_-]+/context/attach$", path):
+            slug = path.split("/")[4]
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            try:
+                import morning_store as _store
+                result = _store.attach_context(
+                    slug,
+                    source=(payload.get("source") or "").strip(),
+                    source_id=(payload.get("source_id") or "").strip(),
+                    title=(payload.get("title") or "").strip(),
+                    body_markdown=payload.get("body_markdown") or "",
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            self.send_json(result, 200 if result.get("ok") else 400)
+        elif path in ("/api/morning/inbox/promote", "/api/morning/inbox/dismiss"):
+            action = path.rsplit("/", 1)[-1]
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            cid = (payload.get("id") or "").strip()
+            if not cid:
+                self.send_json({"ok": False, "error": "missing id"}, 400)
+            else:
+                import morning_store as _store
+                if action == "promote":
+                    goal_slug = (payload.get("goal_slug") or "").strip()
+                    as_kind = (payload.get("as") or "tactical").strip()  # tactical | strategy | context
+                    if not goal_slug:
+                        self.send_json({"ok": False, "error": "missing goal_slug"}, 400)
+                        return
+                    result = _store.mark_inbox_item(
+                        cid,
+                        promoted_to=goal_slug,
+                        promoted_as=as_kind,
+                    )
+                else:  # dismiss
+                    import time as _t
+                    result = _store.mark_inbox_item(
+                        cid,
+                        dismissed_at=_t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime()),
+                    )
+                self.send_json(result)
+        elif path == "/api/morning/launch":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
@@ -3613,6 +3727,44 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json(morning_launch(goal_slug, strategy_id))
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/affiliates":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            try:
+                lead = affiliates_store.create_lead(payload)
+                self.send_json({"ok": True, "lead": lead})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/affiliates/lead_[A-Za-z0-9_]+/delete$", path):
+            lead_id = path.split("/")[3]
+            try:
+                deleted = affiliates_store.delete_lead(lead_id)
+                if deleted:
+                    self.send_json({"ok": True, "id": lead_id})
+                else:
+                    self.send_json({"ok": False, "error": "not found"}, 404)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/affiliates/lead_[A-Za-z0-9_]+$", path):
+            lead_id = path.split("/")[3]
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            try:
+                updated = affiliates_store.update_lead(lead_id, payload)
+                if updated is None:
+                    self.send_json({"ok": False, "error": "not found"}, 404)
+                else:
+                    self.send_json({"ok": True, "lead": updated})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/upload-image":
             ctype = self.headers.get("Content-Type", "")
             length = int(self.headers.get("Content-Length", "0"))
