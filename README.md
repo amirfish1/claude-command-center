@@ -105,6 +105,21 @@ writes sidecar state the UI uses for the kanban.
   via `claude -p` (Haiku by default). Used for cleaning up auto-generated
   session slugs.
 
+## Morning view (Phase 1 — skeleton)
+
+A second page at `/morning` that will become the single morning landing spot
+for goals, strategic priorities, today's tactical queue, and an inbox of
+LLM-extracted captures from free-form sources.
+
+Phase 1 ships the UI shell with sample hardcoded data — no ingestion, no
+session launching, no Notion migration yet. Those land in Phase 2+.
+
+- Landing page: `http://localhost:8090/morning`
+- Goal detail: `http://localhost:8090/morning/goals/bym-growth`
+- JSON: `http://localhost:8090/api/morning/state`, `/api/morning/goals/<slug>`
+
+Design spec: [`docs/superpowers/specs/2026-04-17-morning-view-design.md`](docs/superpowers/specs/2026-04-17-morning-view-design.md)
+
 ## Screenshots
 
 ![kanban](docs/images/kanban.png)
