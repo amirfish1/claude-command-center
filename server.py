@@ -3413,15 +3413,26 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/static/morning/"):
             rel = path[len("/static/morning/"):]
             target = MORNING_STATIC_DIR / rel
-            if not target.is_file():
+            try:
+                resolved = target.resolve(strict=False)
+                base = MORNING_STATIC_DIR.resolve()
+            except OSError as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            # Prevent path traversal (../../etc/passwd). Check before .is_file().
+            try:
+                resolved.relative_to(base)
+            except ValueError:
+                self.send_json({"error": f"not found: {path}"}, 404)
+                return
+            if not resolved.is_file():
                 self.send_json({"error": f"not found: {path}"}, 404)
             else:
                 try:
-                    body = target.read_bytes()
+                    body = resolved.read_bytes()
                 except OSError as e:
                     self.send_json({"error": str(e)}, 500)
                     return
-                # Content-Type from extension
                 ct = "text/plain"
                 if rel.endswith(".js"):
                     ct = "application/javascript"
