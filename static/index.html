@@ -813,6 +813,28 @@
     100% { box-shadow: 0 0 0 0 rgba(88,166,255,0.0); background-color: inherit; }
   }
   .kanban-card.just-moved { animation: cardJustMoved 2.2s ease-out; }
+  /* Spawning feedback on a backlog card while a new session is being created. */
+  .kanban-card.spawning {
+    pointer-events: none;
+    opacity: 0.55;
+    animation: spawnPulse 1.4s ease-in-out infinite;
+    position: relative;
+  }
+  .kanban-card.spawning::after {
+    content: 'Spawning…';
+    position: absolute; top: 8px; right: 10px;
+    font-size: 11px; font-weight: 600;
+    color: var(--accent);
+    background: rgba(88,166,255,0.15);
+    border: 1px solid rgba(88,166,255,0.4);
+    border-radius: 4px;
+    padding: 2px 8px;
+    letter-spacing: 0.3px;
+  }
+  @keyframes spawnPulse {
+    0%, 100% { opacity: 0.55; }
+    50%      { opacity: 0.85; }
+  }
   .kanban-card:hover .kanban-card-actions { opacity: 1; }
   .kanban-card .kanban-action-btn {
     width: 22px; height: 22px; border-radius: 3px; border: none;
@@ -1258,11 +1280,11 @@
 </style>
 </head>
 <body>
-  <div class="ccc-top-nav" style="position:fixed; top:8px; right:12px; z-index:1000; font-size:12px;">
-    <a href="/morning" style="color:#5ac8fa; text-decoration:none; background:#23272e; padding:6px 10px; border-radius:4px;">→ Morning</a>
-  </div>
   <div class="sidebar">
-    <div class="sidebar-header"><span class="dot"></span> Claude Command Center</div>
+    <div class="sidebar-header">
+      <span class="dot"></span> Claude Command Center
+      <a href="/morning" title="Morning view" style="margin-left:auto; color:#5ac8fa; text-decoration:none; font-size:11px; padding:2px 8px; border:1px solid #2b3038; border-radius:4px;">Morning →</a>
+    </div>
     <div class="deploy-panel" id="deployPanel">
       <div class="deploy-header">
         <span class="deploy-dot" id="deployDot"></span>
@@ -1434,8 +1456,12 @@
   function cleanIssuePrompt(s) {
     if (!s) return s;
     return String(s)
+      // Old template
       .replace(/^\s*Fix GitHub issue #\d+:\s*/i, '')
       .replace(/\.?\s*Read the issue first with[^.]*?,\s*then implement the fix\.?\s*$/i, '')
+      // Current template: "Fix issue #N — {title}\n\nRun `gh issue view N` …"
+      .replace(/^\s*Fix issue #\d+\s*(?:—|-)\s*/i, '')
+      .replace(/\n+Run `gh issue view \d+`[^\n]*(title may be truncated\)\.?)?\s*$/i, '')
       .trim();
   }
   // Extract the first sentence / line from a blob of text. Used to derive a
@@ -3299,7 +3325,11 @@
         const title = btn.dataset.title;
         const cleanTitle = (title || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
         const subject = issueNum ? ('issue-' + issueNum) : cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
-        const body = cleanTitle;
+        // GH issue titles truncate around ~94 chars, so always tell Claude to
+        // read the full issue. Keep the short title as a hint.
+        const body = issueNum
+          ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
+          : cleanTitle;
         openNewSessionModal(subject, body);
       });
     });
@@ -3312,23 +3342,23 @@
         // Clean title for use as session name: strip #N: prefix, strip [bracket] tags, clean chars
         let cleanTitle = (title || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
         const sessionName = issueNum ? ('issue-' + issueNum) : cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
-        const prompt = cleanTitle;
+        // See the Edit & start handler above — same rationale. Titles over
+        // ~94 chars get truncated by GitHub, so always direct Claude to read
+        // the full body via `gh issue view N`.
+        const prompt = issueNum
+          ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
+          : cleanTitle;
         const spawnKey = issueNum ? ('issue-' + issueNum) : sessionName;
         if (_spawningKeys.has(spawnKey)) return;  // already spawning — ignore duplicate tap
         _spawningKeys.add(spawnKey);
         btn.disabled = true;
-        btn.textContent = 'Starting...';
-        // Remove the backlog card from DOM immediately so repeated taps can't hit it
+        btn.textContent = 'Spawning…';
+        // Visual "Spawning..." feedback on the backlog card — we KEEP it in the
+        // DOM so the user sees the animation. _spawningKeys already guards
+        // against duplicate taps; the server filter (active_issue_nums) hides
+        // the backlog item once the real session shows up.
         const card = btn.closest('.kanban-card');
-        const cardId = card && card.dataset.id;
-        if (cardId) {
-          const c = conversationsData.find(x => x.id === cardId);
-          if (c) {
-            columnOverrides[c.session_id || c.id] = 'archived';
-            try { localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
-          }
-        }
-        if (card && card.parentNode) card.parentNode.removeChild(card);
+        if (card) card.classList.add('spawning');
         // Optimistically insert a pending-spawn card in Working using a temp id.
         // The real card replaces it once the spawn_pid matches (see loadConversationList).
         const tempPid = 'tmp-' + Date.now();

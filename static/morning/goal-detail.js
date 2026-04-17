@@ -22,6 +22,23 @@
     return parts.length >= 3 ? decodeURIComponent(parts[2]) : "";
   }
 
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
+  }
+
+  // Minimal safe markdown: **bold**, ## heading, paragraph breaks, line breaks.
+  // Input is HTML-escaped first; only controlled tag substitutions happen after.
+  function renderMarkdownSafe(src) {
+    if (!src) return "";
+    let h = escapeHtml(src);
+    h = h.replace(/^## (.+)$/gm, "<h4 class=\"md-h\">$1</h4>");
+    h = h.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    h = h.split(/\n\n+/).map(p => p.startsWith("<h4") ? p : "<p>" + p.replace(/\n/g, "<br>") + "</p>").join("");
+    return h;
+  }
+
   function launchLabel(state) {
     if (state === "alive") return "▶ Inject";
     if (state === "dormant") return "▶ Resume";
@@ -65,7 +82,7 @@
 
     document.getElementById("gd-life-area").textContent = detail.life_area || "";
     document.getElementById("gd-name").textContent = detail.name || slug;
-    document.getElementById("gd-intent").textContent = detail.intent_markdown || "";
+    document.getElementById("gd-intent").innerHTML = renderMarkdownSafe(detail.intent_markdown || "");
     document.title = "CCC · " + (detail.name || slug);
 
     const header = document.getElementById("gd-header");
