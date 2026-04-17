@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CCC · Morning</title>
+  <link rel="stylesheet" href="/static/morning/morning.css">
+</head>
+<body>
+  <div class="mv-wrap">
+    <nav class="mv-nav">
+      <a class="active">Morning</a>
+      <a href="/">Kanban</a>
+      <span class="mv-nav-meta" id="refresh-meta">loading…</span>
+      <button id="scan-now" title="re-scan all sources">Scan now</button>
+    </nav>
+
+    <section class="mv-section">
+      <h3>Goals · Q2 2026</h3>
+      <div id="goals-row" class="mv-goals"></div>
+    </section>
+
+    <section class="mv-section">
+      <h3>This week · strategic</h3>
+      <div id="strategic-list"></div>
+    </section>
+
+    <section class="mv-section">
+      <h3>Today · tactical (auto-aggregated)</h3>
+      <div id="tactical-list"></div>
+    </section>
+
+    <section class="mv-section">
+      <h3>Inbox · needs triage <span id="inbox-count" class="muted"></span></h3>
+      <div id="inbox-list"></div>
+    </section>
+  </div>
+
+  <script src="/static/morning/morning.js"></script>
+</body>
+</html>
