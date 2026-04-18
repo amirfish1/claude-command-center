@@ -395,6 +395,44 @@ def _recent_sessions_for_goal(goal):
     return out
 
 
+def _group_suggested(items, min_group_size=3):
+    """Collapse same-source clusters of items into group rows so the
+    Suggested list doesn't drown in 10 BYM GitHub issues.
+
+    Groups by (goal_slug, source) pairs. Any cluster with >= min_group_size
+    items becomes one row of kind='group' with an `items` payload the
+    frontend can expand. Smaller clusters stay as individual rows.
+    """
+    buckets = {}
+    order = []
+    for it in items:
+        key = (it.get("goal_slug"), it.get("source"))
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(it)
+
+    out = []
+    for key in order:
+        group = buckets[key]
+        goal_slug, source = key
+        if len(group) >= min_group_size:
+            out.append({
+                "kind": "group",
+                "goal_slug": goal_slug,
+                "source": source,
+                "count": len(group),
+                "text": f"{source} — {len(group)} items",
+                "collapsed": True,
+                "items": group,
+            })
+        else:
+            for it in group:
+                it["kind"] = "single"
+                out.append(it)
+    return out
+
+
 def _scan_all_repos():
     cfg = _load_config()
     items = []
@@ -441,13 +479,13 @@ def get_morning_state():
     } for g in goals]
 
     strategic = _strategic_from_goals(goals)
-    tactical = _scan_all_repos()
-    _tag_tactical(tactical, goals)
 
-    # User-added tactical items from the braindump "Accept" flow (and any
-    # other future write-paths). These come pre-tagged with goal_slug.
+    # "Today" = only the things Amir explicitly committed to. Everything
+    # we scan from TODO.md / PARKING_LOT / GitHub starts in "Suggested"
+    # so Today doesn't drown in auto-scanned backlog.
+    today = []
     for ut in morning_store.load_user_tactical():
-        tactical.append({
+        today.append({
             "priority": "P1",
             "goal_slug": ut.get("goal_slug"),
             "text": ut.get("text", ""),
@@ -456,10 +494,24 @@ def get_morning_state():
             "user_tactical_id": ut.get("id"),
         })
 
+    suggested = _scan_all_repos()
+    _tag_tactical(suggested, goals)
+    suggested = _group_suggested(suggested)
+
+    # Preserve old key for backwards-compat with any existing client code;
+    # the new UI reads `today` + `suggested` directly.
+    tactical = today + [
+        item
+        for group in suggested
+        for item in (group.get("items") if group.get("collapsed") else [group])
+    ]
+
     return {
         "goals": goal_cards,
         "strategic": strategic,
-        "tactical": tactical,
+        "today": today,
+        "suggested": suggested,
+        "tactical": tactical,  # deprecated — retained for any older consumers
         "inbox": _load_inbox(),
         "last_refreshed": datetime.now(timezone.utc).isoformat(),
     }

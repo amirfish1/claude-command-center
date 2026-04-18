@@ -322,6 +322,33 @@
   }
 
   let knownGoalSlugs = [];  // populated by load() below
+  const LS_ANALYSIS_KEY = "ccc.morning.braindump.lastAnalysis";
+  const LS_DUMP_KEY = "ccc.morning.braindump.lastDump";
+
+  function saveAnalysisToLS(items, dumpText) {
+    try {
+      localStorage.setItem(LS_ANALYSIS_KEY, JSON.stringify({
+        items,
+        savedAt: new Date().toISOString(),
+      }));
+      if (dumpText !== undefined) localStorage.setItem(LS_DUMP_KEY, dumpText);
+    } catch (e) { /* quota / disabled — ignore */ }
+  }
+
+  function loadAnalysisFromLS() {
+    try {
+      const raw = localStorage.getItem(LS_ANALYSIS_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) { return null; }
+  }
+
+  function clearAnalysisLS() {
+    try {
+      localStorage.removeItem(LS_ANALYSIS_KEY);
+      localStorage.removeItem(LS_DUMP_KEY);
+    } catch (e) {}
+  }
 
   async function acceptAnalysis(item, action, goalSlug, btn, row) {
     btn.disabled = true;
@@ -341,7 +368,11 @@
       if (!r.ok || !d.ok) throw new Error(d.error || "HTTP " + r.status);
       btn.textContent = action === "tactical" ? "✓ added" : "✓ attached";
       row.style.opacity = "0.4";
-      setTimeout(() => row.remove(), 600);
+      setTimeout(() => {
+        row.remove();
+        pruneFromLS(item);
+        updateEmptyState();
+      }, 600);
     } catch (e) {
       btn.textContent = "error";
       alert("Accept failed: " + e.message);
@@ -349,10 +380,40 @@
     }
   }
 
-  function dismissAnalysis(row) {
+  function dismissAnalysis(row, item) {
     row.style.transition = "opacity 0.2s";
     row.style.opacity = "0.25";
-    setTimeout(() => row.remove(), 220);
+    setTimeout(() => { row.remove(); pruneFromLS(item); updateEmptyState(); }, 220);
+  }
+
+  function pruneFromLS(item) {
+    const stored = loadAnalysisFromLS();
+    if (!stored || !item) return;
+    const key = (item.original_text || "") + "::" + (item.classification || "");
+    stored.items = (stored.items || []).filter((it) => {
+      return ((it.original_text || "") + "::" + (it.classification || "")) !== key;
+    });
+    if (!stored.items.length) {
+      clearAnalysisLS();
+    } else {
+      saveAnalysisToLS(stored.items, undefined);
+    }
+  }
+
+  function updateEmptyState() {
+    const host = document.getElementById("mk-analysis");
+    if (host.children.length === 0) host.hidden = true;
+  }
+
+  function renderAnalysisList(items) {
+    const host = document.getElementById("mk-analysis");
+    host.hidden = false;
+    host.innerHTML = "";
+    if (!items.length) {
+      host.appendChild(el("div", { class: "muted" }, "No items found."));
+      return;
+    }
+    for (const it of items) host.appendChild(renderAnalysisItem(it));
   }
 
   function renderAnalysisItem(item) {
@@ -410,7 +471,7 @@
       actionsHost.appendChild(attachBtn);
     }
     const dismissBtn = el("button", {}, "Dismiss");
-    dismissBtn.addEventListener("click", () => dismissAnalysis(row));
+    dismissBtn.addEventListener("click", () => dismissAnalysis(row, item));
     actionsHost.appendChild(dismissBtn);
 
     return row;
@@ -449,15 +510,9 @@
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.ok) throw new Error(d.error || "HTTP " + r.status);
-      const host = document.getElementById("mk-analysis");
-      host.hidden = false;
-      host.innerHTML = "";
       const items = d.items || [];
-      if (!items.length) {
-        host.appendChild(el("div", { class: "muted" }, "No items found."));
-      } else {
-        for (const it of items) host.appendChild(renderAnalysisItem(it));
-      }
+      saveAnalysisToLS(items, text);
+      renderAnalysisList(items);
       const elapsed = Math.round((Date.now() - start) / 1000);
       status.textContent = `${items.length} items · `
         + `${items.filter(i => (i.classification || "").toUpperCase() === "NEW").length} new · `
@@ -487,7 +542,27 @@
     boardToggle.innerHTML = boardToggle.innerHTML.replace(/^[▸▾]/, isHidden ? "▾" : "▸");
   });
 
+  // Restore the last braindump analysis so reloading the page doesn't wipe
+  // the cards. Also restores the raw dump text so the user can see what
+  // they typed.
+  function restorePreviousAnalysis() {
+    const stored = loadAnalysisFromLS();
+    if (stored && Array.isArray(stored.items) && stored.items.length) {
+      renderAnalysisList(stored.items);
+      const status = document.getElementById("mk-analyze-status");
+      if (status) {
+        const savedStr = stored.savedAt ? new Date(stored.savedAt).toLocaleTimeString() : "";
+        status.textContent = stored.items.length + " items from " + savedStr;
+      }
+    }
+    try {
+      const lastDump = localStorage.getItem(LS_DUMP_KEY);
+      if (lastDump) document.getElementById("mk-dump").value = lastDump;
+    } catch (e) {}
+  }
+
   setGreeting();
+  restorePreviousAnalysis();
   document.getElementById("refresh-now").addEventListener("click", load);
   load();
 })();
