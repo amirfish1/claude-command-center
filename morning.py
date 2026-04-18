@@ -444,6 +444,18 @@ def get_morning_state():
     tactical = _scan_all_repos()
     _tag_tactical(tactical, goals)
 
+    # User-added tactical items from the braindump "Accept" flow (and any
+    # other future write-paths). These come pre-tagged with goal_slug.
+    for ut in morning_store.load_user_tactical():
+        tactical.append({
+            "priority": "P1",
+            "goal_slug": ut.get("goal_slug"),
+            "text": ut.get("text", ""),
+            "source": ut.get("source") or "braindump",
+            "age_days": 0,
+            "user_tactical_id": ut.get("id"),
+        })
+
     return {
         "goals": goal_cards,
         "strategic": strategic,

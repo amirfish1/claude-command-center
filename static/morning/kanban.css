@@ -73,15 +73,33 @@
 .mk-ana-text { color: #eaeaea; margin-bottom: 4px; }
 .mk-ana-meta { font-size: 11px; color: #888; }
 .mk-ana-goal { color: #5ac8fa; font-family: monospace; font-size: 10px; }
+.mk-ana-controls {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.mk-ana-label {
+  font-size: 10px; color: #777; text-transform: uppercase; letter-spacing: 1px;
+}
+.mk-ana-goal-picker {
+  background: #1a1d23; color: #ddd;
+  border: 1px solid #2a2e35; border-radius: 4px;
+  padding: 4px 8px; font-size: 12px;
+  font-family: inherit;
+}
 .mk-ana-actions {
   display: flex; gap: 6px;
+  margin-left: auto;
 }
 .mk-ana-actions button {
   font-size: 11px; padding: 4px 10px;
   border-radius: 3px; border: 1px solid #444;
   background: #1a1d23; color: #aaa; cursor: pointer;
 }
+.mk-ana-actions button:hover { color: #ddd; }
 .mk-ana-actions button.accept { border-color: #27ae60; color: #27ae60; }
+.mk-ana-actions button.accept:hover { background: #27ae60; color: #fff; }
+.mk-ana-actions button:disabled { opacity: 0.5; cursor: default; }
 
 .mk-board-toggle {
   margin: 12px 0;

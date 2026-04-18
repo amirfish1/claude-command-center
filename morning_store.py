@@ -291,6 +291,80 @@ def load_all_goals(goals_dir=None):
     return goals
 
 
+def add_user_tactical(goal_slug, text, source_note="morning braindump"):
+    """Append a user-authored tactical item to
+    ~/.claude/log-viewer/morning/user-tactical.jsonl. Morning.py's tactical
+    aggregator reads this file alongside repo-scanned items.
+
+    Returns {"ok": True, "id": ...}.
+    """
+    import json
+    import hashlib
+    import time as _time
+
+    path = Path.home() / ".claude" / "log-viewer" / "morning" / "user-tactical.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cid = hashlib.sha1(f"user:{goal_slug}:{text}:{_time.time()}".encode()).hexdigest()[:12]
+    entry = {
+        "id": cid,
+        "goal_slug": goal_slug,
+        "text": text,
+        "source": source_note,
+        "created_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+    }
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "id": cid}
+
+
+def load_user_tactical():
+    """Return the list of user-added tactical items, skipping dismissed ones."""
+    import json
+    path = Path.home() / ".claude" / "log-viewer" / "morning" / "user-tactical.jsonl"
+    if not path.is_file():
+        return []
+    items = {}
+    dismissed = set()
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                cid = ev.get("id")
+                if not cid:
+                    continue
+                if ev.get("dismissed_at"):
+                    dismissed.add(cid)
+                    continue
+                items.setdefault(cid, ev)
+    except OSError:
+        return []
+    return [v for k, v in items.items() if k not in dismissed]
+
+
+def dismiss_user_tactical(item_id):
+    """Append a dismissed marker for a user-tactical item."""
+    import json
+    import time as _time
+    path = Path.home() / ".claude" / "log-viewer" / "morning" / "user-tactical.jsonl"
+    if not path.is_file():
+        return {"ok": False, "error": "no user tactical file"}
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "id": item_id,
+                "dismissed_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+            }) + "\n")
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
 def attach_context(goal_slug, source, source_id, title, body_markdown):
     """Persist a context artifact for a goal.
 
@@ -412,4 +486,7 @@ __all__ = [
     "save_strategy_session_id",
     "attach_context",
     "mark_inbox_item",
+    "add_user_tactical",
+    "load_user_tactical",
+    "dismiss_user_tactical",
 ]

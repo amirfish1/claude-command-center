@@ -261,6 +261,18 @@
       return;
     }
 
+    // Build the known-goal-slug list from whatever surfaces in sessions
+    // (active + dormant + never-started all carry goal_slug metadata).
+    const slugSet = new Set();
+    for (const s of (state.sessions || [])) {
+      const g = s.morning && s.morning.goal_slug;
+      if (g) slugSet.add(g);
+    }
+    for (const n of (state.never_started || [])) {
+      if (n.goal_slug) slugSet.add(n.goal_slug);
+    }
+    knownGoalSlugs = Array.from(slugSet).sort();
+
     const active = (state.sessions || []).filter(s => s.is_live);
     const dormant = (state.sessions || []).filter(s => !s.is_live);
     const backlog = state.never_started || [];
@@ -309,9 +321,60 @@
       "It's " + dateStr + ". What's on your mind?";
   }
 
+  let knownGoalSlugs = [];  // populated by load() below
+
+  async function acceptAnalysis(item, action, goalSlug, btn, row) {
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.textContent = "…";
+    try {
+      const r = await fetch("/api/morning/braindump/accept", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          goal_slug: goalSlug,
+          action,
+          text: item.original_text || "",
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || "HTTP " + r.status);
+      btn.textContent = action === "tactical" ? "✓ added" : "✓ attached";
+      row.style.opacity = "0.4";
+      setTimeout(() => row.remove(), 600);
+    } catch (e) {
+      btn.textContent = "error";
+      alert("Accept failed: " + e.message);
+      setTimeout(() => { btn.textContent = originalLabel; btn.disabled = false; }, 2500);
+    }
+  }
+
+  function dismissAnalysis(row) {
+    row.style.transition = "opacity 0.2s";
+    row.style.opacity = "0.25";
+    setTimeout(() => row.remove(), 220);
+  }
+
   function renderAnalysisItem(item) {
     const cls = (item.classification || "NEW").toUpperCase();
-    const host = el("div", { class: "mk-ana-item " + cls },
+
+    // Goal picker (<select>). Defaults to the LLM's suggested_goal when
+    // it matches a known slug, otherwise leaves placeholder. Users can
+    // override before clicking Accept.
+    const goalSelect = el("select", { class: "mk-ana-goal-picker" });
+    const noneOpt = el("option", { value: "" }, "(no goal)");
+    goalSelect.appendChild(noneOpt);
+    for (const slug of knownGoalSlugs) {
+      const opt = el("option", { value: slug }, slug);
+      goalSelect.appendChild(opt);
+    }
+    if (item.suggested_goal && knownGoalSlugs.includes(item.suggested_goal)) {
+      goalSelect.value = item.suggested_goal;
+    }
+
+    // Action buttons vary by classification.
+    const actionsHost = el("div", { class: "mk-ana-actions" });
+    const row = el("div", { class: "mk-ana-item " + cls },
       el("span", { class: "mk-ana-badge" }, cls),
       el("div", { class: "mk-ana-body" },
         el("div", { class: "mk-ana-text" }, item.original_text || ""),
@@ -319,14 +382,38 @@
           item.notes || "",
           item.matched_existing
             ? el("span", {}, " · matches: ", el("em", {}, item.matched_existing))
-            : null,
-          item.suggested_goal
-            ? el("span", {}, " · ", el("span", { class: "mk-ana-goal" }, item.suggested_goal))
             : null
+        ),
+        el("div", { class: "mk-ana-controls" },
+          el("label", { class: "mk-ana-label" }, "goal:"),
+          goalSelect,
+          actionsHost
         )
       )
     );
-    return host;
+
+    if (cls === "NEW") {
+      const acceptBtn = el("button", { class: "accept" }, "Accept as tactical");
+      acceptBtn.addEventListener("click", () => {
+        const slug = goalSelect.value;
+        if (!slug) { alert("Pick a goal first (or use Dismiss)"); return; }
+        acceptAnalysis(item, "tactical", slug, acceptBtn, row);
+      });
+      actionsHost.appendChild(acceptBtn);
+    } else if (cls === "CONTEXT") {
+      const attachBtn = el("button", { class: "accept" }, "Attach as note");
+      attachBtn.addEventListener("click", () => {
+        const slug = goalSelect.value;
+        if (!slug) { alert("Pick a goal first (or use Dismiss)"); return; }
+        acceptAnalysis(item, "context", slug, attachBtn, row);
+      });
+      actionsHost.appendChild(attachBtn);
+    }
+    const dismissBtn = el("button", {}, "Dismiss");
+    dismissBtn.addEventListener("click", () => dismissAnalysis(row));
+    actionsHost.appendChild(dismissBtn);
+
+    return row;
   }
 
   async function analyzeDump() {

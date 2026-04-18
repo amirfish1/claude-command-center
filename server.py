@@ -383,6 +383,41 @@ def _save_session_issue(session_id, issue_number):
 
 _SESSION_ISSUES_CACHE = None
 
+_SESSION_STATE_RE = re.compile(
+    r"<session-state>\s*(.*?)\s*</session-state>",
+    re.IGNORECASE | re.DOTALL,
+)
+_SESSION_STATE_FIELD_RE = re.compile(
+    r"^(DID|INSIGHT|NEXT_STEP_USER)\s*:\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _parse_session_state(text):
+    """Extract the structured `<session-state>` block sessions emit on final
+    reply. Returns {did, insight, next_step_user} or None.
+    """
+    if not text:
+        return None
+    m = _SESSION_STATE_RE.search(text)
+    if not m:
+        return None
+    body = m.group(1)
+    out = {"did": None, "insight": None, "next_step_user": None}
+    for fm in _SESSION_STATE_FIELD_RE.finditer(body):
+        key = fm.group(1).upper()
+        val = fm.group(2).strip()
+        if key == "DID":
+            out["did"] = val
+        elif key == "INSIGHT":
+            out["insight"] = val
+        elif key == "NEXT_STEP_USER":
+            out["next_step_user"] = val
+    if not any(out.values()):
+        return None
+    return out
+
+
 def _detect_issue_number_for_session(conv):
     """Try to extract a GitHub issue number this session references.
 
@@ -2052,6 +2087,7 @@ def find_conversations():
             "pending_file": tail_meta.get("pending_file"),
             "last_assistant_text": tail_meta.get("last_assistant_text"),
             "tail_issue_number": tail_meta.get("tail_issue_number"),
+            "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
             "archived": sid in archived_set,
             "verified": sid in verified_set,
         })
@@ -3651,6 +3687,8 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
         if path == "" or path == "/":
             # Re-read on every request so edits to static/index.html are live.
             self.send_html(_load_index_html())
+        elif path == "/api/attention":
+            self.send_json(compute_attention_items())
         elif path == "/api/config":
             self.send_json(get_app_config())
         elif path == "/api/logs":
@@ -3967,6 +4005,34 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                         dismissed_at=_t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime()),
                     )
                 self.send_json(result)
+        elif path == "/api/morning/braindump/accept":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            goal_slug = (payload.get("goal_slug") or "").strip()
+            action = (payload.get("action") or "").strip()  # "tactical" | "context"
+            text = (payload.get("text") or "").strip()
+            if not goal_slug or not text or action not in ("tactical", "context"):
+                self.send_json({"ok": False, "error": "need goal_slug, text, action in (tactical|context)"}, 400)
+            else:
+                import morning_store as _store
+                try:
+                    if action == "tactical":
+                        result = _store.add_user_tactical(goal_slug, text, source_note="braindump")
+                    else:
+                        result = _store.attach_context(
+                            goal_slug,
+                            source="braindump",
+                            source_id=(payload.get("source_id") or "")[:60],
+                            title=text[:80],
+                            body_markdown=text,
+                        )
+                except Exception as e:
+                    result = {"ok": False, "error": str(e)}
+                self.send_json(result, 200 if result.get("ok") else 400)
         elif path == "/api/morning/braindump":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -4547,6 +4613,171 @@ def _warm_cache():
 
 _app_config_cache = None
 _app_config_cache_ts = 0
+
+
+def _classify_attention(c):
+    """For a single conv, decide whether it needs user attention and in what way.
+    Returns a dict {kind, priority, where, did, insight, next_step} or None.
+
+    Priority ordering (lower = more urgent):
+      1 pending_tool         agent paused waiting for tool approval
+      2 sidecar_waiting      live session idle, expecting next prompt
+      3 pushed_open          pushed but linked issue still OPEN (PR missing Closes #N?)
+      4 uncommitted_edits    dormant with edits but no commit (the "fix done" case)
+      5 committed_not_pushed commits exist locally but never pushed
+      6 needs_attention_label  backlog issue flagged by the reporter
+      7 open_backlog         unflagged open backlog item
+    """
+    if c.get("archived") or c.get("verified"):
+        return None
+    bt = c.get("backlog_type")
+    if bt in ("todo", "parking"):
+        return None  # explicit: "don't flood me with TODO.md noise"
+
+    state = c.get("session_state") or {}
+    has_structured = bool(state.get("did") or state.get("insight") or state.get("next_step_user"))
+
+    sid = c.get("session_id") or c.get("id")
+    name = (c.get("display_name") or c.get("first_message") or "")[:100]
+    inum = c.get("linked_issue") or c.get("issue_number") or c.get("tail_issue_number") or ""
+
+    # ── Session (non-backlog) cases ────────────────────────────────────────
+    if c.get("source") != "backlog":
+        live = bool(c.get("is_live"))
+        pending_tool = c.get("pending_tool")
+        pending_file = c.get("pending_file") or ""
+        last_event = c.get("last_event_type")
+        sidecar_status = c.get("sidecar_status")
+
+        if live and pending_tool:
+            return {
+                "kind": "pending_tool", "priority": 1,
+                "session_id": sid, "name": name,
+                "where": "Working · blocked on tool approval",
+                "did": state.get("did"),
+                "insight": state.get("insight"),
+                "next_step": state.get("next_step_user") or
+                    (f"Jump to terminal — Claude paused on {pending_tool}" +
+                     (f" on {pending_file}" if pending_file else "")),
+                "has_structured": has_structured,
+            }
+
+        if live and sidecar_status == "waiting":
+            return {
+                "kind": "sidecar_waiting", "priority": 2,
+                "session_id": sid, "name": name,
+                "where": "Working · idle, awaiting your prompt",
+                "did": state.get("did"),
+                "insight": state.get("insight"),
+                "next_step": state.get("next_step_user") or
+                    "Open the session and send the next instruction",
+                "has_structured": has_structured,
+            }
+
+        # Pushed but the linked GH issue never auto-closed (PR missing `Closes #N`)
+        if (c.get("has_push") and inum and
+                (c.get("gh_state") or "").upper() == "OPEN"):
+            return {
+                "kind": "pushed_open", "priority": 3,
+                "session_id": sid, "name": name,
+                "where": f"Review · pushed, issue #{inum} still open",
+                "did": state.get("did"),
+                "insight": state.get("insight"),
+                "next_step": state.get("next_step_user") or
+                    f"Verify the deploy then close #{inum} manually",
+                "has_structured": has_structured,
+            }
+
+        # Dormant with edits but nothing committed — the "agent finished, work is
+        # sitting in the working tree" case the user specifically flagged.
+        if (not live) and c.get("has_edit") and not c.get("has_commit"):
+            return {
+                "kind": "uncommitted_edits", "priority": 4,
+                "session_id": sid, "name": name,
+                "where": "Review · uncommitted edits",
+                "did": state.get("did"),
+                "insight": state.get("insight"),
+                "next_step": state.get("next_step_user") or
+                    "Open the card, read the summary, verify diff, tap Commit & resolve",
+                "has_structured": has_structured,
+            }
+
+        if c.get("has_commit") and not c.get("has_push"):
+            return {
+                "kind": "committed_not_pushed", "priority": 5,
+                "session_id": sid, "name": name,
+                "where": "Review · commits unpushed",
+                "did": state.get("did"),
+                "insight": state.get("insight"),
+                "next_step": state.get("next_step_user") or
+                    "Open the card and push the branch (or send `push` via input bar)",
+                "has_structured": has_structured,
+            }
+
+        return None
+
+    # ── Backlog (GitHub) cases ─────────────────────────────────────────────
+    if bt != "github":
+        return None  # covered above — TODO/parking already returned None
+    labels = c.get("issue_labels") or []
+    is_needs_attn = "needs-attention" in labels
+    is_icebox = "icebox" in labels
+    has_wip = c.get("gh_in_progress") or ("claude-in-progress" in labels)
+
+    if is_needs_attn:
+        return {
+            "kind": "needs_attention_label", "priority": 6,
+            "session_id": sid, "name": name,
+            "where": f"Backlog · flagged needs-attention",
+            "did": None, "insight": None,
+            "next_step": f"Read issue #{inum}, respond to reporter, then remove the label",
+            "has_structured": False,
+        }
+
+    if not has_wip and not is_icebox:
+        return {
+            "kind": "open_backlog", "priority": 7,
+            "session_id": sid, "name": name,
+            "where": "Backlog · open",
+            "did": None, "insight": None,
+            "next_step": "Triage: start session, icebox, or close",
+            "has_structured": False,
+        }
+    return None
+
+
+def compute_attention_items():
+    """Rank-and-cap list of cards that need user attention.
+
+    Caps: 8 total, max 3 backlog — stay scannable.
+    Sort: priority ASC, then most recent activity first.
+    """
+    try:
+        convs = find_all_sessions() or []
+    except Exception:
+        convs = []
+    raw = []
+    for c in convs:
+        item = _classify_attention(c)
+        if item:
+            item["_modified"] = c.get("modified") or 0
+            raw.append(item)
+    raw.sort(key=lambda i: (i["priority"], -i["_modified"]))
+    MAX_TOTAL = 8
+    MAX_BACKLOG = 3
+    out = []
+    backlog_count = 0
+    backlog_kinds = ("needs_attention_label", "open_backlog")
+    for it in raw:
+        if it["kind"] in backlog_kinds:
+            if backlog_count >= MAX_BACKLOG:
+                continue
+            backlog_count += 1
+        it.pop("_modified", None)
+        out.append(it)
+        if len(out) >= MAX_TOTAL:
+            break
+    return {"ok": True, "items": out}
 
 
 def get_app_config():
