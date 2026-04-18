@@ -52,7 +52,7 @@
 
   function renderSession(sess) {
     const morning = sess.morning || {};
-    const card = el("div", { class: "mk-card", style: { "--accent": morning.goal_accent || "#5ac8fa" } },
+    const card = el("div", { class: "mk-card selectable", style: { "--accent": morning.goal_accent || "#5ac8fa" } },
       el("div", { class: "goal" }, morning.goal_name || morning.goal_slug || ""),
       el("div", { class: "text" }, morning.strategy_text || sess.display_name || sess.first_message || "(untitled)"),
       el("div", { class: "meta" },
@@ -77,8 +77,156 @@
     }, "goal →");
     actions.appendChild(detailLink);
     card.appendChild(actions);
+    card.addEventListener("click", (e) => {
+      if (e.target.tagName === "BUTTON" || e.target.tagName === "A") return;
+      openPane(sess);
+      document.querySelectorAll(".mk-card.selected").forEach(c => c.classList.remove("selected"));
+      card.classList.add("selected");
+    });
     return card;
   }
+
+  // ---------------------------------------------------------------------
+  // Right-side transcript pane
+  // ---------------------------------------------------------------------
+
+  let paneSession = null;
+  let paneAfter = 0;
+  let panePollTimer = null;
+
+  function openPane(sess) {
+    paneSession = sess;
+    paneAfter = 0;
+    document.getElementById("mk-pane").hidden = false;
+    document.getElementById("mk-wrap").classList.add("pane-open");
+    const m = sess.morning || {};
+    document.getElementById("mk-pane-title").textContent =
+      (m.goal_name || m.goal_slug || "") + " · " + (m.strategy_text || m.strategy_id || "");
+    document.getElementById("mk-pane-meta").textContent =
+      "session " + (sess.session_id || "").slice(0, 8) +
+      (sess.is_live ? " · alive" : " · dormant") +
+      (sess.modified_human ? " · " + sess.modified_human : "");
+    document.getElementById("mk-pane-transcript").innerHTML = "";
+    document.getElementById("mk-pane-transcript").appendChild(
+      el("div", { class: "mk-empty" }, "Loading transcript…")
+    );
+    loadTranscript(true);
+    if (panePollTimer) clearInterval(panePollTimer);
+    panePollTimer = setInterval(() => loadTranscript(false), 4000);
+  }
+
+  function closePane() {
+    document.getElementById("mk-pane").hidden = true;
+    document.getElementById("mk-wrap").classList.remove("pane-open");
+    paneSession = null;
+    paneAfter = 0;
+    if (panePollTimer) {
+      clearInterval(panePollTimer);
+      panePollTimer = null;
+    }
+    document.querySelectorAll(".mk-card.selected").forEach(c => c.classList.remove("selected"));
+  }
+
+  async function loadTranscript(replace) {
+    if (!paneSession) return;
+    let data;
+    try {
+      const r = await fetch(`/api/morning/conversation/${encodeURIComponent(paneSession.session_id)}?after=${paneAfter}`);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      data = await r.json();
+    } catch (e) {
+      return;
+    }
+    const host = document.getElementById("mk-pane-transcript");
+    if (replace) host.innerHTML = "";
+    for (const ev of (data.events || [])) {
+      host.appendChild(renderEvent(ev));
+    }
+    if (!data.events || !data.events.length) {
+      if (replace) {
+        host.appendChild(el("div", { class: "mk-empty" }, "No transcript events yet."));
+      }
+    }
+    paneAfter = data.last_line || paneAfter;
+    host.scrollTop = host.scrollHeight;
+  }
+
+  function renderEvent(ev) {
+    if (ev.type === "user_text") {
+      return el("div", { class: "mk-ev user" },
+        el("div", { class: "role" }, "you"),
+        el("div", { class: "body" }, ev.text || "")
+      );
+    }
+    if (ev.type === "tool_result") {
+      return el("div", { class: "mk-ev tool_result" },
+        el("div", { class: "role" }, "tool result")
+      );
+    }
+    if (ev.type === "assistant") {
+      const host = el("div", { class: "mk-ev assistant" },
+        el("div", { class: "role" }, "claude")
+      );
+      for (const b of (ev.blocks || [])) {
+        if (b.kind === "text") {
+          host.appendChild(el("div", { class: "blk text" }, b.text || ""));
+        } else if (b.kind === "tool_use") {
+          host.appendChild(el("div", { class: "blk tool_use" },
+            el("span", { class: "tool-name" }, b.name || "?"),
+            el("span", {}, b.detail ? " · " + b.detail : "")
+          ));
+        } else if (b.kind === "thinking") {
+          host.appendChild(el("div", { class: "blk thinking" }, b.text || ""));
+        }
+      }
+      return host;
+    }
+    if (ev.type === "result") {
+      return el("div", { class: "mk-ev result" },
+        el("div", { class: "role" }, "— turn complete —")
+      );
+    }
+    return el("div", {});
+  }
+
+  async function sendPaneMessage() {
+    if (!paneSession) return;
+    const textarea = document.getElementById("mk-pane-msg");
+    const msg = textarea.value.trim();
+    if (!msg) return;
+    const m = paneSession.morning || {};
+    if (!m.goal_slug || !m.strategy_id) return;
+    const sendBtn = document.getElementById("mk-pane-send");
+    sendBtn.disabled = true;
+    sendBtn.textContent = "sending…";
+    try {
+      const r = await fetch("/api/morning/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          goal_slug: m.goal_slug,
+          strategy_id: m.strategy_id,
+          message: msg,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || "HTTP " + r.status);
+      textarea.value = "";
+      sendBtn.textContent = d.action === "resumed" ? "✓ sent" : "✓";
+      setTimeout(() => { sendBtn.textContent = "Send"; sendBtn.disabled = false; }, 1500);
+      setTimeout(() => loadTranscript(false), 1000);
+    } catch (e) {
+      sendBtn.textContent = "error";
+      alert("Send failed: " + e.message);
+      setTimeout(() => { sendBtn.textContent = "Send"; sendBtn.disabled = false; }, 2500);
+    }
+  }
+
+  document.getElementById("mk-pane-close").addEventListener("click", closePane);
+  document.getElementById("mk-pane-send").addEventListener("click", sendPaneMessage);
+  document.getElementById("mk-pane-msg").addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") sendPaneMessage();
+  });
 
   async function launchAction(btn, morning) {
     if (!morning.goal_slug || !morning.strategy_id) return;

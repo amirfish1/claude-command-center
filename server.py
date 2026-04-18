@@ -3383,6 +3383,44 @@ def _scan_session_id_in_log(log_path, max_lines=20):
     return None
 
 
+def parse_conversation_by_sid(session_id, after_line=0):
+    """Like parse_conversation() but searches every project dir for the sid.
+
+    Morning-spawned sessions can land in any ~/.claude/projects/<slug>/
+    depending on spawn cwd, so the CONVERSATIONS_DIR-anchored function
+    misses them.
+    """
+    if not PROJECTS_ROOT.is_dir():
+        return {"events": [], "last_line": 0}
+    for pd in PROJECTS_ROOT.iterdir():
+        if not pd.is_dir():
+            continue
+        cand = pd / f"{session_id}.jsonl"
+        if cand.is_file():
+            events = []
+            line_num = 0
+            try:
+                with open(cand, "r") as f:
+                    for line in f:
+                        line_num += 1
+                        if line_num <= after_line:
+                            continue
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            ev = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        parsed = _parse_conversation_event(ev, line_num)
+                        if parsed:
+                            events.append(parsed)
+            except OSError:
+                break
+            return {"events": events, "last_line": line_num}
+    return {"events": [], "last_line": 0}
+
+
 def _morning_session_ids():
     """Return a dict {session_id: {"goal_slug": ..., "strategy_id": ...}}
     for every strategy across all goal.md files that has a claude_session_id.
@@ -3409,9 +3447,13 @@ def _morning_session_ids():
     return out
 
 
-def morning_launch(goal_slug, strategy_id):
+def morning_launch(goal_slug, strategy_id, custom_message=None):
     """Spawn a new Claude session for the strategy, or resume/inject if one
     already exists. Returns a dict describing the action taken.
+
+    When `custom_message` is provided, a resume/inject uses it verbatim
+    instead of the default "Still working on..." framing. Ignored for
+    fresh spawns (those always get the full goal brief).
     """
     # Lazy import to avoid a cycle at module import time.
     import morning as _morning
@@ -3435,12 +3477,10 @@ def morning_launch(goal_slug, strategy_id):
     session_id = strategy.get("claude_session_id")
 
     if session_id:
-        # Resume into the existing session and inject the framing message.
+        # Resume into the existing session and inject a message.
+        message = (custom_message or "").strip() or _morning_resume_framing(goal_name, strategy_text)
         try:
-            result = resume_session_headless(
-                session_id,
-                _morning_resume_framing(goal_name, strategy_text),
-            )
+            result = resume_session_headless(session_id, message)
         except Exception as e:  # pragma: no cover — best-effort
             return {"ok": False, "error": f"resume failed: {e}"}
         if not result.get("ok"):
@@ -3606,6 +3646,11 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
             self.send_json({"sessions": out, "never_started": never_started})
+        elif re.match(r"^/api/morning/conversation/[a-zA-Z0-9-]+$", path):
+            sid = path.rsplit("/", 1)[-1]
+            qs = urllib.parse.parse_qs(parsed.query)
+            after_line = int(qs.get("after", ["0"])[0])
+            self.send_json(parse_conversation_by_sid(sid, after_line))
         elif path == "/morning/kanban":
             try:
                 self.send_html((MORNING_STATIC_DIR / "kanban.html").read_text())
@@ -3837,11 +3882,12 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 payload = {}
             goal_slug = (payload.get("goal_slug") or "").strip()
             strategy_id = (payload.get("strategy_id") or "").strip()
+            custom_message = payload.get("message")
             if not goal_slug or not strategy_id:
                 self.send_json({"ok": False, "error": "missing goal_slug or strategy_id"}, 400)
             else:
                 try:
-                    self.send_json(morning_launch(goal_slug, strategy_id))
+                    self.send_json(morning_launch(goal_slug, strategy_id, custom_message=custom_message))
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/affiliates":

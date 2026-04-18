@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/static/morning/kanban.css">
 </head>
 <body>
-  <div class="mk-wrap">
+  <div class="mk-wrap" id="mk-wrap">
     <nav class="mv-nav">
       <a href="/morning">Morning</a>
       <a class="active">Kanban</a>
@@ -34,6 +34,21 @@
       </section>
     </div>
   </div>
+
+  <aside id="mk-pane" class="mk-pane" hidden>
+    <div class="mk-pane-header">
+      <div class="mk-pane-title" id="mk-pane-title">—</div>
+      <button class="mk-pane-close" id="mk-pane-close" title="close">×</button>
+    </div>
+    <div class="mk-pane-meta" id="mk-pane-meta"></div>
+    <div class="mk-pane-transcript" id="mk-pane-transcript">
+      <div class="mk-empty">No transcript yet.</div>
+    </div>
+    <div class="mk-pane-input">
+      <textarea id="mk-pane-msg" placeholder="Type a message to inject into this session…" rows="3"></textarea>
+      <button id="mk-pane-send" class="primary">Send</button>
+    </div>
+  </aside>
 
   <script src="/static/morning/side-nav.js"></script>
   <script src="/static/morning/kanban.js"></script>
