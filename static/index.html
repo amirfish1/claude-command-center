@@ -254,6 +254,14 @@
   .event.assistant { background: rgba(188, 140, 255, 0.06); border-left-color: var(--purple); }
   .event.tool_result { display: none; } /* hide tool results - they're noise */
 
+  .event.user_text.pending {
+    font-style: italic; opacity: 0.62;
+  }
+  .event.user_text.pending .label::after {
+    content: ' · sending…'; font-style: normal; font-weight: 400;
+    color: var(--text-muted); text-transform: none; letter-spacing: 0;
+    font-size: 10px; margin-left: 4px;
+  }
   .event.user_text {
     background: rgba(63, 185, 80, 0.08); border-left-color: var(--green);
   }
@@ -425,16 +433,45 @@
   .conversations-view { flex: 1; overflow-y: auto; padding: 0 20px 16px; position: relative; }
   .conv-sticky-header {
     position: sticky; top: -20px; z-index: 5;
-    padding: 36px 12px 12px; margin: -20px -12px 8px;
+    padding: 36px 12px 16px; margin: -20px -12px 8px;
     background: #10151c;
     border-bottom: 1px solid var(--border);
     box-shadow: 0 4px 8px rgba(0,0,0,0.45);
+    display: flex; flex-direction: column;
+    box-sizing: border-box;
   }
   .conv-sticky-header .user-msg {
     font-size: 14px; color: var(--text); line-height: 1.4;
     max-height: 3.6em; overflow: hidden;
+    flex: 1 1 auto; min-height: 0;
+  }
+  .conv-sticky-header.is-resized .user-msg {
+    max-height: none; overflow: auto;
   }
   .conv-sticky-header .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }
+  .conv-sticky-header__resize-handle {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: 10px; cursor: ns-resize;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 6; touch-action: none; user-select: none;
+    background: transparent;
+    transition: background 0.12s;
+  }
+  .conv-sticky-header__resize-handle::before {
+    content: ''; display: block;
+    width: 40px; height: 3px; border-radius: 2px;
+    background: rgba(139,148,158,0.45);
+    transition: background 0.12s, width 0.12s;
+  }
+  .conv-sticky-header__resize-handle:hover::before,
+  .conv-sticky-header__resize-handle.is-dragging::before {
+    background: var(--accent);
+    width: 60px;
+  }
+  .conv-sticky-header__resize-handle:hover,
+  .conv-sticky-header__resize-handle.is-dragging {
+    background: rgba(88,166,255,0.08);
+  }
   .conversations-view .event { margin-bottom: 12px; padding: 10px 14px; border-radius: 6px; border-left: 3px solid transparent; }
   .conversations-view .event.assistant { background: rgba(188, 140, 255, 0.06); border-left-color: var(--purple); }
   .conversations-view .event.user_text { background: rgba(63, 185, 80, 0.08); border-left-color: var(--green); }
@@ -787,6 +824,10 @@
   .kanban-card .kanban-card-title {
     font-size: 14px; font-weight: 600; color: var(--text);
     line-height: 1.3; word-break: break-word;
+    /* Reserve room for the top-right action-icon cluster (3 × 22px + gaps +
+       right offset). Without this, long titles wrap under the icons and look
+       like the icons are overcasting the text. */
+    padding-right: 82px;
   }
   .kanban-card .kanban-card-desc {
     font-size: 12px; color: var(--text-muted);
@@ -881,6 +922,12 @@
     display: inline-block; font-size: 10px; padding: 1px 6px;
     border-radius: 3px; margin-right: 6px; font-weight: 700;
     background: rgba(188,140,255,0.18); color: var(--purple);
+    text-transform: uppercase; letter-spacing: 0.5px; vertical-align: middle;
+  }
+  .kanban-na-chip {
+    display: inline-block; font-size: 10px; padding: 1px 6px;
+    border-radius: 3px; margin-right: 6px; font-weight: 700;
+    background: rgba(248,81,73,0.2); color: var(--red);
     text-transform: uppercase; letter-spacing: 0.5px; vertical-align: middle;
   }
   /* Backlog card issue chip (the "#NNN ↗" button) */
@@ -1107,9 +1154,161 @@
      Both toggled via body classes (`mobile-show-main`, `mobile-conv-open`).
   */
   .mobile-back-btn { display: none; }
-  /* Floating reload button is mobile-only; desktop has an inline button in the
-     kanban-panel-toolbar (#kptReloadPageBtn). */
-  .mobile-reload-btn { display: none; }
+  .mobile-reload-btn { display: none; }  /* legacy floating button — no longer used */
+
+  /* Reload button anchored to the bottom-right of the kanban panel itself,
+     so it's in reach whether the conv-panel is open, closed, or resized, and
+     doesn't float over the conv pane. */
+  .kanban-panel { position: relative; }
+  .kanban-reload-btn {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 50;
+    width: 38px; height: 38px; border-radius: 50%;
+    background: rgba(13,17,23,0.85);
+    border: 1px solid var(--border);
+    color: var(--text);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 18px; line-height: 1; cursor: pointer;
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    font-family: inherit;
+    opacity: 0.55;
+    transition: opacity 0.15s, background 0.15s;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+  .kanban-reload-btn:hover { opacity: 1; background: var(--surface); }
+  .kanban-reload-btn:active { background: var(--accent); color: #fff; }
+
+  /* ── Attention panel (top 25% of the kanban pane) ─────────────────────── */
+  .attention-panel {
+    flex: 0 0 auto;
+    max-height: 25vh;
+    padding: 6px 12px 8px;
+    background: linear-gradient(rgba(248,81,73,0.04), rgba(248,81,73,0.04)), var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    position: relative;
+    box-sizing: border-box;
+  }
+  .attention-panel[style*="height"] { max-height: none; }
+  .attention-panel.collapsed { max-height: 32px; height: 32px !important; overflow: hidden; padding-bottom: 0; }
+  .attention-panel.collapsed .attention-list { display: none; }
+  .attention-panel.collapsed .attention-resize-handle { display: none; }
+  .attention-resize-handle {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: 10px; cursor: ns-resize;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 6; touch-action: none; user-select: none;
+    background: transparent;
+    transition: background 0.12s;
+  }
+  .attention-resize-handle::before {
+    content: ''; display: block;
+    width: 40px; height: 3px; border-radius: 2px;
+    background: rgba(139,148,158,0.45);
+    transition: background 0.12s, width 0.12s;
+  }
+  .attention-resize-handle:hover::before,
+  .attention-resize-handle.is-dragging::before {
+    background: var(--accent);
+    width: 60px;
+  }
+  .attention-resize-handle:hover,
+  .attention-resize-handle.is-dragging {
+    background: rgba(88,166,255,0.08);
+  }
+  .attention-header {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    color: var(--text-muted); letter-spacing: 0.5px;
+    padding: 4px 0; position: sticky; top: 0;
+    background: var(--surface);
+  }
+  .att-count {
+    background: rgba(248,81,73,0.18); color: var(--red);
+    font-size: 10px; padding: 1px 7px; border-radius: 10px; font-weight: 700;
+  }
+  .att-count:empty { display: none; }
+  .att-toggle {
+    margin-left: auto; background: transparent; border: none; color: var(--text-muted);
+    font-size: 12px; cursor: pointer; padding: 2px 6px;
+  }
+  .attention-panel.collapsed .att-toggle { transform: rotate(-90deg); }
+  .attention-list {
+    display: flex; flex-direction: column; gap: 6px;
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  }
+  .attention-row {
+    display: grid; grid-template-columns: 1fr auto; gap: 4px 10px;
+    padding: 8px 10px; border-radius: 6px;
+    background: var(--bg); border: 1px solid var(--border);
+    cursor: pointer; transition: border-color 0.15s, background 0.15s;
+    align-items: start;
+  }
+  .attention-row:hover { border-color: var(--accent); background: #1c2128; }
+  .attention-row .att-kind {
+    grid-column: 2; grid-row: 1; justify-self: end;
+    font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
+    text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;
+  }
+  .attention-row .att-kind.k-pending_tool         { background: rgba(248,81,73,0.22); color: var(--red); }
+  .attention-row .att-kind.k-sidecar_waiting      { background: rgba(210,153,34,0.22); color: var(--orange); }
+  .attention-row .att-kind.k-pushed_open          { background: rgba(57,210,192,0.22); color: var(--cyan); }
+  .attention-row .att-kind.k-uncommitted_edits    { background: rgba(210,153,34,0.22); color: var(--orange); }
+  .attention-row .att-kind.k-committed_not_pushed { background: rgba(57,210,192,0.18); color: var(--cyan); }
+  .attention-row .att-kind.k-needs_attention_label{ background: rgba(248,81,73,0.18); color: var(--red); }
+  .attention-row .att-kind.k-open_backlog         { background: rgba(139,148,158,0.18); color: var(--text-muted); }
+  .attention-row .att-col-debug {
+    grid-column: 2; grid-row: 2; justify-self: end;
+    font-size: 10px; color: var(--text-muted);
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    background: rgba(139,148,158,0.12); padding: 1px 6px; border-radius: 3px;
+    white-space: nowrap;
+  }
+  .attention-row .att-name {
+    grid-column: 1; grid-row: 1;
+    font-size: 13px; font-weight: 600; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .attention-row .att-sid {
+    display: inline-block; margin-right: 6px;
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    font-size: 10px; font-weight: 500; color: var(--text-muted);
+    background: rgba(139,148,158,0.12); padding: 1px 5px; border-radius: 3px;
+    cursor: pointer; user-select: all; vertical-align: middle;
+  }
+  .attention-row .att-sid:hover { background: rgba(88,166,255,0.18); color: var(--accent); }
+  .attention-row .att-sid.copied { background: rgba(63,185,80,0.22); color: var(--green); }
+  .attention-row .att-where {
+    grid-column: 1 / span 2; grid-row: 2;
+    font-size: 10px; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .attention-row .att-did,
+  .attention-row .att-insight {
+    grid-column: 1 / span 2;
+    font-size: 12px; color: var(--text-muted); line-height: 1.35;
+  }
+  .attention-row .att-did    { grid-row: 3; }
+  .attention-row .att-insight{ grid-row: 4; color: var(--purple); opacity: 0.85; }
+  .attention-row .att-verify-btn {
+    grid-column: 2; grid-row: 5; justify-self: end;
+    font-size: 10px; font-weight: 700; padding: 3px 10px;
+    background: rgba(63,185,80,0.12); color: var(--green);
+    border: 1px solid rgba(63,185,80,0.4); border-radius: 4px;
+    cursor: pointer; transition: background 0.12s, transform 0.08s;
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .attention-row .att-verify-btn:hover { background: rgba(63,185,80,0.22); }
+  .attention-row .att-verify-btn:active { transform: scale(0.96); }
+  .attention-row .att-verify-btn:disabled { opacity: 0.5; cursor: wait; }
+  .attention-row .att-next {
+    grid-column: 1 / span 2; grid-row: 5;
+    font-size: 12px; color: var(--accent); font-weight: 600; line-height: 1.35;
+  }
+  .attention-row .att-next::before { content: '→ '; opacity: 0.7; }
+  .attention-empty { padding: 10px; font-size: 12px; color: var(--text-muted); text-align: center; }
   @media (max-width: 768px) {
     body {
       padding-top: env(safe-area-inset-top);
@@ -1255,6 +1454,7 @@
 
     /* Give the "Original ask" sticky header more room to breathe */
     .conv-sticky-header .user-msg { max-height: 9em !important; }
+    .conv-sticky-header.is-resized .user-msg { max-height: none !important; overflow: auto !important; }
 
     /* Floating reload button — bottom-right to avoid overlap with conv-panel X.
        (Safe-area padding keeps it above the home indicator.) */
@@ -1366,7 +1566,6 @@
       <div class="kanban-panel-toolbar">
         <input type="text" class="kpt-search" id="kptSearch" placeholder="Search sessions...">
         <button id="kptRefreshBtn" title="Refresh data">&#8634;</button>
-        <button id="kptReloadPageBtn" title="Full page reload (fresh HTML + JS)">&#10227;</button>
         <button id="kptRecentBtn" title="Show only last 10 hours">Recent</button>
         <label class="kpt-label"><input type="checkbox" id="kptPkoodToggle"> pkood</label>
         <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
@@ -1377,7 +1576,19 @@
         <span class="kpt-deploy" id="kptDeployStatus" title="Vercel deploy status" style="margin-left:auto;font-size:11px;display:flex;align-items:center;gap:4px;color:var(--text-muted);white-space:nowrap;"></span>
         <button id="kptOpenConvBtn" title="Open conversation panel" style="display:none;">&#9664;</button>
       </div>
+      <div class="attention-panel" id="attentionPanel">
+        <div class="attention-header">
+          <span class="att-title-label">Needs your attention</span>
+          <span class="att-count" id="attentionCount"></span>
+          <button id="attentionRefreshBtn" title="Force refresh — busts GH state cache and re-queries" style="margin-left:auto;font-size:13px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;line-height:1;">&#8634;</button>
+          <button id="attentionSeeAllBtn" title="Show every candidate, including stale ones" style="font-size:11px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;">See all</button>
+          <button class="att-toggle" id="attentionToggle" title="Collapse / expand">&#9662;</button>
+        </div>
+        <div class="attention-list" id="attentionList"></div>
+        <div class="attention-resize-handle" id="attentionResizeHandle" title="Drag to resize · double-click to reset"></div>
+      </div>
       <div class="kanban-board-split" id="kanbanBoardSplit"></div>
+      <button class="kanban-reload-btn" id="kanbanReloadBtn" title="Reload page">&#8634;</button>
     </div>
     <div class="split-resizer" id="splitResizer"></div>
     <div class="conv-panel">
@@ -1453,6 +1664,10 @@
   // Strip the "Fix GitHub issue #N: ... Read the issue first with `gh issue view N`,
   // then implement the fix." boilerplate from older spawn prompts. Kept here so it
   // retroactively cleans cards spawned before the prompt-template cleanup.
+  // Structured block every spawned session is asked to emit on its final reply
+  // so the /attention panel can show exact state + next step without heuristics.
+  const SESSION_STATE_INSTRUCTION = "\n\nBefore your final reply, end with a block formatted EXACTLY like this (the CCC dashboard parses it):\n<session-state>\nDID: <one sentence — what you actually changed/learned>\nINSIGHT: <one sentence — the main finding, root cause, or surprise>\nNEXT_STEP_USER: <one sentence — the exact next thing the user should do>\n</session-state>";
+
   function cleanIssuePrompt(s) {
     if (!s) return s;
     return String(s)
@@ -1843,6 +2058,10 @@
     const text = ($convInput && $convInput.value || '').trim();
     if (!text || !currentSession.id) return;
     $convSendBtn.disabled = true;
+    const flashRed = () => {
+      $convInput.style.borderColor = 'var(--red)';
+      setTimeout(() => { $convInput.style.borderColor = ''; }, 1500);
+    };
     try {
       let res;
       if (currentSession.source === 'pkood') {
@@ -1859,16 +2078,31 @@
           body: JSON.stringify({ session_id: currentSession.id, text }),
         });
       }
-      const data = await res.json();
-      if (data.ok) {
+      let data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        // Optimistic echo: append an italicized pending entry so the user sees
+        // their message immediately. renderConversationEvents replaces it when
+        // the real user_text event arrives from the jsonl tail.
+        const $view = getConvView();
+        if ($view) {
+          const pendingDiv = document.createElement('div');
+          pendingDiv.className = 'event user_text pending';
+          pendingDiv.innerHTML = '<span class="label">User</span>'
+            + '<div class="user-msg">' + escapeHtml(text) + '</div>';
+          $view.appendChild(pendingDiv);
+          $view.scrollTop = $view.scrollHeight;
+          _pendingSends.push({ text, element: pendingDiv });
+        }
         $convInput.value = '';
       } else {
-        $convInput.style.borderColor = 'var(--red)';
-        setTimeout(() => { $convInput.style.borderColor = ''; }, 1500);
+        flashRed();
+        const reason = data.error || ('HTTP ' + res.status);
+        showOpToast('Send failed: ' + reason, 'error');
       }
     } catch (err) {
-      $convInput.style.borderColor = 'var(--red)';
-      setTimeout(() => { $convInput.style.borderColor = ''; }, 1500);
+      flashRed();
+      showOpToast('Send failed: ' + (err.message || 'network error'), 'error');
     }
     $convSendBtn.disabled = false;
     $convInput.focus();
@@ -2215,10 +2449,335 @@
         if (c.spawn_pid) sessionSpawnPidByConv[c.id] = c.spawn_pid;
       }
       renderSidebar(filterConversations($convSearch.value));
+      loadAttentionList();  // piggy-back on the same refresh cycle
     } catch (err) {
       $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Failed to load sessions: ' + escapeHtml(err.message) + '</div>';
     }
   }
+
+  // ── Attention panel (top-of-kanban "what needs me") ─────────────────────
+  let _nyaShowAll = false;
+  async function loadAttentionList() {
+    const $list = document.getElementById('attentionList');
+    const $count = document.getElementById('attentionCount');
+    const $seeAll = document.getElementById('attentionSeeAllBtn');
+    if (!$list) return;
+    try {
+      const url = _nyaShowAll ? '/api/attention?all=1' : '/api/attention';
+      const res = await fetch(url);
+      const data = await res.json();
+      const items = (data && data.items) || [];
+      const shown = (data && data.shown) || items.length;
+      const total = (data && data.total) || 0;
+      const grand = (data && data.grand_total) || total;
+      if ($count) {
+        // "8 / 42" in default mode; "82 / 82" in see-all mode. If age-out
+        // hid some, show "(+N stale)" so you know the See-all button matters.
+        if (_nyaShowAll) {
+          $count.textContent = items.length + ' / ' + grand;
+        } else if (total > shown) {
+          const staleHint = grand > total ? ' · +' + (grand - total) + ' stale' : '';
+          $count.textContent = shown + ' / ' + total + staleHint;
+        } else {
+          const staleHint = grand > total ? ' · +' + (grand - total) + ' stale' : '';
+          $count.textContent = shown ? String(shown) + staleHint : '';
+        }
+      }
+      if ($seeAll) {
+        $seeAll.textContent = _nyaShowAll ? 'See fewer' : ('See all' + (grand > total ? ' (' + grand + ')' : ''));
+      }
+      if (!items.length) {
+        $list.innerHTML = '<div class="attention-empty">All clear — nothing needs you right now.</div>';
+        return;
+      }
+      $list.innerHTML = items.map(it => {
+        const kind = it.kind || '';
+        const label = kind.replace(/_/g, ' ');
+        // For each attention card, resolve the underlying conversation so we
+        // can print which column the kanban classifier would put it in. This
+        // surfaces discrepancies ("why is this in Needs Attention when the
+        // board puts it in Working?") — the debug label lets Amir see both
+        // truths side-by-side.
+        let classifiedCol = '';
+        const sid = it.session_id || '';
+        if (sid.startsWith('backlog-issue-')) {
+          const conv = conversationsData.find(x => x.id === sid);
+          classifiedCol = conv ? classifyKanbanColumn(conv) : '(no backlog card)';
+        } else if (sid) {
+          const conv = conversationsData.find(x => (x.session_id === sid) || (x.id === sid));
+          classifiedCol = conv ? classifyKanbanColumn(conv) : '(no conv loaded)';
+        } else {
+          classifiedCol = '(no session_id)';
+        }
+        const shortSid = sid.startsWith('backlog-issue-')
+          ? '#' + sid.replace('backlog-issue-', '')
+          : sid.slice(0, 8);
+        const sidChip = sid
+          ? '<span class="att-sid" data-full="' + escapeHtml(sid) + '" title="' + escapeHtml(sid) + ' — click to copy">' + escapeHtml(shortSid) + '</span>'
+          : '';
+        // Verify button only makes sense for session rows. Backlog items
+        // (needs_attention_label, open_backlog) don't have a session to verify.
+        const isSessionRow = !sid.startsWith('backlog-issue-');
+        const verifyBtn = isSessionRow
+          ? '<button class="att-verify-btn" data-verify-sid="' + escapeHtml(sid) + '" title="Mark this session verified — moves card to Verified column and drops it from this list">&#10003; Verify</button>'
+          : '';
+        return '<div class="attention-row" data-sid="' + escapeHtml(sid) + '" data-kind="' + escapeHtml(kind) + '">'
+          + '<div class="att-name">' + sidChip + escapeHtml(it.name || '(untitled)') + '</div>'
+          + '<span class="att-kind k-' + escapeHtml(kind) + '">' + escapeHtml(label) + '</span>'
+          + '<span class="att-col-debug" title="Column the kanban classifier would place this in">col: ' + escapeHtml(classifiedCol) + '</span>'
+          + '<div class="att-where">' + escapeHtml(it.where || '') + '</div>'
+          + (it.did     ? '<div class="att-did"><strong>Did:</strong> '     + escapeHtml(it.did)     + '</div>' : '')
+          + (it.insight ? '<div class="att-insight"><strong>Insight:</strong> ' + escapeHtml(it.insight) + '</div>' : '')
+          + '<div class="att-next">' + escapeHtml(it.next_step || '') + '</div>'
+          + verifyBtn
+        + '</div>';
+      }).join('');
+      // Verify buttons: call the same endpoint drag-to-Verified uses, then
+      // optimistically remove the row. Full refresh follows so the kanban
+      // card moves too.
+      $list.querySelectorAll('.att-verify-btn').forEach(btn => {
+        btn.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          const fullSid = btn.dataset.verifySid || '';
+          if (!fullSid) return;
+          const row = btn.closest('.attention-row');
+          const conv = conversationsData.find(x => (x.session_id === fullSid) || (x.id === fullSid));
+          const cardId = conv ? conv.id : fullSid;
+          btn.disabled = true;
+          btn.textContent = 'Verifying…';
+          try {
+            await ccPostJson('/api/conversations/' + cardId + '/verify', {
+              verified: true, session_id: fullSid,
+              display_name: (conv && conv.display_name) || '',
+              cwd: (conv && conv.session_cwd) || '',
+              linked_issue: (conv && (conv.linked_issue || conv.issue_number)) || '',
+              tail_issue_number: (conv && conv.tail_issue_number) || '',
+            });
+            if (conv) conv.verified = true;
+            if (row) row.remove();
+            // If the session was live and waiting on the user's next prompt,
+            // close the loop by answering "Yes" to whatever the LLM asked. Most
+            // sidecar_waiting cases are "did this work / should I commit / done
+            // — anything else?" — "Yes" is the safe default reply.
+            const wasLive = conv && conv.is_live;
+            if (wasLive) {
+              fetch('/api/inject-input', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ session_id: fullSid, text: 'Yes' }),
+              }).then(r => r.json()).then(data => {
+                if (!data.ok) {
+                  showOpToast('Verified, but couldn\'t reply "Yes" to the terminal: ' + (data.error || 'unknown'), 'error');
+                }
+              }).catch(() => {});
+            }
+            refreshConversationList();  // moves the kanban card to Verified
+          } catch (err) {
+            btn.disabled = false;
+            btn.innerHTML = '&#10003; Verify';
+            showOpToast('Verify failed: ' + err.message, 'error');
+          }
+        });
+      });
+      // ID chip: click copies full session_id (stopPropagation so the row click
+      // doesn't also open the session). Brief green flash confirms the copy.
+      $list.querySelectorAll('.att-sid').forEach(chip => {
+        chip.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          const full = chip.dataset.full || '';
+          if (!full) return;
+          try {
+            await navigator.clipboard.writeText(full);
+            chip.classList.add('copied');
+            setTimeout(() => chip.classList.remove('copied'), 900);
+          } catch (_) {
+            showOpToast('Copy failed — select and copy manually', 'error');
+          }
+        });
+      });
+      // Wire clicks: open the underlying session AND scroll its column into view.
+      $list.querySelectorAll('.attention-row').forEach(row => {
+        row.addEventListener('click', () => {
+          const sid = row.dataset.sid;
+          if (!sid) return;
+          if (sid.startsWith('backlog-issue-')) {
+            const n = sid.replace('backlog-issue-', '');
+            renderIssueInConvPane(n);
+          } else {
+            const c = conversationsData.find(x => (x.session_id === sid) || (x.id === sid));
+            selectConversation(c ? c.id : sid);
+          }
+          focusCardOnBoard(sid);
+        });
+      });
+    } catch (_) {
+      // Keep last-known contents on transient errors
+    }
+  }
+
+  // Scroll the split kanban so the card for the given id (session_id or card id)
+  // lands horizontally centered in view, its column expanded, and the card itself
+  // visible within the column. Briefly flashes a ring on the card.
+  function focusCardOnBoard(idOrSid) {
+    const board = document.getElementById('kanbanBoardSplit');
+    if (!board) return;
+    // Support both session_id and card id (backlog ids are the card id).
+    let card = board.querySelector('.kanban-card[data-session-id="' + CSS.escape(idOrSid) + '"]')
+            || board.querySelector('.kanban-card[data-id="' + CSS.escape(idOrSid) + '"]');
+    if (!card) {
+      // Card may be past the 20-item truncation in its column. Find which
+      // column it would land in, flip that column to show-all, and retry.
+      const conv = conversationsData.find(x => x.session_id === idOrSid || x.id === idOrSid);
+      if (conv) {
+        const targetCol = classifyKanbanColumn(conv);
+        if (targetCol && !kanbanShowAll[targetCol]) {
+          kanbanShowAll[targetCol] = true;
+          renderSidebar(filterConversations($convSearch.value));
+          requestAnimationFrame(() => focusCardOnBoard(idOrSid));
+        }
+      }
+      return;
+    }
+    // Expand the containing column if it was collapsed
+    const column = card.closest('.kanban-column');
+    if (column && column.dataset.col && kanbanCollapsed[column.dataset.col]) {
+      kanbanCollapsed[column.dataset.col] = false;
+      try { localStorage.setItem('clv-kanban-collapsed', JSON.stringify(kanbanCollapsed)); } catch (_) {}
+      renderSidebar(filterConversations($convSearch.value));
+      // After re-render, grab the fresh node and try again
+      requestAnimationFrame(() => focusCardOnBoard(idOrSid));
+      return;
+    }
+    // Horizontal scroll: center the column within the board viewport.
+    if (column) {
+      const boardRect = board.getBoundingClientRect();
+      const colRect = column.getBoundingClientRect();
+      const colCenterInBoard = (colRect.left - boardRect.left) + (colRect.width / 2);
+      const desired = board.scrollLeft + colCenterInBoard - (boardRect.width / 2);
+      board.scrollTo({ left: Math.max(0, desired), behavior: 'smooth' });
+    }
+    // Vertical scroll within the column's cards container so the card is visible
+    const cards = column && column.querySelector('.kanban-cards');
+    if (cards) {
+      const cardsRect = cards.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      if (cardRect.top < cardsRect.top || cardRect.bottom > cardsRect.bottom) {
+        const offset = (cardRect.top - cardsRect.top) - (cardsRect.height / 2) + (cardRect.height / 2);
+        cards.scrollTo({ top: cards.scrollTop + offset, behavior: 'smooth' });
+      }
+    }
+    // Brief highlight so the user's eye catches it
+    card.classList.remove('just-moved');
+    // Force reflow to restart animation
+    void card.offsetWidth;
+    card.classList.add('just-moved');
+  }
+
+  // Collapse toggle for the attention panel (persisted)
+  (function () {
+    const $panel = document.getElementById('attentionPanel');
+    const $toggle = document.getElementById('attentionToggle');
+    if (!$panel || !$toggle) return;
+    try {
+      if (localStorage.getItem('clv-attention-collapsed') === '1') {
+        $panel.classList.add('collapsed');
+      }
+    } catch (_) {}
+    $toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      $panel.classList.toggle('collapsed');
+      try {
+        localStorage.setItem('clv-attention-collapsed',
+          $panel.classList.contains('collapsed') ? '1' : '0');
+      } catch (_) {}
+    });
+    const $seeAll = document.getElementById('attentionSeeAllBtn');
+    if ($seeAll) {
+      $seeAll.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _nyaShowAll = !_nyaShowAll;
+        loadAttentionList();
+      });
+    }
+    const $refresh = document.getElementById('attentionRefreshBtn');
+    if ($refresh) {
+      $refresh.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        $refresh.disabled = true;
+        $refresh.style.opacity = '0.5';
+        try {
+          // Bust the 60s GH issue-state cache, then re-query so auto-verify
+          // can reclassify any closed issues immediately.
+          await ccPostJson('/api/bust-issue-state', {}).catch(() => {});
+          await loadAttentionList();
+          refreshConversationList();
+        } finally {
+          setTimeout(() => { $refresh.disabled = false; $refresh.style.opacity = ''; }, 400);
+        }
+      });
+    }
+
+    // Resize handle: drag DOWN to grow the NYA panel, shrinking kanban below.
+    const ATT_HEIGHT_KEY = 'clv-attention-height';
+    const ATT_MIN_PX = 80;
+    const $handle = document.getElementById('attentionResizeHandle');
+
+    function attMaxPx() {
+      const parent = $panel.parentElement;
+      if (!parent) return 9999;
+      return Math.max(ATT_MIN_PX, Math.floor(parent.clientHeight * 0.7));
+    }
+    function applyAttHeight(h) {
+      const clamped = Math.max(ATT_MIN_PX, Math.min(attMaxPx(), h));
+      $panel.style.height = clamped + 'px';
+    }
+    function resetAttHeight() {
+      $panel.style.height = '';
+      try { localStorage.removeItem(ATT_HEIGHT_KEY); } catch (_) {}
+    }
+    try {
+      const stored = parseInt(localStorage.getItem(ATT_HEIGHT_KEY) || '', 10);
+      if (!isNaN(stored) && stored > 0) {
+        // Defer so the parent has laid out and clientHeight is meaningful.
+        requestAnimationFrame(() => applyAttHeight(stored));
+      }
+    } catch (_) {}
+
+    if ($handle) {
+      let startY = 0;
+      let startH = 0;
+      let activePointerId = null;
+      $handle.addEventListener('pointerdown', (e) => {
+        if ($panel.classList.contains('collapsed')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        activePointerId = e.pointerId;
+        startY = e.clientY;
+        startH = $panel.getBoundingClientRect().height;
+        $handle.classList.add('is-dragging');
+        try { $handle.setPointerCapture(e.pointerId); } catch (_) {}
+      });
+      $handle.addEventListener('pointermove', (e) => {
+        if (activePointerId !== e.pointerId) return;
+        const dy = e.clientY - startY;
+        applyAttHeight(startH + dy);
+      });
+      const endDrag = (e) => {
+        if (activePointerId !== e.pointerId) return;
+        $handle.classList.remove('is-dragging');
+        try { $handle.releasePointerCapture(e.pointerId); } catch (_) {}
+        activePointerId = null;
+        const finalH = $panel.getBoundingClientRect().height;
+        try { localStorage.setItem(ATT_HEIGHT_KEY, String(Math.round(finalH))); } catch (_) {}
+      };
+      $handle.addEventListener('pointerup', endDrag);
+      $handle.addEventListener('pointercancel', endDrag);
+      $handle.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        resetAttHeight();
+      });
+    }
+  })();
 
   function relativeTime(ts) {
     const nowSec = Date.now() / 1000;
@@ -2303,6 +2862,60 @@
   // Manual column overrides (drag-and-drop) — session_id → column key
   let columnOverrides = {};
   try { columnOverrides = JSON.parse(localStorage.getItem('clv-column-overrides') || '{}'); } catch (_) {}
+
+  // One-time migration: older builds of the kanban stored drag-to-Verified
+  // (and drag-to-Archived) as a client-only override without calling the
+  // server's verify/archive endpoints. Now that those calls are wired, we
+  // reconcile by pushing any stale `verified` / `archived` overrides to the
+  // server (idempotent — the endpoint is a no-op if the flag is already set)
+  // and then clearing them from localStorage. Runs once per browser; clear
+  // the `clv-override-sync-done` key to re-run.
+  (async function migrateStaleOverrides() {
+    try {
+      if (localStorage.getItem('clv-override-sync-done') === '1') return;
+      const keys = Object.keys(columnOverrides);
+      if (!keys.length) {
+        localStorage.setItem('clv-override-sync-done', '1');
+        return;
+      }
+      // cardId in the override key is either a UUID session_id, "issue-N",
+      // or "pkood-*". Only those hit the server endpoints; everything else
+      // (e.g. "spawning-*", "backlog-todo-*") stays client-only.
+      const serverEligible = /^([a-f0-9-]{8,}|issue-\d+|pkood-.+)$/;
+      let synced = 0;
+      for (const cardId of keys) {
+        const target = columnOverrides[cardId];
+        if (target !== 'verified' && target !== 'archived') continue;
+        if (!serverEligible.test(cardId)) continue;
+        try {
+          const endpoint = target === 'verified' ? 'verify' : 'archive';
+          const body = target === 'verified'
+            ? { verified: true, session_id: cardId }
+            : { session_id: cardId };
+          const r = await fetch('/api/conversations/' + cardId + '/' + endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          delete columnOverrides[cardId];
+          synced++;
+        } catch (e) {
+          console.warn('override sync failed for', cardId, target, e);
+          // Leave override in place so next run retries.
+        }
+      }
+      try {
+        localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides));
+      } catch (_) {}
+      localStorage.setItem('clv-override-sync-done', '1');
+      if (synced) {
+        console.info('[override-sync] pushed', synced, 'stale verified/archived override(s) to server');
+      }
+    } catch (e) {
+      console.warn('override migration crashed:', e);
+    }
+  })();
   // Guard against double-spawn from rapid mobile taps. Key is "issue-<num>" or session name.
   const _spawningKeys = new Set();
   // Client-side persistence for archived TODO.md / PARKING_LOT.md backlog cards.
@@ -2337,40 +2950,77 @@
     });
   }
 
+  // Fetch helper: POSTs JSON, rejects on non-2xx. Callers must await and handle.
+  async function ccPostJson(url, body) {
+    const res = await fetch(url, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body || {}),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(res.status + ' ' + (text || res.statusText));
+    }
+    try { return await res.json(); } catch (_) { return {}; }
+  }
+
+  function showOpToast(msg, kind) {
+    const toast = document.createElement('div');
+    const color = kind === 'error' ? 'var(--red)' : 'var(--green)';
+    const mark = kind === 'error' ? '!' : '\u2713';
+    toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:12px;color:var(--text);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);max-width:520px;';
+    toast.innerHTML = '<span style="color:' + color + '">' + mark + '</span> ' + msg;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), kind === 'error' ? 5000 : 3000);
+  }
+
   async function moveCardToColumn(cardId, targetCol) {
     const c = conversationsData.find(x => x.id === cardId);
     if (!c) return;
     const sid = c.session_id || cardId;
 
-    // Special columns: flip backend flags instead of just overriding
+    // Special columns: flip backend flags instead of just overriding.
+    // Drag-to-Verified passes {verified: true} explicitly so the (now
+    // idempotent) endpoint can't toggle the wrong way on stale client state.
+    // Backend call must land before we flip local state — otherwise NYA/
+    // attention panels (which read server truth) won't agree with the UI.
     if (targetCol === 'verified') {
-      if (!c.verified) {
-        await fetch('/api/conversations/' + cardId + '/verify', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ session_id: sid, display_name: c.display_name || '', cwd: c.session_cwd || '' }),
-        }).catch(() => {});
+      try {
+        await ccPostJson('/api/conversations/' + cardId + '/verify',
+          { verified: true, session_id: sid, display_name: c.display_name || '', cwd: c.session_cwd || '' });
         c.verified = true;
+        delete columnOverrides[sid];
+      } catch (err) {
+        showOpToast('Verify failed — card stays put (' + err.message + ')', 'error');
+        renderSidebar(filterConversations($convSearch.value));
+        return;
       }
-      delete columnOverrides[sid];
     }
     // Moving into working/planning: set override + signal to GitHub
     if (targetCol === 'working' || targetCol === 'planning') {
-      columnOverrides[sid] = targetCol;
-      // Unflip backend verified/archived if needed
+      // Unflip backend verified/archived if needed (must succeed before override)
       if (c.verified) {
-        await fetch('/api/conversations/' + cardId + '/verify', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ session_id: sid }),
-        }).catch(() => {});
-        c.verified = false;
+        try {
+          await ccPostJson('/api/conversations/' + cardId + '/verify',
+            { verified: false, session_id: sid });
+          c.verified = false;
+        } catch (err) {
+          showOpToast('Un-verify failed — card stays in Verified (' + err.message + ')', 'error');
+          renderSidebar(filterConversations($convSearch.value));
+          return;
+        }
       }
       if (c.archived) {
-        await fetch('/api/conversations/' + cardId + '/archive', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ session_id: sid }),
-        }).catch(() => {});
-        c.archived = false;
+        try {
+          await ccPostJson('/api/conversations/' + cardId + '/archive',
+            { session_id: sid });
+          c.archived = false;
+        } catch (err) {
+          showOpToast('Un-archive failed — card stays in Archived (' + err.message + ')', 'error');
+          renderSidebar(filterConversations($convSearch.value));
+          return;
+        }
       }
+      columnOverrides[sid] = targetCol;
       const issueNum = c.linked_issue || c.issue_number || (() => {
         const m = /^issue-(\d+)$/.exec(c.display_name || '');
         return m ? m[1] : null;
@@ -2389,29 +3039,44 @@
         _archivedBacklogIds.add(cardId);
         _persistArchivedBacklog();
         c.archived = true;
+        delete columnOverrides[sid];
       } else if (!c.archived) {
-        await fetch('/api/conversations/' + cardId + '/archive', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ session_id: sid }),
-        }).catch(() => {});
-        c.archived = true;
+        try {
+          await ccPostJson('/api/conversations/' + cardId + '/archive',
+            { session_id: sid });
+          c.archived = true;
+          delete columnOverrides[sid];
+        } catch (err) {
+          showOpToast('Archive failed — card stays put (' + err.message + ')', 'error');
+          renderSidebar(filterConversations($convSearch.value));
+          return;
+        }
+      } else {
+        delete columnOverrides[sid];
       }
-      delete columnOverrides[sid];
     } else {
-      // Moving OUT of verified/archived? unflip the backend
+      // Moving OUT of verified/archived? unflip the backend (must succeed first)
       if (c.verified) {
-        await fetch('/api/conversations/' + cardId + '/verify', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ session_id: sid }),
-        }).catch(() => {});
-        c.verified = false;
+        try {
+          await ccPostJson('/api/conversations/' + cardId + '/verify',
+            { verified: false, session_id: sid });
+          c.verified = false;
+        } catch (err) {
+          showOpToast('Un-verify failed — card stays in Verified (' + err.message + ')', 'error');
+          renderSidebar(filterConversations($convSearch.value));
+          return;
+        }
       }
       if (c.archived) {
-        await fetch('/api/conversations/' + cardId + '/archive', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ session_id: sid }),
-        }).catch(() => {});
-        c.archived = false;
+        try {
+          await ccPostJson('/api/conversations/' + cardId + '/archive',
+            { session_id: sid });
+          c.archived = false;
+        } catch (err) {
+          showOpToast('Un-archive failed — card stays in Archived (' + err.message + ')', 'error');
+          renderSidebar(filterConversations($convSearch.value));
+          return;
+        }
       }
       columnOverrides[sid] = targetCol;
     }
@@ -2427,9 +3092,15 @@
       // override (e.g., pushed/committed while override=working). Do NOT clear
       // just because the session went idle — user explicitly placed it here.
       const stage = sessionStage(c);
+      const ghClosed = (c.gh_state || '').toUpperCase() === 'CLOSED';
       const stale =
-        (ov === 'working' || ov === 'planning') && stage === 'pushed' ||
-        (ov === 'archived') && c.id && c.id.startsWith('backlog-issue-') && (c.issue_state || '').toUpperCase() === 'OPEN';
+        // Server truth wins: verified/archived cannot coexist with an active-work override.
+        c.verified || c.archived ||
+        // Only flag working/planning as stale when work has truly shipped
+        // (pushed) or the linked GH issue is closed. Committed-but-not-pushed
+        // sessions are legitimately still "in-flight" work — keep the override.
+        ((ov === 'working' || ov === 'planning') && (stage === 'pushed' || ghClosed)) ||
+        ((ov === 'archived') && c.id && c.id.startsWith('backlog-issue-') && (c.issue_state || '').toUpperCase() === 'OPEN');
       if (stale) {
         delete columnOverrides[c.session_id || c.id];
         try { localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
@@ -2654,6 +3325,9 @@
           html += '<div style="display:flex;gap:4px;margin-top:6px;">';
           html += '<button class="kanban-start-btn" data-issue="' + escapeHtml(c.issue_number || '') + '" data-title="' + escapeHtml(c.display_name || c.first_message || '') + '" style="flex:1;padding:4px 10px;border-radius:4px;border:1px solid rgba(63,185,80,0.3);background:rgba(63,185,80,0.1);color:var(--green);font-size:11px;font-weight:600;cursor:pointer;">Start session</button>';
           html += '<button class="kanban-start-edit-btn" data-issue="' + escapeHtml(c.issue_number || '') + '" data-title="' + escapeHtml(c.display_name || c.first_message || '') + '" data-body="' + escapeHtml(c.first_message || '') + '" title="Edit the prompt before launching" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text-muted);font-size:11px;cursor:pointer;">Edit &amp; start</button>';
+          // Give-up button — archives the backlog card (closes GH issue "not planned"
+          // for github-type; client-side archive for todo/parking).
+          html += '<button class="kanban-backlog-archive-btn" data-id="' + c.id + '" title="Archive / dismiss this item" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:14px;cursor:pointer;line-height:1;">&times;</button>';
           html += '</div>';
           html += '</div>';
           continue;
@@ -2710,6 +3384,8 @@
         let issueBadge = '';
         if (linkedIssue) {
           const ghState = (c.gh_state || '').toUpperCase();
+          const ghLabelsArr = c.gh_labels || c.issue_labels || [];
+          const hasNA = Array.isArray(ghLabelsArr) && ghLabelsArr.indexOf('needs-attention') >= 0;
           // Single state chip: WIP absorbs "open" when the claude-in-progress
           // label is present — avoids showing both "open" and "WIP" side by side.
           let stateChip = '';
@@ -2720,10 +3396,17 @@
           } else if (ghState) {
             stateChip = '<span class="kanban-gh-state gh-open" title="GitHub issue state: open">open</span>';
           }
+          // Surface a visible needs-attention chip so it's not buried in the
+          // GH-label array. The kanban column routing may put the card in
+          // Review based on session state — the chip tells the user at a
+          // glance that the reporter flagged the issue.
+          const naChip = hasNA
+            ? '<span class="kanban-na-chip" title="Reporter flagged this issue with needs-attention">needs-attention</span>'
+            : '';
           const desktopChip = c.desktop_app
             ? '<span class="kanban-desktop-badge" title="Session is tracked by the Claude desktop app">Desktop</span>'
             : '';
-          issueBadge = '<span class="kanban-issue-badge" title="Linked to GitHub issue">#' + escapeHtml(linkedIssue) + '</span>' + stateChip + desktopChip;
+          issueBadge = '<span class="kanban-issue-badge" title="Linked to GitHub issue">#' + escapeHtml(linkedIssue) + '</span>' + stateChip + naChip + desktopChip;
         }
         html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open &amp; rename">' + issueBadge + escapeHtml(title) + '</div>';
         if (descHtml) {
@@ -3060,16 +3743,14 @@
         ev.stopPropagation();
         const card = btn.closest('.kanban-card');
         try {
-          const res = await fetch('/api/conversations/' + card.dataset.id + '/archive', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ session_id: card.dataset.sessionId }),
-          });
-          const data = await res.json();
+          const data = await ccPostJson('/api/conversations/' + card.dataset.id + '/archive',
+            { session_id: card.dataset.sessionId });
           const c = conversationsData.find(x => x.id === card.dataset.id);
           if (c) c.archived = !!data.archived;
           renderSidebar(filterConversations($convSearch.value));
-        } catch (_) {}
+        } catch (err) {
+          showOpToast('Archive failed (' + err.message + ')', 'error');
+        }
       });
     });
     targetEl.querySelectorAll('.kanban-show-all').forEach(link => {
@@ -3098,8 +3779,24 @@
             ev.target.closest('.kanban-column-header')) return;
         if (ev.button !== 0) return;
 
-        // Default = marquee (multi-select). Hold Alt/Option to pan.
-        const wantPan = ev.altKey;
+        // Smart default:
+        //   - Shift/Cmd/Ctrl held → marquee (the user clearly wants to extend selection)
+        //   - Alt held → always pan
+        //   - Plain drag close to a card → marquee (multi-select the cluster)
+        //   - Plain drag in truly empty space → pan/scroll the board horizontally
+        const PROXIMITY_PX = 50;
+        let closeToCard = false;
+        const cards = targetEl.querySelectorAll('.kanban-card');
+        for (const card of cards) {
+          const r = card.getBoundingClientRect();
+          if (ev.clientX >= r.left - PROXIMITY_PX && ev.clientX <= r.right + PROXIMITY_PX &&
+              ev.clientY >= r.top  - PROXIMITY_PX && ev.clientY <= r.bottom + PROXIMITY_PX) {
+            closeToCard = true;
+            break;
+          }
+        }
+        const forceMarquee = ev.metaKey || ev.ctrlKey || ev.shiftKey;
+        const wantPan = !forceMarquee && (ev.altKey || !closeToCard);
         if (!wantPan) {
           isMarquee = true;
           const rect = targetEl.getBoundingClientRect();
@@ -3253,18 +3950,16 @@
       btn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
         const card = btn.closest('.kanban-card');
+        const conv = conversationsData.find(x => x.id === card.dataset.id) || {};
         try {
-          const conv = conversationsData.find(x => x.id === card.dataset.id) || {};
-          const res = await fetch('/api/conversations/' + card.dataset.id + '/verify', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ session_id: card.dataset.sessionId, display_name: conv.display_name || '', cwd: conv.session_cwd || '' }),
-          });
-          const data = await res.json();
+          const data = await ccPostJson('/api/conversations/' + card.dataset.id + '/verify',
+            { session_id: card.dataset.sessionId, display_name: conv.display_name || '', cwd: conv.session_cwd || '' });
           const c = conversationsData.find(x => x.id === card.dataset.id);
           if (c) c.verified = !!data.verified;
           renderSidebar(filterConversations($convSearch.value));
-        } catch (_) {}
+        } catch (err) {
+          showOpToast('Verify failed (' + err.message + ')', 'error');
+        }
       });
     });
     targetEl.querySelectorAll('[data-action="review-archive"]').forEach(btn => {
@@ -3272,16 +3967,14 @@
         ev.stopPropagation();
         const card = btn.closest('.kanban-card');
         try {
-          const res = await fetch('/api/conversations/' + card.dataset.id + '/archive', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ session_id: card.dataset.sessionId }),
-          });
-          const data = await res.json();
+          const data = await ccPostJson('/api/conversations/' + card.dataset.id + '/archive',
+            { session_id: card.dataset.sessionId });
           const c = conversationsData.find(x => x.id === card.dataset.id);
           if (c) c.archived = !!data.archived;
           renderSidebar(filterConversations($convSearch.value));
-        } catch (_) {}
+        } catch (err) {
+          showOpToast('Archive failed (' + err.message + ')', 'error');
+        }
       });
     });
     targetEl.querySelectorAll('[data-action="review-sendback"]').forEach(btn => {
@@ -3327,10 +4020,34 @@
         const subject = issueNum ? ('issue-' + issueNum) : cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
         // GH issue titles truncate around ~94 chars, so always tell Claude to
         // read the full issue. Keep the short title as a hint.
-        const body = issueNum
+        const body = (issueNum
           ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
-          : cleanTitle;
+          : cleanTitle) + SESSION_STATE_INSTRUCTION;
         openNewSessionModal(subject, body);
+      });
+    });
+    // ── Give-up / archive a backlog card ──
+    targetEl.querySelectorAll('.kanban-backlog-archive-btn').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const cardId = btn.dataset.id;
+        if (!cardId) return;
+        btn.disabled = true;
+        btn.textContent = '…';
+        // Optimistically hide the card in-place
+        const card = btn.closest('.kanban-card');
+        if (card) card.style.opacity = '0.45';
+        try {
+          // Reuse moveCardToColumn('archived') — correctly routes:
+          //   - backlog-todo-* / backlog-parking-* → client-side archive
+          //   - backlog-issue-* → server archive (closes GH issue "not planned")
+          await moveCardToColumn(cardId, 'archived');
+          setTimeout(refreshConversationList, 500);
+        } catch (_) {
+          btn.disabled = false;
+          btn.textContent = '\u00d7';
+          if (card) card.style.opacity = '';
+        }
       });
     });
     // ── Start session from a backlog card ──
@@ -3345,9 +4062,9 @@
         // See the Edit & start handler above — same rationale. Titles over
         // ~94 chars get truncated by GitHub, so always direct Claude to read
         // the full body via `gh issue view N`.
-        const prompt = issueNum
+        const prompt = (issueNum
           ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
-          : cleanTitle;
+          : cleanTitle) + SESSION_STATE_INSTRUCTION;
         const spawnKey = issueNum ? ('issue-' + issueNum) : sessionName;
         if (_spawningKeys.has(spawnKey)) return;  // already spawning — ignore duplicate tap
         _spawningKeys.add(spawnKey);
@@ -3547,18 +4264,16 @@
         const convId = item.dataset.id;
         const sessionId = item.dataset.sessionId;
         try {
-          const res = await fetch('/api/conversations/' + convId + '/archive', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ session_id: sessionId }),
-          });
-          const data = await res.json();
+          const data = await ccPostJson('/api/conversations/' + convId + '/archive',
+            { session_id: sessionId });
           if (data.ok) {
             const c = conversationsData.find(x => x.id === convId);
             if (c) c.archived = data.archived;
             renderSidebar(filterConversations($convSearch.value));
           }
-        } catch (err) { /* swallow */ }
+        } catch (err) {
+          showOpToast('Archive failed (' + err.message + ')', 'error');
+        }
       });
     });
   }
@@ -3785,6 +4500,80 @@
     return (kanbanView && $convPanelView) ? $convPanelView : $conversationsView;
   }
 
+  const STICKY_HEADER_HEIGHT_KEY = 'clv-sticky-header-height';
+  const STICKY_HEADER_MIN_PX = 90;
+
+  function getStickyMaxPx($view) {
+    const vh = ($view && $view.clientHeight) || window.innerHeight || 800;
+    return Math.max(STICKY_HEADER_MIN_PX + 40, Math.floor(vh * 0.6));
+  }
+
+  function applyStickyHeaderHeight(sticky, $view, h) {
+    if (!sticky) return;
+    const maxPx = getStickyMaxPx($view);
+    const clamped = Math.max(STICKY_HEADER_MIN_PX, Math.min(maxPx, h));
+    sticky.style.height = clamped + 'px';
+    sticky.classList.add('is-resized');
+  }
+
+  function resetStickyHeaderHeight(sticky) {
+    if (!sticky) return;
+    sticky.style.height = '';
+    sticky.classList.remove('is-resized');
+    try { localStorage.removeItem(STICKY_HEADER_HEIGHT_KEY); } catch (_) {}
+  }
+
+  function attachStickyHeaderResize(sticky, $view) {
+    if (!sticky || sticky._resizeAttached) return;
+    sticky._resizeAttached = true;
+    const handle = sticky.querySelector('[data-sticky-resize]');
+    if (!handle) return;
+
+    const stored = parseInt(localStorage.getItem(STICKY_HEADER_HEIGHT_KEY) || '', 10);
+    if (!isNaN(stored) && stored > 0) {
+      applyStickyHeaderHeight(sticky, $view, stored);
+    }
+
+    let startY = 0;
+    let startH = 0;
+    let activePointerId = null;
+
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      activePointerId = e.pointerId;
+      startY = e.clientY;
+      startH = sticky.getBoundingClientRect().height;
+      handle.classList.add('is-dragging');
+      try { handle.setPointerCapture(e.pointerId); } catch (err) { /* no-op */ }
+    });
+
+    handle.addEventListener('pointermove', (e) => {
+      if (activePointerId !== e.pointerId) return;
+      const dy = e.clientY - startY;
+      applyStickyHeaderHeight(sticky, $view, startH + dy);
+    });
+
+    const endDrag = (e) => {
+      if (activePointerId !== e.pointerId) return;
+      handle.classList.remove('is-dragging');
+      try { handle.releasePointerCapture(e.pointerId); } catch (err) { /* no-op */ }
+      activePointerId = null;
+      const finalH = sticky.getBoundingClientRect().height;
+      try { localStorage.setItem(STICKY_HEADER_HEIGHT_KEY, String(Math.round(finalH))); } catch (err) { /* no-op */ }
+    };
+    handle.addEventListener('pointerup', endDrag);
+    handle.addEventListener('pointercancel', endDrag);
+    // Double-click resets to auto-size (content-based height).
+    handle.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      resetStickyHeaderHeight(sticky);
+    });
+    // Title attribute for discoverability.
+    handle.title = 'Drag to resize · double-click to reset';
+  }
+
   async function renderIssueInConvPane(issueNum) {
     const $view = getConvView();
     stopConvStream();
@@ -3930,6 +4719,7 @@
     currentConversation = id;
     convLastLine = 0;
     _firstUserMsgRendered = false;
+    _pendingSends = [];  // drop any optimistic sends from the previous conv
     const $view = getConvView();
     $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading...</div>';
     // Update active state in sidebar (list view)
@@ -4068,11 +4858,17 @@
           body: JSON.stringify({ session_id: sid, cwd: currentSession.cwd }),
         });
         $cpLaunchBtn.textContent = 'Launched!';
-        // Refresh live status quickly so the button flips to Jump without the
-        // usual 5s poll wait.
-        setTimeout(refreshLiveStatus, 400);
-        setTimeout(refreshLiveStatus, 1500);
-        setTimeout(() => { $cpLaunchBtn.innerHTML = '<span>&#43;</span> Launch'; }, 1500);
+        $cpLaunchBtn.disabled = true;  // block re-clicks during the startup window
+        // Refresh live status on a quick schedule so the button flips to Jump
+        // without waiting for the 5s poll. Claude cold-start can take ~3-5s.
+        setTimeout(refreshLiveStatus, 700);
+        setTimeout(refreshLiveStatus, 2000);
+        setTimeout(refreshLiveStatus, 4000);
+        setTimeout(refreshLiveStatus, 7000);
+        setTimeout(() => {
+          $cpLaunchBtn.innerHTML = '<span>&#43;</span> Launch';
+          $cpLaunchBtn.disabled = false;
+        }, 7000);
       } catch (_) {
         $cpLaunchBtn.innerHTML = '<span>&#43;</span> Launch';
       }
@@ -4172,6 +4968,12 @@
   }
 
   let _firstUserMsgRendered = false;
+  // Optimistic pending sends: messages the user submitted via the input bar
+  // that haven't yet appeared in the conversation jsonl. Each entry is
+  // { text, element } — we strip pending styling (or remove the div) when
+  // the real user_text event lands via the render loop.
+  let _pendingSends = [];
+  const _normSend = (s) => (s || '').replace(/\s+/g, ' ').trim();
 
   // Render a TODO.md backlog card in the conv pane. No session exists yet —
   // just show the TODO text and the two spawn buttons so the user can start one.
@@ -4233,8 +5035,10 @@
             + '<button class="tools-toggle" data-tools-toggle' + (hidden ? ' class="active"' : '') + ' title="Toggle tool-call visibility">'
             + (hidden ? 'Show tools' : 'Hide tools') + '</button>'
             + '<div class="label">Original ask</div>'
-            + '<div class="user-msg">' + escapeHtml(cleanIssuePrompt(ev.text)) + '</div>';
+            + '<div class="user-msg">' + escapeHtml(cleanIssuePrompt(ev.text)) + '</div>'
+            + '<div class="conv-sticky-header__resize-handle" data-sticky-resize title="Drag to resize"></div>';
           $view.insertBefore(sticky, $view.firstChild);
+          attachStickyHeaderResize(sticky, $view);
           sticky.querySelector('[data-tools-toggle]').addEventListener('click', (e) => {
             e.stopPropagation();
             const nowHidden = !$view.classList.contains('hide-tools');
@@ -4317,6 +5121,15 @@
           + '<span class="line-num">L' + ev.line + '</span>'
           + '<span>' + escapeHtml(ev.subtype || '') + (ev.model ? ' &middot; ' + escapeHtml(ev.model) : '') + (ev.session ? ' &middot; ' + escapeHtml(ev.session) : '') + '</span>';
       } else if (ev.type === 'user_text') {
+        // If this matches an outstanding optimistic send, drop the pending stub
+        // (the real event lands in its place below).
+        const normed = _normSend(ev.text);
+        const pIdx = _pendingSends.findIndex(p => _normSend(p.text) === normed);
+        if (pIdx >= 0) {
+          const p = _pendingSends[pIdx];
+          if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
+          _pendingSends.splice(pIdx, 1);
+        }
         div.innerHTML = '<span class="label">User</span>'
           + '<span class="line-num">L' + ev.line + '</span>'
           + '<div class="user-msg">' + escapeHtml(cleanIssuePrompt(ev.text)) + '</div>';
@@ -4812,9 +5625,9 @@
     });
   }
   // Refresh
-  const $kptReloadPageBtn = document.getElementById('kptReloadPageBtn');
-  if ($kptReloadPageBtn) {
-    $kptReloadPageBtn.addEventListener('click', () => {
+  const $kanbanReloadBtn = document.getElementById('kanbanReloadBtn');
+  if ($kanbanReloadBtn) {
+    $kanbanReloadBtn.addEventListener('click', () => {
       try { location.reload(true); } catch (_) { location.reload(); }
     });
   }
@@ -4887,7 +5700,8 @@
       return first.length > 120 ? first.slice(0, 120).trim() + '...' : first;
     }
     const effectiveSubject = subject || firstSentence(body);
-    const prompt = body ? (subject ? (subject + '\n\n' + body) : body) : subject;
+    const basePrompt = body ? (subject ? (subject + '\n\n' + body) : body) : subject;
+    const prompt = basePrompt + SESSION_STATE_INSTRUCTION;
     const usePkood = !!($nsmPkood && $nsmPkood.checked);
     $nsmSubmit.disabled = true;
     $nsmSubmit.textContent = 'Launching...';
@@ -5000,6 +5814,10 @@
       const text = ($cpInput.value || '').trim();
       if (!text || !currentSession.id) return;
       $cpSendBtn.disabled = true;
+      const flashRed = () => {
+        $cpInput.style.borderColor = 'var(--red)';
+        setTimeout(() => { $cpInput.style.borderColor = ''; }, 1500);
+      };
       try {
         let res;
         if (currentSession.source === 'pkood') {
@@ -5023,16 +5841,30 @@
             body: JSON.stringify({ session_id: currentSession.id, text }),
           });
         }
-        const data = await res.json();
-        if (data.ok) {
+        let data = {};
+        try { data = await res.json(); } catch (_) {}
+        if (res.ok && data.ok) {
+          // Optimistic echo into the conv view (replaced by the real user_text
+          // event when the jsonl tail catches up).
+          const $view = getConvView();
+          if ($view) {
+            const pendingDiv = document.createElement('div');
+            pendingDiv.className = 'event user_text pending';
+            pendingDiv.innerHTML = '<span class="label">User</span>'
+              + '<div class="user-msg">' + escapeHtml(text) + '</div>';
+            $view.appendChild(pendingDiv);
+            $view.scrollTop = $view.scrollHeight;
+            _pendingSends.push({ text, element: pendingDiv });
+          }
           $cpInput.value = '';
         } else {
-          $cpInput.style.borderColor = 'var(--red)';
-          setTimeout(() => { $cpInput.style.borderColor = ''; }, 1500);
+          flashRed();
+          const reason = data.error || ('HTTP ' + res.status);
+          showOpToast('Send failed: ' + reason, 'error');
         }
       } catch (err) {
-        $cpInput.style.borderColor = 'var(--red)';
-        setTimeout(() => { $cpInput.style.borderColor = ''; }, 1500);
+        flashRed();
+        showOpToast('Send failed: ' + (err.message || 'network error'), 'error');
       }
       $cpSendBtn.disabled = false;
     }
@@ -5088,6 +5920,7 @@
         sessionCwdExistsByConv[c.id] = !!c.session_cwd_exists;
       }
       renderSidebar(filterConversations($convSearch.value));
+      loadAttentionList();  // keep the top panel current with the board
     } catch (_) {}
   }, 10000);
 

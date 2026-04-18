@@ -428,22 +428,19 @@ def _detect_issue_number_for_session(conv):
     if _SESSION_ISSUES_CACHE is None:
         _SESSION_ISSUES_CACHE = _load_session_issues()
     sid = conv.get("session_id", "")
-    # Explicit mapping wins
+    # Explicit mapping wins (user-set or written at spawn time)
     explicit = _SESSION_ISSUES_CACHE.get(sid)
     if explicit:
         return str(explicit)
     # Strong patterns only (avoid "Image #1" false positives):
-    #   - branch like "issue-91", "fix/91", "fix-91"
-    #   - display_name or first_message containing "issue 91", "issue-91",
-    #     "issue/91", "fix-91", or "GitHub issue #91" / "GitHub issue 91"
+    #   "issue 91", "issue-91", "issue/91", "fix-91", "GitHub issue #91", etc.
     strong = re.compile(
         r"(?:github\s+)?(?:issue|fix)[\s/-]+#?(\d+)",
         re.IGNORECASE,
     )
-    branch = conv.get("branch", "") or ""
-    m = strong.search(branch)
-    if m:
-        return m.group(1)
+    # Priority: spawn-time identity (display_name, first_message) wins over
+    # branch name — sessions often run on a pre-existing branch for a different
+    # issue (e.g. display_name "issue-159" on branch "claude/issue-145-…").
     dname = conv.get("display_name", "") or ""
     m = strong.search(dname)
     if m:
@@ -452,11 +449,22 @@ def _detect_issue_number_for_session(conv):
     m = re.match(r"^#(\d+)[:\s]", dname)
     if m:
         return m.group(1)
-    # Fall back to first_message — spawn prompts include "Fix GitHub issue #N: ..."
+    # first_message from spawn prompts: "Fix GitHub issue #N: ..."
     fm = conv.get("first_message", "") or ""
     m = strong.search(fm[:200])  # only head; avoids body noise
     if m:
         return m.group(1)
+    # Branch name: fallback only when first_message is empty / trivial.
+    # Sessions that launch inside a leftover worktree inherit its branch name
+    # but have nothing to do with that branch's original issue — latching onto
+    # the branch would mis-link chat/meta sessions (e.g. a first_message of
+    # "By the way…" running in claude/issue-145-owner-only-packages).
+    fm_stripped = (fm or "").strip()
+    if len(fm_stripped) < 30:
+        branch = conv.get("branch", "") or ""
+        m = strong.search(branch)
+        if m:
+            return m.group(1)
     # Last resort: high-confidence signals mined from the jsonl tail (gh issue cmds,
     # "Closes #N" in commits, github.com/.../issues/N URLs). Covers sessions where
     # Claude created or touched an issue mid-conversation.
@@ -479,6 +487,35 @@ def _latest_commit_sha(cwd=None):
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return ""
+
+
+_unpushed_cache = {}  # key: cwd str → (count_int_or_None, ts)
+
+
+def _count_unpushed_commits(cwd):
+    """Return how many commits HEAD is ahead of its upstream in `cwd`, or
+    None if we can't tell (no upstream, detached HEAD, git missing, etc.).
+    Cached 60s per cwd — called from NYA classifier per flagged session."""
+    if not cwd:
+        return None
+    key = str(cwd)
+    now = time.time()
+    cached = _unpushed_cache.get(key)
+    if cached and now - cached[1] < 60:
+        return cached[0]
+    count = None
+    try:
+        out = subprocess.run(
+            ["git", "rev-list", "--count", "@{u}..HEAD"],
+            capture_output=True, text=True, timeout=5, cwd=key,
+        )
+        if out.returncode == 0:
+            count = int((out.stdout or "0").strip() or 0)
+        # Non-zero rc usually means no upstream configured — treat as unknown
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        pass
+    _unpushed_cache[key] = (count, now)
+    return count
 
 
 def create_github_issue_for_session(conv):
@@ -555,6 +592,7 @@ def close_github_issue_with_commit(issue_number, conv):
                     fn(issue_number)
             except Exception:
                 pass
+            _bust_issue_state_cache()
         return ok
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
@@ -1073,10 +1111,30 @@ def _build_resume_command(session_id, cwd, cwd_exists):
 def launch_terminal_for_session(session_id, cwd=None, terminal_app=None):
     """Open a new terminal window and run the resume command for this session.
 
-    Returns {ok, terminal_app, command, error?}.
+    Idempotent: if a live claude process with a TTY already exists for this
+    session, bring that terminal to the front instead of opening a new one.
+    Prevents the "I clicked Launch and got two terminals" race.
+
+    Returns {ok, terminal_app, command, error?, existing?}.
     """
     if not session_id:
         return {"ok": False, "error": "missing session_id"}
+    # Pre-check: is there already a live claude --resume on this session with a tty?
+    try:
+        existing = session_live_status(session_id, cwd) or {}
+        if existing.get("live") and existing.get("tty"):
+            tty = existing.get("tty")
+            term_app = existing.get("terminal_app") or _preferred_terminal_app()
+            jr = focus_terminal_by_tty(tty, term_app)
+            return {
+                "ok": bool(jr.get("ok")),
+                "terminal_app": term_app,
+                "existing": True,
+                "tty": tty,
+                "note": "Live terminal already attached — focused it instead of opening a new one.",
+            }
+    except Exception:
+        pass  # fall through to the normal launch path
     if cwd is None:
         cwd = find_session_cwd(session_id)
     cwd_exists = bool(cwd and Path(cwd).is_dir())
@@ -1262,18 +1320,31 @@ def inject_input_via_keystroke(tty, terminal_app, text):
         return "ok"
         '''
 
-    try:
-        out = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=5,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        return {"ok": False, "error": str(e)}
+    def _run():
+        try:
+            return subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=5,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            return e
+
+    out = _run()
+    if isinstance(out, Exception):
+        return {"ok": False, "error": str(out)}
     result_str = (out.stdout or "").strip()
+    # Auto-retry once on notfound — the tab often becomes findable ~200ms later
+    # after a focus/Spaces transition settles.
+    if result_str == "notfound":
+        time.sleep(0.2)
+        out = _run()
+        if isinstance(out, Exception):
+            return {"ok": False, "error": str(out)}
+        result_str = (out.stdout or "").strip()
     if out.returncode != 0:
         return {"ok": False, "error": (out.stderr or "").strip() or "AppleScript failed"}
     if result_str == "notfound":
-        return {"ok": False, "error": f"No {terminal_app} tab found for {tty_short}"}
+        return {"ok": False, "error": f"No {terminal_app} tab found for {tty_short} — tab may be hidden, on another Space, or behind a fullscreen app"}
     return {"ok": True, "tty": tty}
 
 
@@ -1519,7 +1590,7 @@ def _load_desktop_app_metadata():
 def _fetch_issue_states():
     """Bulk-fetch state+labels+title for all issues. Cached 5 min."""
     global _issue_state_cache, _issue_state_cache_ts
-    if time.time() - _issue_state_cache_ts < 300 and _issue_state_cache:
+    if time.time() - _issue_state_cache_ts < 60 and _issue_state_cache:
         return _issue_state_cache
     try:
         out = subprocess.run(
@@ -1541,6 +1612,13 @@ def _fetch_issue_states():
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass
     return _issue_state_cache
+
+
+def _bust_issue_state_cache():
+    """Force next _fetch_issue_states() to re-query gh. Call after any mutation
+    (close/reopen/label change) so the UI doesn't serve 5-minute-stale state."""
+    global _issue_state_cache_ts
+    _issue_state_cache_ts = 0
 
 # Backlog: full issue data (labels, body) for open issues
 _backlog_issues_cache = []
@@ -3126,7 +3204,9 @@ def auto_verify_closed_issues():
     for c in convs:
         if c.get("verified") or c.get("archived"):
             continue
-        if not c.get("has_push"):
+        tail_inum = c.get("tail_issue_number")
+        has_push = c.get("has_push")
+        if not has_push and not tail_inum:
             continue
         inum = c.get("linked_issue")
         if not inum:
@@ -3140,6 +3220,14 @@ def auto_verify_closed_issues():
             inum = _detect_issue_number_for_session(c)
         if not inum:
             continue
+        # Only verify when the ORIGINAL (spawn-time) committed issue is CLOSED.
+        # Do NOT verify on tail_issue_number matches when they differ from the
+        # linked issue — sessions often create sibling issues (e.g. via the
+        # /announce-feature skill) that close separately; our commitment is to
+        # the original issue the session was spawned for, which stays open
+        # until that bug/feature is actually resolved.
+        if not has_push and str(tail_inum) != str(inum):
+            continue
         st = issue_states.get(str(inum))
         if not st or st["state"] != "CLOSED":
             continue
@@ -3148,12 +3236,13 @@ def auto_verify_closed_issues():
             continue
         verified_list.append(sid)
         verified_set.add(sid)
-        newly_verified.append({"session_id": sid, "issue": inum, "display_name": c.get("display_name", "")[:80]})
+        newly_verified.append({"session_id": sid, "issue": inum, "display_name": (c.get("display_name") or "")[:80]})
         # Also strip in-progress label
         remove_in_progress_label(inum)
 
     if newly_verified:
         _save_verified_conversations(verified_list)
+        _bust_issue_state_cache()
 
     return {"ok": True, "newly_verified": newly_verified, "count": len(newly_verified)}
 
@@ -3196,23 +3285,35 @@ def backfill_in_progress_labels():
     return {"ok": True, "marked": marked, "skipped": skipped, "errors": errors}
 
 
-def mark_issue_in_progress(issue_number):
+def mark_issue_in_progress(issue_number, force_reopen=False):
     """Signal to GitHub that work is starting on an issue:
-    - reopens the issue if closed
+    - reopens the issue if closed as NOT_PLANNED (never if COMPLETED)
     - adds 'claude-in-progress' label
     - self-assigns to the authenticated gh user (@me)
+
+    Will NOT reopen an issue that was closed with stateReason=COMPLETED unless
+    force_reopen=True. This prevents stale-card drags from resurrecting shipped
+    work (see 2026-04-18 #126 incident: UI showed 5-min-stale OPEN; drag→Working
+    called mark_issue_in_progress which unconditionally reopened the issue).
     """
     global _backlog_issues_cache_ts, _issue_state_cache_ts
     result = {"ok": False, "issue_number": str(issue_number)}
-    # Reopen if closed
+    # Reopen only when safe
     try:
         st_out = subprocess.run(
-            ["gh", "issue", "view", str(issue_number), "--json", "state"],
+            ["gh", "issue", "view", str(issue_number),
+             "--json", "state,stateReason"],
             capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
         )
         if st_out.returncode == 0:
-            st = json.loads(st_out.stdout).get("state", "").upper()
+            st_data = json.loads(st_out.stdout)
+            st = (st_data.get("state") or "").upper()
+            reason = (st_data.get("stateReason") or "").upper()
             if st == "CLOSED":
+                if reason == "COMPLETED" and not force_reopen:
+                    result["skipped_reopen"] = "already completed"
+                    result["ok"] = True
+                    return result
                 subprocess.run(
                     ["gh", "issue", "reopen", str(issue_number)],
                     capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
@@ -3265,7 +3366,7 @@ def mark_issue_icebox(issue_number):
 
 def remove_in_progress_label(issue_number):
     """Strip the claude-in-progress label (ignore if absent)."""
-    global _backlog_issues_cache_ts
+    global _backlog_issues_cache_ts, _issue_state_cache_ts
     try:
         subprocess.run(
             ["gh", "issue", "edit", str(issue_number),
@@ -3273,6 +3374,7 @@ def remove_in_progress_label(issue_number):
             capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
         )
         _backlog_issues_cache_ts = 0
+        _bust_issue_state_cache()
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
@@ -3460,10 +3562,15 @@ def parse_conversation_by_sid(session_id, after_line=0):
 _MORNING_BRAINDUMP_PROMPT = """You are analyzing Amir's morning brain-dump.
 
 For each item in his dump, classify as exactly one of:
-- NEW: a fresh task/idea not already in his system
+- NEW: a fresh task/idea not already in his system. This INCLUDES personal
+  errands or one-off todos (e.g. "call mom", "pick up dry cleaning") even
+  when they don't map to any configured goal. If Amir typed it and it's a
+  real action item, it's NEW — regardless of whether a goal matches.
 - EXISTING: matches or refines something already tracked; identify which
 - CONTEXT: not a task — a thought, update, reflection, or meeting note
-- DISCARD: noise ("ok", "hmm", filler)
+- DISCARD: ONLY pure filler with no content ("ok", "hmm", "uh", "so yeah").
+  Never DISCARD an actual intent just because no goal fits — use NEW with
+  suggested_goal: null instead.
 
 Also suggest which GOAL it maps to (or null if unclear). Goal slugs are shown below.
 
@@ -3688,7 +3795,9 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
             # Re-read on every request so edits to static/index.html are live.
             self.send_html(_load_index_html())
         elif path == "/api/attention":
-            self.send_json(compute_attention_items())
+            qs = urllib.parse.parse_qs(parsed.query)
+            include_all = qs.get("all", ["0"])[0] in ("1", "true")
+            self.send_json(compute_attention_items(include_all=include_all))
         elif path == "/api/config":
             self.send_json(get_app_config())
         elif path == "/api/logs":
@@ -3934,6 +4043,14 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
+        if path == "/api/bust-issue-state":
+            # External signal that GitHub issue state may have changed (e.g. a
+            # Claude Code PostToolUse hook fired after `gh issue close/reopen`).
+            # Drop the 60s cache so the next /api/sessions call re-queries gh
+            # and auto_verify_closed_issues can fire immediately.
+            _bust_issue_state_cache()
+            self.send_json({"ok": True})
+            return
         if path == "/api/morning/ingest/run":
             # Fire-and-forget: spawn the Apple Notes ingester in the background.
             # The morning page refreshes its state right after this call returns,
@@ -4018,6 +4135,19 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
             else:
                 import morning_store as _store
                 self.send_json(_store.dismiss_user_tactical(cid))
+        elif path == "/api/morning/today/reorder":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            ids = payload.get("ids")
+            if not isinstance(ids, list):
+                self.send_json({"ok": False, "error": "ids must be a list"}, 400)
+            else:
+                import morning_store as _store
+                self.send_json(_store.save_user_tactical_order([str(x) for x in ids]))
         elif path == "/api/morning/braindump/accept":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -4034,7 +4164,12 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 import morning_store as _store
                 try:
                     if action == "tactical":
-                        result = _store.add_user_tactical(goal_slug, text, source_note="braindump")
+                        meta = {
+                            "classification": (payload.get("classification") or "").strip() or None,
+                            "notes": (payload.get("notes") or "").strip() or None,
+                            "matched_existing": (payload.get("matched_existing") or "").strip() or None,
+                        }
+                        result = _store.add_user_tactical(goal_slug, text, source_note="braindump", meta=meta)
                     else:
                         result = _store.attach_context(
                             goal_slug,
@@ -4298,6 +4433,7 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                     global _backlog_issues_cache_ts, _issue_titles_cache_ts
                     _backlog_issues_cache_ts = 0
                     _issue_titles_cache_ts = 0
+                    _bust_issue_state_cache()
                     self.send_json({
                         "ok": gh_out.returncode == 0,
                         "archived": True,
@@ -4336,6 +4472,8 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                         gh_result = {"action": action, "ok": gh_out.returncode == 0}
                     except (subprocess.TimeoutExpired, FileNotFoundError):
                         gh_result = {"action": action, "ok": False}
+                if gh_result is not None:
+                    _bust_issue_state_cache()
                 self.send_json({"ok": True, "archived": now_archived, "github": gh_result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -4374,20 +4512,34 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 # Also close linked GitHub issue with commit SHA comment
                 gh_result = None
                 if now_verified:
-                    # Find the issue: from watcher id OR side-car mapping OR
-                    # fallback: parse "issue-N" display name (how /Start Session names sessions).
+                    # Resolve the linked issue, in priority order:
+                    #  1. explicit `linked_issue` from payload (the frontend
+                    #     already knows from /api/sessions — trust it)
+                    #  2. watcher-style conv_id like "issue-N"
+                    #  3. side-car session→issue mapping
+                    #  4. display_name patterns: "issue-N" OR "#N: title"
+                    #  5. payload.tail_issue_number (in-session gh signals)
                     issue_num = None
-                    m = re.match(r"^issue-(\d+)$", conv_id)
-                    if m:
-                        issue_num = m.group(1)
-                    else:
+                    payload_inum = payload.get("linked_issue")
+                    if payload_inum:
+                        issue_num = str(payload_inum)
+                    if not issue_num:
+                        m = re.match(r"^issue-(\d+)$", conv_id)
+                        if m:
+                            issue_num = m.group(1)
+                    if not issue_num:
                         issue_num = _load_session_issues().get(sid)
                     if not issue_num:
                         display_name = payload.get("display_name") or ""
-                        dm = re.match(r"^issue-(\d+)$", display_name)
+                        dm = (re.match(r"^issue-(\d+)$", display_name)
+                              or re.match(r"^#(\d+)[:\s]", display_name))
                         if dm:
                             issue_num = dm.group(1)
                             _save_session_issue(sid, issue_num)
+                    if not issue_num:
+                        tail = payload.get("tail_issue_number")
+                        if tail:
+                            issue_num = str(tail)
                     if issue_num:
                         # Build a minimal conv dict for helper
                         conv_info = {
@@ -4545,10 +4697,12 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
 
         line_num = 0
         last_keepalive = time.time()
-        timeout_at = time.time() + 300  # 5 minute max
-
+        # No server-side timeout — SSE is designed for persistent connections,
+        # and the 5s keepalive below is what keeps proxies/browsers happy.
+        # Connection closes when the client disconnects (BrokenPipeError below)
+        # or the server process restarts.
         try:
-            while time.time() < timeout_at:
+            while True:
                 events = []
                 try:
                     with open(filepath, "r") as f:
@@ -4664,6 +4818,28 @@ def _classify_attention(c):
     state = c.get("session_state") or {}
     has_structured = bool(state.get("did") or state.get("insight") or state.get("next_step_user"))
 
+    # Session self-reports as waiting on an EXTERNAL party (not the user), OR
+    # the session explicitly says the work is already done (nothing to commit,
+    # already shipped, etc.). Trust the structured next_step_user field — the
+    # session chose this exact wording to tell the user where the work stands.
+    # A LIVE session still shows via pending_tool/sidecar_waiting below, which
+    # are detected from tool state and not suppressible this way.
+    next_step_raw = (state.get("next_step_user") or "").strip().lower()
+    _WAIT_PREFIXES = ("wait ", "wait for", "waiting", "awaiting", "ask ",
+                      "blocked on", "blocked by", "tbd")
+    _DONE_PREFIXES = ("nothing to ", "no action", "done", "no changes",
+                      "already shipped", "already pushed", "already on main",
+                      "already merged", "already closed", "ready to close")
+    _DONE_CONTAINS = ("already shipped", "already pushed", "already on main",
+                      "already merged", "nothing to commit", "nothing to push",
+                      "no changes to commit")
+    if not c.get("is_live") and (
+        next_step_raw.startswith(_WAIT_PREFIXES) or
+        next_step_raw.startswith(_DONE_PREFIXES) or
+        any(p in next_step_raw for p in _DONE_CONTAINS)
+    ):
+        return None
+
     sid = c.get("session_id") or c.get("id")
     name = (c.get("display_name") or c.get("first_message") or "")[:100]
     inum = c.get("linked_issue") or c.get("issue_number") or c.get("tail_issue_number") or ""
@@ -4718,6 +4894,17 @@ def _classify_attention(c):
         # Dormant with edits but nothing committed — the "agent finished, work is
         # sitting in the working tree" case the user specifically flagged.
         if (not live) and c.get("has_edit") and not c.get("has_commit"):
+            # Suppress meta/chat sessions with no issue reference anywhere —
+            # those are exploratory scratch (e.g. first_message "By the way …"
+            # running in a leftover worktree), not real work that needs a
+            # commit decision.
+            no_issue_ref = not (
+                c.get("linked_issue")
+                or c.get("tail_issue_number")
+                or c.get("issue_number")
+            )
+            if no_issue_ref:
+                return None
             return {
                 "kind": "uncommitted_edits", "priority": 4,
                 "session_id": sid, "name": name,
@@ -4730,6 +4917,13 @@ def _classify_attention(c):
             }
 
         if c.get("has_commit") and not c.get("has_push"):
+            # `has_commit` is a session-tool-call flag, not a repo-state check.
+            # Verify the working tree actually has unpushed commits — sessions
+            # often commit duplicate work then `git pull` fast-forwards it onto
+            # already-pushed history (nothing to push despite has_commit=True).
+            ahead = _count_unpushed_commits(c.get("session_cwd"))
+            if ahead == 0:
+                return None
             return {
                 "kind": "committed_not_pushed", "priority": 5,
                 "session_id": sid, "name": name,
@@ -4773,38 +4967,63 @@ def _classify_attention(c):
     return None
 
 
-def compute_attention_items():
+def compute_attention_items(include_all=False):
     """Rank-and-cap list of cards that need user attention.
 
-    Caps: 8 total, max 3 backlog — stay scannable.
+    Default mode: 8 total, max 3 backlog, `uncommitted_edits` older than 7
+    days aged out. `include_all=True` bypasses the cap AND the age-out so
+    the user can see the full pool via a "See all" affordance.
     Sort: priority ASC, then most recent activity first.
     """
     try:
         convs = find_all_sessions() or []
     except Exception:
         convs = []
-    raw = []
+    now = time.time()
+    STALE_AGE_SECS = 7 * 24 * 3600
+    raw_all = []        # every candidate, ignoring age-out
+    raw_filtered = []   # post-age-out (the normal NYA pool)
     for c in convs:
         item = _classify_attention(c)
-        if item:
-            item["_modified"] = c.get("modified") or 0
-            raw.append(item)
-    raw.sort(key=lambda i: (i["priority"], -i["_modified"]))
-    MAX_TOTAL = 8
-    MAX_BACKLOG = 3
+        if not item:
+            continue
+        item["_modified"] = c.get("modified") or 0
+        raw_all.append(item)
+        is_stale = (
+            item["kind"] == "uncommitted_edits"
+            and item["_modified"] > 0
+            and (now - item["_modified"]) > STALE_AGE_SECS
+        )
+        if not is_stale:
+            raw_filtered.append(item)
+    source = raw_all if include_all else raw_filtered
+    source.sort(key=lambda i: (i["priority"], -i["_modified"]))
     out = []
-    backlog_count = 0
-    backlog_kinds = ("needs_attention_label", "open_backlog")
-    for it in raw:
-        if it["kind"] in backlog_kinds:
-            if backlog_count >= MAX_BACKLOG:
-                continue
-            backlog_count += 1
-        it.pop("_modified", None)
-        out.append(it)
-        if len(out) >= MAX_TOTAL:
-            break
-    return {"ok": True, "items": out}
+    if include_all:
+        for it in source:
+            it.pop("_modified", None)
+            out.append(it)
+    else:
+        MAX_TOTAL = 8
+        MAX_BACKLOG = 3
+        backlog_count = 0
+        backlog_kinds = ("needs_attention_label", "open_backlog")
+        for it in source:
+            if it["kind"] in backlog_kinds:
+                if backlog_count >= MAX_BACKLOG:
+                    continue
+                backlog_count += 1
+            it.pop("_modified", None)
+            out.append(it)
+            if len(out) >= MAX_TOTAL:
+                break
+    return {
+        "ok": True,
+        "items": out,
+        "shown": len(out),
+        "total": len(raw_filtered),
+        "grand_total": len(raw_all),
+    }
 
 
 def get_app_config():
