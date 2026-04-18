@@ -16,7 +16,22 @@
       <button id="refresh-now" title="reload">Refresh</button>
     </nav>
 
-    <div class="mk-board">
+    <section class="mk-hero">
+      <h1 id="mk-greeting">Good morning.</h1>
+      <p id="mk-subgreeting" class="mk-subgreeting">What's on your mind?</p>
+      <textarea id="mk-dump" rows="6" placeholder="Dump everything — multiple lines, one thought per line. I'll figure out what's new, what matches existing work, and what's just context."></textarea>
+      <div class="mk-hero-actions">
+        <button id="mk-analyze" class="primary">Analyze →</button>
+        <span id="mk-analyze-status" class="muted"></span>
+      </div>
+      <div id="mk-analysis" class="mk-analysis" hidden></div>
+    </section>
+
+    <div class="mk-board-toggle">
+      <button id="mk-board-toggle" type="button">▸ Show sessions (<span id="mk-board-count">loading</span>)</button>
+    </div>
+
+    <div class="mk-board" id="mk-board" hidden>
       <section class="mk-col" data-col="backlog">
         <h3>Backlog <span class="mk-count" id="count-backlog"></span></h3>
         <p class="subtitle">Strategies from every goal that don't have a session yet.</p>

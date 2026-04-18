@@ -3421,6 +3421,100 @@ def parse_conversation_by_sid(session_id, after_line=0):
     return {"events": [], "last_line": 0}
 
 
+_MORNING_BRAINDUMP_PROMPT = """You are analyzing Amir's morning brain-dump.
+
+For each item in his dump, classify as exactly one of:
+- NEW: a fresh task/idea not already in his system
+- EXISTING: matches or refines something already tracked; identify which
+- CONTEXT: not a task — a thought, update, reflection, or meeting note
+- DISCARD: noise ("ok", "hmm", filler)
+
+Also suggest which GOAL it maps to (or null if unclear). Goal slugs are shown below.
+
+## Goals
+
+{goals}
+
+## Existing tactical items (sample)
+
+{tactical}
+
+## Amir's braindump
+
+```
+{dump}
+```
+
+Return ONLY a JSON array. No prose. No markdown fences. Each item looks like:
+{{"original_text": "...", "classification": "NEW"|"EXISTING"|"CONTEXT"|"DISCARD", "matched_existing": "short text of what it matched, or null", "suggested_goal": "slug or null", "notes": "one-sentence why"}}
+
+Items in the dump are separated by newlines. Preserve Amir's original phrasing in original_text.
+"""
+
+
+def morning_braindump(text):
+    """Run `claude -p --model haiku` on a brain-dump with context about
+    existing goals/tactical items. Returns the parsed analysis array.
+    """
+    import morning_store as _store
+    text = (text or "").strip()
+    if not text:
+        return {"ok": False, "error": "empty dump"}
+
+    try:
+        goals = _store.load_all_goals()
+    except Exception:
+        goals = []
+    goal_lines = []
+    for g in goals:
+        strats = g.get("strategies") or []
+        slug = g.get("slug", "?")
+        name = g.get("name", slug)
+        strat_ids = ", ".join(s.get("id", "?") for s in strats if s.get("status") == "active")
+        goal_lines.append(f"- {slug}: {name} (active strategies: {strat_ids or 'none'})")
+    goals_block = "\n".join(goal_lines) or "(no goals configured)"
+
+    # Grab current tactical items so Claude can match against them.
+    import morning as _morning
+    try:
+        state = _morning.get_morning_state()
+        tactical_sample = state.get("tactical", [])[:30]
+    except Exception:
+        tactical_sample = []
+    tact_lines = []
+    for t in tactical_sample:
+        tact_lines.append(f"- [{t.get('source','?')}] {t.get('text','')}")
+    tact_block = "\n".join(tact_lines) or "(no tactical items)"
+
+    prompt = _MORNING_BRAINDUMP_PROMPT.format(
+        goals=goals_block,
+        tactical=tact_block,
+        dump=text,
+    )
+
+    try:
+        r = subprocess.run(
+            ["claude", "-p", "--model", "haiku"],
+            input=prompt, capture_output=True, text=True, timeout=60,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        return {"ok": False, "error": f"claude -p failed: {e}"}
+    if r.returncode != 0:
+        return {"ok": False, "error": f"claude -p exited {r.returncode}: {r.stderr[:200]}"}
+
+    out = (r.stdout or "").strip()
+    out = re.sub(r"^```(?:json)?\s*|\s*```$", "", out, flags=re.M).strip()
+    m = re.search(r"\[.*\]", out, flags=re.S)
+    if not m:
+        return {"ok": False, "error": "no JSON array in response", "raw": out[:500]}
+    try:
+        items = json.loads(m.group(0))
+    except json.JSONDecodeError as e:
+        return {"ok": False, "error": f"JSON parse: {e}", "raw": out[:500]}
+
+    return {"ok": True, "items": items}
+
+
 def _morning_session_ids():
     """Return a dict {session_id: {"goal_slug": ..., "strategy_id": ...}}
     for every strategy across all goal.md files that has a claude_session_id.
@@ -3873,6 +3967,21 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                         dismissed_at=_t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime()),
                     )
                 self.send_json(result)
+        elif path == "/api/morning/braindump":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            text = (payload.get("text") or "").strip()
+            if not text:
+                self.send_json({"ok": False, "error": "missing text"}, 400)
+            else:
+                try:
+                    self.send_json(morning_braindump(text))
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/morning/launch":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

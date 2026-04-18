@@ -281,10 +281,105 @@
     document.getElementById("count-backlog").textContent = backlog.length;
     document.getElementById("count-active").textContent = active.length;
     document.getElementById("count-dormant").textContent = dormant.length;
+    // board toggle summary
+    const summary = `${backlog.length} backlog · ${active.length} active · ${dormant.length} dormant`;
+    const mkBoardCount = document.getElementById("mk-board-count");
+    if (mkBoardCount) mkBoardCount.textContent = summary;
     document.getElementById("refresh-meta").textContent =
       "last refreshed " + new Date().toLocaleTimeString();
   }
 
+  // ---------------------------------------------------------------------
+  // Morning hero — greeting + brain dump analysis
+  // ---------------------------------------------------------------------
+
+  function setGreeting() {
+    const now = new Date();
+    const hour = now.getHours();
+    let period = "morning";
+    if (hour >= 12 && hour < 17) period = "afternoon";
+    else if (hour >= 17 || hour < 5) period = "evening";
+    const months = ["January","February","March","April","May","June",
+                    "July","August","September","October","November","December"];
+    const dateStr = months[now.getMonth()] + " " + now.getDate() + ", " +
+      now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    document.getElementById("mk-greeting").textContent =
+      "Good " + period + ", Amir.";
+    document.getElementById("mk-subgreeting").textContent =
+      "It's " + dateStr + ". What's on your mind?";
+  }
+
+  function renderAnalysisItem(item) {
+    const cls = (item.classification || "NEW").toUpperCase();
+    const host = el("div", { class: "mk-ana-item " + cls },
+      el("span", { class: "mk-ana-badge" }, cls),
+      el("div", { class: "mk-ana-body" },
+        el("div", { class: "mk-ana-text" }, item.original_text || ""),
+        el("div", { class: "mk-ana-meta" },
+          item.notes || "",
+          item.matched_existing
+            ? el("span", {}, " · matches: ", el("em", {}, item.matched_existing))
+            : null,
+          item.suggested_goal
+            ? el("span", {}, " · ", el("span", { class: "mk-ana-goal" }, item.suggested_goal))
+            : null
+        )
+      )
+    );
+    return host;
+  }
+
+  async function analyzeDump() {
+    const textarea = document.getElementById("mk-dump");
+    const text = textarea.value.trim();
+    if (!text) return;
+    const btn = document.getElementById("mk-analyze");
+    const status = document.getElementById("mk-analyze-status");
+    btn.disabled = true;
+    status.textContent = "analyzing (takes ~15s)…";
+    try {
+      const r = await fetch("/api/morning/braindump", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || "HTTP " + r.status);
+      const host = document.getElementById("mk-analysis");
+      host.hidden = false;
+      host.innerHTML = "";
+      const items = d.items || [];
+      if (!items.length) {
+        host.appendChild(el("div", { class: "muted" }, "No items found."));
+      } else {
+        for (const it of items) host.appendChild(renderAnalysisItem(it));
+      }
+      status.textContent = items.length + " items · "
+        + items.filter(i => (i.classification || "").toUpperCase() === "NEW").length + " new · "
+        + items.filter(i => (i.classification || "").toUpperCase() === "EXISTING").length + " existing";
+    } catch (e) {
+      status.textContent = "failed: " + e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById("mk-analyze").addEventListener("click", analyzeDump);
+  document.getElementById("mk-dump").addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") analyzeDump();
+  });
+
+  // Collapsible kanban board — hidden by default so the hero has the stage.
+  const boardToggle = document.getElementById("mk-board-toggle");
+  boardToggle.addEventListener("click", () => {
+    const board = document.getElementById("mk-board");
+    const isHidden = board.hidden;
+    board.hidden = !isHidden;
+    // Flip the triangle on the button's label.
+    boardToggle.innerHTML = boardToggle.innerHTML.replace(/^[▸▾]/, isHidden ? "▾" : "▸");
+  });
+
+  setGreeting();
   document.getElementById("refresh-now").addEventListener("click", load);
   load();
 })();
