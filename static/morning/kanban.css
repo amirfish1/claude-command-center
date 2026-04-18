@@ -1,0 +1,114 @@
+.mk-wrap { max-width: 1400px; margin: 0 auto; padding: 20px; padding-left: 72px; }
+
+.mk-board {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.mk-col {
+  background: #1a1d23;
+  border-radius: 10px;
+  padding: 14px;
+  min-height: 400px;
+}
+
+.mk-col h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: #ddd;
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mk-col .subtitle {
+  font-size: 11px;
+  color: #888;
+  margin: 0 0 12px;
+}
+
+.mk-count {
+  font-size: 10px;
+  background: #2b3038;
+  color: #aaa;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.mk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mk-card {
+  background: #23272e;
+  border-radius: 8px;
+  padding: 12px;
+  border-left: 4px solid var(--accent, #5ac8fa);
+  font-size: 13px;
+}
+
+.mk-card .goal {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--accent, #5ac8fa);
+  margin-bottom: 4px;
+}
+
+.mk-card .text {
+  color: #ddd;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.mk-card .meta {
+  font-size: 10px;
+  color: #888;
+  font-family: monospace;
+  margin-bottom: 8px;
+}
+
+.mk-card .actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mk-card button, .mk-card a.btn {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  border: 1px solid #444;
+  background: #1a1d23;
+  color: #aaa;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.mk-card button.primary {
+  background: #27ae60;
+  border-color: #27ae60;
+  color: #fff;
+}
+.mk-card button.warn {
+  background: #e67e22;
+  border-color: #e67e22;
+  color: #fff;
+}
+
+.mk-empty {
+  font-size: 12px;
+  color: #555;
+  text-align: center;
+  padding: 20px 0;
+  font-style: italic;
+}

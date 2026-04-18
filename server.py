@@ -3383,6 +3383,32 @@ def _scan_session_id_in_log(log_path, max_lines=20):
     return None
 
 
+def _morning_session_ids():
+    """Return a dict {session_id: {"goal_slug": ..., "strategy_id": ...}}
+    for every strategy across all goal.md files that has a claude_session_id.
+    Used to route sessions to the Morning Kanban vs. the Dev Kanban.
+    """
+    import morning_store as _store
+    out = {}
+    try:
+        goals = _store.load_all_goals()
+    except Exception:
+        return out
+    for g in goals:
+        for s in g.get("strategies", []):
+            sid = s.get("claude_session_id")
+            if sid:
+                out[sid] = {
+                    "goal_slug": g["slug"],
+                    "goal_name": g.get("name"),
+                    "goal_accent": g.get("accent"),
+                    "strategy_id": s.get("id"),
+                    "strategy_text": s.get("text"),
+                    "strategy_status": s.get("status"),
+                }
+    return out
+
+
 def morning_launch(goal_slug, strategy_id):
     """Spawn a new Claude session for the strategy, or resume/inject if one
     already exists. Returns a dict describing the action taken.
@@ -3516,7 +3542,75 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/sessions":
             self.send_json(find_all_sessions())
         elif path == "/api/conversations":
-            self.send_json(find_conversations())
+            convs = find_conversations() or []
+            qs = urllib.parse.parse_qs(parsed.query)
+            include_morning = qs.get("include_morning", ["0"])[0] in ("1", "true")
+            if not include_morning:
+                morning_sids = _morning_session_ids()
+                convs = [c for c in convs if c.get("session_id") not in morning_sids]
+            self.send_json(convs)
+        elif path == "/api/morning/sessions":
+            # Morning-spawned sessions may live in ANY project slug under
+            # ~/.claude/projects/ (spawn cwd determines the slug), not only
+            # the project CCC is watching. find_conversations() only scans
+            # CONVERSATIONS_DIR — too narrow. Scan all project dirs for the
+            # specific session_ids we care about.
+            morning_sids = _morning_session_ids()
+            registry = _load_session_registry() if PROJECTS_ROOT.is_dir() else {}
+            out = []
+            if PROJECTS_ROOT.is_dir():
+                for sid, meta in morning_sids.items():
+                    jsonl = None
+                    for pd in PROJECTS_ROOT.iterdir():
+                        if not pd.is_dir():
+                            continue
+                        cand = pd / f"{sid}.jsonl"
+                        if cand.is_file():
+                            jsonl = cand
+                            break
+                    if not jsonl:
+                        continue
+                    try:
+                        stat = jsonl.stat()
+                    except OSError:
+                        continue
+                    out.append({
+                        "session_id": sid,
+                        "display_name": meta.get("strategy_text"),
+                        "first_message": meta.get("strategy_text"),
+                        "modified": stat.st_mtime,
+                        "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime)),
+                        "is_live": sid in registry,
+                        "morning": meta,
+                    })
+            # Also surface strategies that have NO session yet ("never started"),
+            # so the Morning Kanban Backlog column has something to launch from.
+            never_started = []
+            seen = set(morning_sids.keys())
+            try:
+                import morning_store as _store
+                for g in _store.load_all_goals():
+                    for s in g.get("strategies", []):
+                        if s.get("status") in ("dropped", "done"):
+                            continue
+                        if s.get("claude_session_id"):
+                            continue
+                        never_started.append({
+                            "goal_slug": g["slug"],
+                            "goal_name": g.get("name"),
+                            "goal_accent": g.get("accent"),
+                            "strategy_id": s.get("id"),
+                            "strategy_text": s.get("text"),
+                            "strategy_status": s.get("status"),
+                        })
+            except Exception:
+                pass
+            self.send_json({"sessions": out, "never_started": never_started})
+        elif path == "/morning/kanban":
+            try:
+                self.send_html((MORNING_STATIC_DIR / "kanban.html").read_text())
+            except OSError as e:
+                self.send_json({"error": "morning/kanban.html missing", "detail": str(e)}, 500)
         elif path == "/api/session-status":
             qs = urllib.parse.parse_qs(parsed.query)
             sid = qs.get("session_id", [""])[0]

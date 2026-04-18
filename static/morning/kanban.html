@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CCC · Morning Kanban</title>
+  <link rel="stylesheet" href="/static/morning/morning.css">
+  <link rel="stylesheet" href="/static/morning/kanban.css">
+</head>
+<body>
+  <div class="mk-wrap">
+    <nav class="mv-nav">
+      <a href="/morning">Morning</a>
+      <a class="active">Kanban</a>
+      <a href="/">Dev Kanban</a>
+      <span class="mv-nav-meta" id="refresh-meta">loading…</span>
+      <button id="refresh-now" title="reload">Refresh</button>
+    </nav>
+
+    <div class="mk-board">
+      <section class="mk-col" data-col="backlog">
+        <h3>Backlog <span class="mk-count" id="count-backlog"></span></h3>
+        <p class="subtitle">Strategies from every goal that don't have a session yet.</p>
+        <div class="mk-list" id="col-backlog"></div>
+      </section>
+      <section class="mk-col" data-col="active">
+        <h3>Active <span class="mk-count" id="count-active"></span></h3>
+        <p class="subtitle">Sessions with a running process right now.</p>
+        <div class="mk-list" id="col-active"></div>
+      </section>
+      <section class="mk-col" data-col="dormant">
+        <h3>Dormant <span class="mk-count" id="count-dormant"></span></h3>
+        <p class="subtitle">Sessions that exist on disk but no process attached.</p>
+        <div class="mk-list" id="col-dormant"></div>
+      </section>
+    </div>
+  </div>
+
+  <script src="/static/morning/side-nav.js"></script>
+  <script src="/static/morning/kanban.js"></script>
+</body>
+</html>
