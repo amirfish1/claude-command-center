@@ -4005,6 +4005,19 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                         dismissed_at=_t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime()),
                     )
                 self.send_json(result)
+        elif path == "/api/morning/today/dismiss":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            cid = (payload.get("id") or "").strip()
+            if not cid:
+                self.send_json({"ok": False, "error": "missing id"}, 400)
+            else:
+                import morning_store as _store
+                self.send_json(_store.dismiss_user_tactical(cid))
         elif path == "/api/morning/braindump/accept":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
