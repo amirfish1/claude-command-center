@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CCC · Affiliates</title>
+  <link rel="stylesheet" href="/static/affiliates/affiliates.css">
+</head>
+<body>
+  <div class="af-wrap">
+    <nav class="af-nav">
+      <a class="active">Affiliates</a>
+      <a href="/">Kanban</a>
+      <a href="/morning">Morning</a>
+      <span class="af-nav-meta" id="status-meta"></span>
+      <button id="add-lead" class="af-btn-primary">+ Add Lead</button>
+    </nav>
+
+    <section class="af-section">
+      <h3>Studio leads <span id="lead-count" class="muted"></span></h3>
+      <p class="af-help">Track studios you are pursuing. Fields save automatically when you move off a field.</p>
+      <div id="leads-list"></div>
+      <div id="empty-state" class="af-empty" style="display:none;">
+        No leads yet. Click <strong>+ Add Lead</strong> to track your first one.
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/affiliates/affiliates.js"></script>
+</body>
+</html>
