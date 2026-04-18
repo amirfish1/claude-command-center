@@ -273,6 +273,9 @@
     }
     knownGoalSlugs = Array.from(slugSet).sort();
 
+    // Paint the "Today" strip too (user-tactical items).
+    renderTodayStrip();
+
     const active = (state.sessions || []).filter(s => s.is_live);
     const dormant = (state.sessions || []).filter(s => !s.is_live);
     const backlog = state.never_started || [];
@@ -453,16 +456,21 @@
       )
     );
 
-    if (cls === "NEW") {
-      const acceptBtn = el("button", { class: "accept" }, "Accept as tactical");
-      acceptBtn.addEventListener("click", () => {
-        const slug = goalSelect.value;
-        if (!slug) { alert("Pick a goal first (or use Dismiss)"); return; }
-        acceptAnalysis(item, "tactical", slug, acceptBtn, row);
-      });
-      actionsHost.appendChild(acceptBtn);
-    } else if (cls === "CONTEXT") {
-      const attachBtn = el("button", { class: "accept" }, "Attach as note");
+    // "Add to today" works for every classification — per user feedback,
+    // if Amir typed it, he wants the option to pull it into Today regardless
+    // of whether we think it's existing / new / context / discard.
+    const addTodayBtn = el("button", { class: "accept" }, "Add to today");
+    addTodayBtn.addEventListener("click", () => {
+      const slug = goalSelect.value;
+      if (!slug) { alert("Pick a goal first (or use Dismiss)"); return; }
+      acceptAnalysis(item, "tactical", slug, addTodayBtn, row);
+    });
+    actionsHost.appendChild(addTodayBtn);
+
+    // CONTEXT keeps a secondary "Attach as note" for when the item really
+    // is context, not a todo. NEW / EXISTING / DISCARD only get Add/Dismiss.
+    if (cls === "CONTEXT") {
+      const attachBtn = el("button", {}, "Attach as note");
       attachBtn.addEventListener("click", () => {
         const slug = goalSelect.value;
         if (!slug) { alert("Pick a goal first (or use Dismiss)"); return; }
@@ -470,6 +478,7 @@
       });
       actionsHost.appendChild(attachBtn);
     }
+
     const dismissBtn = el("button", {}, "Dismiss");
     dismissBtn.addEventListener("click", () => dismissAnalysis(row, item));
     actionsHost.appendChild(dismissBtn);
@@ -540,6 +549,78 @@
     board.hidden = !isHidden;
     // Flip the triangle on the button's label.
     boardToggle.innerHTML = boardToggle.innerHTML.replace(/^[▸▾]/, isHidden ? "▾" : "▸");
+  });
+
+  // Paints the "Today" strip on the kanban page from /api/morning/state's
+  // `today` array (items user added from the braindump or elsewhere).
+  // Each row shows the goal chip, the text, and a "Done" button that
+  // dismisses it from Today.
+  async function renderTodayStrip() {
+    const section = document.getElementById("mk-today-section");
+    const host = document.getElementById("mk-today-list");
+    const countEl = document.getElementById("mk-today-count");
+    if (!section || !host) return;
+    let today = [];
+    let goalAccents = {};
+    try {
+      const r = await fetch("/api/morning/state");
+      if (r.ok) {
+        const d = await r.json();
+        today = d.today || [];
+        goalAccents = Object.fromEntries((d.goals || []).map(g => [g.slug, g.accent]));
+      }
+    } catch (e) { /* fall through to empty */ }
+
+    if (!today.length) {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+    countEl.textContent = today.length;
+    host.innerHTML = "";
+    for (const t of today) {
+      const accent = goalAccents[t.goal_slug] || "#5ac8fa";
+      const row = el("div", { class: "mk-today-item", style: { "--accent": accent } },
+        el("span", { class: "goal" }, t.goal_slug || "—"),
+        el("span", { class: "text" }, t.text || ""),
+        el("span", { class: "src" }, t.source || "")
+      );
+      row.style.setProperty("--accent", accent);
+      if (t.user_tactical_id) {
+        const doneBtn = el("button", {}, "Done");
+        doneBtn.addEventListener("click", async () => {
+          doneBtn.disabled = true;
+          doneBtn.textContent = "…";
+          try {
+            const r = await fetch("/api/morning/today/dismiss", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: t.user_tactical_id }),
+            });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok || !d.ok) throw new Error(d.error || "HTTP " + r.status);
+            row.style.opacity = "0.3";
+            setTimeout(() => renderTodayStrip(), 300);
+          } catch (e) {
+            doneBtn.textContent = "error";
+            alert(e.message);
+          }
+        });
+        row.appendChild(doneBtn);
+      }
+      host.appendChild(row);
+    }
+  }
+
+  // Defensive fallback: document-level delegation so the pane-close
+  // button still works if its direct listener gets clobbered by a
+  // re-render.
+  document.addEventListener("click", (e) => {
+    const t = e.target;
+    if (t && (t.id === "mk-pane-close" ||
+              (t.closest && t.closest("#mk-pane-close")))) {
+      closePane();
+    }
   });
 
   // Restore the last braindump analysis so reloading the page doesn't wipe

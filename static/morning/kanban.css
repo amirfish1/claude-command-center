@@ -101,6 +101,40 @@
 .mk-ana-actions button.accept:hover { background: #27ae60; color: #fff; }
 .mk-ana-actions button:disabled { opacity: 0.5; cursor: default; }
 
+/* Today — user-committed items, surfaced right under the braindump hero
+   so the kanban page shows the state that matters to Amir without a tab jump. */
+.mk-today {
+  background: #1a1d23;
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+.mk-today h3 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px;
+  color: #ddd; margin: 0 0 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.mk-today-item {
+  display: flex; gap: 12px; align-items: center;
+  padding: 9px 10px; background: #23272e;
+  border-radius: 6px; margin-bottom: 6px;
+  border-left: 3px solid var(--accent, #5ac8fa);
+  font-size: 13px;
+}
+.mk-today-item .goal {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--accent, #5ac8fa);
+  min-width: 80px;
+}
+.mk-today-item .text { flex: 1; color: #eaeaea; }
+.mk-today-item .src { font-size: 10px; color: #666; }
+.mk-today-item button {
+  background: transparent; border: 1px solid #444;
+  color: #888; padding: 3px 10px;
+  border-radius: 3px; font-size: 11px; cursor: pointer;
+}
+.mk-today-item button:hover { color: #eaeaea; }
+
 .mk-board-toggle {
   margin: 12px 0;
 }

@@ -4337,12 +4337,26 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
             sid = payload.get("session_id") or conv_id
             try:
                 verified = _load_verified_conversations()
-                if sid in verified:
-                    verified.remove(sid)
+                # Idempotent when the caller passes {"verified": true|false}; falls
+                # back to toggle for backward-compat (older clients that didn't set
+                # the flag). Drag-to-Verified always passes true so it can't ever
+                # accidentally un-verify.
+                desired = payload.get("verified")
+                if desired is True:
+                    if sid not in verified:
+                        verified.append(sid)
+                    now_verified = True
+                elif desired is False:
+                    if sid in verified:
+                        verified.remove(sid)
                     now_verified = False
                 else:
-                    verified.append(sid)
-                    now_verified = True
+                    if sid in verified:
+                        verified.remove(sid)
+                        now_verified = False
+                    else:
+                        verified.append(sid)
+                        now_verified = True
                 _save_verified_conversations(verified)
                 # Also close linked GitHub issue with commit SHA comment
                 gh_result = None
