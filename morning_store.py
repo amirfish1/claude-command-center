@@ -291,10 +291,14 @@ def load_all_goals(goals_dir=None):
     return goals
 
 
-def add_user_tactical(goal_slug, text, source_note="morning braindump"):
+def add_user_tactical(goal_slug, text, source_note="morning braindump", meta=None):
     """Append a user-authored tactical item to
     ~/.claude/log-viewer/morning/user-tactical.jsonl. Morning.py's tactical
     aggregator reads this file alongside repo-scanned items.
+
+    `meta` (optional dict): extra fields to persist with the item — e.g.
+    braindump classification, LLM notes, matched_existing. These survive
+    into the Today strip so the UI can show context without a second card.
 
     Returns {"ok": True, "id": ...}.
     """
@@ -312,6 +316,11 @@ def add_user_tactical(goal_slug, text, source_note="morning braindump"):
         "source": source_note,
         "created_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
     }
+    if meta and isinstance(meta, dict):
+        for k in ("classification", "notes", "matched_existing"):
+            v = meta.get(k)
+            if v:
+                entry[k] = v
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
@@ -320,14 +329,57 @@ def add_user_tactical(goal_slug, text, source_note="morning braindump"):
     return {"ok": True, "id": cid}
 
 
-def load_user_tactical():
-    """Return the list of user-added tactical items, skipping dismissed ones."""
+def _user_tactical_order_path():
+    return Path.home() / ".claude" / "log-viewer" / "morning" / "user-tactical-order.json"
+
+
+def load_user_tactical_order():
+    """Return the persisted order [cid, cid, ...] or [] if none saved.
+
+    Missing ids (items added since last save) get appended to the end in
+    creation-timestamp order by the caller. Extra ids not matching any known
+    item are ignored.
+    """
+    import json
+    path = _user_tactical_order_path()
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def save_user_tactical_order(ids):
+    """Persist a list of user-tactical ids in display order."""
+    import json
+    path = _user_tactical_order_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not isinstance(ids, list):
+        ids = []
+    try:
+        path.write_text(json.dumps(ids, indent=2))
+        return {"ok": True}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def load_user_tactical(include_dismissed=False):
+    """Return the list of user-added tactical items.
+
+    By default skips dismissed items. Pass include_dismissed=True to get
+    everything for a "Completed" view. Active items are ordered by the
+    saved drag-order (see save_user_tactical_order); dismissed items follow
+    in most-recent-first order.
+    """
     import json
     path = Path.home() / ".claude" / "log-viewer" / "morning" / "user-tactical.jsonl"
     if not path.is_file():
         return []
     items = {}
-    dismissed = set()
+    dismissed_ids = set()
+    dismissed_at = {}
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -339,12 +391,36 @@ def load_user_tactical():
                 if not cid:
                     continue
                 if ev.get("dismissed_at"):
-                    dismissed.add(cid)
+                    dismissed_ids.add(cid)
+                    dismissed_at[cid] = ev.get("dismissed_at")
                     continue
                 items.setdefault(cid, ev)
     except OSError:
         return []
-    return [v for k, v in items.items() if k not in dismissed]
+
+    active_map = {k: v for k, v in items.items() if k not in dismissed_ids}
+    order = load_user_tactical_order()
+    ordered_active = []
+    seen = set()
+    for cid in order:
+        if cid in active_map and cid not in seen:
+            ordered_active.append(active_map[cid])
+            seen.add(cid)
+    for cid, v in active_map.items():
+        if cid not in seen:
+            ordered_active.append(v)
+
+    if not include_dismissed:
+        return ordered_active
+
+    dismissed_items = []
+    for cid in dismissed_ids:
+        if cid in items:
+            entry = dict(items[cid])
+            entry["dismissed_at"] = dismissed_at.get(cid)
+            dismissed_items.append(entry)
+    dismissed_items.sort(key=lambda e: e.get("dismissed_at") or "", reverse=True)
+    return ordered_active + dismissed_items
 
 
 def dismiss_user_tactical(item_id):
@@ -488,5 +564,7 @@ __all__ = [
     "mark_inbox_item",
     "add_user_tactical",
     "load_user_tactical",
+    "load_user_tactical_order",
+    "save_user_tactical_order",
     "dismiss_user_tactical",
 ]

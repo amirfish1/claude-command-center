@@ -27,35 +27,42 @@
       <div id="mk-analysis" class="mk-analysis" hidden></div>
     </section>
 
-    <section class="mk-today" id="mk-today-section" hidden>
-      <h3>Today <span id="mk-today-count" class="mk-count"></span></h3>
-      <div id="mk-today-list"></div>
+    <section class="mk-goals-section">
+      <div id="goals-row" class="mv-goals"></div>
+      <div id="goals-filter-note"></div>
     </section>
 
-    <div class="mk-board-toggle">
-      <button id="mk-board-toggle" type="button">▸ Show sessions (<span id="mk-board-count">loading</span>)</button>
-    </div>
-
-    <div class="mk-board" id="mk-board" hidden>
+    <div class="mk-board" id="mk-board">
+      <section class="mk-col mk-col-today" data-col="today">
+        <h3>Today <span class="mk-count" id="count-today"></span></h3>
+        <p class="subtitle">Tasks you committed to — from braindump or manually added.</p>
+        <div class="mk-list" id="col-today"></div>
+      </section>
       <section class="mk-col" data-col="backlog">
         <h3>Backlog <span class="mk-count" id="count-backlog"></span></h3>
-        <p class="subtitle">Strategies from every goal that don't have a session yet.</p>
+        <p class="subtitle">Strategies without a session yet.</p>
         <div class="mk-list" id="col-backlog"></div>
       </section>
       <section class="mk-col" data-col="active">
         <h3>Active <span class="mk-count" id="count-active"></span></h3>
-        <p class="subtitle">Sessions with a running process right now.</p>
+        <p class="subtitle">Sessions running right now.</p>
         <div class="mk-list" id="col-active"></div>
       </section>
       <section class="mk-col" data-col="dormant">
         <h3>Dormant <span class="mk-count" id="count-dormant"></span></h3>
-        <p class="subtitle">Sessions that exist on disk but no process attached.</p>
+        <p class="subtitle">Sessions on disk, no process attached.</p>
         <div class="mk-list" id="col-dormant"></div>
+      </section>
+      <section class="mk-col mk-col-completed" data-col="completed">
+        <h3>Completed <span class="mk-count" id="count-completed"></span></h3>
+        <p class="subtitle">Tasks you dragged here from Today.</p>
+        <div class="mk-list" id="col-completed"></div>
       </section>
     </div>
   </div>
 
   <aside id="mk-pane" class="mk-pane" hidden>
+    <div id="mk-pane-handle" class="mk-pane-handle" title="Drag to resize"></div>
     <div class="mk-pane-header">
       <div class="mk-pane-title" id="mk-pane-title">—</div>
       <button class="mk-pane-close" id="mk-pane-close" title="close">×</button>

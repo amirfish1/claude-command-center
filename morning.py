@@ -484,15 +484,24 @@ def get_morning_state():
     # we scan from TODO.md / PARKING_LOT / GitHub starts in "Suggested"
     # so Today doesn't drown in auto-scanned backlog.
     today = []
-    for ut in morning_store.load_user_tactical():
-        today.append({
+    completed = []
+    for ut in morning_store.load_user_tactical(include_dismissed=True):
+        row = {
             "priority": "P1",
             "goal_slug": ut.get("goal_slug"),
             "text": ut.get("text", ""),
             "source": ut.get("source") or "braindump",
             "age_days": 0,
             "user_tactical_id": ut.get("id"),
-        })
+            "classification": ut.get("classification"),
+            "notes": ut.get("notes"),
+            "matched_existing": ut.get("matched_existing"),
+        }
+        if ut.get("dismissed_at"):
+            row["dismissed_at"] = ut.get("dismissed_at")
+            completed.append(row)
+        else:
+            today.append(row)
 
     suggested = _scan_all_repos()
     _tag_tactical(suggested, goals)
@@ -510,6 +519,7 @@ def get_morning_state():
         "goals": goal_cards,
         "strategic": strategic,
         "today": today,
+        "completed": completed,
         "suggested": suggested,
         "tactical": tactical,  # deprecated — retained for any older consumers
         "inbox": _load_inbox(),

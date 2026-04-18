@@ -115,11 +115,14 @@
   display: flex; align-items: center; gap: 8px;
 }
 .mk-today-item {
-  display: flex; gap: 12px; align-items: center;
+  display: flex; flex-direction: column; gap: 4px;
   padding: 9px 10px; background: #23272e;
   border-radius: 6px; margin-bottom: 6px;
   border-left: 3px solid var(--accent, #5ac8fa);
   font-size: 13px;
+}
+.mk-today-main {
+  display: flex; gap: 12px; align-items: center;
 }
 .mk-today-item .goal {
   font-size: 9px; text-transform: uppercase; letter-spacing: 1px;
@@ -132,8 +135,22 @@
   background: transparent; border: 1px solid #444;
   color: #888; padding: 3px 10px;
   border-radius: 3px; font-size: 11px; cursor: pointer;
+  margin-left: auto;
 }
 .mk-today-item button:hover { color: #eaeaea; }
+.mk-today-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: 1px;
+  padding: 2px 6px; border-radius: 3px;
+}
+.mk-today-badge.NEW { background: #27ae60; color: #fff; }
+.mk-today-badge.EXISTING { background: #e67e22; color: #fff; }
+.mk-today-badge.CONTEXT { background: #5ac8fa; color: #0f1115; }
+.mk-today-badge.DISCARD { background: #2b3038; color: #888; }
+.mk-today-sub {
+  font-size: 11px; color: #888; line-height: 1.4;
+  padding-left: 92px;  /* align under .text, past the .goal chip */
+}
+.mk-today-sub .mk-today-match em { color: #aaa; font-style: italic; }
 
 .mk-board-toggle {
   margin: 12px 0;
@@ -148,9 +165,31 @@
 
 .mk-board {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: 1.4fr repeat(4, 1fr);
   gap: 16px;
   margin-top: 18px;
+}
+.mk-col-today { border-top: 2px solid var(--accent-today, #5ac8fa); }
+.mk-col-completed { border-top: 2px solid #555; opacity: 0.85; }
+.mk-col-completed .mk-card { opacity: 0.55; }
+
+/* Drag & drop */
+.mk-card[draggable="true"] { cursor: grab; }
+.mk-card.mk-dragging-card { opacity: 0.4; cursor: grabbing; }
+.mk-list.mk-drop-hot {
+  outline: 2px dashed #5ac8fa;
+  outline-offset: -4px;
+  background: rgba(90, 200, 250, 0.06);
+  border-radius: 6px;
+}
+.mk-drop-indicator {
+  height: 2px; background: #5ac8fa; margin: 2px 0;
+  border-radius: 1px; pointer-events: none;
+}
+
+.mk-goals-section { margin-top: 18px; }
+.mk-goals-section .filter-note {
+  margin: 10px 0 0;
 }
 
 .mk-col {
@@ -263,13 +302,25 @@
 .mk-card.selectable:hover { background: #2a2f37; }
 .mk-card.selected { outline: 2px solid var(--accent, #5ac8fa); outline-offset: 1px; }
 
+.mk-card { position: relative; }
+.mk-card-badge {
+  position: absolute; top: 8px; right: 8px;
+  font-size: 8px; font-weight: 700; letter-spacing: 1px;
+  padding: 2px 5px; border-radius: 3px;
+}
+.mk-card-badge.NEW { background: #27ae60; color: #fff; }
+.mk-card-badge.EXISTING { background: #e67e22; color: #fff; }
+.mk-card-badge.CONTEXT { background: #5ac8fa; color: #0f1115; }
+.mk-card-badge.DISCARD { background: #2b3038; color: #888; }
+
 /* Right-side transcript pane */
-.mk-wrap.pane-open { max-width: none; padding-right: 480px; transition: padding 0.18s; }
+/* Fallback 480px matches historical default (460px pane + 20px gutter). */
+.mk-wrap.pane-open { max-width: none; padding-right: calc(var(--mk-pane-width, 460px) + 20px); transition: padding 0.18s; }
 
 .mk-pane {
   position: fixed;
   top: 0; right: 0; bottom: 0;
-  width: 460px;
+  width: var(--mk-pane-width, 460px);
   background: #14171c;
   border-left: 1px solid #2a2e35;
   display: flex;
@@ -277,6 +328,25 @@
   z-index: 900;
   box-shadow: -4px 0 20px rgba(0, 0, 0, 0.4);
 }
+
+.mk-pane-handle {
+  position: absolute;
+  left: -3px; top: 0; bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 901;
+  background: transparent;
+  transition: background 0.15s;
+}
+.mk-pane-handle:hover { background: rgba(90, 200, 250, 0.15); }
+
+body.mk-dragging { cursor: col-resize; user-select: none; }
+body.mk-dragging * { cursor: col-resize !important; user-select: none !important; }
+/* .mk-pane defines display:flex, which has the same specificity as the
+   built-in [hidden] { display: none } user-agent rule — and loses because
+   author styles win ties. Explicitly suppress display when the hidden attr
+   is set so closePane() (which does `pane.hidden = true`) actually hides it. */
+.mk-pane[hidden] { display: none; }
 
 .mk-pane-header {
   display: flex; align-items: center;
@@ -290,9 +360,14 @@
 }
 .mk-pane-close {
   background: transparent; border: 0; color: #888;
-  font-size: 22px; cursor: pointer; padding: 0 4px; line-height: 1;
+  font-size: 24px; cursor: pointer; line-height: 1;
+  padding: 6px 12px; margin: -6px -6px -6px 4px;
+  border-radius: 4px;
+  min-width: 36px; min-height: 36px;
+  display: inline-flex; align-items: center; justify-content: center;
 }
-.mk-pane-close:hover { color: #fff; }
+.mk-pane-close:hover { color: #fff; background: #2a2e35; }
+.mk-pane-close:active { background: #1a1d23; }
 
 .mk-pane-meta {
   font-size: 11px; color: #888; padding: 8px 16px;
