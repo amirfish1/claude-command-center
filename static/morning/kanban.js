@@ -336,7 +336,24 @@
     const btn = document.getElementById("mk-analyze");
     const status = document.getElementById("mk-analyze-status");
     btn.disabled = true;
-    status.textContent = "analyzing (takes ~15s)…";
+    btn.textContent = "Analyzing…";
+
+    // Elapsed-time ticker: forces the browser to repaint the status line
+    // every second so the user sees it's actively working. Also doubles as a
+    // guarantee that the initial "analyzing…" text is actually painted
+    // before the blocking fetch starts (setInterval schedules past the
+    // first animation frame).
+    const start = Date.now();
+    status.textContent = "analyzing · 0s";
+    const tickerId = setInterval(() => {
+      const secs = Math.round((Date.now() - start) / 1000);
+      status.textContent = `analyzing · ${secs}s (typically 15–30s)`;
+    }, 1000);
+
+    // Yield a frame so the first "analyzing · 0s" paints before we issue
+    // the blocking request.
+    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
     try {
       const r = await fetch("/api/morning/braindump", {
         method: "POST",
@@ -354,13 +371,17 @@
       } else {
         for (const it of items) host.appendChild(renderAnalysisItem(it));
       }
-      status.textContent = items.length + " items · "
-        + items.filter(i => (i.classification || "").toUpperCase() === "NEW").length + " new · "
-        + items.filter(i => (i.classification || "").toUpperCase() === "EXISTING").length + " existing";
+      const elapsed = Math.round((Date.now() - start) / 1000);
+      status.textContent = `${items.length} items · `
+        + `${items.filter(i => (i.classification || "").toUpperCase() === "NEW").length} new · `
+        + `${items.filter(i => (i.classification || "").toUpperCase() === "EXISTING").length} existing `
+        + `(${elapsed}s)`;
     } catch (e) {
       status.textContent = "failed: " + e.message;
     } finally {
+      clearInterval(tickerId);
       btn.disabled = false;
+      btn.textContent = "Analyze →";
     }
   }
 
