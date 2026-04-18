@@ -50,6 +50,25 @@ body {
   padding: 6px 8px; border-radius: 4px; border-left: 3px solid var(--accent, #5ac8fa);
 }
 .mv-goal .ribbon .date { color: #888; font-size: 10px; display: block; margin-bottom: 2px; }
+.mv-goal.active {
+  outline: 2px solid var(--accent, #5ac8fa);
+  outline-offset: 1px;
+}
+.mv-goal.dim { opacity: 0.45; }
+.mv-goal:hover.dim { opacity: 0.7; }
+.mv-goal-open {
+  display: block; text-align: right; margin-top: 6px;
+  font-size: 10px; color: #888; text-decoration: none;
+}
+.mv-goal-open:hover { color: #5ac8fa; }
+
+.filter-note {
+  background: #2a2e35; color: #ccc; font-size: 12px;
+  padding: 8px 12px; border-radius: 6px; margin: -10px 0 16px;
+  border-left: 3px solid #5ac8fa;
+}
+.filter-note a { color: #5ac8fa; text-decoration: none; }
+.filter-note a:hover { text-decoration: underline; }
 
 /* Task rows (strategic + tactical share this) */
 .mv-task {

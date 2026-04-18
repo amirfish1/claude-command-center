@@ -3345,19 +3345,42 @@ def _morning_spawn_prompt(goal_name, intent_markdown, strategy_text):
     )
 
 
-def _morning_resolve_session_id_from_log(log_path, max_wait_s=2.5, interval_s=0.25):
-    """Poll the spawn log file for a resolved session_id (written by Claude
-    Code into the first few jsonl lines). Returns the session_id string, or
-    None if not resolved within the timeout.
+def _morning_resolve_session_id_from_log(log_path, max_wait_s=8.0, interval_s=0.25):
+    """Poll a spawn log for a session_id in any of the first ~20 jsonl lines.
+
+    Claude Code writes SessionStart hook events early with a `session_id`
+    field, so we can resolve within a second or two even though the spawn
+    prompt hasn't been processed yet. Scans any event type, not just the
+    older `spawn_meta` convention that `_extract_spawn_meta` expects.
     """
     deadline = time.time() + max_wait_s
     while time.time() < deadline:
-        meta = _extract_spawn_meta(log_path)
-        if meta and meta.get("session_id"):
-            return meta["session_id"]
+        sid = _scan_session_id_in_log(log_path)
+        if sid:
+            return sid
         time.sleep(interval_s)
-    meta = _extract_spawn_meta(log_path)
-    return (meta or {}).get("session_id")
+    return _scan_session_id_in_log(log_path)
+
+
+def _scan_session_id_in_log(log_path, max_lines=20):
+    try:
+        with open(log_path, "r") as f:
+            for i, line in enumerate(f):
+                if i >= max_lines:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                sid = ev.get("session_id")
+                if sid:
+                    return sid
+    except OSError:
+        return None
+    return None
 
 
 def morning_launch(goal_slug, strategy_id):

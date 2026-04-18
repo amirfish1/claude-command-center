@@ -22,22 +22,35 @@
     return e;
   }
 
+  // Active filter — which goal slug we're narrowing the strategic/tactical
+  // lists to. null means "show all". Click a goal card to set; click the same
+  // card again (or the Clear link) to reset.
+  let activeFilter = null;
+
   function renderGoal(goal) {
+    const isActive = activeFilter === goal.slug;
+    const openLink = el("a", {
+      class: "mv-goal-open",
+      href: "/morning/goals/" + encodeURIComponent(goal.slug),
+    }, "details →");
+    openLink.addEventListener("click", (e) => e.stopPropagation());
     const card = el("div", {
-      class: "mv-goal",
+      class: "mv-goal" + (isActive ? " active" : (activeFilter ? " dim" : "")),
       style: { "--accent": goal.accent || "#5ac8fa" },
-      onclick: () => { window.location.href = "/morning/goals/" + encodeURIComponent(goal.slug); }
     },
       el("div", { class: "cat" }, goal.life_area),
       el("div", { class: "name" }, goal.name),
       el("div", { class: "ribbon", style: { "border-left-color": goal.accent || "#5ac8fa" } },
         el("span", { class: "date" }, (goal.ribbon && goal.ribbon.date || "") + (goal.ribbon && goal.ribbon.source ? " (" + goal.ribbon.source + ")" : "")),
         (goal.ribbon && goal.ribbon.text) || ""
-      )
+      ),
+      openLink
     );
-    // Inline color set via style object above isn't picking up CSS variable on all browsers
-    // for border-left. Set the CSS variable directly:
     card.style.setProperty("--accent", goal.accent || "#5ac8fa");
+    card.addEventListener("click", () => {
+      activeFilter = (activeFilter === goal.slug) ? null : goal.slug;
+      render();  // re-render with new filter
+    });
     return card;
   }
 
@@ -122,32 +135,56 @@
     return row;
   }
 
-  async function load() {
-    let state;
-    try {
-      const r = await fetch("/api/morning/state");
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      state = await r.json();
-    } catch (e) {
-      document.getElementById("refresh-meta").textContent = "load failed: " + e.message;
-      return;
-    }
+  // Cached state so the filter toggle can re-render without refetching.
+  let lastState = null;
+
+  function render() {
+    if (!lastState) return;
+    const state = lastState;
 
     const goalsRow = document.getElementById("goals-row");
     goalsRow.innerHTML = "";
     for (const g of state.goals) goalsRow.appendChild(renderGoal(g));
 
+    // Filter banner (only shown when a goal is selected)
+    const filterNote = document.getElementById("filter-note");
+    if (filterNote) filterNote.remove();
+    if (activeFilter) {
+      const activeGoal = state.goals.find(g => g.slug === activeFilter);
+      const banner = el("div", { id: "filter-note", class: "filter-note" },
+        "Filtered to ",
+        el("strong", {}, activeGoal ? activeGoal.name : activeFilter),
+        " — "
+      );
+      const clear = el("a", { href: "#" }, "clear");
+      clear.addEventListener("click", (e) => { e.preventDefault(); activeFilter = null; render(); });
+      banner.appendChild(clear);
+      goalsRow.insertAdjacentElement("afterend", banner);
+    }
+
+    const matches = (row) => !activeFilter || row.goal_slug === activeFilter;
+
     const strat = document.getElementById("strategic-list");
     strat.innerHTML = "";
-    for (const t of state.strategic) strat.appendChild(renderTaskRow(t));
+    const stratFiltered = state.strategic.filter(matches);
+    for (const t of stratFiltered) strat.appendChild(renderTaskRow(t));
+    if (activeFilter && !stratFiltered.length) {
+      strat.appendChild(el("div", { class: "muted" }, "no strategic rows for this goal"));
+    }
 
     const tact = document.getElementById("tactical-list");
     tact.innerHTML = "";
-    for (const t of state.tactical) tact.appendChild(renderTaskRow(t));
+    const tactFiltered = state.tactical.filter(matches);
+    for (const t of tactFiltered) tact.appendChild(renderTaskRow(t));
+    if (activeFilter && !tactFiltered.length) {
+      tact.appendChild(el("div", { class: "muted" }, "no tactical items tagged to this goal"));
+    }
 
     const inb = document.getElementById("inbox-list");
     inb.innerHTML = "";
     const goalSlugs = state.goals.map(g => g.slug);
+    // Inbox is not filtered (it's always "needs triage for any goal"),
+    // but if filtering we still render it so promote flows stay available.
     for (const i of state.inbox) inb.appendChild(renderInboxItem(i, goalSlugs));
     document.getElementById("inbox-count").textContent =
       "— " + state.inbox.length + " candidates from free-form sources";
@@ -155,6 +192,18 @@
     const ts = state.last_refreshed ? new Date(state.last_refreshed) : null;
     document.getElementById("refresh-meta").textContent =
       ts ? ("last refreshed " + ts.toLocaleTimeString()) : "";
+  }
+
+  async function load() {
+    try {
+      const r = await fetch("/api/morning/state");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      lastState = await r.json();
+    } catch (e) {
+      document.getElementById("refresh-meta").textContent = "load failed: " + e.message;
+      return;
+    }
+    render();
   }
 
   async function scanNow() {
