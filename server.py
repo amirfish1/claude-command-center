@@ -39,7 +39,14 @@ MORNING_STATIC_DIR = STATIC_DIR / "morning"
 AFFILIATES_STATIC_DIR = STATIC_DIR / "affiliates"
 
 import morning  # morning.py — goals/tasks/inbox API (Phase 1 sample data)
-import affiliates_store  # JSON-backed store for the Affiliates section
+# Affiliates is an optional local-only module (gitignored). If the file is
+# absent, the related routes and UI link stay disabled.
+try:
+    import affiliates_store  # JSON-backed store for the Affiliates section
+    AFFILIATES_AVAILABLE = True
+except ImportError:
+    affiliates_store = None
+    AFFILIATES_AVAILABLE = False
 PORT = int(os.environ.get("PORT", 8090))
 # Optional title-prefix noise stripper (e.g. "[BYM Problem]"). Comma-separated prefixes.
 # Empty by default; set `CCC_TITLE_STRIP=BYM,FOO` to strip `[BYM ...]` and `[FOO ...]` from titles.
@@ -3483,6 +3490,21 @@ def _morning_spawn_prompt(goal_name, intent_markdown, strategy_text):
     )
 
 
+def _morning_task_spawn_prompt(goal_name, intent_markdown, task_text, status):
+    # Lighter framing for a tactical-task session (not a full strategy).
+    status_line = f"## Current status (my note)\n\n{status}\n\n" if status else ""
+    return (
+        f"You're picking up a focused work session on a task I committed to today "
+        f"(from my Morning view in Claude Command Center).\n\n"
+        f"## Goal\n\n{goal_name}\n\n"
+        f"## Goal intent\n\n{intent_markdown}\n\n"
+        f"## Task\n\n{task_text}\n\n"
+        f"{status_line}"
+        f"This is a fresh session for this task. Please help me move forward on it, "
+        f"asking any clarifying questions first if needed."
+    )
+
+
 def _morning_resolve_session_id_from_log(log_path, max_wait_s=8.0, interval_s=0.25):
     """Poll a spawn log for a session_id in any of the first ~20 jsonl lines.
 
@@ -3668,7 +3690,8 @@ def _morning_session_ids():
     try:
         goals = _store.load_all_goals()
     except Exception:
-        return out
+        goals = []
+    goal_meta_by_slug = {g["slug"]: g for g in goals}
     for g in goals:
         for s in g.get("strategies", []):
             sid = s.get("claude_session_id")
@@ -3681,7 +3704,253 @@ def _morning_session_ids():
                     "strategy_text": s.get("text"),
                     "strategy_status": s.get("status"),
                 }
+    # Also claim sessions bound to Today tasks (via ▶ Start on a task card).
+    # Without this, task-spawned sessions leak into the Dev Kanban because the
+    # dev/morning split is driven by presence in this map.
+    try:
+        for ut in _store.load_user_tactical(include_dismissed=True):
+            sid = ut.get("claude_session_id")
+            if not sid or sid in out:
+                continue
+            slug = ut.get("goal_slug") or ""
+            gmeta = goal_meta_by_slug.get(slug, {})
+            out[sid] = {
+                "goal_slug": slug,
+                "goal_name": gmeta.get("name") or slug,
+                "goal_accent": gmeta.get("accent") or "#5ac8fa",
+                "strategy_id": None,
+                "strategy_text": ut.get("text") or "",
+                "strategy_status": "task",
+                "user_tactical_id": ut.get("id"),
+            }
+    except Exception:
+        pass
     return out
+
+
+def _promote_task_to_strategy(task_id, launch=False):
+    """Convert a user-tactical task into a new strategy on its goal.
+
+    If the task has no goal_slug, refuses. On success, dismisses the task
+    (it now lives as a strategy). If launch=True, also spawns a session for
+    the new strategy and saves the session_id on the strategy entry.
+    """
+    import morning_store as _store
+    tasks = _store.load_user_tactical(include_dismissed=True)
+    task = next((t for t in tasks if t.get("id") == task_id), None)
+    if task is None:
+        return {"ok": False, "error": f"unknown task: {task_id}"}
+    goal_slug = task.get("goal_slug")
+    if not goal_slug:
+        return {"ok": False, "error": "task has no goal — set one before promoting"}
+    text = task.get("text") or ""
+    result = _store.append_strategy(goal_slug, text, status="active")
+    if not result.get("ok"):
+        return result
+    strategy_id = result["strategy_id"]
+    _store.dismiss_user_tactical(task_id)
+    if launch:
+        launch_result = morning_launch(goal_slug, strategy_id)
+        return {"ok": True, "action": "promoted_and_launched", "strategy_id": strategy_id, "goal_slug": goal_slug, "launch": launch_result}
+    return {"ok": True, "action": "promoted", "strategy_id": strategy_id, "goal_slug": goal_slug}
+
+
+def _demote_strategy_to_task(goal_slug, strategy_id, keep_session=False):
+    """Convert a strategy into a user-tactical task and mark the strategy
+    as dropped. If keep_session=True and the strategy has a session_id, the
+    new task carries that session_id so the user can still Resume it.
+    """
+    import morning as _morning
+    import morning_store as _store
+    detail = _morning.get_goal_detail(goal_slug) or {}
+    strat = next((s for s in detail.get("strategies", []) if s.get("id") == strategy_id), None)
+    if strat is None:
+        return {"ok": False, "error": f"unknown strategy: {goal_slug}/{strategy_id}"}
+    add = _store.add_user_tactical(goal_slug, strat.get("text") or strategy_id, source_note="demoted")
+    if not add.get("ok"):
+        return add
+    if keep_session and strat.get("claude_session_id"):
+        _store.update_user_tactical(add["id"], {"claude_session_id": strat["claude_session_id"]})
+    _store.set_strategy_field(goal_slug, strategy_id, "status", "dropped")
+    if not keep_session and strat.get("claude_session_id"):
+        # Detach the session so it's not double-tracked.
+        _store.set_strategy_field(goal_slug, strategy_id, "claude_session_id", None)
+    return {"ok": True, "action": "demoted", "user_tactical_id": add["id"]}
+
+
+def _detach_session_from_strategy(goal_slug, strategy_id):
+    """Clear the claude_session_id on a strategy (leaves session running)."""
+    import morning_store as _store
+    return _store.set_strategy_field(goal_slug, strategy_id, "claude_session_id", None)
+
+
+def _kill_session_by_id(session_id):
+    """Best-effort: find the pid owning this session and SIGTERM it."""
+    import signal
+    sessions_dir = Path.home() / ".claude" / "sessions"
+    if not sessions_dir.is_dir():
+        return {"ok": False, "error": "no sessions dir"}
+    for f in sessions_dir.glob("*.json"):
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if data.get("session_id") != session_id:
+            continue
+        pid = data.get("pid")
+        if not pid:
+            continue
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+            return {"ok": True, "action": "killed", "pid": pid}
+        except (OSError, ProcessLookupError) as e:
+            return {"ok": False, "error": str(e)}
+    return {"ok": False, "error": "no process found for session"}
+
+
+def morning_move(payload):
+    """Unified dispatcher for all kanban drag-drop transitions.
+
+    Expected payload: {source_col, target_col, card_id, goal_slug?,
+    strategy_id?, session_id?, user_tactical_id?, insert_before_id?}.
+    Each pair maps to a specific operation; unsupported pairs return a
+    no-op result so the UI can toast an appropriate message.
+    """
+    import morning_store as _store
+    src = (payload.get("source_col") or "").strip()
+    tgt = (payload.get("target_col") or "").strip()
+    goal_slug = payload.get("goal_slug") or ""
+    strategy_id = payload.get("strategy_id") or ""
+    session_id = payload.get("session_id") or ""
+    utid = payload.get("user_tactical_id") or payload.get("card_id") or ""
+
+    # Identical column: only Today supports reorder. Everything else is a
+    # render-only move (the user's drop position doesn't change derived
+    # columns like Active/Dormant), so we no-op.
+    if src == tgt:
+        return {"ok": True, "action": "noop-same-col"}
+
+    # Today → Completed : dismiss
+    if src == "today" and tgt == "completed":
+        return _store.dismiss_user_tactical(utid)
+    # Completed → Today : undismiss
+    if src == "completed" and tgt == "today":
+        return _store.undismiss_user_tactical(utid)
+    # Today → Backlog/Active/Dormant : promote task to strategy (+launch for active/dormant)
+    if src == "today" and tgt in ("backlog", "active", "dormant"):
+        return _promote_task_to_strategy(utid, launch=(tgt in ("active", "dormant")))
+    # Completed → Backlog/Active/Dormant : undismiss + promote (+launch for active/dormant)
+    if src == "completed" and tgt in ("backlog", "active", "dormant"):
+        _store.undismiss_user_tactical(utid)
+        return _promote_task_to_strategy(utid, launch=(tgt in ("active", "dormant")))
+
+    # Backlog → Active/Dormant : spawn session on strategy
+    if src == "backlog" and tgt in ("active", "dormant"):
+        if not goal_slug or not strategy_id:
+            return {"ok": False, "error": "missing goal_slug/strategy_id"}
+        return morning_launch(goal_slug, strategy_id)
+    # Backlog → Completed : mark strategy dropped
+    if src == "backlog" and tgt == "completed":
+        if not goal_slug or not strategy_id:
+            return {"ok": False, "error": "missing goal_slug/strategy_id"}
+        return _store.set_strategy_field(goal_slug, strategy_id, "status", "dropped")
+    # Backlog → Today : demote strategy to task
+    if src == "backlog" and tgt == "today":
+        if not goal_slug or not strategy_id:
+            return {"ok": False, "error": "missing goal_slug/strategy_id"}
+        return _demote_strategy_to_task(goal_slug, strategy_id)
+
+    # Dormant → Active : resume session
+    if src == "dormant" and tgt == "active":
+        if not goal_slug or not strategy_id:
+            return {"ok": False, "error": "missing goal_slug/strategy_id"}
+        return morning_launch(goal_slug, strategy_id)
+    # Active/Dormant → Backlog : detach session
+    if src in ("active", "dormant") and tgt == "backlog":
+        if not goal_slug or not strategy_id:
+            return {"ok": False, "error": "missing goal_slug/strategy_id"}
+        return _detach_session_from_strategy(goal_slug, strategy_id)
+    # Active/Dormant → Today : demote session to task (keep session_id on task)
+    if src in ("active", "dormant") and tgt == "today":
+        if not goal_slug or not strategy_id:
+            return {"ok": False, "error": "missing goal_slug/strategy_id"}
+        return _demote_strategy_to_task(goal_slug, strategy_id, keep_session=True)
+    # Active/Dormant → Completed : mark done (keep session for audit)
+    if src in ("active", "dormant") and tgt == "completed":
+        if not goal_slug or not strategy_id:
+            return {"ok": False, "error": "missing goal_slug/strategy_id"}
+        return _store.set_strategy_field(goal_slug, strategy_id, "status", "done")
+    # Active → Dormant : kill process (session_id persists)
+    if src == "active" and tgt == "dormant":
+        if not session_id:
+            return {"ok": False, "error": "missing session_id"}
+        return _kill_session_by_id(session_id)
+
+    return {"ok": False, "error": f"unsupported move: {src} -> {tgt}"}
+
+
+def morning_launch_task(task_id, custom_message=None):
+    """Spawn or resume a Claude session bound to a Today task.
+
+    The task's claude_session_id, once resolved, is persisted back on the
+    user-tactical record via an update entry so subsequent clicks resume
+    instead of re-spawning.
+    """
+    import morning as _morning
+    import morning_store as _store
+
+    items = _store.load_user_tactical(include_dismissed=True)
+    task = next((t for t in items if t.get("id") == task_id), None)
+    if task is None:
+        return {"ok": False, "error": f"unknown task: {task_id}"}
+    goal_slug = task.get("goal_slug") or ""
+    detail = _morning.get_goal_detail(goal_slug) or {}
+    goal_name = detail.get("name") or goal_slug or "(no goal)"
+    intent = detail.get("intent_markdown") or ""
+    task_text = task.get("text") or ""
+    status = task.get("status") or ""
+    session_id = task.get("claude_session_id")
+
+    if session_id:
+        message = (custom_message or "").strip() or (
+            f"Jumping back into the task: \"{task_text}\". "
+            f"What's the current state, and what's the next move?"
+        )
+        try:
+            result = resume_session_headless(session_id, message)
+        except Exception as e:
+            return {"ok": False, "error": f"resume failed: {e}"}
+        if not result.get("ok"):
+            return {"ok": False, "error": result.get("error") or "resume failed", "action": "resume"}
+        return {"ok": True, "action": "resumed", "session_id": session_id, "pid": result.get("pid")}
+
+    name = f"task--{(goal_slug or 'no-goal')}--{task_id[:8]}"
+    try:
+        spawn = spawn_session(
+            _morning_task_spawn_prompt(goal_name, intent, task_text, status),
+            name=name,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"spawn failed: {e}"}
+    if not spawn.get("ok"):
+        return {"ok": False, "error": spawn.get("error") or "spawn failed", "action": "spawn"}
+
+    resolved_sid = None
+    log_path = spawn.get("log")
+    if log_path:
+        resolved_sid = _morning_resolve_session_id_from_log(log_path)
+    if resolved_sid:
+        try:
+            _store.update_user_tactical(task_id, {"claude_session_id": resolved_sid})
+        except Exception:
+            pass
+    return {
+        "ok": True,
+        "action": "spawned",
+        "session_id": resolved_sid,
+        "pid": spawn.get("pid"),
+        "log": log_path,
+    }
 
 
 def morning_launch(goal_slug, strategy_id, custom_message=None):
@@ -3997,7 +4266,7 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": f"unknown goal: {slug}"}, 404)
             else:
                 self.send_json(detail)
-        elif path.startswith("/static/affiliates/"):
+        elif path.startswith("/static/affiliates/") and AFFILIATES_AVAILABLE:
             rel = path[len("/static/affiliates/"):]
             target = AFFILIATES_STATIC_DIR / rel
             try:
@@ -4031,12 +4300,12 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-store, must-revalidate")
                 self.end_headers()
                 self.wfile.write(body)
-        elif path == "/affiliates":
+        elif path == "/affiliates" and AFFILIATES_AVAILABLE:
             try:
                 self.send_html((AFFILIATES_STATIC_DIR / "index.html").read_text())
             except OSError as e:
                 self.send_json({"error": "affiliates/index.html missing", "detail": str(e)}, 500)
-        elif path == "/api/affiliates":
+        elif path == "/api/affiliates" and AFFILIATES_AVAILABLE:
             self.send_json({"leads": affiliates_store.list_leads()})
         else:
             self.send_json({"error": "Not found"}, 404)
@@ -4148,6 +4417,62 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
             else:
                 import morning_store as _store
                 self.send_json(_store.save_user_tactical_order([str(x) for x in ids]))
+        elif path == "/api/morning/today/update":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            cid = (payload.get("id") or "").strip()
+            if not cid:
+                self.send_json({"ok": False, "error": "missing id"}, 400)
+            else:
+                import morning_store as _store
+                fields = {k: payload[k] for k in
+                          ("text", "status", "goal_slug", "classification", "notes", "matched_existing")
+                          if k in payload}
+                self.send_json(_store.update_user_tactical(cid, fields))
+        elif path == "/api/morning/today/undismiss":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            cid = (payload.get("id") or "").strip()
+            if not cid:
+                self.send_json({"ok": False, "error": "missing id"}, 400)
+            else:
+                import morning_store as _store
+                self.send_json(_store.undismiss_user_tactical(cid))
+        elif path == "/api/morning/move":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            try:
+                self.send_json(morning_move(payload))
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/morning/today/launch":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            cid = (payload.get("id") or "").strip()
+            message = payload.get("message")
+            if not cid:
+                self.send_json({"ok": False, "error": "missing id"}, 400)
+            else:
+                try:
+                    self.send_json(morning_launch_task(cid, custom_message=message))
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/morning/braindump/accept":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -4213,7 +4538,7 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json(morning_launch(goal_slug, strategy_id, custom_message=custom_message))
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
-        elif path == "/api/affiliates":
+        elif path == "/api/affiliates" and AFFILIATES_AVAILABLE:
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
@@ -4225,7 +4550,7 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "lead": lead})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
-        elif re.match(r"^/api/affiliates/lead_[A-Za-z0-9_]+/delete$", path):
+        elif AFFILIATES_AVAILABLE and re.match(r"^/api/affiliates/lead_[A-Za-z0-9_]+/delete$", path):
             lead_id = path.split("/")[3]
             try:
                 deleted = affiliates_store.delete_lead(lead_id)
@@ -4235,7 +4560,7 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": "not found"}, 404)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
-        elif re.match(r"^/api/affiliates/lead_[A-Za-z0-9_]+$", path):
+        elif AFFILIATES_AVAILABLE and re.match(r"^/api/affiliates/lead_[A-Za-z0-9_]+$", path):
             lead_id = path.split("/")[3]
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
