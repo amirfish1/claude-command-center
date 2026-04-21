@@ -267,6 +267,10 @@
   }
   .event.user_text .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; }
   .event.user_text .user-msg { margin-top: 6px; white-space: pre-wrap; font-size: 15px; }
+  .msg-image { max-width: 480px; max-height: 360px; border-radius: 6px; display: block; margin: 6px 0; cursor: zoom-in; }
+  .img-lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; z-index: 9999; cursor: zoom-out; }
+  .img-lightbox.open { display: flex; }
+  .img-lightbox img { max-width: 95vw; max-height: 95vh; border-radius: 6px; box-shadow: 0 4px 30px rgba(0,0,0,0.5); }
 
   .event.result {
     background: rgba(57, 210, 192, 0.08); border-left-color: var(--cyan);
@@ -2220,6 +2224,29 @@
     }
     return '<a href="#" class="path-link" data-path="' + p + '">' + p + '</a>';
   }
+
+  let _imgLightbox = null;
+  document.addEventListener('click', (ev) => {
+    const img = ev.target.closest('img.msg-image');
+    if (img) {
+      ev.preventDefault();
+      if (!_imgLightbox) {
+        _imgLightbox = document.createElement('div');
+        _imgLightbox.className = 'img-lightbox';
+        _imgLightbox.innerHTML = '<img alt="">';
+        _imgLightbox.addEventListener('click', () => _imgLightbox.classList.remove('open'));
+        document.body.appendChild(_imgLightbox);
+      }
+      _imgLightbox.querySelector('img').src = img.src;
+      _imgLightbox.classList.add('open');
+      return;
+    }
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && _imgLightbox && _imgLightbox.classList.contains('open')) {
+      _imgLightbox.classList.remove('open');
+    }
+  });
 
   document.addEventListener('click', async (ev) => {
     const a = ev.target.closest('a.path-link');
@@ -5139,9 +5166,26 @@
           if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
           _pendingSends.splice(pIdx, 1);
         }
+        let imagesHtml = '';
+        if (Array.isArray(ev.images) && ev.images.length) {
+          for (const img of ev.images) {
+            let src = '';
+            if (img.kind === 'path' && img.session_id && img.filename) {
+              src = '/image-cache/' + encodeURIComponent(img.session_id) + '/' + encodeURIComponent(img.filename);
+            } else if (img.kind === 'base64' && img.data) {
+              src = 'data:' + (img.media_type || 'image/png') + ';base64,' + img.data;
+            } else {
+              continue;
+            }
+            imagesHtml += '<img class="msg-image" src="' + src + '" alt="pasted image">';
+          }
+        }
+        const cleanedText = cleanIssuePrompt(ev.text || '');
+        const textHtml = cleanedText ? '<div class="user-msg">' + escapeHtml(cleanedText) + '</div>' : '';
         div.innerHTML = '<span class="label">User</span>'
           + '<span class="line-num">L' + ev.line + '</span>'
-          + '<div class="user-msg">' + escapeHtml(cleanIssuePrompt(ev.text)) + '</div>';
+          + textHtml
+          + imagesHtml;
       } else if (ev.type === 'assistant') {
         let html = '<span class="line-num">L' + ev.line + '</span>';
         let hasNonTool = false;

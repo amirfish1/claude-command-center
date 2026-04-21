@@ -1290,7 +1290,10 @@ def inject_input_via_keystroke(tty, terminal_app, text):
         return "ok"
         '''
     else:
-        # Terminal.app: find the tab by tty, focus it, then keystroke
+        # Terminal.app: find the tab by tty, focus it, then keystroke.
+        # The reorder is re-asserted AFTER activate to win the race against
+        # macOS restoring a different Terminal window as key — otherwise
+        # keystroke lands in whichever Terminal tab was last user-focused.
         script = f'''
         tell application "Terminal"
           set foundWin to missing value
@@ -1318,8 +1321,13 @@ def inject_input_via_keystroke(tty, terminal_app, text):
             set index of foundWin to 1
           end try
           activate
+          delay 0.25
+          try
+            set index of foundWin to 1
+          end try
+          set selected of foundTab to true
         end tell
-        delay 0.15
+        delay 0.1
         tell application "System Events"
           keystroke "{text_lit}"
           keystroke return
@@ -1999,14 +2007,17 @@ def parse_event(ev, line_num):
                 for item in content
                 if isinstance(item, dict) and item.get("type") == "text"
             ]
-            if texts:
+            images = _extract_images_from_content(content)
+            if texts or images:
                 return {
                     "line": line_num,
                     "type": "user_text",
                     "text": "\n".join(t for t in texts if t),
+                    "images": images,
                 }
         elif isinstance(content, str) and content.strip():
-            return {"line": line_num, "type": "user_text", "text": content.strip()}
+            images = _extract_images_from_content(content)
+            return {"line": line_num, "type": "user_text", "text": content.strip(), "images": images}
 
     if t == "result":
         cost = ev.get("cost_usd", "?")
@@ -2046,20 +2057,77 @@ def _safe_parse_message(msg):
 
 
 def _extract_text_from_content(content):
-    """Extract plain text from a message content field (string or list)."""
+    """Extract plain text from a message content field (string or list).
+
+    Image-only messages return "[image]" so conversation previews don't blank out.
+    """
     if isinstance(content, str):
         return content.strip()
     if isinstance(content, list):
         texts = []
+        has_image = False
         for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                t = item.get("text", "").strip()
-                if t:
-                    texts.append(t)
+            if isinstance(item, dict):
+                itype = item.get("type")
+                if itype == "text":
+                    t = item.get("text", "").strip()
+                    if t:
+                        texts.append(t)
+                elif itype == "image":
+                    has_image = True
             elif isinstance(item, str):
                 texts.append(item.strip())
-        return "\n".join(texts)
+        joined = "\n".join(texts)
+        if joined:
+            return joined
+        if has_image:
+            return "[image]"
+        return ""
     return ""
+
+
+_IMAGE_CACHE_PATH_RE = re.compile(r"/image-cache/([0-9a-fA-F-]+)/([^/\s\"'\]]+\.(?:png|jpe?g|gif|webp))", re.IGNORECASE)
+
+
+def _extract_images_from_content(content):
+    """Return a list of image descriptors from a message content field.
+
+    Each entry is one of:
+      {"kind": "path", "session_id": str, "filename": str}
+      {"kind": "base64", "media_type": str, "data": str}
+    """
+    out = []
+    if not isinstance(content, list):
+        # Claude Code also sometimes emits text blocks containing
+        # "[Image: source: /Users/.../.claude/image-cache/<sid>/<N>.png]".
+        if isinstance(content, str):
+            for m in _IMAGE_CACHE_PATH_RE.finditer(content):
+                out.append({"kind": "path", "session_id": m.group(1), "filename": m.group(2)})
+        return out
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        itype = item.get("type")
+        if itype == "image":
+            src = item.get("source") or {}
+            stype = src.get("type")
+            if stype == "base64":
+                data = src.get("data") or ""
+                mt = src.get("media_type") or "image/png"
+                if data:
+                    out.append({"kind": "base64", "media_type": mt, "data": data})
+            else:
+                p = src.get("path") or src.get("file_path") or ""
+                if isinstance(p, str):
+                    m = _IMAGE_CACHE_PATH_RE.search(p)
+                    if m:
+                        out.append({"kind": "path", "session_id": m.group(1), "filename": m.group(2)})
+        elif itype == "text":
+            txt = item.get("text", "")
+            if isinstance(txt, str) and "image-cache" in txt:
+                for m in _IMAGE_CACHE_PATH_RE.finditer(txt):
+                    out.append({"kind": "path", "session_id": m.group(1), "filename": m.group(2)})
+    return out
 
 
 def find_conversations():
@@ -2444,8 +2512,11 @@ def _parse_conversation_event(ev, line_num):
         text = _extract_text_from_content(content)
         if text and text.lstrip().startswith("<command-name>"):
             return None
-        if text:
-            return {"line": line_num, "type": "user_text", "text": text}
+        images = _extract_images_from_content(content)
+        if text or images:
+            # Preview placeholder "[image]" shouldn't leak into the rendered message.
+            display_text = "" if (text == "[image]" and images) else text
+            return {"line": line_num, "type": "user_text", "text": display_text, "images": images}
         # Check for tool results in content list
         if isinstance(content, list):
             for item in content:
@@ -4124,14 +4195,29 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                         stat = jsonl.stat()
                     except OSError:
                         continue
+                    tail = _extract_tail_meta(jsonl) or {}
+                    is_live = sid in registry
+                    sc = _read_sidecar_state(sid) if is_live else None
+                    sidecar_status = sc.get("status") if sc else None
+                    sidecar_has_writes = bool(sc.get("has_writes")) if sc else False
                     out.append({
                         "session_id": sid,
                         "display_name": meta.get("strategy_text"),
                         "first_message": meta.get("strategy_text"),
                         "modified": stat.st_mtime,
                         "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime)),
-                        "is_live": sid in registry,
+                        "is_live": is_live,
                         "morning": meta,
+                        # Dev-kanban-compatible stage signals so the morning
+                        # board can classify Review / Working / etc. with
+                        # the same derivation.
+                        "has_edit": tail.get("has_edit", False),
+                        "has_commit": tail.get("has_commit", False),
+                        "has_push": tail.get("has_push", False),
+                        "last_event_type": tail.get("last_event_type"),
+                        "pending_tool": tail.get("pending_tool"),
+                        "sidecar_status": sidecar_status,
+                        "sidecar_has_writes": sidecar_has_writes,
                     })
             # Also surface strategies that have NO session yet ("never started"),
             # so the Morning Kanban Backlog column has something to launch from.
@@ -4212,6 +4298,46 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
 
             result = parse_log_file(log_file, after_line)
             self.send_json(result)
+        elif path.startswith("/image-cache/"):
+            # Serve user-pasted images from ~/.claude/image-cache/<sid>/<file>.
+            # Path sandboxing (realpath under base) is the sole authorization check;
+            # we don't validate session_id format separately.
+            image_base = (Path.home() / ".claude" / "image-cache").resolve()
+            rel = path[len("/image-cache/"):]
+            target = image_base / rel
+            allowed_exts = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+            ext = ("." + rel.rsplit(".", 1)[-1].lower()) if "." in rel else ""
+            if ext not in allowed_exts:
+                self.send_json({"error": "not found"}, 404)
+                return
+            try:
+                resolved = target.resolve(strict=False)
+            except OSError:
+                self.send_json({"error": "not found"}, 404)
+                return
+            try:
+                resolved.relative_to(image_base)
+            except ValueError:
+                self.send_json({"error": "forbidden"}, 403)
+                return
+            if not resolved.is_file():
+                self.send_json({"error": "not found"}, 404)
+                return
+            try:
+                body = resolved.read_bytes()
+            except OSError:
+                self.send_json({"error": "not found"}, 404)
+                return
+            ct_map = {
+                ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".gif": "image/gif", ".webp": "image/webp",
+            }
+            self.send_response(200)
+            self.send_header("Content-Type", ct_map[ext])
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.end_headers()
+            self.wfile.write(body)
         elif path.startswith("/static/morning/"):
             rel = path[len("/static/morning/"):]
             target = MORNING_STATIC_DIR / rel
