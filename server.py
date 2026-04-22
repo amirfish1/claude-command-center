@@ -67,6 +67,168 @@ def load_known_repos():
     return repos
 
 
+def _which(cmd):
+    """Return the absolute path of `cmd` on PATH, or None. shutil-free so the
+    file stays stdlib-only without importing shutil at module top."""
+    import shutil
+    return shutil.which(cmd)
+
+
+def _run_healthcheck():
+    """Probe every external dependency and surface a structured diagnosis.
+
+    Each check returns:
+      - status: "ok" / "warn" / "error"
+      - message: human-readable one-liner
+      - hint: actionable next step (only present on warn/error)
+
+    The UI renders a setup banner that lists only the failing checks.
+    Empty UI without explanation is the worst first-run experience.
+    """
+    out = {"checks": []}
+
+    # ── claude CLI ────────────────────────────────────────────────────
+    claude_path = _which("claude")
+    projects_dir = Path.home() / ".claude" / "projects"
+    if not claude_path:
+        out["checks"].append({
+            "id": "claude_cli",
+            "label": "Claude Code CLI",
+            "status": "error",
+            "message": "`claude` not found on PATH",
+            "hint": "Install Claude Code: https://docs.claude.com/en/docs/claude-code",
+        })
+    elif not projects_dir.is_dir():
+        out["checks"].append({
+            "id": "claude_cli",
+            "label": "Claude Code CLI",
+            "status": "warn",
+            "message": "`claude` installed but no sessions yet",
+            "hint": "Run `claude` once in any repo to generate session data, then refresh.",
+        })
+    else:
+        try:
+            session_files = [p for p in projects_dir.rglob("*.jsonl")]
+            n = len(session_files)
+        except OSError:
+            n = 0
+        out["checks"].append({
+            "id": "claude_cli",
+            "label": "Claude Code CLI",
+            "status": "ok",
+            "message": f"Found {n} session file{'s' if n != 1 else ''} on disk",
+        })
+
+    # ── gh CLI ────────────────────────────────────────────────────────
+    gh_path = _which("gh")
+    if not gh_path:
+        out["checks"].append({
+            "id": "gh_cli",
+            "label": "GitHub CLI",
+            "status": "warn",
+            "message": "`gh` not found on PATH (issue board disabled)",
+            "hint": "Install: `brew install gh`  (or see https://cli.github.com/)",
+        })
+    else:
+        try:
+            r = subprocess.run(
+                ["gh", "auth", "status"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode != 0:
+                out["checks"].append({
+                    "id": "gh_cli",
+                    "label": "GitHub CLI",
+                    "status": "warn",
+                    "message": "`gh` installed but not authenticated",
+                    "hint": "Run `gh auth login` in your terminal, then refresh.",
+                })
+            else:
+                # Extract username from output like "Logged in to github.com account amirfish1 (...)"
+                user = ""
+                m = re.search(r"account\s+(\S+)", r.stderr or r.stdout or "")
+                if m:
+                    user = m.group(1)
+                out["checks"].append({
+                    "id": "gh_cli",
+                    "label": "GitHub CLI",
+                    "status": "ok",
+                    "message": f"Authenticated{f' as @{user}' if user else ''}",
+                })
+        except (subprocess.SubprocessError, OSError) as e:
+            out["checks"].append({
+                "id": "gh_cli",
+                "label": "GitHub CLI",
+                "status": "error",
+                "message": f"`gh auth status` failed: {e}",
+                "hint": "Check `gh` install. Run `gh auth status` manually for details.",
+            })
+
+    # ── REPO_ROOT state ───────────────────────────────────────────────
+    repo_check = {"id": "watched_repo", "label": "Watched repo"}
+    if not REPO_ROOT.is_dir():
+        repo_check.update({
+            "status": "error",
+            "message": f"REPO_ROOT does not exist: {REPO_ROOT}",
+            "hint": "Pick a different repo from the picker, or restart with CCC_WATCH_REPO=/path/to/repo.",
+        })
+    else:
+        is_git = (REPO_ROOT / ".git").is_dir()
+        # Try to extract the GH owner/repo from the local git remote so the
+        # banner can show "(GH: amirfish1/my-finance-app)" — confirms the
+        # local-folder ↔ GH-repo link visually.
+        gh_slug = None
+        if is_git:
+            try:
+                r = subprocess.run(
+                    ["git", "remote", "get-url", "origin"],
+                    capture_output=True, text=True, timeout=3, cwd=str(REPO_ROOT),
+                )
+                if r.returncode == 0:
+                    url = (r.stdout or "").strip()
+                    # Match git@github.com:owner/repo.git or https://github.com/owner/repo(.git)
+                    m = re.search(r"github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?$", url)
+                    if m:
+                        gh_slug = f"{m.group(1)}/{m.group(2)}"
+            except (subprocess.SubprocessError, OSError):
+                pass
+        # Quick issue count probe (cached fetch — non-blocking).
+        issue_count = None
+        if gh_path:
+            cached = _backlog_issues_cache or []
+            issue_count = sum(1 for i in cached if (i.get("state") or "").upper() == "OPEN")
+        msg = f"{REPO_ROOT.name}"
+        if gh_slug:
+            msg += f"  (GH: {gh_slug})"
+        if issue_count is not None and gh_slug:
+            msg += f"  · {issue_count} open issue{'s' if issue_count != 1 else ''}"
+        if not is_git:
+            repo_check.update({
+                "status": "warn",
+                "message": f"{msg} (no .git/ — issue board disabled for this repo)",
+                "hint": "Switch to a git repo using the picker, or `git init` here.",
+            })
+        elif not gh_slug and gh_path:
+            repo_check.update({
+                "status": "warn",
+                "message": f"{msg} (no GitHub remote)",
+                "hint": "Add a GitHub remote: `git remote add origin git@github.com:owner/repo.git`",
+            })
+        else:
+            repo_check.update({"status": "ok", "message": msg})
+    out["checks"].append(repo_check)
+
+    # Overall summary: worst status wins.
+    statuses = [c["status"] for c in out["checks"]]
+    if "error" in statuses:
+        out["overall"] = "error"
+    elif "warn" in statuses:
+        out["overall"] = "warn"
+    else:
+        out["overall"] = "ok"
+    return out
+
+
 def switch_repo_root(new_path):
     """Switch the watched repo at runtime.
 
@@ -4489,6 +4651,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "version": __version__,
                 "morning": MORNING_ENABLED,
             })
+        elif path == "/api/healthcheck":
+            # Surface the state of every external dependency CCC delegates to.
+            # Used by the setup banner so first-time users see exactly what's
+            # missing instead of an empty UI with no explanation.
+            self.send_json(_run_healthcheck())
         elif path == "/api/version":
             self.send_json({"version": __version__})
         elif path == "/api/repo/list":

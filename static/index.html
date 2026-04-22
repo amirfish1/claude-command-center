@@ -1185,23 +1185,30 @@
   .kanban-reload-btn:hover { opacity: 1; background: var(--surface); }
   .kanban-reload-btn:active { background: var(--accent); color: #fff; }
 
-  /* ── Attention panel (top 25% of the kanban pane) ─────────────────────── */
+  /* ── Attention panel (bottom-mounted, opens upward on demand) ───────────
+   * Lives BELOW the kanban so the kanban gets the prime real estate by
+   * default. Collapsed by default — the user expands it when they want
+   * to triage. The drag handle is on TOP of the panel; dragging up grows
+   * the panel (and shrinks the kanban above). */
   .attention-panel {
     flex: 0 0 auto;
     max-height: 25vh;
     padding: 6px 12px 8px;
     background: linear-gradient(rgba(248,81,73,0.04), rgba(248,81,73,0.04)), var(--surface);
-    border-bottom: 1px solid var(--border);
+    border-top: 1px solid var(--border);
     display: flex; flex-direction: column;
     position: relative;
     box-sizing: border-box;
   }
   .attention-panel[style*="height"] { max-height: none; }
-  .attention-panel.collapsed { max-height: 32px; height: 32px !important; overflow: hidden; padding-bottom: 0; }
+  .attention-panel.collapsed { max-height: 32px; height: 32px !important; overflow: hidden; padding-top: 0; padding-bottom: 0; }
   .attention-panel.collapsed .attention-list { display: none; }
   .attention-panel.collapsed .attention-resize-handle { display: none; }
+  /* Collapsed bar gets a subtle hover affordance so users know they can click it. */
+  .attention-panel.collapsed .attention-header { cursor: pointer; }
+  .attention-panel.collapsed:hover { background: linear-gradient(rgba(248,81,73,0.08), rgba(248,81,73,0.08)), var(--surface); }
   .attention-resize-handle {
-    position: absolute; left: 0; right: 0; bottom: 0;
+    position: absolute; left: 0; right: 0; top: 0;
     height: 10px; cursor: ns-resize;
     display: flex; align-items: center; justify-content: center;
     z-index: 6; touch-action: none; user-select: none;
@@ -1491,6 +1498,19 @@
       <span class="dot"></span>
       <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
     </div>
+
+    <!-- Repo picker — moved here from the kanban toolbar so first-time users
+         see immediately which repo CCC is watching, and can switch without
+         hunting. The actual <select> is populated by JS in the kpt block. -->
+    <div class="repo-picker-host" style="padding:8px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;">
+      <span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Repo</span>
+      <select id="sbRepoPicker" title="Repo this session is watching — switch to point at a different project. Live-switches without a server restart." style="flex:1;padding:5px 6px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:11px;outline:none;min-width:0;"></select>
+    </div>
+
+    <!-- Setup banner — only renders when /api/healthcheck flags issues.
+         First-time users see exactly what's missing instead of an empty UI. -->
+    <div id="setupBanner" style="display:none;padding:8px 12px;border-bottom:1px solid var(--border);background:rgba(248,81,73,0.06);"></div>
+
     <div class="deploy-panel" id="deployPanel">
       <div class="deploy-header">
         <span class="deploy-dot" id="deployDot"></span>
@@ -1570,31 +1590,39 @@
   <div id="kanbanLayout">
     <div class="kanban-panel">
       <div class="kanban-panel-toolbar">
-        <select id="kptRepoPicker" title="Repo this kanban is watching — switch to point at a different project. Live-switches without a server restart." style="padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none;max-width:180px;"></select>
         <input type="text" class="kpt-search" id="kptSearch" placeholder="Search sessions...">
-        <button id="kptRefreshBtn" title="Refresh data">&#8634;</button>
-        <button id="kptRecentBtn" title="Show only sessions/issues touched in the last 10 hours">Last 10h</button>
-        <label class="kpt-label" title="Spawn via Pkood (background agent runner) instead of headless Claude — see docs"><input type="checkbox" id="kptPkoodToggle"> pkood</label>
+        <button id="kptRefreshBtn" title="Refresh data" aria-label="Refresh data">&#8634;</button>
         <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
         <button id="kptRunBtn" title="Run new session" aria-label="Run new session">Run</button>
-        <button id="kptDescToggle" title="Compact mode — hide the description preview on cards">Compact</button>
-        <button id="kptGitOnlyToggle" title="Show only cards linked to a GitHub issue">GitHub only</button>
-        <button id="kptListViewBtn" title="Back to list view">&#9783;</button>
+        <!-- View menu — collapses three rarely-changed toggles (Last 10h /
+             Compact / GitHub only) into one disclosure to declutter the
+             primary toolbar. The buttons themselves stay in DOM so existing
+             handlers keep working; we just hide them inside a popover. -->
+        <div class="kpt-view-menu-wrap" style="position:relative;">
+          <button id="kptViewMenuBtn" title="View options" aria-haspopup="true" aria-expanded="false">View &#9662;</button>
+          <div id="kptViewMenu" style="display:none;position:absolute;top:calc(100% + 4px);right:0;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px;min-width:160px;z-index:50;box-shadow:0 4px 16px rgba(0,0,0,0.4);flex-direction:column;gap:4px;">
+            <button id="kptRecentBtn" title="Show only sessions/issues touched in the last 10 hours" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Last 10h</button>
+            <button id="kptDescToggle" title="Compact mode — hide the description preview on cards" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Compact</button>
+            <button id="kptGitOnlyToggle" title="Show only cards linked to a GitHub issue" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">GitHub only</button>
+            <label class="kpt-label" title="Spawn via Pkood (background agent runner) instead of headless Claude — see docs" style="display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text);"><input type="checkbox" id="kptPkoodToggle" style="margin:0;"> pkood spawn</label>
+          </div>
+        </div>
+        <button id="kptListViewBtn" title="Switch to list view" aria-label="Switch to list view">&#9783;</button>
         <span class="kpt-deploy" id="kptDeployStatus" title="Vercel deploy status" style="margin-left:auto;font-size:11px;display:flex;align-items:center;gap:4px;color:var(--text-muted);white-space:nowrap;"></span>
-        <button id="kptOpenConvBtn" title="Open conversation panel" style="display:none;">&#9664;</button>
+        <button id="kptOpenConvBtn" title="Open conversation panel" aria-label="Open conversation panel" style="display:none;">&#9664;</button>
       </div>
-      <div class="attention-panel" id="attentionPanel">
+      <div class="kanban-board-split" id="kanbanBoardSplit"></div>
+      <div class="attention-panel collapsed" id="attentionPanel">
+        <div class="attention-resize-handle" id="attentionResizeHandle" title="Drag up to resize · double-click to reset"></div>
         <div class="attention-header">
           <span class="att-title-label">Needs your attention</span>
           <span class="att-count" id="attentionCount"></span>
           <button id="attentionRefreshBtn" title="Force refresh — busts GH state cache and re-queries" style="margin-left:auto;font-size:13px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;line-height:1;">&#8634;</button>
           <button id="attentionSeeAllBtn" title="Show every candidate, including stale ones" style="font-size:11px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;">See all</button>
-          <button class="att-toggle" id="attentionToggle" title="Collapse / expand">&#9662;</button>
+          <button class="att-toggle" id="attentionToggle" title="Collapse / expand" aria-label="Toggle Needs Your Attention panel">&#9662;</button>
         </div>
         <div class="attention-list" id="attentionList"></div>
-        <div class="attention-resize-handle" id="attentionResizeHandle" title="Drag to resize · double-click to reset"></div>
       </div>
-      <div class="kanban-board-split" id="kanbanBoardSplit"></div>
       <button class="kanban-reload-btn" id="kanbanReloadBtn" title="Reload page">&#8634;</button>
     </div>
     <div class="split-resizer" id="splitResizer"></div>
@@ -2743,24 +2771,44 @@
     card.classList.add('just-moved');
   }
 
-  // Collapse toggle for the attention panel (persisted)
+  // Collapse toggle for the attention panel (persisted).
+  // NYA defaults to COLLAPSED — kanban gets the prime real estate. Users
+  // expand on demand via the header bar (whole header is clickable when
+  // collapsed) or the dedicated toggle. The collapsed state is sticky in
+  // localStorage so a user who likes it open stays open across reloads.
   (function () {
     const $panel = document.getElementById('attentionPanel');
     const $toggle = document.getElementById('attentionToggle');
     if (!$panel || !$toggle) return;
+    // Default behaviour: only EXPAND when user has explicitly chosen to.
+    // We keep the panel collapsed by default (HTML starts with .collapsed).
     try {
-      if (localStorage.getItem('ccc-attention-collapsed') === '1') {
-        $panel.classList.add('collapsed');
-      }
+      const stored = localStorage.getItem('ccc-attention-collapsed');
+      if (stored === '0') {
+        $panel.classList.remove('collapsed');
+      } // else (null or '1') → stay collapsed (HTML default)
     } catch (_) {}
+    function setCollapsed(collapsed) {
+      $panel.classList.toggle('collapsed', collapsed);
+      try {
+        localStorage.setItem('ccc-attention-collapsed', collapsed ? '1' : '0');
+      } catch (_) {}
+    }
     $toggle.addEventListener('click', (e) => {
       e.stopPropagation();
-      $panel.classList.toggle('collapsed');
-      try {
-        localStorage.setItem('ccc-attention-collapsed',
-          $panel.classList.contains('collapsed') ? '1' : '0');
-      } catch (_) {}
+      setCollapsed(!$panel.classList.contains('collapsed'));
     });
+    // Whole header is a click-target when collapsed, so the user doesn't
+    // have to aim at the small toggle chevron.
+    const $header = $panel.querySelector('.attention-header');
+    if ($header) {
+      $header.addEventListener('click', (e) => {
+        if (!$panel.classList.contains('collapsed')) return;
+        // Don't hijack clicks on the inline buttons (refresh / see all / toggle).
+        if (e.target.closest('button')) return;
+        setCollapsed(false);
+      });
+    }
     const $seeAll = document.getElementById('attentionSeeAllBtn');
     if ($seeAll) {
       $seeAll.addEventListener('click', (e) => {
@@ -2829,8 +2877,11 @@
       });
       $handle.addEventListener('pointermove', (e) => {
         if (activePointerId !== e.pointerId) return;
+        // Handle is on TOP of the bottom-mounted panel — drag UP grows the
+        // panel (negative dy = bigger height). Inverted from the old
+        // top-mounted layout where drag-down grew it.
         const dy = e.clientY - startY;
-        applyAttHeight(startH + dy);
+        applyAttHeight(startH - dy);
       });
       const endDrag = (e) => {
         if (activePointerId !== e.pointerId) return;
@@ -5716,32 +5767,32 @@
   }
 
   // ── Split panel toolbar controls ──
-  // Repo picker — populated from /api/repo/list, switches via /api/repo/switch.
-  // The server live-swaps REPO_ROOT and invalidates caches; we just reload the
-  // conversation list so the UI reflects the new repo.
-  const $kptRepoPicker = document.getElementById('kptRepoPicker');
-  if ($kptRepoPicker) {
+  // Sidebar repo picker — single source of truth for the watched repo.
+  // Lives in the sidebar header so first-time users see it immediately.
+  // (The old kanban-toolbar picker has been removed to declutter.)
+  const $sbRepoPicker = document.getElementById('sbRepoPicker');
+  if ($sbRepoPicker) {
     (async () => {
       try {
         const r = await fetch('/api/repo/list');
         const d = await r.json();
         const repos = d.repos || [];
         const current = d.current || '';
-        $kptRepoPicker.innerHTML = '';
+        $sbRepoPicker.innerHTML = '';
         for (const repo of repos) {
           const opt = document.createElement('option');
           opt.value = repo.path;
           opt.textContent = repo.label || repo.path;
           opt.title = repo.path;
           if (repo.path === current) opt.selected = true;
-          $kptRepoPicker.appendChild(opt);
+          $sbRepoPicker.appendChild(opt);
         }
-      } catch (e) { /* picker is best-effort — failure shouldn't break the kanban */ }
+      } catch (e) { /* picker is best-effort — failure shouldn't break the page */ }
     })();
-    $kptRepoPicker.addEventListener('change', async () => {
-      const target = $kptRepoPicker.value;
-      const prev = $kptRepoPicker.dataset.prev || '';
-      $kptRepoPicker.disabled = true;
+    $sbRepoPicker.addEventListener('change', async () => {
+      const target = $sbRepoPicker.value;
+      const prev = $sbRepoPicker.dataset.prev || '';
+      $sbRepoPicker.disabled = true;
       try {
         const r = await fetch('/api/repo/switch', {
           method: 'POST',
@@ -5755,16 +5806,93 @@
         location.reload();
       } catch (e) {
         showOpToast('Failed to switch repo: ' + (e.message || e), 'error');
-        if (prev) $kptRepoPicker.value = prev;
+        if (prev) $sbRepoPicker.value = prev;
       } finally {
-        $kptRepoPicker.disabled = false;
+        $sbRepoPicker.disabled = false;
       }
     });
     // Stash the current value so we can restore on failure.
-    $kptRepoPicker.addEventListener('focus', () => {
-      $kptRepoPicker.dataset.prev = $kptRepoPicker.value;
+    $sbRepoPicker.addEventListener('focus', () => {
+      $sbRepoPicker.dataset.prev = $sbRepoPicker.value;
     });
   }
+
+  // View menu — open/close popover containing the secondary toggles.
+  // Closes on outside click (Escape closes too). Active dot on the trigger
+  // when any of the contained toggles is currently on.
+  (function () {
+    const $btn = document.getElementById('kptViewMenuBtn');
+    const $menu = document.getElementById('kptViewMenu');
+    if (!$btn || !$menu) return;
+    function setOpen(open) {
+      $menu.style.display = open ? 'flex' : 'none';
+      $btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    $btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setOpen($menu.style.display === 'none');
+    });
+    document.addEventListener('click', (e) => {
+      if ($menu.style.display === 'flex' && !$menu.contains(e.target) && e.target !== $btn) {
+        setOpen(false);
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && $menu.style.display === 'flex') setOpen(false);
+    });
+    // Hover style for items inside the menu
+    $menu.querySelectorAll('button').forEach(b => {
+      b.addEventListener('mouseenter', () => { b.style.background = 'rgba(255,255,255,0.05)'; });
+      b.addEventListener('mouseleave', () => { b.style.background = 'transparent'; });
+    });
+  })();
+
+  // Setup banner — surface failed healthcheck checks so first-time users
+  // see exactly what's missing instead of an empty UI with no explanation.
+  // Re-runs on page load only; users can click Refresh to re-probe.
+  (async function renderSetupBanner() {
+    const $banner = document.getElementById('setupBanner');
+    if (!$banner) return;
+    try {
+      const r = await fetch('/api/healthcheck');
+      const d = await r.json();
+      const checks = d.checks || [];
+      // Always show the watched-repo line (even when ok) so users see the
+      // GH slug confirmation. Hide claude_cli/gh_cli rows when ok.
+      const visible = checks.filter(c => c.status !== 'ok' || c.id === 'watched_repo');
+      if (visible.length === 0) {
+        $banner.style.display = 'none';
+        return;
+      }
+      const iconFor = (s) => s === 'ok' ? '✓' : (s === 'warn' ? '⚠' : '✗');
+      const colorFor = (s) => s === 'ok' ? 'var(--green)' : (s === 'warn' ? 'var(--orange)' : 'var(--red)');
+      const rows = visible.map(c => {
+        const hint = c.hint
+          ? `<div style="font-size:10px;color:var(--text-muted);margin-top:2px;line-height:1.3;">${escapeHtml(c.hint)}</div>`
+          : '';
+        return `<div style="margin-bottom:6px;">
+          <div style="font-size:11px;display:flex;align-items:flex-start;gap:6px;">
+            <span style="color:${colorFor(c.status)};font-weight:700;">${iconFor(c.status)}</span>
+            <div style="flex:1;min-width:0;">
+              <div><strong style="color:var(--text);">${escapeHtml(c.label)}:</strong> <span style="color:var(--text-muted);">${escapeHtml(c.message)}</span></div>
+              ${hint}
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+      const overallBg = d.overall === 'error'
+        ? 'rgba(248,81,73,0.06)'
+        : d.overall === 'warn'
+          ? 'rgba(210,153,34,0.06)'
+          : 'transparent';
+      $banner.style.background = overallBg;
+      $banner.innerHTML = rows;
+      $banner.style.display = '';
+    } catch (e) {
+      // Healthcheck failed — keep banner hidden rather than showing a scary error.
+      $banner.style.display = 'none';
+    }
+  })();
 
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
