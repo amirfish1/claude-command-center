@@ -1185,6 +1185,48 @@
   .kanban-reload-btn:hover { opacity: 1; background: var(--surface); }
   .kanban-reload-btn:active { background: var(--accent); color: #fff; }
 
+  /* ── Layout-agnostic top bar (repo picker + setup banner) ──────────────
+   * position:fixed so it floats above BOTH list and kanban-split modes.
+   * Body is display:flex (row) — embedding it in flow would make it
+   * stretch full-height. The fixed positioning sidesteps that.
+   * Side-nav (52px, also fixed) sits to the left, so we offset accordingly.
+   * Body padding-top below makes room for the topbar. */
+  .ccc-topbar {
+    position: fixed; top: 0; left: 52px; right: 0; z-index: 100;
+    display: flex; align-items: center; gap: 10px;
+    padding: 5px 12px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    box-sizing: border-box;
+    min-height: 32px;
+  }
+  body { padding-top: 33px; }  /* match topbar min-height + border */
+  .ccc-topbar-label {
+    align-self: center;
+    color: var(--text-muted); text-transform: uppercase;
+    letter-spacing: 0.5px; font-weight: 600;
+  }
+  .ccc-topbar #sbRepoPicker {
+    padding: 4px 6px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    font-size: 11px; outline: none; max-width: 220px;
+  }
+  .ccc-setup-banner {
+    flex: 1; display: none; align-items: center;
+    padding: 0 10px; border-left: 1px solid var(--border);
+    font-size: 11px; line-height: 1.3; min-width: 0;
+    overflow: hidden;
+  }
+  .ccc-setup-banner.has-issues { display: flex; }
+  .ccc-setup-banner.is-ok { color: var(--text-muted); opacity: 0.8; }
+  .ccc-setup-banner-rows { display: flex; gap: 14px; flex-wrap: wrap; }
+  .ccc-setup-row { display: flex; align-items: center; gap: 4px; }
+  .ccc-setup-row .icon { font-weight: 700; }
+  .ccc-setup-row.ok .icon { color: var(--green); }
+  .ccc-setup-row.warn .icon { color: var(--orange); }
+  .ccc-setup-row.error .icon { color: var(--red); }
+
   /* ── Attention panel (bottom-mounted, opens upward on demand) ───────────
    * Lives BELOW the kanban so the kanban gets the prime real estate by
    * default. Collapsed by default — the user expands it when they want
@@ -1493,23 +1535,42 @@
 </style>
 </head>
 <body>
+  <!-- FOIT guard: read the persisted layout choice synchronously and apply
+       the body class BEFORE any layout paint. Without this, the sidebar
+       briefly renders for kanban-split users (whose sidebar is display:none)
+       and the resize handle flickers in then disappears.
+
+       Also runs the localStorage rename map (clv-* → ccc-*) inline, since
+       this read needs the new key to be populated. The main migration block
+       further down is idempotent — it's safe to run twice. -->
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem('ccc-kanban-view') === null
+            && localStorage.getItem('clv-kanban-view') !== null) {
+          localStorage.setItem('ccc-kanban-view', localStorage.getItem('clv-kanban-view'));
+        }
+        if (localStorage.getItem('ccc-kanban-view') === 'true') {
+          document.body.classList.add('kanban-split');
+        }
+      } catch (_) {}
+    })();
+  </script>
+
+  <!-- Layout-agnostic top bar — visible in BOTH list and kanban-split modes
+       so the most-important controls (which repo we're watching + the
+       setup banner) never disappear when the user toggles views. -->
+  <div class="ccc-topbar" id="cccTopbar">
+    <span class="ccc-topbar-label">Repo</span>
+    <select id="sbRepoPicker" title="Repo this session is watching — switch to point at a different project. Live-switches without a server restart."></select>
+    <div id="setupBanner" class="ccc-setup-banner"></div>
+  </div>
+
   <div class="sidebar">
     <div class="sidebar-header">
       <span class="dot"></span>
       <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
     </div>
-
-    <!-- Repo picker — moved here from the kanban toolbar so first-time users
-         see immediately which repo CCC is watching, and can switch without
-         hunting. The actual <select> is populated by JS in the kpt block. -->
-    <div class="repo-picker-host" style="padding:8px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;">
-      <span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Repo</span>
-      <select id="sbRepoPicker" title="Repo this session is watching — switch to point at a different project. Live-switches without a server restart." style="flex:1;padding:5px 6px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:11px;outline:none;min-width:0;"></select>
-    </div>
-
-    <!-- Setup banner — only renders when /api/healthcheck flags issues.
-         First-time users see exactly what's missing instead of an empty UI. -->
-    <div id="setupBanner" style="display:none;padding:8px 12px;border-bottom:1px solid var(--border);background:rgba(248,81,73,0.06);"></div>
 
     <div class="deploy-panel" id="deployPanel">
       <div class="deploy-header">
@@ -5849,7 +5910,8 @@
 
   // Setup banner — surface failed healthcheck checks so first-time users
   // see exactly what's missing instead of an empty UI with no explanation.
-  // Re-runs on page load only; users can click Refresh to re-probe.
+  // Lives in the layout-agnostic top bar so it shows in both list mode and
+  // kanban-split mode. Re-runs on page load only; click Refresh to re-probe.
   (async function renderSetupBanner() {
     const $banner = document.getElementById('setupBanner');
     if (!$banner) return;
@@ -5857,37 +5919,19 @@
       const r = await fetch('/api/healthcheck');
       const d = await r.json();
       const checks = d.checks || [];
-      // Always show the watched-repo line (even when ok) so users see the
-      // GH slug confirmation. Hide claude_cli/gh_cli rows when ok.
-      const visible = checks.filter(c => c.status !== 'ok' || c.id === 'watched_repo');
-      if (visible.length === 0) {
-        $banner.style.display = 'none';
-        return;
-      }
       const iconFor = (s) => s === 'ok' ? '✓' : (s === 'warn' ? '⚠' : '✗');
-      const colorFor = (s) => s === 'ok' ? 'var(--green)' : (s === 'warn' ? 'var(--orange)' : 'var(--red)');
-      const rows = visible.map(c => {
-        const hint = c.hint
-          ? `<div style="font-size:10px;color:var(--text-muted);margin-top:2px;line-height:1.3;">${escapeHtml(c.hint)}</div>`
-          : '';
-        return `<div style="margin-bottom:6px;">
-          <div style="font-size:11px;display:flex;align-items:flex-start;gap:6px;">
-            <span style="color:${colorFor(c.status)};font-weight:700;">${iconFor(c.status)}</span>
-            <div style="flex:1;min-width:0;">
-              <div><strong style="color:var(--text);">${escapeHtml(c.label)}:</strong> <span style="color:var(--text-muted);">${escapeHtml(c.message)}</span></div>
-              ${hint}
-            </div>
-          </div>
-        </div>`;
+      // Compact rendering — one row per check, fits on a single line in the
+      // top bar. Tooltip carries the hint when status isn't ok.
+      const rows = checks.map(c => {
+        const tt = (c.hint && c.status !== 'ok') ? `${c.message} — ${c.hint}` : c.message;
+        return `<span class="ccc-setup-row ${c.status}" title="${escapeHtml(tt)}">
+          <span class="icon">${iconFor(c.status)}</span>
+          <span>${escapeHtml(c.label === 'Watched repo' ? c.message : c.label)}</span>
+        </span>`;
       }).join('');
-      const overallBg = d.overall === 'error'
-        ? 'rgba(248,81,73,0.06)'
-        : d.overall === 'warn'
-          ? 'rgba(210,153,34,0.06)'
-          : 'transparent';
-      $banner.style.background = overallBg;
-      $banner.innerHTML = rows;
-      $banner.style.display = '';
+      $banner.innerHTML = `<div class="ccc-setup-banner-rows">${rows}</div>`;
+      $banner.classList.add(d.overall === 'ok' ? 'is-ok' : 'has-issues');
+      $banner.classList.add('has-issues');  // always display (informational, not just on errors)
     } catch (e) {
       // Healthcheck failed — keep banner hidden rather than showing a scary error.
       $banner.style.display = 'none';
