@@ -1207,6 +1207,39 @@
      and injects its own `body { padding-left: 52px }`. The side-nav is
      position:fixed at left:0, so this padding makes content start at 52px. */
   body { padding-left: 52px; box-sizing: border-box; }
+
+  /* ── Full-page loading overlay ──────────────────────────────────────────
+   * Shown on initial load and during repo-switch. Covers everything so the
+   * user sees a clear "we're working" signal instead of staring at an empty
+   * dark page wondering if the app is broken. Fades out once the first
+   * /api/sessions response renders. */
+  .ccc-loading-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: var(--bg);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px;
+    transition: opacity 0.25s ease-out;
+    pointer-events: all;
+  }
+  .ccc-loading-overlay.fade-out { opacity: 0; pointer-events: none; }
+  .ccc-loading-overlay.gone { display: none; }
+  .ccc-loading-spinner {
+    width: 36px; height: 36px;
+    border: 3px solid rgba(88,166,255,0.18);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: ccc-spin 0.8s linear infinite;
+  }
+  @keyframes ccc-spin { to { transform: rotate(360deg); } }
+  .ccc-loading-label {
+    color: var(--text-muted); font-size: 13px; letter-spacing: 0.3px;
+    text-align: center; max-width: 320px; line-height: 1.4;
+  }
+  .ccc-loading-label strong { color: var(--text); font-weight: 600; }
+  .ccc-loading-detail {
+    font-size: 11px; color: var(--text-muted); opacity: 0.6;
+    margin-top: 2px;
+  }
   .ccc-topbar-label {
     align-self: center;
     color: var(--text-muted); text-transform: uppercase;
@@ -1564,6 +1597,35 @@
         }
         if (localStorage.getItem('ccc-kanban-view') === 'true') {
           document.body.classList.add('kanban-split');
+        }
+      } catch (_) {}
+    })();
+  </script>
+
+  <!-- Loading overlay — covers the page until the first /api/sessions call
+       completes. Removed once the kanban renders. The label is set
+       synchronously based on a sessionStorage flag the picker writes
+       just before triggering location.reload(). -->
+  <div class="ccc-loading-overlay" id="cccLoadingOverlay">
+    <div class="ccc-loading-spinner"></div>
+    <div class="ccc-loading-label" id="cccLoadingLabel">
+      <strong>Loading sessions…</strong>
+      <div class="ccc-loading-detail">Scanning Claude Code transcripts and GitHub issues.</div>
+    </div>
+  </div>
+  <script>
+    // If the user just switched repos, surface that in the label.
+    (function () {
+      try {
+        const switching = sessionStorage.getItem('ccc-switching-to');
+        if (switching) {
+          const $label = document.getElementById('cccLoadingLabel');
+          if ($label) {
+            $label.innerHTML =
+              '<strong>Switching to ' + switching.replace(/[<>&]/g, '') + '</strong>' +
+              '<div class="ccc-loading-detail">Re-scanning sessions and GitHub issues for the new repo.</div>';
+          }
+          sessionStorage.removeItem('ccc-switching-to');
         }
       } catch (_) {}
     })();
@@ -2589,6 +2651,20 @@
     }, 30000);
   }
 
+  // Hide the loading overlay once we've actually rendered a sessions response.
+  // Idempotent — fires on every list refresh but only the first matters.
+  function hideLoadingOverlay() {
+    const $overlay = document.getElementById('cccLoadingOverlay');
+    if (!$overlay || $overlay.classList.contains('gone')) return;
+    $overlay.classList.add('fade-out');
+    // Remove from layout after the fade so it doesn't intercept clicks.
+    setTimeout(() => $overlay.classList.add('gone'), 300);
+  }
+  // Safety net — if /api/sessions hangs or the render path errors silently,
+  // never leave the user staring at a spinner forever. 30s is generous given
+  // the cache-warm scan can take ~10s on a big ~/.claude/projects dir.
+  setTimeout(hideLoadingOverlay, 30000);
+
   async function loadConversationList() {
     try {
       const res = await fetch('/api/sessions');
@@ -2622,8 +2698,10 @@
       }
       renderSidebar(filterConversations($convSearch.value));
       loadAttentionList();  // piggy-back on the same refresh cycle
+      hideLoadingOverlay();  // first render has happened — reveal the UI
     } catch (err) {
       $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Failed to load sessions: ' + escapeHtml(err.message) + '</div>';
+      hideLoadingOverlay();  // even on error — don't leave the user stuck on a spinner
     }
   }
 
@@ -5865,8 +5943,24 @@
     $sbRepoPicker.addEventListener('change', async () => {
       const target = $sbRepoPicker.value;
       const prev = $sbRepoPicker.dataset.prev || '';
+      const targetLabel = $sbRepoPicker.options[$sbRepoPicker.selectedIndex]?.textContent || target;
       $sbRepoPicker.disabled = true;
+      // Show the loading overlay immediately so the user sees something is
+      // happening (the POST + reload + scan can take several seconds).
+      const $overlay = document.getElementById('cccLoadingOverlay');
+      if ($overlay) {
+        $overlay.classList.remove('fade-out', 'gone');
+        const $label = document.getElementById('cccLoadingLabel');
+        if ($label) {
+          $label.innerHTML =
+            '<strong>Switching to ' + targetLabel.replace(/[<>&]/g, '') + '</strong>' +
+            '<div class="ccc-loading-detail">Re-scanning sessions and GitHub issues for the new repo.</div>';
+        }
+      }
       try {
+        // Stash the target name in sessionStorage so the overlay on the
+        // post-reload page knows we're mid-switch and can show the right label.
+        try { sessionStorage.setItem('ccc-switching-to', targetLabel); } catch (_) {}
         const r = await fetch('/api/repo/switch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -5878,6 +5972,8 @@
         // open detail panes) starts clean against the new repo.
         location.reload();
       } catch (e) {
+        try { sessionStorage.removeItem('ccc-switching-to'); } catch (_) {}
+        if ($overlay) $overlay.classList.add('fade-out', 'gone');
         showOpToast('Failed to switch repo: ' + (e.message || e), 'error');
         if (prev) $sbRepoPicker.value = prev;
       } finally {
