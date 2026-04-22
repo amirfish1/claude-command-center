@@ -6160,8 +6160,8 @@
         return;
       }
       if (!confirm('Generate AI titles for ' + candidates.length + ' cards? '
-                   + 'Each call uses claude haiku (~3-5s, $0.001 each). Total ~'
-                   + Math.ceil(candidates.length / 3 * 5) + 's at 3 in parallel.')) {
+                   + 'Each call uses claude haiku (~1-3s, $0.001 each). Total ~'
+                   + Math.ceil(candidates.length / 8 * 3) + 's at 8 in parallel.')) {
         return;
       }
       const total = candidates.length;
@@ -6174,8 +6174,10 @@
       };
       updateBtn();
 
-      // Throttled queue — 3 in flight at a time so we don't fork-bomb claude.
-      const PARALLEL = 3;
+      // Throttled queue — 8 in flight. Modern Macs handle parallel `claude -p`
+      // subprocesses fine; the bottleneck is API rate-limit, not local CPU.
+      // If you start hitting Anthropic 429s, lower this.
+      const PARALLEL = 8;
       const queue = candidates.slice();
       async function worker() {
         while (queue.length) {
