@@ -1202,6 +1202,11 @@
     min-height: 32px;
   }
   body { padding-top: 33px; }  /* match topbar min-height + border */
+  /* Reserve space for the side-nav (52px) at first paint so the page doesn't
+     visibly shift right when /static/morning/side-nav.js finishes loading
+     and injects its own `body { padding-left: 52px }`. The side-nav is
+     position:fixed at left:0, so this padding makes content start at 52px. */
+  body { padding-left: 52px; box-sizing: border-box; }
   .ccc-topbar-label {
     align-self: center;
     color: var(--text-muted); text-transform: uppercase;
@@ -1533,6 +1538,13 @@
     .mobile-reload-btn:active { background: var(--accent); color: #fff; }
   }
 </style>
+<!-- Load side-nav.js with `defer` from the head so it executes before
+     DOMContentLoaded but after the document is parsed. Previously it was
+     a plain <script> at the bottom of <body>, which meant the body initially
+     had no left padding and shifted 52px right when the script finally ran.
+     The CSS above already reserves the 52px so the layout is stable from
+     first paint; this just keeps the script in the right place semantically. -->
+<script src="/static/morning/side-nav.js" defer></script>
 </head>
 <body>
   <!-- FOIT guard: read the persisted layout choice synchronously and apply
@@ -6344,6 +6356,5 @@
   setInterval(pollVercelDeploy, 15000);
 })();
 </script>
-<script src="/static/morning/side-nav.js"></script>
 </body>
 </html>
