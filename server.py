@@ -1006,6 +1006,9 @@ def summarize_session_title(session_id):
         "Produce a concise 4-8 word title summarizing what the user is trying to do "
         "below. No quotes, no trailing punctuation, just the title itself on a single "
         "line. Skip image references and boilerplate.\n\n"
+        "If the prompt explicitly references a GitHub issue (e.g. '#194', "
+        "'issue 194', 'fix issue 194'), prefix the title with the issue ref: "
+        "'#194 short description'. Otherwise just return the bare title.\n\n"
         "Opening prompt:\n"
         + first_msg
         + "\n\nTitle:"

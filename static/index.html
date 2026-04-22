@@ -906,6 +906,15 @@
     background: rgba(63,185,80,0.18); color: var(--green);
     vertical-align: middle; letter-spacing: 0.3px;
   }
+  /* Inline GH-issue reference inside a title — used when the AI title
+     preserves a "#NNN" but the card itself isn't linked to a GH issue
+     in metadata. Subtler than the badge; just gives the number signal. */
+  .kanban-issue-ref {
+    color: var(--green);
+    font-weight: 600;
+    font-size: 0.95em;
+    white-space: nowrap;
+  }
   .kanban-gh-state {
     display: inline-block; font-size: 10px; padding: 1px 6px;
     border-radius: 3px; margin-right: 6px; font-weight: 700;
@@ -1727,6 +1736,7 @@
       <div class="kanban-panel-toolbar">
         <input type="text" class="kpt-search" id="kptSearch" placeholder="Search sessions...">
         <button id="kptRefreshBtn" title="Refresh data" aria-label="Refresh data">&#8634;</button>
+        <button id="kptSummarizeAllBtn" title="Use Claude haiku to generate concise titles for every card whose name hasn't been touched. Runs in the background, ~3 cards in parallel." aria-label="Summarize titles for all unnamed cards">&#10024; Titles</button>
         <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
         <button id="kptRunBtn" title="Run new session" aria-label="Run new session">Run</button>
         <!-- View menu — collapses three rarely-changed toggles (Last 10h /
@@ -3716,9 +3726,27 @@
           const desktopChip = c.desktop_app
             ? '<span class="kanban-desktop-badge" title="Session is tracked by the Claude desktop app">Desktop</span>'
             : '';
-          issueBadge = '<span class="kanban-issue-badge" title="Linked to GitHub issue">#' + escapeHtml(linkedIssue) + '</span>' + stateChip + naChip + desktopChip;
+          issueBadge = '<span class="kanban-issue-badge" title="Linked to GitHub issue">GH #' + escapeHtml(linkedIssue) + '</span>' + stateChip + naChip + desktopChip;
         }
-        html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open &amp; rename">' + issueBadge + escapeHtml(title) + '</div>';
+        // Title cleanup before render:
+        //   - When the card already has a linked-issue chip ("GH #194"), strip
+        //     a leading "#194" / "#194:" / "#194 -" from the title text to
+        //     avoid showing the issue number twice.
+        //   - When there's NO linked issue but the AI-generated title contains
+        //     a #NNN reference, wrap it in a small green-text span so the user
+        //     sees at a glance it's a GitHub issue reference, not random text.
+        let renderTitle = title;
+        if (linkedIssue) {
+          const stripRe = new RegExp('^#?' + linkedIssue + '\\s*[:\\-\u2014]?\\s*', 'i');
+          renderTitle = title.replace(stripRe, '');
+        }
+        let titleHtml = escapeHtml(renderTitle);
+        if (!linkedIssue) {
+          // Wrap any #NNN in the title with a styled span for clarity.
+          titleHtml = titleHtml.replace(/#(\d{1,5})\b/g,
+            '<span class="kanban-issue-ref" title="GitHub issue reference">GH&nbsp;#$1</span>');
+        }
+        html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open &amp; rename">' + issueBadge + titleHtml + '</div>';
         if (descHtml) {
           html += '<div class="kanban-card-desc">' + descHtml + '</div>';
         }
@@ -6113,6 +6141,67 @@
   if ($kptRefreshBtn) {
     $kptRefreshBtn.addEventListener('click', refreshConversationList);
   }
+
+  // ── Bulk summarize titles ──
+  // Walk every conversation card whose name hasn't been user-touched and
+  // whose first_message reads like a long prompt, fire the per-card
+  // summarize endpoint with limited parallelism. Per-card status is
+  // surfaced via a toast; full pass refreshes the list at the end.
+  const $kptSummarizeAllBtn = document.getElementById('kptSummarizeAllBtn');
+  if ($kptSummarizeAllBtn) {
+    $kptSummarizeAllBtn.addEventListener('click', async () => {
+      const candidates = (conversationsData || []).filter(c =>
+        !c.name_overridden
+        && (c.session_id || '').length >= 32  // real sessions only — skip backlog/pkood
+        && (c.first_message || '').length >= 60  // skip already-short titles
+      );
+      if (candidates.length === 0) {
+        showOpToast('No untitled cards to summarize.', 'info');
+        return;
+      }
+      if (!confirm('Generate AI titles for ' + candidates.length + ' cards? '
+                   + 'Each call uses claude haiku (~3-5s, $0.001 each). Total ~'
+                   + Math.ceil(candidates.length / 3 * 5) + 's at 3 in parallel.')) {
+        return;
+      }
+      const total = candidates.length;
+      let done = 0, failed = 0;
+      $kptSummarizeAllBtn.disabled = true;
+      const origText = $kptSummarizeAllBtn.textContent;
+      const updateBtn = () => {
+        $kptSummarizeAllBtn.textContent = '✨ ' + done + '/' + total
+          + (failed ? ' (' + failed + ' failed)' : '');
+      };
+      updateBtn();
+
+      // Throttled queue — 3 in flight at a time so we don't fork-bomb claude.
+      const PARALLEL = 3;
+      const queue = candidates.slice();
+      async function worker() {
+        while (queue.length) {
+          const c = queue.shift();
+          try {
+            const r = await fetch('/api/conversations/' + encodeURIComponent(c.session_id) + '/summarize', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+            });
+            const d = await r.json();
+            if (d.ok) done++; else failed++;
+          } catch (_) { failed++; }
+          updateBtn();
+        }
+      }
+      const workers = Array.from({ length: PARALLEL }, () => worker());
+      await Promise.all(workers);
+
+      $kptSummarizeAllBtn.disabled = false;
+      $kptSummarizeAllBtn.textContent = origText;
+      showOpToast('Summarized ' + done + '/' + total + (failed ? ' (' + failed + ' failed)' : ''), failed ? 'error' : 'ok');
+      // Refresh so the new titles render.
+      refreshConversationList();
+    });
+  }
+
   // New session + Run
   if ($kptRunBtn) {
     $kptRunBtn.addEventListener('click', async () => {
