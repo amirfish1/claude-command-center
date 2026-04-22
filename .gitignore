@@ -32,7 +32,5 @@ venv/
 /.claude/pasted-images/
 *.log
 
-# Local-only Affiliates module (studio-owner CRM, not part of OSS distribution).
-# Gated in server.py via AFFILIATES_AVAILABLE — absent = feature silently disabled.
-/affiliates_store.py
-/static/affiliates/
+# Pre-publish workspace — audit reports, archive prep, etc.
+/oss-prep/

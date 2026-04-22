@@ -21,7 +21,7 @@ CCC_WATCH_REPO=~/some/project ./run.sh
 Open `http://localhost:8090`.
 
 The server writes Claude Code hook configuration into `~/.claude/settings.json`
-on first run, and copies hook scripts to `~/.claude/log-viewer/hooks/`. If
+on first run, and copies hook scripts to `~/.claude/command-center/hooks/`. If
 something goes wrong there, the server logs what it did at startup.
 
 ## Proposing a change
@@ -55,7 +55,7 @@ under a minute.
 | Spawn headless claude / follow-up injection | `spawn_session` (~L2321), `_write_stream_json_user_message` (~L2385), `resume_session_headless` (~L2414) |
 | Jump to terminal / tab rename+color on jump | `launch_terminal_for_session` (~L969), `inject_input_via_keystroke` (~L1069) |
 | Hook install / sync | `ensure_hooks_installed` at the bottom (~L3680) |
-| HTTP routing | `class LogViewerHandler` (~L3101), `do_GET` (~L3102), `do_POST` (~L3182) |
+| HTTP routing | `class CommandCenterHandler` (~L3101), `do_GET` (~L3102), `do_POST` (~L3182) |
 | Vercel auto-fix-deploy loop | `vercel_deploy_status` (~L2790), `vercel_deploy_status_with_autofix` |
 
 ### `static/index.html` (~4500 lines)
@@ -80,10 +80,10 @@ IIFE — state is private. Key functions:
 
 ### Cross-cutting
 
-- **State on disk**: everything under `~/.claude/log-viewer/` is the
+- **State on disk**: everything under `~/.claude/command-center/` is the
   app's own persistence. Delete any single file to reset that feature.
 - **Hooks**: `hooks/post-tool-use.py` + `hooks/stop.py` get copied to
-  `~/.claude/log-viewer/hooks/` at server startup. They're small (<60
+  `~/.claude/command-center/hooks/` at server startup. They're small (<60
   lines each) — read them first if you want to understand the sidecar
   signal.
 

@@ -1,0 +1,42 @@
+[project]
+name = "claude-command-center"
+version = "0.1.0"
+description = "A local command center for Claude Code that doesn't care how your agents were launched."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Amir Fish" },
+]
+keywords = ["claude", "claude-code", "kanban", "dashboard", "agent", "session-manager"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: User Interfaces",
+]
+
+# Zero runtime dependencies — stdlib only. The `gh`, `claude`, `vercel`, and
+# `pkood` integrations are subprocess shell-outs to optional external CLIs;
+# install whichever ones you want and the corresponding UI surfaces light up.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/amirfish1/claude-command-center"
+Repository = "https://github.com/amirfish1/claude-command-center"
+Issues = "https://github.com/amirfish1/claude-command-center/issues"
+
+[project.scripts]
+claude-command-center = "server:main"
+
+# No build backend declared — this isn't packaged for PyPI today. Run via
+# `./run.sh` or `python3 server.py`. The pyproject.toml exists so tooling
+# (ruff, mypy, IDEs) can pick up the project metadata.

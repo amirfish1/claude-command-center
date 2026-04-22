@@ -43,24 +43,38 @@
   else if (path === "/morning/kanban") activeKey = "mkanban";
   else if (path.startsWith("/morning")) activeKey = "morning";
 
-  const links = [
+  const allLinks = [
     { key: "dev",     href: "/",                icon: "🛠️", label: "Dev" },
-    { key: "morning", href: "/morning",         icon: "☀️",  label: "Morn" },
-    { key: "mkanban", href: "/morning/kanban",  icon: "📋", label: "M.Kan" },
+    { key: "morning", href: "/morning",         icon: "☀️",  label: "Morning", morning: true },
+    { key: "mkanban", href: "/morning/kanban",  icon: "📋", label: "Board", morning: true },
   ];
 
-  const nav = document.createElement("nav");
-  nav.className = "ccc-side-nav";
-  for (const l of links) {
-    const a = document.createElement("a");
-    a.href = l.href;
-    if (l.key === activeKey) a.className = "active";
-    const iconSpan = document.createElement("span");
-    iconSpan.className = "icon";
-    iconSpan.textContent = l.icon;
-    a.appendChild(iconSpan);
-    a.appendChild(document.createTextNode(l.label));
-    nav.appendChild(a);
+  // Probe whether the Morning view is enabled before rendering its links.
+  // /api/morning/state returns 404 when CCC_ENABLE_MORNING is unset, in which
+  // case we silently drop the Morning entries from the nav.
+  function build(links) {
+    const nav = document.createElement("nav");
+    nav.className = "ccc-side-nav";
+    for (const l of links) {
+      const a = document.createElement("a");
+      a.href = l.href;
+      if (l.key === activeKey) a.className = "active";
+      const iconSpan = document.createElement("span");
+      iconSpan.className = "icon";
+      iconSpan.textContent = l.icon;
+      a.appendChild(iconSpan);
+      a.appendChild(document.createTextNode(l.label));
+      nav.appendChild(a);
+    }
+    document.body.appendChild(nav);
   }
-  document.body.appendChild(nav);
+
+  fetch("/api/features")
+    .then(r => r.ok ? r.json() : {})
+    .catch(() => ({}))
+    .then(features => {
+      const morningOn = !!(features && features.morning);
+      const links = allLinks.filter(l => morningOn || !l.morning);
+      build(links);
+    });
 })();

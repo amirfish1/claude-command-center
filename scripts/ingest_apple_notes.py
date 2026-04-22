@@ -5,7 +5,7 @@ Flow:
 1. `osascript -l JavaScript` lists Apple Notes modified in the last 14 days.
 2. For each note with substantive body text, invoke `claude -p --model haiku`
    with an extraction prompt. Parse the JSON array returned.
-3. Write unique candidates to `~/.claude/log-viewer/morning/inbox/<date>.jsonl`.
+3. Write unique candidates to `~/.claude/command-center/morning/inbox/<date>.jsonl`.
 
 Run manually:
     python3 scripts/ingest_apple_notes.py
@@ -94,14 +94,30 @@ EXTRACT_PROMPT_TEMPLATE = (
     "must have:\n"
     "- \"text\": a short (<= 120 chars) rephrasing of the action\n"
     "- \"suggested_goal\": optional slug if you can guess "
-    "(bym-growth, nvidia-course, ai-forms, amirfish-ai, taxes), else null\n\n"
+    "({goal_slugs}), else null\n\n"
     "If there's nothing actionable, return [].\n\n"
     "## Title\n{title}\n\n## Body\n\n{body}\n"
 )
 
 
+def _load_goal_slugs():
+    """Read configured goal slugs from morning_store. Returns a comma-separated
+    string for inlining into the LLM prompt. Falls back to "no goals configured"
+    when morning_store has nothing yet (fresh install)."""
+    try:
+        import morning_store
+        slugs = [g.get("slug") for g in (morning_store.load_all_goals() or []) if g.get("slug")]
+    except Exception:
+        slugs = []
+    return ", ".join(slugs) if slugs else "no goals configured"
+
+
 def _extract(title, body, source_id, modified_iso):
-    prompt = EXTRACT_PROMPT_TEMPLATE.format(title=title or "(untitled)", body=body)
+    prompt = EXTRACT_PROMPT_TEMPLATE.format(
+        title=title or "(untitled)",
+        body=body,
+        goal_slugs=_load_goal_slugs(),
+    )
     try:
         r = subprocess.run(
             ["claude", "-p", "--model", "haiku"],
@@ -169,7 +185,7 @@ def main():
         return 0
     print(f"[apple-notes] fetched {len(notes)} notes from last 14 days")
 
-    inbox_dir = Path.home() / ".claude" / "log-viewer" / "morning" / "inbox"
+    inbox_dir = Path.home() / ".claude" / "command-center" / "morning" / "inbox"
     inbox_dir.mkdir(parents=True, exist_ok=True)
     existing = _existing_ids(inbox_dir)
 

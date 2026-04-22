@@ -1,14 +1,14 @@
 """Morning view module for Claude Command Center.
 
-Phase 2 composition layer: reads real goal.md files from
-~/.claude/log-viewer/morning/goals/ and scans watched repos for tactical
-items (TODO.md, PARKING_LOT.md, GitHub issues). Falls back to sample
+Composition layer: reads real goal.md files from
+~/.claude/command-center/morning/goals/ and scans watched repos for tactical
+items (TODO.md, PARKING_LOT.md, GitHub issues). Falls back to neutral sample
 data if no goals have been seeded yet so the page still renders on a
 fresh install.
 
-Phase 3+ will derive session deliverables, recent-session summaries,
-and ribbon text from Claude Code transcripts. For now the ribbon is a
-simple "N active · M done" summary of the goal's strategies.
+The ribbon string for each goal is currently derived from strategy status
+counts ("N active · M done"). Future versions may pull deliverables and
+recent-session summaries from Claude Code transcripts directly.
 """
 
 import copy
@@ -21,7 +21,7 @@ import morning_store
 from ingesters import github, repo_files
 
 
-_CONFIG_PATH = Path.home() / ".claude" / "log-viewer" / "morning" / "config.json"
+_CONFIG_PATH = Path.home() / ".claude" / "command-center" / "morning" / "config.json"
 
 
 # ---------------------------------------------------------------------------
@@ -29,53 +29,53 @@ _CONFIG_PATH = Path.home() / ".claude" / "log-viewer" / "morning" / "config.json
 # ---------------------------------------------------------------------------
 
 _SAMPLE_GOALS = [
-    {"slug": "bym-growth", "name": "BYM growth", "life_area": "The Initiatives",
+    {"slug": "product-a", "name": "Product A", "life_area": "Work",
      "accent": "#27ae60",
-     "ribbon": {"date": "Apr 17", "text": "5 commits · 3 issues closed · demo mode shipped", "source": "auto"}},
-    {"slug": "nvidia-course", "name": "Nvidia course", "life_area": "The Initiatives",
+     "ribbon": {"date": "Apr 17", "text": "5 commits · 3 issues closed", "source": "auto"}},
+    {"slug": "learning", "name": "Learning", "life_area": "Work",
      "accent": "#f39c12",
-     "ribbon": {"date": "Apr 17", "text": "3 commits · spec draft landed · Eran aligned", "source": "auto"}},
-    {"slug": "ai-forms", "name": "AI forms", "life_area": "The Initiatives",
+     "ribbon": {"date": "Apr 17", "text": "3 commits · spec draft landed", "source": "auto"}},
+    {"slug": "side-project", "name": "Side project", "life_area": "Work",
      "accent": "#3498db",
-     "ribbon": {"date": "Apr 17", "text": "no activity 4 days · \"$5 MCP\" still parked", "source": "auto"}},
-    {"slug": "taxes", "name": "Taxes", "life_area": "HOME/FAMILY",
+     "ribbon": {"date": "Apr 17", "text": "no activity 4 days · idea still parked", "source": "auto"}},
+    {"slug": "admin", "name": "Admin", "life_area": "Personal",
      "accent": "#9b59b6",
-     "ribbon": {"date": "Apr 17", "text": "URGENT — deadline Apr 15 passed", "source": "manual"}},
+     "ribbon": {"date": "Apr 17", "text": "deadline approaching", "source": "manual"}},
 ]
 
 _SAMPLE_STRATEGIC = [
-    {"priority": "P0", "goal_slug": "nvidia-course",
-     "text": "Come up with structure: raw material + workshop", "source": "Notion", "age_days": 3},
-    {"priority": "P1", "goal_slug": "bym-growth",
-     "text": "Push/promote BYM (advance growth)", "source": "Notion", "age_days": 3},
-    {"priority": "P0", "goal_slug": "taxes",
-     "text": "Taxes", "source": "Notion", "age_days": 3},
-    {"priority": "P1", "goal_slug": "ai-forms",
-     "text": "Push AI forms (decide: launch / marketing / sales)", "source": "Notion", "age_days": 3},
+    {"priority": "P0", "goal_slug": "learning",
+     "text": "Outline workshop structure", "source": "Notion", "age_days": 3},
+    {"priority": "P1", "goal_slug": "product-a",
+     "text": "Drive growth (sales / marketing)", "source": "Notion", "age_days": 3},
+    {"priority": "P0", "goal_slug": "admin",
+     "text": "File quarterly report", "source": "Notion", "age_days": 3},
+    {"priority": "P1", "goal_slug": "side-project",
+     "text": "Decide: launch / marketing / sales", "source": "Notion", "age_days": 3},
 ]
 
 _SAMPLE_TACTICAL = [
-    {"priority": "P0", "goal_slug": "bym-growth",
-     "text": "Re-run migration for Joyce after fixes", "source": "TODO.md", "age_days": 2},
-    {"priority": "P0", "goal_slug": "bym-growth",
-     "text": "#114 — same-day swap instructors fails", "source": "GH", "age_days": 0},
-    {"priority": "P1", "goal_slug": "bym-growth",
-     "text": "ICS email invitations instead of GCal invites", "source": "TODO.md", "age_days": 5},
-    {"priority": "P1", "goal_slug": "bym-growth",
-     "text": "Verify new Calendly token holds all 7 scopes", "source": "TODO.md", "age_days": 4},
-    {"priority": "P2", "goal_slug": "bym-growth",
+    {"priority": "P0", "goal_slug": "product-a",
+     "text": "Re-run migration for customer", "source": "TODO.md", "age_days": 2},
+    {"priority": "P0", "goal_slug": "product-a",
+     "text": "#114 — booking conflict on same-day reschedule", "source": "GH", "age_days": 0},
+    {"priority": "P1", "goal_slug": "product-a",
+     "text": "Send email invites instead of calendar invites", "source": "TODO.md", "age_days": 5},
+    {"priority": "P1", "goal_slug": "product-a",
+     "text": "Verify OAuth token has all required scopes", "source": "TODO.md", "age_days": 4},
+    {"priority": "P2", "goal_slug": "product-a",
      "text": "Test passkey auth end-to-end on production", "source": "PARKING", "age_days": 13},
 ]
 
 _SAMPLE_INBOX = [
-    {"source": "Apple Notes", "age_days": 2, "suggested_goal": None,
-     "text": "Try using a local LLM for the Wispr transcription cleanup instead of sending to cloud"},
+    {"source": "Notes app", "age_days": 2, "suggested_goal": None,
+     "text": "Try a local LLM for transcription cleanup instead of sending to cloud"},
     {"source": "Google Doc", "age_days": 1, "suggested_goal": None,
-     "text": "Should explore putting the command center behind proper auth so I can share it with Eran"},
-    {"source": "Wispr", "age_days": 0, "suggested_goal": None,
-     "text": "Idea: morning dashboard that aggregates all my todos so I don't have to remember where things are"},
-    {"source": "Apple Notes", "age_days": 4, "suggested_goal": None,
-     "text": "Find a decent mattress finally"},
+     "text": "Should explore putting the command center behind proper auth so I can share it with the team"},
+    {"source": "Voice notes", "age_days": 0, "suggested_goal": None,
+     "text": "Idea: morning dashboard that aggregates all todos so nothing falls through the cracks"},
+    {"source": "Notes app", "age_days": 4, "suggested_goal": None,
+     "text": "Pick up groceries"},
 ]
 
 
@@ -207,7 +207,7 @@ def _load_inbox():
     `promoted_to` / `dismissed_at` field mark the candidate as handled —
     we filter those out of the returned set. Capped at the last 7 days.
     """
-    inbox_dir = Path.home() / ".claude" / "log-viewer" / "morning" / "inbox"
+    inbox_dir = Path.home() / ".claude" / "command-center" / "morning" / "inbox"
     if not inbox_dir.is_dir():
         return []
     candidates_by_id = {}
@@ -397,7 +397,7 @@ def _recent_sessions_for_goal(goal):
 
 def _group_suggested(items, min_group_size=3):
     """Collapse same-source clusters of items into group rows so the
-    Suggested list doesn't drown in 10 BYM GitHub issues.
+    Suggested list doesn't drown in 10 GitHub issues from a single repo.
 
     Groups by (goal_slug, source) pairs. Any cluster with >= min_group_size
     items becomes one row of kind='group' with an `items` payload the
@@ -454,7 +454,7 @@ def _scan_all_repos():
 def get_morning_state():
     """Return the full state needed to render /morning.
 
-    Prefers real goals from ~/.claude/log-viewer/morning/goals/. Falls back
+    Prefers real goals from ~/.claude/command-center/morning/goals/. Falls back
     to sample data if no goals are seeded yet (so a fresh install still
     renders something meaningful).
     """
@@ -480,7 +480,7 @@ def get_morning_state():
 
     strategic = _strategic_from_goals(goals)
 
-    # "Today" = only the things Amir explicitly committed to. Everything
+    # "Today" = only the things the user explicitly committed to. Everything
     # we scan from TODO.md / PARKING_LOT / GitHub starts in "Suggested"
     # so Today doesn't drown in auto-scanned backlog.
     today = []
@@ -496,6 +496,8 @@ def get_morning_state():
             "classification": ut.get("classification"),
             "notes": ut.get("notes"),
             "matched_existing": ut.get("matched_existing"),
+            "status": ut.get("status"),
+            "claude_session_id": ut.get("claude_session_id"),
         }
         if ut.get("dismissed_at"):
             row["dismissed_at"] = ut.get("dismissed_at")

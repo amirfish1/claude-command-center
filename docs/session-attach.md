@@ -75,7 +75,7 @@ All three paths produce the same card shape. The classifier doesn't know or
 care where the session came from — it only looks at:
 
 - Is there a live pid in `~/.claude/sessions/`?
-- Is there a recent sidecar update (`~/.claude/log-viewer/live-state/<sid>.json`)?
+- Is there a recent sidecar update (`~/.claude/command-center/live-state/<sid>.json`)?
 - Does the JSONL contain `has_push` / `has_commit` markers?
 - Are there manual overrides (verified, archived, column drag)?
 

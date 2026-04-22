@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
-Claude Log Viewer — Web UI
+Claude Command Center — Web UI
 
-Browse and view claude-issue-watcher stream-json logs in the browser.
+Browse and view claude-issue-watcher stream-json logs in the browser, manage
+GitHub-issue-driven sessions on a kanban, and (optionally) drive the Morning
+view for goals/tactical-item triage.
 
 Usage:
-    ./scripts/claude-log-viewer-web.py             # starts on port 8090
-    PORT=9000 ./scripts/claude-log-viewer-web.py   # custom port
+    ./run.sh                 # starts on port 8090, watches $PWD
+    PORT=9000 ./run.sh       # custom port
+    CCC_WATCH_REPO=~/dev/foo ./run.sh
 """
+
+__version__ = "0.1.0"
 
 import ast
 import http.server
@@ -24,6 +29,8 @@ from pathlib import Path
 
 # The repository the command center is watching. Override with CCC_WATCH_REPO;
 # defaults to the current working directory when the server is launched.
+# Can also be switched at runtime via switch_repo_root() — caches that depend on
+# REPO_ROOT (backlog, issue titles/state) get invalidated automatically.
 _env_watch = os.environ.get("CCC_WATCH_REPO")
 REPO_ROOT = Path(_env_watch).resolve() if _env_watch else Path.cwd().resolve()
 LOG_DIR = REPO_ROOT / ".claude" / "logs"
@@ -32,24 +39,77 @@ WATCHER_SCRIPT = REPO_ROOT / "scripts" / "claude-issue-watcher.sh"
 # Claude Code encodes project path by replacing "/" with "-" under ~/.claude/projects/
 _cc_project_slug = "-" + str(REPO_ROOT).lstrip("/").replace("/", "-")
 CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
+
+def load_known_repos():
+    """Auto-detect projects for the picker by scanning $HOME.
+
+    Returns one entry per direct child of $HOME that looks like a project —
+    either a git repo (`.git/`) or a Claude workspace (`.claude/`). Skips
+    dotfile dirs themselves so the list stays clean. Sorted alphabetically.
+    Falls back to cwd when nothing is found so the picker is never empty.
+    """
+    home = Path.home()
+    repos = []
+    try:
+        for entry in sorted(home.iterdir(), key=lambda p: p.name.lower()):
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            is_git = (entry / ".git").is_dir()
+            is_claude = (entry / ".claude").is_dir()
+            if not (is_git or is_claude):
+                continue
+            repos.append({"path": str(entry.resolve()), "label": entry.name})
+    except OSError:
+        pass
+    if not repos:
+        cwd = Path.cwd().resolve()
+        repos.append({"path": str(cwd), "label": cwd.name})
+    return repos
+
+
+def switch_repo_root(new_path):
+    """Switch the watched repo at runtime.
+
+    Reassigns REPO_ROOT and all derived module globals (LOG_DIR, WATCHER_SCRIPT,
+    CONVERSATIONS_DIR, _cc_project_slug). Existing functions read these at call
+    time, so they pick up the new value automatically. Also invalidates every
+    cache that holds repo-specific data so the next request re-queries fresh.
+
+    The cache vars (_backlog_issues_cache, etc.) are declared further down in
+    the module — by the time switch_repo_root is *called* at runtime they
+    always exist, so the `global` declarations below are safe.
+
+    Raises ValueError when new_path is not an existing directory.
+    """
+    global REPO_ROOT, LOG_DIR, WATCHER_SCRIPT, CONVERSATIONS_DIR, _cc_project_slug
+    global _backlog_issues_cache, _backlog_issues_cache_ts
+    global _issue_titles_cache, _issue_titles_cache_ts
+    global _issue_state_cache, _issue_state_cache_ts
+    new_root = Path(new_path).expanduser().resolve()
+    if not new_root.is_dir():
+        raise ValueError(f"not a directory: {new_root}")
+    REPO_ROOT = new_root
+    LOG_DIR = REPO_ROOT / ".claude" / "logs"
+    WATCHER_SCRIPT = REPO_ROOT / "scripts" / "claude-issue-watcher.sh"
+    _cc_project_slug = "-" + str(REPO_ROOT).lstrip("/").replace("/", "-")
+    CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
+    # Invalidate every repo-scoped cache.
+    _backlog_issues_cache = []
+    _backlog_issues_cache_ts = 0
+    _issue_titles_cache = {}
+    _issue_titles_cache_ts = 0
+    _issue_state_cache = {}
+    _issue_state_cache_ts = 0
+    return REPO_ROOT
 # Tool's own assets live next to this file.
 CCC_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = CCC_ROOT / "static"
 MORNING_STATIC_DIR = STATIC_DIR / "morning"
-AFFILIATES_STATIC_DIR = STATIC_DIR / "affiliates"
 
-import morning  # morning.py — goals/tasks/inbox API (Phase 1 sample data)
-# Affiliates is an optional local-only module (gitignored). If the file is
-# absent, the related routes and UI link stay disabled.
-try:
-    import affiliates_store  # JSON-backed store for the Affiliates section
-    AFFILIATES_AVAILABLE = True
-except ImportError:
-    affiliates_store = None
-    AFFILIATES_AVAILABLE = False
+import morning  # morning.py — goals/tasks/inbox API for the Morning view
 PORT = int(os.environ.get("PORT", 8090))
-# Optional title-prefix noise stripper (e.g. "[BYM Problem]"). Comma-separated prefixes.
-# Empty by default; set `CCC_TITLE_STRIP=BYM,FOO` to strip `[BYM ...]` and `[FOO ...]` from titles.
+# Optional title-prefix noise stripper. Comma-separated prefixes.
+# Empty by default; set `CCC_TITLE_STRIP=ACME,FOO` to strip `[ACME ...]` and `[FOO ...]` from titles.
 TITLE_STRIP_PREFIXES = [p for p in os.environ.get("CCC_TITLE_STRIP", "").split(",") if p]
 
 # Optional org-tagger for multi-tenant apps. Set CCC_ORG_PATTERNS as
@@ -79,6 +139,12 @@ def _detect_issue_org(body):
         if rx.search(body):
             return label
     return None
+
+
+# Morning view is opt-in. It's a goal-/strategy-/braindump-driven sub-feature
+# that not all users want — particularly OSS users who just want the kanban
+# for managing Claude sessions. Set CCC_ENABLE_MORNING=1 to enable.
+MORNING_ENABLED = os.environ.get("CCC_ENABLE_MORNING", "").strip().lower() in ("1", "true", "yes", "on")
 _TITLE_STRIP_RE = re.compile(
     r"^\s*\[(?:" + "|".join(re.escape(p) for p in TITLE_STRIP_PREFIXES) + r")[^\]]*\]\s*"
 ) if TITLE_STRIP_PREFIXES else None
@@ -90,9 +156,12 @@ def _strip_title_prefix(title):
     return _TITLE_STRIP_RE.sub("", title)
 
 # Sidecar state (written by hooks)
-SIDECAR_STATE_DIR = Path.home() / ".claude" / "log-viewer" / "live-state"
-HOOK_SCRIPTS_DIR = Path.home() / ".claude" / "log-viewer" / "hooks"
-HOOK_MARKER = "log-viewer/hooks/"
+SIDECAR_STATE_DIR = Path.home() / ".claude" / "command-center" / "live-state"
+HOOK_SCRIPTS_DIR = Path.home() / ".claude" / "command-center" / "hooks"
+HOOK_MARKER = "command-center/hooks/"
+# Legacy marker (pre-rename) — kept so ensure_hooks_installed can detect old
+# entries in ~/.claude/settings.json and rewrite them to the new path.
+HOOK_MARKER_LEGACY = "log-viewer/hooks/"
 
 # Global watcher process handle
 _watcher_proc = None
@@ -134,13 +203,15 @@ _session_cwd_cache_mtime = 0
 
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 SESSIONS_REGISTRY = Path.home() / ".claude" / "sessions"  # per-pid {sessionId, cwd, ...}
-LOG_VIEWER_STATE_DIR = Path.home() / ".claude" / "log-viewer"
-SESSION_NAMES_FILE = LOG_VIEWER_STATE_DIR / "session-names.json"  # side-car overrides
-CONVERSATION_ORDER_FILE = LOG_VIEWER_STATE_DIR / "conversation-order.json"  # [session_id,...]
-ARCHIVED_CONVERSATIONS_FILE = LOG_VIEWER_STATE_DIR / "archived-conversations.json"  # [session_id,...]
-VERIFIED_CONVERSATIONS_FILE = LOG_VIEWER_STATE_DIR / "verified-conversations.json"  # [session_id,...]
-SESSION_ISSUES_FILE = LOG_VIEWER_STATE_DIR / "session-issues.json"  # {session_id: issue_number}
-FIX_DEPLOY_SPAWNED_FILE = LOG_VIEWER_STATE_DIR / "fix-deploy-spawned.json"  # {commit_sha: {pid, spawned_at, name}}
+COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
+# Backwards-compat alias — older code / forks may import the previous name.
+LOG_VIEWER_STATE_DIR = COMMAND_CENTER_STATE_DIR
+SESSION_NAMES_FILE = COMMAND_CENTER_STATE_DIR / "session-names.json"  # side-car overrides
+CONVERSATION_ORDER_FILE = COMMAND_CENTER_STATE_DIR / "conversation-order.json"  # [session_id,...]
+ARCHIVED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "archived-conversations.json"  # [session_id,...]
+VERIFIED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "verified-conversations.json"  # [session_id,...]
+SESSION_ISSUES_FILE = COMMAND_CENTER_STATE_DIR / "session-issues.json"  # {session_id: issue_number}
+FIX_DEPLOY_SPAWNED_FILE = COMMAND_CENTER_STATE_DIR / "fix-deploy-spawned.json"  # {commit_sha: {pid, spawned_at, name}}
 
 # {path: {mtime, custom_title, last_prompt, agent_name}}
 _conv_meta_cache = {}
@@ -497,6 +568,7 @@ def _latest_commit_sha(cwd=None):
 
 
 _unpushed_cache = {}  # key: cwd str → (count_int_or_None, ts)
+_UNPUSHED_CACHE_TTL_S = 60
 
 
 def _count_unpushed_commits(cwd):
@@ -508,7 +580,7 @@ def _count_unpushed_commits(cwd):
     key = str(cwd)
     now = time.time()
     cached = _unpushed_cache.get(key)
-    if cached and now - cached[1] < 60:
+    if cached and now - cached[1] < _UNPUSHED_CACHE_TTL_S:
         return cached[0]
     count = None
     try:
@@ -708,7 +780,7 @@ def rename_session(session_id, name):
             except OSError as e2:
                 result["error"] = f"both paths failed: {e2}"
                 return result
-        # Also record in side-car as a "user set this from the viewer" marker.
+        # Also record in side-car as a "user set this from the command center" marker.
         # Display priority still comes from the jsonl (authoritative), but the
         # side-car's presence is used to render the teal "I renamed this" color.
         try:
@@ -2206,7 +2278,7 @@ def find_conversations():
             or override
             or None
         )
-        # name_overridden means "user touched the name from the log viewer"
+        # name_overridden means "user touched the name from the command center"
         # (used for teal visual marker). Decoupled from display value.
         name_overridden = bool(override)
         conversations.append({
@@ -3144,7 +3216,7 @@ Instructions:
     ]
 
     log_fh = open(log_path, "w")
-    # Write synthetic metadata + prompt so the viewer shows the title and initial prompt
+    # Write synthetic metadata + prompt so the command center shows the title and initial prompt
     meta = json.dumps({
         "type": "spawn_meta",
         "issue_number": issue_number,
@@ -3652,13 +3724,13 @@ def parse_conversation_by_sid(session_id, after_line=0):
     return {"events": [], "last_line": 0}
 
 
-_MORNING_BRAINDUMP_PROMPT = """You are analyzing Amir's morning brain-dump.
+_MORNING_BRAINDUMP_PROMPT = """You are analyzing the user's morning brain-dump.
 
-For each item in his dump, classify as exactly one of:
-- NEW: a fresh task/idea not already in his system. This INCLUDES personal
-  errands or one-off todos (e.g. "call mom", "pick up dry cleaning") even
-  when they don't map to any configured goal. If Amir typed it and it's a
-  real action item, it's NEW — regardless of whether a goal matches.
+For each item in the dump, classify as exactly one of:
+- NEW: a fresh task/idea not already in the user's system. This INCLUDES
+  personal errands or one-off todos (e.g. "call mom", "pick up dry cleaning")
+  even when they don't map to any configured goal. If the user typed it and
+  it's a real action item, it's NEW — regardless of whether a goal matches.
 - EXISTING: matches or refines something already tracked; identify which
 - CONTEXT: not a task — a thought, update, reflection, or meeting note
 - DISCARD: ONLY pure filler with no content ("ok", "hmm", "uh", "so yeah").
@@ -3675,7 +3747,7 @@ Also suggest which GOAL it maps to (or null if unclear). Goal slugs are shown be
 
 {tactical}
 
-## Amir's braindump
+## Braindump
 
 ```
 {dump}
@@ -3684,7 +3756,7 @@ Also suggest which GOAL it maps to (or null if unclear). Goal slugs are shown be
 Return ONLY a JSON array. No prose. No markdown fences. Each item looks like:
 {{"original_text": "...", "classification": "NEW"|"EXISTING"|"CONTEXT"|"DISCARD", "matched_existing": "short text of what it matched, or null", "suggested_goal": "slug or null", "notes": "one-sentence why"}}
 
-Items in the dump are separated by newlines. Preserve Amir's original phrasing in original_text.
+Items in the dump are separated by newlines. Preserve the user's original phrasing in original_text.
 """
 
 
@@ -4126,10 +4198,26 @@ def _load_index_html():
 HTML_PAGE = _load_index_html()
 
 
-class LogViewerHandler(http.server.BaseHTTPRequestHandler):
+class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
+    def _is_morning_path(self, path):
+        """True if the request targets the (opt-in) Morning sub-feature."""
+        return (
+            path == "/morning"
+            or path.startswith("/morning/")
+            or path.startswith("/api/morning/")
+            or path == "/api/morning"
+        )
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
+
+        # Morning view is opt-in via CCC_ENABLE_MORNING=1.
+        if self._is_morning_path(path) and not MORNING_ENABLED:
+            self.send_json({
+                "error": "Morning view is disabled. Set CCC_ENABLE_MORNING=1 to enable."
+            }, 404)
+            return
 
         if path == "" or path == "/":
             # Re-read on every request so edits to static/index.html are live.
@@ -4249,7 +4337,16 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(parse_conversation_by_sid(sid, after_line))
         elif path == "/morning/kanban":
             try:
-                self.send_html((MORNING_STATIC_DIR / "kanban.html").read_text())
+                html = (MORNING_STATIC_DIR / "kanban.html").read_text()
+                # Inject CCC_USER_NAME so the greeting can personalize. Empty string
+                # by default; the JS handles the empty case ("Good morning.").
+                user_name = os.environ.get("CCC_USER_NAME", "").replace('"', '\\"')
+                html = html.replace(
+                    "</head>",
+                    f'<script>window.CCC_USER_NAME = "{user_name}";</script>\n</head>',
+                    1,
+                )
+                self.send_html(html)
             except OSError as e:
                 self.send_json({"error": "morning/kanban.html missing", "detail": str(e)}, 500)
         elif path == "/api/session-status":
@@ -4385,6 +4482,24 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": "morning/goal-detail.html missing", "detail": str(e)}, 500)
         elif path == "/api/morning/state":
             self.send_json(morning.get_morning_state())
+        elif path == "/api/features":
+            # Always-on feature-flag endpoint so the UI can hide opt-in surfaces
+            # like the Morning sub-feature without hard-coding env-var probes.
+            self.send_json({
+                "version": __version__,
+                "morning": MORNING_ENABLED,
+            })
+        elif path == "/api/version":
+            self.send_json({"version": __version__})
+        elif path == "/api/repo/list":
+            # List of repos the picker offers + the one currently active.
+            repos = load_known_repos()
+            current = str(REPO_ROOT)
+            # Make sure the current repo is always in the list, even if it's not
+            # in the morning watched_repos config.
+            if not any(r["path"] == current for r in repos):
+                repos.append({"path": current, "label": Path(current).name})
+            self.send_json({"current": current, "repos": repos})
         elif re.match(r"^/api/morning/goals/[A-Za-z0-9_-]+$", path):
             slug = path.rsplit("/", 1)[-1]
             detail = morning.get_goal_detail(slug)
@@ -4392,52 +4507,42 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": f"unknown goal: {slug}"}, 404)
             else:
                 self.send_json(detail)
-        elif path.startswith("/static/affiliates/") and AFFILIATES_AVAILABLE:
-            rel = path[len("/static/affiliates/"):]
-            target = AFFILIATES_STATIC_DIR / rel
-            try:
-                resolved = target.resolve(strict=False)
-                base = AFFILIATES_STATIC_DIR.resolve()
-            except OSError as e:
-                self.send_json({"error": str(e)}, 500)
-                return
-            try:
-                resolved.relative_to(base)
-            except ValueError:
-                self.send_json({"error": f"not found: {path}"}, 404)
-                return
-            if not resolved.is_file():
-                self.send_json({"error": f"not found: {path}"}, 404)
-            else:
-                try:
-                    body = resolved.read_bytes()
-                except OSError as e:
-                    self.send_json({"error": str(e)}, 500)
-                    return
-                ct = "text/plain"
-                if rel.endswith(".js"):
-                    ct = "application/javascript"
-                elif rel.endswith(".css"):
-                    ct = "text/css"
-                elif rel.endswith(".html"):
-                    ct = "text/html; charset=utf-8"
-                self.send_response(200)
-                self.send_header("Content-Type", ct)
-                self.send_header("Cache-Control", "no-store, must-revalidate")
-                self.end_headers()
-                self.wfile.write(body)
-        elif path == "/affiliates" and AFFILIATES_AVAILABLE:
-            try:
-                self.send_html((AFFILIATES_STATIC_DIR / "index.html").read_text())
-            except OSError as e:
-                self.send_json({"error": "affiliates/index.html missing", "detail": str(e)}, 500)
-        elif path == "/api/affiliates" and AFFILIATES_AVAILABLE:
-            self.send_json({"leads": affiliates_store.list_leads()})
         else:
             self.send_json({"error": "Not found"}, 404)
 
+    def _check_same_origin(self):
+        """SECURITY: reject cross-origin POSTs (CSRF defence).
+
+        We have no auth — the trust model is "loopback only". A browser tab
+        on any unrelated site can fetch http://localhost:PORT/... unless we
+        check the Origin header. Browsers always set Origin on cross-origin
+        requests but may omit it on same-origin (varies). We allow:
+          - missing Origin (curl, same-origin form posts in some browsers)
+          - Origin matching localhost / 127.0.0.1 / ::1 on our PORT
+        Anything else gets 403. Returns True if request is allowed.
+        """
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            return True  # no Origin = curl / programmatic / same-origin form
+        for host in ("localhost", "127.0.0.1", "[::1]"):
+            for scheme in ("http", "https"):
+                if origin == f"{scheme}://{host}:{PORT}":
+                    return True
+                if origin == f"{scheme}://{host}":  # default port edge case
+                    return True
+        self.send_json({"error": "cross-origin POST rejected", "origin": origin}, 403)
+        return False
+
     def do_POST(self):
+        if not self._check_same_origin():
+            return
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
+        # Morning view is opt-in via CCC_ENABLE_MORNING=1.
+        if self._is_morning_path(path) and not MORNING_ENABLED:
+            self.send_json({
+                "error": "Morning view is disabled. Set CCC_ENABLE_MORNING=1 to enable."
+            }, 404)
+            return
         if path == "/api/bust-issue-state":
             # External signal that GitHub issue state may have changed (e.g. a
             # Claude Code PostToolUse hook fired after `gh issue close/reopen`).
@@ -4445,6 +4550,44 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
             # and auto_verify_closed_issues can fire immediately.
             _bust_issue_state_cache()
             self.send_json({"ok": True})
+            return
+        if path == "/api/repo/switch":
+            # Live-switch the watched repo. All REPO_ROOT-derived globals get
+            # reassigned and every repo-scoped cache is invalidated. The next
+            # /api/conversations call will rescan the new repo from scratch.
+            #
+            # SECURITY: target must be in the picker's allow-list. Without
+            # this, a CSRF could repoint REPO_ROOT at /etc and the next gh /
+            # subprocess call would run cwd=/etc — at minimum noisy errors,
+            # potentially worse depending on what code reads from REPO_ROOT.
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            target = (body.get("path") or "").strip()
+            if not target:
+                self.send_json({"ok": False, "error": "missing 'path'"}, 400)
+                return
+            try:
+                target_resolved = str(Path(target).expanduser().resolve())
+            except OSError as e:
+                self.send_json({"ok": False, "error": f"bad path: {e}"}, 400)
+                return
+            allowed = {r["path"] for r in load_known_repos()}
+            allowed.add(str(REPO_ROOT))  # current repo is always allowed
+            if target_resolved not in allowed:
+                self.send_json({
+                    "ok": False,
+                    "error": "path not in allow-list (must appear in the repo picker)",
+                    "path": target_resolved,
+                }, 403)
+                return
+            try:
+                new_root = switch_repo_root(target_resolved)
+                self.send_json({"ok": True, "current": str(new_root)})
+            except ValueError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
             return
         if path == "/api/morning/ingest/run":
             # Fire-and-forget: spawn the Apple Notes ingester in the background.
@@ -4664,44 +4807,6 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json(morning_launch(goal_slug, strategy_id, custom_message=custom_message))
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
-        elif path == "/api/affiliates" and AFFILIATES_AVAILABLE:
-            length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length) if length > 0 else b""
-            try:
-                payload = json.loads(body) if body else {}
-            except json.JSONDecodeError:
-                payload = {}
-            try:
-                lead = affiliates_store.create_lead(payload)
-                self.send_json({"ok": True, "lead": lead})
-            except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, 500)
-        elif AFFILIATES_AVAILABLE and re.match(r"^/api/affiliates/lead_[A-Za-z0-9_]+/delete$", path):
-            lead_id = path.split("/")[3]
-            try:
-                deleted = affiliates_store.delete_lead(lead_id)
-                if deleted:
-                    self.send_json({"ok": True, "id": lead_id})
-                else:
-                    self.send_json({"ok": False, "error": "not found"}, 404)
-            except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, 500)
-        elif AFFILIATES_AVAILABLE and re.match(r"^/api/affiliates/lead_[A-Za-z0-9_]+$", path):
-            lead_id = path.split("/")[3]
-            length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length) if length > 0 else b""
-            try:
-                payload = json.loads(body) if body else {}
-            except json.JSONDecodeError:
-                payload = {}
-            try:
-                updated = affiliates_store.update_lead(lead_id, payload)
-                if updated is None:
-                    self.send_json({"ok": False, "error": "not found"}, 404)
-                else:
-                    self.send_json({"ok": True, "lead": updated})
-            except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/upload-image":
             ctype = self.headers.get("Content-Type", "")
             length = int(self.headers.get("Content-Length", "0"))
@@ -4727,6 +4832,10 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/open":
+            # SECURITY: macOS `open` will execute scripts/apps. We MUST clamp
+            # the target to a known-safe sandbox or this is RCE-as-a-feature.
+            # Accept only paths that resolve under REPO_ROOT or LOG_DIR — i.e.
+            # files the user is already viewing in this dashboard.
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
@@ -4737,24 +4846,42 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
             if not target:
                 self.send_json({"ok": False, "error": "missing path"}, 400)
             else:
+                # Build candidate list: absolute path as-is, or relative to REPO_ROOT.
                 candidates = []
                 if os.path.isabs(target):
                     candidates.append(target)
                 else:
-                    cwd = os.getcwd()
-                    candidates.append(os.path.join(cwd, target))
-                    home = os.path.expanduser("~")
-                    for root in ("dev/my-finance-app", "dev/claude-command-center", "dev"):
-                        candidates.append(os.path.join(home, root, target))
+                    candidates.append(str(REPO_ROOT / target))
                 resolved = next((p for p in candidates if os.path.exists(p)), None)
                 if not resolved:
                     self.send_json({"ok": False, "error": "not found", "tried": candidates}, 404)
                 else:
+                    # Sandbox check: resolved path must live under REPO_ROOT or LOG_DIR.
                     try:
-                        subprocess.Popen(["open", resolved])
-                        self.send_json({"ok": True, "path": resolved})
-                    except Exception as e:
-                        self.send_json({"ok": False, "error": str(e)}, 500)
+                        rp = Path(resolved).resolve(strict=False)
+                        allowed_roots = [REPO_ROOT.resolve(), LOG_DIR.resolve()]
+                        in_sandbox = any(
+                            str(rp).startswith(str(root) + os.sep) or rp == root
+                            for root in allowed_roots
+                        )
+                    except OSError:
+                        in_sandbox = False
+                    if not in_sandbox:
+                        self.send_json({
+                            "ok": False,
+                            "error": "path outside sandbox (REPO_ROOT / LOG_DIR)",
+                            "path": resolved,
+                        }, 403)
+                    else:
+                        try:
+                            # `open -R` reveals in Finder rather than launching —
+                            # safer default. Add a `launch: true` body field if
+                            # callers ever need launch behaviour back.
+                            cmd = ["open", "-R", str(rp)] if not payload.get("launch") else ["open", str(rp)]
+                            subprocess.Popen(cmd)
+                            self.send_json({"ok": True, "path": str(rp)})
+                        except Exception as e:
+                            self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/watcher/start":
             self.send_json(watcher_start())
         elif path == "/api/watcher/stop":
@@ -4877,7 +5004,7 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                     gh_out = subprocess.run(
                         ["gh", "issue", "close", issue_num,
                          "--reason", "not planned",
-                         "--comment", "Archived via command center (not planned)"],
+                         "--comment", "Archived via Claude Command Center (not planned)"],
                         capture_output=True, text=True, timeout=10,
                         cwd=str(REPO_ROOT),
                     )
@@ -5143,7 +5270,8 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # SECURITY: no wildcard CORS — same-origin only. The UI is served from
+        # the same host:port, so no CORS header is needed at all.
         self.end_headers()
 
         line_num = 0
@@ -5512,12 +5640,32 @@ def get_app_config():
     return config
 
 
+def migrate_state_dir():
+    """One-time rename: ~/.claude/log-viewer/ → ~/.claude/command-center/.
+
+    Pre-rename users have data at the old path. We rename it on first launch
+    of the renamed binary so they don't lose session-names, archives, etc.
+    Idempotent — does nothing if the new path already exists or the old one
+    doesn't.
+    """
+    old = Path.home() / ".claude" / "log-viewer"
+    new = COMMAND_CENTER_STATE_DIR
+    if new.exists() or not old.exists():
+        return
+    try:
+        old.rename(new)
+        print(f"  [migrate] Renamed {old} -> {new}")
+    except OSError as e:
+        print(f"  [migrate] Could not rename state dir ({e}). Continuing with {new}.")
+
+
 def ensure_hooks_installed():
     """Ensure our PostToolUse and Stop hooks are registered in ~/.claude/settings.json.
 
     Also copies the hook scripts from this repo's hooks/ into
-    ~/.claude/log-viewer/hooks/ so ~/.claude/settings.json can reference them
-    from a stable location independent of where this repo is checked out.
+    ~/.claude/command-center/hooks/ so ~/.claude/settings.json can reference
+    them from a stable location independent of where this repo is checked out.
+    Migrates legacy `log-viewer/hooks/` references to the new path in-place.
     """
     # Copy hook scripts into the well-known install location, keeping them
     # in sync with whatever version is in this repo.
@@ -5547,6 +5695,17 @@ def ensure_hooks_installed():
         return
 
     hooks = settings.setdefault("hooks", {})
+
+    # Rewrite any legacy `log-viewer/hooks/` paths in existing entries so
+    # users who installed under the old name keep working without a manual edit.
+    rewrote_legacy = False
+    for kind in ("PostToolUse", "Stop"):
+        for entry in hooks.get(kind, []) or []:
+            for h in entry.get("hooks", []) or []:
+                cmd = h.get("command", "")
+                if HOOK_MARKER_LEGACY in cmd:
+                    h["command"] = cmd.replace(HOOK_MARKER_LEGACY, HOOK_MARKER)
+                    rewrote_legacy = True
 
     # PostToolUse hook
     post_tool_hooks = hooks.setdefault("PostToolUse", [])
@@ -5582,11 +5741,13 @@ def ensure_hooks_installed():
         })
         print("  [hooks] Installed Stop hook")
 
-    if not has_post_tool or not has_stop:
+    if not has_post_tool or not has_stop or rewrote_legacy:
         tmp_path = settings_path.with_suffix(".tmp")
         try:
             tmp_path.write_text(json.dumps(settings, indent=4) + "\n")
             tmp_path.replace(settings_path)
+            if rewrote_legacy:
+                print("  [hooks] Migrated legacy `log-viewer/hooks/` paths in settings.json")
             print("  [hooks] settings.json updated")
         except OSError as e:
             print(f"  [hooks] Failed to write settings.json: {e}")
@@ -5598,9 +5759,21 @@ def main():
     class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         allow_reuse_address = True
         daemon_threads = True
+    migrate_state_dir()
     ensure_hooks_installed()
-    server = ThreadedHTTPServer(("", PORT), LogViewerHandler)
-    print(f"Claude Log Viewer running at http://localhost:{PORT}")
+    # SECURITY: bind to 127.0.0.1 by default. The whole trust model is
+    # "implicit because it's local"; binding to all interfaces (the old
+    # `("", PORT)`) exposed every endpoint — including subprocess-spawning
+    # ones — to anyone on the same LAN. Escape hatch for power users:
+    # CCC_BIND_HOST=0.0.0.0 (with an explicit warning printed below).
+    bind_host = os.environ.get("CCC_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    server = ThreadedHTTPServer((bind_host, PORT), CommandCenterHandler)
+    if bind_host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"⚠️  WARNING: binding to {bind_host} — server is reachable from the network.")
+        print(f"   This server has no auth. Anyone who can reach this port can run")
+        print(f"   subprocesses on your machine. Unset CCC_BIND_HOST to revert to localhost.")
+    display_host = "localhost" if bind_host in ("127.0.0.1", "::1") else bind_host
+    print(f"Claude Command Center running at http://{display_host}:{PORT}")
     print(f"  Log dir:       {LOG_DIR}")
     print(f"  Fallback:      {FALLBACK_DIR}/claude-issue-*.log")
     print(f"  Conversations: {CONVERSATIONS_DIR}/*.jsonl")

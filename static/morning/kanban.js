@@ -31,6 +31,11 @@
       el("div", { class: "text" }, item.strategy_text || item.strategy_id),
       el("div", { class: "meta" }, "no session yet")
     );
+    card.draggable = true;
+    card.dataset.sourceCol = "backlog";
+    card.dataset.goalSlug = item.goal_slug || "";
+    card.dataset.strategyId = item.strategy_id || "";
+    wireCardDrag(card);
     const launchBtn = el("button", { class: "primary" }, "▶ Start");
     launchBtn.addEventListener("click", async () => {
       launchBtn.disabled = true;
@@ -61,6 +66,7 @@
 
   function renderSession(sess) {
     const morning = sess.morning || {};
+    const col = sess.is_live ? "active" : "dormant";
     const card = el("div", { class: "mk-card selectable", style: { "--accent": morning.goal_accent || "#5ac8fa" } },
       el("div", { class: "goal" }, morning.goal_name || morning.goal_slug || ""),
       el("div", { class: "text" }, morning.strategy_text || sess.display_name || sess.first_message || "(untitled)"),
@@ -92,6 +98,12 @@
       document.querySelectorAll(".mk-card.selected").forEach(c => c.classList.remove("selected"));
       card.classList.add("selected");
     });
+    card.draggable = true;
+    card.dataset.sourceCol = col;
+    card.dataset.goalSlug = morning.goal_slug || "";
+    card.dataset.strategyId = morning.strategy_id || "";
+    card.dataset.sessionId = sess.session_id || "";
+    wireCardDrag(card);
     return card;
   }
 
@@ -204,19 +216,28 @@
     const msg = textarea.value.trim();
     if (!msg) return;
     const m = paneSession.morning || {};
-    if (!m.goal_slug || !m.strategy_id) return;
     const sendBtn = document.getElementById("mk-pane-send");
     sendBtn.disabled = true;
     sendBtn.textContent = "sending…";
+    let url, body;
+    if (m.user_tactical_id) {
+      // Task-bound session: route through the task launch endpoint so the
+      // resume message uses the task framing (not the strategy framing).
+      url = "/api/morning/today/launch";
+      body = { id: m.user_tactical_id, message: msg };
+    } else if (m.goal_slug && m.strategy_id) {
+      url = "/api/morning/launch";
+      body = { goal_slug: m.goal_slug, strategy_id: m.strategy_id, message: msg };
+    } else {
+      sendBtn.textContent = "no target";
+      setTimeout(() => { sendBtn.textContent = "Send"; sendBtn.disabled = false; }, 1500);
+      return;
+    }
     try {
-      const r = await fetch("/api/morning/launch", {
+      const r = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          goal_slug: m.goal_slug,
-          strategy_id: m.strategy_id,
-          message: msg,
-        }),
+        body: JSON.stringify(body),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.ok) throw new Error(d.error || "HTTP " + r.status);
@@ -235,7 +256,7 @@
   // Draggable resize handle on the transcript pane
   // ---------------------------------------------------------------------
 
-  const LS_PANE_WIDTH_KEY = "ccc.morning.pane.width";
+  const LS_PANE_WIDTH_KEY = "ccc-morning-pane-width";
 
   function applyPaneWidth(px) {
     document.documentElement.style.setProperty("--mk-pane-width", px + "px");
@@ -298,15 +319,23 @@
   });
 
   async function launchAction(btn, morning) {
-    if (!morning.goal_slug || !morning.strategy_id) return;
+    // Task-bound sessions (user_tactical_id + no strategy_id) have no
+    // entry in goal.md — they route through the task launch endpoint so
+    // /api/morning/launch's "unknown strategy" check doesn't trip.
+    const isTask = morning.user_tactical_id && !morning.strategy_id;
+    if (!isTask && (!morning.goal_slug || !morning.strategy_id)) return;
     const label = btn.textContent;
     btn.disabled = true;
     btn.textContent = "…";
     try {
-      const r = await fetch("/api/morning/launch", {
+      const url = isTask ? "/api/morning/today/launch" : "/api/morning/launch";
+      const body = isTask
+        ? { id: morning.user_tactical_id }
+        : { goal_slug: morning.goal_slug, strategy_id: morning.strategy_id };
+      const r = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ goal_slug: morning.goal_slug, strategy_id: morning.strategy_id }),
+        body: JSON.stringify(body),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.ok) throw new Error(d.error || "HTTP " + r.status);
@@ -345,6 +374,7 @@
       }));
       knownGoalSlugs = knownGoals.map(g => g.slug);
       lastTodayData = stateBody.today || [];
+      lastCompletedData = stateBody.completed || [];
     }
 
     lastSessionsData = sState;
@@ -354,15 +384,64 @@
       "last refreshed " + new Date().toLocaleTimeString();
   }
 
+  // Dev-kanban-style derived classification. Takes a session record (with the
+  // stage fields served by /api/morning/sessions) and returns the column it
+  // belongs to: "active" / "dormant" / "review". Columns are derived from
+  // signals — the user doesn't hand-place sessions, same as the dev kanban.
+  function classifyKanbanColumn(sess) {
+    const m = sess.morning || {};
+    const isTask = !!m.user_tactical_id && !m.strategy_id;
+    const live = !!sess.is_live;
+    const has_edit = !!sess.has_edit;
+    const has_commit = !!sess.has_commit;
+    const has_push = !!sess.has_push;
+    const last_event = sess.last_event_type;
+    const sidecar_status = sess.sidecar_status;
+    const sidecar_has_writes = !!sess.sidecar_has_writes;
+
+    // Live sessions with sidecar: trust sidecar over stage history.
+    if (live && sidecar_status) {
+      if (sidecar_status === "waiting" || sidecar_has_writes) return "active";
+      return "active";  // planning-style live — morning collapses into active
+    }
+    // Pushed or committed (dead or live-without-sidecar) → review.
+    if (has_push || has_commit) return "review";
+    // Dormant + edits + last turn was assistant = work waiting for human review.
+    if (!live && has_edit && last_event === "assistant") return "review";
+    // Live without sidecar, any stage → active.
+    if (live) return "active";
+    // Task-bound sessions fall through to dormant naturally.
+    if (isTask) return "dormant";
+    return "dormant";
+  }
+
   function renderBoard() {
     if (!lastSessionsData) return;
     const state = lastSessionsData;
     const matches = (slug) => !activeGoalFilter || slug === activeGoalFilter;
     const allSessions = state.sessions || [];
-    const active = allSessions.filter(s => s.is_live && matches((s.morning || {}).goal_slug));
-    const dormant = allSessions.filter(s => !s.is_live && matches((s.morning || {}).goal_slug));
+    // Sessions classify derivedly — same model as the dev kanban. Run each
+    // session through classifyKanbanColumn and bucket. Goal-filter still
+    // applies on top of the classifier result.
+    const active = [];
+    const dormant = [];
+    const review = [];
+    for (const s of allSessions) {
+      if (!matches((s.morning || {}).goal_slug)) continue;
+      const col = classifyKanbanColumn(s);
+      if (col === "active") active.push(s);
+      else if (col === "review") review.push(s);
+      else dormant.push(s);
+    }
+    // Corresponding: tasks with a session are represented by their session
+    // card in Active/Dormant, so hide them from the Today column.
+    const sessionOwnedTaskIds = new Set(
+      allSessions.map(s => (s.morning || {}).user_tactical_id).filter(Boolean)
+    );
     const backlog = (state.never_started || []).filter(n => matches(n.goal_slug));
-    const todayFiltered = (lastTodayData || []).filter(t => matches(t.goal_slug));
+    const todayFiltered = (lastTodayData || [])
+      .filter(t => matches(t.goal_slug))
+      .filter(t => !sessionOwnedTaskIds.has(t.user_tactical_id));
 
     const paint = (listId, items, renderer, emptyText) => {
       const host = document.getElementById(listId);
@@ -373,15 +452,245 @@
       }
       for (const it of items) host.appendChild(renderer(it));
     };
+    const completedData = (lastCompletedData || []).filter(t => matches(t.goal_slug));
     paint("col-today", todayFiltered, renderTodayCard, activeGoalFilter ? "no tasks for this goal" : "no tasks yet — braindump above");
     paint("col-backlog", backlog, renderNeverStarted, activeGoalFilter ? "no backlog for this goal" : "all strategies have sessions");
     paint("col-active", active, renderSession, activeGoalFilter ? "no active sessions for this goal" : "nothing running right now");
     paint("col-dormant", dormant, renderSession, activeGoalFilter ? "no dormant sessions for this goal" : "no dormant sessions");
+    paint("col-review", review, renderSession, activeGoalFilter ? "no review items for this goal" : "no sessions waiting on review");
+    paint("col-completed", completedData, renderCompletedCard, activeGoalFilter ? "no completed tasks for this goal" : "drag tasks here to complete");
 
     document.getElementById("count-today").textContent = todayFiltered.length;
     document.getElementById("count-backlog").textContent = backlog.length;
     document.getElementById("count-active").textContent = active.length;
     document.getElementById("count-dormant").textContent = dormant.length;
+    document.getElementById("count-review").textContent = review.length;
+    document.getElementById("count-completed").textContent = completedData.length;
+
+    renderAttention();
+  }
+
+  let lastCompletedData = [];
+
+  // Derived "Needs your attention" strip. Same pattern as the dev kanban's
+  // NYA panel: iterate sessions, match each against a signal predicate, emit
+  // a row. No server call — predicates run over `lastSessionsData` which is
+  // already loaded. Click a row to open the session's pane.
+  function renderAttention() {
+    const section = document.getElementById("mk-attention-section");
+    const list = document.getElementById("mk-attention-list");
+    const countEl = document.getElementById("mk-attention-count");
+    if (!section || !list) return;
+    const sessions = (lastSessionsData && lastSessionsData.sessions) || [];
+    const rows = [];
+    for (const s of sessions) {
+      const m = s.morning || {};
+      if (activeGoalFilter && m.goal_slug !== activeGoalFilter) continue;
+      let kind = null, detail = "";
+      if (s.is_live && s.pending_tool) {
+        kind = "pending_tool";
+        detail = "tool awaiting approval: " + (s.pending_tool || "");
+      } else if (s.is_live && s.sidecar_status === "waiting") {
+        kind = "sidecar_waiting";
+        detail = "session waiting for input";
+      } else if (!s.is_live && s.has_edit && !s.has_commit) {
+        kind = "uncommitted_edits";
+        detail = "edits on disk, no commit yet";
+      } else if (!s.is_live && s.has_commit && !s.has_push) {
+        kind = "committed_not_pushed";
+        detail = "commits waiting to push";
+      }
+      if (kind) rows.push({ sess: s, kind, detail });
+    }
+    countEl.textContent = rows.length ? String(rows.length) : "";
+    list.innerHTML = "";
+    if (!rows.length) {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+    for (const r of rows) {
+      const m = r.sess.morning || {};
+      const row = el("div", { class: "mk-attention-row" },
+        el("span", { class: "mk-attention-kind " + r.kind }, r.kind.replace(/_/g, " ")),
+        el("span", { class: "mk-attention-text" }, m.strategy_text || r.sess.display_name || "(untitled)"),
+        el("span", { class: "mk-attention-where" },
+          (m.goal_name || m.goal_slug || "") + " · " + r.detail),
+      );
+      row.addEventListener("click", () => openPane(r.sess));
+      list.appendChild(row);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Drag & drop
+  // ---------------------------------------------------------------------
+
+  let _dragState = null;  // { taskId, sourceCol, sourceEl }
+
+  function wireCardDrag(card) {
+    card.addEventListener("dragstart", (e) => {
+      _dragState = {
+        taskId: card.dataset.taskId || "",
+        sourceCol: card.dataset.sourceCol,
+        goalSlug: card.dataset.goalSlug || "",
+        strategyId: card.dataset.strategyId || "",
+        sessionId: card.dataset.sessionId || "",
+        sourceEl: card,
+      };
+      card.classList.add("mk-dragging-card");
+      try { e.dataTransfer.effectAllowed = "move"; } catch (_) {}
+    });
+    card.addEventListener("dragend", () => {
+      card.classList.remove("mk-dragging-card");
+      document.querySelectorAll(".mk-list.mk-drop-hot").forEach(n => n.classList.remove("mk-drop-hot"));
+      document.querySelectorAll(".mk-drop-indicator").forEach(n => n.remove());
+      _dragState = null;
+    });
+  }
+
+  // Given a mouse clientY and a list container, return the DOM node the new
+  // card should be inserted BEFORE (null = append to end).
+  function childToInsertBefore(list, clientY) {
+    const cards = Array.from(list.querySelectorAll(".mk-card:not(.mk-dragging-card)"));
+    for (const c of cards) {
+      const r = c.getBoundingClientRect();
+      if (clientY < r.top + r.height / 2) return c;
+    }
+    return null;
+  }
+
+  function wireColDrop(list, colKey) {
+    list.addEventListener("dragover", (e) => {
+      if (!_dragState) return;
+      // Accept any source for reorder within-column; only `today` drops
+      // onto `completed` are wired to the dismiss semantics right now.
+      e.preventDefault();
+      try { e.dataTransfer.dropEffect = "move"; } catch (_) {}
+      list.classList.add("mk-drop-hot");
+      // Visual indicator for insertion point (reorder within Today).
+      if (_dragState.sourceCol === "today" && colKey === "today") {
+        document.querySelectorAll(".mk-drop-indicator").forEach(n => n.remove());
+        const before = childToInsertBefore(list, e.clientY);
+        const ind = el("div", { class: "mk-drop-indicator" });
+        if (before) list.insertBefore(ind, before);
+        else list.appendChild(ind);
+      }
+    });
+    list.addEventListener("dragleave", (e) => {
+      if (e.target === list) list.classList.remove("mk-drop-hot");
+    });
+    list.addEventListener("drop", async (e) => {
+      if (!_dragState) return;
+      e.preventDefault();
+      list.classList.remove("mk-drop-hot");
+      document.querySelectorAll(".mk-drop-indicator").forEach(n => n.remove());
+      const ds = _dragState;
+      _dragState = null;
+      if (ds.sourceCol === "today" && colKey === "today") {
+        await reorderTodayTask(ds.taskId, e.clientY, list);
+        return;
+      }
+      await genericMove(ds, colKey);
+    });
+  }
+
+  async function genericMove(ds, targetCol) {
+    const payload = {
+      source_col: ds.sourceCol,
+      target_col: targetCol,
+      user_tactical_id: ds.taskId,
+      goal_slug: ds.goalSlug,
+      strategy_id: ds.strategyId,
+      session_id: ds.sessionId,
+      card_id: ds.taskId || ds.sessionId || (ds.goalSlug + "/" + ds.strategyId),
+    };
+    try {
+      const r = await fetch("/api/morning/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        alert("Move " + ds.sourceCol + " → " + targetCol + " failed: " + (d.error || "HTTP " + r.status));
+      }
+    } catch (e) {
+      alert("Move request failed: " + e.message);
+    }
+    // Full reload to pick up authoritative state — goal.md mutations, new
+    // strategies, detached sessions etc. all affect multiple columns.
+    await load();
+  }
+
+  async function undismissTask(taskId) {
+    try {
+      const r = await fetch("/api/morning/today/undismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: taskId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || "HTTP " + r.status);
+      // Move locally: pop from completed, push to end of today.
+      const idx = lastCompletedData.findIndex(x => x.user_tactical_id === taskId);
+      if (idx >= 0) {
+        const moved = lastCompletedData.splice(idx, 1)[0];
+        delete moved.dismissed_at;
+        lastTodayData.push(moved);
+      }
+      renderBoard();
+    } catch (err) {
+      alert("Un-dismiss failed: " + err.message);
+    }
+  }
+
+  async function dismissTodayTask(taskId) {
+    try {
+      const r = await fetch("/api/morning/today/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: taskId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || "HTTP " + r.status);
+      // Move locally: pop from today, push to completed.
+      const idx = lastTodayData.findIndex(x => x.user_tactical_id === taskId);
+      if (idx >= 0) {
+        const moved = lastTodayData.splice(idx, 1)[0];
+        moved.dismissed_at = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+        lastCompletedData.unshift(moved);
+      }
+      renderBoard();
+    } catch (err) {
+      alert("Dismiss failed: " + err.message);
+    }
+  }
+
+  async function reorderTodayTask(taskId, clientY, list) {
+    const currentIds = lastTodayData.map(t => t.user_tactical_id);
+    const moving = lastTodayData.find(t => t.user_tactical_id === taskId);
+    if (!moving) return;
+    // Compute target index by examining current DOM (which excludes the
+    // dragging card because of the filter in childToInsertBefore).
+    const before = childToInsertBefore(list, clientY);
+    let targetIdx;
+    if (!before) targetIdx = currentIds.length;  // end
+    else targetIdx = currentIds.indexOf(before.dataset.taskId);
+    const fromIdx = currentIds.indexOf(taskId);
+    if (fromIdx === targetIdx || fromIdx === targetIdx - 1) return;
+    const next = lastTodayData.slice();
+    next.splice(fromIdx, 1);
+    const insertAt = targetIdx > fromIdx ? targetIdx - 1 : targetIdx;
+    next.splice(insertAt, 0, moving);
+    lastTodayData = next;
+    renderBoard();
+    // Persist — fire-and-forget; server accepts full id list.
+    fetch("/api/morning/today/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: next.map(t => t.user_tactical_id) }),
+    }).catch(() => {});
   }
 
   // Render the row of goal cards above the board. Clicking a card toggles the
@@ -441,8 +750,11 @@
                     "July","August","September","October","November","December"];
     const dateStr = months[now.getMonth()] + " " + now.getDate() + ", " +
       now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    // Personalize the greeting via window.CCC_USER_NAME (set in HTML head from
+    // a server-injected env var). Falls back to a name-less greeting.
+    const userName = (typeof window !== "undefined" && window.CCC_USER_NAME) || "";
     document.getElementById("mk-greeting").textContent =
-      "Good " + period + ", Amir.";
+      "Good " + period + (userName ? ", " + userName : "") + ".";
     document.getElementById("mk-subgreeting").textContent =
       "It's " + dateStr + ". What's on your mind?";
   }
@@ -451,8 +763,8 @@
   let knownGoals = [];           // [{slug, name, accent, life_area, ribbon}] — authoritative from /api/morning/state
   let activeGoalFilter = null;   // goal slug the board is filtered to, or null for "all"
   let lastSessionsData = null;   // cached /api/morning/sessions response so filter re-renders don't refetch
-  const LS_ANALYSIS_KEY = "ccc.morning.braindump.lastAnalysis";
-  const LS_DUMP_KEY = "ccc.morning.braindump.lastDump";
+  const LS_ANALYSIS_KEY = "ccc-morning-braindump-last-analysis";
+  const LS_DUMP_KEY = "ccc-morning-braindump-last-dump";
 
   function saveAnalysisToLS(items, dumpText) {
     try {
@@ -778,8 +1090,22 @@
 
     const card = el("div", { class: "mk-card", style: { "--accent": accent } },
       el("div", { class: "goal" }, goalName),
-      el("div", { class: "text" }, t.text || ""),
     );
+
+    // Click-to-edit task text.
+    const textEl = el("div", { class: "text mk-editable" }, t.text || "(no text)");
+    textEl.title = "click to edit";
+    wireInlineEdit(textEl, t.text || "", "text", t.user_tactical_id);
+    card.appendChild(textEl);
+
+    // Freeform status line — always present so the user can see the affordance.
+    const statusEl = el("div", { class: "mk-card-status mk-editable" });
+    if (t.status) statusEl.textContent = "status: " + t.status;
+    else { statusEl.textContent = "+ status"; statusEl.classList.add("mk-placeholder"); }
+    statusEl.title = "click to set status";
+    wireInlineEdit(statusEl, t.status || "", "status", t.user_tactical_id);
+    card.appendChild(statusEl);
+
     if (t.notes || t.matched_existing) {
       const meta = el("div", { class: "meta" });
       if (t.notes) meta.appendChild(el("span", {}, t.notes));
@@ -793,16 +1119,148 @@
       const badge = el("div", { class: "mk-card-badge " + cls }, cls);
       card.appendChild(badge);
     }
+
+    // Claude session binding: ▶ Start if none; ▶ Resume/Inject once bound.
     if (t.user_tactical_id) {
-      // Drag-to-reorder within Today, drag-to-Completed to dismiss. The
-      // Done button is intentionally gone — completion is a drag gesture,
-      // not a click, so the user signals it the same way across columns.
+      const actions = el("div", { class: "actions" });
+      const sid = t.claude_session_id;
+      const label = sid ? "▶ Resume" : "▶ Start";
+      const btn = el("button", { class: "primary" }, label);
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        launchTask(t.user_tactical_id, btn);
+      });
+      actions.appendChild(btn);
+      if (sid) {
+        const sidChip = el("span", { class: "meta", style: { marginLeft: "6px" } },
+          "session " + sid.slice(0, 8));
+        actions.appendChild(sidChip);
+      }
+      card.appendChild(actions);
+
+      // Drag-to-reorder within Today, drag-to-Completed to dismiss.
       card.draggable = true;
       card.dataset.taskId = t.user_tactical_id;
       card.dataset.sourceCol = "today";
       wireCardDrag(card);
     }
     return card;
+  }
+
+  // Swaps a text node for a textarea on click; saves on blur/Enter, reverts
+  // on Escape. `field` maps to the /api/morning/today/update payload key.
+  function wireInlineEdit(displayEl, initialValue, field, taskId) {
+    displayEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (displayEl.classList.contains("mk-editing")) return;
+      const textarea = document.createElement("textarea");
+      textarea.className = "mk-inline-editor";
+      textarea.value = initialValue || "";
+      textarea.rows = 2;
+      displayEl.classList.add("mk-editing");
+      displayEl.replaceChildren(textarea);
+      textarea.focus();
+      textarea.select();
+      const restore = (finalVal, isPlaceholder) => {
+        displayEl.classList.remove("mk-editing");
+        displayEl.classList.toggle("mk-placeholder", isPlaceholder);
+        displayEl.textContent = finalVal;
+      };
+      const save = async () => {
+        const v = textarea.value.trim();
+        if (v === (initialValue || "")) {
+          const display = field === "status"
+            ? (v ? "status: " + v : "+ status")
+            : (v || "(no text)");
+          restore(display, field === "status" && !v);
+          return;
+        }
+        try {
+          const r = await fetch("/api/morning/today/update", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: taskId, [field]: v }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d.ok) throw new Error(d.error || "HTTP " + r.status);
+          // Sync in-memory cache so renderBoard matches server.
+          const idx = lastTodayData.findIndex(x => x.user_tactical_id === taskId);
+          if (idx >= 0) lastTodayData[idx][field] = v;
+          const display = field === "status"
+            ? (v ? "status: " + v : "+ status")
+            : (v || "(no text)");
+          restore(display, field === "status" && !v);
+        } catch (err) {
+          alert("Save failed: " + err.message);
+          restore(initialValue || "", field === "status" && !initialValue);
+        }
+      };
+      textarea.addEventListener("blur", save, { once: true });
+      textarea.addEventListener("keydown", (k) => {
+        if (k.key === "Enter" && !k.shiftKey) { k.preventDefault(); textarea.blur(); }
+        else if (k.key === "Escape") {
+          textarea.removeEventListener("blur", save);
+          const display = field === "status"
+            ? (initialValue ? "status: " + initialValue : "+ status")
+            : (initialValue || "(no text)");
+          restore(display, field === "status" && !initialValue);
+        }
+      });
+    });
+  }
+
+  async function launchTask(taskId, btn) {
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "…";
+    try {
+      const r = await fetch("/api/morning/today/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: taskId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || "HTTP " + r.status);
+      btn.textContent = d.action === "resumed" ? "✓ resumed" : "✓ spawned";
+      // Open the conversation pane on the newly-bound session so the user
+      // can watch the spawn/resume actually land — otherwise the spawn feels
+      // silent. If we got a session_id back from the server, use it; else
+      // re-fetch the task after a short delay to pick up the resolved sid.
+      const task = lastTodayData.find(x => x.user_tactical_id === taskId);
+      const goal = task && knownGoals.find(g => g.slug === task.goal_slug);
+      const openPaneFor = (sid) => {
+        if (!sid) return;
+        openPane({
+          session_id: sid,
+          is_live: true,
+          modified_human: "just now",
+          morning: {
+            goal_slug: task ? task.goal_slug : null,
+            goal_name: goal ? goal.name : (task && task.goal_slug) || "",
+            goal_accent: goal ? goal.accent : "#5ac8fa",
+            strategy_id: null,
+            strategy_text: task ? task.text : "",
+            user_tactical_id: taskId,
+          },
+        });
+      };
+      if (d.session_id) {
+        openPaneFor(d.session_id);
+      } else {
+        // Spawn's log parser sometimes needs an extra moment to resolve the
+        // session_id. Wait for the task refresh then open the pane.
+        setTimeout(async () => {
+          await load();
+          const t2 = lastTodayData.find(x => x.user_tactical_id === taskId);
+          if (t2 && t2.claude_session_id) openPaneFor(t2.claude_session_id);
+        }, 1500);
+      }
+      setTimeout(load, 1500);
+    } catch (e) {
+      btn.textContent = "error";
+      alert("Launch failed: " + e.message);
+      setTimeout(() => { btn.textContent = originalLabel; btn.disabled = false; }, 2500);
+    }
   }
 
   function renderCompletedCard(t) {
@@ -815,6 +1273,12 @@
     );
     if (t.dismissed_at) {
       card.appendChild(el("div", { class: "meta" }, "done " + t.dismissed_at.replace("T", " ").replace("Z", "")));
+    }
+    if (t.user_tactical_id) {
+      card.draggable = true;
+      card.dataset.taskId = t.user_tactical_id;
+      card.dataset.sourceCol = "completed";
+      wireCardDrag(card);
     }
     return card;
   }
@@ -870,6 +1334,20 @@
 
   setGreeting();
   document.getElementById("refresh-now").addEventListener("click", load);
+  // Wire each column's list as a drop target once — renderBoard repaints
+  // the inner cards but preserves the list element identity, so listeners
+  // stay attached across re-renders.
+  for (const [colKey, listId] of [
+    ["today", "col-today"],
+    ["backlog", "col-backlog"],
+    ["active", "col-active"],
+    ["dormant", "col-dormant"],
+    ["review", "col-review"],
+    ["completed", "col-completed"],
+  ]) {
+    const list = document.getElementById(listId);
+    if (list) wireColDrop(list, colKey);
+  }
   // Populate knownGoals first, then restore. Otherwise restored cards that
   // need the manual goal picker render with an empty <select>.
   (async () => {

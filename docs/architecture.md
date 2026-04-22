@@ -13,7 +13,7 @@ static/index.html  ~4.5k lines   HTML + CSS + vanilla JS (no framework)
 ```
 
 That's the product. Everything else is hooks (two small scripts) and state
-files under `~/.claude/log-viewer/`.
+files under `~/.claude/command-center/`.
 
 ## Data sources
 
@@ -27,7 +27,7 @@ The server reads from four places. Nothing else is authoritative.
    Claude writes this for interactive TUIs; the server matches entries against
    `ps -A` to tell which sessions are still running and what TTY they're on.
 
-3. **`~/.claude/log-viewer/live-state/<sid>.json`** — written by the
+3. **`~/.claude/command-center/live-state/<sid>.json`** — written by the
    `PostToolUse` and `Stop` hooks that the server installs on first run.
    Every tool invocation bumps a per-session sidecar file with `status`,
    `tool`, `file`, `has_writes`, `timestamp`. This is how the kanban can tell
@@ -40,7 +40,7 @@ The server reads from four places. Nothing else is authoritative.
 ## Data sinks (write-through state)
 
 All mutations land in human-readable JSON sidecar files under
-`~/.claude/log-viewer/`:
+`~/.claude/command-center/`:
 
 | File | Contents |
 |---|---|
@@ -109,7 +109,7 @@ not live + no sidecar  -> inactive
 ```
 
 Manual drag-drop writes a client-side override into `localStorage`
-(`clv-column-overrides`). Overrides auto-clear only when the session's natural
+(`ccc-column-overrides`). Overrides auto-clear only when the session's natural
 state advances past the override (e.g., an override of `working` is dropped
 once the session's commits get pushed).
 
@@ -118,7 +118,7 @@ once the session's commits get pushed).
 On server startup:
 
 1. Copy `hooks/post-tool-use.py` and `hooks/stop.py` from the repo into
-   `~/.claude/log-viewer/hooks/` (only if contents changed).
+   `~/.claude/command-center/hooks/` (only if contents changed).
 2. Merge hook entries into `~/.claude/settings.json` under `hooks.PostToolUse`
    and `hooks.Stop`, pointed at those copies.
 

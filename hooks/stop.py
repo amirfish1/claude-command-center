@@ -6,7 +6,7 @@ import os
 import sys
 import time
 
-LIVE_STATE_DIR = os.path.expanduser("~/.claude/log-viewer/live-state")
+LIVE_STATE_DIR = os.path.expanduser("~/.claude/command-center/live-state")
 
 
 def main():

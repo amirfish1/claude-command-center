@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Sanity: every Python file in the repo must byte-compile. Catches syntax
+  # errors without needing to install or run anything.
+  py-compile:
+    name: py-compile (${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile all .py files
+        run: |
+          python -m compileall -q -f .
+
+  # Unit tests. Morning tests skip gracefully when no real goals are seeded
+  # (they just need morning_store to exist).
+  unittest:
+    name: unittest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run unittest discovery
+        run: python -m unittest discover -s tests -v
+
+  # Cheap smoke test: boot the server on a free port, hit a few read-only
+  # endpoints, and verify they return 2xx. Nothing that requires gh auth.
+  smoke:
+    name: smoke (server boots + responds)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Boot server and probe endpoints
+        run: |
+          PORT=18090 CCC_BIND_HOST=127.0.0.1 python3 server.py &
+          SERVER_PID=$!
+          sleep 3
+          set -x
+          curl -sf -o /dev/null -w "%{http_code}\n" http://localhost:18090/api/features | grep -q 200
+          curl -sf -o /dev/null -w "%{http_code}\n" http://localhost:18090/api/version  | grep -q 200
+          curl -sf -o /dev/null -w "%{http_code}\n" http://localhost:18090/api/repo/list | grep -q 200
+          # Same-origin check: cross-origin POST must be rejected with 403.
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Origin: https://evil.example.com' \
+            -H 'Content-Type: application/json' \
+            -d '{}' http://localhost:18090/api/bust-issue-state)" = "403"
+          kill $SERVER_PID

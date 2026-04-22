@@ -10,7 +10,6 @@
     <nav class="mv-nav">
       <a class="active">Morning</a>
       <a href="/">Kanban</a>
-      <a href="/affiliates" id="affiliatesMorningNavLink" style="display:none;">Affiliates</a>
       <span class="mv-nav-meta" id="refresh-meta">loading…</span>
       <button id="scan-now" title="re-scan all sources">Scan now</button>
     </nav>
@@ -38,13 +37,5 @@
 
   <script src="/static/morning/side-nav.js"></script>
   <script src="/static/morning/morning.js"></script>
-  <script>
-    fetch('/api/affiliates').then(r => {
-      if (r.ok) {
-        const el = document.getElementById('affiliatesMorningNavLink');
-        if (el) el.style.display = '';
-      }
-    }).catch(() => {});
-  </script>
 </body>
 </html>

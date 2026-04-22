@@ -27,6 +27,14 @@
       <div id="mk-analysis" class="mk-analysis" hidden></div>
     </section>
 
+    <section class="mk-attention-section" id="mk-attention-section" hidden>
+      <div class="mk-attention-header">
+        <span class="mk-attention-title">Needs your attention</span>
+        <span class="mk-attention-count" id="mk-attention-count"></span>
+      </div>
+      <div class="mk-attention-list" id="mk-attention-list"></div>
+    </section>
+
     <section class="mk-goals-section">
       <div id="goals-row" class="mv-goals"></div>
       <div id="goals-filter-note"></div>
@@ -52,6 +60,11 @@
         <h3>Dormant <span class="mk-count" id="count-dormant"></span></h3>
         <p class="subtitle">Sessions on disk, no process attached.</p>
         <div class="mk-list" id="col-dormant"></div>
+      </section>
+      <section class="mk-col mk-col-review" data-col="review">
+        <h3>Review <span class="mk-count" id="count-review"></span></h3>
+        <p class="subtitle">Edits or commits waiting for human review.</p>
+        <div class="mk-list" id="col-review"></div>
       </section>
       <section class="mk-col mk-col-completed" data-col="completed">
         <h3>Completed <span class="mk-count" id="count-completed"></span></h3>

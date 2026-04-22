@@ -5,8 +5,6 @@ were launched. Terminal sessions, headless processes, or spawned from the
 dashboard — it latches onto all of them and lets you drop in and out of any
 task to fix things.
 
-![demo](docs/images/demo.gif)
-
 ## Why this exists
 
 Most Claude Code orchestration tools are opinionated wrappers. They want to
@@ -44,7 +42,7 @@ CCC_WATCH_REPO=~/some/project ./run.sh
 
 Open [http://localhost:8090](http://localhost:8090).
 
-First launch copies two hook scripts into `~/.claude/log-viewer/hooks/` and
+First launch copies two hook scripts into `~/.claude/command-center/hooks/` and
 registers them in `~/.claude/settings.json`. After that, every Claude Code
 session on your machine — terminal, headless, or dashboard-spawned —
 writes sidecar state the UI uses for the kanban.
@@ -55,7 +53,7 @@ writes sidecar state the UI uses for the kanban.
 ┌─────────────┐   writes   ┌────────────────────────────────┐
 │ any claude  │ ─────────> │ ~/.claude/projects/*.jsonl     │
 │ process     │            │ ~/.claude/sessions/<pid>.json  │
-│ anywhere on │            │ ~/.claude/log-viewer/          │
+│ anywhere on │            │ ~/.claude/command-center/          │
 │ your mac    │            │   live-state/<sid>.json        │
 └─────────────┘            └──────────────┬─────────────────┘
                                           │  reads
@@ -115,29 +113,14 @@ Phase 1 ships the UI shell with sample hardcoded data — no ingestion, no
 session launching, no Notion migration yet. Those land in Phase 2+.
 
 - Landing page: `http://localhost:8090/morning`
-- Goal detail: `http://localhost:8090/morning/goals/bym-growth`
+- Goal detail: `http://localhost:8090/morning/goals/<slug>`
 - JSON: `http://localhost:8090/api/morning/state`, `/api/morning/goals/<slug>`
-
-Design spec: [`docs/superpowers/specs/2026-04-17-morning-view-design.md`](docs/superpowers/specs/2026-04-17-morning-view-design.md)
-
-## Screenshots
-
-![kanban](docs/images/kanban.png)
-*Kanban board — every live session and every open GitHub issue on one screen.*
-
-![detail](docs/images/detail.png)
-*Detail pane — streaming transcript, original ask pinned at the top,
-commit/resolve and GitHub shortcuts inline.*
-
-![attach](docs/images/attach.png)
-*A session spawned in a terminal five minutes ago, surfacing automatically
-in the dashboard with a live activity glow.*
 
 ## Architecture
 
 Two files: a single Python file (stdlib-only HTTP server) and a single HTML
 file (vanilla JS, no framework, no build). State lives in JSON sidecar
-files under `~/.claude/log-viewer/` — all human-readable, all rewriteable
+files under `~/.claude/command-center/` — all human-readable, all rewriteable
 by hand.
 
 The server has no background workers. Every API request scans Claude's
@@ -146,7 +129,7 @@ issue data, and returns a flat list. The client classifies into columns
 using rules like "has_push → Review", "live + sidecar_has_writes → Working".
 
 Hooks are the only invasive thing. On first run the server copies
-`hooks/post-tool-use.py` and `hooks/stop.py` to `~/.claude/log-viewer/hooks/`
+`hooks/post-tool-use.py` and `hooks/stop.py` to `~/.claude/command-center/hooks/`
 and merges entries into `~/.claude/settings.json`. After that, Claude Code
 fires them after every tool invocation, each hook writes a tiny JSON file
 under `live-state/`, and the server reads those to answer "is this session
@@ -161,8 +144,12 @@ For more depth: [`docs/architecture.md`](docs/architecture.md),
 |---|---|---|
 | `CCC_WATCH_REPO` | `$PWD` | Repository the UI watches (cwd for spawns, `gh` calls, project slug lookup) |
 | `PORT` | `8090` | HTTP port |
+| `CCC_BIND_HOST` | `127.0.0.1` | Interface to bind. Set to `0.0.0.0` to expose on the LAN — **no auth, see [`SECURITY.md`](SECURITY.md)** |
+| `CCC_USER_NAME` | *(empty)* | First-name shown in the Morning view greeting ("Good morning, Amir."). Leave empty for a name-less greeting. |
+| `CCC_ENABLE_MORNING` | *(off)* | Set to `1` to enable the Morning view (goals / strategic / tactical / braindump). Off by default — most users only need the kanban. |
+| `CCC_TITLE_STRIP` | *(empty)* | Comma-separated prefixes to strip from GitHub issue titles (e.g. `ACME,FOO` strips `[ACME ...]` and `[FOO ...]`) |
+| `CCC_ORG_PATTERNS` | *(empty)* | Multi-tenant org-tagger. Format: `Label1:pat1a\|pat1b;Label2:pat2`. Each issue body is scanned and tagged with the first matching label so the UI can group backlog by org. |
 | `VERCEL_PROJECT` | *(unset)* | Vercel project name. Leave empty to disable deploy polling. |
-| `CCC_TITLE_STRIP` | *(empty)* | Comma-separated prefixes to strip from GitHub issue titles (e.g. `BYM,FOO` strips `[BYM ...]` and `[FOO ...]`) |
 
 ## Roadmap
 

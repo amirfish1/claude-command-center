@@ -6,10 +6,7 @@ import os
 import sys
 import time
 
-LIVE_STATE_DIR = os.path.expanduser("~/.claude/log-viewer/live-state")
-# Any tool invocation counts as "working" for kanban purposes.
-# (File was originally limited to writers but UX feedback: move to Working ASAP.)
-WRITE_TOOLS = None  # None = all tools
+LIVE_STATE_DIR = os.path.expanduser("~/.claude/command-center/live-state")
 
 
 def main():
@@ -26,9 +23,10 @@ def main():
 
         os.makedirs(LIVE_STATE_DIR, exist_ok=True)
 
-        # Set _writes flag if this is a write-capable tool
+        # Any tool invocation marks the session as "writing" for kanban
+        # classification — the column rule is "live + has_writes → Working".
         writes_flag = os.path.join(LIVE_STATE_DIR, f"{session_id}_writes")
-        if tool_name and (WRITE_TOOLS is None or tool_name in WRITE_TOOLS):
+        if tool_name:
             with open(writes_flag, "w") as f:
                 f.write("1")
 

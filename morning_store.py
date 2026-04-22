@@ -1,4 +1,4 @@
-"""Read goal.md files from ~/.claude/log-viewer/morning/goals/.
+"""Read + mutate goal.md files from ~/.claude/command-center/morning/goals/.
 
 Uses a tiny YAML-subset parser (stdlib-only) since CCC avoids dependencies.
 The subset supports exactly what the goal.md schema needs:
@@ -15,6 +15,7 @@ can show a parse-error banner for a broken goal file.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -224,7 +225,7 @@ def parse_goal_md(text):
 
 
 def goals_dir_default():
-    return Path.home() / ".claude" / "log-viewer" / "morning" / "goals"
+    return Path.home() / ".claude" / "command-center" / "morning" / "goals"
 
 
 def load_goal(goal_dir):
@@ -239,15 +240,15 @@ def load_goal(goal_dir):
     fm, body = parse_goal_md(text)
     slug = goal_dir.name
     strategies = fm.get("strategies") or []
-    # Normalize: each strategy may or may not have claude_session_id. If the
-    # session isn't set, we mark the UI session_state "never"; otherwise we'd
-    # need to check CCC's live-state registry — that's Phase 3.
+    # Normalize: every strategy gets a session_state field. We default to
+    # "dormant" when a claude_session_id is on file; morning._upgrade_session_states
+    # later promotes "dormant" → "alive" by checking the live-state registry.
     for s in strategies:
         sid = s.get("claude_session_id")
         if s.get("status") == "dropped":
             s["session_state"] = "dropped"
         elif sid:
-            s["session_state"] = "dormant"  # Phase 3 will upgrade to alive if it's running
+            s["session_state"] = "dormant"
         else:
             s["session_state"] = "never"
         s.setdefault("session_summary", "")
@@ -293,7 +294,7 @@ def load_all_goals(goals_dir=None):
 
 def add_user_tactical(goal_slug, text, source_note="morning braindump", meta=None):
     """Append a user-authored tactical item to
-    ~/.claude/log-viewer/morning/user-tactical.jsonl. Morning.py's tactical
+    ~/.claude/command-center/morning/user-tactical.jsonl. Morning.py's tactical
     aggregator reads this file alongside repo-scanned items.
 
     `meta` (optional dict): extra fields to persist with the item — e.g.
@@ -306,7 +307,7 @@ def add_user_tactical(goal_slug, text, source_note="morning braindump", meta=Non
     import hashlib
     import time as _time
 
-    path = Path.home() / ".claude" / "log-viewer" / "morning" / "user-tactical.jsonl"
+    path = Path.home() / ".claude" / "command-center" / "morning" / "user-tactical.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     cid = hashlib.sha1(f"user:{goal_slug}:{text}:{_time.time()}".encode()).hexdigest()[:12]
     entry = {
@@ -330,7 +331,7 @@ def add_user_tactical(goal_slug, text, source_note="morning braindump", meta=Non
 
 
 def _user_tactical_order_path():
-    return Path.home() / ".claude" / "log-viewer" / "morning" / "user-tactical-order.json"
+    return Path.home() / ".claude" / "command-center" / "morning" / "user-tactical-order.json"
 
 
 def load_user_tactical_order():
@@ -365,6 +366,61 @@ def save_user_tactical_order(ids):
         return {"ok": False, "error": str(e)}
 
 
+_USER_TACTICAL_UPDATE_FIELDS = (
+    "text", "status", "notes", "classification", "matched_existing", "goal_slug",
+    "claude_session_id", "strategy_promoted_id",
+)
+
+
+def update_user_tactical(item_id, fields):
+    """Append an update record for a user-tactical item.
+
+    `fields` is a dict restricted to _USER_TACTICAL_UPDATE_FIELDS. Returns
+    {"ok": True} on success. The loader merges these on top of the base
+    record at read time (last-write-wins per field).
+    """
+    import json
+    import time as _time
+
+    if not item_id:
+        return {"ok": False, "error": "missing id"}
+    entry = {"id": str(item_id), "updated_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())}
+    for k in _USER_TACTICAL_UPDATE_FIELDS:
+        if k in (fields or {}):
+            entry[k] = fields[k]
+    if len(entry) == 2:  # only id + updated_at, nothing actually changed
+        return {"ok": False, "error": "no updatable fields"}
+    path = Path.home() / ".claude" / "command-center" / "morning" / "user-tactical.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
+def undismiss_user_tactical(item_id):
+    """Revive a dismissed task. Appends an undismiss record; the loader
+    treats the presence of a later base/update record as overriding the
+    prior dismiss (a rewritten loader handles this cleanly).
+    """
+    import json
+    import time as _time
+    path = Path.home() / ".claude" / "command-center" / "morning" / "user-tactical.jsonl"
+    if not path.is_file():
+        return {"ok": False, "error": "no user tactical file"}
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "id": str(item_id),
+                "undismissed_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+            }) + "\n")
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
 def load_user_tactical(include_dismissed=False):
     """Return the list of user-added tactical items.
 
@@ -372,14 +428,20 @@ def load_user_tactical(include_dismissed=False):
     everything for a "Completed" view. Active items are ordered by the
     saved drag-order (see save_user_tactical_order); dismissed items follow
     in most-recent-first order.
+
+    The jsonl supports three record types per id:
+    - base:     first record with full fields (created by add_user_tactical)
+    - update:   later record with same id + any subset of mutable fields —
+                fields present here overwrite the base (last-write-wins)
+    - dismiss:  record carrying `dismissed_at` — moves the item to Completed
     """
     import json
-    path = Path.home() / ".claude" / "log-viewer" / "morning" / "user-tactical.jsonl"
+    path = Path.home() / ".claude" / "command-center" / "morning" / "user-tactical.jsonl"
     if not path.is_file():
         return []
     items = {}
-    dismissed_ids = set()
-    dismissed_at = {}
+    # Latest dismiss/undismiss timestamp per id — used to decide final state.
+    dismiss_state = {}  # id -> {"dismissed_at": str|None}
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -391,13 +453,23 @@ def load_user_tactical(include_dismissed=False):
                 if not cid:
                     continue
                 if ev.get("dismissed_at"):
-                    dismissed_ids.add(cid)
-                    dismissed_at[cid] = ev.get("dismissed_at")
+                    dismiss_state[cid] = {"dismissed_at": ev.get("dismissed_at")}
                     continue
-                items.setdefault(cid, ev)
+                if ev.get("undismissed_at"):
+                    dismiss_state[cid] = {"dismissed_at": None}
+                    continue
+                if cid in items:
+                    for k in _USER_TACTICAL_UPDATE_FIELDS:
+                        if k in ev and ev[k] is not None:
+                            items[cid][k] = ev[k]
+                    items[cid]["updated_at"] = ev.get("updated_at") or items[cid].get("updated_at")
+                else:
+                    items[cid] = ev
     except OSError:
         return []
 
+    dismissed_ids = {cid for cid, s in dismiss_state.items() if s.get("dismissed_at")}
+    dismissed_at = {cid: s.get("dismissed_at") for cid, s in dismiss_state.items() if s.get("dismissed_at")}
     active_map = {k: v for k, v in items.items() if k not in dismissed_ids}
     order = load_user_tactical_order()
     ordered_active = []
@@ -427,7 +499,7 @@ def dismiss_user_tactical(item_id):
     """Append a dismissed marker for a user-tactical item."""
     import json
     import time as _time
-    path = Path.home() / ".claude" / "log-viewer" / "morning" / "user-tactical.jsonl"
+    path = Path.home() / ".claude" / "command-center" / "morning" / "user-tactical.jsonl"
     if not path.is_file():
         return {"ok": False, "error": "no user tactical file"}
     try:
@@ -502,7 +574,7 @@ def mark_inbox_item(candidate_id, **update):
     import json
     import time as _time
 
-    inbox_dir = Path.home() / ".claude" / "log-viewer" / "morning" / "inbox"
+    inbox_dir = Path.home() / ".claude" / "command-center" / "morning" / "inbox"
     inbox_dir.mkdir(parents=True, exist_ok=True)
     today = _time.strftime("%Y-%m-%d")
     jsonl = inbox_dir / f"{today}.jsonl"
@@ -511,6 +583,115 @@ def mark_inbox_item(candidate_id, **update):
     try:
         with open(jsonl, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
+def _slugify_id(text):
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return s[:50] or "task"
+
+
+def append_strategy(goal_slug, text, status="active", claude_session_id=None):
+    """Append a new strategy entry to the strategies: list in goal.md.
+
+    Returns {"ok": True, "strategy_id": "..."} on success. Strategy id is
+    auto-generated from the text. Fails if the goal doesn't exist or the
+    strategies: list can't be located.
+    """
+    path = goals_dir_default() / goal_slug / "goal.md"
+    if not path.is_file():
+        return {"ok": False, "error": f"unknown goal: {goal_slug}"}
+    full = path.read_text()
+    lines = full.splitlines()
+    # Locate the strategies: block and its end (next top-level key or `---`).
+    start = None
+    for i, line in enumerate(lines):
+        if line.startswith("strategies:"):
+            start = i
+            break
+    if start is None:
+        return {"ok": False, "error": "strategies: key not found"}
+    end = start + 1
+    while end < len(lines):
+        ln = lines[end]
+        if ln.startswith("---"):
+            break
+        # A non-indented non-empty line that's not blank or a "- " item or a comment
+        # marks the next top-level frontmatter key.
+        if ln and not ln.startswith((" ", "\t", "#")) and not ln.startswith("---"):
+            break
+        end += 1
+    # Build unique strategy id — append numeric suffix if collision.
+    base = _slugify_id(text)
+    existing_ids = set(re.findall(r"^  - id: (\S+)\s*$", "\n".join(lines[start:end]), flags=re.M))
+    sid = base
+    n = 2
+    while sid in existing_ids:
+        sid = f"{base}-{n}"
+        n += 1
+    new_block = [
+        f"  - id: {sid}",
+        f"    text: {json.dumps(text)}",
+        f"    status: {status}",
+    ]
+    if claude_session_id:
+        new_block.append(f"    claude_session_id: \"{claude_session_id}\"")
+    # Insert before the end anchor
+    updated = lines[:end] + new_block + lines[end:]
+    try:
+        path.write_text("\n".join(updated) + ("\n" if full.endswith("\n") else ""))
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "strategy_id": sid}
+
+
+def set_strategy_field(goal_slug, strategy_id, field, value):
+    """Text-edit one field (status / claude_session_id / text) within the
+    specified strategy entry. Appends the line if it doesn't already exist
+    inside that strategy's block.
+    """
+    path = goals_dir_default() / goal_slug / "goal.md"
+    if not path.is_file():
+        return {"ok": False, "error": f"unknown goal: {goal_slug}"}
+    full = path.read_text()
+    lines = full.splitlines()
+    target_header_re = re.compile(r"^  - id: " + re.escape(strategy_id) + r"\s*$")
+    field_re = re.compile(r"^    " + re.escape(field) + r":\s.*$")
+    out = []
+    in_block = False
+    handled = False
+    last_indented_idx = -1
+    serialized = value if value is None else (json.dumps(value) if field == "text" else (str(value) if field == "status" else f'"{value}"'))
+    serialized_line = f"    {field}: {serialized if value is not None else 'null'}"
+    for idx, line in enumerate(lines):
+        if target_header_re.match(line):
+            in_block = True
+            out.append(line)
+            last_indented_idx = len(out) - 1
+            continue
+        if in_block:
+            # End of strategy block
+            if re.match(r"^  - id: ", line) or re.match(r"^[^ ]", line) or line.startswith("---"):
+                if not handled:
+                    out.append(serialized_line)
+                    handled = True
+                in_block = False
+            elif field_re.match(line):
+                out.append(serialized_line)
+                handled = True
+                continue
+            else:
+                last_indented_idx = len(out)
+        out.append(line)
+    if in_block and not handled:
+        out.append(serialized_line)
+        handled = True
+    if not handled:
+        return {"ok": False, "error": f"strategy {strategy_id} not found in {goal_slug}"}
+    try:
+        path.write_text("\n".join(out) + ("\n" if full.endswith("\n") else ""))
     except OSError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True}
@@ -560,11 +741,15 @@ __all__ = [
     "load_all_goals",
     "goals_dir_default",
     "save_strategy_session_id",
+    "append_strategy",
+    "set_strategy_field",
     "attach_context",
     "mark_inbox_item",
     "add_user_tactical",
+    "update_user_tactical",
     "load_user_tactical",
     "load_user_tactical_order",
     "save_user_tactical_order",
     "dismiss_user_tactical",
+    "undismiss_user_tactical",
 ]

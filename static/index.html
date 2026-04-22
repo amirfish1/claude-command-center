@@ -11,6 +11,7 @@
     --border: #30363d;
     --text: #c9d1d9;
     --text-muted: #8b949e;
+    --text-secondary: #8b949e;  /* alias for --text-muted; legacy var name still in use */
     --accent: #58a6ff;
     --green: #3fb950;
     --orange: #d29922;
@@ -517,7 +518,7 @@
   .conv-item .conv-title.untitled {
     font-weight: 500; color: var(--text-muted); font-style: italic;
   }
-  /* Teal marker: "I renamed this from the log viewer" */
+  /* Teal marker: "I renamed this from the command center" */
   .conv-item .conv-title.user-renamed { color: var(--cyan); }
   .conv-item .conv-edit-btn {
     opacity: 0; font-size: 13px; cursor: pointer;
@@ -1435,8 +1436,9 @@
     /* Conv-panel toolbar controls */
     #cpFontMinus, #cpFontPlus { display: none !important; }
     .conv-panel-toolbar .cpt-session-id { display: none !important; }
-    /* Jump/Launch only affect the Mac's Terminal.app — useless when viewed
-       from a phone via Tailscale. Hide to avoid the "clicked, nothing happened" UX. */
+    /* Jump/Launch only affect the host's Terminal.app — useless when the UI is
+       viewed from a remote/mobile context. Hide to avoid the "clicked, nothing
+       happened" UX. */
     #cpJumpBtn, #cpLaunchBtn,
     #jumpBtnConv, #launchBtnConv,
     .toolbar .resume-btn { display: none !important; }
@@ -1486,18 +1488,9 @@
 <body>
   <div class="sidebar">
     <div class="sidebar-header">
-      <span class="dot"></span> Claude Command Center
-      <a href="/affiliates" id="affiliatesNavLink" title="Affiliates — studio leads" style="display:none; margin-left:auto; color:#5ac8fa; text-decoration:none; font-size:11px; padding:2px 8px; border:1px solid #2b3038; border-radius:4px;">Affiliates →</a>
+      <span class="dot"></span>
+      <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
     </div>
-    <script>
-      // Show the Affiliates link only when the local-only module is wired up.
-      fetch('/api/affiliates').then(r => {
-        if (r.ok) {
-          const el = document.getElementById('affiliatesNavLink');
-          if (el) el.style.display = '';
-        }
-      }).catch(() => {});
-    </script>
     <div class="deploy-panel" id="deployPanel">
       <div class="deploy-header">
         <span class="deploy-dot" id="deployDot"></span>
@@ -1510,7 +1503,7 @@
         <div class="search-wrap">
           <input type="text" id="convSearch" placeholder="Search conversations..." style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none;">
         </div>
-        <button class="conv-kanban-toggle" id="convKanbanToggle" title="Toggle Kanban board view">&#9783;</button>
+        <button class="conv-kanban-toggle" id="convKanbanToggle" title="Toggle Kanban board view" aria-label="Toggle Kanban board view"><span aria-hidden="true">&#9783;</span> Board</button>
         <button class="conv-archive-toggle" id="convArchiveToggle" title="Show archived">&#128230;</button>
         <button class="conv-sort-btn" id="convSortBtn" title="Sort by latest response (ignores custom order)">&#8693;</button>
         <button class="conv-refresh-btn" id="convRefreshBtn" title="Refresh conversation list">&#8634;</button>
@@ -1521,11 +1514,11 @@
       <div class="kanban-board" id="kanbanBoard" style="display:none;"></div>
     </div>
     <div class="watcher-panel" id="watcherPanel">
-      <div class="watcher-header">
+      <div class="watcher-header" title="Polls GitHub every 60s for issues labeled `claude-fix` and auto-spawns a headless session per issue. Off by default — start it explicitly.">
         <span class="watcher-dot" id="watcherDot"></span>
         <span>Issue Watcher</span>
       </div>
-      <button class="watcher-btn start" id="watcherBtn" disabled>Loading...</button>
+      <button class="watcher-btn start" id="watcherBtn" disabled title="Start polling GitHub for `claude-fix`-labeled issues and spawn sessions">Loading...</button>
       <div class="watcher-output" id="watcherOutput"></div>
     </div>
   </div>
@@ -1538,7 +1531,7 @@
     </div>
     <div class="toolbar" id="convToolbar">
       <input type="text" id="newSessionInput" placeholder="New session prompt..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;min-width:0;">
-      <label class="pkood-toggle-label"><input type="checkbox" id="pkoodToggle"> pkood</label>
+      <label class="pkood-toggle-label" title="Spawn via Pkood (background agent runner) instead of headless Claude — see docs"><input type="checkbox" id="pkoodToggle"> pkood</label>
       <button class="launch-btn" id="newSessionBtn" style="padding:5px 10px;font-size:12px;" title="Spawn headless Claude session">Run</button>
       <button class="pkood-kill-btn" id="pkoodKillBtn" style="display:none;" title="Kill this pkood agent">Kill</button>
       <button class="resume-btn" id="resumeBtnConv" style="display:none;" title="Copy CLI command to resume this session">
@@ -1577,14 +1570,15 @@
   <div id="kanbanLayout">
     <div class="kanban-panel">
       <div class="kanban-panel-toolbar">
+        <select id="kptRepoPicker" title="Repo this kanban is watching — switch to point at a different project. Live-switches without a server restart." style="padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none;max-width:180px;"></select>
         <input type="text" class="kpt-search" id="kptSearch" placeholder="Search sessions...">
         <button id="kptRefreshBtn" title="Refresh data">&#8634;</button>
-        <button id="kptRecentBtn" title="Show only last 10 hours">Recent</button>
-        <label class="kpt-label"><input type="checkbox" id="kptPkoodToggle"> pkood</label>
+        <button id="kptRecentBtn" title="Show only sessions/issues touched in the last 10 hours">Last 10h</button>
+        <label class="kpt-label" title="Spawn via Pkood (background agent runner) instead of headless Claude — see docs"><input type="checkbox" id="kptPkoodToggle"> pkood</label>
         <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
-        <button id="kptRunBtn">Run</button>
-        <button id="kptDescToggle" title="Hide descriptions on cards">Hide desc</button>
-        <button id="kptGitOnlyToggle" title="Show only cards linked to a GitHub issue">Git only</button>
+        <button id="kptRunBtn" title="Run new session" aria-label="Run new session">Run</button>
+        <button id="kptDescToggle" title="Compact mode — hide the description preview on cards">Compact</button>
+        <button id="kptGitOnlyToggle" title="Show only cards linked to a GitHub issue">GitHub only</button>
         <button id="kptListViewBtn" title="Back to list view">&#9783;</button>
         <span class="kpt-deploy" id="kptDeployStatus" title="Vercel deploy status" style="margin-left:auto;font-size:11px;display:flex;align-items:center;gap:4px;color:var(--text-muted);white-space:nowrap;"></span>
         <button id="kptOpenConvBtn" title="Open conversation panel" style="display:none;">&#9664;</button>
@@ -1622,7 +1616,7 @@
       </div>
       <div class="conv-panel-input" id="convPanelInput">
         <input type="text" id="cpInput" placeholder="Send to terminal..." autocomplete="off">
-        <button class="send-btn" id="cpSendBtn">&gt;</button>
+        <button class="send-btn" id="cpSendBtn" title="Send to terminal" aria-label="Send to terminal"><span aria-hidden="true">&gt;</span></button>
         <span class="tty-label" id="cpTtyLabel"></span>
       </div>
     </div>
@@ -1654,7 +1648,7 @@
   // App config from server — populated before anything else renders.
   let APP_CONFIG = {
     app_name: 'Claude Command Center',
-    title_strip: ['BYM'],
+    title_strip: [],
     repo: '',
     vercel_enabled: false,
     vercel_project: '',
@@ -1663,8 +1657,8 @@
     gh_enabled: true,
   };
   // Regex compiled from APP_CONFIG.title_strip at load; used to strip
-  // user-specific prefixes like "[BYM ...]" from session titles.
-  let _titleStripRe = /\s*\[BYM[^\]]*\]\s*/gi;  // fallback until config loads
+  // user-configured prefixes like "[ACME ...]" from session titles.
+  let _titleStripRe = null;  // null = no stripping until config loads
   function rebuildTitleStripRe(prefixes) {
     if (!prefixes || !prefixes.length) { _titleStripRe = null; return; }
     const alt = prefixes.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
@@ -1679,7 +1673,7 @@
   // retroactively cleans cards spawned before the prompt-template cleanup.
   // Structured block every spawned session is asked to emit on its final reply
   // so the /attention panel can show exact state + next step without heuristics.
-  const SESSION_STATE_INSTRUCTION = "\n\nBefore your final reply, end with a block formatted EXACTLY like this (the CCC dashboard parses it):\n<session-state>\nDID: <one sentence — what you actually changed/learned>\nINSIGHT: <one sentence — the main finding, root cause, or surprise>\nNEXT_STEP_USER: <one sentence — the exact next thing the user should do>\n</session-state>";
+  const SESSION_STATE_INSTRUCTION = "\n\nBefore your final reply, end with a block formatted EXACTLY like this (the Claude Command Center dashboard parses it):\n<session-state>\nDID: <one sentence — what you actually changed/learned>\nINSIGHT: <one sentence — the main finding, root cause, or surprise>\nNEXT_STEP_USER: <one sentence — the exact next thing the user should do>\n</session-state>";
 
   function cleanIssuePrompt(s) {
     if (!s) return s;
@@ -2285,9 +2279,50 @@
   const $convSearch = document.getElementById('convSearch');
   const $kanbanBoard = document.getElementById('kanbanBoard');
   const $convKanbanToggle = document.getElementById('convKanbanToggle');
-  let kanbanView = localStorage.getItem('clv-kanban-view') === 'true';
+
+  // ── One-shot localStorage migration ──
+  // Project rebrand: keys moved from `clv-*` (Claude Log Viewer) to `ccc-*`
+  // (Claude Command Center) and Morning's dot-namespaced keys to dash style.
+  // This loop runs every page load but only copies values when the new key
+  // is empty, so it's idempotent. Drop the renames map after one release.
+  (function migrateLocalStorageKeys() {
+    const renames = {
+      'clv-kanban-view': 'ccc-kanban-view',
+      'clv-kanban-collapsed': 'ccc-kanban-collapsed',
+      'clv-conv-panel-open': 'ccc-conv-panel-open',
+      'clv-conv-font-scale': 'ccc-conv-font-scale',
+      'clv-column-overrides': 'ccc-column-overrides',
+      'clv-attention-collapsed': 'ccc-attention-collapsed',
+      'clv-attention-height': 'ccc-attention-height',
+      'clv-override-sync-done': 'ccc-override-sync-done',
+      'clv-archived-backlog': 'ccc-archived-backlog',
+      'clv-column-order': 'ccc-column-order',
+      'clv-show-recent': 'ccc-show-recent',
+      'clv-conv-sort': 'ccc-conv-sort',
+      'clv-sticky-header-height': 'ccc-sticky-header-height',
+      'clv-sidebar-width': 'ccc-sidebar-width',
+      'clv-conv-width': 'ccc-conv-width',
+      'clv-hide-descs': 'ccc-hide-descs',
+      'clv-git-only': 'ccc-git-only',
+      // Morning sub-feature: dot-namespaced → dash-prefixed for consistency.
+      'ccc.morning.pane.width': 'ccc-morning-pane-width',
+      'ccc.morning.braindump.lastAnalysis': 'ccc-morning-braindump-last-analysis',
+      'ccc.morning.braindump.lastDump': 'ccc-morning-braindump-last-dump',
+    };
+    try {
+      for (const oldKey in renames) {
+        const newKey = renames[oldKey];
+        if (localStorage.getItem(newKey) === null) {
+          const v = localStorage.getItem(oldKey);
+          if (v !== null) localStorage.setItem(newKey, v);
+        }
+      }
+    } catch (_) { /* localStorage may be disabled — fail silently */ }
+  })();
+
+  let kanbanView = localStorage.getItem('ccc-kanban-view') === 'true';
   let kanbanCollapsed = {}; // column_key -> bool, tracks user collapse state
-  try { kanbanCollapsed = JSON.parse(localStorage.getItem('clv-kanban-collapsed') || '{}'); } catch (_) {}
+  try { kanbanCollapsed = JSON.parse(localStorage.getItem('ccc-kanban-collapsed') || '{}'); } catch (_) {}
   let kanbanShowAll = {};   // column_key -> bool, tracks "show all" state for large columns
   let activeTab = 'sessions';
 
@@ -2325,7 +2360,7 @@
       }
     }
     if ($kptOpenConvBtn) $kptOpenConvBtn.style.display = open ? 'none' : '';
-    try { localStorage.setItem('clv-conv-panel-open', open ? '1' : '0'); } catch (_) {}
+    try { localStorage.setItem('ccc-conv-panel-open', open ? '1' : '0'); } catch (_) {}
   }
   // ── Mobile overlay helpers ──
   const _mobileMQ = window.matchMedia('(max-width: 768px)');
@@ -2358,11 +2393,11 @@
   if ($kptOpenConvBtn) $kptOpenConvBtn.addEventListener('click', () => setConvPanelOpen(true));
   // Restore last state
   try {
-    if (localStorage.getItem('clv-conv-panel-open') === '0') setConvPanelOpen(false);
+    if (localStorage.getItem('ccc-conv-panel-open') === '0') setConvPanelOpen(false);
   } catch (_) {}
 
   // Font scale controls for conversations view
-  let convFontScale = parseFloat(localStorage.getItem('clv-conv-font-scale') || '1');
+  let convFontScale = parseFloat(localStorage.getItem('ccc-conv-font-scale') || '1');
   const $fontMinus = document.getElementById('fontMinus');
   const $fontPlus = document.getElementById('fontPlus');
 
@@ -2374,12 +2409,12 @@
 
   if ($fontMinus) $fontMinus.addEventListener('click', () => {
     convFontScale = Math.max(0.7, +(convFontScale - 0.1).toFixed(1));
-    localStorage.setItem('clv-conv-font-scale', String(convFontScale));
+    localStorage.setItem('ccc-conv-font-scale', String(convFontScale));
     applyConvFontScale();
   });
   if ($fontPlus) $fontPlus.addEventListener('click', () => {
     convFontScale = Math.min(1.5, +(convFontScale + 0.1).toFixed(1));
-    localStorage.setItem('clv-conv-font-scale', String(convFontScale));
+    localStorage.setItem('ccc-conv-font-scale', String(convFontScale));
     applyConvFontScale();
   });
 
@@ -2440,7 +2475,7 @@
     conversationsData = [card, ...conversationsData];
     // Pin to Working column for the moment
     columnOverrides[id] = 'working';
-    try { localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
+    try { localStorage.setItem('ccc-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
     renderSidebar(filterConversations($convSearch.value));
     // Auto-cleanup after 30s regardless of refresh cadence
     setTimeout(() => {
@@ -2532,7 +2567,7 @@
         // For each attention card, resolve the underlying conversation so we
         // can print which column the kanban classifier would put it in. This
         // surfaces discrepancies ("why is this in Needs Attention when the
-        // board puts it in Working?") — the debug label lets Amir see both
+        // board puts it in Working?") — the debug label lets the user see both
         // truths side-by-side.
         let classifiedCol = '';
         const sid = it.session_id || '';
@@ -2677,7 +2712,7 @@
     const column = card.closest('.kanban-column');
     if (column && column.dataset.col && kanbanCollapsed[column.dataset.col]) {
       kanbanCollapsed[column.dataset.col] = false;
-      try { localStorage.setItem('clv-kanban-collapsed', JSON.stringify(kanbanCollapsed)); } catch (_) {}
+      try { localStorage.setItem('ccc-kanban-collapsed', JSON.stringify(kanbanCollapsed)); } catch (_) {}
       renderSidebar(filterConversations($convSearch.value));
       // After re-render, grab the fresh node and try again
       requestAnimationFrame(() => focusCardOnBoard(idOrSid));
@@ -2714,7 +2749,7 @@
     const $toggle = document.getElementById('attentionToggle');
     if (!$panel || !$toggle) return;
     try {
-      if (localStorage.getItem('clv-attention-collapsed') === '1') {
+      if (localStorage.getItem('ccc-attention-collapsed') === '1') {
         $panel.classList.add('collapsed');
       }
     } catch (_) {}
@@ -2722,7 +2757,7 @@
       e.stopPropagation();
       $panel.classList.toggle('collapsed');
       try {
-        localStorage.setItem('clv-attention-collapsed',
+        localStorage.setItem('ccc-attention-collapsed',
           $panel.classList.contains('collapsed') ? '1' : '0');
       } catch (_) {}
     });
@@ -2753,7 +2788,7 @@
     }
 
     // Resize handle: drag DOWN to grow the NYA panel, shrinking kanban below.
-    const ATT_HEIGHT_KEY = 'clv-attention-height';
+    const ATT_HEIGHT_KEY = 'ccc-attention-height';
     const ATT_MIN_PX = 80;
     const $handle = document.getElementById('attentionResizeHandle');
 
@@ -2897,7 +2932,7 @@
 
   // Manual column overrides (drag-and-drop) — session_id → column key
   let columnOverrides = {};
-  try { columnOverrides = JSON.parse(localStorage.getItem('clv-column-overrides') || '{}'); } catch (_) {}
+  try { columnOverrides = JSON.parse(localStorage.getItem('ccc-column-overrides') || '{}'); } catch (_) {}
 
   // One-time migration: older builds of the kanban stored drag-to-Verified
   // (and drag-to-Archived) as a client-only override without calling the
@@ -2908,10 +2943,10 @@
   // the `clv-override-sync-done` key to re-run.
   (async function migrateStaleOverrides() {
     try {
-      if (localStorage.getItem('clv-override-sync-done') === '1') return;
+      if (localStorage.getItem('ccc-override-sync-done') === '1') return;
       const keys = Object.keys(columnOverrides);
       if (!keys.length) {
-        localStorage.setItem('clv-override-sync-done', '1');
+        localStorage.setItem('ccc-override-sync-done', '1');
         return;
       }
       // cardId in the override key is either a UUID session_id, "issue-N",
@@ -2942,11 +2977,11 @@
         }
       }
       try {
-        localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides));
+        localStorage.setItem('ccc-column-overrides', JSON.stringify(columnOverrides));
       } catch (_) {}
-      localStorage.setItem('clv-override-sync-done', '1');
+      localStorage.setItem('ccc-override-sync-done', '1');
       if (synced) {
-        console.info('[override-sync] pushed', synced, 'stale verified/archived override(s) to server');
+        console.debug('[override-sync] pushed', synced, 'stale verified/archived override(s) to server');
       }
     } catch (e) {
       console.warn('override migration crashed:', e);
@@ -2959,11 +2994,11 @@
   // live in the browser to stick.)
   let _archivedBacklogIds = new Set();
   try {
-    const saved = JSON.parse(localStorage.getItem('clv-archived-backlog') || '[]');
+    const saved = JSON.parse(localStorage.getItem('ccc-archived-backlog') || '[]');
     if (Array.isArray(saved)) _archivedBacklogIds = new Set(saved);
   } catch (_) {}
   function _persistArchivedBacklog() {
-    try { localStorage.setItem('clv-archived-backlog', JSON.stringify([..._archivedBacklogIds])); } catch (_) {}
+    try { localStorage.setItem('ccc-archived-backlog', JSON.stringify([..._archivedBacklogIds])); } catch (_) {}
   }
 
   // Multi-select state for kanban cards
@@ -3116,7 +3151,7 @@
       }
       columnOverrides[sid] = targetCol;
     }
-    try { localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
+    try { localStorage.setItem('ccc-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
     renderSidebar(filterConversations($convSearch.value));
   }
 
@@ -3139,7 +3174,7 @@
         ((ov === 'archived') && c.id && c.id.startsWith('backlog-issue-') && (c.issue_state || '').toUpperCase() === 'OPEN');
       if (stale) {
         delete columnOverrides[c.session_id || c.id];
-        try { localStorage.setItem('clv-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
+        try { localStorage.setItem('ccc-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
       } else {
         return ov;
       }
@@ -3213,19 +3248,28 @@
   function renderKanbanBoard(convs, targetEl, isSplit) {
     if (!targetEl) targetEl = $kanbanBoard;
     const defaultColumns = [
-      { key: 'backlog',        label: 'Backlog',        defaultExpanded: true },
-      { key: 'needs-attention', label: 'Needs attention', defaultExpanded: true },
-      { key: 'planning',       label: 'Planning',       defaultExpanded: true },
-      { key: 'working',        label: 'Working',        defaultExpanded: true },
-      { key: 'review',         label: 'Review',         defaultExpanded: true },
-      { key: 'testing',        label: 'In Testing',     defaultExpanded: true },
-      { key: 'verified',       label: 'Verified',       defaultExpanded: false },
-      { key: 'archived',       label: 'Archived',       defaultExpanded: false },
-      { key: 'inactive',       label: 'Inactive',       defaultExpanded: false },
+      { key: 'backlog',         label: 'Backlog',         defaultExpanded: true,
+        hint: 'Open GitHub issues and TODO.md / PARKING_LOT items with no session yet.' },
+      { key: 'needs-attention', label: 'Needs attention', defaultExpanded: true,
+        hint: 'Issues labeled `needs-attention` on GitHub — you flagged them for triage.' },
+      { key: 'planning',        label: 'Planning',        defaultExpanded: true,
+        hint: 'Live session, no edits yet. Claude is still working out the plan.' },
+      { key: 'working',         label: 'Working',         defaultExpanded: true,
+        hint: 'Live session actively editing files (sidecar shows writes). Glows when mid-turn.' },
+      { key: 'review',          label: 'Review',          defaultExpanded: true,
+        hint: 'Committed or pushed work waiting for you to read and verify.' },
+      { key: 'testing',         label: 'In Testing',      defaultExpanded: true,
+        hint: 'Manually moved here — work is under human validation.' },
+      { key: 'verified',        label: 'Verified',        defaultExpanded: false,
+        hint: 'Marked done by you, or GitHub issue closed as completed.' },
+      { key: 'archived',        label: 'Archived',        defaultExpanded: false,
+        hint: 'Dismissed / not planned — kept for context, not actionable.' },
+      { key: 'inactive',        label: 'Inactive',        defaultExpanded: false,
+        hint: 'Dormant sessions with no commits. Resume from here when you pick them back up.' },
     ];
     // Apply user-defined column order from localStorage.
     let savedOrder = [];
-    try { savedOrder = JSON.parse(localStorage.getItem('clv-column-order') || '[]'); } catch (_) {}
+    try { savedOrder = JSON.parse(localStorage.getItem('ccc-column-order') || '[]'); } catch (_) {}
     const byKey = Object.fromEntries(defaultColumns.map(c => [c.key, c]));
     const ordered = [];
     for (const k of savedOrder) if (byKey[k]) ordered.push(byKey[k]);
@@ -3258,12 +3302,29 @@
       const hasMore = !showAll && items.length > maxVisible;
 
       html += '<div class="kanban-column ' + col.key + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '">';
-      html += '<div class="kanban-column-header' + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '" draggable="true">';
+      const colTitle = col.hint ? (col.label + ' — ' + col.hint) : col.label;
+      html += '<div class="kanban-column-header' + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '" draggable="true" title="' + escapeHtml(colTitle) + '">';
       html += '<span class="arrow">' + (isCollapsed ? '&#9656;' : '&#9662;') + '</span>';
       html += '<span>' + escapeHtml(col.label) + '</span>';
       html += '<span class="count">' + items.length + '</span>';
       html += '</div>';
       html += '<div class="kanban-cards">';
+      // Empty-state placeholder — gives the user something to read instead of
+      // a silent gap. Matches the morning kanban's pattern.
+      if (items.length === 0) {
+        const emptyMsg = {
+          'backlog': 'No open issues or TODO items.',
+          'needs-attention': 'Nothing flagged for triage.',
+          'planning': 'No live planning sessions.',
+          'working': 'No live editing sessions.',
+          'review': 'Nothing waiting for review.',
+          'testing': 'Drag cards here to mark as testing.',
+          'verified': 'No verified work yet.',
+          'archived': 'No archived items.',
+          'inactive': 'No dormant sessions.',
+        }[col.key] || 'Empty.';
+        html += '<div class="kanban-column-empty" style="padding:14px 12px;color:var(--text-muted);font-size:11px;font-style:italic;text-align:center;opacity:0.6;">' + escapeHtml(emptyMsg) + '</div>';
+      }
       // In Backlog only: group by org (if org tags are configured).
       // Sort by org so same-org cards cluster; emit a small sub-header on change.
       let sortedItems = visibleItems;
@@ -3330,9 +3391,20 @@
 
         // ── Backlog cards: special rendering ──
         if (c.source === 'backlog') {
-          const labels = (c.issue_labels || []).map(function(l) {
-            const color = l === 'bug' ? 'var(--red)' : 'var(--accent)';
-            return '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(139,148,158,0.15);color:' + color + ';font-weight:600;margin-right:3px;">' + escapeHtml(l) + '</span>';
+          let stateBadge = '';
+          if (c.backlog_type === 'github' && c.issue_state) {
+            const isClosed = (c.issue_state || '').toUpperCase() === 'CLOSED';
+            const reason = (c.issue_state_reason || '').toLowerCase().replace(/_/g, ' ');
+            const label = isClosed ? ('closed' + (reason ? ' · ' + reason : '')) : 'open';
+            const color = isClosed ? 'var(--red)' : 'var(--green)';
+            const bg = isClosed ? 'rgba(248,81,73,0.12)' : 'rgba(63,185,80,0.12)';
+            stateBadge = '<span title="GitHub state — if CLOSED appears in Backlog, the cache is stale" style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + bg + ';color:' + color + ';font-weight:600;margin-right:3px;text-transform:uppercase;">' + escapeHtml(label) + '</span>';
+          }
+          const labels = (c.issue_labels || []).filter(function(l) { return l !== 'bug'; }).map(function(l) {
+            const isAttn = l === 'needs-attention';
+            const color = isAttn ? 'var(--red)' : 'var(--accent)';
+            const bg = isAttn ? 'rgba(248,81,73,0.15)' : 'rgba(139,148,158,0.15)';
+            return '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + bg + ';color:' + color + ';font-weight:600;margin-right:3px;">' + escapeHtml(l) + '</span>';
           }).join('');
           let sourceTag = '';
           if (c.backlog_type === 'github') {
@@ -3353,7 +3425,7 @@
           }
           html += '<div class="kanban-card backlog-card" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="backlog">';
           html += '<div class="kanban-card-title">' + escapeHtml(title) + '</div>';
-          if (labels) html += '<div style="margin-top:3px;">' + labels + '</div>';
+          if (stateBadge || labels) html += '<div style="margin-top:3px;">' + stateBadge + labels + '</div>';
           const wipChip = c.gh_in_progress
             ? '<span class="kanban-gh-wip" style="margin-left:6px;" title="claude-in-progress label on GitHub">WIP</span>'
             : '';
@@ -3499,7 +3571,7 @@
         const col = hdr.closest('.kanban-column');
         const nowCollapsed = !col.classList.contains('collapsed');
         kanbanCollapsed[colKey] = nowCollapsed;
-        try { localStorage.setItem('clv-kanban-collapsed', JSON.stringify(kanbanCollapsed)); } catch (_) {}
+        try { localStorage.setItem('ccc-kanban-collapsed', JSON.stringify(kanbanCollapsed)); } catch (_) {}
         col.classList.toggle('collapsed', nowCollapsed);
         hdr.classList.toggle('collapsed', nowCollapsed);
         hdr.querySelector('.arrow').innerHTML = nowCollapsed ? '&#9656;' : '&#9662;';
@@ -3535,7 +3607,7 @@
         if (srcIdx >= 0) current.splice(srcIdx, 1);
         const dstIdx = current.indexOf(dst);
         current.splice(dstIdx, 0, src);
-        try { localStorage.setItem('clv-column-order', JSON.stringify(current)); } catch (_) {}
+        try { localStorage.setItem('ccc-column-order', JSON.stringify(current)); } catch (_) {}
         renderSidebar(filterConversations($convSearch.value));
       });
       hdr.addEventListener('dragend', () => hdr.classList.remove('dragging-header'));
@@ -3679,12 +3751,12 @@
             c.linked_issue = data.issue_number;
             renderSidebar(filterConversations($convSearch.value));
           } else {
-            alert('Failed: ' + (data.error || 'unknown'));
+            showOpToast('Failed: ' + (data.error || 'unknown'), 'error');
             btn.disabled = false;
             btn.innerHTML = origHtml;
           }
         } catch (err) {
-          alert('Error: ' + err.message);
+          showOpToast('Error: ' + err.message, 'error');
           btn.disabled = false;
           btn.innerHTML = origHtml;
         }
@@ -4375,7 +4447,7 @@
 
   // Sort toggle: "custom" (drag order) vs "recent" (by mtime)
   let convSortMode = 'recent';  // always latest-first
-  let showRecentOnly = localStorage.getItem('clv-show-recent') === '1';
+  let showRecentOnly = localStorage.getItem('ccc-show-recent') === '1';
   const RECENT_HOURS = 10;
   const $convSortBtn = document.getElementById('convSortBtn');
 
@@ -4399,7 +4471,7 @@
     updateSortBtn();
     $convSortBtn.addEventListener('click', () => {
       convSortMode = convSortMode === 'recent' ? 'custom' : 'recent';
-      localStorage.setItem('clv-conv-sort', convSortMode);
+      localStorage.setItem('ccc-conv-sort', convSortMode);
       updateSortBtn();
       renderSidebar(filterConversations($convSearch.value));
     });
@@ -4431,7 +4503,7 @@
   if ($convKanbanToggle) {
     $convKanbanToggle.addEventListener('click', () => {
       kanbanView = !kanbanView;
-      localStorage.setItem('clv-kanban-view', kanbanView ? 'true' : 'false');
+      localStorage.setItem('ccc-kanban-view', kanbanView ? 'true' : 'false');
       updateKanbanToggle();
       renderSidebar(filterConversations($convSearch.value));
     });
@@ -4441,7 +4513,7 @@
   if ($kptListViewBtn) {
     $kptListViewBtn.addEventListener('click', () => {
       kanbanView = false;
-      localStorage.setItem('clv-kanban-view', 'false');
+      localStorage.setItem('ccc-kanban-view', 'false');
       updateKanbanToggle();
       renderSidebar(filterConversations($convSearch.value));
     });
@@ -4503,7 +4575,7 @@
           const c = conversationsData.find(x => x.id === item.dataset.id);
           if (c) {
             c.display_name = newName || null;
-            // User just renamed from the viewer → always teal regardless of
+            // User just renamed from the command center → always teal regardless of
             // storage path (jsonl write-through vs. side-car fallback).
             c.name_overridden = !!newName;
           }
@@ -4536,7 +4608,7 @@
     return (kanbanView && $convPanelView) ? $convPanelView : $conversationsView;
   }
 
-  const STICKY_HEADER_HEIGHT_KEY = 'clv-sticky-header-height';
+  const STICKY_HEADER_HEIGHT_KEY = 'ccc-sticky-header-height';
   const STICKY_HEADER_MIN_PX = 90;
 
   function getStickyMaxPx($view) {
@@ -4624,6 +4696,26 @@
         return;
       }
       const issue = data.issue || {};
+      // Self-heal: if the fresh GH state disagrees with what the cached card says,
+      // patch the in-memory card and re-render so it routes to the right column
+      // (verified/archived) without waiting for the 5-min server cache to expire.
+      try {
+        const card = conversationsData.find(x => x.id === 'backlog-issue-' + issueNum);
+        if (card) {
+          const freshState = (issue.state || '').toUpperCase();
+          const freshReason = (issue.stateReason || '').toUpperCase();
+          const freshLabels = (issue.labels || []).map(l => l.name).filter(Boolean);
+          const stateChanged = freshState && card.issue_state !== freshState;
+          const reasonChanged = card.issue_state_reason !== freshReason;
+          const labelsChanged = JSON.stringify(card.issue_labels || []) !== JSON.stringify(freshLabels);
+          if (stateChanged || reasonChanged || labelsChanged) {
+            card.issue_state = freshState;
+            card.issue_state_reason = freshReason;
+            card.issue_labels = freshLabels;
+            renderSidebar(conversationsData);
+          }
+        }
+      } catch (_) { /* render is a courtesy — never block detail render on failure */ }
       const labels = (issue.labels || []).map(l => '<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(139,148,158,0.2);color:var(--text-muted);margin-right:6px;">' + escapeHtml(l.name || '') + '</span>').join('');
       const created = issue.createdAt ? new Date(issue.createdAt).toLocaleString() : '';
       const url = issue.url || '';
@@ -5278,7 +5370,11 @@
 
   function renderIssues(issues) {
     if (!issues.length) {
-      $issuesView.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">No issues found</div>';
+      $issuesView.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;line-height:1.6;">'
+        + 'No GitHub issues found.<br><br>'
+        + 'If this repo just has no open issues, that\'s fine — they\'ll show up here when you create one.<br><br>'
+        + 'If you expected to see issues, install <a href="https://cli.github.com/" target="_blank" rel="noopener" style="color:var(--accent);">gh</a> and run <code style="background:#1a1d23;padding:2px 6px;border-radius:3px;">gh auth login</code> from this repo, then refresh.'
+        + '</div>';
       return;
     }
 
@@ -5548,7 +5644,7 @@
   const $sidebar = document.querySelector('.sidebar');
   const $resizer = document.getElementById('sidebarResizer');
   if ($sidebar && $resizer) {
-    const saved = parseInt(localStorage.getItem('clv-sidebar-width') || '0', 10);
+    const saved = parseInt(localStorage.getItem('ccc-sidebar-width') || '0', 10);
     if (saved >= 240 && saved <= window.innerWidth * 0.6) {
       $sidebar.style.width = saved + 'px';
     }
@@ -5572,7 +5668,7 @@
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       const w = parseInt($sidebar.style.width, 10);
-      if (w) localStorage.setItem('clv-sidebar-width', String(w));
+      if (w) localStorage.setItem('ccc-sidebar-width', String(w));
     }
   }
 
@@ -5582,7 +5678,7 @@
   if ($splitResizer && $convPanel && $kanbanPanel) {
     $kanbanPanel.style.flex = '1';
     $kanbanPanel.style.width = '';
-    const savedConv = parseInt(localStorage.getItem('clv-conv-width') || '0', 10);
+    const savedConv = parseInt(localStorage.getItem('ccc-conv-width') || '0', 10);
     if (savedConv >= 300) {
       $convPanel.style.width = savedConv + 'px';
     }
@@ -5615,11 +5711,61 @@
         setConvPanelOpen(false);
         return;
       }
-      if (w) localStorage.setItem('clv-conv-width', String(w));
+      if (w) localStorage.setItem('ccc-conv-width', String(w));
     }
   }
 
   // ── Split panel toolbar controls ──
+  // Repo picker — populated from /api/repo/list, switches via /api/repo/switch.
+  // The server live-swaps REPO_ROOT and invalidates caches; we just reload the
+  // conversation list so the UI reflects the new repo.
+  const $kptRepoPicker = document.getElementById('kptRepoPicker');
+  if ($kptRepoPicker) {
+    (async () => {
+      try {
+        const r = await fetch('/api/repo/list');
+        const d = await r.json();
+        const repos = d.repos || [];
+        const current = d.current || '';
+        $kptRepoPicker.innerHTML = '';
+        for (const repo of repos) {
+          const opt = document.createElement('option');
+          opt.value = repo.path;
+          opt.textContent = repo.label || repo.path;
+          opt.title = repo.path;
+          if (repo.path === current) opt.selected = true;
+          $kptRepoPicker.appendChild(opt);
+        }
+      } catch (e) { /* picker is best-effort — failure shouldn't break the kanban */ }
+    })();
+    $kptRepoPicker.addEventListener('change', async () => {
+      const target = $kptRepoPicker.value;
+      const prev = $kptRepoPicker.dataset.prev || '';
+      $kptRepoPicker.disabled = true;
+      try {
+        const r = await fetch('/api/repo/switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: target }),
+        });
+        const d = await r.json();
+        if (!d.ok) throw new Error(d.error || 'switch failed');
+        // Hard-reload so EVERY in-memory state (sidecar polls, cached convs,
+        // open detail panes) starts clean against the new repo.
+        location.reload();
+      } catch (e) {
+        showOpToast('Failed to switch repo: ' + (e.message || e), 'error');
+        if (prev) $kptRepoPicker.value = prev;
+      } finally {
+        $kptRepoPicker.disabled = false;
+      }
+    });
+    // Stash the current value so we can restore on failure.
+    $kptRepoPicker.addEventListener('focus', () => {
+      $kptRepoPicker.dataset.prev = $kptRepoPicker.value;
+    });
+  }
+
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
@@ -5630,12 +5776,12 @@
     const applyDescHidden = (hidden) => {
       document.body.classList.toggle('hide-descs', hidden);
       $kptDescToggle.classList.toggle('active', hidden);
-      $kptDescToggle.textContent = hidden ? 'Show desc' : 'Hide desc';
+      $kptDescToggle.textContent = hidden ? 'Expand' : 'Compact';
     };
-    applyDescHidden(localStorage.getItem('clv-hide-descs') === '1');
+    applyDescHidden(localStorage.getItem('ccc-hide-descs') === '1');
     $kptDescToggle.addEventListener('click', () => {
       const nowHidden = !document.body.classList.contains('hide-descs');
-      localStorage.setItem('clv-hide-descs', nowHidden ? '1' : '0');
+      localStorage.setItem('ccc-hide-descs', nowHidden ? '1' : '0');
       applyDescHidden(nowHidden);
     });
   }
@@ -5649,9 +5795,9 @@
     };
     $kptGitOnlyToggle.addEventListener('click', () => {
       applyGitOnly(!window._gitOnlyFilter);
-      localStorage.setItem('clv-git-only', window._gitOnlyFilter ? '1' : '0');
+      localStorage.setItem('ccc-git-only', window._gitOnlyFilter ? '1' : '0');
     });
-    if (localStorage.getItem('clv-git-only') === '1') applyGitOnly(true);
+    if (localStorage.getItem('ccc-git-only') === '1') applyGitOnly(true);
   }
   const $kptNewSession = document.getElementById('kptNewSession');
   const $kptRunBtn = document.getElementById('kptRunBtn');
@@ -5672,7 +5818,7 @@
   if ($kptRecentBtn) {
     $kptRecentBtn.addEventListener('click', () => {
       showRecentOnly = !showRecentOnly;
-      localStorage.setItem('clv-show-recent', showRecentOnly ? '1' : '0');
+      localStorage.setItem('ccc-show-recent', showRecentOnly ? '1' : '0');
       updateRecentBtn();
       renderSidebar(filterConversations($convSearch.value));
     });
@@ -5932,13 +6078,13 @@
   const $cpFontPlus = document.getElementById('cpFontPlus');
   if ($cpFontMinus) $cpFontMinus.addEventListener('click', () => {
     convFontScale = Math.max(0.7, +(convFontScale - 0.1).toFixed(1));
-    localStorage.setItem('clv-conv-font-scale', String(convFontScale));
+    localStorage.setItem('ccc-conv-font-scale', String(convFontScale));
     if ($convPanelView) $convPanelView.style.zoom = convFontScale;
     applyConvFontScale();
   });
   if ($cpFontPlus) $cpFontPlus.addEventListener('click', () => {
     convFontScale = Math.min(1.5, +(convFontScale + 0.1).toFixed(1));
-    localStorage.setItem('clv-conv-font-scale', String(convFontScale));
+    localStorage.setItem('ccc-conv-font-scale', String(convFontScale));
     if ($convPanelView) $convPanelView.style.zoom = convFontScale;
     applyConvFontScale();
   });
