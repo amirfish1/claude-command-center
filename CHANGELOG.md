@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Each message card in the conversation view now shows a relative timestamp
+  next to its line number. Tiers: `just now` (<1 min) → `N minutes ago` (<1 h)
+  → `N hours ago` (<5 h) → `HH:MM` (same day, older) → `Yesterday · HH:MM`
+  → `MMM D · HH:MM`. Hover reveals the full localized date-time.
+
 ### Fixed
 - Haiku title-summarizer subsessions no longer leak into the kanban. The
   `/api/sessions` scan now skips conversations whose first user message

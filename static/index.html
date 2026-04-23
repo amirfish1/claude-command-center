@@ -347,6 +347,7 @@
   .t-body { white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
 
   .line-num { font-size: 10px; color: var(--text-muted); opacity: 0.5; float: right; }
+  .msg-ts { font-size: 10px; color: var(--text-muted); opacity: 0.4; float: right; margin-right: 8px; font-variant-numeric: tabular-nums; }
 
   /* Tabs */
   .tab-bar {
@@ -2388,6 +2389,59 @@
     const div = document.createElement('div');
     div.textContent = s;
     return div.innerHTML;
+  }
+
+  // Subtle timestamp span shown next to line-num. Returns '' when ts is missing/unparseable.
+  // Tiers:
+  //   < 1m        → "just now"
+  //   < 1h        → "N minutes ago"
+  //   < 5h        → "N hours ago"
+  //   same day    → "HH:MM"
+  //   yesterday   → "Yesterday · HH:MM"
+  //   older       → "MMM D · HH:MM"
+  // Tooltip always shows the full localized date-time.
+  function tsSpan(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    const diffMs = now - d;
+    const diffMin = Math.floor(diffMs / 60000);
+    const diffHour = Math.floor(diffMin / 60);
+    const pad = n => String(n).padStart(2, '0');
+    const hhmm = pad(d.getHours()) + ':' + pad(d.getMinutes());
+
+    let label;
+    if (diffMs < 60000) {
+      // Also catches small negative skews — treat as "just now" rather than showing "N minutes ago" in the future.
+      label = 'just now';
+    } else if (diffMin < 60) {
+      label = diffMin === 1 ? '1 minute ago' : diffMin + ' minutes ago';
+    } else if (diffHour < 5) {
+      label = diffHour === 1 ? '1 hour ago' : diffHour + ' hours ago';
+    } else {
+      const sameDay = d.getFullYear() === now.getFullYear()
+        && d.getMonth() === now.getMonth()
+        && d.getDate() === now.getDate();
+      if (sameDay) {
+        label = hhmm;
+      } else {
+        // Yesterday check — compare against a date object rolled back one day
+        // rather than (now - 24h), so DST transitions don't misclassify.
+        const yest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+        const isYesterday = d.getFullYear() === yest.getFullYear()
+          && d.getMonth() === yest.getMonth()
+          && d.getDate() === yest.getDate();
+        if (isYesterday) {
+          label = 'Yesterday · ' + hhmm;
+        } else {
+          const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+          label = months[d.getMonth()] + ' ' + d.getDate() + ' · ' + hhmm;
+        }
+      }
+    }
+    const iso = d.toLocaleString();
+    return '<span class="msg-ts" title="' + escapeHtml(iso) + '">' + escapeHtml(label) + '</span>';
   }
 
   // Minimal markdown renderer for assistant text — tables, inline code, bold, headers
@@ -5667,6 +5721,7 @@
       if (ev.type === 'system') {
         div.innerHTML = '<span class="label">System</span>'
           + '<span class="line-num">L' + ev.line + '</span>'
+          + tsSpan(ev.ts)
           + '<span>' + escapeHtml(ev.subtype || '') + (ev.model ? ' &middot; ' + escapeHtml(ev.model) : '') + (ev.session ? ' &middot; ' + escapeHtml(ev.session) : '') + '</span>';
       } else if (ev.type === 'user_text') {
         // If this matches an outstanding optimistic send, drop the pending stub
@@ -5696,10 +5751,11 @@
         const textHtml = cleanedText ? '<div class="user-msg">' + escapeHtml(cleanedText) + '</div>' : '';
         div.innerHTML = '<span class="label">User</span>'
           + '<span class="line-num">L' + ev.line + '</span>'
+          + tsSpan(ev.ts)
           + textHtml
           + imagesHtml;
       } else if (ev.type === 'assistant') {
-        let html = '<span class="line-num">L' + ev.line + '</span>';
+        let html = '<span class="line-num">L' + ev.line + '</span>' + tsSpan(ev.ts);
         let hasNonTool = false;
         for (const b of ev.blocks) {
           if (b.kind === 'tool_use') {
@@ -5719,6 +5775,7 @@
         const dur = typeof ev.duration_ms === 'number' ? (ev.duration_ms / 1000).toFixed(1) + 's' : ev.duration_ms;
         div.innerHTML = '<span class="label">Done</span>'
           + '<span class="line-num">L' + ev.line + '</span>'
+          + tsSpan(ev.ts)
           + '<div class="stats"><span>Cost: ' + escapeHtml(String(cost)) + '</span><span>Duration: ' + escapeHtml(String(dur)) + '</span></div>';
       } else if (ev.type === 'tool_result') {
         // Hidden by CSS
