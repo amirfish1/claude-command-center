@@ -1,0 +1,55 @@
+name: Bug report
+description: Something broke or behaved unexpectedly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! A few short answers help a lot — skip anything that doesn't apply.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What were you doing, and what went wrong?
+      placeholder: "Opened the kanban view, clicked a card, and the conversation pane didn't scroll."
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: If you can, list the smallest sequence that triggers it.
+      placeholder: |
+        1. Run `./run.sh`
+        2. Open http://localhost:5173
+        3. Click …
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `curl -s localhost:$PORT/api/version` or the tag/commit you're on.
+      placeholder: "v0.1.0"
+    validations:
+      required: false
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / browser
+      placeholder: "macOS 15.2 / Chrome 131"
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots
+      description: Server stdout, browser console, screenshot of the UI — whatever's relevant.
+      render: shell
+    validations:
+      required: false

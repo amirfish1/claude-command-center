@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest a new capability or improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! Focus on the problem — the solution is usually easier to agree on once the pain is clear.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem?
+      description: What are you trying to do that's painful today?
+      placeholder: "I watch 3 repos at once but the picker only scans ~/ — my project at /workspaces/foo never appears."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+      description: A rough sketch is fine — no need to design the whole thing.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried, or other tools that solve this.
+    validations:
+      required: false

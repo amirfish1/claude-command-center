@@ -35,6 +35,14 @@ venv/
 # Pre-publish workspace — audit reports, archive prep, etc.
 /oss-prep/
 
+# Local-only asset workspace (large videos, raw recordings, full-res screenshots)
+# Repo only ships compressed/optimized derivatives in docs/images/
+/_assets/
+
+# Don't accidentally commit large videos anywhere in the tree
+*.mp4
+*.mov
+
 # ── Local-only "Morning view" plugin ──────────────────────────────────
 # Highly opinionated to one user's life (goals, strategies, braindump).
 # Kept on disk for the maintainer's daily use; excluded from the OSS
