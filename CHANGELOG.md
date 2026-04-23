@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-23
+
+### Fixed
+- Chat input at the bottom of the conversation pane was clipped by the fixed
+  topbar's 33px body padding — only a 1px border-top sliver showed. The split
+  kanban view now sizes to `calc(100vh - 33px)` so the input row is visible.
+
+### Added
+- Repo picker now has a "…" button for picking folders the `$HOME` scan
+  can't reach (paths outside `~/`, or nested below a top-level dir).
+  The picked path is persisted to `~/.claude/command-center/custom-repos.txt`
+  via a new `POST /api/repo/add` endpoint and auto-switches on success.
+
 ## [0.1.0] - 2026-04-22
 
 Initial public release.
@@ -30,5 +43,6 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v0.1.1
 [0.1.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v0.1.0

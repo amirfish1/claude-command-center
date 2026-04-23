@@ -12,7 +12,7 @@ Usage:
     CCC_WATCH_REPO=~/dev/foo ./run.sh
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import ast
 import http.server
