@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   → `MMM D · HH:MM`. Hover reveals the full localized date-time.
 
 ### Fixed
+- Per-card ✨ "regenerate title" button now shows on every session card that
+  has a first user message, not only un-summarized ones. Previously, once a
+  card was user-renamed (`name_overridden`), the button was hidden and there
+  was no in-UI way back to an AI-generated title. On renamed cards the
+  button is dimmed and its tooltip flags the destructive intent
+  ("Regenerate title — replaces your manual rename").
 - Haiku title-summarizer subsessions no longer leak into the kanban. The
   `/api/sessions` scan now skips conversations whose first user message
   starts with our internal `Produce a concise 4-8 word title…` prompt,

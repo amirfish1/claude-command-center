@@ -3881,12 +3881,19 @@
         const createIssueBtn = linkedIssue
           ? ''
           : '<button class="kanban-action-btn" data-action="create-issue" title="Create GitHub issue">&#128221;</button>';
-        // Hide the per-card ✨ when this session already has an AI / user
-        // title — the bulk button + ability to manually rename via the title
-        // already cover the rare 're-summarize' case.
-        const summarizeBtn = c.name_overridden
-          ? ''
-          : '<button class="kanban-action-btn" data-action="summarize" title="Generate AI title for this card">&#10024;</button>';
+        // Persistent per-card ✨: show on every card that has a first_message
+        // (both un-summarized AND user-renamed). A user who rename-regretted
+        // otherwise has no way back to an AI title short of clearing the
+        // override by hand. On renamed cards we dim it + swap the tooltip so
+        // the destructive intent (it replaces the manual rename) is obvious.
+        let summarizeBtn = '';
+        if (c.first_message) {
+          if (c.name_overridden) {
+            summarizeBtn = '<button class="kanban-action-btn" data-action="summarize" title="Regenerate title — replaces your manual rename" style="opacity:0.5;">&#10024;</button>';
+          } else {
+            summarizeBtn = '<button class="kanban-action-btn" data-action="summarize" title="Generate AI title for this card">&#10024;</button>';
+          }
+        }
         html += '<div class="kanban-card-actions">'
           + summarizeBtn
           + createIssueBtn
