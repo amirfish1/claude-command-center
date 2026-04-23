@@ -2706,6 +2706,41 @@
   let convLastLine = 0;
   let convEventSource = null;  // SSE connection for tailing live conversations
 
+  // Optimistic state overrides for archived/verified flags. When the user
+  // archives or verifies a card we mutate the in-memory copy, but a /api/sessions
+  // poll already in flight will return *pre-click* data and overwrite that
+  // mutation when it lands — the card briefly reappears in its old column
+  // before the next poll picks up the persisted change. This map shields the
+  // optimistic value until the server's response agrees, with a 30s TTL so a
+  // failed write doesn't pin a stale override forever.
+  const _optimisticOverrides = new Map();  // sid -> {archived?, verified?, ts}
+  const _OPTIMISTIC_TTL_MS = 30000;
+  function setOptimisticOverride(sid, patch) {
+    if (!sid) return;
+    const existing = _optimisticOverrides.get(sid) || {};
+    _optimisticOverrides.set(sid, Object.assign({}, existing, patch, { ts: Date.now() }));
+  }
+  function applyOptimisticOverrides(list) {
+    if (!_optimisticOverrides.size) return;
+    const now = Date.now();
+    for (const [sid, entry] of _optimisticOverrides) {
+      if (now - entry.ts > _OPTIMISTIC_TTL_MS) _optimisticOverrides.delete(sid);
+    }
+    for (const c of list) {
+      const ov = _optimisticOverrides.get(c.session_id);
+      if (!ov) continue;
+      let allMatch = true;
+      if ('archived' in ov) {
+        if (c.archived !== ov.archived) { c.archived = ov.archived; allMatch = false; }
+      }
+      if ('verified' in ov) {
+        if (c.verified !== ov.verified) { c.verified = ov.verified; allMatch = false; }
+      }
+      // Server now agrees on every field we were holding — stop overriding.
+      if (allMatch) _optimisticOverrides.delete(c.session_id);
+    }
+  }
+
   // Pending spawn placeholders (optimistic UI) — keyed by pid.
   const pendingSpawns = new Map();
 
@@ -2771,6 +2806,9 @@
       // Keep still-pending placeholders on top until they materialize.
       const placeholders = Array.from(pendingSpawns.values());
       conversationsData = [...placeholders, ...fresh];
+      // Re-apply any in-flight archive/verify overrides so an /api/sessions
+      // response that started before a click can't briefly un-archive a card.
+      applyOptimisticOverrides(conversationsData);
       conversationsLoaded = true;
       // Cache session IDs / cwds / sources so Resume+Jump work
       sessionIdByConv = {};
@@ -3352,6 +3390,7 @@
         await ccPostJson('/api/conversations/' + cardId + '/verify',
           { verified: true, session_id: sid, display_name: c.display_name || '', cwd: c.session_cwd || '' });
         c.verified = true;
+        setOptimisticOverride(sid, { verified: true });
         delete columnOverrides[sid];
       } catch (err) {
         showOpToast('Verify failed — card stays put (' + err.message + ')', 'error');
@@ -3367,6 +3406,7 @@
           await ccPostJson('/api/conversations/' + cardId + '/verify',
             { verified: false, session_id: sid });
           c.verified = false;
+          setOptimisticOverride(sid, { verified: false });
         } catch (err) {
           showOpToast('Un-verify failed — card stays in Verified (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
@@ -3378,6 +3418,7 @@
           await ccPostJson('/api/conversations/' + cardId + '/archive',
             { session_id: sid });
           c.archived = false;
+          setOptimisticOverride(sid, { archived: false });
         } catch (err) {
           showOpToast('Un-archive failed — card stays in Archived (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
@@ -3409,6 +3450,7 @@
           await ccPostJson('/api/conversations/' + cardId + '/archive',
             { session_id: sid });
           c.archived = true;
+          setOptimisticOverride(sid, { archived: true });
           delete columnOverrides[sid];
         } catch (err) {
           showOpToast('Archive failed — card stays put (' + err.message + ')', 'error');
@@ -3425,6 +3467,7 @@
           await ccPostJson('/api/conversations/' + cardId + '/verify',
             { verified: false, session_id: sid });
           c.verified = false;
+          setOptimisticOverride(sid, { verified: false });
         } catch (err) {
           showOpToast('Un-verify failed — card stays in Verified (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
@@ -3436,6 +3479,7 @@
           await ccPostJson('/api/conversations/' + cardId + '/archive',
             { session_id: sid });
           c.archived = false;
+          setOptimisticOverride(sid, { archived: false });
         } catch (err) {
           showOpToast('Un-archive failed — card stays in Archived (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
@@ -4177,7 +4221,10 @@
           const data = await ccPostJson('/api/conversations/' + card.dataset.id + '/archive',
             { session_id: card.dataset.sessionId });
           const c = conversationsData.find(x => x.id === card.dataset.id);
-          if (c) c.archived = !!data.archived;
+          if (c) {
+            c.archived = !!data.archived;
+            setOptimisticOverride(c.session_id, { archived: c.archived });
+          }
           renderSidebar(filterConversations($convSearch.value));
         } catch (err) {
           showOpToast('Archive failed (' + err.message + ')', 'error');
@@ -4386,7 +4433,10 @@
           const data = await ccPostJson('/api/conversations/' + card.dataset.id + '/verify',
             { session_id: card.dataset.sessionId, display_name: conv.display_name || '', cwd: conv.session_cwd || '' });
           const c = conversationsData.find(x => x.id === card.dataset.id);
-          if (c) c.verified = !!data.verified;
+          if (c) {
+            c.verified = !!data.verified;
+            setOptimisticOverride(c.session_id, { verified: c.verified });
+          }
           renderSidebar(filterConversations($convSearch.value));
         } catch (err) {
           showOpToast('Verify failed (' + err.message + ')', 'error');
@@ -4401,7 +4451,10 @@
           const data = await ccPostJson('/api/conversations/' + card.dataset.id + '/archive',
             { session_id: card.dataset.sessionId });
           const c = conversationsData.find(x => x.id === card.dataset.id);
-          if (c) c.archived = !!data.archived;
+          if (c) {
+            c.archived = !!data.archived;
+            setOptimisticOverride(c.session_id, { archived: c.archived });
+          }
           renderSidebar(filterConversations($convSearch.value));
         } catch (err) {
           showOpToast('Archive failed (' + err.message + ')', 'error');
@@ -4725,7 +4778,10 @@
             { session_id: sessionId });
           if (data.ok) {
             const c = conversationsData.find(x => x.id === convId);
-            if (c) c.archived = data.archived;
+            if (c) {
+              c.archived = data.archived;
+              setOptimisticOverride(c.session_id, { archived: c.archived });
+            }
             renderSidebar(filterConversations($convSearch.value));
           }
         } catch (err) {
@@ -6856,6 +6912,7 @@
         }
       }
       conversationsData = fresh;
+      applyOptimisticOverrides(conversationsData);
       // Re-cache session IDs/cwds for Resume/Jump
       sessionIdByConv = {};
       sessionCwdByConv = {};

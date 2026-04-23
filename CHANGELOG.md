@@ -14,6 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so clicking the ✨ Titles button on the CCC repo (or any repo watched
   from the CCC working directory) stops filling the board with identical
   throwaway cards.
+- Archived/verified cards no longer flash back into their old column
+  briefly after the click. Previously the 10s `/api/sessions` poller
+  could overwrite the optimistic `c.archived = true` mutation if a
+  request was already in flight when the user clicked. A short-lived
+  client-side override map (30s TTL, auto-cleared once the server
+  agrees) shields the optimistic value across stale poll responses.
+  Fixes both the explicit Archive/Verify buttons and the drag-drop paths.
+- `run.sh` no longer clobbers the persisted watched repo when launched
+  from the CCC source tree. It used to force `CCC_WATCH_REPO=$PWD`
+  unconditionally, which overrode `~/.claude/command-center/last-repo.txt`
+  whenever the script ran from its own install dir. Now: explicit env
+  var still wins, otherwise `$PWD` wins unless `$PWD` is the install
+  dir AND a persisted selection exists — in which case we defer to it.
 
 ## [0.1.1] - 2026-04-23
 
