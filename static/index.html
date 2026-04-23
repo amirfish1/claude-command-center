@@ -6176,7 +6176,7 @@
       // Respect the current recency filter — if the user narrowed to "Last 7d"
       // for a screenshot, only summarize the visible cards instead of all 200.
       const cutoff = recencyCutoffSec();
-      const candidates = (conversationsData || []).filter(c =>
+      let candidates = (conversationsData || []).filter(c =>
         !c.name_overridden
         && (c.session_id || '').length >= 32  // real sessions only — skip backlog/pkood
         && (c.first_message || '').length >= 60  // skip already-short titles
@@ -6186,18 +6186,48 @@
         showOpToast('No untitled cards to summarize.', 'info');
         return;
       }
-      if (!confirm('Generate AI titles for ' + candidates.length + ' cards? '
-                   + 'Each call uses claude haiku (~1-3s, $0.001 each). Total ~'
-                   + Math.ceil(candidates.length / 8 * 3) + 's at 8 in parallel.')) {
-        return;
+      // Cap at 30 by default — larger batches take minutes and most users
+      // just want a clean batch for triage / screenshots. They can re-run
+      // to chew through the backlog.
+      const SOFT_CAP = 30;
+      let capped = false;
+      if (candidates.length > SOFT_CAP) {
+        // Sort newest-first so the cap takes the most relevant ones.
+        candidates.sort((a, b) => (b.modified || 0) - (a.modified || 0));
+        const proceed = confirm(
+          candidates.length + ' untitled cards found. That\'s ~'
+          + Math.ceil(candidates.length / 8 * 8 / 60) + ' minutes of `claude -p` calls.\n\n'
+          + 'OK = generate titles for the ' + SOFT_CAP + ' most recent only (~30s).\n'
+          + 'Cancel = do nothing.\n\n'
+          + 'Tip: turn on the "Last 7d" recency filter (View ▾ menu) to narrow first.'
+        );
+        if (!proceed) return;
+        candidates = candidates.slice(0, SOFT_CAP);
+        capped = true;
+      } else {
+        if (!confirm('Generate AI titles for ' + candidates.length + ' cards? '
+                     + 'Each call uses claude haiku (~8s, $0.001). Total ~'
+                     + Math.ceil(candidates.length / 8 * 8) + 's at 8 in parallel.')) {
+          return;
+        }
       }
       const total = candidates.length;
-      let done = 0, failed = 0;
+      let done = 0, failed = 0, inflight = 0;
+      const startedAt = Date.now();
       $kptSummarizeAllBtn.disabled = true;
       const origText = $kptSummarizeAllBtn.textContent;
       const updateBtn = () => {
-        $kptSummarizeAllBtn.textContent = '✨ ' + done + '/' + total
-          + (failed ? ' (' + failed + ' failed)' : '');
+        // Show "running…" before any have completed so it's clear something
+        // is happening. ~8s per call at 8 parallel = first completion at ~8s.
+        if (done === 0 && failed === 0) {
+          $kptSummarizeAllBtn.textContent = '✨ Running… 0/' + total
+            + (inflight ? ' (' + inflight + ' in flight)' : '');
+        } else {
+          const elapsedS = Math.round((Date.now() - startedAt) / 1000);
+          $kptSummarizeAllBtn.textContent = '✨ ' + done + '/' + total
+            + (failed ? ' (' + failed + ' failed)' : '')
+            + ' · ' + elapsedS + 's';
+        }
       };
       updateBtn();
 
@@ -6209,6 +6239,8 @@
       async function worker() {
         while (queue.length) {
           const c = queue.shift();
+          inflight++;
+          updateBtn();
           try {
             const r = await fetch('/api/conversations/' + encodeURIComponent(c.session_id) + '/summarize', {
               method: 'POST',
@@ -6217,6 +6249,7 @@
             const d = await r.json();
             if (d.ok) done++; else failed++;
           } catch (_) { failed++; }
+          inflight--;
           updateBtn();
         }
       }
