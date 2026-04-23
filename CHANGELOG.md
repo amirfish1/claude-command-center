@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Newly-appeared session cards get a transient shimmer glow on the kanban
+  for ~30 seconds after first detection. Signals "this card is still
+  settling — it may jump to a different column shortly." Only triggered
+  for sessions that show up during a live poll; initial page load doesn't
+  glow everything. CSS-only (bounded iteration count) + one scheduled
+  re-render to clean up the class so the gradient doesn't linger static.
 - Conversation-pane input redesigned Claude-Desktop-style: pill-framed
   container with focus ring, multi-line auto-resizing textarea (caps at
   ~160px then scrolls), inline arrow send button, and a keyboard-hint

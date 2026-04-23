@@ -813,6 +813,17 @@
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
   }
+  /* A just-appeared real session (replacing a spawn placeholder, or a brand
+     new session that showed up during a live poll). Same shimmer as the
+     placeholder but softer — signals "this card is still settling, may jump
+     to a different column once state resolves". Iteration count capped so
+     the CSS animation stops itself after ~28s without any JS cleanup. */
+  .kanban-card.recently-born:not(.pending-spawn) {
+    border: 1px dashed rgba(88,166,255,0.55) !important;
+    background: linear-gradient(90deg, var(--surface) 0%, rgba(88,166,255,0.07) 50%, var(--surface) 100%);
+    background-size: 200% 100%;
+    animation: pending-shimmer 1.4s linear 20;
+  }
 
   .kanban-cards {
     padding: 4px 0; overflow-y: auto; flex: 1; min-height: 0;
@@ -2809,6 +2820,41 @@
   let convLastLine = 0;
   let convEventSource = null;  // SSE connection for tailing live conversations
 
+  // Track session_ids first observed *during* this page session (not on the
+  // initial load — those aren't "new"). Powers the `.recently-born` glow that
+  // signals a freshly-spawned card is still settling into its column. CSS
+  // animation has a bounded iteration count so we don't need to clean up.
+  const _firstSeenSessions = new Map();  // session_id → epoch ms
+  let _convInitialLoadDone = false;
+  function stampFreshSessionsAsBorn(freshList) {
+    if (!_convInitialLoadDone) return;
+    const existing = new Set();
+    for (const c of conversationsData) if (c.session_id) existing.add(c.session_id);
+    const now = Date.now();
+    let anyNew = false;
+    for (const c of freshList) {
+      const sid = c.session_id;
+      if (sid && !existing.has(sid) && !_firstSeenSessions.has(sid)) {
+        _firstSeenSessions.set(sid, now);
+        anyNew = true;
+      }
+    }
+    // The CSS animation has a bounded iteration count, but leaves the card
+    // with a static shimmer-gradient background once it stops. Force a
+    // re-render after the TTL so isRecentlyBorn() returns false and the
+    // `.recently-born` class + gradient both come off cleanly.
+    if (anyNew) {
+      setTimeout(() => {
+        if ($convSearch) renderSidebar(filterConversations($convSearch.value));
+        else renderSidebar(conversationsData);
+      }, 30500);
+    }
+  }
+  function isRecentlyBorn(sessionId) {
+    const born = _firstSeenSessions.get(sessionId);
+    return !!born && (Date.now() - born) < 30000;
+  }
+
   // Optimistic state overrides for archived/verified flags. When the user
   // archives or verifies a card we mutate the in-memory copy, but a /api/sessions
   // poll already in flight will return *pre-click* data and overwrite that
@@ -2906,6 +2952,10 @@
           pendingSpawns.delete(pid);
         }
       }
+      // Stamp first-seen timestamps for any session_ids that weren't in the
+      // previous snapshot — drives the `.recently-born` glow. No-op on the
+      // very first load (flag below flips after this block).
+      stampFreshSessionsAsBorn(fresh);
       // Keep still-pending placeholders on top until they materialize.
       const placeholders = Array.from(pendingSpawns.values());
       conversationsData = [...placeholders, ...fresh];
@@ -2913,6 +2963,7 @@
       // response that started before a click can't briefly un-archive a card.
       applyOptimisticOverrides(conversationsData);
       conversationsLoaded = true;
+      _convInitialLoadDone = true;
       // Cache session IDs / cwds / sources so Resume+Jump work
       sessionIdByConv = {};
       sessionCwdByConv = {};
@@ -3923,7 +3974,8 @@
         const midTurn = c.last_event_type === 'assistant';
         const trulyActive = c.is_live && c.sidecar_status === 'active' && (sidecarAge < 300 || midTurn) ? ' truly-active' : '';
         const pendingSpawn = c.pending_spawn ? ' pending-spawn' : '';
-        html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
+        const recentlyBorn = isRecentlyBorn(c.session_id) ? ' recently-born' : '';
+        html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + recentlyBorn + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
         // Create-issue button only when no issue is linked. The "view issue" link
         // was removed — tapping the #NNN badge in the title opens the issue.
         const linkedIssue = c.linked_issue || c.issue_number || '';
@@ -7051,6 +7103,7 @@
           c.name_overridden = true;
         }
       }
+      stampFreshSessionsAsBorn(fresh);
       conversationsData = fresh;
       applyOptimisticOverrides(conversationsData);
       // Re-cache session IDs/cwds for Resume/Jump
