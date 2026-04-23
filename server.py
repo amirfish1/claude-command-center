@@ -2502,6 +2502,7 @@ def parse_log_file(path, after_line=0):
 def parse_event(ev, line_num):
     """Parse a single JSON event into a display-friendly dict."""
     t = ev.get("type", "")
+    ts = ev.get("timestamp", "") or ""
 
     if t == "spawn_meta":
         # Synthetic metadata from inline issue spawns — skip display
@@ -2513,6 +2514,7 @@ def parse_event(ev, line_num):
         session = ev.get("session_id", "")[:12]
         return {
             "line": line_num,
+            "ts": ts,
             "type": "system",
             "subtype": subtype,
             "model": model,
@@ -2546,14 +2548,14 @@ def parse_event(ev, line_num):
                     blocks.append({"kind": "thinking", "text": thinking})
 
         if blocks:
-            return {"line": line_num, "type": "assistant", "blocks": blocks}
+            return {"line": line_num, "ts": ts, "type": "assistant", "blocks": blocks}
 
     if t == "user":
         content = ev.get("message", {}).get("content", [])
         if isinstance(content, list):
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "tool_result":
-                    return {"line": line_num, "type": "tool_result"}
+                    return {"line": line_num, "ts": ts, "type": "tool_result"}
             # Check for human text
             texts = [
                 item.get("text", "").strip()
@@ -2564,13 +2566,14 @@ def parse_event(ev, line_num):
             if texts or images:
                 return {
                     "line": line_num,
+                    "ts": ts,
                     "type": "user_text",
                     "text": "\n".join(t for t in texts if t),
                     "images": images,
                 }
         elif isinstance(content, str) and content.strip():
             images = _extract_images_from_content(content)
-            return {"line": line_num, "type": "user_text", "text": content.strip(), "images": images}
+            return {"line": line_num, "ts": ts, "type": "user_text", "text": content.strip(), "images": images}
 
     if t == "result":
         cost = ev.get("cost_usd", "?")
@@ -2581,6 +2584,7 @@ def parse_event(ev, line_num):
             dur = r.get("duration_ms", dur)
         return {
             "line": line_num,
+            "ts": ts,
             "type": "result",
             "cost_usd": cost,
             "duration_ms": dur,
@@ -2691,6 +2695,17 @@ def find_conversations():
     name_overrides = _load_session_name_overrides()
     archived_set = set(_load_archived_conversations())
     verified_set = set(_load_verified_conversations())
+    # Skip sessions created by our own `claude -p` title-summarizer calls.
+    # The summarizer prompts start with these exact prefixes (see
+    # summarize_session_title / the GitHub-issue title summarizer). Without
+    # this filter, every click of the ✨ Titles button creates a throwaway
+    # session that then pollutes the kanban with a "Produce a concise 4-8
+    # word title…" card. Match is on first_message prefix, which is resilient
+    # to user renames — the prompt text itself can't be overridden.
+    _TITLE_SUMMARIZER_PREFIXES = (
+        "Produce a concise 4-8 word title summarizing what the user is trying to do",
+        "Produce a concise 4-8 word title for the GitHub issue below",
+    )
 
     for f in CONVERSATIONS_DIR.iterdir():
         if not f.name.endswith(".jsonl") or not f.is_file():
@@ -2743,6 +2758,12 @@ def find_conversations():
                         session_id = ev.get("sessionId", "")
 
         except (OSError, UnicodeDecodeError):
+            continue
+
+        # Drop throwaway title-summarizer sessions before spending any more work
+        # on them (tail scan, cwd lookup, etc.). first_message peek above already
+        # strips <command-name> wrappers, so a plain prefix compare is enough.
+        if first_message and first_message.lstrip().startswith(_TITLE_SUMMARIZER_PREFIXES):
             continue
 
         conv_id = f.name[:-6]  # remove .jsonl
@@ -3052,6 +3073,7 @@ def parse_conversation(conversation_id, after_line=0):
 def _parse_conversation_event(ev, line_num):
     """Parse a single conversation JSONL event."""
     ev_type = ev.get("type", "")
+    ts = ev.get("timestamp", "") or ""
 
     # Skip non-message types
     if ev_type in ("file-history-snapshot", "progress", "system"):
@@ -3069,12 +3091,12 @@ def _parse_conversation_event(ev, line_num):
         if text or images:
             # Preview placeholder "[image]" shouldn't leak into the rendered message.
             display_text = "" if (text == "[image]" and images) else text
-            return {"line": line_num, "type": "user_text", "text": display_text, "images": images}
+            return {"line": line_num, "ts": ts, "type": "user_text", "text": display_text, "images": images}
         # Check for tool results in content list
         if isinstance(content, list):
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "tool_result":
-                    return {"line": line_num, "type": "tool_result"}
+                    return {"line": line_num, "ts": ts, "type": "tool_result"}
         return None
 
     if ev_type == "assistant":
@@ -3109,7 +3131,7 @@ def _parse_conversation_event(ev, line_num):
                     blocks.append({"kind": "thinking", "text": preview})
 
         if blocks:
-            return {"line": line_num, "type": "assistant", "blocks": blocks}
+            return {"line": line_num, "ts": ts, "type": "assistant", "blocks": blocks}
 
     if ev_type == "result":
         cost = ev.get("cost_usd", "?")
@@ -3120,6 +3142,7 @@ def _parse_conversation_event(ev, line_num):
             dur = r.get("duration_ms", dur)
         return {
             "line": line_num,
+            "ts": ts,
             "type": "result",
             "cost_usd": cost,
             "duration_ms": dur,

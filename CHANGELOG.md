@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Haiku title-summarizer subsessions no longer leak into the kanban. The
+  `/api/sessions` scan now skips conversations whose first user message
+  starts with our internal `Produce a concise 4-8 word title…` prompt,
+  so clicking the ✨ Titles button on the CCC repo (or any repo watched
+  from the CCC working directory) stops filling the board with identical
+  throwaway cards.
+
 ## [0.1.1] - 2026-04-23
 
 ### Fixed
