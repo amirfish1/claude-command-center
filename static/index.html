@@ -3645,6 +3645,12 @@
           html += '<div style="display:flex;gap:4px;margin-top:6px;">';
           html += '<button class="kanban-start-btn" data-issue="' + escapeHtml(c.issue_number || '') + '" data-title="' + escapeHtml(c.display_name || c.first_message || '') + '" style="flex:1;padding:4px 10px;border-radius:4px;border:1px solid rgba(63,185,80,0.3);background:rgba(63,185,80,0.1);color:var(--green);font-size:11px;font-weight:600;cursor:pointer;">Start session</button>';
           html += '<button class="kanban-start-edit-btn" data-issue="' + escapeHtml(c.issue_number || '') + '" data-title="' + escapeHtml(c.display_name || c.first_message || '') + '" data-body="' + escapeHtml(c.first_message || '') + '" title="Edit the prompt before launching" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text-muted);font-size:11px;cursor:pointer;">Edit &amp; start</button>';
+          // Per-card AI-summarize ✨ — only renders when this card hasn't been
+          // summarized yet, so users can scan visually for cards that still
+          // need a better title and click them one by one.
+          if (!c.name_overridden && c.backlog_type === 'github' && c.issue_number) {
+            html += '<button class="kanban-summarize-issue-btn" data-issue="' + escapeHtml(c.issue_number) + '" title="Generate a concise AI title for this issue" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--purple);font-size:14px;cursor:pointer;line-height:1;">&#10024;</button>';
+          }
           // Give-up button — archives the backlog card (closes GH issue "not planned"
           // for github-type; client-side archive for todo/parking).
           html += '<button class="kanban-backlog-archive-btn" data-id="' + c.id + '" title="Archive / dismiss this item" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:14px;cursor:pointer;line-height:1;">&times;</button>';
@@ -3696,8 +3702,14 @@
         const createIssueBtn = linkedIssue
           ? ''
           : '<button class="kanban-action-btn" data-action="create-issue" title="Create GitHub issue">&#128221;</button>';
+        // Hide the per-card ✨ when this session already has an AI / user
+        // title — the bulk button + ability to manually rename via the title
+        // already cover the rare 're-summarize' case.
+        const summarizeBtn = c.name_overridden
+          ? ''
+          : '<button class="kanban-action-btn" data-action="summarize" title="Generate AI title for this card">&#10024;</button>';
         html += '<div class="kanban-card-actions">'
-          + '<button class="kanban-action-btn" data-action="summarize" title="Regenerate title with Claude">&#10024;</button>'
+          + summarizeBtn
           + createIssueBtn
           + '<button class="kanban-action-btn" data-action="archive" title="' + archiveTitle + '">' + archiveIcon + '</button>'
           + '</div>';
@@ -4362,6 +4374,32 @@
           ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
           : cleanTitle) + SESSION_STATE_INSTRUCTION;
         openNewSessionModal(subject, body);
+      });
+    });
+    // ── Per-card AI-summarize a GH backlog card ──
+    targetEl.querySelectorAll('.kanban-summarize-issue-btn').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const issueNum = btn.dataset.issue;
+        if (!issueNum) return;
+        const orig = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '…';
+        try {
+          const r = await fetch('/api/issues/' + encodeURIComponent(issueNum) + '/summarize-title', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          });
+          const d = await r.json();
+          if (!d.ok) throw new Error(d.error || 'summarize failed');
+          // Refresh so the new title renders. Button auto-hides because the
+          // card now has name_overridden=true.
+          refreshConversationList();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = orig;
+          showOpToast('Summarize failed: ' + (e.message || e), 'error');
+        }
       });
     });
     // ── Give-up / archive a backlog card ──
