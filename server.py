@@ -910,12 +910,14 @@ def _detect_issue_number_for_session(conv):
         m = strong.search(branch)
         if m:
             return m.group(1)
-    # Last resort: high-confidence signals mined from the jsonl tail (gh issue cmds,
-    # "Closes #N" in commits, github.com/.../issues/N URLs). Covers sessions where
-    # Claude created or touched an issue mid-conversation.
-    tail_num = conv.get("tail_issue_number")
-    if tail_num:
-        return str(tail_num)
+    # Deliberately NOT falling back to tail_issue_number (mined from jsonl
+    # Bash/commit/URL scans). In practice it produces false links whenever
+    # Claude merely *mentions* an unrelated issue mid-conversation — e.g. a
+    # session about serving a web app auto-linked to issue #1 ("Multi-repo
+    # view") because an assistant Bash turn listed `github.com/.../issues/1`
+    # while discussing filed issues. The spawn-time signals above
+    # (display_name, first_message, branch) are where genuine "I'm working
+    # on #NNN" intent lives; anything mined from later turns is too noisy.
     return None
 
 

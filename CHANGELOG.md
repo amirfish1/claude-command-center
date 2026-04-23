@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was no in-UI way back to an AI-generated title. On renamed cards the
   button is dimmed and its tooltip flags the destructive intent
   ("Regenerate title — replaces your manual rename").
+- Session → GitHub-issue auto-link no longer uses the jsonl tail
+  (`tail_issue_number`) as a last-resort signal. The tail scan matches any
+  `gh issue …` command, `Closes #N` commit, or `github.com/.../issues/N`
+  URL Claude happens to run mid-conversation, which produced false links
+  when an assistant turn merely *discussed* an unrelated issue. Auto-link
+  now relies solely on spawn-time identity — `display_name`, the first
+  user message, and the branch — where genuine "I'm working on #NNN"
+  intent lives. Explicit side-car mappings remain authoritative.
 - Haiku title-summarizer subsessions no longer leak into the kanban. The
   `/api/sessions` scan now skips conversations whose first user message
   starts with our internal `Produce a concise 4-8 word title…` prompt,
