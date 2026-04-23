@@ -1798,8 +1798,15 @@ def inject_input_via_keystroke(tty, terminal_app, text):
     text_lit = as_lit(text)
 
     if terminal_app == "iTerm2":
-        # iTerm2: find the session by tty, select it, then keystroke
+        # iTerm2: find the session by tty, select it, then keystroke.
+        # We capture the previously-frontmost app BEFORE activating iTerm2 and
+        # restore it AFTER keystroking, so the user's CCC window (browser)
+        # doesn't stay buried when they send from the split-panel input.
         script = f'''
+        set prevApp to ""
+        try
+          tell application "System Events" to set prevApp to name of first application process whose frontmost is true
+        end try
         tell application "iTerm2"
           set found to false
           set winCount to count of windows
@@ -1834,6 +1841,12 @@ def inject_input_via_keystroke(tty, terminal_app, text):
           keystroke "{text_lit}"
           keystroke return
         end tell
+        delay 0.08
+        try
+          if prevApp is not "" and prevApp is not "iTerm2" then
+            tell application prevApp to activate
+          end if
+        end try
         return "ok"
         '''
     else:
@@ -1841,7 +1854,14 @@ def inject_input_via_keystroke(tty, terminal_app, text):
         # The reorder is re-asserted AFTER activate to win the race against
         # macOS restoring a different Terminal window as key — otherwise
         # keystroke lands in whichever Terminal tab was last user-focused.
+        # Capture the previously-frontmost app BEFORE stealing focus so we can
+        # hand it back after the keystroke lands — otherwise CCC (in the user's
+        # browser) stays buried behind Terminal every time they send input.
         script = f'''
+        set prevApp to ""
+        try
+          tell application "System Events" to set prevApp to name of first application process whose frontmost is true
+        end try
         tell application "Terminal"
           set foundWin to missing value
           set foundTab to missing value
@@ -1879,6 +1899,12 @@ def inject_input_via_keystroke(tty, terminal_app, text):
           keystroke "{text_lit}"
           keystroke return
         end tell
+        delay 0.08
+        try
+          if prevApp is not "" and prevApp is not "Terminal" then
+            tell application prevApp to activate
+          end if
+        end try
         return "ok"
         '''
 
