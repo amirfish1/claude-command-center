@@ -5,6 +5,10 @@ were launched. Terminal sessions, headless processes, or spawned from the
 dashboard — it latches onto all of them and lets you drop in and out of any
 task to fix things.
 
+<video src="https://github.com/user-attachments/assets/9d00b168-c21c-4397-9334-e3b4a3515500" controls width="100%" poster="docs/images/kanban.png">
+  Your browser doesn't support inline video. <a href="https://github.com/amirfish1/claude-command-center/releases/download/v0.1.0/CCC-web.mp4">Download the demo</a> or watch the GIF below.
+</video>
+
 ![Claude Command Center demo](docs/images/demo.gif)
 
 ## Why this exists
