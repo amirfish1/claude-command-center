@@ -105,19 +105,6 @@ writes sidecar state the UI uses for the kanban.
   via `claude -p` (Haiku by default). Used for cleaning up auto-generated
   session slugs.
 
-## Morning view (Phase 1 — skeleton)
-
-A second page at `/morning` that will become the single morning landing spot
-for goals, strategic priorities, today's tactical queue, and an inbox of
-LLM-extracted captures from free-form sources.
-
-Phase 1 ships the UI shell with sample hardcoded data — no ingestion, no
-session launching, no Notion migration yet. Those land in Phase 2+.
-
-- Landing page: `http://localhost:8090/morning`
-- Goal detail: `http://localhost:8090/morning/goals/<slug>`
-- JSON: `http://localhost:8090/api/morning/state`, `/api/morning/goals/<slug>`
-
 ## Architecture
 
 Two files: a single Python file (stdlib-only HTTP server) and a single HTML
@@ -147,8 +134,6 @@ For more depth: [`docs/architecture.md`](docs/architecture.md),
 | `CCC_WATCH_REPO` | `$PWD` | Repository the UI watches (cwd for spawns, `gh` calls, project slug lookup) |
 | `PORT` | `8090` | HTTP port |
 | `CCC_BIND_HOST` | `127.0.0.1` | Interface to bind. Set to `0.0.0.0` to expose on the LAN — **no auth, see [`SECURITY.md`](SECURITY.md)** |
-| `CCC_USER_NAME` | *(empty)* | First-name shown in the Morning view greeting ("Good morning, Amir."). Leave empty for a name-less greeting. |
-| `CCC_ENABLE_MORNING` | *(off)* | Set to `1` to enable the Morning view (goals / strategic / tactical / braindump). Off by default — most users only need the kanban. |
 | `CCC_TITLE_STRIP` | *(empty)* | Comma-separated prefixes to strip from GitHub issue titles (e.g. `ACME,FOO` strips `[ACME ...]` and `[FOO ...]`) |
 | `CCC_ORG_PATTERNS` | *(empty)* | Multi-tenant org-tagger. Format: `Label1:pat1a\|pat1b;Label2:pat2`. Each issue body is scanned and tagged with the first matching label so the UI can group backlog by org. |
 | `VERCEL_PROJECT` | *(unset)* | Vercel project name. Leave empty to disable deploy polling. |

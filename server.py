@@ -295,7 +295,26 @@ CCC_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = CCC_ROOT / "static"
 MORNING_STATIC_DIR = STATIC_DIR / "morning"
 
-import morning  # morning.py — goals/tasks/inbox API for the Morning view
+# ── Optional Morning view plugin ──────────────────────────────────────────
+# The Morning view (goals/strategic/tactical/braindump) is highly opinionated
+# to one user's workflow. Files (morning.py, morning_store.py, static/morning/,
+# scripts/ingest_apple_notes.py, ingesters/) are gitignored and may not be
+# present — we detect both the import success AND the user's opt-in env var
+# before enabling routes.
+#
+# CI guarantees nothing in the core depends on these — the smoke test boots
+# the server with NO morning files present and asserts startup succeeds.
+try:
+    import morning  # noqa: F401  — used inside route handlers
+    _MORNING_IMPORTABLE = True
+except ImportError:
+    morning = None
+    _MORNING_IMPORTABLE = False
+MORNING_ENABLED = (
+    _MORNING_IMPORTABLE
+    and os.environ.get("CCC_ENABLE_MORNING", "").strip().lower() in ("1", "true", "yes", "on")
+)
+
 PORT = int(os.environ.get("PORT", 8090))
 # Optional title-prefix noise stripper. Comma-separated prefixes.
 # Empty by default; set `CCC_TITLE_STRIP=ACME,FOO` to strip `[ACME ...]` and `[FOO ...]` from titles.
@@ -330,10 +349,6 @@ def _detect_issue_org(body):
     return None
 
 
-# Morning view is opt-in. It's a goal-/strategy-/braindump-driven sub-feature
-# that not all users want — particularly OSS users who just want the kanban
-# for managing Claude sessions. Set CCC_ENABLE_MORNING=1 to enable.
-MORNING_ENABLED = os.environ.get("CCC_ENABLE_MORNING", "").strip().lower() in ("1", "true", "yes", "on")
 _TITLE_STRIP_RE = re.compile(
     r"^\s*\[(?:" + "|".join(re.escape(p) for p in TITLE_STRIP_PREFIXES) + r")[^\]]*\]\s*"
 ) if TITLE_STRIP_PREFIXES else None

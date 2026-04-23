@@ -50,10 +50,12 @@ jobs:
           python-version: "3.12"
       - name: Boot server and probe endpoints
         run: |
-          PORT=18090 CCC_BIND_HOST=127.0.0.1 python3 server.py &
+          PORT=18090 CCC_BIND_HOST=127.0.0.1 python3 server.py > /tmp/server.log 2>&1 &
           SERVER_PID=$!
           sleep 3
           set -x
+          # Server must still be alive — exits with non-zero if not.
+          ps -p $SERVER_PID > /dev/null
           curl -sf -o /dev/null -w "%{http_code}\n" http://localhost:18090/api/features | grep -q 200
           curl -sf -o /dev/null -w "%{http_code}\n" http://localhost:18090/api/version  | grep -q 200
           curl -sf -o /dev/null -w "%{http_code}\n" http://localhost:18090/api/repo/list | grep -q 200
@@ -62,4 +64,11 @@ jobs:
             -H 'Origin: https://evil.example.com' \
             -H 'Content-Type: application/json' \
             -d '{}' http://localhost:18090/api/bust-issue-state)" = "403"
+          # Morning view should be DISABLED when its plugin files aren't present
+          # (gitignored). Catches accidental hard-coupling that would break OSS users.
+          curl -sf -o /dev/null -w "%{http_code}\n" http://localhost:18090/morning | grep -q 404
+          curl -sf http://localhost:18090/api/features | grep -q '"morning":[[:space:]]*false'
+          # Server log must not mention morning — protects against silent imports
+          # or background tasks that would only surface in the maintainer's setup.
+          ! grep -i "morning" /tmp/server.log
           kill $SERVER_PID

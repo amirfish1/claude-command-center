@@ -21,9 +21,6 @@ Initial public release.
   background agent runners.
 - Repo picker — live-switch the watched repo from the toolbar without restarting.
 - AI title regeneration via `claude -p --model haiku`.
-- Morning view (opt-in) — goals / strategic / tactical surfaces with
-  Apple Notes ingestion.
-
 ### Security
 - `127.0.0.1` bind by default. `CCC_BIND_HOST=0.0.0.0` requires opt-in and
   prints a startup warning.

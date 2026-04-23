@@ -1201,7 +1201,7 @@
    * Side-nav (52px, also fixed) sits to the left, so we offset accordingly.
    * Body padding-top below makes room for the topbar. */
   .ccc-topbar {
-    position: fixed; top: 0; left: 52px; right: 0; z-index: 100;
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
     display: flex; align-items: center; gap: 10px;
     padding: 5px 12px;
     background: var(--surface);
@@ -1210,12 +1210,12 @@
     box-sizing: border-box;
     min-height: 32px;
   }
-  body { padding-top: 33px; }  /* match topbar min-height + border */
-  /* Reserve space for the side-nav (52px) at first paint so the page doesn't
-     visibly shift right when /static/morning/side-nav.js finishes loading
-     and injects its own `body { padding-left: 52px }`. The side-nav is
-     position:fixed at left:0, so this padding makes content start at 52px. */
-  body { padding-left: 52px; box-sizing: border-box; }
+  body { padding-top: 33px; box-sizing: border-box; }
+  /* When the optional Morning side-nav is present, it injects its own
+     `body { padding-left: 52px }` rule. We add a body class flag from the
+     features-probe so the topbar shifts to make room without a layout
+     race. (Without morning, topbar starts at left:0.) */
+  body.has-side-nav .ccc-topbar { left: 52px; }
 
   /* ── Full-page loading overlay ──────────────────────────────────────────
    * Shown on initial load and during repo-switch. Covers everything so the
@@ -1580,13 +1580,19 @@
     .mobile-reload-btn:active { background: var(--accent); color: #fff; }
   }
 </style>
-<!-- Load side-nav.js with `defer` from the head so it executes before
-     DOMContentLoaded but after the document is parsed. Previously it was
-     a plain <script> at the bottom of <body>, which meant the body initially
-     had no left padding and shifted 52px right when the script finally ran.
-     The CSS above already reserves the 52px so the layout is stable from
-     first paint; this just keeps the script in the right place semantically. -->
-<script src="/static/morning/side-nav.js" defer></script>
+<!-- Optional Morning side-nav. Loaded conditionally based on the feature
+     flag so installs without the morning plugin don't get a 404 in the
+     console + a stranded 52px left gutter. The /api/features endpoint is
+     always available and returns {morning: false} when the plugin is absent. -->
+<script>
+  fetch('/api/features').then(r => r.json()).then(f => {
+    if (!f || !f.morning) return;
+    document.body.classList.add('has-side-nav');  // CSS shifts topbar 52px right
+    const s = document.createElement('script');
+    s.src = '/static/morning/side-nav.js';
+    document.head.appendChild(s);
+  }).catch(() => {});
+</script>
 </head>
 <body>
   <!-- FOIT guard: read the persisted layout choice synchronously and apply
