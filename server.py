@@ -34,6 +34,48 @@ from pathlib import Path
 # Can also be switched at runtime via switch_repo_root() — caches that depend on
 # REPO_ROOT (backlog, issue titles/state) get invalidated automatically.
 _LAST_REPO_FILE = Path.home() / ".claude" / "command-center" / "last-repo.txt"
+# User-picked repos that live outside the $HOME scan (e.g. ~/dev/foo, /workspaces/bar).
+# One absolute path per line. Written by /api/repo/add, read by load_known_repos.
+_CUSTOM_REPOS_FILE = Path.home() / ".claude" / "command-center" / "custom-repos.txt"
+
+
+def _load_custom_repos():
+    """Return the list of user-picked repo paths (absolute, deduped, existing dirs)."""
+    try:
+        raw = _CUSTOM_REPOS_FILE.read_text()
+    except OSError:
+        return []
+    out = []
+    seen = set()
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            p = Path(line).expanduser().resolve()
+        except (OSError, ValueError):
+            continue
+        s = str(p)
+        if s in seen or not p.is_dir():
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+def _append_custom_repo(path_str):
+    """Persist a user-picked repo path. Returns the absolute resolved path.
+    Raises ValueError if the path isn't an existing directory."""
+    p = Path(path_str).expanduser().resolve()
+    if not p.is_dir():
+        raise ValueError(f"not a directory: {p}")
+    existing = set(_load_custom_repos())
+    if str(p) in existing:
+        return str(p)
+    _CUSTOM_REPOS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with _CUSTOM_REPOS_FILE.open("a") as f:
+        f.write(str(p) + "\n")
+    return str(p)
 
 
 def _load_persisted_repo():
@@ -83,6 +125,19 @@ def load_known_repos():
     if not repos:
         cwd = Path.cwd().resolve()
         repos.append({"path": str(cwd), "label": cwd.name})
+    # Merge in user-picked repos (folders outside $HOME, or nested ones the scan
+    # missed). Label with parent dir when it disambiguates a duplicate name.
+    scanned_paths = {r["path"] for r in repos}
+    scanned_labels = {r["label"] for r in repos}
+    for custom_path in _load_custom_repos():
+        if custom_path in scanned_paths:
+            continue
+        name = Path(custom_path).name
+        if name in scanned_labels:
+            label = f"{name} ({Path(custom_path).parent.name})"
+        else:
+            label = name
+        repos.append({"path": custom_path, "label": label})
     return repos
 
 
@@ -4873,6 +4928,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # and auto_verify_closed_issues can fire immediately.
             _bust_issue_state_cache()
             self.send_json({"ok": True})
+            return
+        if path == "/api/repo/add":
+            # Persist a user-picked repo path so it appears in the picker and
+            # passes the /api/repo/switch allow-list. Intended for folders
+            # outside $HOME or nested beneath its top level, which the auto-scan
+            # in load_known_repos() can't find. The caller normally follows up
+            # with /api/repo/switch to actually activate the new repo.
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            target = (body.get("path") or "").strip()
+            if not target:
+                self.send_json({"ok": False, "error": "missing 'path'"}, 400)
+                return
+            try:
+                resolved = _append_custom_repo(target)
+            except ValueError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+                return
+            except OSError as e:
+                self.send_json({"ok": False, "error": f"could not persist: {e}"}, 500)
+                return
+            self.send_json({"ok": True, "path": resolved, "repos": load_known_repos()})
             return
         if path == "/api/repo/switch":
             # Live-switch the watched repo. All REPO_ROOT-derived globals get

@@ -1655,6 +1655,7 @@
   <div class="ccc-topbar" id="cccTopbar">
     <span class="ccc-topbar-label">Repo</span>
     <select id="sbRepoPicker" title="Repo this session is watching — switch to point at a different project. Live-switches without a server restart."></select>
+    <button id="sbRepoPickCustom" title="Pick a folder that isn't listed — e.g. a repo outside ~/ or nested below a top-level dir." aria-label="Pick a custom folder" style="padding:2px 8px;font-size:13px;line-height:1;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);cursor:pointer;">&hellip;</button>
     <div id="setupBanner" class="ccc-setup-banner"></div>
   </div>
 
@@ -6073,6 +6074,51 @@
     // Stash the current value so we can restore on failure.
     $sbRepoPicker.addEventListener('focus', () => {
       $sbRepoPicker.dataset.prev = $sbRepoPicker.value;
+    });
+  }
+
+  // "…" button — add a repo folder that isn't in the auto-scanned list
+  // (e.g. paths outside $HOME, or nested projects like ~/dev/foo/bar). Browsers
+  // can't show a native folder picker from a plain <input>, so we ask for the
+  // path via prompt(), then POST to /api/repo/add to persist it before switching.
+  const $sbRepoPickCustom = document.getElementById('sbRepoPickCustom');
+  if ($sbRepoPickCustom && $sbRepoPicker) {
+    $sbRepoPickCustom.addEventListener('click', async () => {
+      const raw = window.prompt(
+        'Absolute path to the repo folder\n(e.g. /Users/you/workspaces/foo):',
+        ''
+      );
+      if (!raw) return;
+      const target = raw.trim();
+      if (!target) return;
+      $sbRepoPickCustom.disabled = true;
+      try {
+        const r = await fetch('/api/repo/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: target }),
+        });
+        const d = await r.json();
+        if (!d.ok) throw new Error(d.error || 'add failed');
+        // Rebuild the <select> from the returned list, select the new repo,
+        // then trigger the existing change handler to perform the switch.
+        const repos = d.repos || [];
+        $sbRepoPicker.innerHTML = '';
+        for (const repo of repos) {
+          const opt = document.createElement('option');
+          opt.value = repo.path;
+          opt.textContent = repo.label || repo.path;
+          opt.title = repo.path;
+          $sbRepoPicker.appendChild(opt);
+        }
+        $sbRepoPicker.dataset.prev = $sbRepoPicker.value;
+        $sbRepoPicker.value = d.path;
+        $sbRepoPicker.dispatchEvent(new Event('change'));
+      } catch (e) {
+        showOpToast('Could not add repo: ' + (e.message || e), 'error');
+      } finally {
+        $sbRepoPickCustom.disabled = false;
+      }
     });
   }
 
