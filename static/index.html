@@ -6176,12 +6176,18 @@
       // Respect the current recency filter — if the user narrowed to "Last 7d"
       // for a screenshot, only summarize the visible cards instead of all 200.
       const cutoff = recencyCutoffSec();
-      let candidates = (conversationsData || []).filter(c =>
-        !c.name_overridden
-        && (c.session_id || '').length >= 32  // real sessions only — skip backlog/pkood
-        && (c.first_message || '').length >= 60  // skip already-short titles
-        && (cutoff === 0 || (c.modified || 0) >= cutoff)
-      );
+      let candidates = (conversationsData || []).filter(c => {
+        if (c.name_overridden) return false;
+        if (cutoff !== 0 && (c.modified || 0) < cutoff) return false;
+        // Real Claude sessions OR GitHub-backed backlog cards. Both can be
+        // summarized; the bulk worker picks the right endpoint per card.
+        const isSession = (c.session_id || '').length >= 32;
+        const isGhBacklog = c.source === 'backlog' && c.backlog_type === 'github' && c.issue_number;
+        if (!isSession && !isGhBacklog) return false;
+        // Skip session cards whose first_message is already short.
+        if (isSession && (c.first_message || '').length < 60) return false;
+        return true;
+      });
       if (candidates.length === 0) {
         showOpToast('No untitled cards to summarize.', 'info');
         return;
@@ -6241,8 +6247,15 @@
           const c = queue.shift();
           inflight++;
           updateBtn();
+          // Route to the right endpoint based on card type:
+          //   - session cards → /api/conversations/<sid>/summarize (reads jsonl)
+          //   - GH backlog cards → /api/issues/<n>/summarize-title (reads gh)
+          const isGhBacklog = c.source === 'backlog' && c.issue_number;
+          const url = isGhBacklog
+            ? '/api/issues/' + encodeURIComponent(c.issue_number) + '/summarize-title'
+            : '/api/conversations/' + encodeURIComponent(c.session_id) + '/summarize';
           try {
-            const r = await fetch('/api/conversations/' + encodeURIComponent(c.session_id) + '/summarize', {
+            const r = await fetch(url, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
             });

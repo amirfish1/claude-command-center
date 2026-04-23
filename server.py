@@ -1021,6 +1021,109 @@ def _extract_first_message(session_id):
     return ""
 
 
+# ────────────────────────────────────────────────────────────────────────
+# AI-summarized GitHub issue titles
+# ────────────────────────────────────────────────────────────────────────
+# Backlog cards show raw GH issue titles, which are often verbose
+# ("[BYM Problem] Tried to add Ricki Silveria to 10am class as a drop in
+# but got an error message."). This sidecar caches AI-summarized versions
+# so the kanban can render compact titles without re-calling claude every
+# request. Format: {"194": {"title": "...", "generated_at": "..."}, ...}
+ISSUE_TITLES_FILE = COMMAND_CENTER_STATE_DIR / "issue-titles.json"
+_issue_titles_overrides_cache = None
+
+
+def _load_issue_title_overrides():
+    """Lazy-load + cache the AI-summary file. Reload is cheap (~few KB)."""
+    global _issue_titles_overrides_cache
+    if _issue_titles_overrides_cache is not None:
+        return _issue_titles_overrides_cache
+    try:
+        _issue_titles_overrides_cache = json.loads(ISSUE_TITLES_FILE.read_text())
+        if not isinstance(_issue_titles_overrides_cache, dict):
+            _issue_titles_overrides_cache = {}
+    except (OSError, json.JSONDecodeError):
+        _issue_titles_overrides_cache = {}
+    return _issue_titles_overrides_cache
+
+
+def _save_issue_title_override(issue_number, title):
+    """Persist one AI-generated title for an issue. Best-effort write."""
+    global _issue_titles_overrides_cache
+    overrides = _load_issue_title_overrides()
+    overrides[str(issue_number)] = {
+        "title": title,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    try:
+        ISSUE_TITLES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ISSUE_TITLES_FILE.write_text(json.dumps(overrides, indent=2))
+    except OSError as e:
+        print(f"  [issue-title] Could not persist {issue_number}: {e}")
+
+
+def summarize_issue_title(issue_number):
+    """Fetch a GitHub issue's title + body, ask claude haiku for a concise
+    title, persist the result. Returns {ok, title, error?}."""
+    result = {"ok": False, "issue_number": str(issue_number)}
+    try:
+        r = subprocess.run(
+            ["gh", "issue", "view", str(issue_number),
+             "--json", "title,body"],
+            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        result["error"] = f"gh failed: {e}"
+        return result
+    if r.returncode != 0:
+        result["error"] = (r.stderr or "").strip()[:200] or f"gh exited {r.returncode}"
+        return result
+    try:
+        issue = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        result["error"] = "gh returned malformed json"
+        return result
+    raw_title = (issue.get("title") or "").strip()
+    body = (issue.get("body") or "").strip()
+    if not raw_title and not body:
+        result["error"] = "issue has no title or body"
+        return result
+    instruction = (
+        "Produce a concise 4-8 word title for the GitHub issue below. "
+        "No quotes, no trailing punctuation, just the title on a single line. "
+        "Skip image references, project tags like '[BYM Problem]', and "
+        "boilerplate. The output should read like a kanban card title.\n\n"
+        f"Issue title: {raw_title}\n\nIssue body:\n{body[:1500]}\n\nTitle:"
+    )
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", "--model", "claude-haiku-4-5-20251001", instruction],
+            capture_output=True, text=True, timeout=45,
+        )
+    except FileNotFoundError:
+        result["error"] = "claude CLI not in PATH"
+        return result
+    except subprocess.TimeoutExpired:
+        result["error"] = "claude -p timed out"
+        return result
+    if proc.returncode != 0:
+        result["error"] = (proc.stderr or "").strip()[:300] or f"claude exited {proc.returncode}"
+        return result
+    title = ""
+    for line in reversed((proc.stdout or "").strip().splitlines()):
+        s = line.strip().strip('"').strip("'").rstrip(".")
+        if s:
+            title = s[:120]
+            break
+    if not title:
+        result["error"] = "empty response"
+        return result
+    _save_issue_title_override(issue_number, title)
+    result["ok"] = True
+    result["title"] = title
+    return result
+
+
 def summarize_session_title(session_id):
     """Use `claude -p` to produce a concise title for a session's opening prompt."""
     result = {"ok": False}
@@ -2038,11 +2141,20 @@ def find_backlog_items():
                 pass
         state = (issue.get("state") or "OPEN").upper()
         reason = (issue.get("stateReason") or "").upper()  # COMPLETED, NOT_PLANNED, DUPLICATE, ""
+        # AI-summary override — if the user has hit the ✨ button on this
+        # issue we use the cached short title instead of the verbose GH one.
+        ai_overrides = _load_issue_title_overrides()
+        ai_entry = ai_overrides.get(str(number))
+        ai_title = (ai_entry or {}).get("title")
+        display_name = f"#{number}: {ai_title or title}"
         items.append({
             "id": f"backlog-issue-{number}",
             "session_id": f"backlog-issue-{number}",
-            "display_name": f"#{number}: {title}",
+            "display_name": display_name,
             "first_message": body[:200],
+            # name_overridden=True signals the bulk button to skip on rerun
+            # (same semantics as session-card cards).
+            "name_overridden": bool(ai_title),
             "source": "backlog",
             "backlog_type": "github",
             "issue_number": str(number),
@@ -2068,7 +2180,6 @@ def find_backlog_items():
             "sidecar_file": None,
             "sidecar_has_writes": False,
             "sidecar_ts": 0,
-            "name_overridden": False,
         })
 
     # Source 2: TODO.md
@@ -5155,6 +5266,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             reason = payload.get("reason") or "completed"
             duplicate_of = payload.get("duplicate_of")
             self.send_json(close_issue(num, reason, duplicate_of))
+        elif re.match(r"^/api/issues/\d+/summarize-title$", path):
+            num = path.split("/")[3]
+            try:
+                # Bust the backlog cache so the next /api/sessions render
+                # picks up the new title without waiting for the 5-min TTL.
+                _bust_issue_state_cache()
+                global _issue_titles_overrides_cache
+                _issue_titles_overrides_cache = None
+                result = summarize_issue_title(num)
+                self.send_json(result)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/summarize$", path):
             conv_id = path.split("/")[-2]
             length = int(self.headers.get("Content-Length", "0"))
