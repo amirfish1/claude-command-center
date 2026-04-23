@@ -27,12 +27,31 @@ import time
 import urllib.parse
 from pathlib import Path
 
-# The repository the command center is watching. Override with CCC_WATCH_REPO;
-# defaults to the current working directory when the server is launched.
+# The repository the command center is watching. Resolution priority:
+#   1. CCC_WATCH_REPO env var (explicit override; never persisted)
+#   2. ~/.claude/command-center/last-repo.txt (last picker selection)
+#   3. cwd (first-run default)
 # Can also be switched at runtime via switch_repo_root() — caches that depend on
 # REPO_ROOT (backlog, issue titles/state) get invalidated automatically.
+_LAST_REPO_FILE = Path.home() / ".claude" / "command-center" / "last-repo.txt"
+
+
+def _load_persisted_repo():
+    """Read the persisted last-repo path written by switch_repo_root.
+    Returns a Path or None if missing/unreadable/no-longer-exists."""
+    try:
+        p = Path(_LAST_REPO_FILE.read_text().strip()).expanduser().resolve()
+        return p if p.is_dir() else None
+    except (OSError, ValueError):
+        return None
+
+
 _env_watch = os.environ.get("CCC_WATCH_REPO")
-REPO_ROOT = Path(_env_watch).resolve() if _env_watch else Path.cwd().resolve()
+if _env_watch:
+    REPO_ROOT = Path(_env_watch).resolve()
+else:
+    persisted = _load_persisted_repo()
+    REPO_ROOT = persisted if persisted else Path.cwd().resolve()
 LOG_DIR = REPO_ROOT / ".claude" / "logs"
 FALLBACK_DIR = Path("/tmp")
 WATCHER_SCRIPT = REPO_ROOT / "scripts" / "claude-issue-watcher.sh"
@@ -262,6 +281,14 @@ def switch_repo_root(new_path):
     _issue_titles_cache_ts = 0
     _issue_state_cache = {}
     _issue_state_cache_ts = 0
+    # Persist so the next server start defaults to this repo. Best-effort —
+    # if we can't write the state file (full disk, permissions), the switch
+    # still works for this session; just doesn't survive a restart.
+    try:
+        _LAST_REPO_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LAST_REPO_FILE.write_text(str(REPO_ROOT) + "\n")
+    except OSError as e:
+        print(f"  [repo-switch] Could not persist last-repo: {e}")
     return REPO_ROOT
 # Tool's own assets live next to this file.
 CCC_ROOT = Path(__file__).resolve().parent
