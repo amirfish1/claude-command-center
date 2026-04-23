@@ -4677,8 +4677,23 @@
 
   // Sort toggle: "custom" (drag order) vs "recent" (by mtime)
   let convSortMode = 'recent';  // always latest-first
-  let showRecentOnly = localStorage.getItem('ccc-show-recent') === '1';
-  const RECENT_HOURS = 10;
+  // Recency filter: '' (off) | '10h' | '7d'.
+  // Backwards-compat: old '1' value (binary toggle) maps to '10h'.
+  let recencyFilter = (function () {
+    const raw = localStorage.getItem('ccc-show-recent') || '';
+    if (raw === '1') return '10h';
+    if (raw === '10h' || raw === '7d') return raw;
+    return '';
+  })();
+  // Helpers — derived from recencyFilter so the rest of the code can stay
+  // boolean-ish where it doesn't care about the actual window.
+  const RECENCY_WINDOWS = { '10h': 10 * 3600, '7d': 7 * 24 * 3600 };
+  function recencyCutoffSec() {
+    const w = RECENCY_WINDOWS[recencyFilter];
+    return w ? (Date.now() / 1000 - w) : 0;
+  }
+  let showRecentOnly = !!recencyFilter;  // legacy alias used by other branches
+  const RECENT_HOURS = 10;  // legacy const, no longer the source of truth
   const $convSortBtn = document.getElementById('convSortBtn');
 
   function applyConvSort(data) {
@@ -5543,7 +5558,7 @@
 
   function filterConversations(q) {
     q = (q || '').toLowerCase();
-    const recentCutoff = Date.now() / 1000 - RECENT_HOURS * 3600;
+    const recentCutoff = recencyCutoffSec();
     // Re-apply persisted local archive for TODO/parking cards on every filter pass
     // (each server response sets c.archived=false for them; we flip it back).
     for (const c of conversationsData) {
@@ -6117,16 +6132,24 @@
       renderSidebar(filterConversations($kptSearch.value));
     });
   }
-  // Recent toggle (last 10h)
+  // Recency cycle: Off → Last 10h → Last 7d → Off.
+  // One button, three states. Label and active-style update each cycle.
+  const RECENCY_LABELS = { '': 'Recency: off', '10h': 'Last 10h', '7d': 'Last 7d' };
+  const RECENCY_NEXT = { '': '10h', '10h': '7d', '7d': '' };
   function updateRecentBtn() {
     if (!$kptRecentBtn) return;
-    $kptRecentBtn.classList.toggle('active', showRecentOnly);
+    $kptRecentBtn.textContent = RECENCY_LABELS[recencyFilter];
+    $kptRecentBtn.classList.toggle('active', !!recencyFilter);
+    $kptRecentBtn.title = recencyFilter
+      ? 'Showing only sessions/issues from the last ' + (recencyFilter === '10h' ? '10 hours' : '7 days') + '. Click to cycle.'
+      : 'Click to limit to last 10h, then 7d, then off.';
   }
   updateRecentBtn();
   if ($kptRecentBtn) {
     $kptRecentBtn.addEventListener('click', () => {
-      showRecentOnly = !showRecentOnly;
-      localStorage.setItem('ccc-show-recent', showRecentOnly ? '1' : '0');
+      recencyFilter = RECENCY_NEXT[recencyFilter];
+      showRecentOnly = !!recencyFilter;
+      localStorage.setItem('ccc-show-recent', recencyFilter || '0');
       updateRecentBtn();
       renderSidebar(filterConversations($convSearch.value));
     });
@@ -6150,10 +6173,14 @@
   const $kptSummarizeAllBtn = document.getElementById('kptSummarizeAllBtn');
   if ($kptSummarizeAllBtn) {
     $kptSummarizeAllBtn.addEventListener('click', async () => {
+      // Respect the current recency filter — if the user narrowed to "Last 7d"
+      // for a screenshot, only summarize the visible cards instead of all 200.
+      const cutoff = recencyCutoffSec();
       const candidates = (conversationsData || []).filter(c =>
         !c.name_overridden
         && (c.session_id || '').length >= 32  // real sessions only — skip backlog/pkood
         && (c.first_message || '').length >= 60  // skip already-short titles
+        && (cutoff === 0 || (c.modified || 0) >= cutoff)
       );
       if (candidates.length === 0) {
         showOpToast('No untitled cards to summarize.', 'info');
