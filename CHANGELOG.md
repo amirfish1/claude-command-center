@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Conversation-pane input redesigned Claude-Desktop-style: pill-framed
+  container with focus ring, multi-line auto-resizing textarea (caps at
+  ~160px then scrolls), inline arrow send button, and a keyboard-hint
+  footer showing `⏎ send · ⇧⏎ newline`. Enter submits (Shift+Enter adds
+  a newline). Send button disables when the input is empty or no session
+  is open. IME composition guarded so Chinese/Japanese candidate commits
+  don't accidentally fire a send.
 - Each message card in the conversation view now shows a relative timestamp
   next to its line number. Tiers: `just now` (<1 min) → `N minutes ago` (<1 h)
   → `N hours ago` (<5 h) → `HH:MM` (same day, older) → `Yesterday · HH:MM`

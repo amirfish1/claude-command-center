@@ -1133,21 +1133,61 @@
     display: flex; align-items: center; justify-content: center;
     height: 100%; color: var(--text-muted); font-size: 14px;
   }
+  /* ── Conversation-pane input (Claude-Desktop-style) ──
+     Pill container wraps the textarea + send button; focus-within gives a
+     subtle ring. Textarea auto-resizes up to a cap (see cpInputAutoResize).
+     The tty label sits below as a muted footer so the input itself is the
+     visual anchor. */
   .conv-panel-input {
-    display: none; padding: 8px 12px; border-top: 1px solid var(--border);
-    background: var(--surface); align-items: center; gap: 8px;
+    display: none; padding: 10px 14px 12px; border-top: 1px solid var(--border);
+    background: var(--surface); flex-direction: column; gap: 4px;
   }
   .conv-panel-input.visible { display: flex; }
-  .conv-panel-input input {
-    flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border);
-    background: var(--bg); color: var(--text); font-size: 13px; outline: none;
+  .cpi-wrap {
+    display: flex; align-items: flex-end; gap: 6px;
+    padding: 10px 10px 10px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border); border-radius: 14px;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
-  .conv-panel-input .send-btn {
-    padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px;
-    background: var(--accent); color: #fff; cursor: pointer; font-size: 14px;
+  .cpi-wrap:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(88,166,255,0.14);
   }
-  .conv-panel-input .tty-label {
-    font-size: 10px; color: var(--text-muted); font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+  .conv-panel-input textarea {
+    flex: 1; min-height: 22px; max-height: 160px;
+    border: none; outline: none; resize: none;
+    background: transparent; color: var(--text);
+    font-family: inherit; font-size: 14px; line-height: 1.5;
+    padding: 0; overflow-y: auto;
+  }
+  .conv-panel-input textarea::placeholder { color: var(--text-muted); opacity: 0.6; }
+  .conv-panel-input .cpi-send {
+    flex: none; width: 32px; height: 32px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid transparent; border-radius: 10px;
+    background: var(--accent); color: #fff; cursor: pointer;
+    transition: opacity 0.15s, transform 0.05s;
+  }
+  .conv-panel-input .cpi-send:hover:not(:disabled) { opacity: 0.9; }
+  .conv-panel-input .cpi-send:active:not(:disabled) { transform: translateY(1px); }
+  .conv-panel-input .cpi-send:disabled {
+    background: transparent; color: var(--text-muted);
+    border-color: var(--border); cursor: not-allowed; opacity: 0.5;
+  }
+  .conv-panel-input .cpi-send svg { display: block; }
+  .conv-panel-input .cpi-hint {
+    font-size: 10px; color: var(--text-muted); opacity: 0.6;
+    padding: 0 6px; display: flex; gap: 10px; align-items: center;
+  }
+  .conv-panel-input .cpi-hint .tty-label {
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+  }
+  .conv-panel-input .cpi-hint .cpi-enter-hint { margin-left: auto; }
+  .conv-panel-input .cpi-hint kbd {
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 3px; padding: 0 4px; font-size: 10px;
   }
 
   /* ── Task 7: Inline input on waiting cards ── */
@@ -1848,9 +1888,18 @@
         <div class="empty-state">Select a session from the board</div>
       </div>
       <div class="conv-panel-input" id="convPanelInput">
-        <input type="text" id="cpInput" placeholder="Send to terminal..." autocomplete="off">
-        <button class="send-btn" id="cpSendBtn" title="Send to terminal" aria-label="Send to terminal"><span aria-hidden="true">&gt;</span></button>
-        <span class="tty-label" id="cpTtyLabel"></span>
+        <div class="cpi-wrap">
+          <textarea id="cpInput" rows="1" placeholder="Send to terminal…" autocomplete="off" spellcheck="false"></textarea>
+          <button class="cpi-send" id="cpSendBtn" type="button" title="Send (Enter)" aria-label="Send" disabled>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M5 12 L19 12 M13 6 L19 12 L13 18"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="cpi-hint">
+          <span class="tty-label" id="cpTtyLabel"></span>
+          <span class="cpi-enter-hint"><kbd>⏎</kbd> send &nbsp;·&nbsp; <kbd>⇧⏎</kbd> newline</span>
+        </div>
       </div>
     </div>
   </div>
@@ -5433,6 +5482,8 @@
     } else {
       $convPanelInput.classList.remove('visible');
     }
+    // Enable/disable the send button based on new session state.
+    if ($cpInput && $cpInput.__cpRefresh) $cpInput.__cpRefresh();
   }
   // ── Split panel toolbar buttons ──
   function updateSplitToolbar() {
@@ -6923,6 +6974,10 @@
             _pendingSends.push({ text, element: pendingDiv });
           }
           $cpInput.value = '';
+          // Collapse the auto-grown textarea back to one row and refresh the
+          // send-button disabled state.
+          $cpInput.style.height = '';
+          if ($cpInput.__cpRefresh) $cpInput.__cpRefresh();
         } else {
           flashRed();
           const reason = data.error || ('HTTP ' + res.status);
@@ -6934,10 +6989,31 @@
       }
       $cpSendBtn.disabled = false;
     }
+    // Grow the textarea to fit content (capped by CSS max-height, which kicks
+    // in scrolling). Runs on every input; cheap enough.
+    function cpInputAutoResize() {
+      $cpInput.style.height = '0px';
+      $cpInput.style.height = Math.min($cpInput.scrollHeight, 160) + 'px';
+    }
+    // Enable the send button only when there's text AND we have an active session.
+    // Exposed on the element so sendToSplitTerminal can re-run it after clearing value.
+    $cpInput.__cpRefresh = function () {
+      const hasText = ($cpInput.value || '').trim().length > 0;
+      $cpSendBtn.disabled = !hasText || !currentSession.id;
+    };
     $cpSendBtn.addEventListener('click', sendToSplitTerminal);
+    $cpInput.addEventListener('input', () => { cpInputAutoResize(); $cpInput.__cpRefresh(); });
     $cpInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); sendToSplitTerminal(); }
+      // Enter submits, Shift+Enter inserts a newline. Guard against IME
+      // composition (Chinese/Japanese input methods dispatch Enter to commit
+      // candidate text — we'd otherwise send the prompt mid-composition).
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        sendToSplitTerminal();
+      }
     });
+    // Disabled until the user types.
+    $cpInput.__cpRefresh();
   }
 
   // ── Split panel font controls ──
