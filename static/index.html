@@ -1033,6 +1033,56 @@
   .nsm-primary:hover { opacity: 0.9; background: var(--accent); }
   .nsm-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
+  /* ── Repo picker modal ─────────────────────────────────────────────
+     Opened when the user selects "Pick a repo…" from the dropdown.
+     Shares the nsm-* overlay pattern for visual consistency. */
+  .rpm-overlay { position: fixed; inset: 0; z-index: 9999;
+    display: none; align-items: center; justify-content: center; }
+  .rpm-overlay.open { display: flex; }
+  .rpm-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.65);
+    backdrop-filter: blur(4px); }
+  .rpm-dialog { position: relative; width: min(620px, 92vw);
+    max-height: 80vh; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+  .rpm-header { display: flex; justify-content: space-between; align-items: baseline; }
+  .rpm-header-title { font-size: 16px; font-weight: 600; color: var(--text); }
+  .rpm-header-hint { font-size: 11px; color: var(--text-muted); }
+  .rpm-section-label { font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted);
+    margin-top: 4px; }
+  .rpm-list { display: flex; flex-direction: column; gap: 2px;
+    max-height: 220px; overflow-y: auto; border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px; background: var(--bg); }
+  .rpm-item { display: flex; flex-direction: column; gap: 2px;
+    padding: 8px 10px; border-radius: 4px; cursor: pointer;
+    background: transparent; border: none; color: var(--text); text-align: left; }
+  .rpm-item:hover { background: #1c2128; }
+  .rpm-item.active { background: rgba(88,166,255,0.12); }
+  .rpm-item .rpm-item-label { font-size: 13px; font-weight: 500; }
+  .rpm-item .rpm-item-path { font-size: 11px; color: var(--text-muted);
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rpm-item .rpm-item-current { font-size: 10px; color: var(--accent); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.05em; margin-left: 6px; }
+  .rpm-empty { padding: 12px; color: var(--text-muted); font-size: 12px;
+    font-style: italic; text-align: center; }
+  .rpm-divider { height: 1px; background: var(--border); margin: 2px 0; }
+  .rpm-actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  .rpm-browse-btn { padding: 8px 14px; font-size: 13px; border-radius: 6px;
+    border: 1px solid var(--accent); background: transparent; color: var(--accent);
+    cursor: pointer; font-weight: 500; }
+  .rpm-browse-btn:hover { background: rgba(88,166,255,0.1); }
+  .rpm-browse-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .rpm-cancel-btn { padding: 8px 14px; font-size: 13px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    cursor: pointer; margin-left: auto; }
+  .rpm-cancel-btn:hover { background: #1c2128; }
+  .rpm-error { font-size: 12px; color: var(--red);
+    background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3);
+    border-radius: 6px; padding: 8px 10px; display: none; }
+  .rpm-error.visible { display: block; }
+
   /* Backlog column — no longer sticky, scrolls with the rest */
   /* Reuse kanban column/card styles in split mode */
   .kanban-board-split .kanban-column,
@@ -1655,7 +1705,6 @@
   <div class="ccc-topbar" id="cccTopbar">
     <span class="ccc-topbar-label">Repo</span>
     <select id="sbRepoPicker" title="Repo this session is watching — switch to point at a different project. Live-switches without a server restart."></select>
-    <button id="sbRepoPickCustom" title="Pick a folder that isn't listed — e.g. a repo outside ~/ or nested below a top-level dir." aria-label="Pick a custom folder" style="padding:2px 8px;font-size:13px;line-height:1;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);cursor:pointer;">&hellip;</button>
     <div id="setupBanner" class="ccc-setup-banner"></div>
   </div>
 
@@ -1823,6 +1872,28 @@
         <button id="nsmSubmit" class="nsm-btn nsm-primary">Launch</button>
       </div>
       <div id="nsmError" style="display:none;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;font-size:12px;color:var(--red);background:rgba(248,81,73,0.1);border:1px solid rgba(248,81,73,0.3);border-radius:6px;padding:10px 12px;user-select:text;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow:auto;"></div>
+    </div>
+  </div>
+
+  <!-- Repo picker modal — opens when the user selects "Pick a repo…" from
+       the topbar dropdown. Shows a Recent section, the full known list,
+       and a Browse button that triggers the OS-native folder chooser. -->
+  <div id="repoPickerModal" class="rpm-overlay" role="dialog" aria-modal="true" aria-labelledby="rpmTitle">
+    <div class="rpm-backdrop" id="rpmBackdrop"></div>
+    <div class="rpm-dialog">
+      <div class="rpm-header">
+        <span class="rpm-header-title" id="rpmTitle">Pick a repo</span>
+        <span class="rpm-header-hint">Esc to cancel</span>
+      </div>
+      <div class="rpm-section-label" id="rpmRecentLabel" style="display:none;">Recent</div>
+      <div class="rpm-list" id="rpmRecentList" style="display:none;"></div>
+      <div class="rpm-section-label" id="rpmOtherLabel">All known</div>
+      <div class="rpm-list" id="rpmOtherList"></div>
+      <div class="rpm-error" id="rpmError"></div>
+      <div class="rpm-actions">
+        <button type="button" class="rpm-browse-btn" id="rpmBrowseBtn" title="Open the native macOS folder chooser">Browse&hellip;</button>
+        <button type="button" class="rpm-cancel-btn" id="rpmCancelBtn">Cancel</button>
+      </div>
     </div>
   </div>
 
@@ -6008,116 +6079,255 @@
     }
   }
 
-  // ── Split panel toolbar controls ──
-  // Sidebar repo picker — single source of truth for the watched repo.
-  // Lives in the sidebar header so first-time users see it immediately.
-  // (The old kanban-toolbar picker has been removed to declutter.)
+  // ── Sidebar repo picker ──
+  // Single source of truth for the watched repo. The <select> gives a fast
+  // dropdown for known repos; the last "Pick a repo…" option opens a proper
+  // modal with a Recent list and a Browse button that shells out to the
+  // native macOS folder chooser for anything not in the known set.
+  const PICKER_SENTINEL = '__pick__';
   const $sbRepoPicker = document.getElementById('sbRepoPicker');
+
+  // Shared state so the modal can reuse what the dropdown already fetched
+  // and the dropdown can refresh itself after an add-via-modal.
+  let repoListState = { repos: [], current: '', recent: [] };
+
+  async function loadRepoList() {
+    const r = await fetch('/api/repo/list');
+    const d = await r.json();
+    repoListState = {
+      repos: d.repos || [],
+      current: d.current || '',
+      recent: d.recent || [],
+    };
+    return repoListState;
+  }
+
+  function renderPickerSelect() {
+    if (!$sbRepoPicker) return;
+    const { repos, current } = repoListState;
+    $sbRepoPicker.innerHTML = '';
+    for (const repo of repos) {
+      const opt = document.createElement('option');
+      opt.value = repo.path;
+      opt.textContent = repo.label || repo.path;
+      opt.title = repo.path;
+      if (repo.path === current) opt.selected = true;
+      $sbRepoPicker.appendChild(opt);
+    }
+    // Sentinel option — selecting it opens the modal instead of switching.
+    const sep = document.createElement('option');
+    sep.disabled = true;
+    sep.textContent = '──────────';
+    $sbRepoPicker.appendChild(sep);
+    const pick = document.createElement('option');
+    pick.value = PICKER_SENTINEL;
+    pick.textContent = 'Pick a repo…';
+    $sbRepoPicker.appendChild(pick);
+    // Remember current selection so we can restore on failure / cancel.
+    $sbRepoPicker.dataset.prev = current;
+  }
+
+  // Shared switcher used by both the dropdown change handler and the modal.
+  // Performs the POST, shows the loading overlay, reloads on success.
+  async function switchToRepo(targetPath, targetLabel) {
+    if (!targetPath) return;
+    if ($sbRepoPicker) $sbRepoPicker.disabled = true;
+    const $overlay = document.getElementById('cccLoadingOverlay');
+    if ($overlay) {
+      $overlay.classList.remove('fade-out', 'gone');
+      const $label = document.getElementById('cccLoadingLabel');
+      if ($label) {
+        $label.innerHTML =
+          '<strong>Switching to ' + String(targetLabel || targetPath).replace(/[<>&]/g, '') + '</strong>' +
+          '<div class="ccc-loading-detail">Re-scanning sessions and GitHub issues for the new repo.</div>';
+      }
+    }
+    try {
+      try { sessionStorage.setItem('ccc-switching-to', targetLabel || targetPath); } catch (_) {}
+      const r = await fetch('/api/repo/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: targetPath }),
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || 'switch failed');
+      location.reload();
+    } catch (e) {
+      try { sessionStorage.removeItem('ccc-switching-to'); } catch (_) {}
+      if ($overlay) $overlay.classList.add('fade-out', 'gone');
+      showOpToast('Failed to switch repo: ' + (e.message || e), 'error');
+      // Restore dropdown selection on failure.
+      if ($sbRepoPicker && $sbRepoPicker.dataset.prev) {
+        $sbRepoPicker.value = $sbRepoPicker.dataset.prev;
+      }
+    } finally {
+      if ($sbRepoPicker) $sbRepoPicker.disabled = false;
+    }
+  }
+
   if ($sbRepoPicker) {
     (async () => {
       try {
-        const r = await fetch('/api/repo/list');
-        const d = await r.json();
-        const repos = d.repos || [];
-        const current = d.current || '';
-        $sbRepoPicker.innerHTML = '';
-        for (const repo of repos) {
-          const opt = document.createElement('option');
-          opt.value = repo.path;
-          opt.textContent = repo.label || repo.path;
-          opt.title = repo.path;
-          if (repo.path === current) opt.selected = true;
-          $sbRepoPicker.appendChild(opt);
-        }
+        await loadRepoList();
+        renderPickerSelect();
       } catch (e) { /* picker is best-effort — failure shouldn't break the page */ }
     })();
-    $sbRepoPicker.addEventListener('change', async () => {
+
+    $sbRepoPicker.addEventListener('change', () => {
       const target = $sbRepoPicker.value;
-      const prev = $sbRepoPicker.dataset.prev || '';
+      if (target === PICKER_SENTINEL) {
+        // Don't actually switch — reset to prev and open the modal.
+        $sbRepoPicker.value = $sbRepoPicker.dataset.prev || repoListState.current;
+        openRepoPickerModal();
+        return;
+      }
       const targetLabel = $sbRepoPicker.options[$sbRepoPicker.selectedIndex]?.textContent || target;
-      $sbRepoPicker.disabled = true;
-      // Show the loading overlay immediately so the user sees something is
-      // happening (the POST + reload + scan can take several seconds).
-      const $overlay = document.getElementById('cccLoadingOverlay');
-      if ($overlay) {
-        $overlay.classList.remove('fade-out', 'gone');
-        const $label = document.getElementById('cccLoadingLabel');
-        if ($label) {
-          $label.innerHTML =
-            '<strong>Switching to ' + targetLabel.replace(/[<>&]/g, '') + '</strong>' +
-            '<div class="ccc-loading-detail">Re-scanning sessions and GitHub issues for the new repo.</div>';
-        }
-      }
-      try {
-        // Stash the target name in sessionStorage so the overlay on the
-        // post-reload page knows we're mid-switch and can show the right label.
-        try { sessionStorage.setItem('ccc-switching-to', targetLabel); } catch (_) {}
-        const r = await fetch('/api/repo/switch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: target }),
-        });
-        const d = await r.json();
-        if (!d.ok) throw new Error(d.error || 'switch failed');
-        // Hard-reload so EVERY in-memory state (sidecar polls, cached convs,
-        // open detail panes) starts clean against the new repo.
-        location.reload();
-      } catch (e) {
-        try { sessionStorage.removeItem('ccc-switching-to'); } catch (_) {}
-        if ($overlay) $overlay.classList.add('fade-out', 'gone');
-        showOpToast('Failed to switch repo: ' + (e.message || e), 'error');
-        if (prev) $sbRepoPicker.value = prev;
-      } finally {
-        $sbRepoPicker.disabled = false;
-      }
+      switchToRepo(target, targetLabel);
     });
+
     // Stash the current value so we can restore on failure.
     $sbRepoPicker.addEventListener('focus', () => {
       $sbRepoPicker.dataset.prev = $sbRepoPicker.value;
     });
   }
 
-  // "…" button — add a repo folder that isn't in the auto-scanned list
-  // (e.g. paths outside $HOME, or nested projects like ~/dev/foo/bar). Browsers
-  // can't show a native folder picker from a plain <input>, so we ask for the
-  // path via prompt(), then POST to /api/repo/add to persist it before switching.
-  const $sbRepoPickCustom = document.getElementById('sbRepoPickCustom');
-  if ($sbRepoPickCustom && $sbRepoPicker) {
-    $sbRepoPickCustom.addEventListener('click', async () => {
-      const raw = window.prompt(
-        'Absolute path to the repo folder\n(e.g. /Users/you/workspaces/foo):',
-        ''
-      );
-      if (!raw) return;
-      const target = raw.trim();
-      if (!target) return;
-      $sbRepoPickCustom.disabled = true;
+  // ── Repo picker modal ──
+  const $rpm = document.getElementById('repoPickerModal');
+  const $rpmBackdrop = document.getElementById('rpmBackdrop');
+  const $rpmCancelBtn = document.getElementById('rpmCancelBtn');
+  const $rpmBrowseBtn = document.getElementById('rpmBrowseBtn');
+  const $rpmRecentLabel = document.getElementById('rpmRecentLabel');
+  const $rpmRecentList = document.getElementById('rpmRecentList');
+  const $rpmOtherLabel = document.getElementById('rpmOtherLabel');
+  const $rpmOtherList = document.getElementById('rpmOtherList');
+  const $rpmError = document.getElementById('rpmError');
+
+  function rpmShowError(msg) {
+    if (!$rpmError) return;
+    $rpmError.textContent = msg;
+    $rpmError.classList.add('visible');
+  }
+  function rpmClearError() {
+    if (!$rpmError) return;
+    $rpmError.textContent = '';
+    $rpmError.classList.remove('visible');
+  }
+  function renderRpmList($el, repos, current) {
+    $el.innerHTML = '';
+    if (!repos.length) {
+      const empty = document.createElement('div');
+      empty.className = 'rpm-empty';
+      empty.textContent = 'No repos here yet.';
+      $el.appendChild(empty);
+      return;
+    }
+    for (const repo of repos) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'rpm-item';
+      if (repo.path === current) btn.classList.add('active');
+      const label = document.createElement('div');
+      label.className = 'rpm-item-label';
+      label.textContent = repo.label || repo.path;
+      if (repo.path === current) {
+        const badge = document.createElement('span');
+        badge.className = 'rpm-item-current';
+        badge.textContent = 'current';
+        label.appendChild(badge);
+      }
+      const path = document.createElement('div');
+      path.className = 'rpm-item-path';
+      path.textContent = repo.path;
+      btn.appendChild(label);
+      btn.appendChild(path);
+      btn.addEventListener('click', () => {
+        if (repo.path === current) { closeRepoPickerModal(); return; }
+        closeRepoPickerModal();
+        switchToRepo(repo.path, repo.label || repo.path);
+      });
+      $el.appendChild(btn);
+    }
+  }
+
+  function renderRpmLists() {
+    const { repos, current, recent } = repoListState;
+    const recentSet = new Set(recent || []);
+    const byPath = {};
+    for (const r of repos) byPath[r.path] = r;
+    // Recent: intersection of recent[] and repos[], preserving recent order.
+    const recentRepos = [];
+    for (const p of recent) {
+      if (byPath[p]) recentRepos.push(byPath[p]);
+    }
+    // Other: everything else, alphabetical by label (load_known_repos already
+    // returns them alphabetical but recency-sort may have reordered).
+    const other = repos.filter(r => !recentSet.has(r.path))
+      .slice()
+      .sort((a, b) => (a.label || a.path).localeCompare(b.label || b.path));
+    if (recentRepos.length) {
+      $rpmRecentLabel.style.display = '';
+      $rpmRecentList.style.display = '';
+      renderRpmList($rpmRecentList, recentRepos, current);
+    } else {
+      $rpmRecentLabel.style.display = 'none';
+      $rpmRecentList.style.display = 'none';
+    }
+    renderRpmList($rpmOtherList, other, current);
+  }
+
+  async function openRepoPickerModal() {
+    if (!$rpm) return;
+    rpmClearError();
+    // Refresh from server so the modal reflects any recent switches from
+    // other tabs / command-line changes since the dropdown was populated.
+    try { await loadRepoList(); } catch (_) { /* use stale state */ }
+    renderRpmLists();
+    $rpm.classList.add('open');
+  }
+  function closeRepoPickerModal() {
+    if (!$rpm) return;
+    $rpm.classList.remove('open');
+  }
+
+  if ($rpmBackdrop) $rpmBackdrop.addEventListener('click', closeRepoPickerModal);
+  if ($rpmCancelBtn) $rpmCancelBtn.addEventListener('click', closeRepoPickerModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $rpm && $rpm.classList.contains('open')) {
+      closeRepoPickerModal();
+    }
+  });
+
+  if ($rpmBrowseBtn) {
+    $rpmBrowseBtn.addEventListener('click', async () => {
+      rpmClearError();
+      $rpmBrowseBtn.disabled = true;
+      const prevText = $rpmBrowseBtn.textContent;
+      $rpmBrowseBtn.textContent = 'Waiting for folder selection…';
       try {
-        const r = await fetch('/api/repo/add', {
+        // Native macOS folder chooser via osascript, server-side. Blocks
+        // until the user picks or cancels — that's fine because the server
+        // is threaded.
+        const r = await fetch('/api/fs/pick-folder', { method: 'POST' });
+        const d = await r.json();
+        if (d.cancelled) return;  // user clicked Cancel — no-op
+        if (!d.ok) { rpmShowError(d.error || 'Could not open folder picker.'); return; }
+        // Persist the new path so it appears in the picker and passes the
+        // switch allow-list, then trigger the switch.
+        const addRes = await fetch('/api/repo/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: target }),
+          body: JSON.stringify({ path: d.path }),
         });
-        const d = await r.json();
-        if (!d.ok) throw new Error(d.error || 'add failed');
-        // Rebuild the <select> from the returned list, select the new repo,
-        // then trigger the existing change handler to perform the switch.
-        const repos = d.repos || [];
-        $sbRepoPicker.innerHTML = '';
-        for (const repo of repos) {
-          const opt = document.createElement('option');
-          opt.value = repo.path;
-          opt.textContent = repo.label || repo.path;
-          opt.title = repo.path;
-          $sbRepoPicker.appendChild(opt);
-        }
-        $sbRepoPicker.dataset.prev = $sbRepoPicker.value;
-        $sbRepoPicker.value = d.path;
-        $sbRepoPicker.dispatchEvent(new Event('change'));
+        const addD = await addRes.json();
+        if (!addD.ok) { rpmShowError(addD.error || 'Could not register the picked folder.'); return; }
+        closeRepoPickerModal();
+        const picked = (addD.repos || []).find(r => r.path === addD.path);
+        switchToRepo(addD.path, picked ? (picked.label || picked.path) : addD.path);
       } catch (e) {
-        showOpToast('Could not add repo: ' + (e.message || e), 'error');
+        rpmShowError(String(e.message || e));
       } finally {
-        $sbRepoPickCustom.disabled = false;
+        $rpmBrowseBtn.disabled = false;
+        $rpmBrowseBtn.textContent = prevText;
       }
     });
   }

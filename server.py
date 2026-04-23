@@ -18,6 +18,7 @@ import ast
 import http.server
 import json
 import os
+import platform
 import re
 import signal
 import subprocess
@@ -37,6 +38,10 @@ _LAST_REPO_FILE = Path.home() / ".claude" / "command-center" / "last-repo.txt"
 # User-picked repos that live outside the $HOME scan (e.g. ~/dev/foo, /workspaces/bar).
 # One absolute path per line. Written by /api/repo/add, read by load_known_repos.
 _CUSTOM_REPOS_FILE = Path.home() / ".claude" / "command-center" / "custom-repos.txt"
+# Recently-switched repos (most recent first). Written by switch_repo_root,
+# read by load_known_repos so the dropdown/modal can surface them at the top.
+_RECENT_REPOS_FILE = Path.home() / ".claude" / "command-center" / "recent-repos.txt"
+_RECENT_REPOS_CAP = 10
 
 
 def _load_custom_repos():
@@ -63,6 +68,51 @@ def _load_custom_repos():
     return out
 
 
+def _load_recent_repos():
+    """Return recently-switched repo paths, most-recent first (deduped, existing dirs only)."""
+    try:
+        raw = _RECENT_REPOS_FILE.read_text()
+    except OSError:
+        return []
+    out = []
+    seen = set()
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            p = Path(line).expanduser().resolve()
+        except (OSError, ValueError):
+            continue
+        s = str(p)
+        if s in seen or not p.is_dir():
+            continue
+        seen.add(s)
+        out.append(s)
+        if len(out) >= _RECENT_REPOS_CAP:
+            break
+    return out
+
+
+def _record_recent_repo(path_str):
+    """Prepend a switch event to the recent list. Silent on I/O error — the
+    recency ordering is a UX nicety, not load-bearing."""
+    try:
+        p = Path(path_str).expanduser().resolve()
+    except (OSError, ValueError):
+        return
+    if not p.is_dir():
+        return
+    existing = _load_recent_repos()
+    new_list = [str(p)] + [x for x in existing if x != str(p)]
+    new_list = new_list[:_RECENT_REPOS_CAP]
+    try:
+        _RECENT_REPOS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _RECENT_REPOS_FILE.write_text("\n".join(new_list) + "\n")
+    except OSError:
+        pass
+
+
 def _append_custom_repo(path_str):
     """Persist a user-picked repo path. Returns the absolute resolved path.
     Raises ValueError if the path isn't an existing directory."""
@@ -76,6 +126,46 @@ def _append_custom_repo(path_str):
     with _CUSTOM_REPOS_FILE.open("a") as f:
         f.write(str(p) + "\n")
     return str(p)
+
+
+def _native_pick_folder(prompt_text="Pick a repo folder for Claude Command Center"):
+    """Open the OS-native folder chooser and return the selected absolute path.
+
+    Returns a dict:
+      {"ok": True, "path": "/abs/path"}               — user picked a folder
+      {"ok": False, "cancelled": True}                — user clicked Cancel
+      {"ok": False, "error": "..."}                   — something else failed
+
+    macOS only today — shells out to osascript. Other platforms return an
+    error so the client can show an explanatory message instead of crashing.
+    """
+    if platform.system() != "Darwin":
+        return {"ok": False, "error": "native folder picker is macOS-only today; type a path instead"}
+    # Two -e args: activate brings the chooser to front (otherwise it can
+    # appear behind the browser on some setups). `with prompt` sets the title
+    # of the dialog so the user knows what they're picking for.
+    safe_prompt = prompt_text.replace('"', '\\"')
+    activate_script = 'tell application "System Events" to activate'
+    pick_script = f'POSIX path of (choose folder with prompt "{safe_prompt}")'
+    try:
+        r = subprocess.run(
+            ["osascript", "-e", activate_script, "-e", pick_script],
+            capture_output=True, text=True, timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "folder picker timed out (10 min)"}
+    except OSError as e:
+        return {"ok": False, "error": f"osascript not available: {e}"}
+    if r.returncode == 0:
+        path = (r.stdout or "").strip().rstrip("/")
+        if not path:
+            return {"ok": False, "error": "no path returned"}
+        return {"ok": True, "path": path}
+    stderr = (r.stderr or "").strip()
+    # osascript exits 1 with "User canceled. (-128)" when Cancel is clicked.
+    if "-128" in stderr or "User canceled" in stderr:
+        return {"ok": False, "cancelled": True}
+    return {"ok": False, "error": stderr or f"osascript exited {r.returncode}"}
 
 
 def _load_persisted_repo():
@@ -138,6 +228,22 @@ def load_known_repos():
         else:
             label = name
         repos.append({"path": custom_path, "label": label})
+    # Re-order: recently-switched repos first (in recency order), then the rest
+    # in the original alphabetical order. The picker modal uses this ordering
+    # to group a "Recent" section above the long list.
+    recent = _load_recent_repos()
+    if recent:
+        by_path = {r["path"]: r for r in repos}
+        ordered = []
+        seen = set()
+        for p in recent:
+            if p in by_path and p not in seen:
+                ordered.append(by_path[p])
+                seen.add(p)
+        for r in repos:
+            if r["path"] not in seen:
+                ordered.append(r)
+        repos = ordered
     return repos
 
 
@@ -344,6 +450,8 @@ def switch_repo_root(new_path):
         _LAST_REPO_FILE.write_text(str(REPO_ROOT) + "\n")
     except OSError as e:
         print(f"  [repo-switch] Could not persist last-repo: {e}")
+    # Record this switch in the recent list so the picker modal can surface it.
+    _record_recent_repo(str(REPO_ROOT))
     return REPO_ROOT
 # Tool's own assets live next to this file.
 CCC_ROOT = Path(__file__).resolve().parent
@@ -4877,7 +4985,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # in the morning watched_repos config.
             if not any(r["path"] == current for r in repos):
                 repos.append({"path": current, "label": Path(current).name})
-            self.send_json({"current": current, "repos": repos})
+            # recent[] is the subset of repos ordered by last-switched; the
+            # client uses it to surface a "Recent" group in the picker modal.
+            self.send_json({
+                "current": current,
+                "repos": repos,
+                "recent": _load_recent_repos(),
+            })
         elif re.match(r"^/api/morning/goals/[A-Za-z0-9_-]+$", path):
             slug = path.rsplit("/", 1)[-1]
             detail = morning.get_goal_detail(slug)
@@ -4928,6 +5042,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # and auto_verify_closed_issues can fire immediately.
             _bust_issue_state_cache()
             self.send_json({"ok": True})
+            return
+        if path == "/api/fs/pick-folder":
+            # Open the OS-native folder chooser and return the picked absolute
+            # path. POST (not GET) so the same-origin check gates it — otherwise
+            # any local page could pop a folder dialog on the user's desktop.
+            # Blocks the request thread until the user picks/cancels; that's
+            # fine because the server runs behind ThreadingHTTPServer.
+            result = _native_pick_folder()
+            self.send_json(result, 200 if result.get("ok") else 200)
+            # NOTE: we return 200 even on cancel — cancel isn't an error.
+            # Real errors (macOS-only restriction, timeout) also get 200 with
+            # {ok:false,error:...} so the UI has a single response shape.
             return
         if path == "/api/repo/add":
             # Persist a user-picked repo path so it appears in the picker and
