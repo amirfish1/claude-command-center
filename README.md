@@ -5,6 +5,8 @@ were launched. Terminal sessions, headless processes, or spawned from the
 dashboard — it latches onto all of them and lets you drop in and out of any
 task to fix things.
 
+![Claude Command Center demo](docs/images/demo.gif)
+
 ## Why this exists
 
 Most Claude Code orchestration tools are opinionated wrappers. They want to
