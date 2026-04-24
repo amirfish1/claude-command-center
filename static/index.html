@@ -1196,6 +1196,49 @@
     white-space: pre-wrap; word-break: break-word; }
   .upd-error.visible { display: block; }
 
+  /* ── Bug-report link + modal ─────────────────────────────────
+     Subtle "Report a bug" link in the topbar. Opens a modal that
+     reuses the .upd-overlay / .upd-dialog / .upd-btn shells. */
+  .bug-link {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 8px; margin-left: 8px;
+    background: transparent; color: var(--text-muted);
+    border: 1px solid transparent; border-radius: 999px;
+    font-size: 11px; font-family: inherit; cursor: pointer;
+    letter-spacing: 0.2px; white-space: nowrap;
+    transition: background 0.12s ease-out, color 0.12s ease-out;
+  }
+  .bug-link:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+  .bug-input { width: 100%; box-sizing: border-box;
+    padding: 7px 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg);
+    color: var(--text); font-family: inherit; font-size: 13px;
+    outline: none; }
+  .bug-input:focus { border-color: var(--accent); }
+  .bug-textarea { min-height: 110px; resize: vertical; line-height: 1.45; }
+  .bug-label { font-size: 11px; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin-bottom: 6px; display: block; }
+  .bug-meta { font-size: 11px; color: var(--text-muted);
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; line-height: 1.5;
+    word-break: break-all; }
+  .bug-meta code { font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
+    font-size: 10.5px; color: var(--text); }
+  .bug-success { font-size: 12px; color: var(--green, #3fb950);
+    background: rgba(63,185,80,0.1); border: 1px solid rgba(63,185,80,0.3);
+    border-radius: 6px; padding: 8px 10px; display: none; }
+  .bug-success.visible { display: block; }
+  .bug-fallback {
+    font-size: 12px; color: var(--text-muted);
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; display: none;
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 180px; overflow: auto;
+    font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
+  }
+  .bug-fallback.visible { display: block; }
+
   /* Backlog column — no longer sticky, scrolls with the rest */
   /* Reuse kanban column/card styles in split mode */
   .kanban-board-split .kanban-column,
@@ -1873,6 +1916,9 @@
       <span class="upd-pill-dot"></span>
       <span id="updPillText">Update available</span>
     </button>
+    <button type="button" id="bugReportLink" class="bug-link" title="Report a bug or request a feature. Files a GitHub issue against amirfish1/claude-command-center.">
+      &#9873; Report a bug
+    </button>
     <div id="setupBanner" class="ccc-setup-banner"></div>
   </div>
 
@@ -2092,6 +2138,45 @@
       <div class="upd-actions">
         <button type="button" class="upd-btn" id="updLaterBtn">Later</button>
         <button type="button" class="upd-btn upd-primary" id="updNowBtn">Update now</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bug-report modal. Opened from #bugReportLink. POSTs to
+       /api/bug-report which shells out to `gh issue create` against
+       amirfish1/claude-command-center. If gh is missing or fails, the
+       handler returns a rendered markdown blob and we offer a
+       copy-to-clipboard fallback. -->
+  <div id="bugReportModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="bugReportTitle">
+    <div class="upd-backdrop" id="bugReportBackdrop"></div>
+    <div class="upd-dialog" style="width:min(560px,92vw);">
+      <div class="upd-title" id="bugReportTitle">Report a bug</div>
+      <div class="upd-versions">
+        Files a GitHub issue against
+        <strong>amirfish1/claude-command-center</strong>. The context block
+        below is auto-attached to the report.
+      </div>
+      <div>
+        <label class="bug-label" for="bugReportTitleInput">Title</label>
+        <input type="text" id="bugReportTitleInput" class="bug-input" maxlength="200"
+               placeholder="One-line summary of the bug or feature request" />
+      </div>
+      <div>
+        <label class="bug-label" for="bugReportDescInput">Description</label>
+        <textarea id="bugReportDescInput" class="bug-input bug-textarea"
+                  placeholder="What did you see? What did you expect? Steps to reproduce…"></textarea>
+      </div>
+      <div>
+        <label class="bug-label">Auto-attached context</label>
+        <div class="bug-meta" id="bugReportMeta">Loading…</div>
+      </div>
+      <div class="upd-error" id="bugReportError"></div>
+      <div class="bug-success" id="bugReportSuccess"></div>
+      <div class="bug-fallback" id="bugReportFallback"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="bugReportCancelBtn">Cancel</button>
+        <button type="button" class="upd-btn" id="bugReportCopyBtn" style="display:none;">Copy markdown</button>
+        <button type="button" class="upd-btn upd-primary" id="bugReportSubmitBtn">Send report</button>
       </div>
     </div>
   </div>
@@ -7574,6 +7659,177 @@
       }
     } catch (_) { /* silent — the pill just stays hidden */ }
   })();
+
+  // ── In-app bug reporting ────────────────────────────────────────
+  // Topbar link → modal → POST /api/bug-report → server shells out
+  // to `gh issue create`. On gh failure the handler returns the
+  // rendered markdown so we can offer a copy-to-clipboard fallback.
+  const $bugLink = document.getElementById('bugReportLink');
+  const $bugModal = document.getElementById('bugReportModal');
+  const $bugBackdrop = document.getElementById('bugReportBackdrop');
+  const $bugTitleInput = document.getElementById('bugReportTitleInput');
+  const $bugDescInput = document.getElementById('bugReportDescInput');
+  const $bugMeta = document.getElementById('bugReportMeta');
+  const $bugError = document.getElementById('bugReportError');
+  const $bugSuccess = document.getElementById('bugReportSuccess');
+  const $bugFallback = document.getElementById('bugReportFallback');
+  const $bugCancelBtn = document.getElementById('bugReportCancelBtn');
+  const $bugSubmitBtn = document.getElementById('bugReportSubmitBtn');
+  const $bugCopyBtn = document.getElementById('bugReportCopyBtn');
+  let bugCachedVersion = null;
+  let bugFallbackMarkdown = '';
+
+  function bugEscape(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[c]);
+  }
+
+  async function bugFetchVersion() {
+    if (bugCachedVersion) return bugCachedVersion;
+    try {
+      const r = await fetch('/api/version', { cache: 'no-store' });
+      const d = await r.json();
+      bugCachedVersion = d && d.version ? String(d.version) : '';
+    } catch (_) {
+      bugCachedVersion = '';
+    }
+    return bugCachedVersion;
+  }
+
+  async function bugRenderMeta() {
+    const version = await bugFetchVersion();
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    const sid = (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '';
+    if (!$bugMeta) return;
+    $bugMeta.innerHTML =
+      '<div><strong>CCC version:</strong> <code>' + bugEscape(version || '—') + '</code></div>' +
+      '<div><strong>Session:</strong> <code>' + bugEscape(sid || '—') + '</code></div>' +
+      '<div><strong>User agent:</strong> <code>' + bugEscape(ua || '—') + '</code></div>';
+  }
+
+  function bugResetState() {
+    if ($bugError) { $bugError.textContent = ''; $bugError.classList.remove('visible'); }
+    if ($bugSuccess) { $bugSuccess.innerHTML = ''; $bugSuccess.classList.remove('visible'); }
+    if ($bugFallback) { $bugFallback.textContent = ''; $bugFallback.classList.remove('visible'); }
+    if ($bugCopyBtn) $bugCopyBtn.style.display = 'none';
+    bugFallbackMarkdown = '';
+    if ($bugSubmitBtn) {
+      $bugSubmitBtn.disabled = false;
+      $bugSubmitBtn.textContent = 'Send report';
+    }
+    if ($bugCancelBtn) { $bugCancelBtn.disabled = false; $bugCancelBtn.textContent = 'Cancel'; }
+  }
+
+  function bugOpenModal() {
+    if (!$bugModal) return;
+    bugResetState();
+    if ($bugTitleInput) $bugTitleInput.value = '';
+    if ($bugDescInput) $bugDescInput.value = '';
+    bugRenderMeta();
+    $bugModal.classList.add('open');
+    setTimeout(() => { if ($bugTitleInput) $bugTitleInput.focus(); }, 0);
+  }
+  function bugCloseModal() {
+    if ($bugModal) $bugModal.classList.remove('open');
+  }
+
+  if ($bugLink) $bugLink.addEventListener('click', bugOpenModal);
+  if ($bugBackdrop) $bugBackdrop.addEventListener('click', bugCloseModal);
+  if ($bugCancelBtn) $bugCancelBtn.addEventListener('click', bugCloseModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $bugModal && $bugModal.classList.contains('open')) {
+      bugCloseModal();
+    }
+  });
+
+  async function bugSubmit() {
+    if (!$bugTitleInput || !$bugDescInput) return;
+    const title = $bugTitleInput.value.trim();
+    const desc = $bugDescInput.value.trim();
+    bugResetState();
+    if (!title) {
+      if ($bugError) { $bugError.textContent = 'Please add a title.'; $bugError.classList.add('visible'); }
+      $bugTitleInput.focus();
+      return;
+    }
+    if (!desc) {
+      if ($bugError) { $bugError.textContent = 'Please describe the bug.'; $bugError.classList.add('visible'); }
+      $bugDescInput.focus();
+      return;
+    }
+    if ($bugSubmitBtn) { $bugSubmitBtn.disabled = true; $bugSubmitBtn.textContent = 'Sending…'; }
+    if ($bugCancelBtn) $bugCancelBtn.disabled = true;
+    const version = await bugFetchVersion();
+    const sid = (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '';
+    let data;
+    try {
+      const r = await fetch('/api/bug-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          description: desc,
+          ccc_version: version || '',
+          user_agent: (navigator && navigator.userAgent) || '',
+          session_id: sid,
+        }),
+      });
+      data = await r.json().catch(() => ({}));
+    } catch (e) {
+      if ($bugError) {
+        $bugError.textContent = 'Network error: ' + (e && e.message ? e.message : 'unknown');
+        $bugError.classList.add('visible');
+      }
+      if ($bugSubmitBtn) { $bugSubmitBtn.disabled = false; $bugSubmitBtn.textContent = 'Send report'; }
+      if ($bugCancelBtn) $bugCancelBtn.disabled = false;
+      return;
+    }
+    if (data && data.ok && data.url) {
+      const safeUrl = bugEscape(data.url);
+      if ($bugSuccess) {
+        $bugSuccess.innerHTML = 'Thanks — issue filed: <a href="' + safeUrl + '" target="_blank" rel="noopener">' + safeUrl + '</a>';
+        $bugSuccess.classList.add('visible');
+      }
+      if ($bugSubmitBtn) { $bugSubmitBtn.disabled = true; $bugSubmitBtn.textContent = 'Sent'; }
+      if ($bugCancelBtn) { $bugCancelBtn.disabled = false; $bugCancelBtn.textContent = 'Close'; }
+      try { showOpToast('Bug report filed', 'success'); } catch (_) {}
+      return;
+    }
+    // Failure path. If the server returned `markdown` we offer a copy-
+    // to-clipboard fallback so the user can still file the issue manually.
+    const errMsg = (data && data.error) || 'Failed to submit bug report.';
+    if ($bugError) {
+      let msg = errMsg;
+      if (data && data.repo_url) {
+        msg += '\n\nFile manually at: ' + data.repo_url;
+      }
+      $bugError.textContent = msg;
+      $bugError.classList.add('visible');
+    }
+    if (data && data.markdown) {
+      bugFallbackMarkdown = String(data.markdown);
+      if ($bugFallback) {
+        $bugFallback.textContent = bugFallbackMarkdown;
+        $bugFallback.classList.add('visible');
+      }
+      if ($bugCopyBtn) $bugCopyBtn.style.display = 'inline-block';
+    }
+    if ($bugSubmitBtn) { $bugSubmitBtn.disabled = false; $bugSubmitBtn.textContent = 'Try again'; }
+    if ($bugCancelBtn) $bugCancelBtn.disabled = false;
+  }
+
+  if ($bugSubmitBtn) $bugSubmitBtn.addEventListener('click', bugSubmit);
+  if ($bugCopyBtn) $bugCopyBtn.addEventListener('click', async () => {
+    const md = bugFallbackMarkdown;
+    if (!md) return;
+    try {
+      await navigator.clipboard.writeText(md);
+      if ($bugCopyBtn) { $bugCopyBtn.textContent = 'Copied'; setTimeout(() => { if ($bugCopyBtn) $bugCopyBtn.textContent = 'Copy markdown'; }, 1500); }
+    } catch (_) {
+      try { showOpToast('Copy failed — select the text and copy manually', 'error'); } catch (__) {}
+    }
+  });
 
   // If we just finished restarting after a self-update, briefly acknowledge.
   try {

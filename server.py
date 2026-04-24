@@ -389,6 +389,109 @@ def _self_update():
     return {"ok": True, "new_sha": (sha or "").strip()}
 
 
+# ── In-app bug reporting ───────────────────────────────────────────────
+# The UI surfaces a "Report a bug" link in the topbar that opens a small
+# modal (title + description + auto-collected context). On submit, the
+# client posts to /api/bug-report; the handler shells out to `gh issue
+# create` against amirfish1/claude-command-center. If `gh` isn't
+# available we return the rendered markdown so the UI can offer a
+# copy-to-clipboard fallback for manual filing.
+_BUG_REPORT_REPO = "amirfish1/claude-command-center"
+
+
+def _build_bug_report_body(description, ccc_version, user_agent, session_id):
+    """Render the GitHub issue body (markdown). Pure — no I/O — so it's
+    cheap to also return on the failure path for clipboard fallback."""
+    lines = [
+        "## Description",
+        "",
+        description.strip(),
+        "",
+        "## Context",
+        "",
+        "| Field | Value |",
+        "|---|---|",
+        f"| **CCC version** | `{ccc_version or '—'}` |",
+        f"| **Session** | `{session_id or '—'}` |",
+        f"| **User agent** | `{user_agent or '—'}` |",
+        "",
+        "_Reported via the in-app Report a bug feature._",
+    ]
+    return "\n".join(lines)
+
+
+def _create_bug_report_issue(payload):
+    """Validate the payload, build a GitHub issue, file it via `gh`.
+
+    Returns one of:
+      {ok: True,  url: "https://github.com/.../issues/N", number: N}
+      {ok: False, error: "...",  markdown: "..."}   # gh missing / failed
+      {ok: False, error: "..."}                     # validation failure
+    The `markdown` key on the failure path lets the client offer a
+    copy-to-clipboard fallback so the user can file it manually.
+    """
+    title = (payload.get("title") or "").strip()
+    description = (payload.get("description") or "").strip()
+    if not title:
+        return {"ok": False, "error": "title is required"}
+    if not description:
+        return {"ok": False, "error": "description is required"}
+    # Cap title at GitHub's 256 char limit with a generous safety margin so
+    # we surface a clean error rather than a truncated one from gh.
+    if len(title) > 200:
+        title = title[:200].rstrip() + "…"
+
+    ccc_version = (payload.get("ccc_version") or "").strip() or __version__
+    user_agent = (payload.get("user_agent") or "").strip()
+    session_id = (payload.get("session_id") or "").strip()
+
+    body = _build_bug_report_body(description, ccc_version, user_agent, session_id)
+    fallback_md = f"## {title}\n\n{body}"
+
+    if not _which("gh"):
+        return {
+            "ok": False,
+            "error": "gh CLI not found on PATH — copy the markdown and file the issue manually.",
+            "markdown": fallback_md,
+            "repo_url": f"https://github.com/{_BUG_REPORT_REPO}/issues/new",
+        }
+
+    try:
+        # `gh issue create` prints the issue URL on stdout when it succeeds.
+        # We pipe body via --body-file=- so we don't have to worry about
+        # arbitrary user input being interpreted by the shell — there is
+        # no shell (subprocess.run with a list).
+        proc = subprocess.run(
+            ["gh", "issue", "create",
+             "-R", _BUG_REPORT_REPO,
+             "--label", "bug",
+             "--title", title,
+             "--body-file", "-"],
+            input=body,
+            capture_output=True, text=True, timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "gh issue create timed out", "markdown": fallback_md}
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"ok": False, "error": f"gh failed to launch: {e}", "markdown": fallback_md}
+
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()[:400]
+        return {
+            "ok": False,
+            "error": err or f"gh issue create exited {proc.returncode}",
+            "markdown": fallback_md,
+            "repo_url": f"https://github.com/{_BUG_REPORT_REPO}/issues/new",
+        }
+
+    url = (proc.stdout or "").strip().splitlines()[-1] if proc.stdout else ""
+    number = None
+    m = re.search(r"/issues/(\d+)", url)
+    if m:
+        number = int(m.group(1))
+    return {"ok": True, "url": url, "number": number}
+
+
 def _schedule_restart(delay=0.5):
     """Arm an os.execvp() that replaces this process with a fresh
     `python server.py` after `delay` seconds. Called AFTER the HTTP response
@@ -5768,6 +5871,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 _schedule_restart()
+            return
+        if path == "/api/bug-report":
+            # Submit a bug report as a GitHub issue against the CCC repo.
+            # Returns {ok:true,url,number} on success; on failure returns
+            # {ok:false,error,markdown,repo_url} so the UI can offer a
+            # copy-to-clipboard fallback for manual filing.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            result = _create_bug_report_issue(payload)
+            # Validation errors (missing title/description) → 400. Anything
+            # else (gh missing, gh failed, network) → 200 with ok:false so
+            # the client can still render the fallback markdown without a
+            # generic browser error page.
+            if not result.get("ok") and not result.get("markdown"):
+                self.send_json(result, 400)
+            else:
+                self.send_json(result)
             return
         if path == "/api/fs/pick-folder":
             # Open the OS-native folder chooser and return the picked absolute
