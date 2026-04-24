@@ -3555,8 +3555,12 @@ def _slugify(text, max_len=40):
     return slug[:max_len].rstrip("-")
 
 
-def spawn_session(prompt, name=None):
-    """Spawn a headless Claude Code session and return tracking info."""
+def spawn_session(prompt, name=None, cwd=None):
+    """Spawn a headless Claude Code session and return tracking info.
+
+    If `cwd` is provided, the spawned subprocess runs there; otherwise it
+    inherits CCC's REPO_ROOT (backwards-compatible default).
+    """
     # Always slugify — name may come from firstSentence(body) and contain
     # filesystem-hostile chars like quotes, colons, slashes.
     session_name = _slugify(name or prompt)
@@ -3576,13 +3580,14 @@ def spawn_session(prompt, name=None):
         "--name", session_name,
     ]
 
+    spawn_cwd = cwd if cwd else str(REPO_ROOT)
     log_fh = open(log_path, "w")
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
         stdout=log_fh,
         stderr=subprocess.STDOUT,
-        cwd=str(REPO_ROOT),
+        cwd=spawn_cwd,
         start_new_session=True,
     )
 
@@ -6145,11 +6150,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = {}
             prompt = (payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
+            cwd_raw = payload.get("cwd")
+            cwd = cwd_raw.strip() if isinstance(cwd_raw, str) else None
             if not prompt:
-                self.send_json({"ok": False, "error": "missing prompt"})
+                self.send_json({"ok": False, "error": "missing prompt"}, 400)
+            elif cwd and not os.path.isabs(cwd):
+                self.send_json({"ok": False, "error": f"cwd must be an absolute path: {cwd}"}, 400)
+            elif cwd and not os.path.isdir(cwd):
+                self.send_json({"ok": False, "error": f"cwd does not exist or is not a directory: {cwd}"}, 400)
             else:
                 try:
-                    self.send_json(spawn_session(prompt, name=name))
+                    self.send_json(spawn_session(prompt, name=name, cwd=cwd or None))
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/sessions/spawned/\d+/inject$", path):
