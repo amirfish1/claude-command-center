@@ -40,3 +40,11 @@ claude-command-center = "server:main"
 # No build backend declared — this isn't packaged for PyPI today. Run via
 # `./run.sh` or `python3 server.py`. The pyproject.toml exists so tooling
 # (ruff, mypy, IDEs) can pick up the project metadata.
+
+# When/if this is packaged (setuptools/hatch/etc.), the orchestration skill
+# under `skills/` must travel with the install — server.py auto-installs
+# `skills/ccc-orchestration.md` to `~/.claude/skills/ccc-orchestration/SKILL.md`
+# on startup, and that source file has to exist relative to server.py.
+# Setuptools-style hint:
+[tool.setuptools.package-data]
+"*" = ["skills/*.md", "static/**/*", "hooks/*.py"]

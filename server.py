@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 
 # The repository the command center is watching. Resolution priority:
@@ -2089,10 +2090,37 @@ def find_session_cwd(session_id):
                         return cwd
         except (OSError, UnicodeDecodeError):
             continue
-        # Fallback: decode project dir name (replace - with /) — lossy but better than nothing
-        decoded = "/" + project_dir.name.lstrip("-").replace("-", "/")
-        _session_cwd_cache[session_id] = decoded
-        return decoded
+        # File matched but cwd wasn't in the first 40 lines — likely a very
+        # young session that hasn't logged a user event yet. Try a sibling
+        # .jsonl in the same project dir; sessions are grouped by cwd, so any
+        # sibling with a cwd tells us ours too. We do NOT decode the project
+        # dir name: Claude's encoding replaces '/' with '-' without escaping
+        # literal hyphens, so `claude-command-center` round-trips as
+        # `claude/command/center`, breaking `cd` in Launch-in-Terminal.
+        for sibling in project_dir.glob("*.jsonl"):
+            if sibling.name == jsonl_name:
+                continue
+            try:
+                with open(sibling, "r") as f:
+                    for i, line in enumerate(f):
+                        if i >= 40:
+                            break
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            ev = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        cwd = ev.get("cwd")
+                        if cwd:
+                            _session_cwd_cache[session_id] = cwd
+                            return cwd
+            except (OSError, UnicodeDecodeError):
+                continue
+        # Don't cache the miss — let a later call succeed once Claude writes
+        # a cwd-bearing event. Callers treat None as "resume without cd".
+        return None
     return None
 
 
@@ -2969,8 +2997,68 @@ def find_all_sessions():
             "verified": False,
         })
 
-    # Add pkood agents
-    for agent in find_pkood_agents():
+    # Add pkood agents — and merge in their linked claude-session card, if any.
+    # Pkood spawns a claude process in a tmux pty, which produces a regular
+    # ~/.claude/projects/*/*.jsonl file. Without dedup the kanban would show
+    # two cards per agent: a pkood card (input works, via /api/pkood/inject)
+    # and a claude-session card (input broken — no Terminal tab backs the
+    # pty). We resolve the link in find_pkood_agents() via a cwd+timestamp
+    # heuristic; here we absorb the jsonl card's signals into the pkood card
+    # and drop the duplicate.
+    pkood_agents = find_pkood_agents()
+    # Only dedup live pkood agents. Dead ones leave their jsonl visible as
+    # a regular interactive card so the user can still `claude --resume` the
+    # underlying session — the pkood card alone can't be resumed.
+    linked_sids = {
+        a["claude_session_id"]
+        for a in pkood_agents
+        if a.get("claude_session_id") and a.get("is_live")
+    }
+    if linked_sids:
+        by_sid = {c["session_id"]: c for c in conversations if c.get("source") == "interactive"}
+        for agent in pkood_agents:
+            if not agent.get("is_live"):
+                continue
+            csid = agent.get("claude_session_id")
+            if not csid:
+                continue
+            twin = by_sid.get(csid)
+            if not twin:
+                continue
+            # Keep the pkood identity (id, session_id, source) so the frontend
+            # routes input via /api/pkood/inject — but pull in the richer
+            # signals the jsonl tail scan produced.
+            for field in (
+                "first_message", "last_prompt", "branch",
+                "has_edit", "has_commit", "has_push",
+                "last_edit_pos", "last_commit_pos", "last_push_pos",
+                "last_event_type", "pending_tool", "pending_file",
+                "last_assistant_text", "tail_issue_number", "session_state",
+                "timestamp",
+            ):
+                if field in twin and twin[field] not in (None, "", False) and not agent.get(field):
+                    agent[field] = twin[field]
+            # Prefer the jsonl's display_name when pkood's is just the agent_id
+            # slug (e.g. the pkood card would show "mgr-schedule" but the jsonl
+            # may have a user-renamed title).
+            if twin.get("display_name") and not agent.get("name_overridden"):
+                agent["display_name"] = twin["display_name"]
+                agent["name_overridden"] = twin.get("name_overridden", False)
+            # Prefer the jsonl's mtime for freshness sorting — pkood's
+            # update_ts can lag behind the actual last assistant event.
+            if twin.get("modified") and twin["modified"] > (agent.get("modified") or 0):
+                agent["modified"] = twin["modified"]
+                agent["modified_human"] = twin.get("modified_human", agent.get("modified_human", ""))
+            # Preserve the linked cwd when the jsonl knows it and we didn't.
+            if not agent.get("session_cwd") and twin.get("session_cwd"):
+                agent["session_cwd"] = twin["session_cwd"]
+                agent["session_cwd_exists"] = twin.get("session_cwd_exists", False)
+        # Drop the now-redundant interactive twins
+        conversations = [
+            c for c in conversations
+            if not (c.get("source") == "interactive" and c.get("session_id") in linked_sids)
+        ]
+    for agent in pkood_agents:
         conversations.append(agent)
 
     # Add backlog items (GitHub issues + TODO.md), skipping those with active sessions
@@ -3482,6 +3570,157 @@ def list_spawned_sessions():
     return result
 
 
+def ask_session_and_wait(session_id, text, timeout_ms=30000):
+    """Synchronously inject `text` into a session and wait for the next
+    `{"type":"result",...}` event in the headless subprocess's stream-json
+    output. Used by /api/ask. Falls back to spawning a fresh
+    `claude --resume` subprocess if no live one exists for this session,
+    same as /api/inject-input does.
+
+    Returns one of:
+      {"ok": True, "text": <result>, "cost_usd": <float>, "duration_ms": <int>, "num_turns": <int>}
+      {"ok": False, "error": "timeout", "partial": <best-effort text>}
+      {"ok": False, "error": <message>}
+
+    Implementation note: stream-json output is piped to a log file (the
+    subprocess inherits log_fh as stdout), so we tail that log file to
+    pick up new events. We record the file size *before* writing the
+    user message and only scan bytes added after that point, so the
+    function returns the assistant's reply to *this* ask, not a stale
+    earlier turn.
+    """
+    if not session_id or not text:
+        return {"ok": False, "error": "missing session_id or text"}
+
+    # Reuse an existing live resume (same path resume_session_headless takes).
+    entry = None
+    for s in _spawned_sessions:
+        if s.get("resumed_sid") == session_id and s["proc"].poll() is None:
+            entry = s
+            break
+
+    if entry is None:
+        # No live subprocess — spawn one. resume_session_headless writes
+        # the user message itself and appends the entry to _spawned_sessions.
+        spawn_result = resume_session_headless(session_id, text)
+        if not spawn_result.get("ok"):
+            return spawn_result
+        # The brand new entry is the last one matching this sid.
+        for s in reversed(_spawned_sessions):
+            if s.get("resumed_sid") == session_id:
+                entry = s
+                break
+        if entry is None:
+            return {"ok": False, "error": "spawned subprocess but lost track of it"}
+        # Fresh spawn — start scanning from byte 0 since the only output
+        # in this log will be from this ask.
+        start_offset = 0
+    else:
+        # Live subprocess — record where the log is *now* before writing
+        # so we don't pick up a previous turn's result event.
+        try:
+            start_offset = os.path.getsize(entry["log"])
+        except OSError:
+            start_offset = 0
+        ok = _write_stream_json_user_message(entry["proc"], text)
+        if not ok:
+            return {"ok": False, "error": "failed to write user message (broken pipe?)"}
+
+    log_path = entry["log"]
+    proc = entry["proc"]
+    deadline = time.monotonic() + max(0.5, timeout_ms / 1000.0)
+    partial_chunks = []
+    pending = b""
+    fh = None
+    try:
+        # The log file may not exist yet for a brand-new spawn (race with
+        # the subprocess opening its stdout). Wait briefly for it.
+        wait_until = time.monotonic() + 2.0
+        while not os.path.exists(log_path) and time.monotonic() < wait_until:
+            time.sleep(0.05)
+        try:
+            fh = open(log_path, "rb")
+        except OSError as e:
+            return {"ok": False, "error": f"could not open log: {e}"}
+        fh.seek(start_offset)
+        while time.monotonic() < deadline:
+            chunk = fh.read()
+            if chunk:
+                pending += chunk
+                # Process complete lines; keep any trailing partial in `pending`.
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if not isinstance(ev, dict):
+                        continue
+                    ev_type = ev.get("type")
+                    if ev_type == "assistant":
+                        # Best-effort partial text accumulation for timeouts.
+                        msg = ev.get("message") or {}
+                        for block in msg.get("content") or []:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                t = block.get("text") or ""
+                                if t:
+                                    partial_chunks.append(t)
+                    elif ev_type == "result":
+                        return {
+                            "ok": True,
+                            "text": ev.get("result") or "",
+                            "cost_usd": ev.get("total_cost_usd"),
+                            "duration_ms": ev.get("duration_ms"),
+                            "num_turns": ev.get("num_turns"),
+                            "is_error": bool(ev.get("is_error")),
+                        }
+            else:
+                # No new data — short sleep, then check if subprocess died.
+                if proc.poll() is not None:
+                    # Drain anything left and bail.
+                    final = fh.read()
+                    if final:
+                        pending += final
+                        # Try to parse one more time
+                        for raw in pending.split(b"\n"):
+                            raw = raw.strip()
+                            if not raw:
+                                continue
+                            try:
+                                ev = json.loads(raw)
+                            except (json.JSONDecodeError, UnicodeDecodeError):
+                                continue
+                            if isinstance(ev, dict) and ev.get("type") == "result":
+                                return {
+                                    "ok": True,
+                                    "text": ev.get("result") or "",
+                                    "cost_usd": ev.get("total_cost_usd"),
+                                    "duration_ms": ev.get("duration_ms"),
+                                    "num_turns": ev.get("num_turns"),
+                                    "is_error": bool(ev.get("is_error")),
+                                }
+                    return {
+                        "ok": False,
+                        "error": f"subprocess exited (code {proc.poll()}) before result event",
+                        "partial": "".join(partial_chunks),
+                    }
+                time.sleep(0.1)
+        return {
+            "ok": False,
+            "error": "timeout",
+            "partial": "".join(partial_chunks),
+        }
+    finally:
+        if fh is not None:
+            try:
+                fh.close()
+            except OSError:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # Pkood agent orchestration
 # ---------------------------------------------------------------------------
@@ -3490,6 +3729,246 @@ PKOOD_STATE_DIR = Path.home() / ".pkood" / "state"
 PKOOD_LOGS_DIR = Path.home() / ".pkood" / "logs"
 PKOOD_SOCKETS_DIR = Path.home() / ".pkood" / "sockets"
 PKOOD_BIN = str(Path.home() / ".local" / "bin" / "pkood")
+
+# Cache for pkood -> claude-session UUID links. Keyed by agent_id.
+# Entry shape: {"link": <dict-or-None>, "meta_mtime": float, "cached_at": float}
+# Invalidation: pkood state-file mtime change OR 60s TTL, whichever first.
+_PKOOD_LINK_CACHE = {}
+_PKOOD_LINK_TTL = 60.0
+
+# Strip common ANSI CSI/OSC sequences from a byte or text buffer. Pkood
+# logs are raw pty streams so the Claude banner is wrapped in colour escapes.
+_ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;?<>=]*[a-zA-Z]")
+_ANSI_OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(\x07|\x1b\\)")
+
+
+def _strip_ansi(s):
+    s = _ANSI_OSC_RE.sub("", s)
+    s = _ANSI_CSI_RE.sub("", s)
+    return s
+
+
+def _pkood_log_spawn_time(agent_id):
+    """Best-effort spawn timestamp for a pkood agent.
+
+    Uses the log file's birth time when available (macOS / APFS expose it via
+    st_birthtime), falling back to mtime. The meta.json `timestamp` field is
+    unreliable because pkood sometimes rewrites it on reconnect, whereas the
+    log file is created once at spawn.
+    """
+    log = PKOOD_LOGS_DIR / f"{agent_id}.log"
+    try:
+        st = log.stat()
+    except OSError:
+        return None
+    ts = getattr(st, "st_birthtime", None) or st.st_mtime
+    return float(ts) if ts else None
+
+
+def _pkood_log_header(agent_id, nbytes=8192):
+    """Read + ANSI-strip the first `nbytes` of a pkood agent's log."""
+    log = PKOOD_LOGS_DIR / f"{agent_id}.log"
+    try:
+        with open(log, "rb") as fh:
+            raw = fh.read(nbytes)
+    except OSError:
+        return ""
+    return _strip_ansi(raw.decode("utf-8", errors="replace"))
+
+
+# Claude prints a remote-control URL in its startup banner:
+#   https://claude.ai/code/session_<alphanum>
+# The same token is recorded once in the corresponding .jsonl as a
+# `bridge_status` event. Matching on it is far more reliable than a
+# cwd+timestamp heuristic when multiple pkood agents share a cwd.
+_BRIDGE_SESSION_RE = re.compile(r"claude\.ai/code/(session_[A-Za-z0-9]+)")
+
+
+def _pkood_bridge_session_id(agent_id):
+    """Extract claude's remote-control bridge session ID from the log banner."""
+    text = _pkood_log_header(agent_id)
+    if not text:
+        return None
+    m = _BRIDGE_SESSION_RE.search(text)
+    return m.group(1) if m else None
+
+
+def _pkood_log_cwd(agent_id):
+    """Extract the cwd from a pkood agent's log file header.
+
+    Claude Code prints the cwd right under its banner (e.g. "~/MyOfficeMgr"
+    or an absolute path), typically on the third visible line. To avoid
+    matching stray paths further down the log (prompts, tool output), we
+    clip the text at the first horizontal rule the banner draws (a run of
+    box-drawing ─ characters) and only search above it.
+    """
+    text = _pkood_log_header(agent_id, nbytes=4096)
+    if not text:
+        return None
+    # Clip at the first horizontal rule the banner renders
+    rule = re.search(r"─{10,}", text)
+    header = text[: rule.start()] if rule else text[:400]
+    for m in re.finditer(r"(~/[^\s\x00-\x1f,)]+|/[A-Za-z0-9._/-]+)", header):
+        candidate = m.group(1).strip().rstrip(",.)")
+        if candidate.startswith("//") or "://" in candidate:
+            continue
+        if candidate.startswith("~"):
+            candidate = str(Path(candidate).expanduser())
+        if Path(candidate).is_dir():
+            return candidate
+    return None
+
+
+def _peek_jsonl_meta(path, max_lines=40):
+    """Return (first_cwd, first_timestamp_epoch, bridge_session_id) from a
+    claude .jsonl file.
+
+    `bridge_session_id` comes from the `bridge_status` system event claude
+    writes in the first few lines, matching the same token printed in its
+    startup banner (which pkood captures). It's the most reliable shared
+    identifier between the two sources.
+    """
+    cwd = None
+    ts_epoch = None
+    bridge_sid = None
+    try:
+        with open(path, "r") as fh:
+            for i, line in enumerate(fh):
+                if i >= max_lines:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if cwd is None and ev.get("cwd"):
+                    cwd = ev["cwd"]
+                if ts_epoch is None and ev.get("timestamp"):
+                    try:
+                        # ISO-8601 with Z suffix (claude format)
+                        t = ev["timestamp"].replace("Z", "+00:00")
+                        ts_epoch = datetime.fromisoformat(t).timestamp()
+                    except (ValueError, TypeError):
+                        pass
+                if (
+                    bridge_sid is None
+                    and ev.get("subtype") == "bridge_status"
+                    and isinstance(ev.get("url"), str)
+                ):
+                    m = _BRIDGE_SESSION_RE.search(ev["url"])
+                    if m:
+                        bridge_sid = m.group(1)
+                if cwd and ts_epoch and bridge_sid:
+                    break
+    except (OSError, UnicodeDecodeError):
+        pass
+    return cwd, ts_epoch, bridge_sid
+
+
+def _resolve_claude_session_for_pkood(agent_id):
+    """Link a pkood agent to its underlying claude-session UUID.
+
+    Two-tier heuristic:
+      1. Primary — bridge session ID match. Claude prints its remote-control
+         URL (`https://claude.ai/code/session_...`) in the startup banner and
+         also records it as a `bridge_status` event in its .jsonl. This token
+         is per-process, so it's a unique shared identifier.
+      2. Fallback — cwd + spawn-time window. When the bridge ID isn't
+         available (older claude builds, /remote-control disabled), we
+         match on the pkood log banner's cwd and the log file's birth time
+         vs. the jsonl's first-event timestamp (±60s window, or ±15s when
+         cwd is unknown).
+
+    Returns {claude_session_id, claude_cwd, claude_jsonl} on success, else None.
+    """
+    spawn_cwd = _pkood_log_cwd(agent_id)
+    spawn_ts = _pkood_log_spawn_time(agent_id)
+    bridge_sid = _pkood_bridge_session_id(agent_id)
+
+    # Choose candidate project dirs: the one encoded from spawn_cwd if we
+    # have it, otherwise all of them (slower — but still bounded).
+    candidate_dirs = []
+    if spawn_cwd:
+        slug = "-" + spawn_cwd.lstrip("/").replace("/", "-")
+        candidate = PROJECTS_ROOT / slug
+        if candidate.is_dir():
+            candidate_dirs.append(candidate)
+    if not candidate_dirs and PROJECTS_ROOT.is_dir():
+        candidate_dirs = [p for p in PROJECTS_ROOT.iterdir() if p.is_dir()]
+
+    # Tighter timestamp window when cwd is unknown (reduces cross-repo
+    # collisions when agents are spawned back-to-back).
+    window = 60.0 if spawn_cwd else 15.0
+
+    best_ts = None  # (abs_delta, path, cwd)
+    for proj in candidate_dirs:
+        for jsonl in proj.glob("*.jsonl"):
+            jsonl_cwd, jsonl_ts, jsonl_bridge = _peek_jsonl_meta(jsonl)
+
+            # Primary: bridge-id exact match wins outright.
+            if bridge_sid and jsonl_bridge and jsonl_bridge == bridge_sid:
+                return {
+                    "claude_session_id": jsonl.stem,
+                    "claude_cwd": jsonl_cwd or spawn_cwd,
+                    "claude_jsonl": str(jsonl),
+                }
+
+            # Fallback: timestamp+cwd window. Only consider when we have a
+            # spawn_ts (we always do unless the log is missing).
+            if not spawn_ts or not jsonl_ts:
+                continue
+            if spawn_cwd and jsonl_cwd and jsonl_cwd != spawn_cwd:
+                continue
+            delta = abs(jsonl_ts - spawn_ts)
+            if delta > window:
+                continue
+            if best_ts is None or delta < best_ts[0]:
+                best_ts = (delta, jsonl, jsonl_cwd)
+
+    # If the bridge-id scan didn't return, fall back to the best timestamp
+    # match. Only use it when we had NO bridge id at all (i.e. we couldn't
+    # check the primary signal); if we had a bridge id but no jsonl had it,
+    # a timestamp match would likely be wrong — a fresh claude process
+    # should always emit bridge_status.
+    if bridge_sid:
+        return None
+    if not best_ts:
+        return None
+    _, path, jsonl_cwd = best_ts
+    return {
+        "claude_session_id": path.stem,
+        "claude_cwd": jsonl_cwd or spawn_cwd,
+        "claude_jsonl": str(path),
+    }
+
+
+def _cached_claude_session_for_pkood(agent_id):
+    """Cached wrapper around _resolve_claude_session_for_pkood.
+
+    Invalidates on: pkood meta-file mtime change OR 60s TTL.
+    """
+    meta_file = PKOOD_STATE_DIR / f"{agent_id}_meta.json"
+    try:
+        meta_mtime = meta_file.stat().st_mtime
+    except OSError:
+        meta_mtime = 0.0
+    now = time.time()
+    entry = _PKOOD_LINK_CACHE.get(agent_id)
+    if (
+        entry
+        and entry["meta_mtime"] == meta_mtime
+        and (now - entry["cached_at"]) < _PKOOD_LINK_TTL
+    ):
+        return entry["link"]
+    link = _resolve_claude_session_for_pkood(agent_id)
+    _PKOOD_LINK_CACHE[agent_id] = {
+        "link": link,
+        "meta_mtime": meta_mtime,
+        "cached_at": now,
+    }
+    return link
 
 
 def find_pkood_agents():
@@ -3520,6 +3999,17 @@ def find_pkood_agents():
                 status = "DEAD"
         elif status == "RUNNING":
             status = "DEAD"
+
+        # Link to the underlying claude-session UUID. Pkood's meta.json
+        # doesn't record the session id, so we reconcile by spawn-cwd +
+        # spawn-time heuristic. When we find a match, the kanban can merge
+        # the two cards (see find_all_sessions) so the user sees one card
+        # per running agent instead of a pkood card AND a jsonl card.
+        link = _cached_claude_session_for_pkood(agent_id) or {}
+        # Prefer the resolved cwd when pkood meta didn't record one —
+        # helps with cross-repo bucketing for pkood-spawned cards.
+        resolved_cwd = link.get("claude_cwd") or target_dir
+
         agents.append({
             "id": f"pkood-{agent_id}",
             "session_id": f"pkood-{agent_id}",
@@ -3533,8 +4023,8 @@ def find_pkood_agents():
             ) if update_ts else "",
             "size": 0,
             "source": "pkood",
-            "session_cwd": target_dir,
-            "session_cwd_exists": bool(target_dir and Path(target_dir).is_dir()),
+            "session_cwd": resolved_cwd,
+            "session_cwd_exists": bool(resolved_cwd and Path(resolved_cwd).is_dir()),
             "has_edit": False,
             "has_commit": False,
             "has_push": False,
@@ -3548,6 +4038,10 @@ def find_pkood_agents():
             "pkood_status": status,  # RUNNING, IDLE, BLOCKED, DEAD
             "pkood_is_stuck": data.get("is_stuck", False),
             "is_live": status not in ("DEAD", ""),
+            # Link back to the underlying claude-session so the kanban can
+            # dedup / enrich the pkood card with jsonl transcript fields.
+            "claude_session_id": link.get("claude_session_id"),
+            "claude_jsonl": link.get("claude_jsonl"),
         })
     agents.sort(key=lambda x: x["modified"], reverse=True)
     return agents
@@ -5820,6 +6314,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         tty, term_app or "Terminal", text
                     )
                     self.send_json(result)
+        elif path == "/api/ask":
+            # Synchronous "inject and wait for the next assistant turn".
+            # Used by the ccc-orchestration skill so a sibling Claude
+            # session can call this server via curl and get back the
+            # other session's reply.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = payload.get("session_id", "")
+            text = payload.get("text", "")
+            try:
+                timeout_ms = int(payload.get("timeout_ms") or 30000)
+            except (TypeError, ValueError):
+                timeout_ms = 30000
+            # Cap at 10 min so a runaway request can't tie up a worker
+            # thread forever.
+            timeout_ms = max(500, min(timeout_ms, 600000))
+            if not sid or not text:
+                self.send_json({"ok": False, "error": "missing session_id or text"})
+            else:
+                result = ask_session_and_wait(sid, text, timeout_ms=timeout_ms)
+                self.send_json(result)
         elif path == "/api/launch-terminal":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -6346,6 +6865,52 @@ def ensure_hooks_installed():
             tmp_path.unlink(missing_ok=True)
 
 
+def write_port_file(bind_host):
+    """Persist the listening URL to ~/.claude/command-center/port.txt so the
+    ccc-orchestration skill (and any other scripted caller) can find this
+    server without hardcoding the port. Single line, format
+    `http://<host>:<port>`. Best-effort — failures are logged and ignored."""
+    display_host = "127.0.0.1" if bind_host in ("127.0.0.1", "localhost", "::1") else bind_host
+    url = f"http://{display_host}:{PORT}"
+    port_file = COMMAND_CENTER_STATE_DIR / "port.txt"
+    try:
+        COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        port_file.write_text(url + "\n")
+        print(f"  [skill] port file: {port_file} -> {url}")
+    except OSError as e:
+        print(f"  [skill] could not write port file ({e})")
+    return url
+
+
+def install_orchestration_skill():
+    """Install (or refresh) the ccc-orchestration skill into
+    ~/.claude/skills/ccc-orchestration/SKILL.md so any Claude Code session
+    on this machine can discover the CCC HTTP API. Idempotent — only
+    writes when the source differs from the destination. Skipped entirely
+    when CCC_SKIP_SKILL_INSTALL=1."""
+    import shutil
+    if os.environ.get("CCC_SKIP_SKILL_INSTALL", "").strip().lower() in ("1", "true", "yes", "on"):
+        print("  [skill] install skipped (CCC_SKIP_SKILL_INSTALL=1)")
+        return
+    src = CCC_ROOT / "skills" / "ccc-orchestration.md"
+    if not src.exists():
+        # Source skill not bundled with this checkout (very minimal install /
+        # broken package). Stay silent rather than spamming a stack trace.
+        print(f"  [skill] source not found at {src}; skipping install")
+        return
+    dst_dir = Path.home() / ".claude" / "skills" / "ccc-orchestration"
+    dst = dst_dir / "SKILL.md"
+    try:
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        if dst.exists() and dst.read_bytes() == src.read_bytes():
+            print(f"  [skill] ccc-orchestration already up to date at {dst}")
+            return
+        shutil.copy2(src, dst)
+        print(f"  [skill] installed ccc-orchestration -> {dst}")
+    except OSError as e:
+        print(f"  [skill] could not install ccc-orchestration ({e})")
+
+
 def main():
     import socketserver
     class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -6353,6 +6918,7 @@ def main():
         daemon_threads = True
     migrate_state_dir()
     ensure_hooks_installed()
+    install_orchestration_skill()
     # SECURITY: bind to 127.0.0.1 by default. The whole trust model is
     # "implicit because it's local"; binding to all interfaces (the old
     # `("", PORT)`) exposed every endpoint — including subprocess-spawning
@@ -6364,6 +6930,7 @@ def main():
         print(f"⚠️  WARNING: binding to {bind_host} — server is reachable from the network.")
         print(f"   This server has no auth. Anyone who can reach this port can run")
         print(f"   subprocesses on your machine. Unset CCC_BIND_HOST to revert to localhost.")
+    write_port_file(bind_host)
     display_host = "localhost" if bind_host in ("127.0.0.1", "::1") else bind_host
     print(f"Claude Command Center running at http://{display_host}:{PORT}")
     print(f"  Log dir:       {LOG_DIR}")

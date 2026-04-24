@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Orchestration skill `ccc-orchestration` and `POST /api/ask` endpoint —
+  any Claude Code session on the machine can now spawn, inject into, and
+  synchronously ask sibling sessions through CCC over plain HTTP. The
+  skill is auto-installed to `~/.claude/skills/ccc-orchestration/SKILL.md`
+  on server startup (skip with `CCC_SKIP_SKILL_INSTALL=1`). CCC also
+  writes its base URL to `~/.claude/command-center/port.txt` on startup
+  so the skill (and any other scripted caller) can discover the running
+  instance without hardcoding the port. `/api/ask` reuses the existing
+  `resume_session_headless` infrastructure: it tails the spawned
+  subprocess's stream-json log, resolves on the next `result` event, and
+  returns `{ok, text, cost_usd, duration_ms, num_turns}`. Timeouts return
+  any partial assistant text seen so far and leave the underlying session
+  running.
+- Fenced code blocks in assistant messages now render as proper syntax-
+  highlighted blocks instead of plain text with literal backticks. Supported
+  langs: ts/tsx/js/jsx, py, bash/sh/zsh, json. Includes language label, a
+  copy-to-clipboard button (hover state for `Copied` feedback), horizontal
+  scroll for long lines, and token colors adapted from the GitHub dark
+  palette. Hand-rolled regex tokenizer — no library dependency.
 - Newly-appeared session cards get a transient shimmer glow on the kanban
   for ~30 seconds after first detection. Signals "this card is still
   settling — it may jump to a different column shortly." Only triggered
@@ -27,6 +46,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   → `MMM D · HH:MM`. Hover reveals the full localized date-time.
 
 ### Fixed
+- Pkood-spawned agents no longer produce two kanban cards (a `pkood-*` one
+  with working input plus a broken "Send to terminal…" claude-session one
+  that can't reach the pty). Each pkood agent is now linked to its
+  underlying `~/.claude/projects/*/<uuid>.jsonl` and the duplicate card is
+  absorbed into the pkood card. Linking is primarily by the
+  `claude.ai/code/session_*` bridge token printed in claude's banner and
+  also recorded as a `bridge_status` event in its jsonl — the shared
+  token is per-process and uniquely identifies each claude instance. When
+  the bridge token isn't available we fall back to a cwd + spawn-time
+  window heuristic. Dead pkood agents are left un-merged so their
+  underlying jsonl stays resumable via the CLI. The merged card pulls in
+  the jsonl's display name and tool-use signals so the user sees one
+  richer card per running agent.
+- "Launch in terminal" no longer builds a broken `cd` for repos whose name
+  contains hyphens. `find_session_cwd` used to fall back to decoding the
+  `~/.claude/projects/` directory name by replacing every `-` with `/`,
+  which silently turns `claude-command-center` into `claude/command/center`.
+  The fallback also triggered for very young sessions whose `.jsonl` hadn't
+  logged a `cwd`-bearing event in its first 40 lines, and the wrong path
+  was cached in-process for the lifetime of the server. The fallback now
+  scans sibling `.jsonl` files in the same project dir (which share a cwd)
+  instead of decoding the dir name, and a miss is no longer cached.
 - Sending to a Terminal.app / iTerm2 session from the split-panel input no
   longer leaves the terminal stuck on top. The osascript inject now
   captures the previously-frontmost app before activating the terminal

@@ -109,6 +109,31 @@ writes sidecar state the UI uses for the kanban.
   via `claude -p` (Haiku by default). Used for cleaning up auto-generated
   session slugs.
 
+## Orchestration skill
+
+CCC ships a Claude Code skill (`ccc-orchestration`) that lets one Claude
+session spawn, inject into, and synchronously ask sibling sessions over
+plain HTTP. On startup the server copies the skill to
+`~/.claude/skills/ccc-orchestration/SKILL.md` (set
+`CCC_SKIP_SKILL_INSTALL=1` to opt out) and writes its base URL to
+`~/.claude/command-center/port.txt` so the skill can discover the running
+instance without hardcoding a port.
+
+Once installed, a Claude session can run e.g.:
+
+```bash
+CCC_URL="$(cat ~/.claude/command-center/port.txt)"
+curl -s -X POST "$CCC_URL/api/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "<uuid>", "text": "What is 2+2?", "timeout_ms": 30000}'
+# -> {"ok": true, "text": "4", "cost_usd": ..., "duration_ms": ..., "num_turns": 1}
+```
+
+Use this for **persistent peer sessions** (a marketing assistant, a deploy
+babysitter) that should survive past the current turn and show up on the
+kanban — not for one-shot internal subtasks (the built-in `Task` tool is
+better for those).
+
 ## Architecture
 
 Two files: a single Python file (stdlib-only HTTP server) and a single HTML
