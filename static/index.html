@@ -862,12 +862,24 @@
     animation: working-glow 1.6s ease-in-out infinite !important;
     border: 1px solid rgba(251,202,4,0.4) !important;
   }
-  .kanban-card.pending-spawn {
-    border: 1px dashed var(--accent) !important;
+  /* Pending (optimistic placeholder while /api/sessions/spawn is in flight)
+     and recently-born (the real session that replaced it, or any session
+     that first appeared during a live poll) share one shimmer style so the
+     visual state is continuous across the swap. Only the iteration count
+     differs: pending shimmers forever until the placeholder is replaced;
+     recently-born stops itself after ~28s via the bounded count. */
+  .kanban-card.pending-spawn,
+  .kanban-card.recently-born:not(.pending-spawn) {
+    border: 1px dashed rgba(88,166,255,0.6) !important;
     background: linear-gradient(90deg, var(--surface) 0%, rgba(88,166,255,0.08) 50%, var(--surface) 100%);
     background-size: 200% 100%;
     animation: pending-shimmer 1.4s linear infinite;
     position: relative;
+  }
+  .kanban-card.recently-born:not(.pending-spawn) {
+    /* Bounded iteration count — shimmer stops itself after ~28s and the
+       `.recently-born` class comes off on the next render via isRecentlyBorn. */
+    animation-iteration-count: 20;
   }
   .kanban-card.pending-spawn .kanban-card-title::after {
     content: ' · spawning...';
@@ -876,17 +888,6 @@
   @keyframes pending-shimmer {
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
-  }
-  /* A just-appeared real session (replacing a spawn placeholder, or a brand
-     new session that showed up during a live poll). Same shimmer as the
-     placeholder but softer — signals "this card is still settling, may jump
-     to a different column once state resolves". Iteration count capped so
-     the CSS animation stops itself after ~28s without any JS cleanup. */
-  .kanban-card.recently-born:not(.pending-spawn) {
-    border: 1px dashed rgba(88,166,255,0.55) !important;
-    background: linear-gradient(90deg, var(--surface) 0%, rgba(88,166,255,0.07) 50%, var(--surface) 100%);
-    background-size: 200% 100%;
-    animation: pending-shimmer 1.4s linear 20;
   }
 
   .kanban-cards {
@@ -898,8 +899,20 @@
   .kanban-card {
     padding: 10px 12px; margin-bottom: 6px; border-radius: 6px;
     background: var(--surface); border: 1px solid var(--border);
-    cursor: pointer; transition: border-color 0.15s;
+    cursor: pointer;
+    /* Soft transitions so column/state changes feel continuous rather than
+       snap-to. .just-moved handles the big flash when a card actually changes
+       column; these cover the subtler per-field shifts. */
+    transition: border-color 0.15s, background-color 0.25s, box-shadow 0.25s;
   }
+  /* Fade-in when a card appears for the first time (placeholder swap, a new
+     session showing up mid-session, or a freshly-loaded board). Paired with
+     the JS that only stamps this class on inserts, not re-renders. */
+  @keyframes card-enter {
+    from { opacity: 0; transform: translateY(-3px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .kanban-card.card-enter { animation: card-enter 0.22s ease-out; }
   .kanban-card:hover { border-color: var(--text-muted); }
   .kanban-card.active { border-color: var(--accent); }
   .kanban-card .kanban-card-title {
@@ -3443,6 +3456,22 @@
   // animation has a bounded iteration count so we don't need to clean up.
   const _firstSeenSessions = new Map();  // session_id → epoch ms
   let _convInitialLoadDone = false;
+
+  // Sticky first-column pin for brand-new sessions. Prevents the "card appeared
+  // in Planning then jumped to Review then back" bounce that happens while the
+  // server is still settling on sidecar_status / live / stage for a session
+  // that's mid-spawn. The sticky releases as soon as the session makes visible
+  // progress (first edit/commit/push/tail event), or after _STICKY_TTL_MS.
+  const _stickyInitialCol = new Map();  // session_id → { col, signals }
+  const _STICKY_TTL_MS = 60000;
+  function _signalSnapshot(c) {
+    return {
+      has_edit: !!c.has_edit,
+      has_commit: !!c.has_commit,
+      has_push: !!c.has_push,
+      last_event_type: c.last_event_type || null,
+    };
+  }
   function stampFreshSessionsAsBorn(freshList) {
     if (!_convInitialLoadDone) return;
     const existing = new Set();
@@ -3562,9 +3591,25 @@
       const res = await fetch('/api/sessions');
       const fresh = await res.json();
       // Drop pending placeholders whose real session has appeared (matched by spawn_pid).
+      // When we do the swap, carry the placeholder's column preference over to
+      // the real session via the sticky mechanism so the card doesn't jump on
+      // first render. Also pre-stamp _firstSeenSessions so `.recently-born`
+      // kicks in on the very first render of the real card (no frame where the
+      // card has neither pending-spawn nor recently-born).
       const realPids = new Set(fresh.filter(c => c.spawn_pid).map(c => c.spawn_pid));
       for (const pid of Array.from(pendingSpawns.keys())) {
         if (realPids.has(pid)) {
+          const placeholderCol = columnOverrides['spawning-' + pid];
+          const realCard = fresh.find(c => c.spawn_pid === pid);
+          if (realCard && realCard.session_id) {
+            _firstSeenSessions.set(realCard.session_id, Date.now());
+            if (placeholderCol && !realCard.verified && !realCard.archived) {
+              _stickyInitialCol.set(realCard.session_id, {
+                col: placeholderCol,
+                signals: _signalSnapshot(realCard),
+              });
+            }
+          }
           delete columnOverrides['spawning-' + pid];
           pendingSpawns.delete(pid);
         }
@@ -4028,9 +4073,63 @@
           _didInitialWorkingScroll = true;
         }
       }
+      _applyCardTransitions();
     });
   }
   let _didInitialWorkingScroll = false;
+
+  // Per-session column memory, used after each render to detect natural column
+  // changes (classifier moved a card) versus drag-drop (already handles its
+  // own highlight). Flash .just-moved so the user's eye catches the shift,
+  // and card-enter on brand-new cards so they fade in instead of snap in.
+  const _lastRenderedCol = new Map();  // session_id → last-rendered column key
+  let _kanbanHasRenderedOnce = false;
+  function _applyCardTransitions() {
+    // Track which sids exist in this render so we know which to evict.
+    const seenThisRender = new Set();
+    // De-dupe across board + split — both panels render the same cards; we
+    // only want to stamp the class once per sid to avoid doubling animations.
+    const stampedJustMoved = new Set();
+    const stampedEnter = new Set();
+    document.querySelectorAll('.kanban-card[data-session-id]').forEach(el => {
+      const sid = el.dataset.sessionId;
+      const col = el.dataset.col;
+      if (!sid || !col) return;
+      seenThisRender.add(sid);
+      const prev = _lastRenderedCol.get(sid);
+      if (prev === undefined) {
+        // First time we've seen this card — fade it in. Skipped on the very
+        // first board render (_kanbanHasRenderedOnce=false) so the entire
+        // board doesn't fade in at once on page load.
+        if (_kanbanHasRenderedOnce && !stampedEnter.has(sid)) {
+          stampedEnter.add(sid);
+          el.classList.remove('card-enter');
+          void el.offsetWidth;
+          el.classList.add('card-enter');
+          setTimeout(() => el.classList.remove('card-enter'), 260);
+        }
+      } else if (prev !== col && !stampedJustMoved.has(sid)) {
+        stampedJustMoved.add(sid);
+        el.classList.remove('just-moved');
+        void el.offsetWidth;
+        el.classList.add('just-moved');
+        setTimeout(() => el.classList.remove('just-moved'), 2300);
+      }
+    });
+    // Commit this render's column state to the memory map (first seen wins,
+    // since board + split each stamp the same sid).
+    const nextCols = new Map();
+    document.querySelectorAll('.kanban-card[data-session-id]').forEach(el => {
+      const sid = el.dataset.sessionId;
+      if (sid && !nextCols.has(sid)) nextCols.set(sid, el.dataset.col);
+    });
+    // Evict sids that are no longer rendered (archived-out, filtered away, …)
+    for (const sid of Array.from(_lastRenderedCol.keys())) {
+      if (!seenThisRender.has(sid)) _lastRenderedCol.delete(sid);
+    }
+    for (const [sid, col] of nextCols) _lastRenderedCol.set(sid, col);
+    _kanbanHasRenderedOnce = true;
+  }
 
   // Manual column overrides (drag-and-drop) — session_id → column key
   let columnOverrides = {};
@@ -4264,6 +4363,51 @@
   }
 
   function classifyKanbanColumn(c) {
+    const raw = _classifyKanbanColumnNatural(c);
+    return _applyFreshSessionSticky(c, raw);
+  }
+
+  // For a session first observed within _STICKY_TTL_MS, pin it to its initial
+  // classification column until either (a) visible progress fires a signal
+  // change or (b) the window expires. This stops the Planning↔Review bounce
+  // that the user sees during the first minute of a fresh spawn, while still
+  // honoring manual drag-drop (columnOverrides) and server truth (verify /
+  // archive / backlog) unconditionally.
+  function _applyFreshSessionSticky(c, raw) {
+    const sid = c.session_id;
+    if (!sid) return raw;
+    const born = _firstSeenSessions.get(sid);
+    if (!born || (Date.now() - born) >= _STICKY_TTL_MS) {
+      if (_stickyInitialCol.has(sid)) _stickyInitialCol.delete(sid);
+      return raw;
+    }
+    // Manual override and server-truth columns always win.
+    if (columnOverrides[sid]) return raw;
+    if (raw === 'verified' || raw === 'archived'
+        || raw === 'backlog' || raw === 'needs-attention') {
+      return raw;
+    }
+    let snap = _stickyInitialCol.get(sid);
+    if (!snap) {
+      snap = { col: raw, signals: _signalSnapshot(c) };
+      _stickyInitialCol.set(sid, snap);
+      return raw;
+    }
+    // If the session has made real progress since we pinned it, release the
+    // sticky so normal classification takes over immediately.
+    const s = snap.signals;
+    const advanced = (c.has_edit && !s.has_edit)
+      || (c.has_commit && !s.has_commit)
+      || (c.has_push && !s.has_push)
+      || (!!c.last_event_type && c.last_event_type !== s.last_event_type);
+    if (advanced) {
+      _stickyInitialCol.delete(sid);
+      return raw;
+    }
+    return snap.col;
+  }
+
+  function _classifyKanbanColumnNatural(c) {
     // Manual override from drag-drop takes priority
     const ov = columnOverrides[c.session_id || c.id];
     if (ov) {
@@ -7428,6 +7572,12 @@
       const usePkood = ($kptPkoodToggle && $kptPkoodToggle.checked) || prompt.startsWith('pkood:');
       if (prompt.startsWith('pkood:')) prompt = prompt.slice(6).trim();
       if (!prompt) return;
+      // Show the placeholder immediately — don't wait for the spawn POST to
+      // return. Users were staring at a blank board for a beat because the
+      // placeholder only materialized after /api/sessions/spawn responded.
+      const subject = prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt;
+      const tempPid = 'tmp-' + Date.now();
+      insertPendingSpawnCard(tempPid, subject, usePkood);
       $kptRunBtn.disabled = true;
       $kptRunBtn.textContent = 'Spawning...';
       try {
@@ -7441,12 +7591,37 @@
         if (data.ok) {
           $kptNewSession.value = '';
           $kptRunBtn.textContent = 'Spawned!';
+          // Swap the temp-pid key for the real pid so the next /api/sessions
+          // poll can match by spawn_pid and replace the placeholder with the
+          // real card. Without this the placeholder sits on the board until
+          // the 30s auto-cleanup fires.
+          if (data.pid) {
+            const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
+            if (placeholder) {
+              placeholder.spawn_pid = data.pid;
+              pendingSpawns.delete(tempPid);
+              pendingSpawns.set(data.pid, placeholder);
+            }
+          }
+          // Tight poll schedule so the real card replaces the placeholder fast.
+          setTimeout(refreshConversationList, 600);
+          setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3000);
         } else {
           $kptRunBtn.textContent = data.error ? 'Failed' : 'Failed';
+          // Spawn failed — drop the optimistic placeholder so the board doesn't
+          // lie about an in-flight session.
+          pendingSpawns.delete(tempPid);
+          delete columnOverrides['spawning-' + tempPid];
+          conversationsData = conversationsData.filter(x => x.id !== 'spawning-' + tempPid);
+          renderSidebar(filterConversations($convSearch.value));
         }
       } catch (err) {
         $kptRunBtn.textContent = 'Error';
+        pendingSpawns.delete(tempPid);
+        delete columnOverrides['spawning-' + tempPid];
+        conversationsData = conversationsData.filter(x => x.id !== 'spawning-' + tempPid);
+        renderSidebar(filterConversations($convSearch.value));
       }
       setTimeout(() => { $kptRunBtn.disabled = false; $kptRunBtn.textContent = 'Run'; }, 2000);
     });

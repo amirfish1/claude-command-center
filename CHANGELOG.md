@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copy it to the clipboard and file the report manually. New endpoint:
   `POST /api/bug-report`. Pattern adapted from BookYourMat. (#5)
 
+### Fixed
+- Spawn experience feels snappy: the kanban toolbar `Run` button now inserts an
+  optimistic placeholder immediately (it was previously waiting for the spawn
+  POST to return), the placeholder→real-card swap inherits the column via a
+  60 s sticky pin so fresh sessions don't bounce Planning↔Working↔Review while
+  the server settles on sidecar/live/stage, and cards fade in + animate on
+  legitimate column changes instead of snap-jumping. Closes the "card appears
+  late, glows, jumps around" gripe.
+
 ## [0.1.2] - 2026-04-24
 
 ### Added
