@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `amirfish1/claude-command-center` via `gh issue create`. If `gh` is
   missing or fails, the modal renders the issue markdown so the user can
   copy it to the clipboard and file the report manually. New endpoint:
-  `POST /api/bug-report`. Pattern adapted from BookYourMat.
+  `POST /api/bug-report`. Pattern adapted from BookYourMat. (#5)
 
 ## [0.1.2] - 2026-04-24
 
