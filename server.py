@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -253,6 +254,155 @@ def _which(cmd):
     file stays stdlib-only without importing shutil at module top."""
     import shutil
     return shutil.which(cmd)
+
+
+# ── In-app update: version check + self-update ─────────────────────────────
+# The UI pings /api/version/check on load; if the local __version__ is behind
+# the latest GitHub release tag, it shows a "Update available" pill. Clicking
+# the pill posts to /api/self-update, which runs
+#     git fetch origin && git reset --hard origin/main
+# in the install directory (pre-flight checked for local mods + branch=main),
+# writes the response, and then os.execvp's the server back onto itself so
+# the new code is running.
+_VERSION_CHECK_CACHE = {"ts": 0.0, "data": None}
+_VERSION_CHECK_TTL = 6 * 60 * 60  # 6h — GitHub unauth limit is 60/h/IP
+
+
+def _install_dir():
+    """Dir containing server.py — this is the git clone we'd update."""
+    return Path(__file__).resolve().parent
+
+
+def _strip_v(tag):
+    if not tag:
+        return ""
+    return tag[1:] if tag.startswith(("v", "V")) else tag
+
+
+def _semver_tuple(s):
+    """Coerce 'X.Y.Z' → (X, Y, Z). Non-numeric chunks → 0. Trailing '-rc1' etc
+    is stripped. Used only for the 'is the local behind?' comparison."""
+    parts = (s or "").split("-", 1)[0].split(".")
+    out = []
+    for p in parts[:3]:
+        try:
+            out.append(int(p))
+        except ValueError:
+            out.append(0)
+    while len(out) < 3:
+        out.append(0)
+    return tuple(out)
+
+
+def _fetch_latest_release():
+    """Hit GitHub's latest-release endpoint. Returns dict or raises on failure.
+    Stdlib-only — urllib.request. Short timeout so we never hang the UI."""
+    url = "https://api.github.com/repos/amirfish1/claude-command-center/releases/latest"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": f"claude-command-center/{__version__}",
+        "Accept": "application/vnd.github+json",
+    })
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _version_check(force=False):
+    """Return {ok, current, latest, behind, changelog_url} for the UI.
+    Caches for 6h to stay well under GitHub's unauthenticated rate limit.
+    Never raises — network / parse errors come back as {ok:false, error}."""
+    now = time.time()
+    if not force and _VERSION_CHECK_CACHE["data"] and (now - _VERSION_CHECK_CACHE["ts"]) < _VERSION_CHECK_TTL:
+        return _VERSION_CHECK_CACHE["data"]
+    try:
+        rel = _fetch_latest_release()
+    except Exception as e:
+        # 404 (no releases yet), network error, timeout, JSON error — all
+        # handled identically: surface to the client, keep the server up.
+        data = {"ok": False, "current": __version__, "error": str(e)}
+        _VERSION_CHECK_CACHE["data"] = data
+        _VERSION_CHECK_CACHE["ts"] = now
+        return data
+    latest = _strip_v(rel.get("tag_name") or "")
+    current = __version__
+    behind = _semver_tuple(current) < _semver_tuple(latest) if latest else False
+    changelog_url = (
+        f"https://github.com/amirfish1/claude-command-center/compare/"
+        f"v{current}...v{latest}"
+    ) if behind else (rel.get("html_url") or "")
+    data = {
+        "ok": True,
+        "current": current,
+        "latest": latest,
+        "behind": behind,
+        "changelog_url": changelog_url,
+    }
+    _VERSION_CHECK_CACHE["data"] = data
+    _VERSION_CHECK_CACHE["ts"] = now
+    return data
+
+
+def _git(args, cwd, timeout=10):
+    """Run `git <args>` in cwd. Returns (rc, stdout, stderr) — stderr trimmed."""
+    try:
+        r = subprocess.run(
+            ["git"] + list(args),
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return r.returncode, r.stdout, (r.stderr or "").strip()
+    except FileNotFoundError:
+        return 127, "", "git not found on PATH"
+    except subprocess.TimeoutExpired:
+        return 124, "", f"git {' '.join(args)} timed out"
+
+
+def _self_update():
+    """Run the pre-flight + pull. Returns a response dict; the caller is
+    responsible for writing it to the client BEFORE the restart fires."""
+    d = _install_dir()
+    if not (d / ".git").exists():
+        return {"ok": False, "error": "not a git clone", "install_dir": str(d)}
+    rc, out, err = _git(["status", "--porcelain"], d)
+    if rc != 0:
+        return {"ok": False, "error": f"git status failed: {err or 'rc={}'.format(rc)}"}
+    if out.strip():
+        paths = [ln[3:] for ln in out.splitlines() if len(ln) > 3]
+        return {"ok": False, "error": "local changes present", "paths": paths}
+    rc, branch, err = _git(["rev-parse", "--abbrev-ref", "HEAD"], d)
+    if rc != 0:
+        return {"ok": False, "error": f"git rev-parse failed: {err or 'rc={}'.format(rc)}"}
+    branch = branch.strip()
+    if branch != "main":
+        return {"ok": False, "error": f"on branch {branch!r}, not main"}
+    rc, _, err = _git(["fetch", "origin", "--quiet"], d, timeout=30)
+    if rc != 0:
+        return {"ok": False, "error": f"git fetch failed: {err or 'rc={}'.format(rc)}"}
+    rc, _, err = _git(["reset", "--hard", "origin/main", "--quiet"], d)
+    if rc != 0:
+        return {"ok": False, "error": f"git reset failed: {err or 'rc={}'.format(rc)}"}
+    rc, sha, _ = _git(["rev-parse", "HEAD"], d)
+    # Bust the 6h cache so the post-restart UI reads fresh latest/current.
+    _VERSION_CHECK_CACHE["ts"] = 0.0
+    _VERSION_CHECK_CACHE["data"] = None
+    return {"ok": True, "new_sha": (sha or "").strip()}
+
+
+def _schedule_restart(delay=0.5):
+    """Arm an os.execvp() that replaces this process with a fresh
+    `python server.py` after `delay` seconds. Called AFTER the HTTP response
+    is flushed so the client sees {ok:true} before the socket dies."""
+    def _go():
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os.execvp(sys.executable, [sys.executable, str(Path(__file__).resolve())])
+    t = threading.Timer(delay, _go)
+    t.daemon = True
+    t.start()
 
 
 def _run_healthcheck():
@@ -5522,6 +5672,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(_run_healthcheck())
         elif path == "/api/version":
             self.send_json({"version": __version__})
+        elif path == "/api/version/check":
+            # Is the local install behind the latest GitHub release? Used by
+            # the in-app "Update available" pill. Cached 6h in memory so we
+            # don't hammer GitHub's unauthenticated rate limit (60/h/IP).
+            # Network / parse errors surface as {ok:false, error} — the UI
+            # hides the pill and logs silently.
+            qs = urllib.parse.parse_qs(parsed.query)
+            force = qs.get("force", ["0"])[0] in ("1", "true")
+            self.send_json(_version_check(force=force))
         elif path == "/api/repo/list":
             # List of repos the picker offers + the one currently active.
             repos = load_known_repos()
@@ -5587,6 +5746,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # and auto_verify_closed_issues can fire immediately.
             _bust_issue_state_cache()
             self.send_json({"ok": True})
+            return
+        if path == "/api/self-update":
+            # Pull the latest main into the install dir and restart the server
+            # in-place via os.execvp. The same-origin check above already
+            # gates this — no additional auth, trust model is "loopback only".
+            # Pre-flight checks in _self_update() bail out before touching the
+            # tree if it's dirty, on the wrong branch, or not a git clone.
+            result = _self_update()
+            self.send_json(result, 200 if result.get("ok") else 200)
+            if result.get("ok"):
+                # Flush the socket BEFORE the process is replaced so the
+                # client sees {ok:true} and can show the reconnect overlay.
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+                _schedule_restart()
             return
         if path == "/api/fs/pick-folder":
             # Open the OS-native folder chooser and return the picked absolute

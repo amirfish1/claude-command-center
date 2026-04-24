@@ -1137,6 +1137,64 @@
     border-radius: 6px; padding: 8px 10px; display: none; }
   .rpm-error.visible { display: block; }
 
+  /* ── In-app update pill + modal ──────────────────────────────────
+     Subtle "Update available" pill that appears in the topbar when
+     the local __version__ is behind GitHub's latest release tag.
+     Clicking the pill opens the .upd-overlay modal. */
+  .upd-pill {
+    display: none; align-items: center; gap: 6px;
+    padding: 3px 10px; margin-left: 8px;
+    background: rgba(88,166,255,0.12); color: var(--accent);
+    border: 1px solid rgba(88,166,255,0.35); border-radius: 999px;
+    font-size: 11px; font-weight: 600; cursor: pointer;
+    letter-spacing: 0.2px; white-space: nowrap;
+    transition: background 0.12s ease-out;
+  }
+  .upd-pill.visible { display: inline-flex; }
+  .upd-pill:hover { background: rgba(88,166,255,0.22); }
+  .upd-pill .upd-pill-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 0 0 rgba(88,166,255,0.4);
+    animation: upd-pulse 2.4s ease-out infinite;
+  }
+  @keyframes upd-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(88,166,255,0.5); }
+    70%  { box-shadow: 0 0 0 6px rgba(88,166,255,0); }
+    100% { box-shadow: 0 0 0 0 rgba(88,166,255,0); }
+  }
+  .upd-overlay { position: fixed; inset: 0; z-index: 9999;
+    display: none; align-items: center; justify-content: center; }
+  .upd-overlay.open { display: flex; }
+  .upd-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.65);
+    backdrop-filter: blur(4px); }
+  .upd-dialog { position: relative; width: min(500px, 92vw);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px;
+    display: flex; flex-direction: column; gap: 14px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+  .upd-title { font-size: 16px; font-weight: 600; color: var(--text); }
+  .upd-versions { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+  .upd-versions strong { color: var(--text); font-weight: 600; }
+  .upd-compare-link { font-size: 12px; color: var(--accent); text-decoration: none; }
+  .upd-compare-link:hover { text-decoration: underline; }
+  .upd-warning { font-size: 11px; color: var(--text-muted);
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; line-height: 1.5; }
+  .upd-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+  .upd-btn { padding: 8px 16px; font-size: 13px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    cursor: pointer; font-family: inherit; }
+  .upd-btn:hover { background: #1c2128; }
+  .upd-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .upd-primary { background: var(--accent); color: #fff;
+    border-color: var(--accent); font-weight: 600; }
+  .upd-primary:hover { opacity: 0.9; background: var(--accent); }
+  .upd-error { font-size: 12px; color: var(--red);
+    background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3);
+    border-radius: 6px; padding: 8px 10px; display: none;
+    white-space: pre-wrap; word-break: break-word; }
+  .upd-error.visible { display: block; }
+
   /* Backlog column — no longer sticky, scrolls with the rest */
   /* Reuse kanban column/card styles in split mode */
   .kanban-board-split .kanban-column,
@@ -1789,6 +1847,17 @@
           }
           sessionStorage.removeItem('ccc-switching-to');
         }
+        // Same idea for the in-app update flow — the post-restart page
+        // shows "Update complete, reconnecting…" instead of the default
+        // "Loading sessions…" while the session scan runs.
+        if (sessionStorage.getItem('ccc-updating')) {
+          const $label2 = document.getElementById('cccLoadingLabel');
+          if ($label2) {
+            $label2.innerHTML =
+              '<strong>Update complete, reconnecting&hellip;</strong>' +
+              '<div class="ccc-loading-detail">Rescanning sessions with the new version.</div>';
+          }
+        }
       } catch (_) {}
     })();
   </script>
@@ -1799,6 +1868,10 @@
   <div class="ccc-topbar" id="cccTopbar">
     <span class="ccc-topbar-label">Repo</span>
     <select id="sbRepoPicker" title="Repo this session is watching — switch to point at a different project. Live-switches without a server restart."></select>
+    <button type="button" id="updPill" class="upd-pill" title="A new release is available on GitHub. Click to review and update.">
+      <span class="upd-pill-dot"></span>
+      <span id="updPillText">Update available</span>
+    </button>
     <div id="setupBanner" class="ccc-setup-banner"></div>
   </div>
 
@@ -1996,6 +2069,28 @@
       <div class="rpm-actions">
         <button type="button" class="rpm-browse-btn" id="rpmBrowseBtn" title="Open the native macOS folder chooser">Browse&hellip;</button>
         <button type="button" class="rpm-cancel-btn" id="rpmCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- In-app update modal. Opened from #updPill when the local install is
+       behind the latest GitHub release. Runs `git reset --hard origin/main`
+       in the install dir and restarts the server in-place. -->
+  <div id="updModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="updTitle">
+    <div class="upd-backdrop" id="updBackdrop"></div>
+    <div class="upd-dialog">
+      <div class="upd-title" id="updTitle">Update Claude Command Center</div>
+      <div class="upd-versions" id="updVersions"></div>
+      <a id="updCompareLink" class="upd-compare-link" href="#" target="_blank" rel="noopener">View changes on GitHub &rarr;</a>
+      <div class="upd-warning">
+        Runs <code>git fetch + reset --hard origin/main</code> in the install
+        directory, then restarts the server. Pre-flight checks require a
+        clean working tree on the <code>main</code> branch.
+      </div>
+      <div class="upd-error" id="updError"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="updLaterBtn">Later</button>
+        <button type="button" class="upd-btn upd-primary" id="updNowBtn">Update now</button>
       </div>
     </div>
   </div>
@@ -7327,6 +7422,165 @@
   if ($newSessionInput) $newSessionInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); spawnNewSession(); }
   });
+
+  // ── In-app update check ─────────────────────────────────────────
+  // Hit /api/version/check on page load. If we're behind the latest
+  // GitHub release, show the topbar pill. Clicking → modal → POST
+  // /api/self-update → show loading overlay → poll /api/version until
+  // the new process is up → location.reload().
+  const $updPill = document.getElementById('updPill');
+  const $updPillText = document.getElementById('updPillText');
+  const $updModal = document.getElementById('updModal');
+  const $updBackdrop = document.getElementById('updBackdrop');
+  const $updVersions = document.getElementById('updVersions');
+  const $updCompareLink = document.getElementById('updCompareLink');
+  const $updError = document.getElementById('updError');
+  const $updLaterBtn = document.getElementById('updLaterBtn');
+  const $updNowBtn = document.getElementById('updNowBtn');
+  let updCheckData = null;
+
+  function updOpenModal() {
+    if (!updCheckData || !updCheckData.behind) return;
+    if ($updVersions) {
+      $updVersions.innerHTML =
+        'Current: <strong>v' + String(updCheckData.current).replace(/[<>&]/g, '') + '</strong> &middot; ' +
+        'Latest: <strong>v' + String(updCheckData.latest).replace(/[<>&]/g, '') + '</strong>';
+    }
+    if ($updCompareLink && updCheckData.changelog_url) {
+      $updCompareLink.href = updCheckData.changelog_url;
+    }
+    if ($updError) {
+      $updError.textContent = '';
+      $updError.classList.remove('visible');
+    }
+    if ($updNowBtn) $updNowBtn.disabled = false;
+    if ($updModal) $updModal.classList.add('open');
+  }
+  function updCloseModal() {
+    if ($updModal) $updModal.classList.remove('open');
+  }
+  if ($updPill) $updPill.addEventListener('click', updOpenModal);
+  if ($updLaterBtn) $updLaterBtn.addEventListener('click', updCloseModal);
+  if ($updBackdrop) $updBackdrop.addEventListener('click', updCloseModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $updModal && $updModal.classList.contains('open')) {
+      updCloseModal();
+    }
+  });
+
+  async function updWaitForServer(maxSeconds) {
+    // Poll /api/version until the restarted server answers. Returns true on
+    // success, false if it never came back within the budget.
+    const deadline = Date.now() + maxSeconds * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        const r = await fetch('/api/version', { cache: 'no-store' });
+        if (r.ok) return true;
+      } catch (_) { /* keep waiting */ }
+    }
+    return false;
+  }
+
+  async function updRunSelfUpdate() {
+    if (!$updNowBtn) return;
+    $updNowBtn.disabled = true;
+    if ($updLaterBtn) $updLaterBtn.disabled = true;
+    if ($updError) { $updError.textContent = ''; $updError.classList.remove('visible'); }
+
+    const $overlay = document.getElementById('cccLoadingOverlay');
+    const $label = document.getElementById('cccLoadingLabel');
+    if ($overlay) {
+      $overlay.classList.remove('fade-out', 'gone');
+      if ($label) {
+        $label.innerHTML =
+          '<strong>Updating Claude Command Center&hellip;</strong>' +
+          '<div class="ccc-loading-detail">Pulling latest from GitHub and restarting the server.</div>';
+      }
+    }
+    try { sessionStorage.setItem('ccc-updating', '1'); } catch (_) {}
+
+    let data;
+    try {
+      const r = await fetch('/api/self-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      data = await r.json();
+    } catch (e) {
+      // Socket may drop at the moment execvp fires — treat that as success
+      // and start polling for the new process.
+      data = { ok: true, _restartRace: true };
+    }
+
+    if (!data.ok) {
+      // Pre-flight failed (dirty tree, wrong branch, etc). Hide the overlay
+      // and surface the reason in the modal so the user can act on it.
+      try { sessionStorage.removeItem('ccc-updating'); } catch (_) {}
+      if ($overlay) $overlay.classList.add('fade-out', 'gone');
+      if ($updError) {
+        let msg = data.error || 'Update failed';
+        if (data.paths && data.paths.length) {
+          msg += '\n\nUncommitted paths:\n  ' + data.paths.slice(0, 8).join('\n  ');
+        }
+        if ((data.error || '').indexOf('local changes') !== -1) {
+          msg += '\n\nCommit or stash the changes in the install directory and try again.';
+        } else if ((data.error || '').indexOf('not main') !== -1) {
+          msg += '\n\nSwitch the install clone to the main branch and try again.';
+        } else if ((data.error || '').indexOf('not a git clone') !== -1) {
+          msg += '\n\nSelf-update only works for installs created with `git clone`.';
+        }
+        $updError.textContent = msg;
+        $updError.classList.add('visible');
+      }
+      showOpToast('Update failed: ' + (data.error || 'unknown'), 'error');
+      $updNowBtn.disabled = false;
+      if ($updLaterBtn) $updLaterBtn.disabled = false;
+      return;
+    }
+
+    // Server is restarting. Poll /api/version until it answers, then reload.
+    if ($label) {
+      $label.innerHTML =
+        '<strong>Restarting&hellip;</strong>' +
+        '<div class="ccc-loading-detail">Waiting for the new process to bind the port.</div>';
+    }
+    const ok = await updWaitForServer(30);
+    if (ok) {
+      // Keep the 'ccc-updating' flag set — the post-reload page reads it to
+      // show a transient "Updated" toast, then clears it.
+      location.reload();
+    } else {
+      try { sessionStorage.removeItem('ccc-updating'); } catch (_) {}
+      if ($overlay) $overlay.classList.add('fade-out', 'gone');
+      showOpToast("Server didn't come back within 30s — try reloading manually", 'error');
+      $updNowBtn.disabled = false;
+      if ($updLaterBtn) $updLaterBtn.disabled = false;
+    }
+  }
+  if ($updNowBtn) $updNowBtn.addEventListener('click', updRunSelfUpdate);
+
+  (async () => {
+    try {
+      const r = await fetch('/api/version/check', { cache: 'no-store' });
+      const d = await r.json();
+      if (d && d.ok && d.behind) {
+        updCheckData = d;
+        if ($updPillText) {
+          $updPillText.textContent = 'Update → v' + String(d.latest).replace(/[<>&]/g, '');
+        }
+        if ($updPill) $updPill.classList.add('visible');
+      }
+    } catch (_) { /* silent — the pill just stays hidden */ }
+  })();
+
+  // If we just finished restarting after a self-update, briefly acknowledge.
+  try {
+    if (sessionStorage.getItem('ccc-updating')) {
+      sessionStorage.removeItem('ccc-updating');
+      showOpToast('Updated to the latest version', 'ok');
+    }
+  } catch (_) {}
 
   // Init — default to Sessions tab
   loadConversationList();
