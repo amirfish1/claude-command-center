@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   modifications and branch=main) and restarts the server in-place via
   `os.execvp`. Browser auto-reconnects when the new process binds the port.
   Closes #3.
+- Browser tab favicon — inline SVG data URL showing the ⌘ glyph in Claude
+  orange on the app's dark surface. No new file, no server route.
 - Orchestration skill `ccc-orchestration` and `POST /api/ask` endpoint —
   any Claude Code session on the machine can now spawn, inject into, and
   synchronously ask sibling sessions through CCC over plain HTTP. The
