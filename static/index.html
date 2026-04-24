@@ -9,6 +9,7 @@
   :root {
     --bg: #0d1117;
     --surface: #161b22;
+    --surface-2: var(--surface-2);          /* hover/raised surface */
     --border: #30363d;
     --text: #c9d1d9;
     --text-muted: #8b949e;
@@ -19,10 +20,30 @@
     --purple: #bc8cff;
     --red: #f85149;
     --cyan: #39d2c0;
+    --accent-contrast: #ffffff;     /* readable text/icon color on var(--accent) */
+    --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+  :root[data-theme="light"] {
+    --bg: #ffffff;
+    --surface: #f6f8fa;
+    --surface-2: #eaeef2;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-muted: #57606a;
+    --text-secondary: #57606a;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --orange: #9a6700;
+    --purple: #8250df;
+    --red: #cf222e;
+    --cyan: #0e7490;
+  }
+  :root[data-font="mono"] {
+    --font-ui: 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-family: var(--font-ui);
     background: var(--bg); color: var(--text);
     display: flex; height: 100vh; overflow: hidden;
   }
@@ -170,8 +191,8 @@
     padding: 10px 12px; border-radius: 6px; cursor: pointer;
     margin-bottom: 4px; transition: background 0.15s;
   }
-  .log-item:hover { background: #1c2128; }
-  .log-item.active { background: #1c2128; border-left: 3px solid var(--accent); }
+  .log-item:hover { background: var(--surface-2); }
+  .log-item.active { background: var(--surface-2); border-left: 3px solid var(--accent); }
   .log-item .issue { font-weight: 600; color: var(--accent); font-size: 14px; }
   .log-item .meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 
@@ -302,7 +323,7 @@
     color: var(--text-muted); font-size: 11px; padding: 3px 8px;
     border-radius: 4px; cursor: pointer;
   }
-  .conv-sticky-header .tools-toggle:hover { color: var(--text); background: #1c2128; }
+  .conv-sticky-header .tools-toggle:hover { color: var(--text); background: var(--surface-2); }
   .conv-sticky-header .tools-toggle.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
 
   .assistant-text {
@@ -405,7 +426,7 @@
   .tab:hover { color: var(--text); }
   .tab.active { color: var(--text); border-bottom-color: var(--accent); }
   .tab .badge {
-    display: inline-block; background: var(--accent); color: #0d1117;
+    display: inline-block; background: var(--accent); color: var(--accent-contrast);
     font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px;
     margin-left: 6px; vertical-align: middle;
   }
@@ -543,14 +564,14 @@
     transition: background 0.15s, color 0.15s;
     font-family: inherit;
   }
-  .font-size-btn:hover { color: var(--text); background: #1c2128; }
+  .font-size-btn:hover { color: var(--text); background: var(--surface-2); }
   .conv-item {
     padding: 12px 14px; border-radius: 6px; cursor: pointer;
     margin-bottom: 6px; transition: background 0.15s;
     border-left: 3px solid transparent;
   }
-  .conv-item:hover { background: #1c2128; }
-  .conv-item.active { background: #1c2128; border-left-color: var(--purple); }
+  .conv-item:hover { background: var(--surface-2); }
+  .conv-item.active { background: var(--surface-2); border-left-color: var(--purple); }
   .conv-item .conv-title-row {
     display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap;
   }
@@ -656,7 +677,7 @@
   .conv-input-bar .send-btn {
     width: 36px; height: 36px; flex-shrink: 0;
     border-radius: 8px; border: none; cursor: pointer;
-    background: var(--accent); color: #0d1117;
+    background: var(--accent); color: var(--accent-contrast);
     font-size: 18px; font-weight: 700; line-height: 1;
     display: flex; align-items: center; justify-content: center;
     transition: background 0.15s, transform 0.1s;
@@ -707,7 +728,7 @@
     display: flex; align-items: center; justify-content: center;
     transition: background 0.15s, color 0.15s, transform 0.4s;
   }
-  .conv-refresh-btn:hover { color: var(--text); background: #1c2128; }
+  .conv-refresh-btn:hover { color: var(--text); background: var(--surface-2); }
   .conv-refresh-btn.spinning { transform: rotate(360deg); }
   .conv-sort-btn {
     width: 28px; height: 28px; flex-shrink: 0;
@@ -717,7 +738,7 @@
     display: flex; align-items: center; justify-content: center;
     transition: background 0.15s, color 0.15s;
   }
-  .conv-sort-btn:hover { color: var(--text); background: #1c2128; }
+  .conv-sort-btn:hover { color: var(--text); background: var(--surface-2); }
   .conv-sort-btn.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
   .conv-archive-toggle {
     width: 28px; height: 28px; flex-shrink: 0;
@@ -727,7 +748,7 @@
     display: flex; align-items: center; justify-content: center;
     transition: background 0.15s, color 0.15s;
   }
-  .conv-archive-toggle:hover { color: var(--text); background: #1c2128; }
+  .conv-archive-toggle:hover { color: var(--text); background: var(--surface-2); }
   .conv-archive-toggle.active { color: var(--orange); border-color: rgba(255,166,87,0.4); }
 
   .conv-item .source-badge {
@@ -751,7 +772,7 @@
     display: flex; align-items: center; justify-content: center;
     transition: background 0.15s, color 0.15s;
   }
-  .conv-kanban-toggle:hover { color: var(--text); background: #1c2128; }
+  .conv-kanban-toggle:hover { color: var(--text); background: var(--surface-2); }
   .conv-kanban-toggle.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
 
   .kanban-board {
@@ -791,7 +812,7 @@
     color: var(--text-muted); border-radius: 4px;
     transition: background 0.15s;
   }
-  .kanban-column-header:hover { background: #1c2128; }
+  .kanban-column-header:hover { background: var(--surface-2); }
   .kanban-column-header .arrow { font-size: 10px; transition: transform 0.2s; }
   .kanban-column-header.collapsed .arrow { transform: rotate(-90deg); }
   .kanban-column-header .count {
@@ -1048,7 +1069,7 @@
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
     cursor: pointer; white-space: nowrap;
   }
-  .kanban-panel-toolbar button:hover { background: #1c2128; }
+  .kanban-panel-toolbar button:hover { background: var(--surface-2); }
   .kanban-panel-toolbar button.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
   .kanban-panel-toolbar .kpt-label {
     font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; cursor: pointer;
@@ -1083,7 +1104,7 @@
   .nsm-btn { padding: 8px 16px; font-size: 13px; border-radius: 6px;
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
     cursor: pointer; }
-  .nsm-btn:hover { background: #1c2128; }
+  .nsm-btn:hover { background: var(--surface-2); }
   .nsm-primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
   .nsm-primary:hover { opacity: 0.9; background: var(--accent); }
   .nsm-primary:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -1112,7 +1133,7 @@
   .rpm-item { display: flex; flex-direction: column; gap: 2px;
     padding: 8px 10px; border-radius: 4px; cursor: pointer;
     background: transparent; border: none; color: var(--text); text-align: left; }
-  .rpm-item:hover { background: #1c2128; }
+  .rpm-item:hover { background: var(--surface-2); }
   .rpm-item.active { background: rgba(88,166,255,0.12); }
   .rpm-item .rpm-item-label { font-size: 13px; font-weight: 500; }
   .rpm-item .rpm-item-path { font-size: 11px; color: var(--text-muted);
@@ -1132,7 +1153,7 @@
   .rpm-cancel-btn { padding: 8px 14px; font-size: 13px; border-radius: 6px;
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
     cursor: pointer; margin-left: auto; }
-  .rpm-cancel-btn:hover { background: #1c2128; }
+  .rpm-cancel-btn:hover { background: var(--surface-2); }
   .rpm-error { font-size: 12px; color: var(--red);
     background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3);
     border-radius: 6px; padding: 8px 10px; display: none; }
@@ -1185,7 +1206,7 @@
   .upd-btn { padding: 8px 16px; font-size: 13px; border-radius: 6px;
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
     cursor: pointer; font-family: inherit; }
-  .upd-btn:hover { background: #1c2128; }
+  .upd-btn:hover { background: var(--surface-2); }
   .upd-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .upd-primary { background: var(--accent); color: #fff;
     border-color: var(--accent); font-weight: 600; }
@@ -1276,7 +1297,7 @@
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
     cursor: pointer; white-space: nowrap;
   }
-  .conv-panel-toolbar button:hover { background: #1c2128; }
+  .conv-panel-toolbar button:hover { background: var(--surface-2); }
   .conv-panel-toolbar .cpt-session-id {
     font-size: 11px; color: var(--text-muted); font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
     opacity: 0.6; cursor: pointer; user-select: all; margin-left: auto;
@@ -1360,7 +1381,7 @@
     background: var(--bg); color: var(--text); cursor: pointer; font-size: 11px;
     white-space: nowrap;
   }
-  .kanban-inline-input button:hover { background: #1c2128; }
+  .kanban-inline-input button:hover { background: var(--surface-2); }
 
   /* ── Task 8: Approve/Deny buttons ── */
   .kanban-tool-info {
@@ -1395,7 +1416,7 @@
     background: var(--bg); color: var(--text); cursor: pointer;
     font-size: 11px;
   }
-  .kanban-review-actions button:hover { background: #1c2128; }
+  .kanban-review-actions button:hover { background: var(--surface-2); }
   .kanban-sendback {
     color: var(--accent) !important; border-color: rgba(88,166,255,0.4) !important;
   }
@@ -1596,7 +1617,7 @@
     cursor: pointer; transition: border-color 0.15s, background 0.15s;
     align-items: start;
   }
-  .attention-row:hover { border-color: var(--accent); background: #1c2128; }
+  .attention-row:hover { border-color: var(--accent); background: var(--surface-2); }
   .attention-row .att-kind {
     grid-column: 2; grid-row: 1; justify-self: end;
     font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
@@ -1828,6 +1849,165 @@
     }
     .mobile-reload-btn:active { background: var(--accent); color: #fff; }
   }
+
+  /* ── Desktop-style sidebar primary action: "+ New session" ──
+     Mirrors Claude Desktop — a clear primary button at the top of the
+     left sidebar, above search and the sessions list. Wired to open the
+     existing nsm-overlay modal. */
+  .sidebar-primary {
+    padding: 10px 12px 8px; border-bottom: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .sidebar-new-btn {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg);
+    color: var(--text); font-size: 13px; font-weight: 600;
+    cursor: pointer; font-family: inherit;
+    transition: background 0.12s, border-color 0.12s, transform 0.08s;
+  }
+  .sidebar-new-btn:hover { background: var(--surface-2); border-color: var(--accent); }
+  .sidebar-new-btn:active { transform: scale(0.98); }
+  .sidebar-new-btn .plus { font-size: 16px; line-height: 1; color: var(--accent); font-weight: 700; }
+  .sidebar-new-btn .kbd {
+    margin-left: auto; font-size: 10px; color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 5px; font-family: 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+    opacity: 0.8;
+  }
+
+  /* Sidebar footer strip — appearance + settings (Claude-Desktop pattern) */
+  .sidebar-footer {
+    border-top: 1px solid var(--border);
+    padding: 6px 8px;
+    display: flex; align-items: center; gap: 4px;
+    flex-shrink: 0;
+  }
+  .sidebar-footer-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; border-radius: 6px;
+    background: transparent; border: 1px solid transparent;
+    color: var(--text-muted); cursor: pointer; font-family: inherit;
+    transition: background 0.12s, color 0.12s;
+  }
+  .sidebar-footer-btn:hover { background: var(--surface-2); color: var(--text); }
+  .sidebar-footer-btn svg { width: 16px; height: 16px; display: block; }
+  .sidebar-footer-spacer { flex: 1; }
+
+  /* Generic dropdown popover (used by appearance + settings menus) */
+  .desktop-popover {
+    position: absolute; z-index: 200;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px;
+    min-width: 200px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    display: none; flex-direction: column; gap: 2px;
+  }
+  .desktop-popover.open { display: flex; }
+  .desktop-popover .pop-section-label {
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-muted);
+    padding: 6px 8px 2px;
+  }
+  .desktop-popover .pop-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 4px;
+    background: transparent; border: none; color: var(--text);
+    font-size: 13px; cursor: pointer; text-align: left; font-family: inherit;
+    width: 100%;
+    text-decoration: none;
+  }
+  .desktop-popover .pop-item:hover { background: var(--surface-2); }
+  .desktop-popover .pop-item .pop-check {
+    width: 12px; color: var(--accent); font-weight: 700;
+  }
+  .desktop-popover .pop-item .pop-icon {
+    width: 14px; height: 14px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-muted);
+  }
+  .desktop-popover .pop-divider {
+    height: 1px; background: var(--border); margin: 4px 2px;
+  }
+
+  /* ── Cmd+K search modal (shares nsm-* visual language) ──
+     A scrollable list of sessions filtered live by display_name /
+     first_message. ↑/↓ to move, Enter to select, Esc to close. */
+  .cmdk-overlay { position: fixed; inset: 0; z-index: 9999;
+    display: none; align-items: flex-start; justify-content: center;
+    padding-top: 12vh; }
+  .cmdk-overlay.open { display: flex; }
+  .cmdk-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(3px); }
+  .cmdk-dialog {
+    position: relative; width: min(620px, 92vw);
+    max-height: 70vh; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.55);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .cmdk-input-wrap {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+  }
+  .cmdk-input-wrap .cmdk-search-icon {
+    width: 16px; height: 16px; color: var(--text-muted); flex-shrink: 0;
+  }
+  #cmdkInput {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: var(--text); font-size: 15px; font-family: inherit;
+  }
+  #cmdkInput::placeholder { color: var(--text-muted); }
+  .cmdk-hint {
+    font-size: 10px; color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 5px; font-family: 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+    flex-shrink: 0;
+  }
+  #cmdkList {
+    overflow-y: auto; padding: 6px; flex: 1; min-height: 60px;
+  }
+  .cmdk-item {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 8px 10px; border-radius: 6px;
+    cursor: pointer; user-select: none;
+    border: 1px solid transparent;
+  }
+  .cmdk-item:hover { background: var(--surface-2); }
+  .cmdk-item.selected {
+    background: var(--surface-2);
+    border-color: var(--accent);
+  }
+  .cmdk-item .cmdk-title {
+    font-size: 13px; color: var(--text); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cmdk-item .cmdk-meta {
+    font-size: 11px; color: var(--text-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cmdk-empty {
+    padding: 24px; text-align: center; color: var(--text-muted);
+    font-size: 13px;
+  }
+  .cmdk-footer {
+    display: flex; gap: 12px; align-items: center;
+    padding: 6px 14px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text-muted);
+  }
+  .cmdk-footer .cmdk-hint { background: var(--bg); }
+
+  /* Unified conversation-pane toggle button (used in both kanban-panel and
+     conv-panel toolbars). Same glyph in both places so the user always
+     recognises it as "show/hide the chat pane". */
+  .panel-toggle-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px;
+    padding: 0 !important;
+    color: var(--text-muted);
+  }
+  .panel-toggle-btn svg { width: 16px; height: 16px; display: block; }
+  .panel-toggle-btn:hover { color: var(--text); }
 </style>
 <!-- Optional Morning side-nav. Loaded conditionally based on the feature
      flag so installs without the morning plugin don't get a 404 in the
@@ -1862,6 +2042,16 @@
         if (localStorage.getItem('ccc-kanban-view') === 'true') {
           document.body.classList.add('kanban-split');
         }
+        // Apply persisted appearance (theme + font) before first paint to
+        // avoid a flash of wrong theme.
+        const themePref = localStorage.getItem('ccc-theme') || 'system';
+        let resolved = themePref;
+        if (themePref === 'system') {
+          resolved = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        if (resolved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+        const fontPref = localStorage.getItem('ccc-font') || 'system';
+        if (fontPref === 'mono') document.documentElement.setAttribute('data-font', 'mono');
       } catch (_) {}
     })();
   </script>
@@ -1928,6 +2118,13 @@
       <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
     </div>
 
+    <div class="sidebar-primary">
+      <button type="button" class="sidebar-new-btn" id="sidebarNewBtn" title="Spawn a new Claude session" aria-label="New session">
+        <span class="plus" aria-hidden="true">+</span>
+        <span>New session</span>
+      </button>
+    </div>
+
     <div class="deploy-panel" id="deployPanel">
       <div class="deploy-header">
         <span class="deploy-dot" id="deployDot"></span>
@@ -1957,6 +2154,42 @@
       </div>
       <button class="watcher-btn start" id="watcherBtn" disabled title="Start polling GitHub for `claude-fix`-labeled issues and spawn sessions">Loading...</button>
       <div class="watcher-output" id="watcherOutput"></div>
+    </div>
+
+    <!-- Bottom-mounted appearance + settings strip, Claude-Desktop-style -->
+    <div class="sidebar-footer">
+      <div style="position:relative;">
+        <button type="button" class="sidebar-footer-btn" id="appearanceBtn" title="Appearance" aria-label="Appearance" aria-haspopup="true" aria-expanded="false">
+          <!-- sun/moon glyph; rotates between sun (light) and moon (dark) via CSS -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        </button>
+        <div class="desktop-popover" id="appearancePopover" role="menu" aria-label="Appearance options" style="bottom:calc(100% + 6px);left:0;">
+          <div class="pop-section-label">Theme</div>
+          <button class="pop-item" type="button" data-theme="light" role="menuitemradio"><span class="pop-check" data-check-theme="light"></span><span>Light</span></button>
+          <button class="pop-item" type="button" data-theme="dark" role="menuitemradio"><span class="pop-check" data-check-theme="dark"></span><span>Dark</span></button>
+          <button class="pop-item" type="button" data-theme="system" role="menuitemradio"><span class="pop-check" data-check-theme="system"></span><span>Match system</span></button>
+          <div class="pop-divider"></div>
+          <div class="pop-section-label">Font</div>
+          <button class="pop-item" type="button" data-font="system" role="menuitemradio"><span class="pop-check" data-check-font="system"></span><span>System</span></button>
+          <button class="pop-item" type="button" data-font="mono" role="menuitemradio"><span class="pop-check" data-check-font="mono"></span><span>Mono</span></button>
+        </div>
+      </div>
+      <div class="sidebar-footer-spacer"></div>
+      <div style="position:relative;">
+        <button type="button" class="sidebar-footer-btn" id="settingsBtn" title="Settings" aria-label="Settings" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
+        <div class="desktop-popover" id="settingsPopover" role="menu" aria-label="Settings menu" style="bottom:calc(100% + 6px);right:0;">
+          <button class="pop-item" type="button" id="settingsCmdkBtn"><span class="pop-icon">⌘K</span><span>Search sessions</span></button>
+          <a class="pop-item" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener"><span class="pop-icon">↗</span><span>View on GitHub</span></a>
+          <a class="pop-item" href="https://github.com/amirfish1/claude-command-center#readme" target="_blank" rel="noopener"><span class="pop-icon">?</span><span>Get help</span></a>
+        </div>
+      </div>
     </div>
   </div>
   <div class="sidebar-resizer" id="sidebarResizer" title="Drag to resize"></div>
@@ -2027,7 +2260,12 @@
         </div>
         <button id="kptListViewBtn" title="Switch to list view" aria-label="Switch to list view">&#9783;</button>
         <span class="kpt-deploy" id="kptDeployStatus" title="Vercel deploy status" style="margin-left:auto;font-size:11px;display:flex;align-items:center;gap:4px;color:var(--text-muted);white-space:nowrap;"></span>
-        <button id="kptOpenConvBtn" title="Open conversation panel" aria-label="Open conversation panel" style="display:none;">&#9664;</button>
+        <button id="kptOpenConvBtn" class="panel-toggle-btn" title="Show conversation panel (⌘\)" aria-label="Show conversation panel" style="display:none;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2"/>
+            <line x1="15" y1="4" x2="15" y2="20"/>
+          </svg>
+        </button>
       </div>
       <div class="kanban-board-split" id="kanbanBoardSplit"></div>
       <div class="attention-panel collapsed" id="attentionPanel">
@@ -2055,7 +2293,12 @@
           <button id="cpFontPlus" title="Increase font size">A+</button>
         </div>
         <span class="cpt-session-id" id="cpSessionId"></span>
-        <button id="cpCloseBtn" title="Close panel" style="margin-left:8px;font-size:16px;line-height:1;">&times;</button>
+        <button id="cpCloseBtn" class="panel-toggle-btn" title="Hide conversation panel (⌘\)" aria-label="Hide conversation panel" style="margin-left:8px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2"/>
+            <line x1="15" y1="4" x2="15" y2="20"/>
+          </svg>
+        </button>
       </div>
       <div class="conv-panel-view" id="convPanelView">
         <div class="empty-state">Select a session from the board</div>
@@ -2078,6 +2321,28 @@
   </div>
 
   <button class="mobile-reload-btn" id="mobileReloadBtn" title="Reload page" aria-label="Reload">&#8634;</button>
+
+  <!-- ⌘K / ⌘P session search modal — fuzzy-filters all sessions by
+       display_name / first_message, sorted by recency. -->
+  <div id="cmdkModal" class="cmdk-overlay" role="dialog" aria-modal="true" aria-label="Search sessions">
+    <div class="cmdk-backdrop" id="cmdkBackdrop"></div>
+    <div class="cmdk-dialog">
+      <div class="cmdk-input-wrap">
+        <svg class="cmdk-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="text" id="cmdkInput" placeholder="Search chats and projects…" autocomplete="off" spellcheck="false" />
+        <span class="cmdk-hint" aria-hidden="true">Esc</span>
+      </div>
+      <div id="cmdkList" role="listbox" aria-label="Sessions"></div>
+      <div class="cmdk-footer">
+        <span><span class="cmdk-hint">↑↓</span> navigate</span>
+        <span><span class="cmdk-hint">↵</span> open</span>
+        <span><span class="cmdk-hint">Esc</span> close</span>
+      </div>
+    </div>
+  </div>
 
   <div id="newSessionModal" class="nsm-overlay" style="display:none;" role="dialog" aria-modal="true">
     <div class="nsm-backdrop" id="nsmBackdrop"></div>
@@ -7838,6 +8103,239 @@
       showOpToast('Updated to the latest version', 'ok');
     }
   } catch (_) {}
+
+  // ── Sidebar primary "+ New session" button ─────────────────────
+  // Reuses the existing nsm-overlay modal so the new-session UX is
+  // consistent regardless of where the user triggers it from.
+  const $sidebarNewBtn = document.getElementById('sidebarNewBtn');
+  if ($sidebarNewBtn) {
+    $sidebarNewBtn.addEventListener('click', () => openNewSessionModal());
+  }
+
+  // ── Appearance picker (theme + font) ───────────────────────────
+  // Persists to ccc-theme / ccc-font and applies via [data-theme] /
+  // [data-font] attributes on <html>. The synchronous FOIT guard at
+  // the top of <body> already applied the saved choice — this block
+  // just wires the picker UI and live updates.
+  const $appearanceBtn = document.getElementById('appearanceBtn');
+  const $appearancePopover = document.getElementById('appearancePopover');
+  const $settingsBtn = document.getElementById('settingsBtn');
+  const $settingsPopover = document.getElementById('settingsPopover');
+  const _systemThemeMQ = window.matchMedia('(prefers-color-scheme: light)');
+
+  function getThemePref() { return localStorage.getItem('ccc-theme') || 'system'; }
+  function getFontPref() { return localStorage.getItem('ccc-font') || 'system'; }
+
+  function applyTheme(pref) {
+    let resolved = pref;
+    if (pref === 'system') {
+      resolved = _systemThemeMQ.matches ? 'light' : 'dark';
+    }
+    if (resolved === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+  }
+  function applyFont(pref) {
+    if (pref === 'mono') {
+      document.documentElement.setAttribute('data-font', 'mono');
+    } else {
+      document.documentElement.removeAttribute('data-font');
+    }
+  }
+  function refreshAppearanceChecks() {
+    const t = getThemePref();
+    const f = getFontPref();
+    $appearancePopover.querySelectorAll('[data-check-theme]').forEach(el => {
+      el.textContent = el.getAttribute('data-check-theme') === t ? '✓' : '';
+    });
+    $appearancePopover.querySelectorAll('[data-check-font]').forEach(el => {
+      el.textContent = el.getAttribute('data-check-font') === f ? '✓' : '';
+    });
+  }
+  // Live-update when the user has 'system' selected and OS theme flips.
+  _systemThemeMQ.addEventListener && _systemThemeMQ.addEventListener('change', () => {
+    if (getThemePref() === 'system') applyTheme('system');
+  });
+
+  // Generic popover open/close helper. Closes other popovers first so
+  // only one is ever open at a time.
+  function openOnlyPopover(target) {
+    [$appearancePopover, $settingsPopover].forEach(p => {
+      if (p && p !== target) p.classList.remove('open');
+    });
+    if (target) target.classList.toggle('open');
+    if ($appearanceBtn) $appearanceBtn.setAttribute('aria-expanded', $appearancePopover && $appearancePopover.classList.contains('open') ? 'true' : 'false');
+    if ($settingsBtn) $settingsBtn.setAttribute('aria-expanded', $settingsPopover && $settingsPopover.classList.contains('open') ? 'true' : 'false');
+    if (target && target.classList.contains('open')) refreshAppearanceChecks();
+  }
+
+  if ($appearanceBtn) {
+    $appearanceBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openOnlyPopover($appearancePopover);
+    });
+  }
+  if ($settingsBtn) {
+    $settingsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openOnlyPopover($settingsPopover);
+    });
+  }
+  if ($appearancePopover) {
+    $appearancePopover.addEventListener('click', (e) => {
+      const themeBtn = e.target.closest('[data-theme]');
+      const fontBtn = e.target.closest('[data-font]');
+      if (themeBtn) {
+        const v = themeBtn.getAttribute('data-theme');
+        localStorage.setItem('ccc-theme', v);
+        applyTheme(v);
+        refreshAppearanceChecks();
+      } else if (fontBtn) {
+        const v = fontBtn.getAttribute('data-font');
+        localStorage.setItem('ccc-font', v);
+        applyFont(v);
+        refreshAppearanceChecks();
+      }
+    });
+  }
+  // Click-outside / Esc closes the popovers.
+  document.addEventListener('click', (e) => {
+    if ($appearancePopover && $appearancePopover.classList.contains('open')
+        && !$appearancePopover.contains(e.target) && e.target !== $appearanceBtn
+        && !$appearanceBtn.contains(e.target)) {
+      $appearancePopover.classList.remove('open');
+      if ($appearanceBtn) $appearanceBtn.setAttribute('aria-expanded', 'false');
+    }
+    if ($settingsPopover && $settingsPopover.classList.contains('open')
+        && !$settingsPopover.contains(e.target) && e.target !== $settingsBtn
+        && !$settingsBtn.contains(e.target)) {
+      $settingsPopover.classList.remove('open');
+      if ($settingsBtn) $settingsBtn.setAttribute('aria-expanded', 'false');
+    }
+  });
+  // Initial state — already applied synchronously, but refresh checks
+  // and re-apply (no-op) for clarity.
+  applyTheme(getThemePref());
+  applyFont(getFontPref());
+
+  // ── ⌘K / ⌘P session search modal ──────────────────────────────
+  const $cmdkModal = document.getElementById('cmdkModal');
+  const $cmdkBackdrop = document.getElementById('cmdkBackdrop');
+  const $cmdkInput = document.getElementById('cmdkInput');
+  const $cmdkList = document.getElementById('cmdkList');
+  let _cmdkItems = [];      // currently-rendered filtered list
+  let _cmdkIndex = 0;       // selected row index
+
+  function openCmdk() {
+    if (!$cmdkModal) return;
+    $cmdkModal.classList.add('open');
+    $cmdkInput.value = '';
+    renderCmdkList('');
+    setTimeout(() => $cmdkInput.focus(), 20);
+  }
+  function closeCmdk() {
+    if (!$cmdkModal) return;
+    $cmdkModal.classList.remove('open');
+  }
+  function _cmdkLabel(c) {
+    if (!c) return '';
+    if (typeof stripTitle === 'function' && c.display_name) return stripTitle(c.display_name) || c.display_name;
+    return c.display_name || c.id || '';
+  }
+  function renderCmdkList(query) {
+    if (!$cmdkList) return;
+    const q = (query || '').toLowerCase().trim();
+    // Pull from the same in-memory store the sidebar uses; sort by mtime
+    // (recency) and exclude archived / pending placeholders for clarity.
+    const data = (Array.isArray(conversationsData) ? conversationsData : [])
+      .filter(c => c && !c.archived && !c.pending);
+    const matches = data.filter(c => {
+      if (!q) return true;
+      const name = (c.display_name || '').toLowerCase();
+      const first = (c.first_message || '').toLowerCase();
+      const branch = (c.branch || '').toLowerCase();
+      return name.includes(q) || first.includes(q) || branch.includes(q);
+    });
+    matches.sort((a, b) => (b.modified || 0) - (a.modified || 0));
+    _cmdkItems = matches.slice(0, 100);
+    _cmdkIndex = 0;
+    if (!_cmdkItems.length) {
+      $cmdkList.innerHTML = '<div class="cmdk-empty">' + (q ? 'No sessions match.' : 'No sessions yet.') + '</div>';
+      return;
+    }
+    const rows = _cmdkItems.map((c, i) => {
+      const title = _cmdkLabel(c) || '(untitled)';
+      const meta = [c.branch, c.source, c.first_message].filter(Boolean)
+        .map(s => String(s).slice(0, 80)).join(' · ');
+      return '<div class="cmdk-item' + (i === 0 ? ' selected' : '') + '" role="option" data-idx="' + i + '">'
+        + '<div class="cmdk-title">' + escapeHtml(title) + '</div>'
+        + (meta ? '<div class="cmdk-meta">' + escapeHtml(meta) + '</div>' : '')
+        + '</div>';
+    }).join('');
+    $cmdkList.innerHTML = rows;
+  }
+  function moveCmdkSelection(delta) {
+    if (!_cmdkItems.length) return;
+    _cmdkIndex = (_cmdkIndex + delta + _cmdkItems.length) % _cmdkItems.length;
+    const rows = $cmdkList.querySelectorAll('.cmdk-item');
+    rows.forEach((r, i) => r.classList.toggle('selected', i === _cmdkIndex));
+    const sel = rows[_cmdkIndex];
+    if (sel && sel.scrollIntoView) sel.scrollIntoView({ block: 'nearest' });
+  }
+  function commitCmdkSelection() {
+    const c = _cmdkItems[_cmdkIndex];
+    if (!c) return;
+    closeCmdk();
+    if (typeof selectConversation === 'function') selectConversation(c.id);
+  }
+  if ($cmdkInput) {
+    $cmdkInput.addEventListener('input', (e) => renderCmdkList(e.target.value));
+    $cmdkInput.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveCmdkSelection(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); moveCmdkSelection(-1); }
+      else if (e.key === 'Enter') { e.preventDefault(); commitCmdkSelection(); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeCmdk(); }
+    });
+  }
+  if ($cmdkList) {
+    $cmdkList.addEventListener('click', (e) => {
+      const row = e.target.closest('.cmdk-item');
+      if (!row) return;
+      _cmdkIndex = parseInt(row.getAttribute('data-idx') || '0', 10);
+      commitCmdkSelection();
+    });
+  }
+  if ($cmdkBackdrop) $cmdkBackdrop.addEventListener('click', closeCmdk);
+
+  // ── Global keyboard shortcuts ─────────────────────────────────
+  // ⌘K / ⌘P → open search; ⌘\ → toggle conversation pane; ⌘N → new session.
+  document.addEventListener('keydown', (e) => {
+    const meta = e.metaKey || e.ctrlKey;
+    if (meta && (e.key === 'k' || e.key === 'K' || e.key === 'p' || e.key === 'P')) {
+      // Don't hijack the browser address bar combo when not focused on us.
+      e.preventDefault();
+      if ($cmdkModal && $cmdkModal.classList.contains('open')) closeCmdk();
+      else openCmdk();
+      return;
+    }
+    if (meta && e.key === '\\') {
+      e.preventDefault();
+      // Reuse cpCloseBtn handler (toggles when in kanban-split mode); fall
+      // back to direct setConvPanelOpen for safety.
+      if (typeof setConvPanelOpen === 'function') setConvPanelOpen(!convPanelOpen);
+    }
+  });
+
+  // Settings popover: clicking the ⌘K row also opens the search modal.
+  const $settingsCmdkBtn = document.getElementById('settingsCmdkBtn');
+  if ($settingsCmdkBtn) {
+    $settingsCmdkBtn.addEventListener('click', () => {
+      if ($settingsPopover) $settingsPopover.classList.remove('open');
+      openCmdk();
+    });
+  }
 
   // Init — default to Sessions tab
   loadConversationList();

@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Claude-Desktop-style UI chrome: prominent "+ New session" button at the
+  top of the sidebar, a unified panel-toggle icon (replaces the legacy
+  `×` / `◀` glyphs in the conv-panel and kanban-panel toolbars) with a
+  `Cmd+\` keyboard shortcut, a `Cmd+K` / `Cmd+P` "Search chats and
+  projects" command palette over the existing in-memory session list,
+  a sun/moon appearance picker (Theme: Light / Dark / Match system,
+  Font: System / Mono — persisted to localStorage), and a sidebar gear
+  popover with View on GitHub / Get help / Search sessions entries.
+  Light theme is now a first-class option; the existing dark palette is
+  unchanged.
 - In-app bug reporting — a "Report a bug" link in the topbar opens a modal
   that auto-attaches CCC version, browser user-agent, and the currently
   selected session id, then files a GitHub issue (label `bug`) against
