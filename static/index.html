@@ -333,6 +333,48 @@
   h3.md-h { font-size: 15px; }
   .assistant-text a { color: var(--accent); }
 
+  /* Fenced code blocks (```lang ... ```). Rounded container with a tiny
+     header strip for language label + copy button; <pre> scrolls horizontally
+     when a line is too long to wrap. Token colors pulled from the GitHub
+     dark palette so highlights read well on the dark CCC surface. */
+  .cb-wrap {
+    margin: 8px 0; border-radius: 8px; overflow: hidden;
+    background: #0b1016; border: 1px solid var(--border);
+  }
+  .cb-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 5px 10px; background: rgba(255,255,255,0.025);
+    border-bottom: 1px solid var(--border);
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    font-size: 11px; color: var(--text-muted);
+  }
+  .cb-lang { letter-spacing: 0.04em; }
+  .cb-lang.cb-lang-plain { opacity: 0.55; }
+  .cb-copy {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-muted); font-family: inherit;
+    font-size: 10px; padding: 2px 8px; border-radius: 4px;
+    cursor: pointer; opacity: 0.6;
+    transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .cb-copy:hover { opacity: 1; color: var(--text); border-color: var(--text-muted); }
+  .cb-copy.copied { color: var(--green); border-color: rgba(63,185,80,0.5); opacity: 1; }
+  pre.cb {
+    margin: 0; padding: 12px 14px; overflow-x: auto;
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    font-size: 13px; line-height: 1.5; color: var(--text);
+    white-space: pre; tab-size: 2;
+  }
+  pre.cb code { background: transparent; padding: 0; font: inherit; color: inherit; }
+  .tok-comment  { color: #768390; font-style: italic; }
+  .tok-string   { color: #a5d6ff; }
+  .tok-keyword  { color: #ff7b72; }
+  .tok-number   { color: #79c0ff; }
+  .tok-type     { color: #ffa657; }
+  .tok-function { color: #d2a8ff; }
+  .tok-variable { color: #ffa657; }
+  .tok-key      { color: #7ee787; }
+
   .thinking-block {
     font-size: 12px; color: var(--text-muted); padding: 4px 8px;
     border-left: 2px solid var(--border); margin: 4px 0;
@@ -2511,6 +2553,20 @@
     let i = 0;
     while (i < lines.length) {
       const line = lines[i];
+      // Fenced code block: ```lang\n...code...\n```
+      // Runs BEFORE table/header detection so ``` inside code doesn't get
+      // misinterpreted as markdown.
+      const fence = line.match(/^\s*```\s*(\S*)\s*$/);
+      if (fence) {
+        const lang = fence[1] || '';
+        i++;
+        const start = i;
+        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) i++;
+        const code = lines.slice(start, i).join('\n');
+        if (i < lines.length) i++;  // skip closing fence
+        out.push(renderCodeBlock(code, lang));
+        continue;
+      }
       // Detect a table: header | sep | rows
       if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s\-:|]+\|\s*$/.test(lines[i + 1])) {
         const cells = (s) => s.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
@@ -2552,6 +2608,90 @@
     return out.join('');
   }
 
+  // ── Fenced-code-block rendering + tokenizer ─────────────────────────────
+  // Basic language-aware syntax highlighting for the handful of langs that
+  // actually show up in CCC conversation text. Not Prism-grade; deliberate
+  // trade-off to keep the single-file "no-bundler" stance. Order of patterns
+  // matters: comments/strings win over keywords, otherwise `// return`
+  // would highlight `return` inside a comment.
+  const _CB_LANG_ALIAS = {
+    javascript: 'ts', js: 'ts', typescript: 'ts', tsx: 'ts', jsx: 'ts',
+    python: 'py', py3: 'py',
+    sh: 'bash', shell: 'bash', zsh: 'bash',
+  };
+  const _CB_LANG_PATTERNS = {
+    ts: [
+      { re: /\/\/[^\n]*|\/\*[\s\S]*?\*\//, cls: 'tok-comment' },
+      { re: /`(?:\\.|[^`\\])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/, cls: 'tok-string' },
+      { re: /\b(?:const|let|var|function|return|if|else|for|while|do|switch|case|default|break|continue|class|extends|new|this|super|import|export|from|as|async|await|try|catch|finally|throw|typeof|instanceof|in|of|void|null|undefined|true|false|yield|enum|interface|type|public|private|protected|readonly|static|abstract|implements|namespace|declare|module|keyof|satisfies)\b/, cls: 'tok-keyword' },
+      { re: /\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/, cls: 'tok-number' },
+      { re: /\b[A-Z][A-Za-z0-9_]*\b/, cls: 'tok-type' },
+      { re: /\b[a-zA-Z_][a-zA-Z0-9_]*(?=\s*\()/, cls: 'tok-function' },
+    ],
+    py: [
+      { re: /#[^\n]*|'''[\s\S]*?'''|"""[\s\S]*?"""/, cls: 'tok-comment' },
+      { re: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/, cls: 'tok-string' },
+      { re: /\b(?:def|return|if|elif|else|for|while|break|continue|class|import|from|as|async|await|try|except|finally|raise|with|lambda|yield|global|nonlocal|pass|in|is|not|and|or|True|False|None|self|cls)\b/, cls: 'tok-keyword' },
+      { re: /\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/, cls: 'tok-number' },
+      { re: /\b[a-zA-Z_][a-zA-Z0-9_]*(?=\s*\()/, cls: 'tok-function' },
+    ],
+    bash: [
+      { re: /#[^\n]*/, cls: 'tok-comment' },
+      { re: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/, cls: 'tok-string' },
+      { re: /\$\{[^}]+\}|\$[a-zA-Z_][a-zA-Z0-9_]*|\$[0-9@*#?!-]/, cls: 'tok-variable' },
+      { re: /\b(?:if|then|else|elif|fi|for|do|done|while|until|case|esac|function|in|return|break|continue|export|local|readonly|declare|source|exit|trap|set|unset|eval|exec|shift)\b/, cls: 'tok-keyword' },
+      { re: /\b\d+\b/, cls: 'tok-number' },
+    ],
+    json: [
+      { re: /"(?:\\.|[^"\\])*"(?=\s*:)/, cls: 'tok-key' },
+      { re: /"(?:\\.|[^"\\])*"/, cls: 'tok-string' },
+      { re: /\b(?:true|false|null)\b/, cls: 'tok-keyword' },
+      { re: /-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/, cls: 'tok-number' },
+    ],
+  };
+  function highlightCode(code, lang) {
+    const key = _CB_LANG_ALIAS[String(lang || '').toLowerCase()] || String(lang || '').toLowerCase();
+    const patterns = _CB_LANG_PATTERNS[key];
+    if (!patterns) return escapeHtml(code);
+    let out = '';
+    let idx = 0;
+    while (idx < code.length) {
+      let hit = null;
+      let hitCls = '';
+      for (const { re, cls } of patterns) {
+        // Sticky regex match at current position only (no scanning ahead).
+        const sticky = new RegExp(re.source, 'y');
+        sticky.lastIndex = idx;
+        const m = sticky.exec(code);
+        if (m && m.index === idx) { hit = m[0]; hitCls = cls; break; }
+      }
+      if (hit) {
+        out += '<span class="' + hitCls + '">' + escapeHtml(hit) + '</span>';
+        idx += hit.length;
+      } else {
+        // Emit one char as-is; next iteration tries patterns from the next
+        // position. Cheap; the patterns that matter are regex-fast and the
+        // fall-through only runs on whitespace/punctuation.
+        out += escapeHtml(code.charAt(idx));
+        idx += 1;
+      }
+    }
+    return out;
+  }
+  function renderCodeBlock(code, lang) {
+    const langLabel = lang
+      ? '<span class="cb-lang">' + escapeHtml(lang) + '</span>'
+      : '<span class="cb-lang cb-lang-plain">code</span>';
+    return (
+      '<div class="cb-wrap">' +
+        '<div class="cb-head">' + langLabel +
+          '<button class="cb-copy" type="button" title="Copy">Copy</button>' +
+        '</div>' +
+        '<pre class="cb"><code>' + highlightCode(code, lang) + '</code></pre>' +
+      '</div>'
+    );
+  }
+
   function renderInline(s) {
     // Escape HTML first
     s = escapeHtml(s);
@@ -2586,6 +2726,37 @@
     }
     return '<a href="#" class="path-link" data-path="' + p + '">' + p + '</a>';
   }
+
+  // Copy button on fenced code blocks. Reads plain text from the <code>
+  // element (which survives as the rendered text, with token spans
+  // unwound by textContent) so we don't need to stash the raw code
+  // separately per block.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.cb-copy');
+    if (!btn) return;
+    ev.preventDefault();
+    const wrap = btn.closest('.cb-wrap');
+    const code = wrap && wrap.querySelector('code') ? wrap.querySelector('code').textContent : '';
+    if (!code) return;
+    const flash = (ok) => {
+      const orig = btn.textContent;
+      btn.classList.toggle('copied', ok);
+      btn.textContent = ok ? 'Copied' : 'Failed';
+      setTimeout(() => { btn.classList.remove('copied'); btn.textContent = orig; }, 1200);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code).then(() => flash(true)).catch(() => flash(false));
+    } else {
+      // Fallback for older browsers / insecure contexts: temp textarea + execCommand.
+      const ta = document.createElement('textarea');
+      ta.value = code; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (_) {}
+      document.body.removeChild(ta);
+      flash(ok);
+    }
+  });
 
   let _imgLightbox = null;
   document.addEventListener('click', (ev) => {
