@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-04-24
+
 ### Added
 - Claude-Desktop-style UI chrome: prominent "+ New session" button at the
   top of the sidebar, a unified panel-toggle icon (replaces the legacy
@@ -184,7 +186,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/amirfish1/claude-command-center/releases/tag/v0.1.3
 [0.1.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v0.1.2
 [0.1.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v0.1.1
 [0.1.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v0.1.0
