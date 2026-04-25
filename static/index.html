@@ -1103,10 +1103,6 @@
     font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
   .nsm-header span:first-child { font-size: 16px; color: var(--text); font-weight: 600; }
   .nsm-hint { font-size: 11px; }
-  #nsmSubject { font-size: 22px; padding: 12px 14px; background: var(--bg);
-    border: 1px solid var(--border); border-radius: 6px; color: var(--text);
-    outline: none; font-weight: 500; }
-  #nsmSubject:focus { border-color: var(--accent); }
   #nsmBody { font-size: 15px; padding: 14px; background: var(--bg);
     border: 1px solid var(--border); border-radius: 6px; color: var(--text);
     outline: none; min-height: 320px; resize: vertical; font-family: inherit;
@@ -2364,8 +2360,7 @@
         <span>New session</span>
         <span class="nsm-hint">Esc to cancel · &#8984;&#9166; to launch</span>
       </div>
-      <input id="nsmSubject" type="text" placeholder="Subject (becomes the card title)" autocomplete="off" />
-      <textarea id="nsmBody" placeholder="Full prompt sent to Claude / git / etc..."></textarea>
+      <textarea id="nsmBody" placeholder="What should this session do? (the first sentence becomes the card title — you can rename later or hit ✨ to AI-generate one)"></textarea>
       <div class="nsm-actions">
         <label class="nsm-pkood"><input type="checkbox" id="nsmPkood"> pkood</label>
         <span style="flex:1;"></span>
@@ -5424,13 +5419,13 @@
         const issueNum = btn.dataset.issue;
         const title = btn.dataset.title;
         const cleanTitle = (title || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
-        const subject = issueNum ? ('issue-' + issueNum) : cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
         // GH issue titles truncate around ~94 chars, so always tell Claude to
         // read the full issue. Keep the short title as a hint.
-        const body = (issueNum
+        // (No SESSION_STATE_INSTRUCTION here — submitNewSessionModal appends it.)
+        const body = issueNum
           ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
-          : cleanTitle) + SESSION_STATE_INSTRUCTION;
-        openNewSessionModal(subject, body);
+          : cleanTitle;
+        openNewSessionModal(body);
       });
     });
     // ── Per-card AI-summarize a GH backlog card ──
@@ -7627,42 +7622,39 @@
     });
   }
   // ── New-session modal ──
+  // Single-field: just the prompt body. Card title is derived from the first
+  // sentence at submit time. Subject was redundant — users almost never typed
+  // something different from the body's lead, and the ✨ Titles button + the
+  // post-spawn rename flow cover the "I want a cleaner title" case.
   const $nsm = document.getElementById('newSessionModal');
-  const $nsmSubject = document.getElementById('nsmSubject');
   const $nsmBody = document.getElementById('nsmBody');
   const $nsmSubmit = document.getElementById('nsmSubmit');
   const $nsmCancel = document.getElementById('nsmCancel');
   const $nsmBackdrop = document.getElementById('nsmBackdrop');
   const $nsmPkood = document.getElementById('nsmPkood');
-  function openNewSessionModal(seed = '', body = '') {
+  function openNewSessionModal(body = '') {
     if (!$nsm) return;
     _clearNsmError();
-    $nsmSubject.value = seed || '';
     $nsmBody.value = body || '';
     if ($nsmPkood && $kptPkoodToggle) $nsmPkood.checked = $kptPkoodToggle.checked;
     $nsm.style.display = 'flex';
-    setTimeout(() => {
-      if (body || seed) { $nsmBody.focus(); } else { $nsmSubject.focus(); }
-    }, 30);
+    setTimeout(() => { $nsmBody.focus(); }, 30);
   }
   function closeNewSessionModal() {
     if ($nsm) $nsm.style.display = 'none';
     if ($kptNewSession) $kptNewSession.value = '';
   }
   async function submitNewSessionModal() {
-    const subject = ($nsmSubject.value || '').trim();
     const body = ($nsmBody.value || '').trim();
-    if (!subject && !body) return;
+    if (!body) return;
+    // Card title = first sentence (or line) of the prompt, capped at 120 chars.
     function firstSentence(text) {
-      if (!text) return '';
-      // Split on sentence enders or newlines; take first non-empty chunk.
       const chunks = text.split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
       const first = chunks[0] || text.trim();
       return first.length > 120 ? first.slice(0, 120).trim() + '...' : first;
     }
-    const effectiveSubject = subject || firstSentence(body);
-    const basePrompt = body ? (subject ? (subject + '\n\n' + body) : body) : subject;
-    const prompt = basePrompt + SESSION_STATE_INSTRUCTION;
+    const effectiveSubject = firstSentence(body);
+    const prompt = body + SESSION_STATE_INSTRUCTION;
     const usePkood = !!($nsmPkood && $nsmPkood.checked);
     $nsmSubmit.disabled = true;
     $nsmSubmit.textContent = 'Launching...';
@@ -7746,7 +7738,7 @@
       }
     });
   }
-  [document.getElementById('nsmBody'), document.getElementById('nsmSubject'),
+  [document.getElementById('nsmBody'),
    document.getElementById('kptNewSession'), document.getElementById('cpInput'),
    document.getElementById('convInput')].forEach(attachImagePaste);
 
