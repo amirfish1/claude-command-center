@@ -1272,6 +1272,47 @@
     font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
   }
   .bug-fallback.visible { display: block; }
+  .bug-shot-row {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .bug-shot-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 10px; border-radius: 6px;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border);
+    font-family: inherit; font-size: 12px; cursor: pointer;
+    transition: background 0.12s ease-out, border-color 0.12s ease-out;
+  }
+  .bug-shot-btn:hover { background: rgba(255,255,255,0.04); border-color: var(--accent); }
+  .bug-shot-btn:disabled { opacity: 0.6; cursor: progress; }
+  .bug-shot-btn .bug-shot-ico {
+    display: inline-block; width: 12px; height: 12px;
+    border: 1.5px solid currentColor; border-radius: 2px;
+    position: relative;
+  }
+  .bug-shot-btn .bug-shot-ico::after {
+    content: ""; position: absolute;
+    top: 1.5px; left: 3px; right: 3px; height: 1.5px;
+    background: currentColor; border-radius: 1px;
+  }
+  .bug-shot-help {
+    font-size: 10.5px; color: var(--text-muted);
+    margin-top: 6px; line-height: 1.45;
+  }
+  .bug-shot-preview {
+    margin-top: 8px; display: none;
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px; background: var(--bg);
+  }
+  .bug-shot-preview.visible { display: block; }
+  .bug-shot-preview img {
+    display: block; max-width: 100%; max-height: 200px;
+    border-radius: 4px; margin: 0 auto 8px;
+    background: rgba(0,0,0,0.2);
+  }
+  .bug-shot-preview-actions {
+    display: flex; justify-content: flex-end; gap: 6px;
+  }
 
   /* Backlog column — no longer sticky, scrolls with the rest */
   /* Reuse kanban column/card styles in split mode */
@@ -2443,6 +2484,27 @@
         <label class="bug-label" for="bugReportDescInput">Description</label>
         <textarea id="bugReportDescInput" class="bug-input bug-textarea"
                   placeholder="What did you see? What did you expect? Steps to reproduce…"></textarea>
+      </div>
+      <div>
+        <label class="bug-label">Screenshot (optional)</label>
+        <div class="bug-shot-row">
+          <button type="button" class="bug-shot-btn" id="bugReportShotBtn">
+            <span class="bug-shot-ico" aria-hidden="true"></span>
+            <span id="bugReportShotBtnLabel">Add screenshot</span>
+          </button>
+        </div>
+        <div class="bug-shot-help">
+          Opens the macOS area-selector — draw a rectangle over what you want to share.
+          Screenshots are published to a public branch of the CCC repo, so include
+          only what you're OK making public.
+        </div>
+        <div class="bug-shot-preview" id="bugReportShotPreview">
+          <img id="bugReportShotImg" alt="Screenshot preview" />
+          <div class="bug-shot-preview-actions">
+            <button type="button" class="bug-shot-btn" id="bugReportShotRetakeBtn">Retake</button>
+            <button type="button" class="bug-shot-btn" id="bugReportShotRemoveBtn">Remove</button>
+          </div>
+        </div>
       </div>
       <div>
         <label class="bug-label">Auto-attached context</label>
@@ -8116,8 +8178,15 @@
   const $bugCancelBtn = document.getElementById('bugReportCancelBtn');
   const $bugSubmitBtn = document.getElementById('bugReportSubmitBtn');
   const $bugCopyBtn = document.getElementById('bugReportCopyBtn');
+  const $bugShotBtn = document.getElementById('bugReportShotBtn');
+  const $bugShotBtnLabel = document.getElementById('bugReportShotBtnLabel');
+  const $bugShotPreview = document.getElementById('bugReportShotPreview');
+  const $bugShotImg = document.getElementById('bugReportShotImg');
+  const $bugShotRetakeBtn = document.getElementById('bugReportShotRetakeBtn');
+  const $bugShotRemoveBtn = document.getElementById('bugReportShotRemoveBtn');
   let bugCachedVersion = null;
   let bugFallbackMarkdown = '';
+  let bugShotB64 = '';  // raw base64 PNG (no data: prefix), '' when no screenshot
 
   function bugEscape(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
@@ -8148,18 +8217,72 @@
       '<div><strong>User agent:</strong> <code>' + bugEscape(ua || '—') + '</code></div>';
   }
 
+  function bugClearShot() {
+    bugShotB64 = '';
+    if ($bugShotImg) $bugShotImg.src = '';
+    if ($bugShotPreview) $bugShotPreview.classList.remove('visible');
+    if ($bugShotBtnLabel) $bugShotBtnLabel.textContent = 'Add screenshot';
+    if ($bugShotBtn) $bugShotBtn.disabled = false;
+  }
+
   function bugResetState() {
     if ($bugError) { $bugError.textContent = ''; $bugError.classList.remove('visible'); }
     if ($bugSuccess) { $bugSuccess.innerHTML = ''; $bugSuccess.classList.remove('visible'); }
     if ($bugFallback) { $bugFallback.textContent = ''; $bugFallback.classList.remove('visible'); }
     if ($bugCopyBtn) $bugCopyBtn.style.display = 'none';
     bugFallbackMarkdown = '';
+    bugClearShot();
     if ($bugSubmitBtn) {
       $bugSubmitBtn.disabled = false;
       $bugSubmitBtn.textContent = 'Send report';
     }
     if ($bugCancelBtn) { $bugCancelBtn.disabled = false; $bugCancelBtn.textContent = 'Cancel'; }
   }
+
+  async function bugCaptureScreenshot() {
+    // Hands off to the server, which shells out to `screencapture -i` and
+    // blocks until the user finishes drawing or hits Esc. The button stays
+    // in a "spinner" state for the entire window so it's clear something
+    // is waiting on the user.
+    if (!$bugShotBtn) return;
+    if ($bugError) { $bugError.textContent = ''; $bugError.classList.remove('visible'); }
+    $bugShotBtn.disabled = true;
+    if ($bugShotBtnLabel) $bugShotBtnLabel.textContent = 'Drawing…';
+    let data;
+    try {
+      const r = await fetch('/api/bug-report/capture', { method: 'POST' });
+      data = await r.json().catch(() => ({}));
+    } catch (e) {
+      if ($bugError) {
+        $bugError.textContent = 'Capture failed: ' + (e && e.message ? e.message : 'unknown');
+        $bugError.classList.add('visible');
+      }
+      bugClearShot();
+      return;
+    }
+    if (data && data.cancelled) {
+      // User pressed Esc — they bailed on purpose, no error noise.
+      bugClearShot();
+      return;
+    }
+    if (!data || !data.ok || !data.image_b64) {
+      if ($bugError) {
+        $bugError.textContent = (data && data.error) || 'Could not capture screenshot.';
+        $bugError.classList.add('visible');
+      }
+      bugClearShot();
+      return;
+    }
+    bugShotB64 = data.image_b64;
+    if ($bugShotImg) $bugShotImg.src = 'data:' + (data.mime || 'image/png') + ';base64,' + data.image_b64;
+    if ($bugShotPreview) $bugShotPreview.classList.add('visible');
+    if ($bugShotBtnLabel) $bugShotBtnLabel.textContent = 'Replace screenshot';
+    $bugShotBtn.disabled = false;
+  }
+
+  if ($bugShotBtn) $bugShotBtn.addEventListener('click', bugCaptureScreenshot);
+  if ($bugShotRetakeBtn) $bugShotRetakeBtn.addEventListener('click', bugCaptureScreenshot);
+  if ($bugShotRemoveBtn) $bugShotRemoveBtn.addEventListener('click', bugClearShot);
 
   function bugOpenModal() {
     if (!$bugModal) return;
@@ -8198,22 +8321,30 @@
       $bugDescInput.focus();
       return;
     }
-    if ($bugSubmitBtn) { $bugSubmitBtn.disabled = true; $bugSubmitBtn.textContent = 'Sending…'; }
+    if ($bugSubmitBtn) {
+      $bugSubmitBtn.disabled = true;
+      // Sending an image takes a couple of seconds (push to a public branch
+      // before gh issue create) — surface that explicitly so the user
+      // doesn't think the submit hung.
+      $bugSubmitBtn.textContent = bugShotB64 ? 'Sending (uploading screenshot)…' : 'Sending…';
+    }
     if ($bugCancelBtn) $bugCancelBtn.disabled = true;
     const version = await bugFetchVersion();
     const sid = (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '';
+    const payload = {
+      title,
+      description: desc,
+      ccc_version: version || '',
+      user_agent: (navigator && navigator.userAgent) || '',
+      session_id: sid,
+    };
+    if (bugShotB64) payload.screenshot_b64 = bugShotB64;
     let data;
     try {
       const r = await fetch('/api/bug-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          description: desc,
-          ccc_version: version || '',
-          user_agent: (navigator && navigator.userAgent) || '',
-          session_id: sid,
-        }),
+        body: JSON.stringify(payload),
       });
       data = await r.json().catch(() => ({}));
     } catch (e) {
@@ -8227,8 +8358,30 @@
     }
     if (data && data.ok && data.url) {
       const safeUrl = bugEscape(data.url);
+      let html = 'Thanks — issue filed: <a href="' + safeUrl + '" target="_blank" rel="noopener">' + safeUrl + '</a>';
+      if (data.screenshot_needs_manual && data.screenshot_path) {
+        // Push to bug-screenshots branch failed (typical for OSS users
+        // without write access). Show the local path with a clear
+        // drag-drop instruction, AND fire-and-forget a /reveal so Finder
+        // pops to the file. The user finishes the attachment manually.
+        const safePath = bugEscape(data.screenshot_path);
+        html += '<div style="margin-top:8px;line-height:1.5;">'
+              + 'Screenshot upload failed — saved locally at '
+              + '<code style="font-family:\'SF Mono\',monospace;font-size:11px;">' + safePath + '</code>. '
+              + 'Drag this file into a comment on the issue to attach it. '
+              + 'Finder should be opening to it now.'
+              + '</div>';
+        try {
+          fetch('/api/bug-report/reveal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: data.screenshot_path }),
+          });
+        } catch (_) { /* best effort */ }
+        try { window.open(data.url, '_blank', 'noopener'); } catch (_) {}
+      }
       if ($bugSuccess) {
-        $bugSuccess.innerHTML = 'Thanks — issue filed: <a href="' + safeUrl + '" target="_blank" rel="noopener">' + safeUrl + '</a>';
+        $bugSuccess.innerHTML = html;
         $bugSuccess.classList.add('visible');
       }
       if ($bugSubmitBtn) { $bugSubmitBtn.disabled = true; $bugSubmitBtn.textContent = 'Sent'; }
