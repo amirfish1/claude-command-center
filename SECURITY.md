@@ -17,7 +17,7 @@ If you expose the port to the network, the LAN, or the internet, you are giving 
 ## What we do to enforce the boundary
 
 - **Localhost-only bind** — `server.py` binds `127.0.0.1` by default. Setting `CCC_BIND_HOST=0.0.0.0` prints a startup warning.
-- **Same-origin POST check** — every `POST` is rejected unless the `Origin` header is missing (curl, programmatic) or matches `localhost` / `127.0.0.1` / `[::1]` on the server's port. This blocks CSRF from any browser tab on an unrelated site.
+- **Same-origin POST check** — every `POST` is rejected unless the `Origin` header is missing (curl, programmatic) or matches `localhost` / `127.0.0.1` / `[::1]` on the server's port. This blocks CSRF from any browser tab on an unrelated site. The `CCC_ALLOWED_ORIGIN` env var (comma-separated origins) opts additional hostnames into the allowlist for trusted-network access (Tailscale, VPN). Each entry there is a peer that can run commands as you — only list origins you fully trust, and pair with `CCC_BIND_HOST` so the bind surface matches what you're allowing.
 - **No wildcard CORS** — the SSE stream and JSON endpoints serve same-origin only.
 - **`/api/open` sandbox** — the "open file in OS" endpoint resolves the requested path under `REPO_ROOT` or `LOG_DIR` and rejects anything outside. Default action is `open -R` (reveal in Finder), not launch.
 - **`/api/repo/switch` allow-list** — repo switching only accepts paths the picker would offer (anything under `~/` with a `.git/` or `.claude/` directory).

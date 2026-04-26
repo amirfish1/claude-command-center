@@ -15,6 +15,10 @@
 #   CCC_WATCH_REPO=~/dev/foo ./run.sh
 #   PORT=9000 ./run.sh
 #   CCC_BIND_HOST=0.0.0.0 ./run.sh # advanced: expose on LAN (no auth — see SECURITY.md)
+#   CCC_BIND_HOST=0.0.0.0 \
+#     CCC_ALLOWED_ORIGIN=http://my-mac.tailnet.ts.net:8090 ./run.sh
+#                                  # advanced: reach the UI from a phone over Tailscale.
+#                                  # Comma-separated; exact match against the browser Origin.
 
 set -euo pipefail
 

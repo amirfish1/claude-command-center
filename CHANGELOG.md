@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `CCC_ALLOWED_ORIGIN` env var — comma-separated list of additional origins
+  added to the same-origin POST allowlist. Pair with `CCC_BIND_HOST=0.0.0.0`
+  to reach the UI from a phone or other device over a trusted network
+  (Tailscale, VPN). The same-origin check otherwise rejects POSTs from any
+  Origin that isn't `localhost` / `127.0.0.1` / `[::1]`, which is what made
+  Tailscale access stop working after the OSS-launch security hardening.
+  Documented in `README.md` and `SECURITY.md`; startup prints the active
+  allowlist when set. There is still no auth — every entry is a peer that
+  can run commands as you.
+
 ## [0.1.3] - 2026-04-24
 
 ### Added

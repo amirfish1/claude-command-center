@@ -163,6 +163,7 @@ For more depth: [`docs/architecture.md`](docs/architecture.md),
 | `CCC_WATCH_REPO` | `$PWD` | Repository the UI watches (cwd for spawns, `gh` calls, project slug lookup) |
 | `PORT` | `8090` | HTTP port |
 | `CCC_BIND_HOST` | `127.0.0.1` | Interface to bind. Set to `0.0.0.0` to expose on the LAN — **no auth, see [`SECURITY.md`](SECURITY.md)** |
+| `CCC_ALLOWED_ORIGIN` | *(empty)* | Comma-separated origins (e.g. `http://my-mac.tailnet.ts.net:8090`) added to the same-origin POST allowlist. Use with `CCC_BIND_HOST=0.0.0.0` to reach the UI from another device on a trusted network (Tailscale / VPN) — **no auth, see [`SECURITY.md`](SECURITY.md)** |
 | `CCC_TITLE_STRIP` | *(empty)* | Comma-separated prefixes to strip from GitHub issue titles (e.g. `ACME,FOO` strips `[ACME ...]` and `[FOO ...]`) |
 | `CCC_ORG_PATTERNS` | *(empty)* | Multi-tenant org-tagger. Format: `Label1:pat1a\|pat1b;Label2:pat2`. Each issue body is scanned and tagged with the first matching label so the UI can group backlog by org. |
 | `VERCEL_PROJECT` | *(unset)* | Vercel project name. Leave empty to disable deploy polling. |

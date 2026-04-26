@@ -737,6 +737,13 @@ PORT = int(os.environ.get("PORT", 8090))
 # Empty by default; set `CCC_TITLE_STRIP=ACME,FOO` to strip `[ACME ...]` and `[FOO ...]` from titles.
 TITLE_STRIP_PREFIXES = [p for p in os.environ.get("CCC_TITLE_STRIP", "").split(",") if p]
 
+# Optional same-origin allowlist extension. Comma-separated full origins
+# (scheme + host + optional port), e.g. `http://my-mac.tailnet.ts.net:8090`.
+# Used together with CCC_BIND_HOST=0.0.0.0 to reach the UI from another
+# device on a trusted network (Tailscale, VPN). The server has no auth, so
+# every entry here is a peer that can run commands as you — see SECURITY.md.
+ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("CCC_ALLOWED_ORIGIN", "").split(",") if o.strip()]
+
 # Optional org-tagger for multi-tenant apps. Set CCC_ORG_PATTERNS as
 # `Label1:pat1a|pat1b;Label2:pat2`. The server scans each GitHub issue body
 # for the patterns and tags the card with `org: "Label1"`, letting the UI
@@ -5823,6 +5830,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         requests but may omit it on same-origin (varies). We allow:
           - missing Origin (curl, same-origin form posts in some browsers)
           - Origin matching localhost / 127.0.0.1 / ::1 on our PORT
+          - Origin in the CCC_ALLOWED_ORIGIN env var (for trusted-network
+            access via Tailscale / VPN — exact match against the env value)
         Anything else gets 403. Returns True if request is allowed.
         """
         origin = (self.headers.get("Origin") or "").strip()
@@ -5834,6 +5843,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     return True
                 if origin == f"{scheme}://{host}":  # default port edge case
                     return True
+        if origin in ALLOWED_ORIGINS:
+            return True
         self.send_json({"error": "cross-origin POST rejected", "origin": origin}, 403)
         return False
 
@@ -7241,6 +7252,8 @@ def main():
         print(f"⚠️  WARNING: binding to {bind_host} — server is reachable from the network.")
         print(f"   This server has no auth. Anyone who can reach this port can run")
         print(f"   subprocesses on your machine. Unset CCC_BIND_HOST to revert to localhost.")
+    if ALLOWED_ORIGINS:
+        print(f"⚠️  CCC_ALLOWED_ORIGIN extends the same-origin allowlist: {', '.join(ALLOWED_ORIGINS)}")
     write_port_file(bind_host)
     display_host = "localhost" if bind_host in ("127.0.0.1", "::1") else bind_host
     print(f"Claude Command Center running at http://{display_host}:{PORT}")
