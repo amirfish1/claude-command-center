@@ -2,8 +2,8 @@
 """
 Claude Command Center — Web UI
 
-Browse and view claude-issue-watcher stream-json logs in the browser, manage
-GitHub-issue-driven sessions on a kanban, and (optionally) drive the Morning
+Browse Claude Code conversation jsonls in a kanban, drive
+GitHub-issue-driven fixes inline, and (optionally) drive the Morning
 view for goals/tactical-item triage.
 
 Usage:
@@ -187,8 +187,6 @@ else:
     persisted = _load_persisted_repo()
     REPO_ROOT = persisted if persisted else Path.cwd().resolve()
 LOG_DIR = REPO_ROOT / ".claude" / "logs"
-FALLBACK_DIR = Path("/tmp")
-WATCHER_SCRIPT = REPO_ROOT / "scripts" / "claude-issue-watcher.sh"
 # Claude Code encodes project path by replacing "/" with "-" under ~/.claude/projects/
 _cc_project_slug = "-" + str(REPO_ROOT).lstrip("/").replace("/", "-")
 CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
@@ -819,7 +817,7 @@ def _run_healthcheck():
 def switch_repo_root(new_path):
     """Switch the watched repo at runtime.
 
-    Reassigns REPO_ROOT and all derived module globals (LOG_DIR, WATCHER_SCRIPT,
+    Reassigns REPO_ROOT and all derived module globals (LOG_DIR,
     CONVERSATIONS_DIR, _cc_project_slug). Existing functions read these at call
     time, so they pick up the new value automatically. Also invalidates every
     cache that holds repo-specific data so the next request re-queries fresh.
@@ -830,7 +828,7 @@ def switch_repo_root(new_path):
 
     Raises ValueError when new_path is not an existing directory.
     """
-    global REPO_ROOT, LOG_DIR, WATCHER_SCRIPT, CONVERSATIONS_DIR, _cc_project_slug
+    global REPO_ROOT, LOG_DIR, CONVERSATIONS_DIR, _cc_project_slug
     global _backlog_issues_cache, _backlog_issues_cache_ts
     global _issue_titles_cache, _issue_titles_cache_ts
     global _issue_state_cache, _issue_state_cache_ts
@@ -839,7 +837,6 @@ def switch_repo_root(new_path):
         raise ValueError(f"not a directory: {new_root}")
     REPO_ROOT = new_root
     LOG_DIR = REPO_ROOT / ".claude" / "logs"
-    WATCHER_SCRIPT = REPO_ROOT / "scripts" / "claude-issue-watcher.sh"
     _cc_project_slug = "-" + str(REPO_ROOT).lstrip("/").replace("/", "-")
     CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
     # Invalidate every repo-scoped cache.
@@ -953,10 +950,6 @@ HOOK_MARKER = "command-center/hooks/"
 # Legacy marker (pre-rename) — kept so ensure_hooks_installed can detect old
 # entries in ~/.claude/settings.json and rewrite them to the new path.
 HOOK_MARKER_LEGACY = "log-viewer/hooks/"
-
-# Global watcher process handle
-_watcher_proc = None
-_watcher_output_lines = []
 
 # Spawned headless Claude sessions
 _spawned_sessions = []  # [{pid, name, log, proc}]
@@ -2557,27 +2550,6 @@ def find_session_cwd(session_id):
     return None
 
 
-def _extract_spawn_meta(path):
-    """Extract spawn_meta from the first few lines of a log file."""
-    try:
-        with open(path, "r") as f:
-            for i, line in enumerate(f):
-                if i >= 5:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if ev.get("type") == "spawn_meta":
-                    return ev
-    except (OSError, UnicodeDecodeError):
-        pass
-    return None
-
-
 _issue_titles_cache = {}
 _issue_titles_cache_ts = 0
 
@@ -3060,172 +3032,6 @@ def find_backlog_items():
     return items
 
 
-def find_log_files():
-    """Return list of {issue, path, size, modified, session_id} dicts."""
-    logs = []
-    pattern = re.compile(r"issue-(\d+)\.log$")
-    titles = _fetch_issue_titles()
-
-    for directory in [LOG_DIR, FALLBACK_DIR]:
-        if not directory.is_dir():
-            continue
-        for f in directory.iterdir():
-            m = pattern.search(f.name)
-            if m and f.is_file():
-                issue = m.group(1)
-                # Don't duplicate if found in both locations
-                if any(l["issue"] == issue for l in logs):
-                    continue
-                sid = extract_session_id(f)
-                meta = _extract_spawn_meta(f)
-                mode = (meta or {}).get("mode", "worktree")
-                # Inline spawns always run in REPO_ROOT
-                if mode == "inline":
-                    cwd = str(REPO_ROOT)
-                else:
-                    cwd = find_session_cwd(sid)
-                gh_title = titles.get(issue, "")
-                logs.append({
-                    "issue": issue,
-                    "issue_title": gh_title or (meta or {}).get("issue_title", ""),
-                    "mode": mode,
-                    "path": str(f),
-                    "size": f.stat().st_size,
-                    "modified": f.stat().st_mtime,
-                    "modified_human": time.strftime(
-                        "%Y-%m-%d %H:%M", time.localtime(f.stat().st_mtime)
-                    ),
-                    "session_id": sid,
-                    "session_cwd": cwd,
-                    "session_cwd_exists": bool(cwd and Path(cwd).is_dir()),
-                })
-
-    logs.sort(key=lambda x: x["modified"], reverse=True)
-    return logs
-
-
-def parse_log_file(path, after_line=0):
-    """Parse a stream-json log file into structured events."""
-    events = []
-    line_num = 0
-
-    try:
-        with open(path, "r") as f:
-            for line in f:
-                line_num += 1
-                if line_num <= after_line:
-                    continue
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                parsed = parse_event(ev, line_num)
-                if parsed:
-                    events.append(parsed)
-    except FileNotFoundError:
-        pass
-
-    return {"events": events, "last_line": line_num}
-
-
-def parse_event(ev, line_num):
-    """Parse a single JSON event into a display-friendly dict."""
-    t = ev.get("type", "")
-    ts = ev.get("timestamp", "") or ""
-
-    if t == "spawn_meta":
-        # Synthetic metadata from inline issue spawns — skip display
-        return None
-
-    if t == "system":
-        subtype = ev.get("subtype", "")
-        model = ev.get("model", "")
-        session = ev.get("session_id", "")[:12]
-        return {
-            "line": line_num,
-            "ts": ts,
-            "type": "system",
-            "subtype": subtype,
-            "model": model,
-            "session": session,
-        }
-
-    if t == "assistant":
-        blocks = []
-        for block in ev.get("message", {}).get("content", []):
-            btype = block.get("type", "")
-            if btype == "tool_use":
-                inp = block.get("input", {})
-                name = block.get("name", "?")
-                detail = (
-                    inp.get("file_path")
-                    or inp.get("pattern")
-                    or inp.get("command", "")
-                    or inp.get("query", "")
-                    or inp.get("prompt", "")
-                    or ""
-                )
-                # No truncation — full detail shown in web UI
-                blocks.append({"kind": "tool_use", "name": name, "detail": detail})
-            elif btype == "text":
-                txt = block.get("text", "").strip()
-                if txt:
-                    blocks.append({"kind": "text", "text": txt})
-            elif btype == "thinking":
-                thinking = block.get("thinking", "").strip()
-                if thinking:
-                    blocks.append({"kind": "thinking", "text": thinking})
-
-        if blocks:
-            return {"line": line_num, "ts": ts, "type": "assistant", "blocks": blocks}
-
-    if t == "user":
-        content = ev.get("message", {}).get("content", [])
-        if isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "tool_result":
-                    return {"line": line_num, "ts": ts, "type": "tool_result"}
-            # Check for human text
-            texts = [
-                item.get("text", "").strip()
-                for item in content
-                if isinstance(item, dict) and item.get("type") == "text"
-            ]
-            images = _extract_images_from_content(content)
-            if texts or images:
-                return {
-                    "line": line_num,
-                    "ts": ts,
-                    "type": "user_text",
-                    "text": "\n".join(t for t in texts if t),
-                    "images": images,
-                }
-        elif isinstance(content, str) and content.strip():
-            images = _extract_images_from_content(content)
-            return {"line": line_num, "ts": ts, "type": "user_text", "text": content.strip(), "images": images}
-
-    if t == "result":
-        cost = ev.get("cost_usd", "?")
-        dur = ev.get("duration_ms", "?")
-        r = ev.get("result")
-        if isinstance(r, dict):
-            cost = r.get("cost_usd", cost)
-            dur = r.get("duration_ms", dur)
-        return {
-            "line": line_num,
-            "ts": ts,
-            "type": "result",
-            "cost_usd": cost,
-            "duration_ms": dur,
-        }
-
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Conversation parsing (Claude Code interactive sessions)
 # ---------------------------------------------------------------------------
@@ -3575,11 +3381,11 @@ def _add_sidecar_fields(entry):
 
 
 def find_all_sessions():
-    """Return a unified list of sessions from both conversations and issue logs.
+    """Return a unified list of sessions: interactive conversations + pkood
+    agents + ~/.claude/tasks backlog cards.
 
-    Each entry has a 'source' field: 'interactive' or 'watcher'.
-    Conversations come from find_conversations(), issue logs from find_log_files().
-    Merged, custom-ordered, and sorted by mtime.
+    Each entry has a 'source' field: 'interactive' | 'pkood' | 'task'.
+    Sources are merged, custom-ordered, and sorted by mtime.
     """
     global _SESSION_ISSUES_CACHE
     _SESSION_ISSUES_CACHE = _load_session_issues()
@@ -3594,46 +3400,6 @@ def find_all_sessions():
         c["is_live"] = c["session_id"] in live_sids
         reg_pid = (registry.get(c["session_id"]) or {}).get("pid")
         c["spawn_pid"] = reg_pid if reg_pid in spawned_pids else None
-
-    # Get issue logs and transform to conversation-like shape.
-    # Deduplicate: if a watcher log's session_id matches an interactive session,
-    # skip the watcher entry (the interactive one has richer signal data).
-    logs = find_log_files()
-    interactive_sids = {c["session_id"] for c in conversations}
-    for log in logs:
-        if log.get("session_id") and log["session_id"] in interactive_sids:
-            continue
-        issue = log["issue"]
-        issue_title = log.get("issue_title", "")
-        display = f"#{issue}: {issue_title}" if issue_title else f"Issue #{issue}"
-        conversations.append({
-            "id": f"issue-{issue}",
-            "session_id": log.get("session_id") or f"issue-{issue}",
-            "timestamp": "",
-            "branch": "",
-            "first_message": "",
-            "display_name": display,
-            "name_overridden": False,
-            "last_prompt": "",
-            "size": log["size"],
-            "modified": log["modified"],
-            "modified_human": log["modified_human"],
-            "session_cwd": log.get("session_cwd"),
-            "session_cwd_exists": log.get("session_cwd_exists", False),
-            "source": "watcher",
-            "issue_number": issue,
-            "issue_mode": log.get("mode", "worktree"),
-            "is_live": (log.get("session_id") or "") in live_sids,
-            # Session signals — empty for watcher logs
-            "has_edit": False,
-            "has_commit": False,
-            "has_push": False,
-            "last_event_type": None,
-            "pending_tool": None,
-            "pending_file": None,
-            "archived": False,
-            "verified": False,
-        })
 
     # Add pkood agents — and merge in their linked claude-session card, if any.
     # Pkood spawns a claude process in a tmux pty, which produces a regular
@@ -3909,134 +3675,6 @@ def _parse_conversation_event(ev, line_num):
         }
 
     return None
-
-
-# ---------------------------------------------------------------------------
-# Watcher process management
-# ---------------------------------------------------------------------------
-
-_watcher_lock = threading.Lock()
-
-
-def _reader_thread(proc):
-    """Background thread that reads watcher stdout line-by-line."""
-    global _watcher_output_lines
-    try:
-        for raw in proc.stdout:
-            line = raw.decode("utf-8", errors="replace").rstrip()
-            with _watcher_lock:
-                _watcher_output_lines.append(line)
-                if len(_watcher_output_lines) > 500:
-                    _watcher_output_lines = _watcher_output_lines[-500:]
-    except (ValueError, OSError):
-        pass  # pipe closed
-
-
-def _find_zombie_watchers():
-    """Find any existing watcher processes not managed by us."""
-    try:
-        result = subprocess.run(
-            ["pgrep", "-f", "claude-issue-watcher\\.sh"],
-            capture_output=True, text=True, timeout=3,
-        )
-        if result.returncode == 0:
-            pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
-            # Exclude our own managed process
-            with _watcher_lock:
-                our_pid = _watcher_proc.pid if _watcher_proc and _watcher_proc.poll() is None else None
-            return [p for p in pids if p != our_pid]
-    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
-        pass
-    return []
-
-
-def _kill_zombie_watchers():
-    """Kill any orphaned watcher processes."""
-    zombies = _find_zombie_watchers()
-    for pid in zombies:
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, OSError):
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                pass
-    return zombies
-
-
-def watcher_status():
-    """Return watcher status dict."""
-    global _watcher_proc
-    zombies = _find_zombie_watchers()
-    with _watcher_lock:
-        if _watcher_proc is not None:
-            ret = _watcher_proc.poll()
-            if ret is not None:
-                _watcher_proc = None
-                return {"running": False, "exit_code": ret, "zombies": zombies, "output": _watcher_output_lines[-50:]}
-            return {"running": True, "pid": _watcher_proc.pid, "zombies": zombies, "output": _watcher_output_lines[-50:]}
-        # Not managed by us, but zombies exist
-        if zombies:
-            return {"running": False, "zombies": zombies, "output": _watcher_output_lines[-50:]}
-        return {"running": False, "output": _watcher_output_lines[-50:]}
-
-
-def watcher_start():
-    """Start the watcher script as a subprocess."""
-    global _watcher_proc, _watcher_output_lines
-
-    # Kill any orphaned watchers first
-    zombies = _kill_zombie_watchers()
-
-    with _watcher_lock:
-        if _watcher_proc is not None and _watcher_proc.poll() is None:
-            return {"error": "Watcher is already running", "running": True, "pid": _watcher_proc.pid, "output": _watcher_output_lines[-50:]}
-
-    if not WATCHER_SCRIPT.exists():
-        return {"error": f"Watcher script not found: {WATCHER_SCRIPT}"}
-
-    with _watcher_lock:
-        _watcher_output_lines = []
-        _watcher_proc = subprocess.Popen(
-            [str(WATCHER_SCRIPT)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=str(REPO_ROOT),
-            preexec_fn=os.setsid,
-        )
-        # Start background reader so stdout never blocks
-        t = threading.Thread(target=_reader_thread, args=(_watcher_proc,), daemon=True)
-        t.start()
-
-    return {"started": True, **watcher_status()}
-
-
-def watcher_stop():
-    """Stop the watcher subprocess."""
-    global _watcher_proc
-    with _watcher_lock:
-        if _watcher_proc is None or _watcher_proc.poll() is not None:
-            _watcher_proc = None
-            return {"error": "Watcher is not running"}
-        proc = _watcher_proc
-
-    # Kill the entire process group (watcher + any children like claude CLI)
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.wait(timeout=2)
-
-    with _watcher_lock:
-        _watcher_proc = None
-    return {"stopped": True}
 
 
 # ---------------------------------------------------------------------------
@@ -5010,8 +4648,6 @@ def _gh(*args, timeout=10):
 
 def list_issues():
     """Return open issues + recently closed issues (last 24h)."""
-    log_issues = {l["issue"] for l in find_log_files()}
-
     # Open issues
     open_issues = _gh(
         "issue", "list", "--state", "open", "--limit", "50",
@@ -5047,7 +4683,7 @@ def list_issues():
             "labels": labels,
             "state": issue["state"].lower(),
             "claude_status": claude_status,
-            "has_log": str(issue["number"]) in log_issues,
+            "has_log": False,
             "updated_at": issue.get("updatedAt", ""),
             "closed_at": issue.get("closedAt", ""),
         })
@@ -5110,7 +4746,7 @@ Instructions:
 
     session_name = f"issue-{issue_number}"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
-    log_filename = f"issue-{issue_number}.log"
+    log_filename = f"spawn-issue-{issue_number}-{timestamp}.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / log_filename
 
@@ -5124,25 +4760,12 @@ Instructions:
         prompt,
     ]
 
+    # The log file is kept (not consumed by the UI any more — Claude writes
+    # its own jsonl under ~/.claude/projects/, which surfaces as the
+    # interactive session card) but `_reattach_spawned_orphans` still reads
+    # it via `extract_session_id` to backfill the session id when the
+    # in-memory spawn registry is wiped on a restart.
     log_fh = open(log_path, "w")
-    # Write synthetic metadata + prompt so the command center shows the title and initial prompt
-    meta = json.dumps({
-        "type": "spawn_meta",
-        "issue_number": issue_number,
-        "issue_title": title,
-        "mode": "inline",
-        "session_id": "",
-    })
-    log_fh.write(meta + "\n")
-    prompt_ev = json.dumps({
-        "type": "user",
-        "message": {"content": [{"type": "text", "text": prompt}]},
-        "session_id": "",
-        "_synthetic": True,
-    })
-    log_fh.write(prompt_ev + "\n")
-    log_fh.flush()
-
     proc = subprocess.Popen(
         cmd,
         stdout=log_fh,
@@ -6145,14 +5768,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(compute_attention_items(include_all=include_all))
         elif path == "/api/config":
             self.send_json(get_app_config())
-        elif path == "/api/logs":
-            logs = find_log_files()
-            # Strip internal path from response
-            for log in logs:
-                del log["path"]
-            self.send_json(logs)
-        elif path == "/api/watcher":
-            self.send_json(watcher_status())
         elif path == "/api/issues":
             self.send_json(list_issues())
         elif path == "/api/vercel-deploy":
@@ -6321,24 +5936,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing id parameter"}, 400)
             else:
                 self.send_json(pkood_tail(agent_id))
-        elif path.startswith("/api/logs/"):
-            issue = path.split("/")[-1]
-            qs = urllib.parse.parse_qs(parsed.query)
-            after_line = int(qs.get("after", ["0"])[0])
-
-            # Find the log file
-            log_file = None
-            for log in find_log_files():
-                if log["issue"] == issue:
-                    log_file = log["path"]
-                    break
-
-            if not log_file:
-                self.send_json({"error": f"No log found for issue #{issue}"}, 404)
-                return
-
-            result = parse_log_file(log_file, after_line)
-            self.send_json(result)
         elif path.startswith("/image-cache/"):
             # Serve user-pasted images from ~/.claude/image-cache/<sid>/<file>.
             # Path sandboxing (realpath under base) is the sole authorization check;
@@ -6996,10 +6593,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             self.send_json({"ok": True, "path": str(rp)})
                         except Exception as e:
                             self.send_json({"ok": False, "error": str(e)}, 500)
-        elif path == "/api/watcher/start":
-            self.send_json(watcher_start())
-        elif path == "/api/watcher/stop":
-            self.send_json(watcher_stop())
         elif path == "/api/sessions/spawn":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -7167,7 +6760,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     archived.append(sid)
                     now_archived = True
                 _save_archived_conversations(archived)
-                # If this is a watcher issue session, also close/reopen the GitHub issue
+                # If this card represents a GitHub issue (id `issue-N`),
+                # also close/reopen the issue on archive/unarchive.
                 issue_match = re.match(r"^issue-(\d+)$", conv_id)
                 gh_result = None
                 if issue_match:
@@ -7225,7 +6819,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # Resolve the linked issue, in priority order:
                     #  1. explicit `linked_issue` from payload (the frontend
                     #     already knows from /api/sessions — trust it)
-                    #  2. watcher-style conv_id like "issue-N"
+                    #  2. issue-card conv_id like "issue-N"
                     #  3. side-car session→issue mapping
                     #  4. display_name patterns: "issue-N" OR "#N: title"
                     #  5. payload.tail_issue_number (in-session gh signals)
@@ -7764,7 +7358,7 @@ def compute_attention_items(include_all=False):
 
 def get_app_config():
     """Surface the detected environment to the frontend so the UI can
-    conditionally render panels (Vercel, Watcher, pkood) and avoid hardcoded
+    conditionally render panels (Vercel, pkood) and avoid hardcoded
     user-specific defaults. Cached 30s."""
     global _app_config_cache, _app_config_cache_ts
     if _app_config_cache and time.time() - _app_config_cache_ts < 30:
@@ -7788,7 +7382,6 @@ def get_app_config():
         "vercel_enabled": bool(VERCEL_PROJECT),
         "vercel_project": VERCEL_PROJECT,
         "pkood_enabled": bool(shutil.which("pkood")),
-        "watcher_enabled": WATCHER_SCRIPT.exists(),
         "gh_enabled": bool(shutil.which("gh")),
         "orgs": [label for label, _ in ORG_PATTERNS],
     }
@@ -8030,7 +7623,6 @@ def main():
     display_host = "localhost" if bind_host in ("127.0.0.1", "::1") else bind_host
     print(f"Claude Command Center running at http://{display_host}:{PORT}")
     print(f"  Log dir:       {LOG_DIR}")
-    print(f"  Fallback:      {FALLBACK_DIR}/claude-issue-*.log")
     print(f"  Conversations: {CONVERSATIONS_DIR}/*.jsonl")
     print(f"  Press Ctrl+C to stop")
     # Warm the metadata cache in the background so the first /api/sessions

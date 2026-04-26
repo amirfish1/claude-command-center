@@ -115,46 +115,7 @@
   .tool-filter-item .tool-label { color: var(--text); }
   .tool-filter-item .tool-count { color: var(--text-muted); font-size: 10px; margin-left: auto; }
 
-  /* Watcher control */
-  .watcher-panel {
-    border-top: 1px solid var(--border); padding: 12px;
-    flex: 1; display: flex; flex-direction: column; min-height: 0;
-  }
-  .watcher-header {
-    font-size: 11px; font-weight: 600; text-transform: uppercase;
-    color: var(--text-muted); margin-bottom: 8px;
-    display: flex; align-items: center; gap: 6px;
-  }
-  .watcher-header .watcher-dot {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: var(--text-muted);
-  }
-  .watcher-header .watcher-dot.running { background: var(--green); animation: pulse 2s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-  .watcher-btn {
-    width: 100%; padding: 6px 12px; border-radius: 6px;
-    border: 1px solid var(--border); cursor: pointer;
-    font-size: 12px; font-weight: 600;
-    transition: background 0.15s, border-color 0.15s;
-  }
-  .watcher-btn.start {
-    background: rgba(63, 185, 80, 0.12); color: var(--green);
-    border-color: rgba(63, 185, 80, 0.3);
-  }
-  .watcher-btn.start:hover { background: rgba(63, 185, 80, 0.2); }
-  .watcher-btn.stop {
-    background: rgba(248, 81, 73, 0.12); color: var(--red);
-    border-color: rgba(248, 81, 73, 0.3);
-  }
-  .watcher-btn.stop:hover { background: rgba(248, 81, 73, 0.2); }
-  .watcher-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .watcher-output {
-    margin-top: 8px; flex: 1; overflow-y: auto; min-height: 60px; height: 0;
-    font-size: 10px; font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-    color: var(--text-muted); line-height: 1.4;
-    background: var(--bg); border-radius: 4px; padding: 6px;
-  }
-  .watcher-output:empty::after { content: 'No output yet'; color: var(--text-muted); opacity: 0.4; }
 
   /* Vercel deploy status */
   .deploy-panel {
@@ -1802,7 +1763,6 @@
     #convSessionId { display: none !important; }
 
     /* Panels that don't make sense on phones */
-    .watcher-panel { display: none !important; }
     .deploy-panel { display: none !important; }
 
     /* --- Kanban-split --- */
@@ -2269,14 +2229,6 @@
       </div>
       <div class="attention-list" id="attentionList"></div>
     </div>
-    <div class="watcher-panel" id="watcherPanel">
-      <div class="watcher-header" title="Polls GitHub every 60s for issues labeled `claude-fix` and auto-spawns a headless session per issue. Off by default — start it explicitly.">
-        <span class="watcher-dot" id="watcherDot"></span>
-        <span>Issue Watcher</span>
-      </div>
-      <button class="watcher-btn start" id="watcherBtn" disabled title="Start polling GitHub for `claude-fix`-labeled issues and spawn sessions">Loading...</button>
-      <div class="watcher-output" id="watcherOutput"></div>
-    </div>
 
     <!-- Bottom-mounted appearance + settings strip, Claude-Desktop-style -->
     <div class="sidebar-footer">
@@ -2605,7 +2557,6 @@
     vercel_enabled: false,
     vercel_project: '',
     pkood_enabled: false,
-    watcher_enabled: false,
     gh_enabled: true,
   };
   // Regex compiled from APP_CONFIG.title_strip at load; used to strip
@@ -2678,8 +2629,6 @@
     // Hide optional panels that aren't configured on this machine.
     const $deployPanel = document.getElementById('deployPanel');
     if ($deployPanel) $deployPanel.style.display = APP_CONFIG.vercel_enabled ? '' : 'none';
-    const $watcherPanel = document.getElementById('watcherPanel');
-    if ($watcherPanel) $watcherPanel.style.display = APP_CONFIG.watcher_enabled ? '' : 'none';
     const $kptDeploy = document.getElementById('kptDeployStatus');
     if ($kptDeploy && !APP_CONFIG.vercel_enabled) $kptDeploy.style.display = 'none';
     document.querySelectorAll('.pkood-toggle-label, .kpt-label, .nsm-pkood').forEach(el => {
@@ -2692,9 +2641,8 @@
   let sessionIdByConv = {}; // {convId: sessionId}
   let sessionCwdByConv = {}; // {convId: originalCwd}
   let sessionCwdExistsByConv = {}; // {convId: bool}
-  let sessionSourceByConv = {}; // {convId: 'interactive'|'watcher'}
+  let sessionSourceByConv = {}; // {convId: 'interactive'|'pkood'|'task'}
   let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
-  let sessionIssueByConv = {}; // {convId: issueNumber} for watcher sessions
   // Currently-focused session and its live-process state
   let currentSession = { id: null, cwd: null, cwdExists: false, source: null };
   let liveStatus = { live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false };
@@ -2709,9 +2657,6 @@
   const $pkoodToggle = document.getElementById('pkoodToggle');
   const $pkoodKillBtn = document.getElementById('pkoodKillBtn');
   let pkoodTailPoller = null; // interval ID for polling pkood tail
-  let issueLogPoller = null; // interval ID for polling issue log tail
-  let issueLogLastLine = 0; // last line loaded for current issue log
-  const $watcherPanel = document.getElementById('watcherPanel');
   const $convRefreshBtn = document.getElementById('convRefreshBtn');
 
   function shellQuote(s) {
@@ -2720,7 +2665,7 @@
 
   function buildResumeCommand(sid, cwd, cwdExists) {
     if (!cwd) return 'claude --resume ' + sid;
-    // Derive worktree branch from a watcher worktree path:
+    // Derive worktree branch from a `.claude/worktrees/...` path:
     // e.g. /Users/.../.claude/worktrees/claude-fix/issue-88 -> branch "claude-fix/issue-88"
     const wtMatch = cwd.match(/\/\.claude\/worktrees\/(.+)$/);
     const quotedCwd = shellQuote(cwd);
@@ -3597,10 +3542,9 @@
     applyConvFontScale();
   });
 
-  // The Sessions/Issues tab bar was removed. switchTab() is kept as a no-op
-  // so legacy call sites (e.g. fix-issue flow) don't crash; behaviour is
-  // always the sessions view now. The Issue Watcher panel in the sidebar is
-  // controlled by APP_CONFIG.watcher_enabled, not by tab state.
+  // The Sessions/Issues tab bar was removed. switchTab() is kept as a
+  // null-safe no-op so legacy call sites (e.g. fix-issue flow) don't crash;
+  // behaviour is always the sessions view now.
   function switchTab(tab) {
     activeTab = tab;
     if (tab === 'sessions' && !conversationsLoaded) {
@@ -3803,14 +3747,12 @@
       sessionCwdByConv = {};
       sessionCwdExistsByConv = {};
       sessionSourceByConv = {};
-      sessionIssueByConv = {};
       sessionSpawnPidByConv = {};
       for (const c of conversationsData) {
         if (c.session_id) sessionIdByConv[c.id] = c.session_id;
         if (c.session_cwd) sessionCwdByConv[c.id] = c.session_cwd;
         sessionCwdExistsByConv[c.id] = !!c.session_cwd_exists;
         sessionSourceByConv[c.id] = c.source || 'interactive';
-        if (c.issue_number) sessionIssueByConv[c.id] = c.issue_number;
         if (c.spawn_pid) sessionSpawnPidByConv[c.id] = c.spawn_pid;
       }
       renderSidebar(filterConversations($convSearch.value));
@@ -5846,8 +5788,7 @@
         : '';
       const branch = c.branch ? '<span class="branch-badge">' + escapeHtml(c.branch) + '</span>' : '';
       let sourceBadge = '';
-      if (c.source === 'watcher') sourceBadge = '<span class="source-badge">watcher</span>';
-      else if (c.source === 'pkood') sourceBadge = '<span class="source-badge pkood">pkood</span>';
+      if (c.source === 'pkood') sourceBadge = '<span class="source-badge pkood">pkood</span>';
       const rel = relativeTime(c.modified);
       const active = currentConversation === c.id ? ' active' : '';
 
@@ -6261,7 +6202,6 @@
   async function renderIssueInConvPane(issueNum) {
     const $view = getConvView();
     stopConvStream();
-    stopIssueLogPoller();
     currentConversation = 'backlog-issue-' + issueNum;
     $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading issue #' + issueNum + '...</div>';
     try {
@@ -6418,7 +6358,6 @@
   async function selectConversation(id) {
     // Stop any existing SSE stream or pollers
     stopConvStream();
-    stopIssueLogPoller();
     mobileShowForCurrentMode();
     currentConversation = id;
     convLastLine = 0;
@@ -6487,22 +6426,6 @@
       }
       await loadPkoodTail(agentId);
       pkoodTailPoller = setInterval(() => loadPkoodTail(agentId), 2000);
-    } else if (source === 'watcher') {
-      stopPkoodTailPoller();
-      stopIssueLogPoller();
-      if ($pkoodKillBtn) $pkoodKillBtn.style.display = 'none';
-      const issue = sessionIssueByConv[id];
-      if (!issue) return;
-      try {
-        const res = await fetch('/api/logs/' + issue);
-        const data = await res.json();
-        $view.innerHTML = '';
-        renderConversationEvents(data.events || []);
-        issueLogLastLine = data.last_line || 0;
-      } catch (err) {
-        $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load issue log: ' + escapeHtml(err.message) + '</div>';
-      }
-      issueLogPoller = setInterval(() => pollIssueLogs(issue), 2000);
     } else {
       stopPkoodTailPoller();
       if ($pkoodKillBtn) $pkoodKillBtn.style.display = 'none';
@@ -6617,25 +6540,6 @@
     }
   }
 
-  function stopIssueLogPoller() {
-    if (issueLogPoller) {
-      clearInterval(issueLogPoller);
-      issueLogPoller = null;
-    }
-    issueLogLastLine = 0;
-  }
-
-  async function pollIssueLogs(issueNum) {
-    try {
-      const res = await fetch('/api/logs/' + issueNum + '?after=' + issueLogLastLine);
-      const data = await res.json();
-      if (data.events && data.events.length > 0) {
-        renderConversationEvents(data.events);
-        issueLogLastLine = data.last_line;
-      }
-    } catch (err) {}
-  }
-
   async function loadPkoodTail(agentId) {
     const $view = getConvView();
     try {
@@ -6686,7 +6590,6 @@
   function renderTodoInConvPane(backlogId) {
     const $view = getConvView();
     stopConvStream();
-    stopIssueLogPoller();
     currentConversation = backlogId;
     const c = conversationsData.find(x => x.id === backlogId) || {};
     const title = stripTitle(c.display_name || '(todo)').replace(/-/g, ' ').trim();
@@ -6940,9 +6843,9 @@
   let issuesData = [];
 
   async function loadIssues() {
-    // Issues tab was removed; the dedicated /api/issues view no longer exists
-    // in the UI. The Issue Watcher (sidebar panel) polls GitHub directly for
-    // spawn purposes; it doesn't depend on this function.
+    // Issues tab was removed; the dedicated /api/issues view no longer
+    // exists as a visible UI element. Issues now surface as kanban cards
+    // with an inline "Fix" button instead of a dedicated panel.
     if (!$issuesView) return;
     try {
       const res = await fetch('/api/issues');
@@ -6997,7 +6900,7 @@
     });
     $issuesView.querySelectorAll('.log-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        // Find the watcher session in the unified list and select it
+        // Find the issue's session card in the unified list and select it.
         const issueId = 'issue-' + btn.dataset.num;
         switchTab('sessions');
         selectConversation(issueId);
@@ -7170,61 +7073,6 @@
     if (s < 86400) return Math.floor(s / 3600) + 'h ago';
     return Math.floor(s / 86400) + 'd ago';
   }
-
-  // ── Watcher control ──
-  const $watcherBtn = document.getElementById('watcherBtn');
-  const $watcherDot = document.getElementById('watcherDot');
-  const $watcherOutput = document.getElementById('watcherOutput');
-  let watcherPolling = null;
-
-  async function pollWatcher() {
-    try {
-      const res = await fetch('/api/watcher');
-      const data = await res.json();
-      updateWatcherUI(data);
-    } catch {}
-  }
-
-  function updateWatcherUI(data) {
-    const running = data.running;
-    const zombies = data.zombies || [];
-    $watcherDot.className = 'watcher-dot' + (running ? ' running' : '');
-    $watcherBtn.disabled = false;
-    if (running) {
-      $watcherBtn.textContent = 'Stop watcher';
-      $watcherBtn.className = 'watcher-btn stop';
-      if (!watcherPolling) watcherPolling = setInterval(pollWatcher, 3000);
-    } else {
-      $watcherBtn.textContent = 'Start watcher';
-      $watcherBtn.className = 'watcher-btn start';
-      if (watcherPolling) { clearInterval(watcherPolling); watcherPolling = null; }
-    }
-    let outputLines = (data.output || []).slice();
-    if (zombies.length && !running) {
-      outputLines.unshift('Warning: Orphan watcher PIDs: ' + zombies.join(', ') + ' (will be killed on next start)');
-    }
-    if (outputLines.length) {
-      $watcherOutput.textContent = outputLines.join('\n');
-      $watcherOutput.scrollTop = $watcherOutput.scrollHeight;
-    }
-  }
-
-  $watcherBtn.addEventListener('click', async () => {
-    const running = $watcherDot.classList.contains('running');
-    $watcherBtn.disabled = true;
-    $watcherBtn.textContent = running ? 'Stopping...' : 'Starting...';
-    try {
-      const res = await fetch(running ? '/api/watcher/stop' : '/api/watcher/start', { method: 'POST' });
-      const data = await res.json();
-      if (data.error && !data.running) {
-        $watcherOutput.textContent = data.error;
-      }
-      await pollWatcher();
-    } catch (err) {
-      $watcherBtn.disabled = false;
-      $watcherOutput.textContent = 'Error: ' + err.message;
-    }
-  });
 
   // ── Sidebar resizer ──
   const $sidebar = document.querySelector('.sidebar');
@@ -8909,9 +8757,6 @@
 
   // Init
   loadConversationList();
-  // Issue Watcher panel visibility is controlled by APP_CONFIG.watcher_enabled
-  // (set earlier in the load sequence), not by tab state.
-  pollWatcher();
   pollVercelDeploy();
   setInterval(pollVercelDeploy, 15000);
 })();

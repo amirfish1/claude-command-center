@@ -7,15 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Issue Watcher subprocess + `find_log_files` data path.** The standalone
+  `scripts/claude-issue-watcher.sh` polling daemon (and its sidebar
+  start/stop panel) is gone. The script had been missing from the repo for
+  some time and the panel was already dead in the UI; this commit deletes
+  the scaffolding behind it: `WATCHER_SCRIPT`, `_watcher_proc`,
+  `_watcher_lock`, `_watcher_output_lines`, `_reader_thread`,
+  `_find_zombie_watchers`, `_kill_zombie_watchers`, `watcher_status`,
+  `watcher_start`, `watcher_stop`, the `/api/watcher`, `/api/watcher/start`,
+  `/api/watcher/stop` endpoints, and the `watcher_enabled` field on
+  `/api/config`. Same on the front-end: `.watcher-panel` HTML/CSS,
+  `pollWatcher`, the watcher button handler, and APP_CONFIG plumbing.
+  Issue triage now happens inline — the kanban surfaces issue cards with
+  a "Fix" button that calls `spawn_issue_fix()` directly, and remote
+  agents drive the same flow over `/api/ask`.
+- **`find_log_files` + `LOG_DIR/issue-N.log` data path.** Removed the
+  `find_log_files()`, `_extract_spawn_meta()`, `parse_log_file()`, and
+  `parse_event()` functions, the `FALLBACK_DIR` constant, and the
+  `/api/logs` and `/api/logs/<issue>` endpoints. The dual-source merge
+  in `find_all_sessions()` (which produced `source="watcher"` cards)
+  is gone — sessions come from `find_conversations()` (interactive) +
+  `find_pkood_agents()` + `~/.claude/tasks/` only. Front-end:
+  `sessionIssueByConv`, `issueLogPoller`, `issueLogLastLine`,
+  `stopIssueLogPoller`, `pollIssueLogs`, the `source === 'watcher'`
+  branch in `selectConversation`, and the matching source-badge are all
+  removed.
+- **`spawn_issue_fix` no longer writes a synthetic stream-json header.**
+  The function used to prepend a `spawn_meta` event and a synthetic
+  user-message event so the `parse_log_file` UI viewer had something to
+  render. With that viewer gone, the headers are dead writes — the
+  spawned `claude -p` already writes its own `~/.claude/projects/.../<sid>.jsonl`
+  which surfaces as the interactive session card. The local log file is
+  still written (renamed `spawn-issue-{N}-{ts}.log` for naming consistency
+  with `spawn_session`) because `_reattach_spawned_orphans` reads it via
+  `extract_session_id` to backfill the session id after a restart.
+
 ### Changed
 - User messages in the conversation pane now render in blue (the
   shared `--accent` colour) instead of green, so they read as
   "the human's turn" rather than blending with the cyan "result"
   rows. Assistant messages stay purple, results stay cyan.
 - Sessions/Issues tabs removed from the main pane. The dedicated `/api/issues`
-  view (and its tab bar) is gone — GitHub issues are still surfaced via the
-  Issue Watcher panel in the sidebar, which now isn't gated on a tab being
-  active. The "← Back" mobile button moved into `convToolbar`.
+  view (and its tab bar) is gone — GitHub issues are still surfaced via
+  inline kanban cards, with a "Fix" button per card. The "← Back" mobile
+  button moved into `convToolbar`.
 - "Needs your attention" panel relocated from the dead split-kanban layout
   into the sidebar (between the conversation list and the Issue Watcher
   panel). It's still collapsed-by-default and still drag-resizable.
