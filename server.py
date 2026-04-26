@@ -3184,6 +3184,24 @@ def _read_in_flight_state(session_id):
     return None
 
 
+def _read_notification_state(session_id):
+    """Return the Notification hook marker for a session, or None.
+
+    The marker is written when Claude Code emits a `Notification` event
+    (typically a permission prompt — "Claude needs your permission to
+    use Bash"). PostToolUse clears it once the tool actually runs, so
+    its presence is a precise "human input required" signal rather than
+    the timing-based heuristic the dashboard previously relied on.
+    """
+    path = SIDECAR_STATE_DIR / f"{session_id}_needs_approval.json"
+    try:
+        if path.exists():
+            return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
 def _cleanup_stale_sidecars(live_session_ids):
     """Remove sidecar files for sessions that are no longer live."""
     if not SIDECAR_STATE_DIR.is_dir():
@@ -3192,11 +3210,14 @@ def _cleanup_stale_sidecars(live_session_ids):
         if not f.is_file():
             continue
         name = f.stem
-        # Strip suffixes to get session_id (`_writes` flag, `_in_flight` marker)
+        # Strip suffixes to get session_id (`_writes` flag, `_in_flight`
+        # marker, `_needs_approval` marker).
         if name.endswith("_writes"):
             sid = name[:-len("_writes")]
         elif name.endswith("_in_flight"):
             sid = name[:-len("_in_flight")]
+        elif name.endswith("_needs_approval"):
+            sid = name[:-len("_needs_approval")]
         else:
             sid = name
         if sid not in live_session_ids:
@@ -3217,6 +3238,7 @@ def _add_sidecar_fields(entry):
     is_live = entry.get("is_live")
     sc = _read_sidecar_state(sid) if is_live else None
     inflight = _read_in_flight_state(sid) if is_live else None
+    notif = _read_notification_state(sid) if is_live else None
     entry["sidecar_status"] = sc.get("status") if sc else None
     entry["sidecar_has_writes"] = sc.get("has_writes", False) if sc else False
     if inflight:
@@ -3229,6 +3251,10 @@ def _add_sidecar_fields(entry):
         entry["sidecar_file"] = sc.get("file") if sc else None
         entry["sidecar_ts"] = sc.get("timestamp", 0) if sc else 0
         entry["sidecar_in_flight"] = False
+    # Notification hook signal — precise "Claude is asking for permission"
+    # marker, replaces the brittle pending_tool/age heuristic on the UI side.
+    entry["needs_approval"] = bool(notif)
+    entry["needs_approval_message"] = notif.get("message", "") if notif else ""
 
 
 def find_all_sessions():
@@ -5690,6 +5716,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # to render an in-progress strip without polling /api/sessions.
             sc = _read_sidecar_state(sid) if sid else None
             inflight = _read_in_flight_state(sid) if sid else None
+            notif = _read_notification_state(sid) if sid else None
             if inflight:
                 status["sidecar_tool"] = inflight.get("tool")
                 status["sidecar_file"] = inflight.get("file")
@@ -5708,6 +5735,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 status["sidecar_status"] = None
                 status["sidecar_ts"] = 0
                 status["sidecar_in_flight"] = False
+            status["needs_approval"] = bool(notif)
+            status["needs_approval_message"] = notif.get("message", "") if notif else ""
             self.send_json(status)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/stream$", path):
             conv_id = path.split("/")[-2]
@@ -7164,7 +7193,7 @@ def ensure_hooks_installed():
     import shutil
     repo_hooks = CCC_ROOT / "hooks"
     HOOK_SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
-    for name in ("post-tool-use.py", "pre-tool-use.py", "stop.py"):
+    for name in ("post-tool-use.py", "pre-tool-use.py", "notification.py", "stop.py"):
         src = repo_hooks / name
         if not src.exists():
             continue
@@ -7234,6 +7263,26 @@ def ensure_hooks_installed():
         })
         print("  [hooks] Installed PostToolUse hook")
 
+    # Notification hook — fires when Claude Code asks for permission (or
+    # otherwise wants the user's attention). Drives a precise "Needs
+    # approval" badge on the kanban card, replacing the brittle
+    # pending_tool/age heuristic the UI used to rely on.
+    notification_hooks = hooks.setdefault("Notification", [])
+    has_notification = any(
+        "notification.py" in h.get("command", "") and HOOK_MARKER in h.get("command", "")
+        for entry in notification_hooks
+        for h in entry.get("hooks", [])
+    )
+    if not has_notification:
+        notification_hooks.append({
+            "matcher": "",
+            "hooks": [{
+                "type": "command",
+                "command": f"python3 {HOOK_SCRIPTS_DIR / 'notification.py'}"
+            }]
+        })
+        print("  [hooks] Installed Notification hook")
+
     # Stop hook
     stop_hooks = hooks.setdefault("Stop", [])
     has_stop = any(
@@ -7251,7 +7300,8 @@ def ensure_hooks_installed():
         })
         print("  [hooks] Installed Stop hook")
 
-    if not has_post_tool or not has_stop or rewrote_legacy:
+    if (not has_pre_tool or not has_post_tool or not has_notification
+            or not has_stop or rewrote_legacy):
         tmp_path = settings_path.with_suffix(".tmp")
         try:
             tmp_path.write_text(json.dumps(settings, indent=4) + "\n")
