@@ -1397,6 +1397,53 @@
     font-size: 11px; color: var(--text-muted); margin-top: 4px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  /* Live "what is Claude doing right now" badge on Working cards */
+  .kanban-live-tool {
+    font-size: 11px; margin-top: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: #FBCA04;
+    background: rgba(251,202,4,0.10);
+    border-left: 2px solid rgba(251,202,4,0.6);
+    padding: 3px 6px; border-radius: 3px;
+    animation: pulse 2s infinite;
+  }
+  .kanban-live-tool .kanban-live-name { font-weight: 600; }
+  .kanban-live-tool .kanban-live-file { color: var(--text-muted); }
+  .kanban-live-tool .kanban-live-age { color: var(--text-muted); font-size: 10px; margin-left: 4px; }
+  /* In-flight: tool is actively running right now (PreToolUse marker) */
+  .kanban-live-tool.in-flight {
+    color: #58a6ff;
+    background: rgba(88,166,255,0.10);
+    border-left-color: rgba(88,166,255,0.6);
+    animation: pulse 1.2s infinite;
+  }
+  /* Live "what's running" strip in the conversation detail pane */
+  .conv-live-tool-strip {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; font-size: 12px;
+    color: #FBCA04;
+    background: rgba(251,202,4,0.08);
+    border-bottom: 1px solid rgba(251,202,4,0.25);
+    position: sticky; top: 0; z-index: 9;
+  }
+  .conv-live-tool-strip .cl-pulse {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #FBCA04; box-shadow: 0 0 6px rgba(251,202,4,0.7);
+    animation: pulse 1.4s infinite;
+    flex: 0 0 8px;
+  }
+  .conv-live-tool-strip .cl-tool { font-weight: 600; }
+  .conv-live-tool-strip .cl-file { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .conv-live-tool-strip .cl-age { color: var(--text-muted); font-size: 11px; margin-left: auto; flex: 0 0 auto; }
+  .conv-live-tool-strip.in-flight {
+    color: #58a6ff;
+    background: rgba(88,166,255,0.08);
+    border-bottom-color: rgba(88,166,255,0.30);
+  }
+  .conv-live-tool-strip.in-flight .cl-pulse {
+    background: #58a6ff; box-shadow: 0 0 6px rgba(88,166,255,0.7);
+    animation: pulse 1.0s infinite;
+  }
   .kanban-approve-deny {
     display: flex; gap: 4px; margin-top: 4px;
   }
@@ -2556,7 +2603,7 @@
   let sessionIssueByConv = {}; // {convId: issueNumber} for watcher sessions
   // Currently-focused session and its live-process state
   let currentSession = { id: null, cwd: null, cwdExists: false, source: null };
-  let liveStatus = { live: false, pid: null, tty: null, terminalApp: null };
+  let liveStatus = { live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false };
   let liveStatusTimer = null;
 
   const $resumeBtnConv = document.getElementById('resumeBtnConv');
@@ -2764,12 +2811,18 @@
         terminalApp: data.terminal_app || null,
         ambiguous: !!data.ambiguous,
         matchCount: data.match_count || 0,
+        sidecarTool: data.sidecar_tool || null,
+        sidecarFile: data.sidecar_file || null,
+        sidecarStatus: data.sidecar_status || null,
+        sidecarTs: data.sidecar_ts || 0,
+        sidecarInFlight: !!data.sidecar_in_flight,
       };
     } catch (err) {
-      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0 };
+      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false };
     }
     updateJumpButton();
     updateInputBar();
+    updateLiveToolStrip();
     if (typeof updateSplitToolbar === 'function') updateSplitToolbar();
   }
 
@@ -2777,6 +2830,45 @@
     if (liveStatusTimer) clearInterval(liveStatusTimer);
     refreshLiveStatus();
     liveStatusTimer = setInterval(refreshLiveStatus, 5000);
+  }
+
+  // Render a live "what's running right now" strip docked above the
+  // conversation transcript. Reads from liveStatus (refreshed every 5s
+  // by /api/session-status) so the chat pane shows the same in-progress
+  // signal the kanban card now shows.
+  function updateLiveToolStrip() {
+    const $view = (typeof getConvView === 'function') ? getConvView() : null;
+    if (!$view) return;
+    let strip = document.querySelector('.conv-live-tool-strip');
+    const tool = liveStatus.sidecarTool;
+    const ts = liveStatus.sidecarTs || 0;
+    const ageSec = ts ? Math.max(0, Math.floor(Date.now() / 1000 - ts)) : 9999;
+    const shouldShow = liveStatus.live && tool && liveStatus.sidecarStatus === 'active' && ageSec < 300;
+    if (!shouldShow) {
+      if (strip) strip.remove();
+      return;
+    }
+    const file = liveStatus.sidecarFile || '';
+    const shortFile = file
+      ? (file.length > 60 ? '…' + file.slice(-59) : file)
+      : '';
+    const dur = ageSec < 2 ? '<1s' : ageSec < 60 ? ageSec + 's' : Math.floor(ageSec / 60) + 'm';
+    const inFlight = !!liveStatus.sidecarInFlight;
+    const ageLbl = inFlight ? 'running ' + dur : dur + ' ago';
+    const html =
+        '<span class="cl-pulse"></span>'
+      + '<span class="cl-tool">' + (inFlight ? '▶ ' : '') + escapeHtml(tool) + '</span>'
+      + (shortFile ? ' <span class="cl-file">' + escapeHtml(shortFile) + '</span>' : '')
+      + '<span class="cl-age">' + ageLbl + '</span>';
+    if (!strip) {
+      strip = document.createElement('div');
+      strip.className = 'conv-live-tool-strip';
+      $view.insertBefore(strip, $view.firstChild);
+    } else if (strip.parentElement !== $view) {
+      $view.insertBefore(strip, $view.firstChild);
+    }
+    strip.classList.toggle('in-flight', inFlight);
+    strip.innerHTML = html;
   }
 
   const $convSessionId = document.getElementById('convSessionId');
@@ -4806,9 +4898,37 @@
           html += '<div class="kanban-card-desc">' + descHtml + '</div>';
         }
         html += '<div class="kanban-card-meta">' + metaParts.join(' \u00b7 ') + '</div>';
+        if (c.last_interacted) {
+          html += '<div class="kanban-card-interacted" title="Last time you typed a message or clicked a card button">'
+            + 'Last interacted ' + escapeHtml(relativeTime(c.last_interacted))
+            + '</div>';
+        }
         html += '<div class="kanban-card-stage ' + stageCls + '">' + escapeHtml(stageLabel) + '</div>';
 
         // ── Task 8: Approve/Deny for waiting cards with pending_tool ──
+        // Live "what's running right now" \u2014 render whenever sidecar shows
+        // active work and the data is fresh (<5 min). Closes the Working
+        // column gap where the card showed nothing while Claude was busy.
+        if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool) {
+          const sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
+          if (sidecarAge < 300) {
+            const shortFile = c.sidecar_file
+              ? (c.sidecar_file.length > 40 ? '\u2026' + c.sidecar_file.slice(-39) : c.sidecar_file)
+              : '';
+            // In-flight = the PreToolUse marker says this tool is *currently*
+            // running, so "running 5s" is honest. Otherwise it's the most
+            // recent completion, so "5s ago" is honest.
+            const dur = sidecarAge < 2 ? '<1s' : sidecarAge < 60 ? sidecarAge + 's' : Math.floor(sidecarAge / 60) + 'm';
+            const ageLbl = c.sidecar_in_flight ? 'running ' + dur : dur + ' ago';
+            const arrow = c.sidecar_in_flight ? '\u25b6 ' : '';
+            html += '<div class="kanban-live-tool' + (c.sidecar_in_flight ? ' in-flight' : '') + '" title="' + (c.sidecar_in_flight ? 'Currently running' : 'Last completed') + '">'
+              + '<span class="kanban-live-name">' + arrow + escapeHtml(c.sidecar_tool) + '</span>'
+              + (shortFile ? ' <span class="kanban-live-file">' + escapeHtml(shortFile) + '</span>' : '')
+              + '<span class="kanban-live-age">' + ageLbl + '</span>'
+              + '</div>';
+          }
+        }
+
         if (colKey === 'waiting' && c.pending_tool && !c.sidecar_status) {
           const shortFile = c.pending_file ? c.pending_file.split('/').pop() : '';
           html += '<div class="kanban-tool-info">\u23f3 ' + escapeHtml(c.pending_tool) + (shortFile ? ': ' + escapeHtml(shortFile) : '') + '</div>';

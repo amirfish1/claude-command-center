@@ -3168,6 +3168,22 @@ def _read_sidecar_state(session_id):
     return None
 
 
+def _read_in_flight_state(session_id):
+    """Return the PreToolUse in-flight marker for a session, or None.
+
+    The marker is written when a tool starts and deleted by PostToolUse.
+    Its presence means a tool is *currently* running; without it, the
+    sidecar's `tool` field is just the most-recently-completed tool.
+    """
+    path = SIDECAR_STATE_DIR / f"{session_id}_in_flight.json"
+    try:
+        if path.exists():
+            return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
 def _cleanup_stale_sidecars(live_session_ids):
     """Remove sidecar files for sessions that are no longer live."""
     if not SIDECAR_STATE_DIR.is_dir():
@@ -3176,8 +3192,13 @@ def _cleanup_stale_sidecars(live_session_ids):
         if not f.is_file():
             continue
         name = f.stem
-        # Strip _writes suffix to get session_id
-        sid = name[:-7] if name.endswith("_writes") else name
+        # Strip suffixes to get session_id (`_writes` flag, `_in_flight` marker)
+        if name.endswith("_writes"):
+            sid = name[:-len("_writes")]
+        elif name.endswith("_in_flight"):
+            sid = name[:-len("_in_flight")]
+        else:
+            sid = name
         if sid not in live_session_ids:
             try:
                 f.unlink()
@@ -3186,14 +3207,28 @@ def _cleanup_stale_sidecars(live_session_ids):
 
 
 def _add_sidecar_fields(entry):
-    """Add sidecar fields to a session entry, reading state if available."""
+    """Add sidecar fields to a session entry, reading state if available.
+
+    Prefer the in-flight marker (a tool currently running) over the sidecar's
+    most-recently-completed tool — the in-flight tool is what users want to
+    see on the kanban card while they wait.
+    """
     sid = entry.get("session_id", "")
-    sc = _read_sidecar_state(sid) if entry.get("is_live") else None
+    is_live = entry.get("is_live")
+    sc = _read_sidecar_state(sid) if is_live else None
+    inflight = _read_in_flight_state(sid) if is_live else None
     entry["sidecar_status"] = sc.get("status") if sc else None
-    entry["sidecar_tool"] = sc.get("tool") if sc else None
-    entry["sidecar_file"] = sc.get("file") if sc else None
     entry["sidecar_has_writes"] = sc.get("has_writes", False) if sc else False
-    entry["sidecar_ts"] = sc.get("timestamp", 0) if sc else 0
+    if inflight:
+        entry["sidecar_tool"] = inflight.get("tool")
+        entry["sidecar_file"] = inflight.get("file")
+        entry["sidecar_ts"] = inflight.get("started_at", 0)
+        entry["sidecar_in_flight"] = True
+    else:
+        entry["sidecar_tool"] = sc.get("tool") if sc else None
+        entry["sidecar_file"] = sc.get("file") if sc else None
+        entry["sidecar_ts"] = sc.get("timestamp", 0) if sc else 0
+        entry["sidecar_in_flight"] = False
 
 
 def find_all_sessions():
@@ -5649,6 +5684,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             status = session_live_status(sid, cwd)
             status["cwd"] = cwd
             status["cwd_exists"] = bool(cwd and Path(cwd).is_dir())
+            # Live "what's running right now" — prefer the PreToolUse
+            # in-flight marker (currently running) over the PostToolUse
+            # sidecar (most-recently completed). The detail pane uses these
+            # to render an in-progress strip without polling /api/sessions.
+            sc = _read_sidecar_state(sid) if sid else None
+            inflight = _read_in_flight_state(sid) if sid else None
+            if inflight:
+                status["sidecar_tool"] = inflight.get("tool")
+                status["sidecar_file"] = inflight.get("file")
+                status["sidecar_status"] = "active"
+                status["sidecar_ts"] = inflight.get("started_at", 0)
+                status["sidecar_in_flight"] = True
+            elif sc:
+                status["sidecar_tool"] = sc.get("tool")
+                status["sidecar_file"] = sc.get("file")
+                status["sidecar_status"] = sc.get("status")
+                status["sidecar_ts"] = sc.get("timestamp", 0)
+                status["sidecar_in_flight"] = False
+            else:
+                status["sidecar_tool"] = None
+                status["sidecar_file"] = None
+                status["sidecar_status"] = None
+                status["sidecar_ts"] = 0
+                status["sidecar_in_flight"] = False
             self.send_json(status)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/stream$", path):
             conv_id = path.split("/")[-2]
@@ -7105,7 +7164,7 @@ def ensure_hooks_installed():
     import shutil
     repo_hooks = CCC_ROOT / "hooks"
     HOOK_SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
-    for name in ("post-tool-use.py", "stop.py"):
+    for name in ("post-tool-use.py", "pre-tool-use.py", "stop.py"):
         src = repo_hooks / name
         if not src.exists():
             continue
@@ -7140,10 +7199,28 @@ def ensure_hooks_installed():
                     h["command"] = cmd.replace(HOOK_MARKER_LEGACY, HOOK_MARKER)
                     rewrote_legacy = True
 
+    # PreToolUse hook — writes an in-flight marker so the dashboard can show
+    # "running X for Ns" while a long tool is still executing.
+    pre_tool_hooks = hooks.setdefault("PreToolUse", [])
+    has_pre_tool = any(
+        "pre-tool-use.py" in h.get("command", "") and HOOK_MARKER in h.get("command", "")
+        for entry in pre_tool_hooks
+        for h in entry.get("hooks", [])
+    )
+    if not has_pre_tool:
+        pre_tool_hooks.append({
+            "matcher": "",
+            "hooks": [{
+                "type": "command",
+                "command": f"python3 {HOOK_SCRIPTS_DIR / 'pre-tool-use.py'}"
+            }]
+        })
+        print("  [hooks] Installed PreToolUse hook")
+
     # PostToolUse hook
     post_tool_hooks = hooks.setdefault("PostToolUse", [])
     has_post_tool = any(
-        HOOK_MARKER in h.get("command", "")
+        "post-tool-use.py" in h.get("command", "") and HOOK_MARKER in h.get("command", "")
         for entry in post_tool_hooks
         for h in entry.get("hooks", [])
     )

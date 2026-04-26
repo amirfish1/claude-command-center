@@ -30,6 +30,14 @@ def main():
             with open(writes_flag, "w") as f:
                 f.write("1")
 
+        # Clear the in-flight marker pre-tool-use.py wrote when the tool
+        # started — the tool has now returned.
+        in_flight = os.path.join(LIVE_STATE_DIR, f"{session_id}_in_flight.json")
+        try:
+            os.unlink(in_flight)
+        except OSError:
+            pass
+
         has_writes = os.path.exists(writes_flag)
 
         # Extract a meaningful file/command reference

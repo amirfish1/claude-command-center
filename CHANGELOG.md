@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Live "what's running" signal on cards and chat pane.** The kanban card now
+  surfaces the currently-executing tool (e.g. `Bash npm test`, `Read foo.py`)
+  as an animated badge while a session is live, instead of showing only a glow.
+  The conversation detail pane gains a sticky strip that does the same, refreshed
+  every 5s from `/api/session-status`. New `PreToolUse` hook (`hooks/pre-tool-use.py`)
+  writes a `<sid>_in_flight.json` marker so long-running tools (Bash, WebFetch)
+  read as "running 8s" instead of "8s ago"; PostToolUse clears it on completion.
+  Hook auto-installs into `~/.claude/settings.json` on next server start.
 - `CCC_ALLOWED_ORIGIN` env var — comma-separated list of additional origins
   added to the same-origin POST allowlist. Pair with `CCC_BIND_HOST=0.0.0.0`
   to reach the UI from a phone or other device over a trusted network
