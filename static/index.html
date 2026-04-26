@@ -4658,6 +4658,13 @@
             sourceTag = '<button class="kanban-action-btn" data-action="view-issue" data-issue="' + escapeHtml(c.issue_number || '') + '" title="Open issue #' + escapeHtml(c.issue_number || '') + ' on GitHub (full body + images)" style="display:inline-flex;align-items:center;gap:3px;padding:0 4px;font-size:10px;color:var(--text-muted);border:1px solid var(--border);border-radius:3px;background:transparent;cursor:pointer;">#' + escapeHtml(c.issue_number || '') + ' &#x2197;</button>';
           } else if (c.backlog_type === 'parking') {
             sourceTag = '<span style="font-size:10px;color:var(--cyan);">PARKING_LOT.md</span>';
+          } else if (c.backlog_type === 'native_task') {
+            // Counts: "3/6 done" — gives the user a quick read on session progress.
+            const total = c.task_total || 0;
+            const done = c.task_completed || 0;
+            const ip = c.task_in_progress || 0;
+            const countStr = total ? (' &middot; ' + done + '/' + total + ' done' + (ip ? ' &middot; ' + ip + ' in progress' : '')) : '';
+            sourceTag = '<span title="From ~/.claude/tasks/ (TodoWrite)" style="font-size:10px;color:var(--purple);">&#128203; task' + countStr + '</span>';
           } else {
             sourceTag = '<span style="font-size:10px;color:var(--accent);">TODO.md</span>';
           }

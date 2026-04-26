@@ -2569,6 +2569,103 @@ def _parse_todo_md():
     return items
 
 
+def _load_native_tasks():
+    """Surface Claude Code's built-in TodoWrite output as backlog records.
+
+    Claude Code persists per-session todos to ``~/.claude/tasks/<session_id>/<task_id>.json``.
+    Each file is one task with shape ``{id, subject, description, activeForm,
+    status, blocks, blockedBy}`` — ``status`` is one of ``pending``,
+    ``in_progress``, ``completed``.
+
+    To avoid spamming the kanban (a session with 6 todos shouldn't add 6 cards)
+    we collapse each session_id to a single record:
+      - Title prefers the in_progress task's ``subject``; falls back to first
+        pending; otherwise the most recent completed (so finished sessions still
+        show *what* they did).
+      - Counts (``total``, ``in_progress_count``, ``pending_count``,
+        ``completed_count``) are returned so the UI can show e.g. "3/6".
+      - ``modified`` is the dir mtime so the card sorts by last-touched session.
+
+    Sessions with zero parseable task files are skipped entirely.
+    Files that aren't valid JSON objects are skipped without aborting the
+    session record (one bad task shouldn't hide the rest).
+    """
+    tasks_root = Path.home() / ".claude" / "tasks"
+    if not tasks_root.is_dir():
+        return []
+    records = []
+    try:
+        session_dirs = [d for d in tasks_root.iterdir() if d.is_dir()]
+    except OSError:
+        return []
+    for sdir in session_dirs:
+        session_id = sdir.name
+        in_progress = []
+        pending = []
+        completed = []
+        try:
+            files = [f for f in sdir.iterdir() if f.is_file() and f.suffix == ".json"]
+        except OSError:
+            continue
+        for tf in files:
+            try:
+                with open(tf, "r", encoding="utf-8") as fh:
+                    raw = json.load(fh)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            # Schema is a single task object; tolerate the legacy "list of tasks"
+            # form too, in case some Claude Code versions wrote arrays.
+            if isinstance(raw, list):
+                tasks = [t for t in raw if isinstance(t, dict)]
+            elif isinstance(raw, dict):
+                tasks = [raw]
+            else:
+                continue
+            for task in tasks:
+                status = (task.get("status") or "").lower()
+                if status == "in_progress":
+                    in_progress.append((tf.stat().st_mtime, task))
+                elif status == "pending":
+                    pending.append((tf.stat().st_mtime, task))
+                elif status == "completed":
+                    completed.append((tf.stat().st_mtime, task))
+        total = len(in_progress) + len(pending) + len(completed)
+        if total == 0:
+            continue
+        # Pick the headline task: in_progress > pending > most-recent completed
+        if in_progress:
+            headline = max(in_progress, key=lambda x: x[0])[1]
+            headline_status = "in_progress"
+        elif pending:
+            headline = min(pending, key=lambda x: x[0])[1]
+            headline_status = "pending"
+        else:
+            headline = max(completed, key=lambda x: x[0])[1]
+            headline_status = "completed"
+        title = (headline.get("subject") or headline.get("activeForm")
+                 or headline.get("content") or "").strip()
+        if not title:
+            continue
+        try:
+            mtime = sdir.stat().st_mtime
+        except OSError:
+            mtime = 0
+        records.append({
+            "session_id": session_id,
+            "title": title,
+            "active_form": (headline.get("activeForm") or "").strip(),
+            "description": (headline.get("description") or "").strip(),
+            "status": headline_status,
+            "in_progress_count": len(in_progress),
+            "pending_count": len(pending),
+            "completed_count": len(completed),
+            "total": total,
+            "modified": mtime,
+            "source": "native_task",
+        })
+    return records
+
+
 def _parse_parking_lot_md():
     """Parse PARKING_LOT.md for `## heading` items; body = text until the next
     heading or `---` separator. Returns [{title, body}] in file order."""
@@ -2731,6 +2828,53 @@ def find_backlog_items():
             "sidecar_has_writes": False,
             "sidecar_ts": 0,
             "name_overridden": False,
+        })
+
+    # Source 4: ~/.claude/tasks/<session_id>/*.json (native TodoWrite output)
+    # Only surfaces sessions that aren't already represented as a live/inactive
+    # conversation — that filtering happens at the `/api/sessions` merge step,
+    # so here we just emit candidate cards.
+    for nt in _load_native_tasks():
+        # Pad short subjects with the activeForm so the card body has signal.
+        body_bits = [nt["title"]]
+        if nt.get("description"):
+            body_bits.append(nt["description"])
+        if nt.get("active_form") and nt["active_form"] != nt["title"]:
+            body_bits.append(nt["active_form"])
+        body = "\n\n".join(b for b in body_bits if b)
+        items.append({
+            "id": f"backlog-task-{nt['session_id']}",
+            "session_id": nt["session_id"],
+            "display_name": nt["title"][:120],
+            "first_message": body[:400],
+            "source": "backlog",
+            "backlog_type": "native_task",
+            "issue_number": "",
+            "issue_labels": [],
+            "modified": nt.get("modified") or 0,
+            "size": 0,
+            "branch": "",
+            "is_live": False,
+            "archived": False,
+            "verified": False,
+            "has_edit": False,
+            "has_commit": False,
+            "has_push": False,
+            "last_event_type": None,
+            "pending_tool": None,
+            "pending_file": None,
+            "sidecar_status": None,
+            "sidecar_tool": None,
+            "sidecar_file": None,
+            "sidecar_has_writes": False,
+            "sidecar_ts": 0,
+            "name_overridden": False,
+            # Native-task-specific fields
+            "task_status": nt["status"],
+            "task_total": nt["total"],
+            "task_in_progress": nt["in_progress_count"],
+            "task_pending": nt["pending_count"],
+            "task_completed": nt["completed_count"],
         })
 
     return items
@@ -3334,10 +3478,16 @@ def find_all_sessions():
             active_issue_nums.add(m.group(1))
         for m in _issue_pattern.finditer(fm):
             active_issue_nums.add(m.group(1))
+    # Native-task cards key off session_id, not issue number — collect the
+    # set of session_ids already represented so we don't double-up.
+    existing_sids = {c.get("session_id") for c in conversations if c.get("session_id")}
     for item in find_backlog_items():
         inum = item.get("issue_number", "")
         if inum and inum in active_issue_nums:
             continue  # Active session already covers this issue
+        if (item.get("backlog_type") == "native_task"
+                and item.get("session_id") in existing_sids):
+            continue  # The session is already on the board; don't dup
         conversations.append(item)
 
     # Sidecar: clean up stale files, then enrich every entry

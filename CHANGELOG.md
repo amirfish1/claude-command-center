@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Surface `~/.claude/tasks/<session_id>/*.json` (Claude Code's native TodoWrite
+  output) as backlog cards. One card per session — title taken from the
+  in-progress task (falls back to first pending, then most-recent completed),
+  with a small `task` source-tag and `done/total` counts. Sessions already
+  represented on the board are skipped to avoid dups.
+
 ## [0.1.3] - 2026-04-24
 
 ### Added
