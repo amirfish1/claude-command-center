@@ -508,6 +508,159 @@ def _schedule_restart(delay=0.5):
     t.start()
 
 
+def _load_network_config():
+    """Read persisted network config from NETWORK_CONFIG_FILE.
+
+    Returns a dict with the three keys we care about, defaults filled in:
+      {"bind_host": str|None, "allowed_origins": [str], "trust_tailnet": bool}
+    Missing file or malformed JSON returns the empty default — same-origin
+    behaviour falls back to env vars + loopback, which is the safe baseline.
+    """
+    default = {"bind_host": None, "allowed_origins": [], "trust_tailnet": False}
+    try:
+        raw = json.loads(NETWORK_CONFIG_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return default
+    if not isinstance(raw, dict):
+        return default
+    bind_host = raw.get("bind_host")
+    if not isinstance(bind_host, str) or not bind_host.strip():
+        bind_host = None
+    raw_origins = raw.get("allowed_origins") or []
+    origins = []
+    if isinstance(raw_origins, list):
+        for item in raw_origins:
+            if isinstance(item, str) and item.strip():
+                origins.append(item.strip())
+    return {
+        "bind_host": bind_host.strip() if bind_host else None,
+        "allowed_origins": origins,
+        "trust_tailnet": bool(raw.get("trust_tailnet")),
+    }
+
+
+def _save_network_config(config):
+    """Persist `config` to NETWORK_CONFIG_FILE. Only the three known keys are
+    written — the function silently drops anything else so a bad POST body
+    can't smuggle extra fields onto disk."""
+    bind_host = config.get("bind_host")
+    if bind_host is not None:
+        bind_host = str(bind_host).strip() or None
+    raw_origins = config.get("allowed_origins") or []
+    origins = []
+    if isinstance(raw_origins, list):
+        for item in raw_origins:
+            if isinstance(item, str) and item.strip():
+                origins.append(item.strip())
+    payload = {
+        "bind_host": bind_host,
+        "allowed_origins": origins,
+        "trust_tailnet": bool(config.get("trust_tailnet")),
+    }
+    COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    NETWORK_CONFIG_FILE.write_text(json.dumps(payload, indent=2))
+    return payload
+
+
+def _detect_tailnet_origins(port):
+    """Return ({available, running, hostname, ips, origins}) describing the
+    local Tailscale node, or `available=False` when the CLI is missing.
+
+    Origins are built from the magic-DNS hostname plus each tailscale IP, on
+    HTTP at the supplied port — what a phone on the tailnet would see in its
+    Origin header when hitting CCC. Never raises; any error path returns
+    `available=False`/`running=False` so callers can degrade gracefully.
+    """
+    blank = {"available": False, "running": False, "hostname": "", "ips": [], "origins": []}
+    try:
+        proc = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True, text=True, timeout=4,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return blank
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return {**blank, "available": True}
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {**blank, "available": True}
+    self_node = data.get("Self") or {}
+    hostname = (self_node.get("DNSName") or "").rstrip(".")
+    raw_ips = self_node.get("TailscaleIPs") or data.get("TailscaleIPs") or []
+    ips = [ip for ip in raw_ips if isinstance(ip, str)]
+    backend = (data.get("BackendState") or "").strip()
+    running = backend.lower() == "running"
+    origins = []
+    if hostname:
+        origins.append(f"http://{hostname}:{port}")
+    for ip in ips:
+        if ":" in ip:  # IPv6 needs brackets in the URL
+            origins.append(f"http://[{ip}]:{port}")
+        else:
+            origins.append(f"http://{ip}:{port}")
+    return {
+        "available": True,
+        "running": running,
+        "hostname": hostname,
+        "ips": ips,
+        "origins": origins,
+    }
+
+
+def _resolve_runtime_network(port):
+    """Merge env vars, persisted config, and Tailscale auto-detect into the
+    final {bind_host, allowed_origins[]} the server should use this run.
+
+    Priority:
+      bind_host: env CCC_BIND_HOST > config.bind_host > "127.0.0.1"
+      allowed_origins: union of env CCC_ALLOWED_ORIGIN, config.allowed_origins,
+        and detected tailnet origins (when trust_tailnet is on)
+      trust_tailnet: env CCC_TRUST_TAILNET in {"1","true","yes","on"}
+        OR config.trust_tailnet
+    Returns (bind_host, allowed_origins, info) where `info` summarizes which
+    layers contributed — purely for the startup banner and the GET endpoint.
+    """
+    config = _load_network_config()
+    env_bind = os.environ.get("CCC_BIND_HOST", "").strip()
+    bind_host = env_bind or (config["bind_host"] or "127.0.0.1")
+
+    env_trust = os.environ.get("CCC_TRUST_TAILNET", "").strip().lower() in ("1", "true", "yes", "on")
+    trust_tailnet = env_trust or config["trust_tailnet"]
+
+    env_origins = [o.strip() for o in os.environ.get("CCC_ALLOWED_ORIGIN", "").split(",") if o.strip()]
+    origins = []
+    seen = set()
+    for src in (env_origins, config["allowed_origins"]):
+        for o in src:
+            if o not in seen:
+                seen.add(o)
+                origins.append(o)
+    tailnet_info = _detect_tailnet_origins(port) if trust_tailnet else {"available": False, "running": False, "hostname": "", "ips": [], "origins": []}
+    if trust_tailnet:
+        for o in tailnet_info["origins"]:
+            if o not in seen:
+                seen.add(o)
+                origins.append(o)
+
+    info = {
+        "bind_host": bind_host,
+        "allowed_origins": origins,
+        "trust_tailnet": trust_tailnet,
+        "env_overrides": {
+            "bind_host": bool(env_bind),
+            "trust_tailnet": env_trust,
+            "allowed_origins": bool(env_origins),
+        },
+        "tailnet": tailnet_info,
+        "config_file_origins": list(config["allowed_origins"]),
+        "config_file_bind_host": config["bind_host"],
+        "config_file_trust_tailnet": config["trust_tailnet"],
+        "port": port,
+    }
+    return bind_host, origins, info
+
+
 def _run_healthcheck():
     """Probe every external dependency and surface a structured diagnosis.
 
@@ -737,12 +890,22 @@ PORT = int(os.environ.get("PORT", 8090))
 # Empty by default; set `CCC_TITLE_STRIP=ACME,FOO` to strip `[ACME ...]` and `[FOO ...]` from titles.
 TITLE_STRIP_PREFIXES = [p for p in os.environ.get("CCC_TITLE_STRIP", "").split(",") if p]
 
-# Optional same-origin allowlist extension. Comma-separated full origins
-# (scheme + host + optional port), e.g. `http://my-mac.tailnet.ts.net:8090`.
-# Used together with CCC_BIND_HOST=0.0.0.0 to reach the UI from another
-# device on a trusted network (Tailscale, VPN). The server has no auth, so
-# every entry here is a peer that can run commands as you — see SECURITY.md.
+# Same-origin allowlist extension. Origins listed here are accepted on top of
+# the loopback defaults (localhost / 127.0.0.1 / [::1]) so the UI can be
+# reached from another device on a trusted network (Tailscale, VPN). Three
+# layers feed this list at startup, all merged into the final ALLOWED_ORIGINS:
+#   1. CCC_ALLOWED_ORIGIN env var — comma-separated full origins
+#   2. ~/.claude/command-center/network.json `allowed_origins` field
+#   3. Tailscale auto-detect when `trust_tailnet` is on (config or env)
+# Format: scheme://host[:port], e.g. `http://my-mac.tailnet.ts.net:8090`.
+# The server has no auth, so every entry here is a peer that can run commands
+# as you — see SECURITY.md. Mutated by `_resolve_runtime_network` in main().
 ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("CCC_ALLOWED_ORIGIN", "").split(",") if o.strip()]
+# Populated in main() once the file + env + tailnet layers are merged. The
+# GET /api/network-config handler returns this verbatim so the UI can show
+# the user exactly what's trusted on this run, including which env vars
+# are pinning values they can't override from the UI.
+RUNTIME_NETWORK_INFO = None
 
 # Optional org-tagger for multi-tenant apps. Set CCC_ORG_PATTERNS as
 # `Label1:pat1a|pat1b;Label2:pat2`. The server scans each GitHub issue body
@@ -840,6 +1003,11 @@ ARCHIVED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "archived-conversations
 VERIFIED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "verified-conversations.json"  # [session_id,...]
 SESSION_ISSUES_FILE = COMMAND_CENTER_STATE_DIR / "session-issues.json"  # {session_id: issue_number}
 FIX_DEPLOY_SPAWNED_FILE = COMMAND_CENTER_STATE_DIR / "fix-deploy-spawned.json"  # {commit_sha: {pid, spawned_at, name}}
+# {bind_host, allowed_origins[], trust_tailnet} — persisted same-origin
+# allowlist + bind config so the user doesn't have to re-export env vars on
+# every restart. Empty/missing = loopback-only (the safe default). Loaded by
+# `_load_network_config`, written by `_save_network_config`. See SECURITY.md.
+NETWORK_CONFIG_FILE = COMMAND_CENTER_STATE_DIR / "network.json"
 
 # {path: {mtime, custom_title, last_prompt, agent_name}}
 _conv_meta_cache = {}
@@ -5855,6 +6023,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             force = qs.get("force", ["0"])[0] in ("1", "true")
             self.send_json(_version_check(force=force))
+        elif path == "/api/network-config":
+            # What origins / bind host are trusted on this run, plus a live
+            # snapshot of the tailnet so the UI can offer a "trust my
+            # tailnet" toggle without the user having to type origins.
+            # Re-detect the tailnet on every request — the user could have
+            # signed in to Tailscale just now — but reuse the cached
+            # RUNTIME_NETWORK_INFO for everything else (it never changes
+            # mid-run; switching it requires restart via POST).
+            stored = _load_network_config()
+            tailnet = _detect_tailnet_origins(PORT)
+            info = RUNTIME_NETWORK_INFO or {}
+            self.send_json({
+                "stored": stored,
+                "runtime": {
+                    "bind_host": info.get("bind_host"),
+                    "allowed_origins": info.get("allowed_origins", []),
+                    "trust_tailnet": info.get("trust_tailnet"),
+                    "env_overrides": info.get("env_overrides", {}),
+                    "port": PORT,
+                },
+                "tailnet": tailnet,
+            })
         elif path == "/api/repo/list":
             # List of repos the picker offers + the one currently active.
             repos = load_known_repos()
@@ -5924,6 +6114,55 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # and auto_verify_closed_issues can fire immediately.
             _bust_issue_state_cache()
             self.send_json({"ok": True})
+            return
+        if path == "/api/network-config":
+            # SECURITY: localhost-only — even if the user has allowlisted a
+            # tailnet origin, that peer must NOT be able to expand its own
+            # trust further (privilege escalation). The same-origin check
+            # above accepts tailnet origins; this extra gate rejects them.
+            origin = (self.headers.get("Origin") or "").strip()
+            if origin:
+                ok = False
+                for host in ("localhost", "127.0.0.1", "[::1]"):
+                    for scheme in ("http", "https"):
+                        if origin == f"{scheme}://{host}:{PORT}" or origin == f"{scheme}://{host}":
+                            ok = True
+                            break
+                    if ok:
+                        break
+                if not ok:
+                    self.send_json({"error": "network-config is localhost-only", "origin": origin}, 403)
+                    return
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"error": "expected JSON object"}, 400)
+                return
+            requested_bind = payload.get("bind_host")
+            if requested_bind is not None:
+                if not isinstance(requested_bind, str):
+                    self.send_json({"error": "bind_host must be a string or null"}, 400)
+                    return
+                requested_bind = requested_bind.strip() or None
+            saved = _save_network_config({
+                "bind_host": requested_bind,
+                "allowed_origins": payload.get("allowed_origins") or [],
+                "trust_tailnet": bool(payload.get("trust_tailnet")),
+            })
+            # bind_host can't change without rebinding the socket; restart
+            # in-place if anything network-shaped changed at all. Cheaper
+            # than diffing — restart is fast, ~1s.
+            self.send_json({"ok": True, "saved": saved, "restart": True})
+            try:
+                self.wfile.flush()
+            except Exception:
+                pass
+            _schedule_restart()
             return
         if path == "/api/self-update":
             # Pull the latest main into the install dir and restart the server
@@ -7322,15 +7561,23 @@ def main():
     # "implicit because it's local"; binding to all interfaces (the old
     # `("", PORT)`) exposed every endpoint — including subprocess-spawning
     # ones — to anyone on the same LAN. Escape hatch for power users:
-    # CCC_BIND_HOST=0.0.0.0 (with an explicit warning printed below).
-    bind_host = os.environ.get("CCC_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    # CCC_BIND_HOST=0.0.0.0 (with an explicit warning printed below). The
+    # final value is resolved across env vars, the persisted network.json,
+    # and (when trust_tailnet is on) the live Tailscale node — see
+    # `_resolve_runtime_network`.
+    bind_host, resolved_origins, network_info = _resolve_runtime_network(PORT)
+    ALLOWED_ORIGINS[:] = resolved_origins  # in-place: _check_same_origin reads the global list
+    global RUNTIME_NETWORK_INFO
+    RUNTIME_NETWORK_INFO = network_info
     server = ThreadedHTTPServer((bind_host, PORT), CommandCenterHandler)
     if bind_host not in ("127.0.0.1", "localhost", "::1"):
         print(f"⚠️  WARNING: binding to {bind_host} — server is reachable from the network.")
         print(f"   This server has no auth. Anyone who can reach this port can run")
         print(f"   subprocesses on your machine. Unset CCC_BIND_HOST to revert to localhost.")
     if ALLOWED_ORIGINS:
-        print(f"⚠️  CCC_ALLOWED_ORIGIN extends the same-origin allowlist: {', '.join(ALLOWED_ORIGINS)}")
+        print(f"⚠️  Same-origin allowlist extended: {', '.join(ALLOWED_ORIGINS)}")
+    if network_info["trust_tailnet"] and not network_info["tailnet"]["available"]:
+        print("   trust_tailnet is on but `tailscale` CLI is not on PATH — install it or unset to silence.")
     write_port_file(bind_host)
     display_host = "localhost" if bind_host in ("127.0.0.1", "::1") else bind_host
     print(f"Claude Command Center running at http://{display_host}:{PORT}")

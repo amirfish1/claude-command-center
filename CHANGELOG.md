@@ -25,6 +25,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Documented in `README.md` and `SECURITY.md`; startup prints the active
   allowlist when set. There is still no auth — every entry is a peer that
   can run commands as you.
+- **First-class trusted-network access.** The `CCC_ALLOWED_ORIGIN` env var
+  added in the previous commit is now joined by two more layers, all merged
+  into the same-origin allowlist at startup: a persisted JSON config at
+  `~/.claude/command-center/network.json` (so settings survive shell
+  restarts), and a `CCC_TRUST_TAILNET=1` opt-in (or `trust_tailnet: true` in
+  the JSON) that shells out to `tailscale status --json` and adds the local
+  node's MagicDNS hostname + Tailscale IPs automatically. New endpoints
+  `GET /api/network-config` (returns the live config plus a tailnet probe)
+  and `POST /api/network-config` (writes the JSON, restarts in-place via
+  `os.execvp`). The POST is **localhost-only** even though the broader
+  allowlist accepts tailnet origins for everything else — a peer cannot
+  expand its own trust further. New "Network access…" entry in the sidebar
+  settings popover drives all of it from the UI: a checkbox to bind on all
+  interfaces, a checkbox to trust the detected tailnet, and a free-text
+  field for additional origins (e.g. other VPNs). Env vars still win when
+  set, so CI overrides keep working. README and SECURITY.md updated, plus
+  `run.sh` no longer defaults `CCC_BIND_HOST` (would otherwise clobber the
+  JSON-config layer).
 
 ### Fixed
 - Mobile: "Send to terminal…" input bar in the conversation panel was

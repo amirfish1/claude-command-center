@@ -40,14 +40,16 @@ else
 fi
 
 export PORT="${PORT:-8090}"
-export CCC_BIND_HOST="${CCC_BIND_HOST:-127.0.0.1}"
+# CCC_BIND_HOST is intentionally NOT defaulted here. server.py resolves
+# the bind across env, ~/.claude/command-center/network.json, and a built-in
+# 127.0.0.1 default — exporting a value here would clobber the JSON layer.
 
 mkdir -p "$DISPLAY_REPO/.claude/logs"
 
 echo "→ Command Center"
 echo "  watching : $DISPLAY_REPO"
 echo "  port     : $PORT"
-echo "  bind     : $CCC_BIND_HOST"
+echo "  bind     : ${CCC_BIND_HOST:-(default 127.0.0.1, or from network.json)}"
 echo "  url      : http://localhost:$PORT"
 
 exec python3 "$HERE/server.py"

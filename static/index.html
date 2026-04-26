@@ -2250,6 +2250,7 @@
         </button>
         <div class="desktop-popover" id="settingsPopover" role="menu" aria-label="Settings menu" style="bottom:calc(100% + 6px);right:0;">
           <button class="pop-item" type="button" id="settingsCmdkBtn"><span class="pop-icon">⌘K</span><span>Search sessions</span></button>
+          <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
           <a class="pop-item" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener"><span class="pop-icon">↗</span><span>View on GitHub</span></a>
           <a class="pop-item" href="https://github.com/amirfish1/claude-command-center#readme" target="_blank" rel="noopener"><span class="pop-icon">?</span><span>Get help</span></a>
         </div>
@@ -2505,6 +2506,58 @@
         <button type="button" class="upd-btn" id="bugReportCancelBtn">Cancel</button>
         <button type="button" class="upd-btn" id="bugReportCopyBtn" style="display:none;">Copy markdown</button>
         <button type="button" class="upd-btn upd-primary" id="bugReportSubmitBtn">Send report</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Network-access modal. Opened from the settings popover.
+       Lets the user opt in to reachability over their tailnet without
+       editing env vars. POSTs to /api/network-config which writes
+       ~/.claude/command-center/network.json and triggers an in-place
+       restart. Localhost-only on the server side — see SECURITY.md. -->
+  <div id="networkModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="networkTitle">
+    <div class="upd-backdrop" id="networkBackdrop"></div>
+    <div class="upd-dialog" style="width:min(620px,94vw);">
+      <div class="upd-title" id="networkTitle">Network access</div>
+      <div class="upd-versions">
+        Lets a phone or other device on your trusted network reach the UI.
+        CCC has no auth — every origin trusted here can run commands as
+        you. See <a href="https://github.com/amirfish1/claude-command-center/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;">
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;">
+          <input type="checkbox" id="networkBindAll" style="margin-top:3px;">
+          <span>
+            <strong>Listen on all network interfaces</strong>
+            <div style="color:var(--text-muted);font-size:12px;margin-top:2px;">
+              Switches the bind from <code>127.0.0.1</code> to <code>0.0.0.0</code>.
+              Required for any non-loopback access. The same-origin check below still gates writes.
+            </div>
+          </span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;">
+          <input type="checkbox" id="networkTrustTailnet" style="margin-top:3px;">
+          <span>
+            <strong>Trust my Tailscale tailnet</strong>
+            <div style="color:var(--text-muted);font-size:12px;margin-top:2px;" id="networkTailnetSummary">
+              Detecting Tailscale…
+            </div>
+          </span>
+        </label>
+        <div>
+          <label class="bug-label" for="networkExtraOrigins">Additional allowed origins</label>
+          <textarea id="networkExtraOrigins" class="bug-input bug-textarea" style="min-height:60px;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;font-size:12px;"
+                    placeholder="http://my-host:8090&#10;http://192.168.1.50:8090"></textarea>
+          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
+            One per line. Use full origins (scheme://host[:port]). Useful for VPNs other than Tailscale.
+          </div>
+        </div>
+        <div id="networkEnvNotice" style="display:none;font-size:12px;color:var(--text-muted);background:rgba(255,176,0,0.08);border:1px solid rgba(255,176,0,0.25);border-radius:6px;padding:8px 10px;"></div>
+      </div>
+      <div class="upd-error" id="networkError"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="networkCancelBtn">Cancel</button>
+        <button type="button" class="upd-btn upd-primary" id="networkSaveBtn">Save &amp; restart</button>
       </div>
     </div>
   </div>
@@ -8388,6 +8441,166 @@
       if ($bugCopyBtn) { $bugCopyBtn.textContent = 'Copied'; setTimeout(() => { if ($bugCopyBtn) $bugCopyBtn.textContent = 'Copy markdown'; }, 1500); }
     } catch (_) {
       try { showOpToast('Copy failed — select the text and copy manually', 'error'); } catch (__) {}
+    }
+  });
+
+  // Network access modal — opt in to non-loopback access via Tailscale or
+  // arbitrary trusted origins. POSTs to /api/network-config which writes
+  // the JSON config and triggers an in-place restart.
+  const $networkBtn = document.getElementById('networkAccessBtn');
+  const $networkModal = document.getElementById('networkModal');
+  const $networkBackdrop = document.getElementById('networkBackdrop');
+  const $networkBindAll = document.getElementById('networkBindAll');
+  const $networkTrustTailnet = document.getElementById('networkTrustTailnet');
+  const $networkTailnetSummary = document.getElementById('networkTailnetSummary');
+  const $networkExtraOrigins = document.getElementById('networkExtraOrigins');
+  const $networkEnvNotice = document.getElementById('networkEnvNotice');
+  const $networkError = document.getElementById('networkError');
+  const $networkCancelBtn = document.getElementById('networkCancelBtn');
+  const $networkSaveBtn = document.getElementById('networkSaveBtn');
+
+  function networkEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[c]);
+  }
+  function networkResetState() {
+    if ($networkError) { $networkError.textContent = ''; $networkError.classList.remove('visible'); }
+    if ($networkSaveBtn) { $networkSaveBtn.disabled = false; $networkSaveBtn.textContent = 'Save & restart'; }
+    if ($networkCancelBtn) { $networkCancelBtn.disabled = false; }
+  }
+  function networkRenderTailnet(tn) {
+    if (!$networkTailnetSummary) return;
+    if (!tn || !tn.available) {
+      $networkTailnetSummary.innerHTML = 'Tailscale CLI not found on PATH — install <a href="https://tailscale.com/download" target="_blank" rel="noopener">tailscale</a> to enable.';
+      if ($networkTrustTailnet) $networkTrustTailnet.disabled = true;
+      return;
+    }
+    if (!tn.running) {
+      $networkTailnetSummary.textContent = 'Tailscale is installed but not running. Start it and reopen this dialog.';
+      if ($networkTrustTailnet) $networkTrustTailnet.disabled = true;
+      return;
+    }
+    if ($networkTrustTailnet) $networkTrustTailnet.disabled = false;
+    const host = tn.hostname ? '<code>' + networkEsc(tn.hostname) + '</code>' : '(no MagicDNS hostname)';
+    const originsList = (tn.origins || []).map(o => '<code>' + networkEsc(o) + '</code>').join(', ');
+    $networkTailnetSummary.innerHTML =
+      'Detected: ' + host + '. When trusted, these origins are allowed: ' + (originsList || '(none)');
+  }
+  function networkRenderEnvNotice(env) {
+    if (!$networkEnvNotice) return;
+    const pinned = [];
+    if (env && env.bind_host) pinned.push('CCC_BIND_HOST');
+    if (env && env.allowed_origins) pinned.push('CCC_ALLOWED_ORIGIN');
+    if (env && env.trust_tailnet) pinned.push('CCC_TRUST_TAILNET');
+    if (pinned.length === 0) {
+      $networkEnvNotice.style.display = 'none';
+      return;
+    }
+    $networkEnvNotice.style.display = '';
+    $networkEnvNotice.innerHTML =
+      'Some values are pinned by environment variables for this run: <code>' +
+      pinned.map(networkEsc).join('</code>, <code>') +
+      '</code>. Saving here will not change them — clear the env to take control from the UI.';
+  }
+
+  async function networkOpen() {
+    if (!$networkModal) return;
+    networkResetState();
+    if ($networkExtraOrigins) $networkExtraOrigins.value = '';
+    if ($networkBindAll) $networkBindAll.checked = false;
+    if ($networkTrustTailnet) $networkTrustTailnet.checked = false;
+    if ($networkTailnetSummary) $networkTailnetSummary.textContent = 'Detecting Tailscale…';
+    $networkModal.classList.add('open');
+    let data;
+    try {
+      const r = await fetch('/api/network-config', { cache: 'no-store' });
+      data = await r.json();
+    } catch (e) {
+      if ($networkError) {
+        $networkError.textContent = 'Could not load current settings: ' + (e && e.message || 'unknown');
+        $networkError.classList.add('visible');
+      }
+      return;
+    }
+    const stored = data.stored || {};
+    const runtime = data.runtime || {};
+    if ($networkBindAll) $networkBindAll.checked = (stored.bind_host === '0.0.0.0') || (runtime.bind_host && runtime.bind_host !== '127.0.0.1' && runtime.bind_host !== 'localhost');
+    if ($networkTrustTailnet) $networkTrustTailnet.checked = !!stored.trust_tailnet;
+    // Show only the user-managed origins (those in the stored config).
+    // Auto-detected tailnet origins and env-supplied ones are not shown
+    // here — listing them would invite "delete = remove trust", which the
+    // env / auto-detect layers don't honour. Tailnet origins are summarized
+    // separately via the checkbox.
+    if ($networkExtraOrigins) {
+      $networkExtraOrigins.value = (stored.allowed_origins || []).join('\n');
+    }
+    networkRenderTailnet(data.tailnet);
+    networkRenderEnvNotice(runtime.env_overrides);
+  }
+  function networkClose() {
+    if ($networkModal) $networkModal.classList.remove('open');
+  }
+
+  async function networkSave() {
+    if (!$networkSaveBtn) return;
+    networkResetState();
+    const bindAll = !!($networkBindAll && $networkBindAll.checked);
+    const trust = !!($networkTrustTailnet && $networkTrustTailnet.checked);
+    const extra = ($networkExtraOrigins && $networkExtraOrigins.value || '')
+      .split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const bad = extra.find(o => !/^https?:\/\/[^\s]+$/.test(o));
+    if (bad) {
+      if ($networkError) {
+        $networkError.textContent = 'Origin must look like http://host:port — got: ' + bad;
+        $networkError.classList.add('visible');
+      }
+      return;
+    }
+    $networkSaveBtn.disabled = true;
+    $networkSaveBtn.textContent = 'Saving…';
+    if ($networkCancelBtn) $networkCancelBtn.disabled = true;
+    try { sessionStorage.setItem('ccc-updating', '1'); } catch (_) {}
+    let data;
+    try {
+      const r = await fetch('/api/network-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bind_host: bindAll ? '0.0.0.0' : '127.0.0.1',
+          allowed_origins: extra,
+          trust_tailnet: trust,
+        }),
+      });
+      data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        throw new Error(data && data.error ? data.error : 'save failed (' + r.status + ')');
+      }
+    } catch (e) {
+      try { sessionStorage.removeItem('ccc-updating'); } catch (_) {}
+      if ($networkError) {
+        $networkError.textContent = (e && e.message) || 'Save failed.';
+        $networkError.classList.add('visible');
+      }
+      $networkSaveBtn.disabled = false;
+      $networkSaveBtn.textContent = 'Save & restart';
+      if ($networkCancelBtn) $networkCancelBtn.disabled = false;
+      return;
+    }
+    $networkSaveBtn.textContent = 'Restarting…';
+    setTimeout(() => { try { location.reload(); } catch (_) {} }, 1200);
+  }
+
+  if ($networkBtn) $networkBtn.addEventListener('click', () => {
+    if ($settingsPopover) $settingsPopover.classList.remove('open');
+    networkOpen();
+  });
+  if ($networkBackdrop) $networkBackdrop.addEventListener('click', networkClose);
+  if ($networkCancelBtn) $networkCancelBtn.addEventListener('click', networkClose);
+  if ($networkSaveBtn) $networkSaveBtn.addEventListener('click', networkSave);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $networkModal && $networkModal.classList.contains('open')) {
+      networkClose();
     }
   });
 
