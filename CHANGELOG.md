@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- "Send to terminal…" input bar now appears for **dormant** sessions, not
+  just live ones with a TTY. The backend's `/api/inject-input` endpoint
+  already routed dormant sends through headless `claude --resume`, but the
+  UI's visibility check (`live && tty`) hid the bar — leaving users with
+  Resume/Launch buttons and no way to type a follow-up. Bar now shows for
+  any selected session; placeholder adapts to "Resume and send…" when
+  dormant, "Send to terminal…" when live, "Send to pkood agent…" when
+  pkood.
+
 ### Removed
 - **Issue Watcher subprocess + `find_log_files` data path.** The standalone
   `scripts/claude-issue-watcher.sh` polling daemon (and its sidebar

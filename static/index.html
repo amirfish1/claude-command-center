@@ -2994,10 +2994,23 @@
     const live = liveStatus.live && liveStatus.tty;
     const isConvTab = activeTab === 'sessions';
     const hasSession = !!currentSession.id;
-    if ((live || isPkood) && isConvTab && hasSession) {
+    // Show the bar for any selected session — /api/inject-input routes to
+    // live-TTY keystroke injection when the session is alive and falls back
+    // to headless `claude --resume` when dormant, so the user can always
+    // type a follow-up. Previously hidden for dormant sessions, which left
+    // the user with Resume/Launch buttons and no way to just send a message.
+    if (isConvTab && hasSession) {
       $convInputBar.classList.add('visible');
-      $convTtyLabel.textContent = isPkood ? 'pkood' : liveStatus.tty;
-      $convInput.placeholder = isPkood ? 'Send to pkood agent...' : 'Send to terminal...';
+      if (isPkood) {
+        $convTtyLabel.textContent = 'pkood';
+        $convInput.placeholder = 'Send to pkood agent...';
+      } else if (live) {
+        $convTtyLabel.textContent = liveStatus.tty;
+        $convInput.placeholder = 'Send to terminal...';
+      } else {
+        $convTtyLabel.textContent = 'dormant';
+        $convInput.placeholder = 'Resume and send…';
+      }
     } else {
       $convInputBar.classList.remove('visible');
     }
