@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Classifier test coverage.** New `tests/test_classify.py` drives
+  `find_conversations()` and `_add_sidecar_fields()` against a hand-crafted
+  `tests/fixtures/mock_session.jsonl` (Read + Edit tool_use, matching
+  tool_results, trailing `<session-state>` and `result` events) so the
+  parser that turns transcripts into kanban-card metadata is no longer
+  untested.
+
 ## [0.1.3] - 2026-04-24
 
 ### Added
