@@ -1008,6 +1008,11 @@ FIX_DEPLOY_SPAWNED_FILE = COMMAND_CENTER_STATE_DIR / "fix-deploy-spawned.json"  
 # every restart. Empty/missing = loopback-only (the safe default). Loaded by
 # `_load_network_config`, written by `_save_network_config`. See SECURITY.md.
 NETWORK_CONFIG_FILE = COMMAND_CENTER_STATE_DIR / "network.json"
+# Persistent registry of spawned headless `claude -p` PIDs, so a server restart
+# can re-discover orphans instead of leaving them unreachable. See
+# _reattach_spawned_orphans() for the boot-time sweep. Schema is a list of
+# {pid, session_id, cwd, spawned_at, name, log, command_summary}.
+SPAWNED_PIDS_FILE = COMMAND_CENTER_STATE_DIR / "spawned-pids.json"
 
 # {path: {mtime, custom_title, last_prompt, agent_name}}
 _conv_meta_cache = {}
@@ -4096,6 +4101,14 @@ def spawn_session(prompt, name=None, cwd=None):
         "log_fh": log_fh,
     }
     _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid,
+        name=session_name,
+        log_path=log_path,
+        cwd=spawn_cwd,
+        spawned_at=timestamp,
+        command_summary=prompt[:200],
+    )
 
     return {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)}
 
@@ -4195,12 +4208,227 @@ def resume_session_headless(session_id, text):
         "resumed_sid": session_id,
     }
     _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid,
+        name=entry["name"],
+        log_path=log_path,
+        cwd=cwd,
+        spawned_at=timestamp,
+        command_summary=text[:200],
+    )
     return {"ok": ok, "pid": proc.pid, "log": str(log_path), "resumed": True}
 
 
+# ---------------------------------------------------------------------------
+# Persistent spawn-PID registry
+# ---------------------------------------------------------------------------
+# When the server restarts, the in-memory `_spawned_sessions` dict is wiped but
+# the underlying `claude -p` children may still be running, orphaned. The
+# registry (`spawned-pids.json`) lets us re-discover them on the next boot so
+# the dashboard's inject path doesn't bottom out with "unknown pid".
+#
+# We never kill orphans — destructive action without an explicit ask is
+# off-limits per CLAUDE.md. The sweep just rebuilds `_spawned_sessions` from
+# verified-alive entries and prunes dead/reused PIDs from the file so it
+# doesn't grow forever.
+#
+# Concurrency: assumed single CCC server per host. If two boot at once
+# they'll race on this file; last-writer-wins is acceptable since the only
+# downside is a missed reattach (the orphan stays orphaned, same as today).
+
+class _ReattachedProc:
+    """Stand-in for a real subprocess.Popen for processes we recovered from
+    the registry on startup. We don't own their stdin/stdout (those died with
+    the previous server), so writes are no-ops that report failure. `.poll()`
+    returns None while the PID is alive and a sentinel exit code once it isn't,
+    which is what callers (`list_spawned_sessions`, `find_all_sessions`) check.
+    """
+
+    def __init__(self, pid):
+        self.pid = pid
+        self.stdin = None
+        self._cached_exit = None
+
+    def poll(self):
+        if self._cached_exit is not None:
+            return self._cached_exit
+        try:
+            os.kill(self.pid, 0)
+            return None
+        except ProcessLookupError:
+            self._cached_exit = -1
+            return -1
+        except PermissionError:
+            # Process exists but is owned by another user; treat as alive.
+            return None
+
+
+def _load_spawn_registry():
+    """Read the on-disk spawn registry. Tolerant of missing/malformed files
+    — both yield an empty list so a corrupted registry can never block boot."""
+    if not SPAWNED_PIDS_FILE.exists():
+        return []
+    try:
+        data = json.loads(SPAWNED_PIDS_FILE.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"  [spawn-registry] ignoring malformed registry ({e})")
+        return []
+    if not isinstance(data, list):
+        print(f"  [spawn-registry] ignoring registry with unexpected shape (not a list)")
+        return []
+    return data
+
+
+def _save_spawn_registry(entries):
+    """Atomically rewrite the spawn registry. Best-effort — failures are logged
+    so a read-only HOME doesn't crash the server."""
+    try:
+        COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = SPAWNED_PIDS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(entries, indent=2))
+        os.replace(tmp, SPAWNED_PIDS_FILE)
+    except OSError as e:
+        print(f"  [spawn-registry] could not write {SPAWNED_PIDS_FILE} ({e})")
+
+
+def _record_spawn_to_registry(pid, name, log_path, cwd, spawned_at, command_summary):
+    """Append a freshly-spawned session to the on-disk registry. The
+    session_id is filled in lazily by the reattach sweep (it isn't known
+    at fork time — Claude emits it in the first stream-json event)."""
+    entries = _load_spawn_registry()
+    entries.append({
+        "pid": pid,
+        "session_id": None,
+        "name": name,
+        "log": str(log_path),
+        "cwd": str(cwd),
+        "spawned_at": spawned_at,
+        "command_summary": command_summary,
+    })
+    _save_spawn_registry(entries)
+
+
+def _remove_spawn_from_registry(pid):
+    """Drop a PID from the registry — called when a session exits gracefully
+    or is explicitly torn down. Safe to call when the entry isn't present."""
+    entries = _load_spawn_registry()
+    pruned = [e for e in entries if e.get("pid") != pid]
+    if len(pruned) != len(entries):
+        _save_spawn_registry(pruned)
+
+
+def _pid_is_claude_process(pid):
+    """Verify a PID is actually a `claude` process before treating it as one
+    of ours. PIDs get reused, so a bare `os.kill(pid, 0)` isn't enough — we
+    could end up trying to inject into someone's vim. Uses `ps -p <pid> -o
+    command=` (works on macOS + Linux) and matches strictly on argv[0]
+    basename — substring matching is too lenient (any python process whose
+    argv mentions 'claude' would otherwise pass)."""
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+    if out.returncode != 0:
+        return False
+    cmd = out.stdout.strip()
+    if not cmd:
+        return False
+    parts = cmd.split()
+    if not parts:
+        return False
+    # Match the executable basename only; `claude -p ...` shows up as
+    # `/path/to/claude -p ...` on macOS or just `claude -p ...` on Linux.
+    return parts[0].rsplit("/", 1)[-1] == "claude"
+
+
+def _reattach_spawned_orphans():
+    """Boot-time sweep that re-populates `_spawned_sessions` from the on-disk
+    registry. Verifies every entry's PID is alive AND is still a `claude`
+    process (PIDs can be reused), drops dead/reused ones, and rewrites the
+    registry. Never kills anything — just makes live orphans visible to the
+    dashboard again."""
+    raw_entries = _load_spawn_registry()
+    if not raw_entries:
+        # Still touch the file so a stale corrupt blob is replaced with a
+        # known-good empty list on first boot after upgrade.
+        if SPAWNED_PIDS_FILE.exists():
+            _save_spawn_registry([])
+        return
+
+    reattached = 0
+    dropped = 0
+    survivors = []
+    for entry in raw_entries:
+        pid = entry.get("pid")
+        if not isinstance(pid, int):
+            dropped += 1
+            continue
+        # Step 1: is the PID alive at all?
+        try:
+            os.kill(pid, 0)
+            alive = True
+        except ProcessLookupError:
+            alive = False
+        except PermissionError:
+            # Different user owns the PID — we'd never be able to signal it
+            # anyway. Drop from registry rather than confuse the UI.
+            alive = False
+        if not alive:
+            dropped += 1
+            continue
+        # Step 2: is it actually a claude process? (PID reuse defence.)
+        if not _pid_is_claude_process(pid):
+            dropped += 1
+            continue
+        # Step 3: try to backfill session_id from the log file if we don't
+        # have it yet. Best-effort — failures don't block reattach.
+        session_id = entry.get("session_id")
+        log_path = entry.get("log")
+        if not session_id and log_path:
+            try:
+                session_id = extract_session_id(log_path)
+            except Exception:
+                session_id = None
+        # Looks legit — re-add to the in-memory map with a stub proc.
+        stub = _ReattachedProc(pid)
+        synthetic = {
+            "pid": pid,
+            "name": entry.get("name") or f"reattached-{pid}",
+            "log": log_path or "",
+            "prompt": entry.get("command_summary", "") or "",
+            "started": entry.get("spawned_at", ""),
+            "proc": stub,
+            "log_fh": None,
+            "reattached": True,
+        }
+        if session_id:
+            synthetic["resumed_sid"] = session_id
+        _spawned_sessions.append(synthetic)
+        survivors.append({
+            "pid": pid,
+            "session_id": session_id,
+            "name": entry.get("name"),
+            "log": log_path,
+            "cwd": entry.get("cwd"),
+            "spawned_at": entry.get("spawned_at"),
+            "command_summary": entry.get("command_summary", ""),
+        })
+        reattached += 1
+
+    _save_spawn_registry(survivors)
+    print(f"  [spawn-registry] reattached {reattached} orphans, dropped {dropped} dead/reused entries")
+
+
 def list_spawned_sessions():
-    """Return spawned sessions with running/finished status."""
+    """Return spawned sessions with running/finished status. Also opportunistically
+    drops finished sessions from the on-disk spawn registry so it doesn't grow
+    forever (the in-memory list keeps them so the UI can still show 'finished'
+    state, but persistence only needs the live ones)."""
     result = []
+    finished_pids = []
     for s in _spawned_sessions:
         poll = s["proc"].poll()
         result.append({
@@ -4211,6 +4439,17 @@ def list_spawned_sessions():
             "started": s.get("started", ""),
             "status": "running" if poll is None else f"finished (exit {poll})",
         })
+        if poll is not None:
+            finished_pids.append(s["pid"])
+    if finished_pids:
+        try:
+            entries = _load_spawn_registry()
+            pruned = [e for e in entries if e.get("pid") not in finished_pids]
+            if len(pruned) != len(entries):
+                _save_spawn_registry(pruned)
+        except Exception:
+            # Registry hygiene is best-effort; never break the API response.
+            pass
     return result
 
 
@@ -4922,6 +5161,14 @@ Instructions:
         "log_fh": log_fh,
     }
     _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid,
+        name=session_name,
+        log_path=log_path,
+        cwd=str(REPO_ROOT),
+        spawned_at=timestamp,
+        command_summary=prompt[:200],
+    )
 
     return {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)}
 
@@ -7757,6 +8004,7 @@ def main():
     migrate_state_dir()
     ensure_hooks_installed()
     install_orchestration_skill()
+    _reattach_spawned_orphans()
     # SECURITY: bind to 127.0.0.1 by default. The whole trust model is
     # "implicit because it's local"; binding to all interfaces (the old
     # `("", PORT)`) exposed every endpoint — including subprocess-spawning
