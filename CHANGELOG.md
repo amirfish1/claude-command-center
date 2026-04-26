@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- User messages in the conversation pane now render in blue (the
+  shared `--accent` colour) instead of green, so they read as
+  "the human's turn" rather than blending with the cyan "result"
+  rows. Assistant messages stay purple, results stay cyan.
+
 ### Added
 - **Live "what's running" signal on cards and chat pane.** The kanban card now
   surfaces the currently-executing tool (e.g. `Bash npm test`, `Read foo.py`)

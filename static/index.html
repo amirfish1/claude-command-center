@@ -544,8 +544,8 @@
   }
   .conversations-view .event { margin-bottom: 12px; padding: 10px 14px; border-radius: 6px; border-left: 3px solid transparent; }
   .conversations-view .event.assistant { background: rgba(188, 140, 255, 0.06); border-left-color: var(--purple); }
-  .conversations-view .event.user_text { background: rgba(63, 185, 80, 0.08); border-left-color: var(--green); }
-  .conversations-view .event.user_text .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  .conversations-view .event.user_text { background: rgba(88, 166, 255, 0.08); border-left-color: var(--accent); }
+  .conversations-view .event.user_text .label { color: var(--accent); font-weight: 600; font-size: 11px; text-transform: uppercase; }
   .conversations-view .event.user_text .user-msg { margin-top: 6px; white-space: pre-wrap; font-size: 15px; }
   .conversations-view .event.tool_result { display: none; }
   .conversations-view .event.result { background: rgba(57, 210, 192, 0.08); border-left-color: var(--cyan); font-size: 12px; }
@@ -6122,9 +6122,11 @@
     input.addEventListener('blur', () => commit(true));
   }
 
-  // Return the active conversation view element (split panel or main)
+  // Return the active conversation view element. The split-panel
+  // (`$convPanelView`) is no longer engaged from the user-facing toggle,
+  // so all conversation rendering goes into `.main`'s `$conversationsView`.
   function getConvView() {
-    return (kanbanView && $convPanelView) ? $convPanelView : $conversationsView;
+    return $conversationsView;
   }
 
   const STICKY_HEADER_HEIGHT_KEY = 'ccc-sticky-header-height';
