@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Screenshots in the bug-report modal — an "Add screenshot" button opens
+  the macOS area-selector (`screencapture -i`) so the user draws a
+  rectangle over exactly what they want to share. The preview renders in
+  the modal with Retake / Remove controls. On submit the image is committed
+  to a dedicated `bug-screenshots` branch of `amirfish1/claude-command-center`
+  and embedded inline in the issue body via `raw.githubusercontent.com`. If
+  the push fails (typical for OSS users without write access), the image is
+  saved to `~/.claude/command-center/bug-screenshots/`, Finder pops to it,
+  and the issue body carries a drag-drop instruction so the user can attach
+  it manually. New endpoints: `POST /api/bug-report/capture`,
+  `POST /api/bug-report/reveal`. `POST /api/bug-report` now accepts an
+  optional `screenshot_b64` field.
 ## [0.1.4] - 2026-04-25
 
 ### Fixed
