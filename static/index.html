@@ -505,9 +505,27 @@
   }
   .conversations-view .event { margin-bottom: 12px; padding: 10px 14px; border-radius: 6px; border-left: 3px solid transparent; }
   .conversations-view .event.assistant { background: rgba(188, 140, 255, 0.06); border-left-color: var(--purple); }
-  .conversations-view .event.user_text { background: rgba(88, 166, 255, 0.08); border-left-color: var(--accent); }
-  .conversations-view .event.user_text .label { color: var(--accent); font-weight: 600; font-size: 11px; text-transform: uppercase; }
-  .conversations-view .event.user_text .user-msg { margin-top: 6px; white-space: pre-wrap; font-size: 15px; }
+  /* User bubble — Claude-Desktop-style chat bubble. No label, no left
+     border, rounded corners, constrained width, subtle blue tint. */
+  .conversations-view .event.user_text {
+    background: rgba(88, 166, 255, 0.10);
+    border: none;
+    border-radius: 12px;
+    padding: 10px 16px;
+    max-width: 85%;
+  }
+  .conversations-view .event.user_text .label { display: none; }
+  .conversations-view .event.user_text .line-num,
+  .conversations-view .event.user_text .msg-ts { display: none; }
+  .conversations-view .event.user_text .user-msg {
+    margin-top: 0;
+    white-space: pre-wrap;
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--accent);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    font-weight: 400;
+  }
   .conversations-view .event.tool_result { display: none; }
   .conversations-view .event.result { background: rgba(57, 210, 192, 0.08); border-left-color: var(--cyan); font-size: 12px; }
   .conversations-view .event.result .label { color: var(--cyan); font-weight: 600; text-transform: uppercase; font-size: 11px; }
@@ -3379,6 +3397,22 @@
     }
   });
 
+  // Inline-code paths in conversation messages get rendered as
+  // `<a class="path-link">`. Two kinds in practice:
+  //   • file paths       → open in editor via /api/open
+  //   • web routes       → open in a browser tab on the project's deploy
+  //                        URL (Vercel) when known, else the same origin
+  // Heuristic: if it starts with `/` AND the last segment has a file
+  // extension, treat as a file. Otherwise treat as a web route. Routes
+  // like `/api/foo/bar` (no extension on the last segment) win the
+  // browser-tab path; files like `static/index.html` win the editor path.
+  function _isWebRoutePath(p) {
+    if (!p.startsWith('/')) return false;
+    const last = p.split('/').pop() || '';
+    // Strip query/fragment before extension check.
+    const cleanLast = last.split(/[?#]/)[0];
+    return !/\.[a-zA-Z0-9]{1,8}$/.test(cleanLast);
+  }
   document.addEventListener('click', async (ev) => {
     const a = ev.target.closest('a.path-link');
     if (!a) return;
@@ -3386,6 +3420,12 @@
     ev.stopPropagation();
     const p = a.dataset.path;
     if (!p) return;
+    if (_isWebRoutePath(p)) {
+      const base = _vercelDeployUrl || '';  // empty → relative to current origin
+      const target = base ? base + p : p;
+      window.open(target, '_blank', 'noopener');
+      return;
+    }
     a.style.opacity = '0.5';
     try {
       const res = await fetch('/api/open', {
@@ -7036,6 +7076,10 @@
   // ── Vercel deploy status ──
   const $deployDot = document.getElementById('deployDot');
   const $deployInfo = document.getElementById('deployInfo');
+  // Latest production deploy URL — stashed so the inline-code path-link
+  // handler can open URL-shaped paths (`/api/foo/bar`) on the right
+  // domain instead of localhost (or, for file paths, the editor).
+  let _vercelDeployUrl = '';
 
   async function pollVercelDeploy() {
     try {
@@ -7054,6 +7098,7 @@
       const dur = d.duration_s ? d.duration_s + 's' : '';
       const commitInfo = d.commit_sha ? d.commit_sha + (d.commit_ref ? ' (' + d.commit_ref + ')' : '') : '';
       const link = d.url ? 'https://' + d.url : '';
+      _vercelDeployUrl = link;
 
       let html = '<span class="deploy-state ' + stLower + '">' + st + '</span>';
       if (age) html += ' &middot; ' + age;
