@@ -4796,19 +4796,42 @@ Instructions:
     return {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)}
 
 
-VERCEL_PROJECT = os.environ.get("VERCEL_PROJECT", "")
+_VERCEL_PROJECT_ENV = os.environ.get("VERCEL_PROJECT", "")
+
+
+def _detect_vercel_project():
+    """Read REPO_ROOT/.vercel/project.json (created by `vercel link`) and
+    return its `projectName`. Returns "" when the file is absent or
+    malformed. Resolved per-request so it follows the active repo when the
+    user switches via the sidebar repo picker."""
+    candidate = REPO_ROOT / ".vercel" / "project.json"
+    try:
+        with open(candidate, "r") as f:
+            data = json.load(f)
+        name = (data or {}).get("projectName") or ""
+        return name if isinstance(name, str) else ""
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return ""
+
+
+def _resolve_vercel_project():
+    """env > .vercel/project.json > "". Env still wins so CI overrides keep
+    working; the autodetect is just a friendlier default for the common case
+    of a `vercel link`-ed local checkout."""
+    return _VERCEL_PROJECT_ENV or _detect_vercel_project()
 
 
 def vercel_deploy_status():
     """Return latest production deployment status from Vercel CLI.
 
-    No-op when VERCEL_PROJECT isn't set — Vercel integration is opt-in.
+    No-op when no project name is resolvable — Vercel integration is opt-in.
     """
-    if not VERCEL_PROJECT:
-        return {"error": "VERCEL_PROJECT not configured", "disabled": True}
+    project = _resolve_vercel_project()
+    if not project:
+        return {"error": "VERCEL_PROJECT not configured (no env, no .vercel/project.json)", "disabled": True}
     try:
         result = subprocess.run(
-            ["vercel", "ls", VERCEL_PROJECT, "--environment", "production", "-F", "json"],
+            ["vercel", "ls", project, "--environment", "production", "-F", "json"],
             capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
         )
         if result.returncode != 0:
@@ -4833,7 +4856,7 @@ def vercel_deploy_status():
             "commit_sha": meta.get("githubCommitSha", "")[:7],
             "commit_msg": (meta.get("githubCommitMessage", "") or "").split("\n")[0][:80],
             "commit_ref": meta.get("githubCommitRef", ""),
-            "project": VERCEL_PROJECT,
+            "project": project,
         }
     except subprocess.TimeoutExpired:
         return {"error": "vercel CLI timed out"}
@@ -7379,8 +7402,8 @@ def get_app_config():
         "app_name": "Claude Command Center",
         "title_strip": TITLE_STRIP_PREFIXES,
         "repo": repo_slug,
-        "vercel_enabled": bool(VERCEL_PROJECT),
-        "vercel_project": VERCEL_PROJECT,
+        "vercel_enabled": bool(_resolve_vercel_project()),
+        "vercel_project": _resolve_vercel_project(),
         "pkood_enabled": bool(shutil.which("pkood")),
         "gh_enabled": bool(shutil.which("gh")),
         "orgs": [label for label, _ in ORG_PATTERNS],
