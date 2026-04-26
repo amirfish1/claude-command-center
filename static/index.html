@@ -1033,6 +1033,28 @@
     background: rgba(248,81,73,0.2); color: var(--red);
     text-transform: uppercase; letter-spacing: 0.5px; vertical-align: middle;
   }
+  /* Needs-approval badge — Notification hook signal. Sits above the title
+     on cards parked in the Waiting column. Pulses gently to draw the eye. */
+  .kanban-needs-approval-badge {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; font-weight: 700;
+    padding: 4px 8px; margin-bottom: 6px;
+    border-radius: 4px;
+    background: rgba(88,166,255,0.18); color: var(--accent);
+    border: 1px solid rgba(88,166,255,0.35);
+    animation: kanban-needs-approval-pulse 2s ease-in-out infinite;
+  }
+  .kanban-needs-approval-icon { font-size: 13px; line-height: 1; }
+  .kanban-needs-approval-label { text-transform: uppercase; letter-spacing: 0.5px; }
+  .kanban-needs-approval-msg {
+    font-weight: 400; font-size: 10px; opacity: 0.85;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; min-width: 0;
+  }
+  @keyframes kanban-needs-approval-pulse {
+    0%, 100% { background: rgba(88,166,255,0.18); }
+    50%      { background: rgba(88,166,255,0.32); }
+  }
   /* Backlog card issue chip (the "#NNN ↗" button) */
   .kanban-card.backlog-card [data-action="view-issue"] {
     font-size: 14px !important;
@@ -4513,6 +4535,11 @@
   }
 
   function classifyKanbanColumn(c) {
+    // Notification hook signal — Claude Code is explicitly asking for
+    // permission. This is the strongest "human input required" signal we
+    // have, so it overrides natural classification and the fresh-session
+    // sticky alike. Cleared automatically when PostToolUse fires.
+    if (c && c.needs_approval) return 'waiting';
     const raw = _classifyKanbanColumnNatural(c);
     return _applyFreshSessionSticky(c, raw);
   }
@@ -4658,6 +4685,8 @@
         hint: 'Live session, no edits yet. Claude is still working out the plan.' },
       { key: 'working',         label: 'Working',         defaultExpanded: true,
         hint: 'Live session actively editing files (sidecar shows writes). Glows when mid-turn.' },
+      { key: 'waiting',         label: 'Waiting',         defaultExpanded: true,
+        hint: 'Claude is asking for permission (Notification hook). Approve or deny in the terminal.' },
       { key: 'review',          label: 'Review',          defaultExpanded: true,
         hint: 'Committed or pushed work waiting for you to read and verify.' },
       { key: 'testing',         label: 'In Testing',      defaultExpanded: true,
@@ -4719,6 +4748,7 @@
           'needs-attention': 'Nothing flagged for triage.',
           'planning': 'No live planning sessions.',
           'working': 'No live editing sessions.',
+          'waiting': 'No sessions waiting for approval.',
           'review': 'Nothing waiting for review.',
           'testing': 'Drag cards here to mark as testing.',
           'verified': 'No verified work yet.',
@@ -4955,6 +4985,18 @@
           // Wrap any #NNN in the title with a styled span for clarity.
           titleHtml = titleHtml.replace(/#(\d{1,5})\b/g,
             '<span class="kanban-issue-ref" title="GitHub issue reference">GH&nbsp;#$1</span>');
+        }
+        // Notification hook badge — Claude Code is asking for permission
+        // (or otherwise needs the user). Sits above the title so it's the
+        // first thing the eye lands on when scanning the Waiting column.
+        if (c.needs_approval) {
+          const msg = c.needs_approval_message || '';
+          const shortMsg = msg && msg.length <= 80 ? msg : '';
+          html += '<div class="kanban-needs-approval-badge" title="' + escapeHtml(msg || 'Claude is asking for permission') + '">'
+            + '<span class="kanban-needs-approval-icon">🔔</span>'
+            + '<span class="kanban-needs-approval-label">Needs approval</span>'
+            + (shortMsg ? '<span class="kanban-needs-approval-msg">' + escapeHtml(shortMsg) + '</span>' : '')
+            + '</div>';
         }
         html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open &amp; rename">' + issueBadge + titleHtml + '</div>';
         if (descHtml) {

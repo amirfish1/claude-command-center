@@ -38,6 +38,15 @@ def main():
         except OSError:
             pass
 
+        # Clear the needs-approval marker notification.py wrote — the user
+        # answered the permission prompt (approve/deny) and the tool ran,
+        # so the badge should drop off the kanban card.
+        needs_approval = os.path.join(LIVE_STATE_DIR, f"{session_id}_needs_approval.json")
+        try:
+            os.unlink(needs_approval)
+        except OSError:
+            pass
+
         has_writes = os.path.exists(writes_flag)
 
         # Extract a meaningful file/command reference

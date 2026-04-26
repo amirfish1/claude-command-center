@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the empty state.
 
 ### Added
+- **Notification hook drives a real Needs-Approval signal.** A new `Notification`
+  hook (`hooks/notification.py`) writes a `<sid>_needs_approval.json` marker
+  whenever Claude Code asks the user for permission; PostToolUse clears it. The
+  kanban now routes those cards into a dedicated "Waiting" column with a
+  pulsing 🔔 badge above the title, replacing the brittle pending_tool/age
+  heuristic that confused "tool fired but not yet returned" with "Claude is
+  blocked on a permission prompt." Hook auto-installs on next server start.
 - **Live "what's running" signal on cards and chat pane.** The kanban card now
   surfaces the currently-executing tool (e.g. `Bash npm test`, `Read foo.py`)
   as an animated badge while a session is live, instead of showing only a glow.
