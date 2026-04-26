@@ -8540,29 +8540,205 @@ def _interrupt_session(session_id):
     return {"ok": False, "error": "session is not live — nothing to interrupt"}
 
 
+def _iso_to_epoch(ts):
+    """Parse a Claude-style ISO-8601 timestamp ("2026-04-26T23:22:56.738Z")
+    to an epoch float. Returns None on parse failure — callers treat that
+    as "skip the timestamp gate" rather than failing the request."""
+    if not ts:
+        return None
+    try:
+        # datetime.fromisoformat handles "+00:00" but not "Z" before py3.11.
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def ask_session_via_live_tail(session_id, text, timeout_ms, status):
+    """Inject into a LIVE session via the existing TTY-keystroke path
+    (same as /api/inject-input takes), then tail the session's .jsonl
+    transcript for the assistant's reply. No `claude --resume` subprocess
+    is spawned — the live session does the work, so cost and tokens are
+    a fraction of the resume-headless path.
+
+    `status` is the dict returned by `session_live_status()` and must
+    have `live=True` plus a `tty`. Caller is expected to have checked.
+
+    Returns the same shape as `ask_session_via_resume`, with
+    `source="live-tail"` and `cost_usd=None` (the live process doesn't
+    expose its API cost back to us — that's the price of skipping the
+    resume).
+    """
+    tty = status.get("tty")
+    term_app = status.get("terminal_app") or "Terminal"
+    if not tty:
+        return {"ok": False, "error": "live session has no tty", "source": "live-tail"}
+
+    jsonl_path = _find_session_jsonl(session_id)
+    if jsonl_path is None:
+        return {
+            "ok": False,
+            "error": "no transcript .jsonl on disk for this session_id",
+            "source": "live-tail",
+        }
+
+    # Snapshot file size BEFORE inject so we only scan bytes the live session
+    # writes in response to this ask. Capture inject epoch with a 1s back-buffer
+    # to absorb any clock skew between this process and Claude's writer.
+    try:
+        start_offset = jsonl_path.stat().st_size
+    except OSError as e:
+        return {
+            "ok": False,
+            "error": f"could not stat jsonl: {e}",
+            "source": "live-tail",
+        }
+    inject_epoch = time.time() - 1.0
+
+    inject = inject_input_via_keystroke(tty, term_app, text)
+    if not inject.get("ok"):
+        return {
+            "ok": False,
+            "error": f"keystroke inject failed: {inject.get('error')}",
+            "source": "live-tail",
+        }
+
+    started = time.monotonic()
+    deadline = started + max(0.5, timeout_ms / 1000.0)
+    text_blocks = []
+    last_event_at = started
+    last_block_was_tool_use = False
+    saw_text = False
+    pending = b""
+    # Idle fallback: if stop_reason is never written (older Claude Code
+    # versions log assistant records with stop_reason=None), accept silence
+    # as "turn over" once we've already collected some text AND the most
+    # recent record wasn't a tool_use (which would mean the assistant is
+    # waiting on a tool_result).
+    IDLE_DONE_SECS = 3.0
+
+    fh = None
+    try:
+        try:
+            fh = open(jsonl_path, "rb")
+        except OSError as e:
+            return {
+                "ok": False,
+                "error": f"could not open jsonl: {e}",
+                "source": "live-tail",
+            }
+        fh.seek(start_offset)
+
+        while time.monotonic() < deadline:
+            chunk = fh.read()
+            if chunk:
+                last_event_at = time.monotonic()
+                pending += chunk
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if not isinstance(ev, dict) or ev.get("type") != "assistant":
+                        continue
+                    ts_epoch = _iso_to_epoch(ev.get("timestamp"))
+                    if ts_epoch is not None and ts_epoch < inject_epoch:
+                        # Old turn — pre-inject record the writer flushed late.
+                        continue
+                    msg = ev.get("message") or {}
+                    blocks = msg.get("content") or []
+                    record_has_tool_use = False
+                    for block in blocks:
+                        if not isinstance(block, dict):
+                            continue
+                        btype = block.get("type")
+                        if btype == "text":
+                            t = block.get("text") or ""
+                            if t:
+                                text_blocks.append(t)
+                                saw_text = True
+                        elif btype == "tool_use":
+                            record_has_tool_use = True
+                    last_block_was_tool_use = record_has_tool_use
+                    # Definitive "turn done" signal in newer Claude Code versions.
+                    stop_reason = msg.get("stop_reason")
+                    if stop_reason in ("end_turn", "stop_sequence", "max_tokens"):
+                        return {
+                            "ok": True,
+                            "text": "".join(text_blocks),
+                            "duration_ms": int((time.monotonic() - started) * 1000),
+                            "num_turns": 1,
+                            "cost_usd": None,
+                            "source": "live-tail",
+                        }
+            else:
+                # Idle fallback — only kicks in once we've seen text and the
+                # last record wasn't a tool_use waiting on a result.
+                if (
+                    saw_text
+                    and not last_block_was_tool_use
+                    and (time.monotonic() - last_event_at) > IDLE_DONE_SECS
+                ):
+                    return {
+                        "ok": True,
+                        "text": "".join(text_blocks),
+                        "duration_ms": int((time.monotonic() - started) * 1000),
+                        "num_turns": 1,
+                        "cost_usd": None,
+                        "source": "live-tail",
+                    }
+                time.sleep(0.1)
+
+        return {
+            "ok": False,
+            "error": "timeout",
+            "partial": "".join(text_blocks),
+            "source": "live-tail",
+        }
+    finally:
+        if fh is not None:
+            try:
+                fh.close()
+            except OSError:
+                pass
+
+
 def ask_session_and_wait(session_id, text, timeout_ms=30000):
-    """Synchronously inject `text` into a session and wait for the next
-    `{"type":"result",...}` event in the headless subprocess's stream-json
-    output. Used by /api/ask. Falls back to spawning a fresh
-    `claude --resume` subprocess if no live one exists for this session,
-    same as /api/inject-input does.
+    """Synchronously inject `text` into a session and wait for its reply.
 
-    Returns one of:
-      {"ok": True, "text": <result>, "cost_usd": <float>, "duration_ms": <int>, "num_turns": <int>}
-      {"ok": False, "error": "timeout", "partial": <best-effort text>}
-      {"ok": False, "error": <message>}
+    Two paths, picked from the session's live status:
 
-    Implementation note: stream-json output is piped to a log file (the
-    subprocess inherits log_fh as stdout), so we tail that log file to
-    pick up new events. We record the file size *before* writing the
-    user message and only scan bytes added after that point, so the
-    function returns the assistant's reply to *this* ask, not a stale
-    earlier turn.
+    - **Live target** (the user has `claude` open in a terminal for this
+      session_id): inject via `inject_input_via_keystroke()` and tail the
+      `.jsonl` transcript. Spawns NO `claude --resume` subprocess.
+      Returns `source="live-tail"`. Cost is `None` because the live
+      process doesn't expose its API cost back to us.
+    - **Dormant target**: spawn `claude --resume` headlessly, write the
+      user message, and tail its stream-json output for the next
+      `{"type":"result",...}` event. Returns `source="resume-headless"`.
+
+    Same return-shape contract for both:
+      {"ok": True, "text": <result>, "cost_usd": <float|None>,
+       "duration_ms": <int>, "num_turns": <int>, "source": <str>}
+      {"ok": False, "error": "timeout", "partial": <best-effort text>, "source": <str>}
+      {"ok": False, "error": <message>, "source": <str>}
     """
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
 
-    # Reuse an existing live resume (same path resume_session_headless takes).
+    # Live-tail short-circuit: if the target session has a running `claude`
+    # process with a usable tty, drive it via keystroke + jsonl tail. This
+    # skips the ~1M-token cache re-read a fresh `claude --resume` would do.
+    cwd = find_session_cwd(session_id)
+    status = session_live_status(session_id, cwd)
+    if status.get("live") and status.get("tty"):
+        return ask_session_via_live_tail(session_id, text, timeout_ms, status)
+
+    # Resume-headless path (original behaviour). Reuse an existing live
+    # resume if we already have one (same path resume_session_headless takes).
     entry = None
     for s in _spawned_sessions:
         if s.get("resumed_sid") == session_id and s["proc"].poll() is None:
@@ -8574,6 +8750,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000):
         # the user message itself and appends the entry to _spawned_sessions.
         spawn_result = resume_session_headless(session_id, text)
         if not spawn_result.get("ok"):
+            spawn_result.setdefault("source", "resume-headless")
             return spawn_result
         # The brand new entry is the last one matching this sid.
         for s in reversed(_spawned_sessions):
@@ -8581,7 +8758,11 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000):
                 entry = s
                 break
         if entry is None:
-            return {"ok": False, "error": "spawned subprocess but lost track of it"}
+            return {
+                "ok": False,
+                "error": "spawned subprocess but lost track of it",
+                "source": "resume-headless",
+            }
         # Fresh spawn — start scanning from byte 0 since the only output
         # in this log will be from this ask.
         start_offset = 0
@@ -8594,7 +8775,11 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000):
             start_offset = 0
         ok = _write_stream_json_user_message(entry, text)
         if not ok:
-            return {"ok": False, "error": "failed to write user message (broken pipe?)"}
+            return {
+                "ok": False,
+                "error": "failed to write user message (broken pipe?)",
+                "source": "resume-headless",
+            }
 
     log_path = entry["log"]
     proc = entry["proc"]
@@ -8611,7 +8796,11 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000):
         try:
             fh = open(log_path, "rb")
         except OSError as e:
-            return {"ok": False, "error": f"could not open log: {e}"}
+            return {
+                "ok": False,
+                "error": f"could not open log: {e}",
+                "source": "resume-headless",
+            }
         fh.seek(start_offset)
         while time.monotonic() < deadline:
             chunk = fh.read()
@@ -8646,6 +8835,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000):
                             "duration_ms": ev.get("duration_ms"),
                             "num_turns": ev.get("num_turns"),
                             "is_error": bool(ev.get("is_error")),
+                            "source": "resume-headless",
                         }
             else:
                 # No new data — short sleep, then check if subprocess died.
@@ -8671,17 +8861,20 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000):
                                     "duration_ms": ev.get("duration_ms"),
                                     "num_turns": ev.get("num_turns"),
                                     "is_error": bool(ev.get("is_error")),
+                                    "source": "resume-headless",
                                 }
                     return {
                         "ok": False,
                         "error": f"subprocess exited (code {proc.poll()}) before result event",
                         "partial": "".join(partial_chunks),
+                        "source": "resume-headless",
                     }
                 time.sleep(0.1)
         return {
             "ok": False,
             "error": "timeout",
             "partial": "".join(partial_chunks),
+            "source": "resume-headless",
         }
     finally:
         if fh is not None:

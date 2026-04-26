@@ -1,0 +1,1 @@
+- `/api/ask` now uses a live TTY keystroke plus JSONL-tail path for active Claude sessions, avoiding a fresh `claude --resume` subprocess while dormant sessions keep the existing headless resume flow.
