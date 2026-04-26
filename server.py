@@ -12,7 +12,7 @@ Usage:
     CCC_WATCH_REPO=~/dev/foo ./run.sh
 """
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 import ast
 import http.server
@@ -189,8 +189,59 @@ else:
 LOG_DIR = REPO_ROOT / ".claude" / "logs"
 FALLBACK_DIR = Path("/tmp")
 WATCHER_SCRIPT = REPO_ROOT / "scripts" / "claude-issue-watcher.sh"
-# Claude Code encodes project path by replacing "/" with "-" under ~/.claude/projects/
-_cc_project_slug = "-" + str(REPO_ROOT).lstrip("/").replace("/", "-")
+
+def _encode_project_slug(path):
+    """Encode an absolute filesystem path the way claude-code does when
+    naming subdirs under ~/.claude/projects/.
+
+    Claude Code 2.x replaces every non-alphanumeric character with '-'
+    (so '/foo/.claude/BYM+Finie' becomes '-foo--claude-BYM-Finie').
+    Older claude-code versions only replaced '/', which is why some
+    legacy project dirs still contain '+', '.', etc.
+
+    CCC has to match the current encoder — otherwise sessions spawned
+    in repos whose path contains '+', '.', '_', or spaces land in a
+    project dir CCC isn't scanning, and they're invisible on the kanban.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path))
+
+def _legacy_project_slug(path):
+    """Pre-2.x claude-code only replaced '/' with '-' — leaving '+',
+    '.', '_', and spaces intact. We still need to surface conversations
+    that historic claude-code versions wrote into those dirs, so the
+    scan covers both the modern and legacy slugs for a given REPO_ROOT.
+    """
+    return "-" + str(path).lstrip("/").replace("/", "-")
+
+def _candidate_conversation_dirs(path):
+    """Every ~/.claude/projects/<slug>/ that could hold conversations for
+    `path`. Both encoders are tried; only existing dirs are returned.
+    Modern slug first so it wins on shared keys (newer is fresher)."""
+    seen = set()
+    candidates = []
+    root = Path.home() / ".claude" / "projects"
+    for slug in (_encode_project_slug(path), _legacy_project_slug(path)):
+        if slug in seen:
+            continue
+        seen.add(slug)
+        d = root / slug
+        if d.is_dir():
+            candidates.append(d)
+    return candidates
+
+def _resolve_conversation_path(conversation_id):
+    """Find <conversation_id>.jsonl across every candidate project dir
+    for the current REPO_ROOT (modern + legacy slug)."""
+    name = conversation_id + ".jsonl"
+    for d in _candidate_conversation_dirs(REPO_ROOT):
+        p = d / name
+        if p.is_file():
+            return p
+    # Fall back to the canonical dir even if it doesn't exist — callers
+    # check existence and produce a 404 with a recognizable path.
+    return CONVERSATIONS_DIR / name
+
+_cc_project_slug = _encode_project_slug(REPO_ROOT)
 CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
 
 def load_known_repos():
@@ -687,7 +738,7 @@ def switch_repo_root(new_path):
     REPO_ROOT = new_root
     LOG_DIR = REPO_ROOT / ".claude" / "logs"
     WATCHER_SCRIPT = REPO_ROOT / "scripts" / "claude-issue-watcher.sh"
-    _cc_project_slug = "-" + str(REPO_ROOT).lstrip("/").replace("/", "-")
+    _cc_project_slug = _encode_project_slug(REPO_ROOT)
     CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
     # Invalidate every repo-scoped cache.
     _backlog_issues_cache = []
@@ -2999,7 +3050,11 @@ def _extract_images_from_content(content):
 def find_conversations():
     """Return list of conversation metadata dicts, newest first."""
     conversations = []
-    if not CONVERSATIONS_DIR.is_dir():
+    # Scan every project dir whose slug encodes back to REPO_ROOT — both
+    # the modern claude-code 2.x slug AND the legacy '/'-only slug, so
+    # we don't drop historic sessions when claude-code's encoder changes.
+    project_dirs = _candidate_conversation_dirs(REPO_ROOT)
+    if not project_dirs:
         return conversations
     name_overrides = _load_session_name_overrides()
     archived_set = set(_load_archived_conversations())
@@ -3016,9 +3071,22 @@ def find_conversations():
         "Produce a concise 4-8 word title for the GitHub issue below",
     )
 
-    for f in CONVERSATIONS_DIR.iterdir():
-        if not f.name.endswith(".jsonl") or not f.is_file():
-            continue
+    # If the same session_id (file name) appears in multiple candidate
+    # dirs (unlikely — claude-code uses one slug per process — but
+    # possible if a repo path was historically encoded both ways), the
+    # first one wins; project_dirs are ordered modern-first.
+    seen_jsonl = set()
+    jsonl_files = []
+    for project_dir in project_dirs:
+        for f in project_dir.iterdir():
+            if not f.name.endswith(".jsonl") or not f.is_file():
+                continue
+            if f.name in seen_jsonl:
+                continue
+            seen_jsonl.add(f.name)
+            jsonl_files.append(f)
+
+    for f in jsonl_files:
         try:
             stat = f.stat()
         except OSError:
@@ -3412,7 +3480,7 @@ def find_all_sessions():
 
 def parse_conversation(conversation_id, after_line=0):
     """Parse a conversation JSONL file into structured events."""
-    filepath = CONVERSATIONS_DIR / (conversation_id + ".jsonl")
+    filepath = _resolve_conversation_path(conversation_id)
     events = []
     line_num = 0
 
@@ -4149,7 +4217,7 @@ def _resolve_claude_session_for_pkood(agent_id):
     # have it, otherwise all of them (slower — but still bounded).
     candidate_dirs = []
     if spawn_cwd:
-        slug = "-" + spawn_cwd.lstrip("/").replace("/", "-")
+        slug = _encode_project_slug(spawn_cwd)
         candidate = PROJECTS_ROOT / slug
         if candidate.is_dir():
             candidate_dirs.append(candidate)
@@ -6683,7 +6751,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
 
     def _stream_conversation(self, conversation_id, after_line):
         """SSE endpoint for real-time conversation tailing."""
-        filepath = CONVERSATIONS_DIR / (conversation_id + ".jsonl")
+        filepath = _resolve_conversation_path(conversation_id)
         if not filepath.exists():
             self.send_json({"error": "Conversation not found"}, 404)
             return
