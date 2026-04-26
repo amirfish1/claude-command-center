@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Persistent spawn-PID registry at `~/.claude/command-center/spawned-pids.json`
+  plus a startup sweep that reattaches surviving headless `claude -p` children
+  after a server restart. Previously the in-memory tracking dict was wiped on
+  restart, leaving live orphans unreachable from the dashboard ("Send failed:
+  unknown pid") until the user manually killed them. The sweep verifies each
+  recorded PID is still alive *and* still belongs to a `claude` process (PID
+  reuse defence) before re-registering it; dead/reused entries are pruned so
+  the registry doesn't grow forever. Pattern adapted from
+  comfortablynumb/claudito (MIT). No orphan is ever killed — reattach only.
+
 ## [0.1.3] - 2026-04-24
 
 ### Added
