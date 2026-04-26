@@ -1585,6 +1585,16 @@
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
     font-size: 11px; outline: none; max-width: 220px;
   }
+  /* Generic action button in the layout-agnostic topbar (Titles, View …).
+     Matches the size of the repo picker so the row reads as one strip. */
+  .ccc-topbar .topbar-btn {
+    padding: 4px 8px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    font-size: 11px; cursor: pointer; white-space: nowrap;
+    line-height: 1.4;
+  }
+  .ccc-topbar .topbar-btn:hover { background: var(--surface-2); }
+  .ccc-topbar .topbar-btn.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
   .ccc-setup-banner {
     flex: 1; display: none; align-items: center;
     padding: 0 10px; border-left: 1px solid var(--border);
@@ -2103,9 +2113,12 @@
             && localStorage.getItem('clv-kanban-view') !== null) {
           localStorage.setItem('ccc-kanban-view', localStorage.getItem('clv-kanban-view'));
         }
-        if (localStorage.getItem('ccc-kanban-view') === 'true') {
-          document.body.classList.add('kanban-split');
-        }
+        // The split-pane kanban layout (#kanbanLayout, gated on body.kanban-split)
+        // is no longer engaged by the user-facing toggle — the Board button now
+        // only swaps the sidebar's list ↔ kanban-board view, leaving .main
+        // visible always. Adding the class here hides .main via the
+        // `body.kanban-split .main { display: none }` rule below, so the FOIT
+        // pre-paint of the class is intentionally skipped now.
         // Apply persisted appearance (theme + font) before first paint to
         // avoid a flash of wrong theme.
         const themePref = localStorage.getItem('ccc-theme') || 'system';
@@ -2173,6 +2186,18 @@
     <button type="button" id="bugReportLink" class="bug-link" title="Report a bug or request a feature. Files a GitHub issue against amirfish1/claude-command-center.">
       &#9873; Report a bug
     </button>
+    <button id="kptSummarizeAllBtn" class="topbar-btn" title="Use Claude haiku to generate concise titles for every card whose name hasn't been touched. Runs in the background, ~3 cards in parallel." aria-label="Summarize titles for all unnamed cards">&#10024; Titles</button>
+    <!-- View menu — collapses three rarely-changed toggles (Last 10h /
+         Compact / GitHub only) into one disclosure popover. -->
+    <div class="kpt-view-menu-wrap" style="position:relative;">
+      <button id="kptViewMenuBtn" class="topbar-btn" title="View options" aria-haspopup="true" aria-expanded="false">View &#9662;</button>
+      <div id="kptViewMenu" style="display:none;position:absolute;top:calc(100% + 4px);right:0;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px;min-width:160px;z-index:50;box-shadow:0 4px 16px rgba(0,0,0,0.4);flex-direction:column;gap:4px;">
+        <button id="kptRecentBtn" title="Show only sessions/issues touched in the last 10 hours" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Last 10h</button>
+        <button id="kptDescToggle" title="Compact mode — hide the description preview on cards" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Compact</button>
+        <button id="kptGitOnlyToggle" title="Show only cards linked to a GitHub issue" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">GitHub only</button>
+        <label class="kpt-label" title="Spawn via Pkood (background agent runner) instead of headless Claude — see docs" style="display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text);"><input type="checkbox" id="kptPkoodToggle" style="margin:0;"> pkood spawn</label>
+      </div>
+    </div>
     <div id="setupBanner" class="ccc-setup-banner"></div>
   </div>
 
@@ -2210,6 +2235,17 @@
         <div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Loading...</div>
       </div>
       <div class="kanban-board" id="kanbanBoard" style="display:none;"></div>
+    </div>
+    <div class="attention-panel collapsed" id="attentionPanel">
+      <div class="attention-resize-handle" id="attentionResizeHandle" title="Drag up to resize · double-click to reset"></div>
+      <div class="attention-header">
+        <span class="att-title-label">Needs your attention</span>
+        <span class="att-count" id="attentionCount"></span>
+        <button id="attentionRefreshBtn" title="Force refresh — busts GH state cache and re-queries" style="margin-left:auto;font-size:13px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;line-height:1;">&#8634;</button>
+        <button id="attentionSeeAllBtn" title="Show every candidate, including stale ones" style="font-size:11px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;">See all</button>
+        <button class="att-toggle" id="attentionToggle" title="Collapse / expand" aria-label="Toggle Needs Your Attention panel">&#9662;</button>
+      </div>
+      <div class="attention-list" id="attentionList"></div>
     </div>
     <div class="watcher-panel" id="watcherPanel">
       <div class="watcher-header" title="Polls GitHub every 60s for issues labeled `claude-fix` and auto-spawns a headless session per issue. Off by default — start it explicitly.">
@@ -2307,22 +2343,8 @@
       <div class="kanban-panel-toolbar">
         <input type="text" class="kpt-search" id="kptSearch" placeholder="Search sessions...">
         <button id="kptRefreshBtn" title="Refresh data" aria-label="Refresh data">&#8634;</button>
-        <button id="kptSummarizeAllBtn" title="Use Claude haiku to generate concise titles for every card whose name hasn't been touched. Runs in the background, ~3 cards in parallel." aria-label="Summarize titles for all unnamed cards">&#10024; Titles</button>
         <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
         <button id="kptRunBtn" title="Run new session" aria-label="Run new session">Run</button>
-        <!-- View menu — collapses three rarely-changed toggles (Last 10h /
-             Compact / GitHub only) into one disclosure to declutter the
-             primary toolbar. The buttons themselves stay in DOM so existing
-             handlers keep working; we just hide them inside a popover. -->
-        <div class="kpt-view-menu-wrap" style="position:relative;">
-          <button id="kptViewMenuBtn" title="View options" aria-haspopup="true" aria-expanded="false">View &#9662;</button>
-          <div id="kptViewMenu" style="display:none;position:absolute;top:calc(100% + 4px);right:0;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px;min-width:160px;z-index:50;box-shadow:0 4px 16px rgba(0,0,0,0.4);flex-direction:column;gap:4px;">
-            <button id="kptRecentBtn" title="Show only sessions/issues touched in the last 10 hours" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Last 10h</button>
-            <button id="kptDescToggle" title="Compact mode — hide the description preview on cards" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Compact</button>
-            <button id="kptGitOnlyToggle" title="Show only cards linked to a GitHub issue" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">GitHub only</button>
-            <label class="kpt-label" title="Spawn via Pkood (background agent runner) instead of headless Claude — see docs" style="display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text);"><input type="checkbox" id="kptPkoodToggle" style="margin:0;"> pkood spawn</label>
-          </div>
-        </div>
         <button id="kptListViewBtn" title="Switch to list view" aria-label="Switch to list view">&#9783;</button>
         <span class="kpt-deploy" id="kptDeployStatus" title="Vercel deploy status" style="margin-left:auto;font-size:11px;display:flex;align-items:center;gap:4px;color:var(--text-muted);white-space:nowrap;"></span>
         <button id="kptOpenConvBtn" class="panel-toggle-btn" title="Show conversation panel (⌘\)" aria-label="Show conversation panel" style="display:none;">
@@ -2333,17 +2355,6 @@
         </button>
       </div>
       <div class="kanban-board-split" id="kanbanBoardSplit"></div>
-      <div class="attention-panel collapsed" id="attentionPanel">
-        <div class="attention-resize-handle" id="attentionResizeHandle" title="Drag up to resize · double-click to reset"></div>
-        <div class="attention-header">
-          <span class="att-title-label">Needs your attention</span>
-          <span class="att-count" id="attentionCount"></span>
-          <button id="attentionRefreshBtn" title="Force refresh — busts GH state cache and re-queries" style="margin-left:auto;font-size:13px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;line-height:1;">&#8634;</button>
-          <button id="attentionSeeAllBtn" title="Show every candidate, including stale ones" style="font-size:11px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;">See all</button>
-          <button class="att-toggle" id="attentionToggle" title="Collapse / expand" aria-label="Toggle Needs Your Attention panel">&#9662;</button>
-        </div>
-        <div class="attention-list" id="attentionList"></div>
-      </div>
       <button class="kanban-reload-btn" id="kanbanReloadBtn" title="Reload page">&#8634;</button>
     </div>
     <div class="split-resizer" id="splitResizer"></div>
@@ -3564,31 +3575,22 @@
     applyConvFontScale();
   });
 
+  // The Sessions/Issues tab bar was removed. switchTab() is kept as a no-op
+  // so legacy call sites (e.g. fix-issue flow) don't crash; behaviour is
+  // always the sessions view now. The Issue Watcher panel in the sidebar is
+  // controlled by APP_CONFIG.watcher_enabled, not by tab state.
   function switchTab(tab) {
     activeTab = tab;
-    $tabIssues.classList.toggle('active', tab === 'issues');
-    $tabSessions.classList.toggle('active', tab === 'sessions');
-    $issuesView.style.display = tab === 'issues' ? '' : 'none';
-    if ($convToolbar) $convToolbar.style.display = tab === 'sessions' ? '' : 'none';
-    $conversationsView.style.display = tab === 'sessions' ? '' : 'none';
-    // Show/hide sidebar sections
-    $convListPanel.style.display = tab === 'sessions' ? 'flex' : 'none';
-    if ($watcherPanel) $watcherPanel.style.display = tab === 'sessions' ? 'none' : '';
     if (tab === 'sessions' && !conversationsLoaded) {
       loadConversationList();
     }
-    // Stop SSE stream when leaving sessions tab
     if (tab !== 'sessions') {
       stopConvStream();
     }
-    // Re-apply the current session to the newly-active toolbar's buttons
     updateResumeButton();
     updateJumpButton();
     updateInputBar();
-    if (typeof updateSplitToolbar === 'function') updateSplitToolbar();
   }
-  $tabIssues.addEventListener('click', () => switchTab('issues'));
-  $tabSessions.addEventListener('click', () => switchTab('sessions'));
 
   // ── Conversations ──
   let conversationsData = [];
@@ -6011,7 +6013,11 @@
   }
   function updateKanbanToggle() {
     if ($convKanbanToggle) $convKanbanToggle.classList.toggle('active', kanbanView);
-    activateSplitMode(kanbanView);
+    // The split-pane kanban layout was retired in favour of swapping the
+    // sidebar's list↔kanban-board view inline (so .main stays visible in
+    // both modes). Always passing `false` here also clears any leftover
+    // body.kanban-split class from older versions or in-flight FOIT.
+    activateSplitMode(false);
   }
   updateKanbanToggle();
   // Apply initial state if kanban was persisted on
@@ -6885,6 +6891,10 @@
   let issuesData = [];
 
   async function loadIssues() {
+    // Issues tab was removed; the dedicated /api/issues view no longer exists
+    // in the UI. The Issue Watcher (sidebar panel) polls GitHub directly for
+    // spawn purposes; it doesn't depend on this function.
+    if (!$issuesView) return;
     try {
       const res = await fetch('/api/issues');
       issuesData = await res.json();
@@ -6895,6 +6905,7 @@
   }
 
   function renderIssues(issues) {
+    if (!$issuesView) return;
     if (!issues.length) {
       $issuesView.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;line-height:1.6;">'
         + 'No GitHub issues found.<br><br>'
@@ -8847,13 +8858,10 @@
     });
   }
 
-  // Init — default to Sessions tab
+  // Init
   loadConversationList();
-  // Hide sidebar sections that don't apply to Sessions
-  if ($watcherPanel) $watcherPanel.style.display = 'none';
-  // Lazy-load the issues tab data
-  loadIssues();
-  startIssuesPolling();
+  // Issue Watcher panel visibility is controlled by APP_CONFIG.watcher_enabled
+  // (set earlier in the load sequence), not by tab state.
   pollWatcher();
   pollVercelDeploy();
   setInterval(pollVercelDeploy, 15000);

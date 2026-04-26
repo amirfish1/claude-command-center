@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared `--accent` colour) instead of green, so they read as
   "the human's turn" rather than blending with the cyan "result"
   rows. Assistant messages stay purple, results stay cyan.
+- Sessions/Issues tabs removed from the main pane. The dedicated `/api/issues`
+  view (and its tab bar) is gone — GitHub issues are still surfaced via the
+  Issue Watcher panel in the sidebar, which now isn't gated on a tab being
+  active. The "← Back" mobile button moved into `convToolbar`.
+- "Needs your attention" panel relocated from the dead split-kanban layout
+  into the sidebar (between the conversation list and the Issue Watcher
+  panel). It's still collapsed-by-default and still drag-resizable.
+- "View" filter menu (Last 10h / Compact / GitHub-only / pkood spawn) and
+  "✨ Titles" bulk-summarize button relocated from the dead split-kanban
+  toolbar into the layout-agnostic `.ccc-topbar`. Generic
+  `.ccc-topbar .topbar-btn` style added so the new entries match the repo
+  picker visually.
+
+### Fixed
+- Clicking a kanban card opens the conversation in the main pane again. The
+  card-click path went through `getConvView()`, which until now still routed
+  to the dead split-pane (`$convPanelView`) when `kanbanView=true`, so the
+  conversation rendered into an invisible element and the right pane stayed
+  on the empty state.
 
 ### Added
 - **Live "what's running" signal on cards and chat pane.** The kanban card now
