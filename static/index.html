@@ -1782,7 +1782,15 @@
     .split-resizer { display: none !important; }
 
     .conv-panel {
-      position: fixed !important; inset: 0; z-index: 900;
+      position: fixed !important;
+      top: 0; left: 0; right: 0; bottom: auto;
+      /* Use the dynamic viewport so the panel resizes with iOS Safari's
+         URL bar and on-screen keyboard — otherwise the input bar slides
+         off-screen and the user can't see "Send to terminal…". */
+      height: 100vh; height: 100dvh;
+      padding-bottom: env(safe-area-inset-bottom);
+      box-sizing: border-box;
+      z-index: 900;
       width: 100% !important; min-width: 0 !important;
       background: var(--bg);
       transform: translateY(100%); transition: transform 0.2s ease-out;

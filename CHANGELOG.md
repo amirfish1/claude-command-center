@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowlist when set. There is still no auth — every entry is a peer that
   can run commands as you.
 
+### Fixed
+- Mobile: "Send to terminal…" input bar in the conversation panel was
+  invisible on iOS Safari — the panel used `position: fixed; inset: 0`
+  with no safe-area / dynamic-viewport handling, so the bottom of the
+  panel (where the input lives) sat under the URL bar and home
+  indicator. Now uses `100dvh` and `padding-bottom:
+  env(safe-area-inset-bottom)` so the input stays visible above both,
+  and resizes when the on-screen keyboard opens.
+
 ## [0.1.3] - 2026-04-24
 
 ### Added
