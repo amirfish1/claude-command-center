@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the empty state.
 
 ### Added
+- Surface `~/.claude/tasks/<session_id>/*.json` (Claude Code's native TodoWrite
+  output) as backlog cards. One card per session — title taken from the
+  in-progress task (falls back to first pending, then most-recent completed),
+  with a small `task` source-tag and `done/total` counts. Sessions already
+  represented on the board are skipped to avoid dups.
 - **Notification hook drives a real Needs-Approval signal.** A new `Notification`
   hook (`hooks/notification.py`) writes a `<sid>_needs_approval.json` marker
   whenever Claude Code asks the user for permission; PostToolUse clears it. The
