@@ -1228,6 +1228,34 @@
     display: inline-block; font-size: 12px; padding: 2px 6px; border-radius: 3px;
     background: rgba(188, 140, 255, 0.15); color: var(--purple);
   }
+  /* Worktree-flavoured branch pill — orange palette + 🌿 leaf so
+     the row can be scanned at a glance for "is this session editing in
+     a worktree?". Same shape as the default badge. */
+  .conv-item .branch-badge.is-worktree {
+    background: rgba(210, 153, 34, 0.15);
+    color: var(--orange, #d29922);
+  }
+  /* Archived section header at the bottom of the sidebar list. The
+     button is the entire row; click toggles the .collapsed class on
+     the parent .conv-archived-section, which hides .conv-archived-list
+     via the rule below. Caret rotates without an animation — keep it
+     boring, the section is supposed to be quiet. */
+  #convList .conv-archived-section { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 6px; }
+  #convList .conv-archived-header {
+    width: 100%; display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px; background: transparent; border: 0; cursor: pointer;
+    color: var(--text-muted); font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.5px; font-weight: 600;
+  }
+  #convList .conv-archived-header:hover { color: var(--text); }
+  #convList .conv-archived-arrow { font-size: 11px; opacity: 0.7; }
+  #convList .conv-archived-count {
+    margin-left: auto;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1px 8px; font-size: 11px;
+    color: var(--text-muted); font-weight: 600;
+  }
+  #convList .conv-archived-section.collapsed .conv-archived-list { display: none; }
   .conv-item .live-dot {
     width: 7px; height: 7px; border-radius: 50%;
     background: var(--green); animation: pulse 2s infinite;
@@ -2315,6 +2343,17 @@
   }
   .ccc-topbar .topbar-btn:hover { background: var(--surface-2); }
   .ccc-topbar .topbar-btn.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
+  /* Subagent-worktree alert dot. Triggered when superpowers / orchestration
+     skills have spawned locked agent worktrees (worktrees_agent_count > 0
+     from /api/repo/worktrees). Pulls attention to the topbar Worktrees
+     button without each session row repeating the count. */
+  .ccc-topbar .topbar-btn.has-agent-worktrees { position: relative; }
+  .ccc-topbar .topbar-btn.has-agent-worktrees::after {
+    content: ''; position: absolute; top: 2px; right: 2px;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--orange, #d29922);
+    box-shadow: 0 0 0 1.5px var(--bg);
+  }
   /* Right-aligned action cluster on the sidebar's "Claude Command
      Center" row — Board / archive / sort / refresh. Sits next to the
      header label so the empty space to the right of the title gets used. */
@@ -3800,6 +3839,29 @@
         sidecarTs: data.sidecar_ts || 0,
         sidecarInFlight: !!data.sidecar_in_flight,
       };
+      // Mirror the freshly-fetched sidecar fields back into the cached
+      // sidebar row so the left list catches up to the right pane on
+      // the same 5s tick. Without this, the row's yellow live-tool pill
+      // and truly-active glow lag by up to the bulk /api/sessions
+      // interval (10s) — long enough that users notice the right pane
+      // lighting up before the left does. Only the active session is
+      // mirrored; other rows still update on the bulk poll.
+      if (currentSession.id && Array.isArray(conversationsData)) {
+        const row = conversationsData.find(
+          (c) => c.session_id === currentSession.id || c.id === currentSession.id,
+        );
+        if (row) {
+          row.is_live = !!data.live;
+          row.sidecar_tool = data.sidecar_tool || null;
+          row.sidecar_file = data.sidecar_file || null;
+          row.sidecar_status = data.sidecar_status || null;
+          row.sidecar_ts = data.sidecar_ts || 0;
+          row.sidecar_in_flight = !!data.sidecar_in_flight;
+          if (typeof renderSidebar === 'function' && typeof filterConversations === 'function' && typeof $convSearch !== 'undefined' && $convSearch) {
+            renderSidebar(filterConversations($convSearch.value));
+          }
+        }
+      }
     } catch (err) {
       liveStatus = { live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false };
     }
@@ -3825,6 +3887,35 @@
   // hits send so they see motion before /api/session-status (5s poll)
   // catches up to the real sidecar event. Auto-removed once the real
   // indicator lands, or on a 60s safety timeout.
+
+  // Session IDs that just had a message sent to them — used to render a
+  // matching "Sending…" pill on the sidebar row so the left list mirrors
+  // the right pane's optimistic indicator. Cleared when real sidecar data
+  // lands (via clearOptimisticAgentIndicator) or after the 60s safety
+  // timeout. Each entry: { ts, timer }.
+  const _sendingSessions = new Map();
+  const _SENDING_TIMEOUT_MS = 60000;
+  function markSessionSending(sid) {
+    if (!sid) return;
+    const existing = _sendingSessions.get(sid);
+    if (existing && existing.timer) clearTimeout(existing.timer);
+    const timer = setTimeout(() => clearSessionSending(sid), _SENDING_TIMEOUT_MS);
+    _sendingSessions.set(sid, { ts: Date.now(), timer });
+    if (typeof renderSidebar === 'function' && typeof filterConversations === 'function' && typeof $convSearch !== 'undefined' && $convSearch) {
+      renderSidebar(filterConversations($convSearch.value));
+    }
+  }
+  function clearSessionSending(sid) {
+    if (!sid) return;
+    const entry = _sendingSessions.get(sid);
+    if (!entry) return;
+    if (entry.timer) clearTimeout(entry.timer);
+    _sendingSessions.delete(sid);
+    if (typeof renderSidebar === 'function' && typeof filterConversations === 'function' && typeof $convSearch !== 'undefined' && $convSearch) {
+      renderSidebar(filterConversations($convSearch.value));
+    }
+  }
+
   let _optimisticAgentTimer = null;
   function showOptimisticAgentIndicator($view) {
     if (!$view) return;
@@ -3870,8 +3961,10 @@
       if (inline) inline.remove();
       return;
     }
-    // Real data arrived — drop the optimistic placeholder.
+    // Real data arrived — drop the optimistic placeholder (right pane)
+    // and the matching "Sending..." pill on the sidebar row.
     clearOptimisticAgentIndicator($view);
+    if (currentSession.id) clearSessionSending(currentSession.id);
     const file = liveStatus.sidecarFile || '';
     const shortFile = file
       ? (file.length > 60 ? '…' + file.slice(-59) : file)
@@ -4105,6 +4198,10 @@
           // once a real sidecar event lands; otherwise self-removes after
           // 60s in case the agent never came up.
           showOptimisticAgentIndicator($view);
+          // Mirror the optimistic "Sending..." indicator onto the
+          // sidebar row so the left list shows the same yellow-glow
+          // immediate feedback the right pane shows.
+          if (currentSession.id) markSessionSending(currentSession.id);
           $view.scrollTop = $view.scrollHeight;
           _pendingSends.push({ text, element: pendingDiv });
         }
@@ -6930,21 +7027,20 @@
       const days = Math.round(gapH / 24);
       return days + (days === 1 ? ' day gap' : ' days gap');
     };
-    $convList.innerHTML = convs.map((c, i, arr) => {
-      let separator = '';
-      if (i > 0) {
-        const prev = arr[i - 1];
-        const newer = (prev && prev.modified) || 0;
-        const older = (c.modified) || 0;
-        if (newer && older && (newer - older) >= GAP_SEPARATOR_S) {
-          separator = '<div class="conv-gap-separator">'
-            + '<span class="conv-gap-line"></span>'
-            + '<span class="conv-gap-label">' + escapeHtml(_gapLabel(newer, older)) + '</span>'
-            + '<span class="conv-gap-line"></span>'
-            + '</div>';
-        }
-      }
-      return separator + (function () {
+    // Split rows into the active group (everything not classified as
+    // archived in the kanban sense) and the archived group (everything
+    // that would land in kanban's Archived column). The user's mental
+    // model is "archive button drops the row to the bottom" — a fixed
+    // section header makes that destination visible. Same source of
+    // truth as the kanban so tapping archive in either view yields the
+    // same resting place.
+    const _activeConvs = [];
+    const _archivedConvs = [];
+    for (const c of convs) {
+      if (classifyKanbanColumn(c) === 'archived') _archivedConvs.push(c);
+      else _activeConvs.push(c);
+    }
+    const _renderRow = (c) => {
       const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
       const rawTitle = c.display_name || (cleanFirst ? firstSentenceOf(cleanFirst, 60) : '(untitled)');
       const title = rawTitle.replace(/-/g, ' ');
@@ -6961,12 +7057,38 @@
         askHtml = '<div class="conv-last">' + escapeHtml(cleanFirst.slice(0, 100)) + '</div>';
       }
       const ask = askHtml;
-      const branch = c.branch ? '<span class="branch-badge">' + escapeHtml(c.branch) + '</span>' : '';
+      // Branch pill: shows where this session's edits actually land.
+      //   1. effective_branch (tool-call inference) wins when present.
+      //   2. else session_cwd_is_worktree → c.branch in worktree style.
+      //   3. else c.branch in default purple badge.
+      // Worktree flavour gets the orange palette + 🌿 leaf so a row
+      // can be scanned at a glance.
+      const isWorktree =
+        c.effective_kind === 'worktree' ||
+        (!c.effective_branch && c.session_cwd_is_worktree);
+      const branchValue = c.effective_branch || c.branch || '';
+      const branchTitleAttr = c.effective_branch
+        ? 'git worktree (inferred from tool-call paths)'
+        : (isWorktree ? 'git worktree' : 'shared clone');
+      const branchCls = isWorktree ? 'branch-badge is-worktree' : 'branch-badge';
+      const branchIcon = isWorktree ? '🌿 ' : '';
+      const branch = branchValue
+        ? '<span class="' + branchCls + '" title="' + branchTitleAttr + '">' + branchIcon + escapeHtml(branchValue) + '</span>'
+        : '';
       // Live "what is the agent doing right now" pill — same data and
       // freshness rules as the kanban card's .kanban-live-tool, just
       // squeezed onto the row's title line so compact rows stay scannable.
+      // Sending pill takes precedence: when the user just hit send and
+      // we're waiting for the first sidecar event, show "Sending…" so
+      // the row mirrors the right pane's optimistic indicator. Cleared
+      // by clearSessionSending when real sidecar data lands.
       let liveToolHtml = '';
-      if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool) {
+      const sidVal = c.session_id || c.id;
+      if (sidVal && _sendingSessions.has(sidVal)) {
+        liveToolHtml = '<span class="conv-live-tool sending" title="Sending — waiting for the first response from the agent">'
+          + '<span class="conv-live-name">● Sending&hellip;</span>'
+          + '</span>';
+      } else if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool) {
         const sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
         if (sidecarAge < 300) {
           // Row view stays compact: tool name only, no file path. The
@@ -6990,37 +7112,29 @@
       const rel = relativeTime(c.last_interacted || c.modified);
       const active = currentConversation === c.id ? ' active' : '';
 
-      // Session signals
+      // Session signals \u2014 minimal by design. Two distinct chip sets so
+      // the sidebar stays scannable:
+      //   - pkood rows: pkood agents have their own state machine
+      //     (running / idle / blocked / stuck) that the live-tool pill
+      //     can't represent. Keep all four.
+      //   - claude rows: only lifecycle chips that flag something the
+      //     user can't see elsewhere. `committed` = local commits the
+      //     user hasn't pushed; `pushed` = a PR likely exists. Live
+      //     activity ("working", pending-tool, etc.) is already covered
+      //     by the yellow live-tool pill on the same row, so no chip
+      //     for that. Default: zero chips. `planning` and `coding` were
+      //     defaults in signal clothing; both retired.
       let signals = '';
       if (c.source === 'pkood') {
-        // Pkood status signals
         const ps = (c.pkood_status || '').toUpperCase();
         if (ps === 'RUNNING') signals += '<span class="conv-signal pkood-running">running</span>';
         else if (ps === 'IDLE') signals += '<span class="conv-signal pkood-idle">idle</span>';
         else if (ps === 'BLOCKED') signals += '<span class="conv-signal pkood-blocked">blocked</span>';
         if (c.pkood_is_stuck) signals += '<span class="conv-signal pkood-stuck">stuck</span>';
-      } else {
-        const stage = sessionStage(c);
-        const stageCls = stageClass(stage);
-        signals += '<span class="conv-signal ' + stageCls + '">' + stage + '</span>';
-
-        // Activity: working / blocked on approval / waiting for input / idle
-        const ageSec = Date.now() / 1000 - c.modified;
-        let activity, actClass;
-        if (c.pending_tool && c.last_event_type === 'assistant' && ageSec > 10 && ageSec < 300 && !c.sidecar_status) {
-          const shortFile = c.pending_file ? c.pending_file.split('/').pop() : '';
-          activity = '\u23f3 ' + c.pending_tool + (shortFile ? ': ' + shortFile : '');
-          actClass = 'activity-blocked';
-        } else if (ageSec < 30 && c.last_event_type === 'assistant') {
-          activity = 'working'; actClass = 'activity-working';
-        } else if (ageSec < 120 && c.last_event_type === 'result') {
-          activity = 'waiting for input'; actClass = 'activity-waiting';
-        } else if (ageSec < 300) {
-          activity = 'idle'; actClass = 'activity-idle';
-        } else {
-          activity = ''; actClass = '';
-        }
-        if (activity) signals += '<span class="conv-signal ' + actClass + '">' + escapeHtml(activity) + '</span>';
+      } else if (c.has_push) {
+        signals += '<span class="conv-signal pushed">pushed</span>';
+      } else if (c.has_commit) {
+        signals += '<span class="conv-signal committed">committed</span>';
       }
 
       return '<div class="conv-item' + active + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
@@ -7039,8 +7153,58 @@
         + '</div>'
         + ask
       + '</div>';
-      })();
+    };
+    // Active list keeps the date-gap separators so morning/evening
+    // boundaries stay visible while scanning.
+    const _activeHtml = _activeConvs.map((c, i, arr) => {
+      let separator = '';
+      if (i > 0) {
+        const newer = (arr[i - 1] && arr[i - 1].modified) || 0;
+        const older = (c.modified) || 0;
+        if (newer && older && (newer - older) >= GAP_SEPARATOR_S) {
+          separator = '<div class="conv-gap-separator">'
+            + '<span class="conv-gap-line"></span>'
+            + '<span class="conv-gap-label">' + escapeHtml(_gapLabel(newer, older)) + '</span>'
+            + '<span class="conv-gap-line"></span>'
+            + '</div>';
+        }
+      }
+      return separator + _renderRow(c);
     }).join('');
+    // Archived section: always present so the destination is obvious,
+    // collapsed by default so it doesn't crowd the active list. State
+    // persists in localStorage. No gap separators inside — archived
+    // rows are a single block, the user's done with timing.
+    let _archivedHtml = '';
+    if (_archivedConvs.length > 0) {
+      const _arcCollapsed = localStorage.getItem('ccc-archived-collapsed') !== '0';
+      const _arcArrow = _arcCollapsed ? '▸' : '▾';
+      const _arcRows = _archivedConvs.map(_renderRow).join('');
+      _archivedHtml =
+        '<div class="conv-archived-section' + (_arcCollapsed ? ' collapsed' : '') + '" data-role="archived-section">'
+        + '<button type="button" class="conv-archived-header" data-role="archived-toggle" aria-expanded="' + (!_arcCollapsed) + '">'
+        +   '<span class="conv-archived-arrow">' + _arcArrow + '</span>'
+        +   '<span class="conv-archived-label">Archived</span>'
+        +   '<span class="conv-archived-count">' + _archivedConvs.length + '</span>'
+        + '</button>'
+        + '<div class="conv-archived-list">' + _arcRows + '</div>'
+        + '</div>';
+    }
+    $convList.innerHTML = _activeHtml + _archivedHtml;
+    // Toggle handler for the Archived section header.
+    const $archivedToggle = $convList.querySelector('[data-role="archived-toggle"]');
+    if ($archivedToggle) {
+      $archivedToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const section = $archivedToggle.closest('[data-role="archived-section"]');
+        if (!section) return;
+        const wasCollapsed = section.classList.toggle('collapsed');
+        localStorage.setItem('ccc-archived-collapsed', wasCollapsed ? '1' : '0');
+        const arrowEl = $archivedToggle.querySelector('.conv-archived-arrow');
+        if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
+        $archivedToggle.setAttribute('aria-expanded', String(!wasCollapsed));
+      });
+    }
     $convList.querySelectorAll('.conv-item').forEach(el => {
       el.addEventListener('click', (ev) => {
         // Ignore clicks that started the inline editor, archive button,
@@ -8170,75 +8334,68 @@
       slot.classList.toggle('visible', !!_usageData);
       return;
     }
-    const path = w.cwd;
-    const tilde = path.replace(/^\/Users\/[^/]+/, '~');
+    // Show ONE pill per session: where Claude's edits are actually
+    // landing. Prefer the tool-call-inferred effective cwd (the truth
+    // when subagents / `cd` move the session out of its launch dir);
+    // fall back to the launch cwd when no inference applies. The
+    // launch cwd is no longer surfaced as a separate pill — the strip
+    // is supposed to answer "where does this session's Edit go?", not
+    // "where was it started from?".
+    const useEff = !!w.effective_cwd;
+    const pillPath = useEff ? w.effective_cwd : w.cwd;
+    const tilde = pillPath.replace(/^\/Users\/[^/]+/, '~');
+    const pillBranch = useEff ? w.effective_branch : w.branch;
+    const pillAhead = useEff ? w.effective_commits_ahead : w.commits_ahead;
+    const pillBehind = useEff ? w.effective_commits_behind : w.commits_behind;
+    const inferTitle = useEff
+      ? ' (inferred from ' + (w.effective_path_count || 0) + '/' + (w.effective_total_paths || 0) + ' tool-call paths)'
+      : '';
     const parts = [];
-    if (w.is_worktree) {
-      parts.push('<span class="wp-kind wp-kind-worktree" title="worktree (not the shared clone)">worktree</span>');
+    let kindCls, kindLabel, kindTitle;
+    if (useEff) {
+      if (w.effective_kind === 'worktree') {
+        kindCls = 'wp-kind-worktree'; kindLabel = 'worktree';
+        kindTitle = 'git worktree' + inferTitle;
+      } else {
+        kindCls = 'wp-kind-clone'; kindLabel = 'shared clone';
+        kindTitle = 'shared clone — main repo working tree' + inferTitle;
+      }
+    } else if (w.is_worktree) {
+      kindCls = 'wp-kind-worktree'; kindLabel = 'worktree';
+      kindTitle = 'worktree (not the shared clone)';
     } else if (w.is_repo) {
-      parts.push('<span class="wp-kind wp-kind-clone" title="shared clone — main repo working tree">shared clone</span>');
+      kindCls = 'wp-kind-clone'; kindLabel = 'shared clone';
+      kindTitle = 'shared clone — main repo working tree';
     } else if (w.exists) {
-      parts.push('<span class="wp-kind wp-kind-other" title="cwd exists but is not a git repo — Claude\'s git commands will fail unless it shells into a repo">not a git repo</span>');
+      kindCls = 'wp-kind-other'; kindLabel = 'not a git repo';
+      kindTitle = "cwd exists but is not a git repo — Claude's git commands will fail unless it shells into a repo";
     } else {
-      parts.push('<span class="wp-kind wp-kind-other" title="cwd does not exist on disk">cwd missing</span>');
+      kindCls = 'wp-kind-other'; kindLabel = 'cwd missing';
+      kindTitle = 'cwd does not exist on disk';
     }
-    if (w.branch) {
-      parts.push('<span class="wp-icon">⎇</span><span class="wp-branch">' + escapeHtml(w.branch) + '</span>');
+    parts.push('<span class="wp-kind ' + kindCls + '" title="' + escapeHtml(kindTitle) + '">' + kindLabel + '</span>');
+    if (pillBranch) {
+      parts.push('<span class="wp-icon">⎇</span><span class="wp-branch">' + escapeHtml(pillBranch) + '</span>');
     }
-    if (w.commits_ahead != null || w.commits_behind != null) {
-      const a = w.commits_ahead || 0;
-      const b = w.commits_behind || 0;
+    if (pillAhead != null || pillBehind != null) {
+      const a = pillAhead || 0;
+      const b = pillBehind || 0;
       if (a > 0) parts.push('<span class="wp-ahead">↑' + a + '</span>');
       if (b > 0) parts.push('<span class="wp-behind">↓' + b + '</span>');
-      if (a === 0 && b === 0 && w.branch) parts.push('<span class="wp-even">in sync</span>');
+      if (a === 0 && b === 0 && pillBranch) parts.push('<span class="wp-even">in sync</span>');
     }
-    const co = w.co_tenants || 0;
-    if (co > 0) {
-      parts.push('<span class="wp-cotenants" title="' + co + ' other live session(s) editing the same cwd">⚠ ' + co + ' other session' + (co === 1 ? '' : 's') + ' here</span>');
-    }
-    parts.push('<span class="wp-path" title="' + escapeHtml(path) + '">' + escapeHtml(tilde) + '</span>');
-
-    // Tool-call inference: when cwd isn't a usable repo (or is a totally
-    // different repo from where edits actually land), surface a second
-    // pill so the user can tell where Claude's writes are really going.
-    if (w.effective_cwd) {
-      const ePath = w.effective_cwd;
-      const eTilde = ePath.replace(/^\/Users\/[^/]+/, '~');
-      const evidence = (w.effective_path_count || 0) + '/' + (w.effective_total_paths || 0) + ' tool-call paths';
-      const eParts = [];
-      eParts.push('<span class="wp-eff-tag" title="inferred from ' + evidence + ' — not the launch cwd">via tool calls</span>');
-      if (w.effective_kind === 'worktree') {
-        eParts.push('<span class="wp-kind wp-kind-worktree">worktree</span>');
-      } else {
-        eParts.push('<span class="wp-kind wp-kind-clone">shared clone</span>');
+    // Co-tenants only meaningful for the literal cwd; skip when we
+    // moved to an inferred cwd via tool calls.
+    if (!useEff) {
+      const co = w.co_tenants || 0;
+      if (co > 0) {
+        parts.push('<span class="wp-cotenants" title="' + co + ' other live session(s) editing the same cwd">⚠ ' + co + ' other session' + (co === 1 ? '' : 's') + ' here</span>');
       }
-      if (w.effective_branch) {
-        eParts.push('<span class="wp-icon">⎇</span><span class="wp-branch">' + escapeHtml(w.effective_branch) + '</span>');
-      }
-      const ea = w.effective_commits_ahead || 0;
-      const eb = w.effective_commits_behind || 0;
-      if (ea > 0) eParts.push('<span class="wp-ahead">↑' + ea + '</span>');
-      if (eb > 0) eParts.push('<span class="wp-behind">↓' + eb + '</span>');
-      if (ea === 0 && eb === 0 && w.effective_branch) eParts.push('<span class="wp-even">in sync</span>');
-      eParts.push('<span class="wp-path" title="' + escapeHtml(ePath) + '">' + escapeHtml(eTilde) + '</span>');
-      parts.push('<span class="wp-eff-divider"></span>' + eParts.join(' '));
     }
+    parts.push('<span class="wp-path" title="' + escapeHtml(pillPath) + '">' + escapeHtml(tilde) + '</span>');
 
-    // Sibling worktrees of this session's repo. Surfaces "your subagent
-    // quietly forked a branch" cases: superpowers / orchestration skills
-    // auto-create locked worktrees the user may not realise exist.
-    const wts = w.worktrees || [];
-    if (wts.length > 0) {
-      const agentN = w.worktrees_agent_count || 0;
-      const manualN = w.worktrees_manual_count || 0;
-      const labelParts = [];
-      if (agentN > 0) labelParts.push(agentN + ' subagent');
-      if (manualN > 0) labelParts.push(manualN + ' manual');
-      const label = '+' + wts.length + ' worktree' + (wts.length === 1 ? '' : 's') +
-        (labelParts.length ? ' (' + labelParts.join(' · ') + ')' : '');
-      const cls = agentN > 0 ? 'wp-worktrees wp-worktrees-agent' : 'wp-worktrees';
-      parts.push('<button type="button" class="' + cls + '" data-action="open-worktrees" title="Click to view worktrees">🌿 ' + escapeHtml(label) + '</button>');
-    }
+    // Sibling-worktrees pill removed — topbar Worktrees button is the
+    // single entry point. Per-session repetition was just noise.
 
     wsSlot.innerHTML = parts.join(' ');
     slot.classList.add('visible');
@@ -8370,6 +8527,27 @@
     const $topbarBtn = document.getElementById('kptWorktreesBtn');
     if ($topbarBtn) $topbarBtn.addEventListener('click', openRepoWorktreesModal);
   })();
+
+  // Slow poll of /api/repo/worktrees so the topbar Worktrees button can
+  // flag subagent-spawned forks (locked agent worktrees that the user
+  // may not realise exist). 60s cadence is plenty — subagent worktrees
+  // accumulate on the timescale of multi-step orchestration tasks.
+  async function refreshWorktreesBadge() {
+    const $btn = document.getElementById('kptWorktreesBtn');
+    if (!$btn) return;
+    try {
+      const res = await fetch('/api/repo/worktrees');
+      const data = await res.json();
+      const agentN = (data && data.agent_count) || 0;
+      $btn.classList.toggle('has-agent-worktrees', agentN > 0);
+      const baseTitle = 'Show all worktrees of this repo, with an indicator for those that have uncommitted changes.';
+      $btn.title = agentN > 0
+        ? baseTitle + ' (' + agentN + ' subagent worktree' + (agentN === 1 ? '' : 's') + ' currently active)'
+        : baseTitle;
+    } catch (_) { /* network blip — leave the badge state alone */ }
+  }
+  refreshWorktreesBadge();
+  setInterval(refreshWorktreesBadge, 60000);
 
   // Token-usage pill — sibling of the workspace info in the same input-
   // context row. Shows latest input tokens out of the model's context
@@ -8875,11 +9053,10 @@
           : (c.modified || 0);
         if (ts < recentCutoff) return false;
       }
-      // Archive filter — in kanban mode, show all (kanban has its own Archived column)
-      if (!kanbanView) {
-        if (showArchived && !c.archived) return false;
-        if (!showArchived && c.archived) return false;
-      }
+      // Archive filter retired in list view: archived rows now sit in
+      // a dedicated Archived section at the bottom of the list, so the
+      // user always sees both groups (active above, archived below).
+      // Kanban has its own Archived column.
       // Git-only filter: cards without a linked issue are hidden
       if (window._gitOnlyFilter) {
         const hasIssue = c.linked_issue || c.issue_number || (c.id || '').startsWith('backlog-issue-');
