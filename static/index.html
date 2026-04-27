@@ -6761,17 +6761,26 @@
     const tmpl = document.querySelector('.conv-pane[data-pane-id="p1"]');
     const clone = tmpl.cloneNode(true);
     clone.setAttribute('data-pane-id', paneId);
-    // Empty state for the new pane; its conversation will be loaded by
-    // selectConversation(id, paneId) immediately after attach.
+    // Strip every id in the clone — HTML mandates id uniqueness, and any
+    // future code that does getElementById('convInput') etc. would resolve
+    // to p1's element, never the clone's. Task 6 will re-find the cloned
+    // chrome elements via class/tag selectors scoped to the clone.
+    clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+    // Replace the transcript with a Loading… empty state; the dropped
+    // conversation will be loaded by selectConversation(id, paneId)
+    // immediately after attach.
     const view = clone.querySelector('.conversations-view');
     if (view) {
-      view.id = '';                           // ids must be unique; only p1 keeps #conversationsView
       view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading…</div>';
     }
-    const inputBar = clone.querySelector('.conv-input-bar');
-    if (inputBar) inputBar.id = '';            // free the global id
+    // Hide the cloned workspace/usage strip — the pill renderers key off
+    // the singular #convInputContext id (which only p1 keeps), so the
+    // strip in cloned panes would render as empty space. Hiding it keeps
+    // the pane chrome clean. Re-engaging per-pane workspace pills is a
+    // potential follow-up; not required for v1.
     const ctxBar = clone.querySelector('.conv-input-context');
-    if (ctxBar) ctxBar.id = '';
+    if (ctxBar) ctxBar.style.display = 'none';
+    // Reveal the close button (was inline display:none in p1's static HTML).
     const closeBtn = clone.querySelector('[data-role="pane-close"]');
     if (closeBtn) closeBtn.style.display = '';
     return clone;
