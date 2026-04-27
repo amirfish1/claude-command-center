@@ -984,6 +984,22 @@
     opacity: 0.8;
     transition: opacity 0.4s ease-out;
   }
+  /* Diagnostic: render-time stamps so we can compare stdout-stream vs JSONL-tail
+     arrival order on screen. Temporary — remove once we hide the tail rows. */
+  .stream-block-text[data-render-ts]::before,
+  .stream-block-tool[data-render-ts]::before,
+  .stream-block-thinking[data-render-ts]::before {
+    content: '[S ' attr(data-render-ts) ']';
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 10px; color: var(--accent); opacity: 0.75;
+    margin-right: 6px;
+  }
+  .conversations-view .event[data-render-ts]::before {
+    content: '[J ' attr(data-render-ts) ']';
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 10px; color: var(--text-muted); opacity: 0.75;
+    margin-right: 6px; display: inline-block;
+  }
   .stream-bubble-settled .stream-bubble-header span:last-child::after {
     content: ' · settled';
     opacity: 0.7;
@@ -7986,6 +8002,14 @@
   let _streamingMsgId = null;        // current message_id we're appending into
   let _spawnLiveSid = null;          // session_id whose spawn we're tailing
 
+  // Diagnostic: HH:MM:SS.mmm for render-time comparison between stream and tail.
+  function nowStamp() {
+    const d = new Date();
+    const p2 = (n) => (n < 10 ? '0' + n : '' + n);
+    const p3 = (n) => (n < 10 ? '00' + n : n < 100 ? '0' + n : '' + n);
+    return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()) + '.' + p3(d.getMilliseconds());
+  }
+
   function setLiveBadgeVisible(visible) {
     const a = document.getElementById('liveBadgeConv');
     const b = document.getElementById('cpLiveBadge');
@@ -8115,12 +8139,14 @@
           } else {
             const div = document.createElement('div');
             div.className = 'stream-block-text';
+            div.dataset.renderTs = nowStamp();
             div.textContent = b.text || '';
             slot.appendChild(div);
           }
         } else if (b.type === 'tool_use') {
           const div = document.createElement('div');
           div.className = 'stream-block-tool';
+          div.dataset.renderTs = nowStamp();
           const summary = b.summary ? ' — ' + b.summary : '';
           div.innerHTML = '<span>⚙</span> <span class="stream-tool-name">'
             + escapeHtml(b.name || 'tool') + '</span>'
@@ -8132,6 +8158,7 @@
           if (!slot.querySelector('.stream-block-thinking')) {
             const div = document.createElement('div');
             div.className = 'stream-block-thinking';
+            div.dataset.renderTs = nowStamp();
             div.textContent = '(thinking…)';
             slot.appendChild(div);
           }
@@ -8748,6 +8775,7 @@
     for (const ev of events) {
       const div = document.createElement('div');
       div.className = 'event ' + ev.type;
+      div.dataset.renderTs = nowStamp();
 
       // Make the first user message sticky at the top
       if (ev.type === 'user_text' && !_firstUserMsgRendered) {
