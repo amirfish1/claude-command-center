@@ -234,6 +234,54 @@
   .toolbar .announce-btn-conv:hover { opacity: 0.9; }
   .toolbar .announce-btn-conv:active { transform: scale(0.97); }
   .toolbar .announce-btn-conv:disabled { opacity: 0.6; cursor: default; }
+  /* "⋯" overflow menu on the right side of the conv toolbar — currently
+     surfaces "Move to repo…" but designed to grow other per-session
+     actions later. */
+  .conv-overflow-wrap { position: relative; }
+  .conv-overflow-btn {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-muted); font-size: 16px; line-height: 1;
+    padding: 2px 9px; border-radius: 4px; cursor: pointer;
+    margin-left: 6px;
+  }
+  .conv-overflow-btn:hover { color: var(--text); background: var(--surface-2); }
+  .conv-overflow-menu {
+    display: none;
+    position: absolute; right: 0; top: calc(100% + 4px);
+    background: var(--surface);
+    border: 1px solid var(--border); border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+    min-width: 220px; max-width: 320px;
+    z-index: 50;
+    padding: 6px 0;
+  }
+  .conv-overflow-menu.open { display: block; }
+  .conv-overflow-menu .com-section-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-muted);
+    padding: 4px 12px;
+  }
+  .conv-overflow-menu .com-item {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; padding: 7px 12px;
+    background: transparent; border: none; cursor: pointer;
+    font-family: inherit; font-size: 13px; color: var(--text);
+    text-align: left;
+  }
+  .conv-overflow-menu .com-item:hover { background: var(--surface-2); }
+  .conv-overflow-menu .com-item.com-current {
+    color: var(--text-muted); cursor: default;
+  }
+  .conv-overflow-menu .com-item.com-current:hover { background: transparent; }
+  .conv-overflow-menu .com-divider {
+    height: 1px; background: var(--border); margin: 6px 0;
+  }
+  .conv-overflow-menu .com-repo-path {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 11px; color: var(--text-muted); margin-left: auto;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 180px;
+  }
 
   .content {
     flex: 1; overflow-y: auto; padding: 16px 20px;
@@ -2056,6 +2104,20 @@
   }
   .ccc-topbar .topbar-btn:hover { background: var(--surface-2); }
   .ccc-topbar .topbar-btn.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
+  /* Right-aligned action cluster on the sidebar's "Claude Command
+     Center" row — Board / archive / sort / refresh. Sits next to the
+     header label so the empty space to the right of the title gets used. */
+  .sidebar-header-actions {
+    display: flex; align-items: center; gap: 4px;
+    margin-left: auto;
+  }
+  .sidebar-header-actions .sh-btn {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-muted); font-size: 11px; font-family: inherit;
+    padding: 3px 8px; border-radius: 4px; cursor: pointer; line-height: 1.4;
+  }
+  .sidebar-header-actions .sh-btn:hover { background: var(--surface-2); color: var(--text); }
+  .sidebar-header-actions .sh-btn.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
   .ccc-setup-banner {
     flex: 1; display: none; align-items: center;
     padding: 0 10px; border-left: 1px solid var(--border);
@@ -2665,6 +2727,12 @@
     <div class="sidebar-header">
       <span class="dot"></span>
       <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
+      <div class="sidebar-header-actions">
+        <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Toggle Kanban board view" aria-label="Toggle Kanban board view"><span aria-hidden="true">&#9783;</span> Board</button>
+        <button class="conv-archive-toggle sh-btn" id="convArchiveToggle" title="Show archived">&#128230;</button>
+        <button class="conv-sort-btn sh-btn" id="convSortBtn" title="Sort by latest response (ignores custom order)">&#8693;</button>
+        <button class="conv-refresh-btn sh-btn" id="convRefreshBtn" title="Refresh conversation list">&#8634;</button>
+      </div>
     </div>
 
     <div class="sidebar-primary">
@@ -2686,10 +2754,6 @@
         <div class="search-wrap">
           <input type="text" id="convSearch" placeholder="Search conversations..." style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none;">
         </div>
-        <button class="conv-kanban-toggle" id="convKanbanToggle" title="Toggle Kanban board view" aria-label="Toggle Kanban board view"><span aria-hidden="true">&#9783;</span> Board</button>
-        <button class="conv-archive-toggle" id="convArchiveToggle" title="Show archived">&#128230;</button>
-        <button class="conv-sort-btn" id="convSortBtn" title="Sort by latest response (ignores custom order)">&#8693;</button>
-        <button class="conv-refresh-btn" id="convRefreshBtn" title="Refresh conversation list">&#8634;</button>
       </div>
       <div class="log-list" id="convList" style="overflow-y:auto;flex:1;min-height:0;max-height:none;">
         <div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Loading...</div>
@@ -2765,6 +2829,10 @@
         <button class="font-size-btn" id="fontPlus" title="Increase font size">A+</button>
       </div>
       <span style="font-size:11px;color:var(--text-muted);font-family:'SF Mono',SFMono-Regular,Consolas,monospace;opacity:0.6;cursor:pointer;user-select:all;margin-left:8px;" id="convSessionId" title="Click to copy session ID"></span>
+      <div class="conv-overflow-wrap">
+        <button type="button" class="conv-overflow-btn" id="convOverflowBtn" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
+        <div class="conv-overflow-menu" id="convOverflowMenu" role="menu" aria-hidden="true"></div>
+      </div>
     </div>
     <div class="issues-view" id="issuesView" style="display:none;">
       <div class="empty-state" style="height:auto;padding:40px;">Loading issues...</div>
@@ -3280,6 +3348,96 @@
           $announceBtnConv.disabled = false;
         }, 2000);
       }
+    });
+  }
+
+  // ── ⋯ overflow menu (move-to-repo for now; designed to grow) ───────
+  const $convOverflowBtn = document.getElementById('convOverflowBtn');
+  const $convOverflowMenu = document.getElementById('convOverflowMenu');
+  function _closeConvOverflow() {
+    if (!$convOverflowMenu) return;
+    $convOverflowMenu.classList.remove('open');
+    $convOverflowMenu.setAttribute('aria-hidden', 'true');
+    if ($convOverflowBtn) $convOverflowBtn.setAttribute('aria-expanded', 'false');
+  }
+  function _renderConvOverflowMenu() {
+    if (!$convOverflowMenu) return;
+    const sid = currentSession && currentSession.id;
+    const isPkood = currentSession && currentSession.source === 'pkood';
+    const repos = (typeof repoListState !== 'undefined' && repoListState.repos) || [];
+    const currentCwd = (currentSession && currentSession.cwd) || '';
+    let html = '';
+    html += '<div class="com-section-label">Move to repo</div>';
+    if (!sid || isPkood) {
+      html += '<div class="com-item com-current">No movable session selected</div>';
+    } else if (!repos.length) {
+      html += '<div class="com-item com-current">No known repos. Add one in the Repo picker.</div>';
+    } else {
+      for (const r of repos) {
+        const isCurrent = r.path === currentCwd;
+        const cls = 'com-item' + (isCurrent ? ' com-current' : '');
+        const label = escapeHtml(r.label || r.path);
+        const path = escapeHtml(r.path);
+        const suffix = isCurrent ? ' <span class="com-repo-path">(current)</span>' : ' <span class="com-repo-path">' + path + '</span>';
+        html += '<button type="button" class="' + cls + '" data-target="' + path + '"'
+          + (isCurrent ? ' disabled' : '')
+          + '>' + label + suffix + '</button>';
+      }
+    }
+    $convOverflowMenu.innerHTML = html;
+    $convOverflowMenu.querySelectorAll('button[data-target]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const target = btn.dataset.target;
+        const sidNow = currentSession && currentSession.id;
+        if (!sidNow || !target) return;
+        if (!confirm('Move session to ' + target + '?\n\nThe JSONL file gets relocated; resume will then run in the new repo.')) return;
+        btn.disabled = true;
+        btn.textContent = 'Moving…';
+        try {
+          const res = await fetch('/api/sessions/' + encodeURIComponent(sidNow) + '/move', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ repo_root: target }),
+          });
+          const data = await res.json();
+          if (data.ok) {
+            _closeConvOverflow();
+            // Refresh the conversation list so the moved session shows
+            // in its new home (and disappears from the current view if
+            // we're not pointed at the target).
+            if (typeof refreshConversationList === 'function') refreshConversationList();
+            else if (typeof loadConversationList === 'function') loadConversationList();
+          } else {
+            btn.textContent = 'Failed: ' + (data.error || 'unknown');
+          }
+        } catch (err) {
+          btn.textContent = 'Failed: ' + err.message;
+        }
+      });
+    });
+  }
+  if ($convOverflowBtn) {
+    $convOverflowBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = $convOverflowMenu.classList.contains('open');
+      if (isOpen) {
+        _closeConvOverflow();
+      } else {
+        _renderConvOverflowMenu();
+        $convOverflowMenu.classList.add('open');
+        $convOverflowMenu.setAttribute('aria-hidden', 'false');
+        $convOverflowBtn.setAttribute('aria-expanded', 'true');
+      }
+    });
+    document.addEventListener('click', (e) => {
+      if (!$convOverflowMenu) return;
+      if (!$convOverflowMenu.classList.contains('open')) return;
+      if (e.target.closest('.conv-overflow-wrap')) return;
+      _closeConvOverflow();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') _closeConvOverflow();
     });
   }
 

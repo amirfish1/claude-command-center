@@ -7905,6 +7905,75 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing text"})
             else:
                 self.send_json(inject_into_spawned(pid, text))
+        elif re.match(r"^/api/sessions/[a-zA-Z0-9-]+/move$", path):
+            # Re-bucket a session into a different repo's project dir.
+            # Just an `os.rename` of the JSONL — historical `cwd` fields
+            # inside stay (they're a record of where each event ran). On
+            # resume, Claude Code uses the cwd you launch from, so the
+            # move makes the session appear in the target repo's CCC
+            # view immediately and resumes naturally there.
+            sid = path.rsplit("/", 2)[-2]
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            target = (payload.get("repo_root") or "").strip()
+            if not target:
+                self.send_json({"ok": False, "error": "missing repo_root"})
+                return
+            try:
+                target_path = Path(target).expanduser().resolve()
+            except (OSError, RuntimeError) as e:
+                self.send_json({"ok": False, "error": f"bad path: {e}"})
+                return
+            if not target_path.is_dir():
+                self.send_json({"ok": False, "error": f"target dir does not exist: {target_path}"})
+                return
+            # Allow-list: target must be a known repo (same set the picker
+            # uses). Prevents arbitrary-path moves from a malicious page.
+            allowed = {Path(r["path"]).resolve() for r in load_known_repos()}
+            if target_path not in allowed:
+                self.send_json({"ok": False, "error": f"target not in known repos: {target_path}"})
+                return
+            # Locate the session JSONL across every project dir under
+            # ~/.claude/projects/. Both the modern and legacy slug
+            # variants are tried via _candidate_conversation_dirs;
+            # iterating the whole projects/ tree as a final fallback
+            # catches sessions that ended up under a slug for a repo
+            # CCC isn't currently watching.
+            src = None
+            projects_root = Path.home() / ".claude" / "projects"
+            if projects_root.is_dir():
+                for d in projects_root.iterdir():
+                    cand = d / (sid + ".jsonl")
+                    if cand.is_file():
+                        src = cand
+                        break
+            if not src:
+                self.send_json({"ok": False, "error": f"session jsonl not found for {sid}"})
+                return
+            # Use the modern encoder so target dirs match what current
+            # Claude Code writes (handles `+`, `.`, `_`, spaces — the
+            # regression that 8216fae fixed).
+            target_slug = _encode_project_slug(target_path)
+            target_dir = projects_root / target_slug
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+                dest = target_dir / (sid + ".jsonl")
+                if dest.exists() and dest.resolve() == src.resolve():
+                    # Already there — nothing to do.
+                    self.send_json({"ok": True, "moved": False, "path": str(dest)})
+                    return
+                if dest.exists():
+                    self.send_json({"ok": False, "error": f"destination already exists: {dest}"})
+                    return
+                os.rename(src, dest)
+            except OSError as e:
+                self.send_json({"ok": False, "error": f"rename failed: {e}"})
+                return
+            self.send_json({"ok": True, "moved": True, "from": str(src), "to": str(dest)})
         elif re.match(r"^/api/issues/\d+/add-label$", path):
             num = path.split("/")[3]
             self.send_json(add_claude_fix_label(num))
