@@ -7598,7 +7598,7 @@
           }
           // Brief toast on the item title
           const toast = document.createElement('div');
-          toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:12px;color:var(--text);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
+          toast.style.cssText = 'position:fixed;bottom:20px;left:20px;background:var(--surface);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:12px;color:var(--text);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
           if (data.method === 'jsonl') {
             toast.innerHTML = '<span style="color:var(--green)">\u2713</span> Saved to .jsonl &mdash; <code>claude --resume</code> will see it';
           } else if (data.method === 'sidecar' && data.live) {

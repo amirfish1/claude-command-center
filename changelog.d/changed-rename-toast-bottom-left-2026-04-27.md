@@ -1,0 +1,1 @@
+- Rename-saved toast now anchors to the bottom-left of the viewport instead of the bottom-center, so it no longer overlaps the conversation pane's input box.
