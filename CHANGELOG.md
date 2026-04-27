@@ -31,18 +31,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the substituted variant exists on disk. Display-only — never used to
   dispatch git writes; future write actions must use literal cwd or
   per-action evidence. New `effective_*` fields on `/api/session/<id>/workspace`.
-- **Session-activity timeline.** New collapsible strip under the conv pane's
-  "Original ask" header shows a chronological log of `git commit`, `git push`,
-  and `gh pr create` events that occurred during the session, with the
-  assistant-turn position of each (`T179 ● commit 22b733d feat(ui): …`),
-  the gap to the next event (`↓ 50 turns later`), and how many turns
-  continued after the last event (`↓ 8 more turns since`). Server walks the
-  JSONL transcript regex-matching Bash tool calls and reading the matching
-  tool_results for SHA / PR number / success state. New endpoint
-  `GET /api/session/<id>/timeline` returns `{events, total_turns}`. Hidden
-  entirely for sessions with no commit/push/PR events.
+- **"Last interacted" indicator on cards.** Each kanban card now shows a small
+  italic "Last interacted Xm ago" line whenever you've typed a message into the
+  card or clicked one of its action buttons (currently routed through
+  `/api/inject-input` — typing, Approve, Deny). Drag-drop column moves do **not**
+  count as interaction. Stamps persist to
+  `~/.claude/command-center/last-interactions.json`, and the kanban now sorts by
+  `max(last_interacted, modified)` so a card you just typed into bubbles to the
+  top instantly even before Claude responds.
 
 ### Changed
+- **Renamed `Planning` column to `Icebox` and collapsed pre-tool live state into `Working`.**
+  The old `Planning` column was doing two unrelated jobs: a transient "live
+  but no tool fired yet" pre-window, and a long-lived "parked by user" intent.
+  The transient half didn't earn a column (it's seconds long, no human action
+  required), so it now lives in `Working` and the column is renamed `Icebox` to
+  match the GitHub label that drives it. New tiebreak: a card with both the
+  `icebox` label and a live process lands in `Icebox` — the explicit "park"
+  signal beats implicit liveness. The classifier shrinks from 15 rules to ~10.
+  Stale `planning` localStorage overrides from older builds drop on first
+  render. `mark_issue_in_progress` now also strips the `icebox` label so the
+  GitHub state matches the new column. See [`docs/kanban-rules.md`](docs/kanban-rules.md)
+  and [`docs/kanban-rules.html`](docs/kanban-rules.html).
 - **Conversation pane styled to match Claude Desktop.** User messages render
   as a chat bubble (blue tint, rounded corners, no USER label or timestamp)
   with explicit SF Pro / system-ui font, 16px / line-height 1.6. Assistant

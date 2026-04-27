@@ -191,6 +191,38 @@ LOG_DIR = REPO_ROOT / ".claude" / "logs"
 _cc_project_slug = "-" + str(REPO_ROOT).lstrip("/").replace("/", "-")
 CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
 
+
+def _slug_variants_for(repo_root):
+    """Return all project-dir slug variants Claude Code might use for
+    the given cwd. CC 2.1.119 regressed and now substitutes `+` → `-`
+    when forming the project dir, so a single cwd can land in either
+    `-Users-foo-Apps-BYM+Finie/` (older builds) or `-Users-foo-Apps-BYM-Finie/`
+    (newer builds). Return both so we don't lose sessions to the regression.
+
+    Always returns the canonical slug first; callers should prefer it
+    for *writes* (we don't want to encourage the buggy variant).
+    """
+    base = str(repo_root).lstrip("/").replace("/", "-")
+    canonical = "-" + base
+    variants = [canonical]
+    # Known CC 2.1.119 substitution. Add to this set if more characters
+    # turn out to be sanitized by future versions.
+    sanitized = "-" + base.replace("+", "-")
+    if sanitized != canonical:
+        variants.append(sanitized)
+    return variants
+
+
+def _conversation_dirs():
+    """All project-dir Paths to scan for sessions belonging to the
+    current REPO_ROOT, including slug-variant fallbacks."""
+    out = []
+    for slug in _slug_variants_for(REPO_ROOT):
+        p = Path.home() / ".claude" / "projects" / slug
+        if p.is_dir():
+            out.append(p)
+    return out
+
 def load_known_repos():
     """Auto-detect projects for the picker by scanning $HOME.
 
@@ -3170,7 +3202,8 @@ def _extract_images_from_content(content):
 def find_conversations():
     """Return list of conversation metadata dicts, newest first."""
     conversations = []
-    if not CONVERSATIONS_DIR.is_dir():
+    conv_dirs = _conversation_dirs()
+    if not conv_dirs:
         return conversations
     name_overrides = _load_session_name_overrides()
     archived_set = set(_load_archived_conversations())
@@ -3188,7 +3221,13 @@ def find_conversations():
         "Produce a concise 4-8 word title for the GitHub issue below",
     )
 
-    for f in CONVERSATIONS_DIR.iterdir():
+    files = []
+    for d in conv_dirs:
+        try:
+            files.extend(d.iterdir())
+        except OSError:
+            pass
+    for f in files:
         if not f.name.endswith(".jsonl") or not f.is_file():
             continue
         try:
@@ -3624,9 +3663,21 @@ def find_all_sessions():
     return conversations
 
 
+def _resolve_conversation_path(conversation_id):
+    """Return the JSONL path for a session, looking through every slug
+    variant for the current REPO_ROOT. Falls back to the canonical
+    CONVERSATIONS_DIR path so error messages still point somewhere sensible
+    when the file genuinely doesn't exist."""
+    for d in _conversation_dirs():
+        cand = d / (conversation_id + ".jsonl")
+        if cand.is_file():
+            return cand
+    return CONVERSATIONS_DIR / (conversation_id + ".jsonl")
+
+
 def parse_conversation(conversation_id, after_line=0):
     """Parse a conversation JSONL file into structured events."""
-    filepath = CONVERSATIONS_DIR / (conversation_id + ".jsonl")
+    filepath = _resolve_conversation_path(conversation_id)
     events = []
     line_num = 0
 
@@ -6059,9 +6110,16 @@ def extract_session_usage(session_id):
     except OSError:
         return empty
 
-    # Best-effort context limit. Claude Code's 1M-context variants tag the
-    # model name with a `[1m]` suffix; everything else maps to 200k.
-    limit = 1_000_000 if "[1m]" in model.lower() else 200_000
+    # Best-effort context limit. Claude Code's 1M-context variant uses a
+    # `[1m]` suffix in some surfaces, but the JSONL strips it ("claude-
+    # opus-4-7" either way), so the model name alone is unreliable.
+    # Fallback signal: if any observed turn used > 200k tokens, the
+    # session must be on the 1M variant (otherwise the API would have
+    # errored). Default to 200k when we have no positive evidence.
+    if "[1m]" in model.lower() or peak > 200_000:
+        limit = 1_000_000
+    else:
+        limit = 200_000
     return {
         "latest_input_tokens": latest,
         "peak_input_tokens": peak,
@@ -7941,7 +7999,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
 
     def _stream_conversation(self, conversation_id, after_line):
         """SSE endpoint for real-time conversation tailing."""
-        filepath = CONVERSATIONS_DIR / (conversation_id + ".jsonl")
+        filepath = _resolve_conversation_path(conversation_id)
         if not filepath.exists():
             self.send_json({"error": "Conversation not found"}, 404)
             return

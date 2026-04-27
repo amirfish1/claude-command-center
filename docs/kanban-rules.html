@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CCC — Kanban column transition rules</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-hi: #1f262e;
+    --line: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --explicit: #58a6ff;
+    --implicit: #f0883e;
+    --server: #3fb950;
+    --warn: #d29922;
+    --danger: #f85149;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif; }
+  body { padding: 28px 36px 80px; max-width: 1400px; margin: 0 auto; }
+
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--muted); margin-bottom: 28px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--muted); margin: 36px 0 12px; font-weight: 600; }
+  code { background: var(--panel); padding: 1px 5px; border-radius: 3px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* Legend */
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; align-items: center;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 12px 16px; margin-bottom: 24px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .legend-note { color: var(--muted); font-size: 12.5px; flex-basis: 100%;
+    margin-top: 4px; line-height: 1.5; }
+  .swatch { width: 28px; height: 0; border-top: 2px solid; }
+  .swatch.dashed { border-top-style: dashed; }
+  .swatch.explicit { border-color: var(--explicit); }
+  .swatch.implicit { border-color: var(--implicit); }
+
+  /* Diagram */
+  .diagram-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 8px;
+    flex-wrap: wrap; }
+  .diagram-toolbar .hint-text { color: var(--muted); font-size: 12.5px; }
+  .diagram-toolbar .toolbar-spacer { flex: 1; }
+  .diagram-toolbar .toggle { display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; color: var(--text); cursor: pointer; user-select: none; }
+  .diagram-toolbar .toggle input { margin: 0; cursor: pointer; }
+  .diagram-toolbar .toggle-dot { display: inline-block; width: 22px; height: 0;
+    border-top: 2px solid; }
+  .diagram-toolbar .toggle-dot.explicit { border-color: var(--explicit); }
+  .diagram-toolbar .toggle-dot.implicit { border-color: var(--implicit);
+    border-top-style: dashed; }
+  .diagram-toolbar button { background: var(--panel-hi); color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px;
+    font-size: 12px; cursor: pointer; font-family: inherit; }
+  .diagram-toolbar button:hover { border-color: var(--accent); color: var(--accent); }
+  .diagram-wrap { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 24px; overflow-x: auto; margin-bottom: 28px; }
+  svg.diagram { display: block; min-width: 1200px; touch-action: none; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+    margin: 0 0 24px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line);
+    vertical-align: top; font-size: 13.5px; }
+  th { background: var(--panel-hi); color: var(--muted); font-weight: 600;
+    text-transform: uppercase; font-size: 11.5px; letter-spacing: 0.05em; }
+  tr:last-child td { border-bottom: 0; }
+  td.col { white-space: nowrap; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 600; line-height: 1.5; }
+  .pill.explicit { background: rgba(88,166,255,0.15); color: var(--explicit); }
+  .pill.implicit { background: rgba(240,136,62,0.15); color: var(--implicit); }
+  .pill.server   { background: rgba(63,185,80,0.15);  color: var(--server); }
+
+  /* Priority list */
+  .priority { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 16px 20px; }
+  .priority ol { margin: 0; padding-left: 22px; }
+  .priority li { margin: 6px 0; }
+  .priority li b { color: var(--accent); }
+
+  /* Aliases callout */
+  .callout { background: rgba(210,153,34,0.08); border: 1px solid rgba(210,153,34,0.4);
+    border-radius: 6px; padding: 14px 18px; margin: 24px 0; }
+  .callout h3 { margin: 0 0 8px; color: var(--warn); font-size: 13px;
+    text-transform: uppercase; letter-spacing: 0.05em; }
+  .callout p { margin: 4px 0; }
+
+  /* Source ribbons in column nodes */
+  .col-node text.label  { font-weight: 600; font-size: 13px; }
+  .col-node text.hint   { font-size: 10.5px; opacity: 0.7; }
+</style>
+</head>
+<body>
+
+<h1>Kanban column transition rules</h1>
+<p class="sub">
+  Every trigger that moves a Claude Command Center card between columns.
+  Companion to <a href="kanban-rules.md">kanban-rules.md</a>.
+</p>
+
+<div class="legend">
+  <div class="legend-item"><span class="swatch explicit"></span> Explicit — user clicks or drags</div>
+  <div class="legend-item"><span class="swatch dashed implicit"></span> Implicit — a signal under the card changed (hook, poll, git, label, process death)</div>
+  <div class="legend-note">Some explicit actions also persist a <code>verified</code> / <code>archived</code> flag server-side and may auto-close a GitHub issue — that's a mechanism detail, not a separate trigger type.</div>
+  <div class="legend-note"><b>Live + icebox tiebreak:</b> if a card has both the <code>icebox</code> label AND a live process, it lands in <code>icebox</code>. The explicit human "park this" signal wins over implicit liveness.</div>
+</div>
+
+<h2>State diagram</h2>
+<div class="diagram-toolbar">
+  <span class="hint-text">Drag any column to rearrange. Layout persists locally.</span>
+  <span class="toolbar-spacer"></span>
+  <label class="toggle"><input type="checkbox" id="toggle-explicit" checked>
+    <span class="toggle-dot explicit"></span> Explicit</label>
+  <label class="toggle"><input type="checkbox" id="toggle-implicit" checked>
+    <span class="toggle-dot implicit"></span> Implicit</label>
+  <button id="reset-layout" type="button">Reset layout</button>
+</div>
+<div class="diagram-wrap">
+<svg id="diagram" class="diagram" viewBox="0 0 1320 720" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow-explicit" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrow-implicit" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#f0883e"/>
+    </marker>
+    <marker id="arrow-server" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3fb950"/>
+    </marker>
+    <style>
+      .edge          { fill: none; stroke-width: 1.6; }
+      .edge.explicit { stroke: #58a6ff; }
+      .edge.implicit { stroke: #f0883e; stroke-dasharray: 5 4; }
+      .edge.server   { stroke: #3fb950; }
+      .elabel        { font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+                       fill: #c9d1d9; pointer-events: none; user-select: none; }
+      .elabel-bg     { fill: #161b22; pointer-events: none; }
+      .col-node      { cursor: grab; }
+      .col-node.dragging { cursor: grabbing; }
+      .col-node text { pointer-events: none; user-select: none; }
+      .col-rect          { fill: #1f262e; stroke: #30363d; stroke-width: 1; rx: 6; }
+      .col-rect.terminal { fill: #1d2a1d; stroke: #2d4a2d; }
+      .col-rect.live     { fill: #1d2330; stroke: #2d3a52; }
+      .col-rect.review   { fill: #2a2418; stroke: #4a3d24; }
+      .col-rect.intake   { fill: #251d2a; stroke: #4a2d52; }
+      .col-node:hover .col-rect { stroke: #58a6ff; }
+    </style>
+  </defs>
+  <g id="edges-layer"></g>
+  <g id="nodes-layer"></g>
+</svg>
+</div>
+<script>
+(function() {
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const W = 170, H = 60;
+  const STORAGE_KEY = 'ccc-kanban-diagram-pos';
+
+  const cols = [
+    { id: 'backlog',         x:  20, y:  40, label: 'backlog',         hint: 'open issues + TODO',           cls: 'intake' },
+    { id: 'needs-attention', x: 220, y:  40, label: 'needs-attention', hint: 'label: needs-attention',       cls: 'intake' },
+    { id: 'icebox',          x: 120, y: 220, label: 'icebox',          hint: 'parked — icebox label or drag', cls: 'intake' },
+    { id: 'working',         x: 370, y: 220, label: 'working',         hint: 'live session — Claude is running', cls: 'live' },
+    { id: 'review',          x: 620, y: 220, label: 'review',          hint: 'committed/pushed, dead',       cls: 'review' },
+    { id: 'testing',         x: 870, y: 220, label: 'testing',         hint: 'manual only',                  cls: '' },
+    { id: 'inactive',        x:1100, y: 220, label: 'inactive',        hint: 'dormant fallback',             cls: '' },
+    { id: 'verified',        x: 370, y: 450, label: 'verified',        hint: 'flag + GH closed COMPLETED',   cls: 'terminal' },
+    { id: 'archived',        x: 620, y: 450, label: 'archived',        hint: 'flag + GH closed not-planned', cls: 'terminal' },
+  ];
+
+  const edges = [
+    // Backlog flows
+    { from: 'backlog',         to: 'working',         kind: 'explicit', label: ['Start session  ·  spawn', 'or drag → working'] },
+    { from: 'backlog',         to: 'needs-attention', kind: 'implicit', label: ['label needs-attention added'] },
+    { from: 'backlog',         to: 'icebox',          kind: 'implicit', label: ['label icebox added', 'or drag → icebox'] },
+    { from: 'backlog',         to: 'verified',        kind: 'implicit', label: ['GH closed COMPLETED', '(/api/sessions poll)'] },
+    { from: 'backlog',         to: 'archived',        kind: 'implicit', label: ['GH closed NOT_PLANNED / dup'] },
+
+    // Needs-attention exits
+    { from: 'needs-attention', to: 'backlog',         kind: 'implicit', label: ['needs-attention label removed'] },
+    { from: 'needs-attention', to: 'icebox',          kind: 'implicit', label: ['label icebox added'] },
+
+    // Working flows
+    { from: 'working',         to: 'icebox',          kind: 'explicit', label: ['drag → icebox', 'or label icebox added'] },
+    { from: 'working',         to: 'review',          kind: 'implicit', label: ['commit / push', '(after process exits)'] },
+    { from: 'working',         to: 'inactive',        kind: 'implicit', label: ['process exits, no tools used'] },
+    { from: 'working',         to: 'archived',        kind: 'explicit', label: ['drag (rare)'] },
+
+    // Icebox exit
+    { from: 'icebox',          to: 'working',         kind: 'explicit', label: ['icebox label removed', 'or drag → working'] },
+
+    // Review flows
+    { from: 'review',          to: 'testing',         kind: 'explicit', label: ['drag manual'] },
+    { from: 'review',          to: 'verified',        kind: 'explicit', label: ['click Verify  ·  drag', '→ closes GH as COMPLETED'] },
+    { from: 'review',          to: 'archived',        kind: 'explicit', label: ['drag → archive'] },
+
+    // Testing exit
+    { from: 'testing',         to: 'verified',        kind: 'explicit', label: ['drag → verified'] },
+
+    // Resurrections from terminal columns
+    { from: 'inactive',        to: 'working',         kind: 'implicit', label: ['resume + tool fires'] },
+    { from: 'archived',        to: 'working',         kind: 'explicit', label: ['drag out → clears archived'] },
+    { from: 'verified',        to: 'working',         kind: 'explicit', label: ['drag out → clears flag'] },
+  ];
+
+  // restore saved positions
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    for (const c of cols) if (saved[c.id]) { c.x = saved[c.id].x; c.y = saved[c.id].y; }
+  } catch (_) {}
+
+  const colMap = Object.fromEntries(cols.map(c => [c.id, c]));
+  const svg = document.getElementById('diagram');
+  const edgeLayer = document.getElementById('edges-layer');
+  const nodeLayer = document.getElementById('nodes-layer');
+  const nodeEls = {};
+
+  function renderNodes() {
+    nodeLayer.innerHTML = '';
+    for (const c of cols) {
+      const g = document.createElementNS(SVG_NS, 'g');
+      g.setAttribute('class', 'col-node');
+      g.setAttribute('transform', `translate(${c.x},${c.y})`);
+      g.dataset.id = c.id;
+
+      const rect = document.createElementNS(SVG_NS, 'rect');
+      rect.setAttribute('class', 'col-rect ' + (c.cls || ''));
+      rect.setAttribute('x', 0); rect.setAttribute('y', 0);
+      rect.setAttribute('width', W); rect.setAttribute('height', H);
+      rect.setAttribute('rx', 6);
+      g.appendChild(rect);
+
+      const tLabel = document.createElementNS(SVG_NS, 'text');
+      tLabel.setAttribute('class', 'label');
+      tLabel.setAttribute('x', W / 2); tLabel.setAttribute('y', 28);
+      tLabel.setAttribute('text-anchor', 'middle');
+      tLabel.setAttribute('fill', '#e6edf3');
+      tLabel.textContent = c.label;
+      g.appendChild(tLabel);
+
+      const tHint = document.createElementNS(SVG_NS, 'text');
+      tHint.setAttribute('class', 'hint');
+      tHint.setAttribute('x', W / 2); tHint.setAttribute('y', 46);
+      tHint.setAttribute('text-anchor', 'middle');
+      tHint.setAttribute('fill', '#c9d1d9');
+      tHint.textContent = c.hint;
+      g.appendChild(tHint);
+
+      nodeLayer.appendChild(g);
+      nodeEls[c.id] = g;
+      attachDrag(g, c);
+    }
+  }
+
+  // pick connection points on the side of each rect that faces the other rect
+  function connectionPoints(a, b) {
+    const acx = a.x + W / 2, acy = a.y + H / 2;
+    const bcx = b.x + W / 2, bcy = b.y + H / 2;
+    const dx = bcx - acx, dy = bcy - acy;
+    let ap, bp;
+    if (Math.abs(dx) * H >= Math.abs(dy) * W) {
+      const sx = Math.sign(dx) || 1;
+      ap = { x: acx + sx * W / 2, y: acy, axis: 'h', dir: sx };
+      bp = { x: bcx - sx * W / 2, y: bcy, axis: 'h', dir: -sx };
+    } else {
+      const sy = Math.sign(dy) || 1;
+      ap = { x: acx, y: acy + sy * H / 2, axis: 'v', dir: sy };
+      bp = { x: bcx, y: bcy - sy * H / 2, axis: 'v', dir: -sy };
+    }
+    return [ap, bp];
+  }
+
+  function bezierPoint(t, p0, c1, c2, p3) {
+    const u = 1 - t;
+    return {
+      x: u*u*u*p0.x + 3*u*u*t*c1.x + 3*u*t*t*c2.x + t*t*t*p3.x,
+      y: u*u*u*p0.y + 3*u*u*t*c1.y + 3*u*t*t*c2.y + t*t*t*p3.y,
+    };
+  }
+
+  function pathFor(a, b) {
+    const [ap, bp] = connectionPoints(a, b);
+    const dist = Math.hypot(bp.x - ap.x, bp.y - ap.y);
+    const off = Math.min(80, Math.max(30, dist * 0.4));
+    const cp1 = {
+      x: ap.x + (ap.axis === 'h' ? ap.dir * off : 0),
+      y: ap.y + (ap.axis === 'v' ? ap.dir * off : 0),
+    };
+    const cp2 = {
+      x: bp.x + (bp.axis === 'h' ? bp.dir * off : 0),
+      y: bp.y + (bp.axis === 'v' ? bp.dir * off : 0),
+    };
+    const mid = bezierPoint(0.5, ap, cp1, cp2, bp);
+    return { d: `M ${ap.x} ${ap.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${bp.x} ${bp.y}`, mid };
+  }
+
+  const visibility = { explicit: true, implicit: true };
+
+  function renderEdges() {
+    edgeLayer.innerHTML = '';
+    for (const e of edges) {
+      if (!visibility[e.kind]) continue;
+      const a = colMap[e.from], b = colMap[e.to];
+      if (!a || !b) continue;
+      const { d, mid } = pathFor(a, b);
+
+      const path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('class', 'edge ' + e.kind);
+      path.setAttribute('d', d);
+      path.setAttribute('marker-end', `url(#arrow-${e.kind})`);
+      edgeLayer.appendChild(path);
+
+      const lines = e.label;
+      const lineH = 13;
+      const padX = 6, padY = 4;
+      const charW = 6.4;
+      const longest = lines.reduce((m, l) => Math.max(m, l.length), 0);
+      const w = longest * charW + padX * 2;
+      const h = lines.length * lineH + padY * 2;
+      const lx = mid.x - w / 2;
+      const ly = mid.y - h / 2;
+
+      const bg = document.createElementNS(SVG_NS, 'rect');
+      bg.setAttribute('class', 'elabel-bg');
+      bg.setAttribute('x', lx); bg.setAttribute('y', ly);
+      bg.setAttribute('width', w); bg.setAttribute('height', h);
+      bg.setAttribute('rx', 3);
+      edgeLayer.appendChild(bg);
+
+      lines.forEach((line, i) => {
+        const t = document.createElementNS(SVG_NS, 'text');
+        t.setAttribute('class', 'elabel');
+        t.setAttribute('x', mid.x);
+        t.setAttribute('y', ly + padY + (i + 1) * lineH - 3);
+        t.setAttribute('text-anchor', 'middle');
+        t.textContent = line;
+        edgeLayer.appendChild(t);
+      });
+    }
+  }
+
+  function persist() {
+    const out = {};
+    for (const c of cols) out[c.id] = { x: c.x, y: c.y };
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(out)); } catch (_) {}
+  }
+
+  function attachDrag(g, c) {
+    let dragging = false, originX = 0, originY = 0, startX = 0, startY = 0, scale = 1;
+    g.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault();
+      dragging = true;
+      g.classList.add('dragging');
+      g.setPointerCapture(ev.pointerId);
+      startX = ev.clientX; startY = ev.clientY;
+      originX = c.x; originY = c.y;
+      const ctm = svg.getScreenCTM();
+      scale = ctm ? ctm.a : 1;
+      // raise z-order so this node draws on top
+      nodeLayer.appendChild(g);
+    });
+    g.addEventListener('pointermove', (ev) => {
+      if (!dragging) return;
+      const dx = (ev.clientX - startX) / scale;
+      const dy = (ev.clientY - startY) / scale;
+      c.x = originX + dx;
+      c.y = originY + dy;
+      g.setAttribute('transform', `translate(${c.x},${c.y})`);
+      renderEdges();
+    });
+    function endDrag(ev) {
+      if (!dragging) return;
+      dragging = false;
+      g.classList.remove('dragging');
+      try { g.releasePointerCapture(ev.pointerId); } catch (_) {}
+      persist();
+    }
+    g.addEventListener('pointerup', endDrag);
+    g.addEventListener('pointercancel', endDrag);
+  }
+
+  document.getElementById('reset-layout').addEventListener('click', () => {
+    try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+    location.reload();
+  });
+
+  function bindToggle(id, kind) {
+    const el = document.getElementById(id);
+    el.addEventListener('change', () => {
+      visibility[kind] = el.checked;
+      renderEdges();
+    });
+  }
+  bindToggle('toggle-explicit', 'explicit');
+  bindToggle('toggle-implicit', 'implicit');
+
+  renderNodes();
+  renderEdges();
+})();
+</script>
+
+<h2>Classifier priority order</h2>
+<p style="color: var(--muted); margin-top: -4px;">
+  First match wins. Cards have no stored column field — this is recomputed
+  on every render (every ~10s) per card. See
+  <code>classifyKanbanColumn</code> at
+  <a href="../static/index.html"><code>static/index.html:4360</code></a>.
+</p>
+<div class="priority">
+<ol>
+  <li><b>Fresh-session sticky</b> — for ~60s after spawn, pin to first column. Releases on real progress. (Less critical now that <code>planning</code> is gone — kept as a safety net.)</li>
+  <li><b>Manual override</b> from drag-drop (localStorage) — unless stale (server flag set, or stage advanced past it).</li>
+  <li><code>verified</code> flag → <b>verified</b></li>
+  <li><code>archived</code> flag → <b>archived</b></li>
+  <li><b>Backlog cards:</b> issue CLOSED+COMPLETED → verified · CLOSED other → archived · label needs-attention → needs-attention · label icebox → icebox · else → backlog</li>
+  <li><b>label icebox</b> (on issue or linked session) → <b>icebox</b> · <span style="color: var(--muted)">wins over liveness — explicit park beats implicit live process</span></li>
+  <li><b>Live + sidecar:</b> any → <b>working</b> (waiting / has_writes / pre-tool — all working)</li>
+  <li>stage = pushed/committed → <b>review</b></li>
+  <li>!live + edits + last=assistant → <b>review</b> (dormant w/ unsaved edits)</li>
+  <li>label needs-attention → <b>needs-attention</b></li>
+  <li>label claude-in-progress → <b>working</b></li>
+  <li>!live + no sidecar → <b>inactive</b></li>
+  <li>Live + pkood (any state) → <b>working</b></li>
+  <li>Live (any other) → <b>working</b></li>
+  <li>Fallback → <b>inactive</b></li>
+</ol>
+</div>
+
+<h2>Triggers — explicit (user actions)</h2>
+<table>
+  <thead>
+    <tr><th>Trigger</th><th>From → To</th><th>Side effects</th><th>Code</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="pill explicit">drag</span> card to column</td>
+      <td>any → any</td>
+      <td>writes <code>columnOverrides</code> to localStorage; for verified/archived also POSTs to server flag endpoints</td>
+      <td><code>moveCardToColumn</code> · index.html:4243</td>
+    </tr>
+    <tr>
+      <td><span class="pill explicit">drag</span> backlog → working</td>
+      <td>backlog → working</td>
+      <td>POST <code>/api/issues/{n}/mark-in-progress</code> · adds <code>claude-in-progress</code> label, reopens, assigns</td>
+      <td>index.html:4293, server.py:4729</td>
+    </tr>
+    <tr>
+      <td><span class="pill explicit">drag</span> any → icebox</td>
+      <td>any → icebox</td>
+      <td>POST <code>/api/issues/{n}/mark-icebox</code> · adds <code>icebox</code> label, removes <code>claude-in-progress</code></td>
+      <td>index.html:4301, server.py:4783</td>
+    </tr>
+    <tr>
+      <td><span class="pill explicit">click</span> Verify button</td>
+      <td>any → verified</td>
+      <td>auto-closes linked GH issue as <code>completed</code>, posts commit SHA as comment</td>
+      <td>server.py:6498</td>
+    </tr>
+    <tr>
+      <td><span class="pill explicit">click</span> Archive button</td>
+      <td>any → archived</td>
+      <td>for backlog: closes GH issue as <code>not planned</code></td>
+      <td>server.py:6408</td>
+    </tr>
+    <tr>
+      <td><span class="pill explicit">click</span> Start session</td>
+      <td>backlog → working</td>
+      <td>spawns Claude session linked to the issue · live process appears on next poll</td>
+      <td>index.html:5482</td>
+    </tr>
+    <tr>
+      <td><span class="pill explicit">drag</span> column header</td>
+      <td>none</td>
+      <td>reorders <i>display</i> only — no card moves</td>
+      <td>index.html:4865</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Triggers — implicit (signals change → re-classify)</h2>
+<table>
+  <thead>
+    <tr><th>Signal</th><th>Effect</th><th>Source</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="pill implicit">hook</span> PostToolUse / Stop fires</td>
+      <td>no column change (card stays in <b>working</b>); updates sidecar for the in-card "mid-turn" glow + status badge</td>
+      <td>hooks/post-tool-use.py · hooks/stop.py → live-state sidecar</td>
+    </tr>
+    <tr>
+      <td><span class="pill implicit">process</span> Claude exits</td>
+      <td><code>is_live=false</code> · has commits/edits → <b>review</b> · else → <b>inactive</b></td>
+      <td><code>ps -A</code> mismatch in /api/sessions</td>
+    </tr>
+    <tr>
+      <td><span class="pill implicit">git</span> commit / push lands</td>
+      <td>working → <b>review</b> (only after process exits — live sessions stay in working)</td>
+      <td><code>sessionStage()</code> reads git log</td>
+    </tr>
+    <tr>
+      <td><span class="pill implicit">poll</span> GH issue closed COMPLETED</td>
+      <td>backlog → <b>verified</b></td>
+      <td>/api/sessions enrich (5-min cache)</td>
+    </tr>
+    <tr>
+      <td><span class="pill implicit">poll</span> GH issue closed NOT_PLANNED / dup</td>
+      <td>backlog → <b>archived</b></td>
+      <td>/api/sessions enrich</td>
+    </tr>
+    <tr>
+      <td><span class="pill implicit">label</span> needs-attention added / removed</td>
+      <td>added: any (non-verified/archived) → <b>needs-attention</b> · removed: drops back to natural classification</td>
+      <td>/api/sessions enrich</td>
+    </tr>
+    <tr>
+      <td><span class="pill implicit">label</span> icebox added / removed</td>
+      <td>added: any (non-verified/archived) → <b>icebox</b> · removed: drops back to natural classification (typically working)</td>
+      <td>/api/sessions enrich</td>
+    </tr>
+    <tr>
+      <td><span class="pill implicit">label</span> claude-in-progress (dead session)</td>
+      <td>inactive / review → <b>working</b> ("this is the active branch")</td>
+      <td>/api/sessions enrich</td>
+    </tr>
+    <tr>
+      <td><span class="pill implicit">timer</span> sticky window expires (60s)</td>
+      <td>card switches from pinned-initial to natural classification</td>
+      <td><code>_applyFreshSessionSticky</code></td>
+    </tr>
+    <tr>
+      <td><span class="pill implicit">cleanup</span> stale override auto-clear</td>
+      <td>localStorage override dropped if server flag set OR stage advanced past it</td>
+      <td>index.html:4407</td>
+    </tr>
+    <tr>
+      <td><span class="pill implicit">pkood</span> agent status flips</td>
+      <td>any state → <b>working</b> while agent is live</td>
+      <td>rule 13</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <h3>Aliases that confuse</h3>
+  <p><b>waiting</b> — sidecar status (between Claude turns), not a column. Routes to <b>working</b>.</p>
+  <p><b>blocked</b> — internal "needs your attention" classification kind, not a column.</p>
+  <p><b>icebox</b> — GitHub label name <i>matches</i> the column name. Adding the label routes the card to the column. Removing it sends the card back to its natural column (typically <b>working</b> if a session is live, otherwise <b>backlog</b>).</p>
+  <p><b>claude-in-progress</b> — GitHub label that <i>routes a dead session into</i> <b>working</b>. Says "this is the active branch."</p>
+  <p><b>testing</b> — manual-only column. Nothing routes in or out automatically.</p>
+  <p><b>verified vs archived</b> — both close the linked GitHub issue, but with different reasons (<code>completed</code> vs <code>not planned</code>).</p>
+</div>
+
+<h2>Refresh cadence</h2>
+<table>
+  <tbody>
+    <tr><td><code>/api/sessions</code> poll</td><td>10 s (browser)</td></tr>
+    <tr><td>GitHub state cache</td><td>5 min (server-side, per issue)</td></tr>
+    <tr><td>Sidecar updates</td><td>real-time (PostToolUse + Stop hooks)</td></tr>
+    <tr><td>localStorage overrides</td><td>immediate</td></tr>
+    <tr><td>Sticky window for fresh sessions</td><td>60 s</td></tr>
+  </tbody>
+</table>
+
+</body>
+</html>

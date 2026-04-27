@@ -93,25 +93,32 @@ All three converge into the same card model in the UI.
 ## Classification
 
 `classifyKanbanColumn` (client-side, in `static/index.html`) takes a session
-entry and returns one of: `backlog / planning / working / review / testing /
-inactive / verified / archived`. The rules:
+entry and returns one of: `backlog / needs-attention / icebox / working /
+review / testing / verified / archived / inactive`. The rules:
 
 ```
-archived flag          -> archived
-verified flag          -> verified
-source is backlog      -> backlog (open) / verified (closed as completed)
-                                   / archived (closed otherwise)
-live + sidecar waiting -> working     (actively between turns)
-live + has_writes      -> working     (actively running tools)
-live + sidecar         -> planning    (no tools used yet)
-pushed / committed     -> review
-not live + no sidecar  -> inactive
+archived flag           -> archived
+verified flag           -> verified
+source is backlog       -> backlog (open) / verified (closed as completed)
+                                    / archived (closed otherwise)
+                                    / needs-attention (label) / icebox (label)
+icebox label            -> icebox        (wins over liveness — explicit park)
+is_live                 -> working       (any live session — sidecar or not)
+pushed / committed      -> review
+not live + edits + assistant-last -> review
+needs-attention label   -> needs-attention
+claude-in-progress (dead) -> working
+otherwise               -> inactive
 ```
+
+The full annotated list lives in [`kanban-rules.md`](kanban-rules.md), with a
+draggable diagram in [`kanban-rules.html`](kanban-rules.html).
 
 Manual drag-drop writes a client-side override into `localStorage`
 (`ccc-column-overrides`). Overrides auto-clear only when the session's natural
 state advances past the override (e.g., an override of `working` is dropped
-once the session's commits get pushed).
+once the session's commits get pushed). Stale `planning` overrides from older
+builds are dropped on first render.
 
 ## Hooks
 
