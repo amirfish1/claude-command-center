@@ -6828,7 +6828,14 @@
     if (ctxBar) ctxBar.style.display = 'none';
     // Reveal the close button (was inline display:none in p1's static HTML).
     const closeBtn = clone.querySelector('[data-role="pane-close"]');
-    if (closeBtn) closeBtn.style.display = '';
+    if (closeBtn) {
+      closeBtn.style.display = '';
+      closeBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closePane(paneId);
+      });
+    }
     // Wire the cloned input bar to send into this specific pane.
     const sendBtn = clone.querySelector('.send-btn');
     const input = clone.querySelector('input[type="text"]');
@@ -6997,6 +7004,10 @@
   // Click anywhere inside a pane to mark it active (drives composer
   // routing via the shim, and the sidebar `.active` highlight).
   document.addEventListener('click', (ev) => {
+    // Don't activate the pane on close-button clicks — the close handler
+    // is about to destroy the pane anyway, and activating it first causes
+    // a flicker (sidebar highlight briefly chases the doomed conv id).
+    if (ev.target && ev.target.closest && ev.target.closest('[data-role="pane-close"]')) return;
     const pane = ev.target.closest && ev.target.closest('.conv-pane');
     if (!pane) return;
     const pid = pane.getAttribute('data-pane-id');
@@ -7052,6 +7063,26 @@
     const newIdx = splitState.panes.length - 1;
     splitState.activeIndex = newIdx;
     await selectConversation(convId, newPane.id);
+  }
+
+  function closePane(paneId) {
+    if (splitState.panes.length < 2) return; // can't close the only pane
+    const idx = paneIndexByPaneId(paneId);
+    if (idx < 0) return;
+    const pane = splitState.panes[idx];
+    // Tear down SSE.
+    if (pane.eventSource) {
+      try { pane.eventSource.close(); } catch (e) {}
+      pane.eventSource = null;
+    }
+    // Remove the DOM element.
+    const el = document.querySelector(`.conv-pane[data-pane-id="${paneId}"]`);
+    if (el) el.remove();
+    // Splice state and collapse.
+    splitState.panes.splice(idx, 1);
+    splitState.orientation = null;
+    splitState.activeIndex = 0; // survivor is now the only pane
+    renderSplitLayout();
   }
 
   const STICKY_HEADER_HEIGHT_KEY = 'ccc-sticky-header-height';
@@ -10201,6 +10232,48 @@
   // Init
   loadConversationList();
   attachAllPaneDropZones();
+
+  // Wire the static p1 close button. Closing p1 when split is engaged:
+  // keep p2 alive, slide its conversation/state into p1's slot so the
+  // static-HTML element ids (#conversationsView, #convInputBar) stay live.
+  document.querySelectorAll('.conv-pane[data-pane-id="p1"] [data-role="pane-close"]').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (splitState.panes.length < 2) return;
+      const survivor = splitState.panes.find(p => p.id !== 'p1');
+      if (!survivor) return;
+      // Remove the survivor's DOM element; the static p1 element stays.
+      const survivorEl = document.querySelector(`.conv-pane[data-pane-id="${survivor.id}"]`);
+      if (survivorEl) survivorEl.remove();
+      // Tear down survivor's SSE; we'll restart on p1.
+      if (survivor.eventSource) { try { survivor.eventSource.close(); } catch (e) {} }
+      // Tear down p1's old SSE before restarting on the new conv.
+      if (splitState.panes[0].eventSource) {
+        try { splitState.panes[0].eventSource.close(); } catch (e) {}
+        splitState.panes[0].eventSource = null;
+      }
+      // Transplant survivor's per-pane state into p1.
+      splitState.panes[0].conversationId = survivor.conversationId;
+      splitState.panes[0].lastLine = survivor.lastLine;
+      splitState.panes[0].pendingSends = survivor.pendingSends;
+      splitState.panes[0].firstUserMsgRendered = survivor.firstUserMsgRendered;
+      splitState.panes[0].currentToolGroup = survivor.currentToolGroup;
+      splitState.panes[0].currentToolCount = survivor.currentToolCount;
+      splitState.panes[0].currentSession = survivor.currentSession;
+      // Collapse state.
+      splitState.panes.splice(1);
+      splitState.orientation = null;
+      splitState.activeIndex = 0;
+      renderSplitLayout();
+      // Re-render p1's transcript with the moved conversation.
+      if (splitState.panes[0].conversationId) {
+        fetchConversationEvents('p1');
+        startConvStream('p1');
+      }
+    });
+  });
+
   pollVercelDeploy();
   setInterval(pollVercelDeploy, 15000);
 })();
