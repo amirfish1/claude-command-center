@@ -2657,31 +2657,14 @@
     .mobile-reload-btn:active { background: var(--accent); color: #fff; }
   }
 
-  /* ── Desktop-style sidebar primary action: "+ New session" ──
-     Mirrors Claude Desktop — a clear primary button at the top of the
-     left sidebar, above search and the sessions list. Wired to open the
-     existing nsm-overlay modal. */
-  .sidebar-primary {
-    padding: 10px 12px 8px; border-bottom: 1px solid var(--border);
-    display: flex; flex-direction: column; gap: 6px;
+  /* "+ New" lives in the sidebar-header-actions cluster next to the
+     Claude Command Center title. Same .sh-btn shape as its siblings;
+     the + glyph is tinted with the accent so the primary action still
+     reads at a glance. */
+  .sidebar-header-actions .sh-btn-new .plus {
+    color: var(--accent); font-weight: 700; margin-right: 1px;
   }
-  .sidebar-new-btn {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 12px; border-radius: 8px;
-    border: 1px solid var(--border); background: var(--bg);
-    color: var(--text); font-size: 13px; font-weight: 600;
-    cursor: pointer; font-family: inherit;
-    transition: background 0.12s, border-color 0.12s, transform 0.08s;
-  }
-  .sidebar-new-btn:hover { background: var(--surface-2); border-color: var(--accent); }
-  .sidebar-new-btn:active { transform: scale(0.98); }
-  .sidebar-new-btn .plus { font-size: 16px; line-height: 1; color: var(--accent); font-weight: 700; }
-  .sidebar-new-btn .kbd {
-    margin-left: auto; font-size: 10px; color: var(--text-muted);
-    border: 1px solid var(--border); border-radius: 4px;
-    padding: 1px 5px; font-family: 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
-    opacity: 0.8;
-  }
+  .sidebar-header-actions .sh-btn-new:hover { border-color: rgba(88,166,255,0.4); }
 
   /* Sidebar footer strip — appearance + settings (Claude-Desktop pattern) */
   .sidebar-footer {
@@ -2940,19 +2923,13 @@
       <span class="dot"></span>
       <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
       <div class="sidebar-header-actions">
+        <button class="sh-btn sh-btn-new" id="sidebarNewBtn" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New</button>
         <button class="conv-compact-toggle sh-btn" id="convCompactToggle" title="Compact rows — keep each card to a single line" aria-label="Toggle compact rows"><span aria-hidden="true">&#8801;</span></button>
         <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Toggle Kanban board view" aria-label="Toggle Kanban board view"><span aria-hidden="true">&#9783;</span> Board</button>
         <button class="conv-archive-toggle sh-btn" id="convArchiveToggle" title="Show archived">&#128230;</button>
         <button class="conv-sort-btn sh-btn" id="convSortBtn" title="Sort by latest response (ignores custom order)">&#8693;</button>
         <button class="conv-refresh-btn sh-btn" id="convRefreshBtn" title="Refresh conversation list">&#8634;</button>
       </div>
-    </div>
-
-    <div class="sidebar-primary">
-      <button type="button" class="sidebar-new-btn" id="sidebarNewBtn" title="Spawn a new Claude session" aria-label="New session">
-        <span class="plus" aria-hidden="true">+</span>
-        <span>New session</span>
-      </button>
     </div>
 
     <div class="deploy-panel" id="deployPanel">

@@ -1,0 +1,1 @@
+The sidebar **+ New session** action is now a small button next to the "Claude Command Center" title (matching the rest of the header action cluster) instead of a full-width box above the deploy panel. Behaviour is unchanged — it still opens the inline new-session pane on the right.
