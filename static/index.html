@@ -10685,11 +10685,79 @@
   } catch (_) {}
 
   // ── Sidebar primary "+ New session" button ─────────────────────
-  // Reuses the existing nsm-overlay modal so the new-session UX is
-  // consistent regardless of where the user triggers it from.
+  // Opens an empty conversation pane on the right with the input bar
+  // ready to receive a prompt — pressing Enter spawns a fresh agent.
   const $sidebarNewBtn = document.getElementById('sidebarNewBtn');
   if ($sidebarNewBtn) {
-    $sidebarNewBtn.addEventListener('click', () => openNewSessionModal());
+    $sidebarNewBtn.addEventListener('click', () => enterNewSessionMode());
+  }
+
+  function enterNewSessionMode() {
+    if (typeof stopConvStream === 'function') stopConvStream();
+    if (typeof stopSpawnStream === 'function') stopSpawnStream();
+    if (typeof stopPkoodTailPoller === 'function') stopPkoodTailPoller();
+    currentConversation = '__new__';
+    setCurrentSession(null, null, null, false, null);
+    if ($convList) $convList.querySelectorAll('.conv-item.active').forEach(el => el.classList.remove('active'));
+    if ($kanbanBoard) $kanbanBoard.querySelectorAll('.kanban-card.active').forEach(el => el.classList.remove('active'));
+    if ($kanbanBoardSplit) $kanbanBoardSplit.querySelectorAll('.kanban-card.active').forEach(el => el.classList.remove('active'));
+    const $view = getConvView();
+    if ($view) {
+      $view.innerHTML = '<div class="empty-state" style="height:auto;padding:48px 32px;flex-direction:column;gap:10px;text-align:center;">'
+        + '<div style="font-size:16px;color:var(--text);">Start a new session</div>'
+        + '<div style="font-size:13px;color:var(--text-muted);max-width:480px;line-height:1.5;">Type a prompt below and press Enter to spawn a fresh Claude agent. The new session will appear in the sidebar.</div>'
+        + '</div>';
+    }
+    updateInputBar();
+    if (typeof mobileShowForCurrentMode === 'function') mobileShowForCurrentMode();
+    setTimeout(() => { if ($convInput) { $convInput.value = ''; $convInput.focus(); } }, 30);
+  }
+
+  async function spawnFromInlineInput(body) {
+    function firstSentence(text) {
+      const chunks = text.split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
+      const first = chunks[0] || text.trim();
+      return first.length > 120 ? first.slice(0, 120).trim() + '...' : first;
+    }
+    const subject = firstSentence(body);
+    const prompt = body + SESSION_STATE_INSTRUCTION;
+    if ($convSendBtn) $convSendBtn.disabled = true;
+    const flashRed = () => {
+      if (!$convInput) return;
+      $convInput.style.borderColor = 'var(--red)';
+      setTimeout(() => { $convInput.style.borderColor = ''; }, 1500);
+    };
+    try {
+      const res = await fetch('/api/sessions/spawn', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ prompt, name: subject }),
+      });
+      const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
+      if (data.ok) {
+        insertPendingSpawnCard(data.pid, subject, false);
+        if ($convInput) $convInput.value = '';
+        const $view = getConvView();
+        if ($view) {
+          $view.innerHTML = '<div class="empty-state" style="height:auto;padding:48px 32px;flex-direction:column;gap:10px;text-align:center;">'
+            + '<div style="font-size:15px;color:var(--text);">Spawning new session…</div>'
+            + '<div style="font-size:13px;color:var(--text-muted);max-width:480px;line-height:1.5;">It will appear in the sidebar in a moment — click it to follow along.</div>'
+            + '</div>';
+        }
+        setTimeout(refreshConversationList, 600);
+        setTimeout(refreshConversationList, 1500);
+        setTimeout(refreshConversationList, 3000);
+      } else {
+        flashRed();
+        showOpToast('Spawn failed: ' + (data.error || 'HTTP ' + res.status), 'error');
+        console.error('[New session] spawn failed', data);
+      }
+    } catch (err) {
+      flashRed();
+      showOpToast('Spawn failed: ' + (err && err.message || 'network'), 'error');
+      console.error('[New session] submit error', err);
+    }
+    if ($convSendBtn) $convSendBtn.disabled = false;
+    if ($convInput) $convInput.focus();
   }
 
   // ── Appearance picker (theme + font) ───────────────────────────
