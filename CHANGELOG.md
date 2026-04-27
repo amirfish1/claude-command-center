@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Screenshots in the bug-report modal — an "Add screenshot" button opens
+  the macOS area-selector (`screencapture -i`) so the user draws a
+  rectangle over exactly what they want to share. The preview renders in
+  the modal with Retake / Remove controls. On submit the image is committed
+  to a dedicated `bug-screenshots` branch of `amirfish1/claude-command-center`
+  and embedded inline in the issue body via `raw.githubusercontent.com`. If
+  the push fails (typical for OSS users without write access), the image is
+  saved to `~/.claude/command-center/bug-screenshots/`, Finder pops to it,
+  and the issue body carries a drag-drop instruction so the user can attach
+  it manually. New endpoints: `POST /api/bug-report/capture`,
+  `POST /api/bug-report/reveal`. `POST /api/bug-report` now accepts an
+  optional `screenshot_b64` field.
 - **Sibling-worktree detection in the workspace strip.** Workspace pill now
   surfaces a `🌿 +N worktrees (X subagent · Y manual)` chip when the session's
   repo has worktrees besides the one it's editing in. Tooltip lists each
@@ -216,6 +228,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   indicator. Now uses `100dvh` and `padding-bottom:
   env(safe-area-inset-bottom)` so the input stays visible above both,
   and resizes when the on-screen keyboard opens.
+
+## [0.1.4] - 2026-04-25
+
+### Fixed
+- Sessions spawned in repos whose path contains non-alphanumeric
+  characters (most commonly `+`, but also `.`, `_`, spaces) are now
+  visible on the kanban. Claude Code 2.x sanitises every non-alnum
+  character to `-` when naming its `~/.claude/projects/<slug>/`
+  subdir; CCC's encoder previously only replaced `/`, so a repo at
+  e.g. `~/Apps/BYM+Finie` had its sessions written under
+  `-Users-amirfish-Apps-BYM-Finie` while CCC scanned
+  `-Users-amirfish-Apps-BYM+Finie`. Symptom: clicking "Start session"
+  on a backlog card briefly showed a placeholder in Working, then
+  the placeholder vanished and the backlog card never cleared,
+  while the spawned `claude -p` kept running invisibly.
 
 ## [0.1.3] - 2026-04-24
 
