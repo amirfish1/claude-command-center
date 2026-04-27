@@ -529,7 +529,7 @@
   .conv-sticky-header.is-resized .user-msg {
     max-height: none; overflow: auto;
   }
-  .conv-sticky-header .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }
+  .conv-sticky-header .label { color: var(--accent); font-weight: 600; font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }
   .conv-sticky-header__resize-handle {
     position: absolute; left: 0; right: 0; bottom: 0;
     height: 10px; cursor: ns-resize;
@@ -3021,7 +3021,10 @@
   function splitFirstSentence(text) {
     if (!text) return ['', ''];
     const s = String(text).trim();
-    const m = s.match(/^([\s\S]*?[.!?])\s+([\s\S]+)$/) || s.match(/^([^\n]+)\n+([\s\S]+)$/);
+    // Split only on real sentence terminators (.!?) followed by whitespace.
+    // A bare newline is NOT a split point — the user's first sentence often
+    // wraps mid-clause (e.g. `btw the "Recap\nlatest assistant turn"`).
+    const m = s.match(/^([\s\S]*?[.!?])\s+([\s\S]+)$/);
     if (!m) return [s, ''];
     return [m[1].trim(), m[2].trim()];
   }
