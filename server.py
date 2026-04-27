@@ -994,6 +994,10 @@ SESSION_NAMES_FILE = COMMAND_CENTER_STATE_DIR / "session-names.json"  # side-car
 CONVERSATION_ORDER_FILE = COMMAND_CENTER_STATE_DIR / "conversation-order.json"  # [session_id,...]
 ARCHIVED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "archived-conversations.json"  # [session_id,...]
 VERIFIED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "verified-conversations.json"  # [session_id,...]
+# {session_id: epoch_seconds} — last time the user interacted with this card
+# from the UI (typed a message, clicked Approve/Deny, etc.). Drag-drop and
+# auto-events do NOT count.
+LAST_INTERACTIONS_FILE = COMMAND_CENTER_STATE_DIR / "last-interactions.json"
 SESSION_ISSUES_FILE = COMMAND_CENTER_STATE_DIR / "session-issues.json"  # {session_id: issue_number}
 FIX_DEPLOY_SPAWNED_FILE = COMMAND_CENTER_STATE_DIR / "fix-deploy-spawned.json"  # {commit_sha: {pid, spawned_at, name}}
 # {bind_host, allowed_origins[], trust_tailnet} — persisted same-origin
@@ -1226,6 +1230,43 @@ def _save_verified_conversations(verified):
         verified = []
     VERIFIED_CONVERSATIONS_FILE.write_text(json.dumps(verified, indent=2))
     return verified
+
+
+def _load_last_interactions():
+    """Return {session_id: epoch_seconds} of the user's last UI interaction."""
+    try:
+        data = json.loads(LAST_INTERACTIONS_FILE.read_text())
+        if isinstance(data, dict):
+            out = {}
+            for k, v in data.items():
+                if isinstance(k, str):
+                    try:
+                        out[k] = float(v)
+                    except (TypeError, ValueError):
+                        continue
+            return out
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def _record_interaction(session_id):
+    """Stamp the user's most recent UI interaction with this session.
+
+    Called from endpoints driven by an explicit user click/keystroke
+    (typing a message, Approve/Deny, etc.). Drag-drop reordering and
+    auto-events must NOT call this — interaction means the human did
+    something to the card on purpose.
+    """
+    if not session_id:
+        return
+    try:
+        data = _load_last_interactions()
+        data[session_id] = time.time()
+        LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        LAST_INTERACTIONS_FILE.write_text(json.dumps(data, indent=2))
+    except OSError:
+        pass
 
 
 def _load_session_issues():
@@ -3134,6 +3175,7 @@ def find_conversations():
     name_overrides = _load_session_name_overrides()
     archived_set = set(_load_archived_conversations())
     verified_set = set(_load_verified_conversations())
+    last_interactions = _load_last_interactions()
     # Skip sessions created by our own `claude -p` title-summarizer calls.
     # The summarizer prompts start with these exact prefixes (see
     # summarize_session_title / the GitHub-issue title summarizer). Without
@@ -3256,10 +3298,19 @@ def find_conversations():
             "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
             "archived": sid in archived_set,
             "verified": sid in verified_set,
+            # Last time the user interacted with this card via the UI.
+            # None when they've never clicked/typed since this feature shipped.
+            "last_interacted": last_interactions.get(sid) or last_interactions.get(conv_id),
         })
 
-    # Primary sort: most recently modified (= latest response) first
-    conversations.sort(key=lambda x: x["modified"], reverse=True)
+    # Primary sort: most recent activity first. Use whichever is later between
+    # the user's last UI interaction and the session's last meaningful event,
+    # so a card the user just typed into bubbles up immediately even before
+    # Claude responds.
+    conversations.sort(
+        key=lambda x: max(x.get("last_interacted") or 0, x.get("modified") or 0),
+        reverse=True,
+    )
     # Apply custom order (if any): listed sessions first in saved order,
     # unlisted (e.g. newly-created) sessions after, by mtime desc.
     order = _load_conversation_order()
@@ -3539,8 +3590,14 @@ def find_all_sessions():
             c["gh_state"] = "OPEN"
             c["gh_in_progress"] = "claude-in-progress" in (c.get("issue_labels") or [])
 
-    # Sort by mtime desc, then apply custom order
-    conversations.sort(key=lambda x: x["modified"], reverse=True)
+    # Sort by latest activity desc (using user-interaction timestamp when it's
+    # more recent than the session's mtime), then apply custom order. Pkood
+    # and backlog cards lack `last_interacted` and fall back to `modified` —
+    # the max() handles missing keys uniformly.
+    conversations.sort(
+        key=lambda x: max(x.get("last_interacted") or 0, x.get("modified") or 0),
+        reverse=True,
+    )
     order = _load_conversation_order()
     if order:
         by_sid = {c["session_id"]: c for c in conversations}
@@ -5059,6 +5116,7 @@ def mark_issue_in_progress(issue_number, force_reopen=False):
         out = subprocess.run(
             ["gh", "issue", "edit", str(issue_number),
              "--add-label", "claude-in-progress",
+             "--remove-label", "icebox",
              "--add-assignee", "@me"],
             capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
         )
@@ -5074,9 +5132,12 @@ def mark_issue_in_progress(issue_number, force_reopen=False):
 
 
 def mark_issue_icebox(issue_number):
-    """Signal that an issue is parked in the icebox (Planning column in the UI):
+    """Signal that an issue is parked in the Icebox column:
     - adds the `icebox` label
     - removes `claude-in-progress` since the issue is parked, not being worked
+
+    Mirror of mark_issue_in_progress: each operation adds its own label and
+    strips the other so the GitHub state always matches a single column.
     """
     global _backlog_issues_cache_ts, _issue_state_cache_ts
     result = {"ok": False, "issue_number": str(issue_number)}
@@ -5311,14 +5372,397 @@ def parse_conversation_by_sid(session_id, after_line=0):
 # Patterns for the session-timeline endpoint. Bash command prefixes that
 # represent shipping-relevant events; we capture them so the conv pane can
 # render a chronological strip ("Turn 4: commit, Turn 7: push, Turn 12: PR").
-_TIMELINE_COMMIT_RE = re.compile(r"^\s*git\s+commit\b")
+# `\bgit\s+(?:-\w+\s+\S+\s+)*commit\b` matches:
+#   git commit ...
+#   git -C /path commit ...
+#   git -c user.email=foo commit ...
+#   cd /path && git commit ...   (\bgit matches mid-string)
+# `cd /abs/path` and `git -C /abs/path ...` — capture the path argument so
+# we can attribute the session's edits to a repo even when its launch cwd
+# is an empty stub directory.
+_BASH_CD_RE = re.compile(r"\bcd\s+(?:--\s+)?([^\s;&|<>]+)")
+_BASH_GIT_C_RE = re.compile(r"\bgit\s+-C\s+([^\s;&|<>]+)")
+
+_TIMELINE_COMMIT_RE = re.compile(r"\bgit\s+(?:-\w+\s+\S+\s+)*commit\b")
 _TIMELINE_COMMIT_MSG_RE = re.compile(r"-m\s+[\"']([^\"']{1,200})[\"']")
-_TIMELINE_PUSH_RE = re.compile(r"^\s*git\s+push\b")
-_TIMELINE_PR_CREATE_RE = re.compile(r"^\s*gh\s+pr\s+create\b")
+_TIMELINE_PUSH_RE = re.compile(r"\bgit\s+(?:-\w+\s+\S+\s+)*push\b")
+_TIMELINE_PR_CREATE_RE = re.compile(r"\bgh\s+pr\s+create\b")
 _TIMELINE_PR_TITLE_RE = re.compile(r"--title\s+[\"']([^\"']{1,200})[\"']")
 _TIMELINE_PR_NUMBER_FROM_URL_RE = re.compile(r"/pull/(\d+)")
 # `git commit` output starts with `[branch sha] subject` — capture both.
 _TIMELINE_COMMIT_RESULT_RE = re.compile(r"\[[^\]]+\s+([0-9a-f]{7,40})\]\s*(.+)")
+
+
+def _git_toplevel_for_path(path, cache):
+    """Return the git toplevel for `path` (the dir if it exists, else its
+    closest existing ancestor). Cached per-call so a session that touched
+    100 files in the same repo only shells out once.
+
+    Display-only: callers must NOT use this to dispatch git writes. The
+    answer is inferred from what tool calls *referenced*, which can include
+    files that don't exist yet (e.g. a new file path passed to Write).
+    """
+    try:
+        p = Path(path).expanduser()
+    except (ValueError, OSError):
+        return None
+    # Walk up to the closest existing ancestor — git rev-parse needs a real
+    # directory to start from. New-file paths (Write to a not-yet-created
+    # file) still resolve via their parent.
+    probe = p if p.exists() else None
+    if probe is None:
+        for ancestor in p.parents:
+            if ancestor.exists():
+                probe = ancestor
+                break
+    if probe is None:
+        return None
+    if not probe.is_dir():
+        probe = probe.parent
+    key = str(probe)
+    if key in cache:
+        return cache[key]
+    try:
+        r = subprocess.run(
+            ["git", "-C", key, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=2,
+        )
+        top = r.stdout.strip() if r.returncode == 0 else None
+    except (subprocess.SubprocessError, OSError):
+        top = None
+    cache[key] = top
+    return top
+
+
+def _scan_session_tool_paths(session_id, max_events=400):
+    """Walk a session's JSONL and collect absolute paths it touched.
+
+    Returns a tuple (file_paths, cd_targets) where:
+    - file_paths: paths from Read/Edit/Write `file_path` (with duplicates).
+    - cd_targets: paths from Bash `cd <path>` and `git -C <path>` (deduped,
+      preserving discovery order). These are *strong* hints about where
+      the session relocated to — useful for remapping stale file_paths
+      whose prefix points at an empty stub directory.
+
+    Capped at ~400 assistant events for bounded latency on long sessions.
+    """
+    if not PROJECTS_ROOT.is_dir():
+        return [], []
+    jsonl = None
+    for pd in PROJECTS_ROOT.iterdir():
+        if not pd.is_dir():
+            continue
+        cand = pd / f"{session_id}.jsonl"
+        if cand.is_file():
+            jsonl = cand
+            break
+    if not jsonl:
+        return [], []
+    file_paths = []
+    cd_targets = []
+    cd_seen = set()
+    seen_events = 0
+    try:
+        with open(jsonl, "r") as f:
+            for line in f:
+                if seen_events >= max_events:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "assistant":
+                    continue
+                if ev.get("isSidechain"):
+                    continue
+                seen_events += 1
+                msg = _safe_parse_message(ev.get("message", {}))
+                for block in msg.get("content", []):
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") != "tool_use":
+                        continue
+                    name = block.get("name", "")
+                    inp = block.get("input") or {}
+                    if name in ("Read", "Edit", "Write", "NotebookEdit"):
+                        fp = inp.get("file_path")
+                        if isinstance(fp, str) and fp.startswith("/"):
+                            file_paths.append(fp)
+                    elif name == "Bash":
+                        cmd = inp.get("command", "")
+                        if not isinstance(cmd, str):
+                            continue
+                        for m in _BASH_CD_RE.finditer(cmd):
+                            cd_path = m.group(1).strip("'\"")
+                            if (cd_path.startswith("/") or cd_path.startswith("~")) and cd_path not in cd_seen:
+                                cd_seen.add(cd_path)
+                                cd_targets.append(cd_path)
+                        for m in _BASH_GIT_C_RE.finditer(cmd):
+                            gc_path = m.group(1).strip("'\"")
+                            if (gc_path.startswith("/") or gc_path.startswith("~")) and gc_path not in cd_seen:
+                                cd_seen.add(gc_path)
+                                cd_targets.append(gc_path)
+    except OSError:
+        return [], []
+    return file_paths, cd_targets
+
+
+def _remap_stale_path(path, literal_cwd, cd_targets):
+    """If `path` is rooted at the session's launch cwd but the file no
+    longer exists there, try prefix-substitution against each known
+    `cd <target>` redirect — return the first variant that exists.
+
+    This catches the BYM+Finie pattern: session launched from
+    `~/my-finance-app` (an empty stub), then ran `cd ~/Apps/BYM+Finie`,
+    then issued Reads with paths like `~/my-finance-app/apps/...` which
+    actually live under `~/Apps/BYM+Finie/apps/...`.
+
+    Returns the remapped path or None if no candidate works.
+    """
+    if not literal_cwd or not path or not path.startswith(literal_cwd):
+        return None
+    try:
+        if Path(path).exists():
+            return None
+    except OSError:
+        return None
+    suffix = path[len(literal_cwd):].lstrip("/")
+    for target in cd_targets:
+        try:
+            t = Path(target).expanduser()
+        except (ValueError, OSError):
+            continue
+        if not t.is_dir():
+            continue
+        candidate = t / suffix
+        try:
+            if candidate.exists():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
+def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None):
+    """From a session's tool-call file paths, find the dominant git repo.
+
+    Returns dict with keys: top, count, total, branch, kind, ahead, behind
+    — or None if no repo dominates the resolved paths (or no paths).
+
+    Stale-path remap: a session whose launch cwd is an empty stub may
+    issue Reads with paths under that stub that actually live in another
+    repo it `cd`'d into. We try prefix substitution against known cd
+    targets so those paths still count as evidence.
+
+    `exclude_top` lets callers say "I already know cwd resolves to repo X,
+    only surface inference if a *different* repo dominates."
+    """
+    file_paths, cd_targets = _scan_session_tool_paths(session_id)
+    if not file_paths and not cd_targets:
+        return None
+    cache = {}
+    counts = {}
+
+    # Strong evidence: every cd/git-C target counts once. If the session
+    # explicitly relocated, that's a clear "I'm working here" signal.
+    for target in cd_targets:
+        top = _git_toplevel_for_path(target, cache)
+        if top:
+            counts[top] = counts.get(top, 0) + 1
+
+    # File-path evidence with stale-path remap fallback.
+    for raw in file_paths:
+        top = _git_toplevel_for_path(raw, cache)
+        if not top:
+            remapped = _remap_stale_path(raw, literal_cwd, cd_targets)
+            if remapped:
+                top = _git_toplevel_for_path(remapped, cache)
+        if top:
+            counts[top] = counts.get(top, 0) + 1
+
+    if not counts:
+        return None
+    total = sum(counts.values())
+    top, count = max(counts.items(), key=lambda kv: kv[1])
+    # Need at least 2 evidence points so a single incidental match doesn't
+    # win, AND >50% of resolved paths so a clear winner exists.
+    if count < 2 or count * 2 <= total:
+        return None
+    if exclude_top and top == exclude_top:
+        return None
+
+    # Cheap re-use of git for branch + ahead/behind on the inferred repo.
+    def git(*args, timeout=2):
+        try:
+            r = subprocess.run(
+                ["git", "-C", top, *args],
+                capture_output=True, text=True, timeout=timeout,
+            )
+            if r.returncode == 0:
+                return r.stdout.strip()
+        except (subprocess.SubprocessError, OSError):
+            pass
+        return None
+
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    if branch == "HEAD":
+        branch = None
+    upstream = git("rev-parse", "--abbrev-ref", "@{u}")
+    base = upstream or "main"
+    ahead = behind = None
+    rl = git("rev-list", "--left-right", "--count", f"{base}...HEAD")
+    if rl:
+        try:
+            b_str, a_str = rl.split()
+            behind = int(b_str)
+            ahead = int(a_str)
+        except (ValueError, IndexError):
+            pass
+
+    # worktree vs shared clone — same .git-file-vs-dir test as the literal cwd.
+    kind = "clone"
+    try:
+        gp = Path(top) / ".git"
+        if gp.is_file():
+            kind = "worktree"
+    except OSError:
+        pass
+
+    return {
+        "top": top,
+        "count": count,
+        "total": total,
+        "branch": branch,
+        "kind": kind,
+        "ahead": ahead,
+        "behind": behind,
+    }
+
+
+def extract_session_workspace(session_id):
+    """Resolve which workspace (shared clone vs. git worktree) a session
+    is editing in, plus branch + ahead/behind. Powers the conv pane's
+    "Workspace" panel so users can tell at a glance whether a session is
+    working on main or in a feature worktree.
+    """
+    out = {
+        "cwd": None, "exists": False, "is_repo": False,
+        "is_worktree": False, "branch": None,
+        "main_repo_path": None,
+        "commits_ahead": None, "commits_behind": None,
+        "co_tenants": 0,
+        # Tool-call-inferred effective workspace — set below when the
+        # session's actual edits land somewhere other than its launch cwd
+        # (e.g. cwd is an empty stub directory but the session is editing
+        # a real repo elsewhere). Display-only; never used to dispatch
+        # writes, since inference can be wrong.
+        "effective_cwd": None,
+        "effective_branch": None,
+        "effective_kind": None,
+        "effective_commits_ahead": None,
+        "effective_commits_behind": None,
+        "effective_path_count": 0,
+        "effective_total_paths": 0,
+        "effective_source": None,
+    }
+    cwd = find_session_cwd(session_id)
+    if not cwd:
+        return out
+    out["cwd"] = cwd
+    p = Path(cwd)
+    if not p.is_dir():
+        return out
+    out["exists"] = True
+
+    # A worktree's `.git` is a file containing `gitdir: <path>`.
+    # The shared clone's `.git` is a directory.
+    git_path = p / ".git"
+    if git_path.is_file():
+        out["is_repo"] = True
+        out["is_worktree"] = True
+        try:
+            line = git_path.read_text().strip()
+            if line.startswith("gitdir:"):
+                gitdir = Path(line[len("gitdir:"):].strip())
+                # gitdir typically points at <main>/.git/worktrees/<name>,
+                # so the main repo dir is two parents up.
+                if gitdir.is_absolute():
+                    candidate_dot_git = gitdir.parent.parent
+                    if candidate_dot_git.name == ".git":
+                        out["main_repo_path"] = str(candidate_dot_git.parent)
+        except OSError:
+            pass
+    elif git_path.is_dir():
+        out["is_repo"] = True
+
+    # Don't early-exit on non-repo cwd: we still want to run tool-call
+    # inference for sessions whose launch cwd is an empty stub directory
+    # but whose actual edits land in a real repo elsewhere (the BYM+Finie
+    # case). The git()-on-cwd block below is harmless to skip in that case.
+
+    def git(*args, timeout=2):
+        try:
+            r = subprocess.run(
+                ["git", "-C", cwd, *args],
+                capture_output=True, text=True, timeout=timeout,
+            )
+            if r.returncode == 0:
+                return r.stdout.strip()
+        except (subprocess.SubprocessError, OSError):
+            pass
+        return None
+
+    if out["is_repo"]:
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
+        if branch and branch != "HEAD":
+            out["branch"] = branch
+
+        # Compare against the configured upstream if any, else `main`.
+        upstream = git("rev-parse", "--abbrev-ref", "@{u}")
+        base = upstream or "main"
+        counts = git("rev-list", "--left-right", "--count", f"{base}...HEAD")
+        if counts:
+            try:
+                behind, ahead = counts.split()
+                out["commits_behind"] = int(behind)
+                out["commits_ahead"] = int(ahead)
+            except (ValueError, IndexError):
+                pass
+
+    # Co-tenants: how many OTHER live sessions are in this same cwd?
+    try:
+        registry = _load_session_registry()
+        for sid_other, info in registry.items():
+            if sid_other == session_id:
+                continue
+            if (info or {}).get("cwd") == cwd:
+                out["co_tenants"] += 1
+    except Exception:
+        pass
+
+    # Tool-call inference. Resolve the literal cwd's git toplevel once so
+    # we only surface "effective" when it actually disagrees with cwd.
+    cwd_top = None
+    if out["is_repo"]:
+        cwd_top = _git_toplevel_for_path(cwd, {})
+    try:
+        eff = _infer_effective_repo(session_id, literal_cwd=cwd, exclude_top=cwd_top)
+    except Exception:
+        eff = None
+    if eff:
+        out["effective_cwd"] = eff["top"]
+        out["effective_branch"] = eff["branch"]
+        out["effective_kind"] = eff["kind"]
+        out["effective_commits_ahead"] = eff["ahead"]
+        out["effective_commits_behind"] = eff["behind"]
+        out["effective_path_count"] = eff["count"]
+        out["effective_total_paths"] = eff["total"]
+        out["effective_source"] = "tool-calls"
+
+    return out
 
 
 def extract_session_timeline(session_id):
@@ -5443,6 +5887,185 @@ def extract_session_timeline(session_id):
         return {"events": [], "total_turns": 0}
 
     return {"events": events, "total_turns": turn}
+
+
+def extract_session_usage(session_id):
+    """Walk a session's JSONL transcript and return token-usage stats.
+
+    Each assistant turn carries a `usage` object: input_tokens +
+    cache_creation_input_tokens + cache_read_input_tokens is the size of
+    the prompt window at that turn (cache reads count against the window
+    even though they're billed cheaper). The peak across all assistant
+    turns is the closest the session got to the model's context limit.
+
+    Returns: {latest_input_tokens, peak_input_tokens, total_output_tokens,
+              model, context_limit}
+    """
+    empty = {
+        "latest_input_tokens": 0,
+        "peak_input_tokens": 0,
+        "total_output_tokens": 0,
+        "model": "",
+        "context_limit": 0,
+    }
+    if not PROJECTS_ROOT.is_dir():
+        return empty
+    jsonl = None
+    for pd in PROJECTS_ROOT.iterdir():
+        if not pd.is_dir():
+            continue
+        cand = pd / f"{session_id}.jsonl"
+        if cand.is_file():
+            jsonl = cand
+            break
+    if not jsonl:
+        return empty
+
+    latest = 0
+    peak = 0
+    total_out = 0
+    model = ""
+    try:
+        with open(jsonl, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "assistant":
+                    continue
+                if ev.get("isSidechain"):
+                    continue
+                msg = _safe_parse_message(ev.get("message", {}))
+                if msg.get("model"):
+                    model = msg.get("model")
+                u = msg.get("usage") or {}
+                if not isinstance(u, dict):
+                    continue
+                inp = (u.get("input_tokens") or 0) \
+                    + (u.get("cache_creation_input_tokens") or 0) \
+                    + (u.get("cache_read_input_tokens") or 0)
+                out = u.get("output_tokens") or 0
+                if inp:
+                    latest = inp
+                    if inp > peak:
+                        peak = inp
+                if isinstance(out, int):
+                    total_out += out
+    except OSError:
+        return empty
+
+    # Best-effort context limit. Claude Code's 1M-context variants tag the
+    # model name with a `[1m]` suffix; everything else maps to 200k.
+    limit = 1_000_000 if "[1m]" in model.lower() else 200_000
+    return {
+        "latest_input_tokens": latest,
+        "peak_input_tokens": peak,
+        "total_output_tokens": total_out,
+        "model": model,
+        "context_limit": limit,
+    }
+
+
+_SESSION_STATE_BLOCK_RE = re.compile(
+    r"<session-state>\s*(.*?)\s*</session-state>", re.DOTALL | re.IGNORECASE
+)
+# Inside a <session-state> block we expect labelled lines: DID, FINDING,
+# NEXT_STEP_USER. Tolerant of extra fields by capturing any UPPER_SNAKE label.
+_SESSION_STATE_FIELD_RE = re.compile(
+    r"^([A-Z][A-Z_]+):\s*(.+?)\s*$", re.MULTILINE
+)
+
+
+def _extract_assistant_text(msg):
+    """Pull the human-readable text out of an assistant `message.content`."""
+    out = []
+    for block in (msg or {}).get("content") or []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            t = block.get("text") or ""
+            if t.strip():
+                out.append(t)
+    return "\n\n".join(out).strip()
+
+
+def extract_session_recap(session_id):
+    """Return both the free-form last-assistant-message text and any
+    structured <session-state> block from the most recent turns. The
+    conv pane appends this as a synthetic "recap" card at the bottom
+    so the user can see "what just happened" without scrolling.
+    """
+    empty = {
+        "freeform": "",
+        "session_state": None,
+        "session_state_raw": None,
+        "has_recap": False,
+    }
+    if not PROJECTS_ROOT.is_dir():
+        return empty
+    jsonl = None
+    for pd in PROJECTS_ROOT.iterdir():
+        if not pd.is_dir():
+            continue
+        cand = pd / f"{session_id}.jsonl"
+        if cand.is_file():
+            jsonl = cand
+            break
+    if not jsonl:
+        return empty
+
+    last_text = ""
+    last_session_state_raw = None
+    try:
+        with open(jsonl, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "assistant":
+                    continue
+                if ev.get("isSidechain"):
+                    continue
+                msg = _safe_parse_message(ev.get("message", {}))
+                text = _extract_assistant_text(msg)
+                if not text:
+                    continue
+                last_text = text
+                m = _SESSION_STATE_BLOCK_RE.search(text)
+                if m:
+                    last_session_state_raw = m.group(1).strip()
+    except OSError:
+        return empty
+
+    if not last_text and not last_session_state_raw:
+        return empty
+
+    # Strip the <session-state> block from the freeform text so we don't
+    # double-display it.
+    freeform_clean = _SESSION_STATE_BLOCK_RE.sub("", last_text).strip()
+
+    structured = None
+    if last_session_state_raw:
+        structured = {}
+        for fm in _SESSION_STATE_FIELD_RE.finditer(last_session_state_raw):
+            structured[fm.group(1).lower()] = fm.group(2).strip()
+        if not structured:
+            structured = None
+
+    return {
+        "freeform": freeform_clean,
+        "session_state": structured,
+        "session_state_raw": last_session_state_raw,
+        "has_recap": bool(freeform_clean or last_session_state_raw),
+    }
 
 
 _MORNING_BRAINDUMP_PROMPT = """You are analyzing the user's morning brain-dump.
@@ -6054,6 +6677,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # log under the conv pane's "Original ask" header.
             sid = path.rsplit("/", 2)[-2]
             self.send_json(extract_session_timeline(sid))
+        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/usage$", path):
+            # Token-usage stats for the conv pane's "Context: 142k / 200k" pill.
+            sid = path.rsplit("/", 2)[-2]
+            self.send_json(extract_session_usage(sid))
+        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/recap$", path):
+            # Free-form last-assistant text + structured <session-state>
+            # block, rendered as a synthetic "recap" card at the bottom
+            # of the conversation transcript.
+            sid = path.rsplit("/", 2)[-2]
+            self.send_json(extract_session_recap(sid))
+        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/workspace$", path):
+            # Workspace info — cwd, branch, worktree?, ahead/behind, co-tenants.
+            sid = path.rsplit("/", 2)[-2]
+            self.send_json(extract_session_workspace(sid))
         elif path == "/morning/kanban":
             try:
                 html = (MORNING_STATIC_DIR / "kanban.html").read_text()
@@ -7128,6 +7765,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not sid or not text:
                 self.send_json({"ok": False, "error": "missing session_id or text"})
             else:
+                # Stamp interaction up-front: the user clicked/typed on this
+                # card, which is the whole signal we want — independent of
+                # whether the keystroke injection itself ends up succeeding.
+                _record_interaction(sid)
                 cwd = find_session_cwd(sid)
                 status = session_live_status(sid, cwd)
                 tty = status.get("tty")

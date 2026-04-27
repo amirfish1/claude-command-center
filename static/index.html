@@ -220,6 +220,20 @@
   .toolbar .launch-btn:hover { background: rgba(88, 166, 255, 0.22); }
   .toolbar .launch-btn:active { transform: scale(0.97); }
   .toolbar .launch-btn.launching { opacity: 0.6; }
+  /* Close & announce — full ship+broadcast flow. Lives in convToolbar so
+     it's available without the user having to scroll up to the sticky
+     "Original ask" header. */
+  .toolbar .announce-btn-conv {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer;
+    background: var(--purple); color: #fff;
+    border: 1px solid var(--purple);
+    font-size: 12px; font-weight: 600; font-family: inherit;
+    transition: opacity 0.15s, transform 0.1s;
+  }
+  .toolbar .announce-btn-conv:hover { opacity: 0.9; }
+  .toolbar .announce-btn-conv:active { transform: scale(0.97); }
+  .toolbar .announce-btn-conv:disabled { opacity: 0.6; cursor: default; }
 
   .content {
     flex: 1; overflow-y: auto; padding: 16px 20px;
@@ -294,6 +308,32 @@
   .assistant-text {
     font-size: 15px; padding: 4px 0;
     line-height: 1.5;
+  }
+  /* <session-state> block — slightly muted, italic body, with breathing
+     room between rows. Each row keeps a small uppercase label
+     (DID / INSIGHT / NEXT STEP USER) so it reads consistently. */
+  .session-state-block {
+    margin: 12px 0;
+    padding: 12px 14px;
+    border-left: 2px solid var(--border);
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 14px;
+    line-height: 1.55;
+    opacity: 0.9;
+  }
+  .session-state-block .ssb-row { margin: 0 0 10px; }
+  .session-state-block .ssb-row:last-child { margin-bottom: 0; }
+  .session-state-block .ssb-key {
+    display: inline-block; min-width: 96px; margin-right: 10px;
+    color: var(--text-muted); font-style: normal;
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    opacity: 0.75;
+  }
+  .session-state-block .ssb-next {
+    margin-top: 10px; padding-top: 10px;
+    border-top: 1px dashed var(--border);
   }
   .md-table {
     border-collapse: collapse; margin: 8px 0; font-size: 13px;
@@ -467,8 +507,14 @@
   /* Conversations view */
   .conversations-view { flex: 1; overflow-y: auto; padding: 0 20px 16px; position: relative; }
   .conv-sticky-header {
-    position: sticky; top: -20px; z-index: 5;
-    padding: 36px 12px 16px; margin: -20px -12px 8px;
+    /* Sits at top:0 of conversations-view (its scroll container). The
+       :has() rule below pushes it to top:30px when the live-tool strip
+       is also stuck above it, so they don't overlap. No negative margins
+       — those caused the top half to render above the scroll origin
+       (clipped by overflow:hidden) and made absolute children appear to
+       hide behind .toolbar. */
+    position: sticky; top: 0; z-index: 5;
+    padding: 12px 12px 12px; margin: 0 -12px 8px;
     background: #10151c;
     border-bottom: 1px solid var(--border);
     box-shadow: 0 4px 8px rgba(0,0,0,0.45);
@@ -563,10 +609,134 @@
   .conversations-view .tool-call-group:not(.collapsed) .tool-call-group-header .tcg-arrow { transform: rotate(90deg); }
   .conversations-view .tool-call-group.collapsed .tool-call-group-body { display: none; }
   .conversations-view .tool-call-group-body { padding: 4px 12px 10px; border-top: 1px solid var(--border); }
+  /* Sticky-header two-column layout — Ask | Activity. Each column gets
+     its own subtle panel background so the header reads as "metadata"
+     vs. the conversation prose below. */
+  .conv-sticky-header .csh-row {
+    display: flex; gap: 12px; align-items: stretch;
+    flex: 1 1 auto; min-height: 0;
+  }
+  .conv-sticky-header .csh-col {
+    background: #161c25;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    box-sizing: border-box;
+  }
+  .conv-sticky-header .csh-col-ask {
+    flex: 5 1 0; min-width: 0;
+    display: flex; flex-direction: column; gap: 6px;
+    overflow-y: auto;
+  }
+  .conv-sticky-header .csh-col-activity {
+    flex: 5 1 0; min-width: 0; min-height: 0;
+    display: flex; flex-direction: column;
+    padding: 0;  /* let session-timeline supply its own padding */
+    border: none; background: transparent;
+  }
+  /* Original ask: first sentence at default size, rest small + grey,
+     always wraps (no horizontal scroll). */
+  .conv-sticky-header .csh-col-ask .user-msg {
+    white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+    max-height: none; overflow: visible;
+  }
+  .conv-sticky-header .csh-col-ask .ask-first {
+    display: block;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  .conv-sticky-header .csh-col-ask .ask-rest {
+    display: block;
+    margin-top: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+    opacity: 0.85;
+  }
+  /* Workspace context strip — single row above the conv input bar,
+     Claude-Desktop-style: "⎇ branch ← base · ↑N · ↓M · ⚠ co-tenants".
+     Visible only when a session has a resolvable cwd. Wraps onto a
+     second line if needed — never scrolls horizontally. */
+  .conv-input-context {
+    display: none;
+    align-items: center; gap: 10px 12px;
+    flex-wrap: wrap;
+    padding: 9px 14px;
+    font-size: 13px; color: var(--text-muted);
+    background: transparent;
+    border-top: 1px solid var(--border);
+  }
+  .conv-input-context.visible { display: flex; }
+  .conv-input-context .wp-icon { opacity: 0.7; font-size: 11px; }
+  .conv-input-context .wp-branch {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 13px; color: var(--accent);
+    background: rgba(88,166,255,0.10); padding: 2px 7px; border-radius: 3px;
+    word-break: break-all; overflow-wrap: anywhere;
+  }
+  .conv-input-context .wp-base { color: var(--text-muted); }
+  .conv-input-context .wp-arrow { opacity: 0.4; }
+  .conv-input-context .wp-kind {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 2px 7px; border-radius: 3px; font-weight: 600;
+  }
+  .conv-input-context .wp-kind-worktree { color: var(--accent); background: rgba(88,166,255,0.10); }
+  .conv-input-context .wp-kind-clone { color: var(--orange); background: rgba(210,153,34,0.10); }
+  /* Usage pill — sits at the right end of the input-context row. The
+     wp-usage wrapper is a flex item with margin-left:auto so the pill
+     hugs the right edge regardless of how much workspace info renders. */
+  .conv-input-context .wp-usage {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 11px;
+  }
+  .conv-input-context .wp-usage-pill {
+    padding: 2px 7px; border-radius: 3px; font-weight: 600;
+    color: var(--text-muted); background: rgba(139,148,158,0.10);
+  }
+  .conv-input-context .wp-usage-pill.wp-usage-warm { color: var(--orange); background: rgba(210,153,34,0.12); }
+  .conv-input-context .wp-usage-pill.wp-usage-hot  { color: var(--red);    background: rgba(248,81,73,0.14); }
+  .conv-input-context .wp-usage-pct { opacity: 0.7; font-weight: 400; }
+  .conv-input-context .wp-usage-peak { color: var(--text-muted); font-size: 10px; opacity: 0.7; }
+  .conv-input-context .wp-ahead { color: var(--green); }
+  .conv-input-context .wp-behind { color: var(--orange); }
+  .conv-input-context .wp-even { color: var(--text-muted); opacity: 0.6; }
+  .conv-input-context .wp-cotenants { color: var(--red); margin-left: auto; font-weight: 500; }
+  .conv-input-context .wp-path {
+    margin-left: auto;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 12px; color: var(--text-muted); opacity: 0.7;
+    word-break: break-all; overflow-wrap: anywhere;
+  }
+  .conv-input-context .wp-cotenants ~ .wp-path { margin-left: 8px; }
+  .conv-input-context .wp-eff-divider {
+    flex: 0 0 100%;
+    height: 1px;
+    background: var(--border);
+    opacity: 0.5;
+    margin: 4px 0 2px;
+  }
+  .conv-input-context .wp-eff-tag {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 2px 7px; border-radius: 3px; font-weight: 600;
+    color: var(--text-muted);
+    background: rgba(255,255,255,0.05);
+    border: 1px dashed var(--border);
+  }
+  .conv-sticky-header .csh-col-activity .session-timeline {
+    margin-top: 0;
+    flex: 1 1 auto; min-height: 0;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .conv-sticky-header .csh-col-activity .session-timeline .stl-body {
+    overflow-y: auto; min-height: 0; flex: 1 1 auto;
+  }
   /* Session-activity timeline — chronological commit / push / PR strip
-     under the sticky "Original ask" header, with turn-position + gaps. */
+     in the right column of the sticky header. */
   .session-timeline {
-    margin-top: 10px; padding: 8px 10px;
+    padding: 8px 10px;
     background: var(--surface);
     border: 1px solid var(--border); border-radius: 6px;
     font-size: 12px;
@@ -761,14 +931,18 @@
   }
   .conv-input-bar.visible { display: flex; align-items: center; gap: 8px; }
   .conv-input-bar input {
-    flex: 1; padding: 10px 14px;
+    flex: 1; padding: 14px 16px;
     border-radius: 8px; border: 1px solid var(--border);
-    background: var(--bg); color: var(--text);
-    font-size: 14px; font-family: inherit; outline: none;
+    background: var(--bg);
+    /* Brighter than --text (#c9d1d9) so the prompt has the same legibility
+       as Claude Desktop's input. Light-mode override below keeps it dark. */
+    color: #f0f6fc;
+    font-size: 15px; font-weight: 500; font-family: inherit; outline: none;
     transition: border-color 0.15s;
   }
+  :root[data-theme="light"] .conv-input-bar input { color: #1f2328; }
   .conv-input-bar input:focus { border-color: var(--accent); }
-  .conv-input-bar input::placeholder { color: var(--text-muted); opacity: 0.5; }
+  .conv-input-bar input::placeholder { color: var(--text-muted); opacity: 0.6; font-weight: 400; }
   .conv-input-bar .send-btn {
     width: 36px; height: 36px; flex-shrink: 0;
     border-radius: 8px; border: none; cursor: pointer;
@@ -890,7 +1064,7 @@
     border-top: 1px solid var(--border);
   }
   .kanban-cards > .kanban-org-header:first-child { border-top: 0; margin-top: 0; padding-top: 2px; }
-  .kanban-column.planning .kanban-card { background: linear-gradient(rgba(188,140,255,0.14), rgba(188,140,255,0.14)), var(--surface); }
+  .kanban-column.icebox   .kanban-card { background: linear-gradient(rgba(188,140,255,0.14), rgba(188,140,255,0.14)), var(--surface); }
   .kanban-column.working  .kanban-card { background: linear-gradient(rgba(210,153,34,0.16), rgba(210,153,34,0.16)), var(--surface); }
   .kanban-column.review   .kanban-card { background: linear-gradient(rgba(57,210,192,0.14), rgba(57,210,192,0.14)), var(--surface); }
   .kanban-column.testing  .kanban-card { background: linear-gradient(rgba(251,202,4,0.14), rgba(251,202,4,0.14)), var(--surface); }
@@ -925,8 +1099,8 @@
   .kanban-column.waiting .kanban-column-header { color: var(--accent); }
   .kanban-column.waiting .count { background: rgba(88,166,255,0.15); color: var(--accent); }
   .kanban-column.idle .kanban-column-header { color: var(--text-muted); }
-  .kanban-column.planning .kanban-column-header { color: var(--purple); }
-  .kanban-column.planning .count { background: rgba(188,140,255,0.2); color: var(--purple); }
+  .kanban-column.icebox   .kanban-column-header { color: var(--purple); }
+  .kanban-column.icebox   .count { background: rgba(188,140,255,0.2); color: var(--purple); }
   .kanban-column.coding .kanban-column-header { color: var(--orange); }
   .kanban-column.coding .count { background: rgba(210,153,34,0.2); color: var(--orange); }
   .kanban-column.review .kanban-column-header { color: var(--cyan); }
@@ -1075,6 +1249,10 @@
   .kanban-card .kanban-action-btn:hover { color: var(--text); background: var(--border); }
   .kanban-card .kanban-card-meta {
     font-size: 11px; color: var(--text-muted); margin-top: 3px;
+  }
+  .kanban-card .kanban-card-interacted {
+    font-size: 10px; color: var(--text-muted); opacity: 0.7;
+    margin-top: 2px; font-style: italic;
   }
   .kanban-card .kanban-card-stage {
     display: inline-block; margin-top: 4px;
@@ -1534,12 +1712,15 @@
     border-left-color: rgba(88,166,255,0.6);
     animation: pulse 1.2s infinite;
   }
-  /* Live "what's running" strip in the conversation detail pane */
+  /* Live "what's running" strip in the conversation detail pane.
+     Background layers the yellow/blue tint over an opaque `--bg` so
+     conversation events scrolling underneath the sticky strip stay hidden
+     instead of bleeding through (an 8% rgba alone is essentially see-through). */
   .conv-live-tool-strip {
     display: flex; align-items: center; gap: 8px;
     padding: 6px 12px; font-size: 12px;
     color: #FBCA04;
-    background: rgba(251,202,4,0.08);
+    background: linear-gradient(rgba(251,202,4,0.08), rgba(251,202,4,0.08)), var(--bg);
     border-bottom: 1px solid rgba(251,202,4,0.25);
     position: sticky; top: 0; z-index: 9;
   }
@@ -1554,12 +1735,92 @@
   .conv-live-tool-strip .cl-age { color: var(--text-muted); font-size: 11px; margin-left: auto; flex: 0 0 auto; }
   .conv-live-tool-strip.in-flight {
     color: #58a6ff;
-    background: rgba(88,166,255,0.08);
+    background: linear-gradient(rgba(88,166,255,0.08), rgba(88,166,255,0.08)), var(--bg);
     border-bottom-color: rgba(88,166,255,0.30);
   }
   .conv-live-tool-strip.in-flight .cl-pulse {
     background: #58a6ff; box-shadow: 0 0 6px rgba(88,166,255,0.7);
     animation: pulse 1.0s infinite;
+  }
+  /* Inline twin of the sticky strip — appended after the last rendered
+     event so the user can see "agent is still working" without having
+     to scroll up to the sticky strip. Shows whenever the strip shows;
+     hidden the moment status flips back to idle. */
+  .conv-live-tool-inline {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; margin: 12px 0;
+    font-size: 12px; color: #FBCA04;
+    background: linear-gradient(rgba(251,202,4,0.10), rgba(251,202,4,0.10)), var(--bg);
+    border: 1px solid rgba(251,202,4,0.30);
+    border-radius: 6px;
+  }
+  .conv-live-tool-inline.in-flight {
+    color: #58a6ff;
+    background: linear-gradient(rgba(88,166,255,0.10), rgba(88,166,255,0.10)), var(--bg);
+    border-color: rgba(88,166,255,0.35);
+  }
+  .conv-live-tool-inline .cl-pulse {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #FBCA04; box-shadow: 0 0 6px rgba(251,202,4,0.7);
+    animation: pulse 1.4s infinite;
+    flex: 0 0 8px;
+  }
+  .conv-live-tool-inline.in-flight .cl-pulse {
+    background: #58a6ff; box-shadow: 0 0 6px rgba(88,166,255,0.7);
+    animation: pulse 1.0s infinite;
+  }
+  .conv-live-tool-inline .cl-tool { font-weight: 600; }
+  .conv-live-tool-inline .cl-file { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .conv-live-tool-inline .cl-age { color: var(--text-muted); font-size: 11px; margin-left: auto; flex: 0 0 auto; }
+  /* Recap card — synthesised from the latest assistant turn (free-form
+     text + any <session-state> block), appended as the last "message"
+     in the transcript so the user can see "what just happened" without
+     scrolling up through tool calls. */
+  .session-recap-card {
+    margin: 16px 0 12px;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    font-size: 13px; line-height: 1.5;
+    color: var(--text);
+  }
+  .session-recap-card .src-header {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--text-muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    margin-bottom: 8px;
+  }
+  .session-recap-card .src-title { font-weight: 600; color: var(--accent); }
+  .session-recap-card .src-freeform {
+    white-space: pre-wrap; word-wrap: break-word;
+  }
+  .session-recap-card .src-freeform code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 12px; background: var(--bg); padding: 1px 5px;
+    border-radius: 3px; color: var(--orange);
+  }
+  .session-recap-card .src-state {
+    margin-top: 10px; padding-top: 10px;
+    border-top: 1px dashed var(--border);
+  }
+  .session-recap-card .src-state-row { margin-bottom: 6px; }
+  .session-recap-card .src-state-row:last-child { margin-bottom: 0; }
+  .session-recap-card .src-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-muted);
+    margin-right: 6px;
+  }
+  /* When the live-tool strip is present above the sticky header, push the
+     header down so they don't both stick at y=0 and overlap.
+     `top: 24px` deliberately *underlaps* the strip's bottom edge by a few
+     pixels — the strip is z-index 9 and opaque, so its lower border paints
+     over the header's top, while guaranteeing no transparent gap exposes
+     the conversation events scrolling underneath. (Strip height varies
+     with the user-agent's default line-height for 12px text, ~26-32px.) */
+  .conversations-view:has(.conv-live-tool-strip) .conv-sticky-header {
+    top: 24px;
   }
   .kanban-approve-deny {
     display: flex; gap: 4px; margin-top: 4px;
@@ -2403,20 +2664,10 @@
   </div>
   <div class="sidebar-resizer" id="sidebarResizer" title="Drag to resize"></div>
   <div class="main">
-    <div class="tab-bar">
-      <button class="mobile-back-btn" id="mobileBackBtn" title="Back to sidebar">&#8592; Back</button>
-      <div class="tab" id="tabIssues" data-tab="issues">Issues <span class="badge" id="issuesBadge" style="display:none">0</span></div>
-      <div class="tab active" id="tabSessions" data-tab="sessions">Sessions</div>
-    </div>
     <div class="toolbar" id="convToolbar">
-      <input type="text" id="newSessionInput" placeholder="New session prompt..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;min-width:0;">
-      <label class="pkood-toggle-label" title="Spawn via Pkood (background agent runner) instead of headless Claude — see docs"><input type="checkbox" id="pkoodToggle"> pkood</label>
-      <button class="launch-btn" id="newSessionBtn" style="padding:5px 10px;font-size:12px;" title="Spawn headless Claude session">Run</button>
+      <button class="mobile-back-btn" id="mobileBackBtn" title="Back to sidebar">&#8592; Back</button>
       <button class="pkood-kill-btn" id="pkoodKillBtn" style="display:none;" title="Kill this pkood agent">Kill</button>
-      <button class="resume-btn" id="resumeBtnConv" style="display:none;" title="Copy CLI command to resume this session">
-        <span class="resume-icon">&#9654;</span>
-        <span class="resume-label">Resume in CLI</span>
-      </button>
+      <button class="announce-btn-conv" id="announceBtnConv" style="display:none;" title="Run /announce-feature — ships and broadcasts to every studio">Close &amp; announce</button>
       <button class="jump-btn" id="jumpBtnConv" style="display:none;" title="Bring the terminal running this session to the front">
         <span class="jump-icon">&#8599;</span>
         <span class="jump-label">Jump to terminal</span>
@@ -2437,6 +2688,10 @@
     </div>
     <div class="conversations-view" id="conversationsView">
       <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
+    </div>
+    <div class="conv-input-context" id="convInputContext">
+      <span class="wp-row" data-workspace></span>
+      <span class="wp-usage" data-usage></span>
     </div>
     <div class="conv-input-bar" id="convInputBar">
       <input type="text" id="convInput" placeholder="Send to terminal..." autocomplete="off">
@@ -2714,7 +2969,19 @@
 
   function cleanIssuePrompt(s) {
     if (!s) return s;
-    return String(s)
+    let out = String(s);
+    // Strip the session-state instruction CCC appends to spawn prompts.
+    // Use the constant rather than a literal so future edits to the
+    // template flow through automatically.
+    if (SESSION_STATE_INSTRUCTION && out.indexOf(SESSION_STATE_INSTRUCTION) !== -1) {
+      out = out.split(SESSION_STATE_INSTRUCTION).join('');
+    }
+    // Generic fallback: strip a "Before your final reply…<session-state>
+    // …</session-state>" trailer even if the constant has shifted slightly
+    // (whitespace, wording tweaks). Anchored to "Before your final reply"
+    // so it can't eat unrelated user text.
+    out = out.replace(/\n*Before your final reply[\s\S]*?<\/session-state>\s*$/i, '');
+    return out
       // Old template
       .replace(/^\s*Fix GitHub issue #\d+:\s*/i, '')
       .replace(/\.?\s*Read the issue first with[^.]*?,\s*then implement the fix\.?\s*$/i, '')
@@ -2731,6 +2998,17 @@
     let first = chunks[0] || String(text).trim();
     if (first.length > maxLen) first = first.slice(0, maxLen).trim() + '…';
     return first;
+  }
+  // Split a prompt into [first sentence, rest] so the sticky-header
+  // "Original ask" box can render the first sentence normal-weight and
+  // the remainder as small grey text. No truncation — the box wraps and
+  // is height-clamped, no horizontal scroll.
+  function splitFirstSentence(text) {
+    if (!text) return ['', ''];
+    const s = String(text).trim();
+    const m = s.match(/^([\s\S]*?[.!?])\s+([\s\S]+)$/) || s.match(/^([^\n]+)\n+([\s\S]+)$/);
+    if (!m) return [s, ''];
+    return [m[1].trim(), m[2].trim()];
   }
   // Tiny inline-markdown renderer for card descriptions. Handles bold, code,
   // headings and bullet lines — enough to preserve Claude's summary formatting
@@ -2782,14 +3060,16 @@
   let currentSession = { id: null, cwd: null, cwdExists: false, source: null };
   let liveStatus = { live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false };
   let liveStatusTimer = null;
+  // Separate 1s tick that just re-renders the live-tool strip + inline
+  // indicator from the cached liveStatus. The 5s poller refreshes the
+  // *data*; this ticker keeps the "running 3s / 4s / 5s" age label
+  // changing every second so the user sees motion.
+  let liveStatusRenderTicker = null;
 
-  const $resumeBtnConv = document.getElementById('resumeBtnConv');
   const $jumpBtnConv = document.getElementById('jumpBtnConv');
   const $launchBtnConv = document.getElementById('launchBtnConv');
   const $convToolbar = document.getElementById('convToolbar');
-  const $newSessionInput = document.getElementById('newSessionInput');
-  const $newSessionBtn = document.getElementById('newSessionBtn');
-  const $pkoodToggle = document.getElementById('pkoodToggle');
+  const $announceBtnConv = document.getElementById('announceBtnConv');
   const $pkoodKillBtn = document.getElementById('pkoodKillBtn');
   let pkoodTailPoller = null; // interval ID for polling pkood tail
   const $convRefreshBtn = document.getElementById('convRefreshBtn');
@@ -2820,10 +3100,7 @@
     return 'cd ' + quotedCwd + ' && claude --resume ' + sid;
   }
 
-  function resumeButtonsForActiveTab() {
-    if (activeTab === 'sessions') return [$resumeBtnConv];
-    return [];
-  }
+  function resumeButtonsForActiveTab() { return []; }
   function jumpButtonsForActiveTab() {
     if (activeTab === 'sessions') return [$jumpBtnConv];
     return [];
@@ -2832,38 +3109,56 @@
     if (activeTab === 'sessions') return [$launchBtnConv];
     return [];
   }
-  function allResumeButtons() { return [$resumeBtnConv].filter(Boolean); }
+  function allResumeButtons() { return []; }
   function allJumpButtons() { return [$jumpBtnConv].filter(Boolean); }
   function allLaunchButtons() { return [$launchBtnConv].filter(Boolean); }
 
-  function updateResumeButton() {
+  // The Resume-in-CLI button used to live in convToolbar; it was removed
+  // because every session row already exposes the same command via its
+  // copy-button menu. Kept as a no-op shim so existing call sites stay valid.
+  function updateResumeButton() {}
+
+  function updateAnnounceButton() {
+    if (!$announceBtnConv) return;
     const sid = currentSession.id;
-    const cwd = currentSession.cwd;
-    const cwdExists = currentSession.cwdExists;
     const isPkood = currentSession.source === 'pkood';
-    const activeBtns = resumeButtonsForActiveTab();
-    // Hide buttons in non-active toolbars
-    for (const btn of allResumeButtons()) {
-      if (!activeBtns.includes(btn)) btn.style.display = 'none';
+    if (!sid || isPkood) {
+      $announceBtnConv.style.display = 'none';
+      delete $announceBtnConv.dataset.sessionId;
+      return;
     }
-    for (const btn of activeBtns) {
-      if (!btn) continue;
-      if (!sid || isPkood) {
-        btn.style.display = 'none';
-        delete btn.dataset.sessionId;
-        delete btn.dataset.resumeCmd;
-        continue;
+    $announceBtnConv.style.display = 'inline-flex';
+    $announceBtnConv.dataset.sessionId = sid;
+    $announceBtnConv.disabled = false;
+    $announceBtnConv.style.opacity = '';
+    $announceBtnConv.textContent = 'Close & announce';
+  }
+  if ($announceBtnConv) {
+    $announceBtnConv.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const sid = $announceBtnConv.dataset.sessionId;
+      if (!sid) return;
+      const feature = window.prompt('Announce what? (short feature name)\n\nLeave blank and /announce-feature will ask.', '');
+      if (feature === null) return;
+      $announceBtnConv.disabled = true;
+      $announceBtnConv.textContent = 'Sending...';
+      const cmd = feature.trim() ? '/announce-feature ' + feature.trim() : '/announce-feature';
+      try {
+        await fetch('/api/inject-input', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ session_id: sid, text: cmd }),
+        });
+        $announceBtnConv.textContent = 'Sent ✓';
+        $announceBtnConv.style.opacity = '0.6';
+      } catch (err) {
+        $announceBtnConv.textContent = 'Failed';
+        setTimeout(() => {
+          $announceBtnConv.textContent = 'Close & announce';
+          $announceBtnConv.disabled = false;
+        }, 2000);
       }
-      const cmd = buildResumeCommand(sid, cwd, cwdExists);
-      btn.style.display = 'inline-flex';
-      btn.dataset.sessionId = sid;
-      btn.dataset.resumeCmd = cmd;
-      btn.classList.remove('copied');
-      btn.classList.toggle('stale', !cwdExists);
-      const label = cwdExists ? 'Resume in CLI' : 'Resume (worktree gone — will recreate)';
-      btn.querySelector('.resume-label').textContent = label;
-      btn.title = cmd;
-    }
+    });
   }
 
   function updateJumpButton() {
@@ -3002,8 +3297,10 @@
 
   function startLiveStatusPolling() {
     if (liveStatusTimer) clearInterval(liveStatusTimer);
+    if (liveStatusRenderTicker) clearInterval(liveStatusRenderTicker);
     refreshLiveStatus();
     liveStatusTimer = setInterval(refreshLiveStatus, 5000);
+    liveStatusRenderTicker = setInterval(updateLiveToolStrip, 1000);
   }
 
   // Render a live "what's running right now" strip docked above the
@@ -3014,12 +3311,14 @@
     const $view = (typeof getConvView === 'function') ? getConvView() : null;
     if (!$view) return;
     let strip = document.querySelector('.conv-live-tool-strip');
+    let inline = $view.querySelector('.conv-live-tool-inline');
     const tool = liveStatus.sidecarTool;
     const ts = liveStatus.sidecarTs || 0;
     const ageSec = ts ? Math.max(0, Math.floor(Date.now() / 1000 - ts)) : 9999;
     const shouldShow = liveStatus.live && tool && liveStatus.sidecarStatus === 'active' && ageSec < 300;
     if (!shouldShow) {
       if (strip) strip.remove();
+      if (inline) inline.remove();
       return;
     }
     const file = liveStatus.sidecarFile || '';
@@ -3043,6 +3342,18 @@
     }
     strip.classList.toggle('in-flight', inFlight);
     strip.innerHTML = html;
+    // Inline twin at the bottom of the transcript. Re-append on every
+    // refresh so it stays the last child even when new events have
+    // streamed in since the last poll.
+    if (!inline) {
+      inline = document.createElement('div');
+      inline.className = 'conv-live-tool-inline';
+    }
+    inline.classList.toggle('in-flight', inFlight);
+    inline.innerHTML = html;
+    if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
+      $view.appendChild(inline);
+    }
   }
 
   const $convSessionId = document.getElementById('convSessionId');
@@ -3069,12 +3380,15 @@
     if (source === 'pkood') {
       // Pkood sessions don't need live status polling or resume button
       if (liveStatusTimer) { clearInterval(liveStatusTimer); liveStatusTimer = null; }
+      if (liveStatusRenderTicker) { clearInterval(liveStatusRenderTicker); liveStatusRenderTicker = null; }
       liveStatus = { live: false, pid: null, tty: null, terminalApp: null };
       updateResumeButton();
+      updateAnnounceButton();
       updateJumpButton();
       updateInputBar();
     } else {
       updateResumeButton();
+      updateAnnounceButton();
       startLiveStatusPolling();
     }
   }
@@ -3280,12 +3594,58 @@
   }
 
   // Minimal markdown renderer for assistant text — tables, inline code, bold, headers
+  function renderSessionStateBlock(body) {
+    // Parse `KEY: value` lines and emit a styled card. Unknown keys are
+    // shown verbatim. NEXT_STEP_USER renders as "→ <value>" without
+    // the key prefix because the arrow is the cue.
+    const lines = body.split('\n').map(s => s.trim()).filter(Boolean);
+    const rows = [];
+    for (const ln of lines) {
+      const m = ln.match(/^([A-Z_]+):\s*(.*)$/);
+      if (!m) {
+        rows.push('<div class="ssb-row ssb-other">' + escapeHtml(ln) + '</div>');
+        continue;
+      }
+      const key = m[1];
+      const val = escapeHtml(m[2]);
+      if (key === 'NEXT_STEP_USER') {
+        rows.push('<div class="ssb-row ssb-next"><span class="ssb-key">Next step user</span>' + val + '</div>');
+      } else if (key === 'DID') {
+        rows.push('<div class="ssb-row ssb-did"><span class="ssb-key">Did</span>' + val + '</div>');
+      } else if (key === 'INSIGHT') {
+        rows.push('<div class="ssb-row ssb-insight"><span class="ssb-key">Insight</span>' + val + '</div>');
+      } else {
+        // Fallback for any future keys: render the raw key name.
+        rows.push('<div class="ssb-row ssb-other"><span class="ssb-key">' + escapeHtml(key.replace(/_/g, ' ').toLowerCase()) + '</span>' + val + '</div>');
+      }
+    }
+    return '<div class="session-state-block">' + rows.join('') + '</div>';
+  }
+
   function renderMarkdown(text) {
     const lines = text.split('\n');
     const out = [];
     let i = 0;
     while (i < lines.length) {
       const line = lines[i];
+      // Session-state block emitted by the orchestration prompt:
+      //   <session-state>
+      //   DID: …
+      //   INSIGHT: …
+      //   NEXT_STEP_USER: …
+      //   </session-state>
+      // Render as a styled card instead of raw <session-state> tags + KEY:
+      // pairs in the prose. Detect first so the block doesn't get partially
+      // gobbled by the table or list logic below.
+      if (/^\s*<session-state>\s*$/.test(line)) {
+        i++;
+        const start = i;
+        while (i < lines.length && !/^\s*<\/session-state>\s*$/.test(lines[i])) i++;
+        const body = lines.slice(start, i).join('\n');
+        if (i < lines.length) i++;  // skip closing tag
+        out.push(renderSessionStateBlock(body));
+        continue;
+      }
       // Fenced code block: ```lang\n...code...\n```
       // Runs BEFORE table/header detection so ``` inside code doesn't get
       // misinterpreted as markdown.
@@ -3939,6 +4299,16 @@
       renderSidebar(filterConversations($convSearch.value));
       loadAttentionList();  // piggy-back on the same refresh cycle
       hideLoadingOverlay();  // first render has happened — reveal the UI
+      // Auto-restore the last-opened card on first load. Only fires when
+      // the user hasn't already clicked something — refresh-after-refresh
+      // shouldn't yank a card out from under an active selection.
+      if (!currentConversation) {
+        let lastId = '';
+        try { lastId = localStorage.getItem('ccc-last-conv') || ''; } catch (_) {}
+        if (lastId && conversationsData.some(c => c.id === lastId)) {
+          selectConversation(lastId);
+        }
+      }
     } catch (err) {
       $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Failed to load sessions: ' + escapeHtml(err.message) + '</div>';
       hideLoadingOverlay();  // even on error — don't leave the user stuck on a spinner
@@ -4563,8 +4933,8 @@
         return;
       }
     }
-    // Moving into working/planning: set override + signal to GitHub
-    if (targetCol === 'working' || targetCol === 'planning') {
+    // Moving into working/icebox: set override + signal to GitHub
+    if (targetCol === 'working' || targetCol === 'icebox') {
       // Unflip backend verified/archived if needed (must succeed before override)
       if (c.verified) {
         try {
@@ -4596,8 +4966,8 @@
         return m ? m[1] : null;
       })() || ((c.id || '').startsWith('backlog-issue-') ? c.id.split('-').pop() : null);
       if (issueNum) {
-        // Planning → `icebox` label ("parked, not active"); Working → `claude-in-progress`.
-        const endpoint = targetCol === 'planning' ? 'mark-icebox' : 'mark-in-progress';
+        // Icebox → `icebox` label ("parked, not active"); Working → `claude-in-progress`.
+        const endpoint = targetCol === 'icebox' ? 'mark-icebox' : 'mark-in-progress';
         fetch('/api/issues/' + issueNum + '/' + endpoint, { method: 'POST' })
           .then(() => setTimeout(refreshConversationList, 800))
           .catch(() => {});
@@ -4717,12 +5087,15 @@
       const stage = sessionStage(c);
       const ghClosed = (c.gh_state || '').toUpperCase() === 'CLOSED';
       const stale =
+        // Migration: 'planning' was renamed to 'icebox' in the planning→icebox
+        // refactor. Drop any leftover overrides from older builds on first render.
+        ov === 'planning' ||
         // Server truth wins: verified/archived cannot coexist with an active-work override.
         c.verified || c.archived ||
-        // Only flag working/planning as stale when work has truly shipped
-        // (pushed) or the linked GH issue is closed. Committed-but-not-pushed
-        // sessions are legitimately still "in-flight" work — keep the override.
-        ((ov === 'working' || ov === 'planning') && (stage === 'pushed' || ghClosed)) ||
+        // Only flag working/icebox as stale when work has truly shipped (pushed)
+        // or the linked GH issue is closed. Committed-but-not-pushed sessions are
+        // legitimately still "in-flight" work — keep the override.
+        ((ov === 'working' || ov === 'icebox') && (stage === 'pushed' || ghClosed)) ||
         ((ov === 'archived') && c.id && c.id.startsWith('backlog-issue-') && (c.issue_state || '').toUpperCase() === 'OPEN');
       if (stale) {
         delete columnOverrides[c.session_id || c.id];
@@ -4746,54 +5119,33 @@
         return 'archived';  // not planned / duplicate / unspecified
       }
       if (hasLabel('needs-attention')) return 'needs-attention';
-      if (hasLabel('icebox')) return 'planning';
+      if (hasLabel('icebox')) return 'icebox';
       return 'backlog';
     }
-    const live = !!c.is_live;
-    const hasSidecar = !!c.sidecar_status;
+
+    // Tiebreak: explicit `icebox` label wins over implicit liveness. A live
+    // session whose issue is parked stays in icebox until the label comes off.
+    if (hasLabel('icebox')) return 'icebox';
+
+    // All live sessions land in Working — sidecar / no-sidecar / has_writes /
+    // no_writes / pkood / pre-tool — they're all live work in progress. The
+    // pre-tool window used to be its own 'planning' column; that's now an
+    // in-card status, not a column.
+    if (c.is_live) return 'working';
+
+    // From here on, the session is dead. Decide based on what it left behind.
     const stage = sessionStage(c);
-
-    // Live sessions with sidecar: trust sidecar state over past commit/push
-    // (the session is still open and between turns, not done)
-    if (live && hasSidecar) {
-      if (c.sidecar_status === 'waiting') return 'working';
-      if (c.sidecar_has_writes) return 'working';
-      return 'planning';
-    }
-
-    // Review: committed/pushed (dead sessions, or live without sidecar)
     if (stage === 'pushed' || stage === 'committed') return 'review';
-
     // Dormant session that made edits and finished its last turn with an assistant
     // message (typically a "done, here's the summary" reply). The work is sitting
     // in the working tree waiting for human review — belongs in Review, not Inactive.
-    if (!live && stage === 'coding' && c.last_event_type === 'assistant') return 'review';
-
-    // Linked-issue label overrides for dead sessions (before falling to Inactive)
+    if (stage === 'coding' && c.last_event_type === 'assistant') return 'review';
     if (hasLabel('needs-attention')) return 'needs-attention';
-    if (hasLabel('icebox')) return 'planning';
     // A session marked claude-in-progress but not actually running:
     // belongs in Working (the label says this is the active work).
     if (hasLabel('claude-in-progress')) return 'working';
 
-    // Dead sessions without commits: inactive (never hide — every session has a column)
-    if (!live && !hasSidecar) return 'inactive';
-
-    // Live but no sidecar: JSONL fallback + pkood
-    if (live) {
-      if (c.source === 'pkood') {
-        const ps = (c.pkood_status || '').toUpperCase();
-        if (ps === 'BLOCKED' || ps === 'IDLE') return 'working';
-        if (ps === 'RUNNING') return 'working';
-        return 'planning';
-      }
-      if (c.pending_tool && c.last_event_type === 'assistant' && !c.sidecar_status) return 'working';
-      if (c.last_event_type === 'result') return 'working';
-      if (c.has_edit) return 'working';
-      return 'planning';
-    }
-
-    // Fallback: never hide anything — every session gets a column
+    // Fallback: never hide anything — every session gets a column.
     return 'inactive';
   }
 
@@ -4804,10 +5156,10 @@
         hint: 'Open GitHub issues and TODO.md / PARKING_LOT items with no session yet.' },
       { key: 'needs-attention', label: 'Needs attention', defaultExpanded: true,
         hint: 'Issues labeled `needs-attention` on GitHub — you flagged them for triage.' },
-      { key: 'planning',        label: 'Planning',        defaultExpanded: true,
-        hint: 'Live session, no edits yet. Claude is still working out the plan.' },
+      { key: 'icebox',          label: 'Icebox',          defaultExpanded: true,
+        hint: 'Parked. The `icebox` GitHub label is set, or you dragged it here. Active intent: don\'t work on this right now.' },
       { key: 'working',         label: 'Working',         defaultExpanded: true,
-        hint: 'Live session actively editing files (sidecar shows writes). Glows when mid-turn.' },
+        hint: 'Live session — Claude is running. Glows when mid-turn.' },
       { key: 'waiting',         label: 'Waiting',         defaultExpanded: true,
         hint: 'Claude is asking for permission (Notification hook). Approve or deny in the terminal.' },
       { key: 'review',          label: 'Review',          defaultExpanded: true,
@@ -4869,8 +5221,8 @@
         const emptyMsg = {
           'backlog': 'No open issues or TODO items.',
           'needs-attention': 'Nothing flagged for triage.',
-          'planning': 'No live planning sessions.',
-          'working': 'No live editing sessions.',
+          'icebox': 'Nothing parked. Drag a card here, or label its issue `icebox`, to park it.',
+          'working': 'No live sessions.',
           'waiting': 'No sessions waiting for approval.',
           'review': 'Nothing waiting for review.',
           'testing': 'Drag cards here to mark as testing.',
@@ -5904,6 +6256,15 @@
       });
       const data = await res.json();
       if (data.ok) {
+        // Optimistic: bump local last_interacted so the card jumps to the top
+        // and the "Last interacted just now" line appears without a refresh.
+        const c = conversationsData.find(x => (x.session_id || x.id) === sessionId);
+        if (c) {
+          c.last_interacted = Date.now() / 1000;
+          if (typeof renderSidebar === 'function' && typeof filterConversations === 'function' && typeof $convSearch !== 'undefined') {
+            renderSidebar(filterConversations($convSearch.value));
+          }
+        }
         if (clearInput) {
           const orig = clearInput.placeholder;
           clearInput.value = '';
@@ -6145,7 +6506,11 @@
 
   function applyConvSort(data) {
     if (convSortMode === 'recent') {
-      return [...data].sort((a, b) => b.modified - a.modified);
+      // Sort by whichever is later: the user's last UI interaction or the
+      // session's last meaningful event. Keeps the just-typed card on top
+      // even before Claude responds.
+      const score = (c) => Math.max(c.last_interacted || 0, c.modified || 0);
+      return [...data].sort((a, b) => score(b) - score(a));
     }
     return data; // custom/default order from server
   }
@@ -6541,6 +6906,10 @@
     stopConvStream();
     mobileShowForCurrentMode();
     currentConversation = id;
+    // Remember which card was last opened so we can re-open it on the
+    // next page load. Reads happen in loadConversationList once the list
+    // is populated; misses (id no longer present) just fall through.
+    try { if (id) localStorage.setItem('ccc-last-conv', id); } catch (_) {}
     convLastLine = 0;
     _firstUserMsgRendered = false;
     _currentToolGroup = null;
@@ -6551,6 +6920,9 @@
     // is later, via renderSessionTimelineIntoSticky).
     const timelineSid = (conversationsData.find(x => x.id === id) || {}).session_id || id;
     fetchSessionTimeline(timelineSid);
+    fetchSessionWorkspace(timelineSid);
+    fetchSessionUsage(timelineSid);
+    fetchSessionRecap(timelineSid);
     const $view = getConvView();
     $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading...</div>';
     // Update active state in sidebar (list view)
@@ -6801,6 +7173,229 @@
     $view.scrollTop = 0;
   }
 
+  // Session-workspace panel — fetched per conversation, rendered in
+  // the third column of the sticky header. Tells you whether the session
+  // is editing in the shared clone or a worktree, what branch, ahead/
+  // behind counts, and whether other sessions are sharing the same cwd.
+  let _workspaceSessionId = null;
+  let _workspaceData = null;
+  async function fetchSessionWorkspace(sid) {
+    _workspaceSessionId = sid;
+    _workspaceData = null;
+    // Clear the strip immediately so a stale workspace from the previous
+    // session doesn't flash before the new fetch lands.
+    const slot = document.getElementById('convInputContext');
+    const wsSlot = slot && slot.querySelector('[data-workspace]');
+    if (wsSlot) wsSlot.innerHTML = '';
+    if (slot) slot.classList.remove('visible');
+    if (!sid) return;
+    try {
+      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/workspace');
+      const data = await res.json();
+      if (_workspaceSessionId !== sid) return;
+      _workspaceData = data;
+      renderSessionWorkspaceIntoSticky();
+    } catch (_) {}
+  }
+
+  function renderSessionWorkspaceIntoSticky() {
+    // Target the input-context strip above the conv input bar; matches
+    // Claude Desktop's pattern of "branch · base · diff · PR" right where
+    // you type. Single row, no third column.
+    const slot = document.getElementById('convInputContext');
+    const wsSlot = slot && slot.querySelector('[data-workspace]');
+    if (!slot || !wsSlot || !_workspaceData) return;
+    const w = _workspaceData;
+    if (!w.cwd) {
+      wsSlot.innerHTML = '';
+      // Don't hide the whole strip — usage pill might still want to show.
+      slot.classList.toggle('visible', !!_usageData);
+      return;
+    }
+    const path = w.cwd;
+    const tilde = path.replace(/^\/Users\/[^/]+/, '~');
+    const parts = [];
+    if (w.is_worktree) {
+      parts.push('<span class="wp-kind wp-kind-worktree" title="worktree (not the shared clone)">worktree</span>');
+    } else if (w.is_repo) {
+      parts.push('<span class="wp-kind wp-kind-clone" title="shared clone — main repo working tree">shared clone</span>');
+    } else if (w.exists) {
+      parts.push('<span class="wp-kind wp-kind-other" title="cwd exists but is not a git repo — Claude\'s git commands will fail unless it shells into a repo">not a git repo</span>');
+    } else {
+      parts.push('<span class="wp-kind wp-kind-other" title="cwd does not exist on disk">cwd missing</span>');
+    }
+    if (w.branch) {
+      parts.push('<span class="wp-icon">⎇</span><span class="wp-branch">' + escapeHtml(w.branch) + '</span>');
+    }
+    if (w.commits_ahead != null || w.commits_behind != null) {
+      const a = w.commits_ahead || 0;
+      const b = w.commits_behind || 0;
+      if (a > 0) parts.push('<span class="wp-ahead">↑' + a + '</span>');
+      if (b > 0) parts.push('<span class="wp-behind">↓' + b + '</span>');
+      if (a === 0 && b === 0 && w.branch) parts.push('<span class="wp-even">in sync</span>');
+    }
+    const co = w.co_tenants || 0;
+    if (co > 0) {
+      parts.push('<span class="wp-cotenants" title="' + co + ' other live session(s) editing the same cwd">⚠ ' + co + ' other session' + (co === 1 ? '' : 's') + ' here</span>');
+    }
+    parts.push('<span class="wp-path" title="' + escapeHtml(path) + '">' + escapeHtml(tilde) + '</span>');
+
+    // Tool-call inference: when cwd isn't a usable repo (or is a totally
+    // different repo from where edits actually land), surface a second
+    // pill so the user can tell where Claude's writes are really going.
+    if (w.effective_cwd) {
+      const ePath = w.effective_cwd;
+      const eTilde = ePath.replace(/^\/Users\/[^/]+/, '~');
+      const evidence = (w.effective_path_count || 0) + '/' + (w.effective_total_paths || 0) + ' tool-call paths';
+      const eParts = [];
+      eParts.push('<span class="wp-eff-tag" title="inferred from ' + evidence + ' — not the launch cwd">via tool calls</span>');
+      if (w.effective_kind === 'worktree') {
+        eParts.push('<span class="wp-kind wp-kind-worktree">worktree</span>');
+      } else {
+        eParts.push('<span class="wp-kind wp-kind-clone">shared clone</span>');
+      }
+      if (w.effective_branch) {
+        eParts.push('<span class="wp-icon">⎇</span><span class="wp-branch">' + escapeHtml(w.effective_branch) + '</span>');
+      }
+      const ea = w.effective_commits_ahead || 0;
+      const eb = w.effective_commits_behind || 0;
+      if (ea > 0) eParts.push('<span class="wp-ahead">↑' + ea + '</span>');
+      if (eb > 0) eParts.push('<span class="wp-behind">↓' + eb + '</span>');
+      if (ea === 0 && eb === 0 && w.effective_branch) eParts.push('<span class="wp-even">in sync</span>');
+      eParts.push('<span class="wp-path" title="' + escapeHtml(ePath) + '">' + escapeHtml(eTilde) + '</span>');
+      parts.push('<span class="wp-eff-divider"></span>' + eParts.join(' '));
+    }
+
+    wsSlot.innerHTML = parts.join(' ');
+    slot.classList.add('visible');
+  }
+
+  // Token-usage pill — sibling of the workspace info in the same input-
+  // context row. Shows latest input tokens out of the model's context
+  // limit, with a peak indicator if it's higher than the latest.
+  let _usageSessionId = null;
+  let _usageData = null;
+  async function fetchSessionUsage(sid) {
+    _usageSessionId = sid;
+    _usageData = null;
+    const slot = document.getElementById('convInputContext');
+    const uSlot = slot && slot.querySelector('[data-usage]');
+    if (uSlot) uSlot.innerHTML = '';
+    if (!sid) return;
+    try {
+      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/usage');
+      const data = await res.json();
+      if (_usageSessionId !== sid) return;
+      _usageData = data;
+      renderSessionUsageIntoStrip();
+    } catch (_) {}
+  }
+
+  function _formatTokens(n) {
+    if (!n) return '0';
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+    if (n >= 1_000) return Math.round(n / 1000) + 'k';
+    return String(n);
+  }
+
+  function renderSessionUsageIntoStrip() {
+    const slot = document.getElementById('convInputContext');
+    const uSlot = slot && slot.querySelector('[data-usage]');
+    if (!slot || !uSlot) return;
+    const u = _usageData || {};
+    const latest = u.latest_input_tokens || 0;
+    const peak = u.peak_input_tokens || 0;
+    const limit = u.context_limit || 200000;
+    if (!latest && !peak) {
+      uSlot.innerHTML = '';
+      return;
+    }
+    const pct = Math.round((latest / limit) * 100);
+    let cls = 'wp-usage-pill';
+    if (pct >= 85) cls += ' wp-usage-hot';
+    else if (pct >= 60) cls += ' wp-usage-warm';
+    const peakNote = peak > latest
+      ? ' <span class="wp-usage-peak" title="Peak across the session">peak ' + _formatTokens(peak) + '</span>'
+      : '';
+    const title = 'Latest assistant turn: ' + latest.toLocaleString() + ' tokens / '
+      + limit.toLocaleString() + ' context limit (' + (u.model || 'model unknown') + ')';
+    uSlot.innerHTML = '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
+      + 'ctx ' + _formatTokens(latest) + ' / ' + _formatTokens(limit)
+      + ' <span class="wp-usage-pct">(' + pct + '%)</span>'
+      + '</span>' + peakNote;
+    slot.classList.add('visible');
+  }
+
+  // Recap card — pulls the latest assistant turn's free-form text plus
+  // any <session-state> block, renders both as the trailing message in
+  // the transcript so the user sees "what just happened" without
+  // scrolling through every tool call.
+  let _recapSessionId = null;
+  let _recapData = null;
+  async function fetchSessionRecap(sid) {
+    _recapSessionId = sid;
+    _recapData = null;
+    // Drop any existing recap card from the previous session.
+    const existing = document.querySelector('.session-recap-card');
+    if (existing) existing.remove();
+    if (!sid) return;
+    try {
+      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/recap');
+      const data = await res.json();
+      if (_recapSessionId !== sid) return;  // session changed mid-fetch
+      _recapData = data;
+      renderSessionRecapCard();
+    } catch (_) {}
+  }
+
+  function _linkifyInlineCode(s) {
+    // Mirror the lightweight inline-code detection used elsewhere — no
+    // path-link rewriting since recap text is informational, not nav.
+    return escapeHtml(s).replace(/`([^`]{1,200})`/g, '<code>$1</code>');
+  }
+
+  function renderSessionRecapCard() {
+    const $view = (typeof getConvView === 'function') ? getConvView() : null;
+    if (!$view || !_recapData || !_recapData.has_recap) return;
+    let card = $view.querySelector('.session-recap-card');
+    if (!card) {
+      card = document.createElement('div');
+      card.className = 'session-recap-card';
+    }
+    const ff = _recapData.freeform || '';
+    const ss = _recapData.session_state || null;
+    let html = '<div class="src-header"><span class="src-title">Recap</span><span>latest assistant turn</span></div>';
+    if (ff) {
+      html += '<div class="src-freeform">' + _linkifyInlineCode(ff) + '</div>';
+    }
+    if (ss && Object.keys(ss).length) {
+      html += '<div class="src-state">';
+      // Render in a stable order: did → finding → next_step_user → others.
+      const order = ['did', 'finding', 'insight', 'next_step_user', 'next_step'];
+      const seen = new Set();
+      for (const key of order) {
+        if (ss[key]) {
+          html += '<div class="src-state-row"><span class="src-label">'
+            + escapeHtml(key.replace(/_/g, ' ')) + '</span>'
+            + _linkifyInlineCode(ss[key]) + '</div>';
+          seen.add(key);
+        }
+      }
+      for (const [k, v] of Object.entries(ss)) {
+        if (seen.has(k) || !v) continue;
+        html += '<div class="src-state-row"><span class="src-label">'
+          + escapeHtml(k.replace(/_/g, ' ')) + '</span>'
+          + _linkifyInlineCode(v) + '</div>';
+      }
+      html += '</div>';
+    }
+    card.innerHTML = html;
+    // Anchor at the very end of $view; the live-tool inline indicator
+    // (if any) re-appends itself on every poll, so it'll naturally end
+    // up *below* the recap card on the next updateLiveToolStrip tick.
+    $view.appendChild(card);
+  }
+
   // Session-activity timeline — fetched per conversation, rendered into
   // the sticky header's `[data-timeline]` slot. Shows commit / push / PR
   // events with their assistant-turn position and the gap to the next.
@@ -6826,12 +7421,15 @@
     if (!slot || !_timelineData) return;
     const evs = _timelineData.events || [];
     const total = _timelineData.total_turns || 0;
+    // Hide the entire right column when there are no events, so the
+    // "Original ask" body expands to fill the full sticky header width.
+    const col = slot.closest('.csh-col-activity');
     if (!evs.length) {
       slot.innerHTML = '';
-      slot.style.display = 'none';
+      if (col) col.style.display = 'none';
       return;
     }
-    slot.style.display = '';
+    if (col) col.style.display = '';
     const iconFor = (k) => ({commit: '●', push: '↑', pr: '⊕'}[k] || '·');
     const labelFor = (e) => {
       if (e.kind === 'commit') {
@@ -6847,7 +7445,7 @@
       }
       return escapeHtml(e.kind);
     };
-    let html = '<div class="stl-header"><span class="stl-title">Session activity</span><span class="stl-counter">' + evs.length + ' event' + (evs.length === 1 ? '' : 's') + ' · ' + total + ' turns</span><button class="stl-toggle" data-stl-toggle title="Collapse"><span aria-hidden="true">▾</span></button></div>';
+    let html = '<div class="stl-header"><span class="stl-title">Session activity</span><span class="stl-counter">' + evs.length + ' event' + (evs.length === 1 ? '' : 's') + ' · ' + total + ' turns</span></div>';
     html += '<div class="stl-body">';
     let prevTurn = 0;
     for (let i = 0; i < evs.length; i++) {
@@ -6870,13 +7468,6 @@
     }
     html += '</div>';
     slot.innerHTML = html;
-    const toggleBtn = slot.querySelector('[data-stl-toggle]');
-    if (toggleBtn) {
-      toggleBtn.addEventListener('click', () => {
-        slot.classList.toggle('collapsed');
-        toggleBtn.querySelector('span').textContent = slot.classList.contains('collapsed') ? '▸' : '▾';
-      });
-    }
   }
 
   // Produce a human-readable summary for a single tool-only assistant event,
@@ -6919,6 +7510,11 @@
   function renderConversationEvents(events) {
     if (!Array.isArray(events)) return;  // defensive: backlog/unknown responses
     const $view = getConvView();
+    // Stick-to-bottom only when the user is *already* near the bottom.
+    // If they've scrolled up to read, leave the scroll position alone so
+    // newly-streamed events don't yank them back down. 80px tolerance is
+    // generous enough to absorb typical line-height jitter.
+    const wasAtBottom = ($view.scrollHeight - $view.scrollTop - $view.clientHeight) < 80;
     for (const ev of events) {
       const div = document.createElement('div');
       div.className = 'event ' + ev.type;
@@ -6946,21 +7542,37 @@
           const resolveBtn = issueNum
             ? '<button class="tools-toggle resolve-btn" data-issue="' + escapeHtml(String(issueNum)) + '" data-session="' + escapeHtml(conv.session_id || '') + '" title="Commit changes and close issue #' + escapeHtml(String(issueNum)) + '" style="right:240px;color:#fff;background:var(--green);border-color:var(--green);">Commit &amp; resolve</button>'
             : '';
-          // "Close & announce" — injects /announce-feature into the session to run the
-          // full ship+broadcast flow (GH issue with ALL-ORGS sentinel, commit, push, close).
-          const announceBtn = '<button class="tools-toggle announce-btn" data-session="' + escapeHtml(conv.session_id || '') + '" title="Run /announce-feature — ships and broadcasts to every studio" style="right:380px;color:#fff;background:var(--purple);border-color:var(--purple);">Close &amp; announce</button>';
-          sticky.innerHTML = announceBtn + resolveBtn + issueBtn
+          // The "Close & announce" button used to live as an absolute
+          // overlay in this sticky header; it's now a real button in
+          // convToolbar (see #announceBtnConv) so it stays in reach
+          // without having to scroll up.
+          sticky.innerHTML = resolveBtn + issueBtn
             + '<button class="tools-toggle" data-tools-toggle' + (hidden ? ' class="active"' : '') + ' title="Toggle tool-call visibility">'
             + (hidden ? 'Show tools' : 'Hide tools') + '</button>'
-            + '<div class="label">Original ask</div>'
-            + '<div class="user-msg">' + escapeHtml(cleanIssuePrompt(ev.text)) + '</div>'
-            + '<div class="session-timeline" data-timeline></div>'
+            + '<div class="csh-row">'
+            +   '<div class="csh-col csh-col-ask">'
+            +     '<div class="label">Original ask</div>'
+            +     (function () {
+                    const cleaned = cleanIssuePrompt(ev.text);
+                    const parts = splitFirstSentence(cleaned);
+                    let h = '<div class="user-msg">';
+                    h += '<span class="ask-first">' + escapeHtml(parts[0]) + '</span>';
+                    if (parts[1]) h += '<span class="ask-rest">' + escapeHtml(parts[1]) + '</span>';
+                    h += '</div>';
+                    return h;
+                  })()
+            +   '</div>'
+            +   '<div class="csh-col csh-col-activity">'
+            +     '<div class="session-timeline" data-timeline></div>'
+            +   '</div>'
+            + '</div>'
             + '<div class="conv-sticky-header__resize-handle" data-sticky-resize title="Drag to resize"></div>';
           $view.insertBefore(sticky, $view.firstChild);
           attachStickyHeaderResize(sticky, $view);
-          // Populate the session-activity timeline if the fetch already
-          // landed; otherwise the fetch's success handler will populate it.
+          // Populate the timeline + workspace panels if the fetches already
+          // landed; otherwise the fetch handlers will populate them.
           renderSessionTimelineIntoSticky();
+          renderSessionWorkspaceIntoSticky();
           sticky.querySelector('[data-tools-toggle]').addEventListener('click', (e) => {
             e.stopPropagation();
             const nowHidden = !$view.classList.contains('hide-tools');
@@ -7004,34 +7616,6 @@
                 else renderIssueInConvPane(n);
               } else {
                 renderIssueInConvPane(n);
-              }
-            });
-          }
-          const announceClickBtn = sticky.querySelector('.announce-btn');
-          if (announceClickBtn) {
-            announceClickBtn.addEventListener('click', async (e) => {
-              e.stopPropagation();
-              const sid = announceClickBtn.dataset.session;
-              if (!sid) return;
-              // Optional feature name: what the session was working on
-              const feature = prompt('Announce what? (short feature name)\n\nLeave blank and /announce-feature will ask.', '');
-              if (feature === null) return;  // user cancelled
-              announceClickBtn.disabled = true;
-              announceClickBtn.textContent = 'Sending...';
-              const cmd = feature.trim()
-                ? '/announce-feature ' + feature.trim()
-                : '/announce-feature';
-              try {
-                await fetch('/api/inject-input', {
-                  method: 'POST',
-                  headers: {'Content-Type': 'application/json'},
-                  body: JSON.stringify({ session_id: sid, text: cmd }),
-                });
-                announceClickBtn.textContent = 'Sent ✓';
-                announceClickBtn.style.opacity = '0.6';
-              } catch (err) {
-                announceClickBtn.textContent = 'Failed';
-                setTimeout(() => { announceClickBtn.textContent = 'Close & announce'; announceClickBtn.disabled = false; }, 2000);
               }
             });
           }
@@ -7152,9 +7736,18 @@
         $view.appendChild(div);
       }
     }
-    if (events.length > 0) {
+    if (events.length > 0 && wasAtBottom) {
       $view.scrollTop = $view.scrollHeight;
     }
+    // Refresh the recap card if any assistant text arrived (the recap
+    // mirrors the latest assistant turn). Re-anchor the inline live-tool
+    // indicator afterwards so it ends up below the recap card.
+    const sawAssistant = events.some(e => e && (e.type === 'assistant' || e.type === 'assistant_text'));
+    if (sawAssistant && currentConversation) {
+      const sid = (conversationsData.find(x => x.id === currentConversation) || {}).session_id || currentConversation;
+      fetchSessionRecap(sid);
+    }
+    if (typeof updateLiveToolStrip === 'function') updateLiveToolStrip();
   }
 
   function filterConversations(q) {
@@ -8375,42 +8968,9 @@
     } catch (_) {}
   }, 10000);
 
-  // --- Spawn new session ---
-  async function spawnNewSession() {
-    let prompt = ($newSessionInput && $newSessionInput.value || '').trim();
-    if (!prompt) return;
-    const usePkood = ($pkoodToggle && $pkoodToggle.checked) || prompt.startsWith('pkood:');
-    if (prompt.startsWith('pkood:')) prompt = prompt.slice(6).trim();
-    if (!prompt) return;
-    $newSessionBtn.disabled = true;
-    $newSessionBtn.textContent = 'Spawning...';
-    try {
-      const endpoint = usePkood ? '/api/pkood/spawn' : '/api/sessions/spawn';
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ prompt }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        $newSessionInput.value = '';
-        $newSessionBtn.textContent = 'Spawned!';
-        setTimeout(refreshConversationList, 3000);
-      } else {
-        $newSessionBtn.textContent = data.error ? 'Failed: ' + data.error.slice(0, 30) : 'Failed';
-      }
-    } catch (err) {
-      $newSessionBtn.textContent = 'Error';
-    }
-    setTimeout(() => {
-      $newSessionBtn.disabled = false;
-      $newSessionBtn.textContent = 'Run';
-    }, 2000);
-  }
-  if ($newSessionBtn) $newSessionBtn.addEventListener('click', spawnNewSession);
-  if ($newSessionInput) $newSessionInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); spawnNewSession(); }
-  });
+  // The convToolbar new-session input + Run/pkood toggle were removed —
+  // spawning now flows through the sidebar's "+ New session" button (which
+  // opens the new-session modal) or the kanban panel's #kptNewSession input.
 
   // ── In-app update check ─────────────────────────────────────────
   // Hit /api/version/check on page load. If we're behind the latest
