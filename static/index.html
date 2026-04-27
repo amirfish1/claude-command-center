@@ -547,6 +547,24 @@
   }
   .conv-pane-close:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
 
+  .conv-toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-overlay, rgba(20,20,24,0.95));
+    color: var(--text, #eee);
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 1000;
+  }
+  .conv-toast.visible { opacity: 1; }
+
   .conv-pane-drop-overlay {
     position: absolute;
     inset: 0;
@@ -6982,9 +7000,12 @@
         // If split is already full, caller shouldn't have shown the overlay,
         // but reject defensively.
         if (splitState.orientation && splitState.panes.length >= 2) return;
-        // Same-conv guard: if convId is already open in the current pane,
-        // do nothing (Task 8 adds a transient tooltip).
-        if (splitState.panes.some(p => p.conversationId === convId)) return;
+        // Same-conv guard: if convId is already open in any pane,
+        // show a toast instead of silently returning.
+        if (splitState.panes.some(p => p.conversationId === convId)) {
+          showConvToast('Conversation is already open');
+          return;
+        }
         openConversationInPane(convId, targetPaneId, orientation);
       });
     });
@@ -7102,6 +7123,63 @@
       });
     }
   }
+
+  // Show a 2-second floating message anchored to the bottom-center of the viewport.
+  // Used when a drop is rejected because the conv is already open.
+  let _convToastTimer = null;
+  function showConvToast(msg) {
+    let el = document.getElementById('convToast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'convToast';
+      el.className = 'conv-toast';
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.classList.add('visible');
+    if (_convToastTimer) clearTimeout(_convToastTimer);
+    _convToastTimer = setTimeout(() => el.classList.remove('visible'), 2000);
+  }
+
+  // Below ~900px the split layout doesn't fit. Collapse to single-pane
+  // (active pane wins). Tear down the inactive pane's SSE. When the
+  // viewport grows back, the user can re-split via drag.
+  function handleViewportResize() {
+    if (window.innerWidth >= 900) return;
+    if (!splitState.orientation || splitState.panes.length < 2) return;
+    const survivor = splitState.panes[splitState.activeIndex];
+    const losers = splitState.panes.filter((_, i) => i !== splitState.activeIndex);
+    losers.forEach(p => {
+      if (p.eventSource) { try { p.eventSource.close(); } catch (e) {} }
+      const el = document.querySelector(`.conv-pane[data-pane-id="${p.id}"]`);
+      if (el && p.id !== 'p1') el.remove();
+    });
+    if (survivor.id !== 'p1') {
+      // Move survivor into p1's slot (same logic as p1-close in Task 7).
+      // Use selectConversation to ensure proper state setup (Task 7 fix).
+      const survivorConvId = survivor.conversationId;
+      if (survivor.eventSource) { try { survivor.eventSource.close(); } catch (e) {} }
+      const survivorEl = document.querySelector(`.conv-pane[data-pane-id="${survivor.id}"]`);
+      if (survivorEl) survivorEl.remove();
+      if (splitState.panes[0].eventSource) {
+        try { splitState.panes[0].eventSource.close(); } catch (e) {}
+        splitState.panes[0].eventSource = null;
+      }
+      splitState.panes.splice(1);
+      splitState.orientation = null;
+      splitState.activeIndex = 0;
+      Object.assign(splitState.panes[0], _newPaneState('p1'));
+      renderSplitLayout();
+      if (survivorConvId) selectConversation(survivorConvId, 'p1');
+    } else {
+      // Survivor is already p1; just splice and re-render.
+      splitState.panes.splice(1);
+      splitState.orientation = null;
+      splitState.activeIndex = 0;
+      renderSplitLayout();
+    }
+  }
+  window.addEventListener('resize', handleViewportResize);
 
   const STICKY_HEADER_HEIGHT_KEY = 'ccc-sticky-header-height';
   const STICKY_HEADER_MIN_PX = 90;
