@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.claude/command-center/last-interactions.json`, and the kanban now sorts by
   `max(last_interacted, modified)` so a card you just typed into bubbles to the
   top instantly even before Claude responds.
+- **"Open in Claude Desktop" button** beside Jump/Launch in the
+  conversation toolbar (and the conversation-pane chrome). Resumes the
+  current session inside the Claude Desktop GUI app via the
+  `claude://resume?session=<uuid>` deep-link — the desktop app imports
+  the CLI session and navigates to it. macOS only for now (relies on
+  `open(1)`).
 
 ### Changed
 - **Renamed `Planning` column to `Icebox` and collapsed pre-tool live state into `Working`.**

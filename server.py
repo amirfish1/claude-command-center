@@ -12,7 +12,7 @@ Usage:
     CCC_WATCH_REPO=~/dev/foo ./run.sh
 """
 
-__version__ = "0.1.3"
+__version__ = "0.2.0"
 
 import ast
 import http.server
@@ -2160,6 +2160,43 @@ def _build_resume_command(session_id, cwd, cwd_exists):
             f"&& cd {q_cwd} && claude --resume {session_id}"
         )
     return f"cd {q_cwd} && claude --resume {session_id}"
+
+
+# UUID-format check — Claude Desktop's deep-link handler validates the
+# session ID against a UUID regex internally and silently drops anything
+# else. We pre-check so the UI gets a clear error instead of an opaque
+# "nothing happened".
+_SESSION_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def open_session_in_claude_desktop(session_id):
+    """Open the macOS Claude Desktop app and resume `session_id`.
+
+    Uses the registered `claude://resume?session=<uuid>` deep-link, which
+    the desktop app handles by importing the CLI session and navigating
+    to it. macOS only — relies on `open(1)`.
+
+    Returns {ok, error?, url?}.
+    """
+    if not session_id:
+        return {"ok": False, "error": "missing session_id"}
+    if not _SESSION_UUID_RE.match(session_id):
+        return {"ok": False, "error": "invalid session_id (expected UUID)"}
+    if sys.platform != "darwin":
+        return {"ok": False, "error": "Claude Desktop deep-link is macOS-only"}
+    url = f"claude://resume?session={session_id}"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        log_path = LOG_DIR / f"desktop-{session_id[:8]}.log"
+        lf = open(log_path, "w")
+        subprocess.Popen(["open", url], stdout=lf, stderr=lf)
+    except (FileNotFoundError, OSError) as e:
+        print(f"open_session_in_claude_desktop: {e!r}", file=sys.stderr, flush=True)
+        return {"ok": False, "error": "could not launch Claude Desktop", "url": url}
+    return {"ok": True, "url": url}
 
 
 def launch_terminal_for_session(session_id, cwd=None, terminal_app=None):
@@ -7994,6 +8031,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 tty = status.get("tty") or ""
                 term_app = status.get("terminal_app") or ""
             self.send_json(focus_terminal_by_tty(tty, term_app))
+        elif path == "/api/open-in-desktop":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = payload.get("session_id", "")
+            self.send_json(open_session_in_claude_desktop(sid))
         else:
             self.send_json({"error": "Not found"}, 404)
 
