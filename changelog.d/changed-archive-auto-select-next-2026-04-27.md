@@ -1,0 +1,1 @@
+- Sidebar: archiving the currently-open session now auto-selects the next active row (or the previous one if it was at the bottom) so you don't land on a blank pane.

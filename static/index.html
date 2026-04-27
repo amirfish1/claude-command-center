@@ -7318,6 +7318,27 @@
         const item = btn.closest('.conv-item');
         const convId = item.dataset.id;
         const sessionId = item.dataset.sessionId;
+        // If the user is archiving the currently-open row, pick its
+        // neighbour now (next sibling, falling back to previous) so we can
+        // jump there once the row vanishes from the active list. Skip
+        // when un-archiving, or when archiving a row that isn't selected.
+        const fromActiveList = !item.closest('.conv-archived-section');
+        const wasSelected = currentConversation === convId;
+        let nextSelectId = null;
+        if (fromActiveList && wasSelected) {
+          const findSibling = (start, dir) => {
+            let probe = start;
+            while (probe) {
+              if (probe.classList && probe.classList.contains('conv-item') && probe.dataset && probe.dataset.id) {
+                return probe.dataset.id;
+              }
+              probe = dir === 'next' ? probe.nextElementSibling : probe.previousElementSibling;
+            }
+            return null;
+          };
+          nextSelectId = findSibling(item.nextElementSibling, 'next')
+                      || findSibling(item.previousElementSibling, 'prev');
+        }
         try {
           const data = await ccPostJson('/api/conversations/' + convId + '/archive',
             { session_id: sessionId });
@@ -7328,6 +7349,9 @@
               setOptimisticOverride(c.session_id, { archived: c.archived });
             }
             renderSidebar(filterConversations($convSearch.value));
+            if (data.archived && nextSelectId) {
+              selectConversation(nextSelectId);
+            }
           }
         } catch (err) {
           showOpToast('Archive failed (' + err.message + ')', 'error');
