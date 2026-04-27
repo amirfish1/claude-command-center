@@ -3474,12 +3474,22 @@
       .replace(/\n+Run `gh issue view \d+`[^\n]*(title may be truncated\)\.?)?\s*$/i, '')
       .trim();
   }
+  // Strip a leading URL or absolute file path from a prompt, when followed by
+  // more text. Drag-and-dropped screenshots / pasted links land at the start of
+  // first_message and would otherwise dominate the auto-generated title.
+  // Only strips when there's actual prose after the path.
+  const LEADING_PATH_OR_URL_RE = /^(?:https?:\/\/\S+|file:\/\/\S+|\S*\/\S*\.[A-Za-z0-9]{1,8})\s+(?=\S)/;
+  function stripLeadingPathOrUrl(s) {
+    if (!s) return s;
+    return String(s).replace(LEADING_PATH_OR_URL_RE, '');
+  }
   // Extract the first sentence / line from a blob of text. Used to derive a
   // usable title when the original prompt is a multi-paragraph body.
   function firstSentenceOf(text, maxLen = 90) {
     if (!text) return '';
-    const chunks = String(text).split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
-    let first = chunks[0] || String(text).trim();
+    const src = stripLeadingPathOrUrl(String(text).trim());
+    const chunks = src.split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
+    let first = chunks[0] || src;
     if (first.length > maxLen) {
       // Back up to the last word boundary so we don't cut mid-word like
       // "documentation of al…". 8-char minimum stops the boundary search

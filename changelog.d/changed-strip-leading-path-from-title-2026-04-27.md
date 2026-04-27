@@ -1,0 +1,1 @@
+- Auto-generated session titles now skip a leading file path or URL when the prompt begins with one, so a pasted screenshot path no longer dominates the card title.
