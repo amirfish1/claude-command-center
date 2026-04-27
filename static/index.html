@@ -3285,11 +3285,46 @@
   // conversation transcript. Reads from liveStatus (refreshed every 5s
   // by /api/session-status) so the chat pane shows the same in-progress
   // signal the kanban card now shows.
+  // Optimistic "agent starting" indicator. Rendered the moment the user
+  // hits send so they see motion before /api/session-status (5s poll)
+  // catches up to the real sidecar event. Auto-removed once the real
+  // indicator lands, or on a 60s safety timeout.
+  let _optimisticAgentTimer = null;
+  function showOptimisticAgentIndicator($view) {
+    if (!$view) return;
+    let el = $view.querySelector('.conv-live-tool-inline.optimistic');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'conv-live-tool-inline optimistic';
+    }
+    el.innerHTML = '<span class="cl-pulse"></span>'
+      + '<span class="cl-tool">Sending&hellip;</span>'
+      + '<span class="cl-age">just now</span>';
+    $view.appendChild(el);
+    if (_optimisticAgentTimer) clearTimeout(_optimisticAgentTimer);
+    _optimisticAgentTimer = setTimeout(() => {
+      const stale = $view.querySelector('.conv-live-tool-inline.optimistic');
+      if (stale) stale.remove();
+      _optimisticAgentTimer = null;
+    }, 60000);
+  }
+  function clearOptimisticAgentIndicator($view) {
+    const el = ($view || document).querySelector('.conv-live-tool-inline.optimistic');
+    if (el) el.remove();
+    if (_optimisticAgentTimer) {
+      clearTimeout(_optimisticAgentTimer);
+      _optimisticAgentTimer = null;
+    }
+  }
+
   function updateLiveToolStrip() {
     const $view = (typeof getConvView === 'function') ? getConvView() : null;
     if (!$view) return;
     let strip = document.querySelector('.conv-live-tool-strip');
-    let inline = $view.querySelector('.conv-live-tool-inline');
+    // Match only the *real* inline indicator — leave the optimistic
+    // twin alone so it lingers until either real data lands or its
+    // own 60s safety timeout fires.
+    let inline = $view.querySelector('.conv-live-tool-inline:not(.optimistic)');
     const tool = liveStatus.sidecarTool;
     const ts = liveStatus.sidecarTs || 0;
     const ageSec = ts ? Math.max(0, Math.floor(Date.now() / 1000 - ts)) : 9999;
@@ -3299,6 +3334,8 @@
       if (inline) inline.remove();
       return;
     }
+    // Real data arrived — drop the optimistic placeholder.
+    clearOptimisticAgentIndicator($view);
     const file = liveStatus.sidecarFile || '';
     const shortFile = file
       ? (file.length > 60 ? '…' + file.slice(-59) : file)
@@ -3480,6 +3517,13 @@
           pendingDiv.innerHTML = '<span class="label">User</span>'
             + '<div class="user-msg">' + escapeHtml(text) + '</div>';
           $view.appendChild(pendingDiv);
+          // Optimistic "agent starting" indicator — yellow glowing dot in
+          // the same shape as the live-tool inline indicator, so the user
+          // gets immediate feedback that work has begun without waiting
+          // for the next 5s liveStatus poll. Updated by updateLiveToolStrip
+          // once a real sidecar event lands; otherwise self-removes after
+          // 60s in case the agent never came up.
+          showOptimisticAgentIndicator($view);
           $view.scrollTop = $view.scrollHeight;
           _pendingSends.push({ text, element: pendingDiv });
         }
