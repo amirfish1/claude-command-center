@@ -24,9 +24,15 @@ Co-author tag from the trailer is fine but not mandatory.
 
 ## CHANGELOG
 
-Follows [Keep a Changelog](https://keepachangelog.com). Every user-visible change appends a bullet under `## [Unreleased]` as part of the same PR/commit. At release time, `[Unreleased]` is renamed to `[X.Y.Z] - YYYY-MM-DD` and a fresh empty `[Unreleased]` goes above it.
+Follows [Keep a Changelog](https://keepachangelog.com). Every user-visible change drops a small markdown file in `changelog.d/` instead of editing `CHANGELOG.md` directly — that way two parallel sessions don't collide on the `[Unreleased]` section.
 
-Categories: `Added`, `Changed`, `Fixed`, `Removed`, `Security`, `Deprecated`.
+- Filename: `<category>-<short-slug>-<discriminator>.md` (e.g. `added-context-pill-2026-04-26.md`).
+- File contents: just the bullet text. A leading `- ` is optional.
+- Categories: `added`, `changed`, `fixed`, `removed`, `security`, `deprecated`.
+
+See `changelog.d/README.md` for the full convention.
+
+At release time, run `python3 scripts/release.py X.Y.Z` to roll snippets into a fresh `## [X.Y.Z] - YYYY-MM-DD` block in `CHANGELOG.md` and `git rm` the snippet files. The legacy `[Unreleased]` section above it stays as-is until cleared by hand at the next release boundary.
 
 ## SemVer
 
