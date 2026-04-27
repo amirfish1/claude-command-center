@@ -6853,7 +6853,7 @@
   // dataTransfer.types for the payload key set by the source handlers.
   function dragHasConversationPayload(ev) {
     const types = (ev.dataTransfer && ev.dataTransfer.types) || [];
-    return Array.from(types).some(t => t === 'text/plain' || t === 'application/x-conv-card');
+    return Array.from(types).some(t => t === 'text/plain');
   }
 
   // Read the conversation id out of the drop event. Both .conv-item drag
@@ -6892,6 +6892,16 @@
     // dragenter fires on every child element entry; track depth so the
     // overlay doesn't flicker when the cursor crosses internal nodes.
     let depth = 0;
+
+    // `dragend` fires on the drag source after any outcome (drop, invalid
+    // drop, ESC cancel). It's the canonical "drag is over" signal — use
+    // it to reset depth defensively so an ESC-cancelled drag (which can
+    // leave unbalanced enters) doesn't desync the next drag's overlay.
+    window.addEventListener('dragend', () => {
+      depth = 0;
+      overlay.classList.remove('active');
+      overlay.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('over'));
+    });
 
     paneEl.addEventListener('dragenter', (ev) => {
       if (!dragHasConversationPayload(ev)) return;
