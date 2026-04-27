@@ -6129,104 +6129,6 @@ def extract_session_usage(session_id):
     }
 
 
-_SESSION_STATE_BLOCK_RE = re.compile(
-    r"<session-state>\s*(.*?)\s*</session-state>", re.DOTALL | re.IGNORECASE
-)
-# Inside a <session-state> block we expect labelled lines: DID, FINDING,
-# NEXT_STEP_USER. Tolerant of extra fields by capturing any UPPER_SNAKE label.
-_SESSION_STATE_FIELD_RE = re.compile(
-    r"^([A-Z][A-Z_]+):\s*(.+?)\s*$", re.MULTILINE
-)
-
-
-def _extract_assistant_text(msg):
-    """Pull the human-readable text out of an assistant `message.content`."""
-    out = []
-    for block in (msg or {}).get("content") or []:
-        if not isinstance(block, dict):
-            continue
-        if block.get("type") == "text":
-            t = block.get("text") or ""
-            if t.strip():
-                out.append(t)
-    return "\n\n".join(out).strip()
-
-
-def extract_session_recap(session_id):
-    """Return both the free-form last-assistant-message text and any
-    structured <session-state> block from the most recent turns. The
-    conv pane appends this as a synthetic "recap" card at the bottom
-    so the user can see "what just happened" without scrolling.
-    """
-    empty = {
-        "freeform": "",
-        "session_state": None,
-        "session_state_raw": None,
-        "has_recap": False,
-    }
-    if not PROJECTS_ROOT.is_dir():
-        return empty
-    jsonl = None
-    for pd in PROJECTS_ROOT.iterdir():
-        if not pd.is_dir():
-            continue
-        cand = pd / f"{session_id}.jsonl"
-        if cand.is_file():
-            jsonl = cand
-            break
-    if not jsonl:
-        return empty
-
-    last_text = ""
-    last_session_state_raw = None
-    try:
-        with open(jsonl, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if ev.get("type") != "assistant":
-                    continue
-                if ev.get("isSidechain"):
-                    continue
-                msg = _safe_parse_message(ev.get("message", {}))
-                text = _extract_assistant_text(msg)
-                if not text:
-                    continue
-                last_text = text
-                m = _SESSION_STATE_BLOCK_RE.search(text)
-                if m:
-                    last_session_state_raw = m.group(1).strip()
-    except OSError:
-        return empty
-
-    if not last_text and not last_session_state_raw:
-        return empty
-
-    # Strip the <session-state> block from the freeform text so we don't
-    # double-display it.
-    freeform_clean = _SESSION_STATE_BLOCK_RE.sub("", last_text).strip()
-
-    structured = None
-    if last_session_state_raw:
-        structured = {}
-        for fm in _SESSION_STATE_FIELD_RE.finditer(last_session_state_raw):
-            structured[fm.group(1).lower()] = fm.group(2).strip()
-        if not structured:
-            structured = None
-
-    return {
-        "freeform": freeform_clean,
-        "session_state": structured,
-        "session_state_raw": last_session_state_raw,
-        "has_recap": bool(freeform_clean or last_session_state_raw),
-    }
-
-
 _MORNING_BRAINDUMP_PROMPT = """You are analyzing the user's morning brain-dump.
 
 For each item in the dump, classify as exactly one of:
@@ -6840,12 +6742,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Token-usage stats for the conv pane's "Context: 142k / 200k" pill.
             sid = path.rsplit("/", 2)[-2]
             self.send_json(extract_session_usage(sid))
-        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/recap$", path):
-            # Free-form last-assistant text + structured <session-state>
-            # block, rendered as a synthetic "recap" card at the bottom
-            # of the conversation transcript.
-            sid = path.rsplit("/", 2)[-2]
-            self.send_json(extract_session_recap(sid))
         elif re.match(r"^/api/session/[a-zA-Z0-9-]+/workspace$", path):
             # Workspace info — cwd, branch, worktree?, ahead/behind, co-tenants.
             sid = path.rsplit("/", 2)[-2]

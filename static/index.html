@@ -1787,46 +1787,6 @@
   .conv-live-tool-inline .cl-tool { font-weight: 600; }
   .conv-live-tool-inline .cl-file { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .conv-live-tool-inline .cl-age { color: var(--text-muted); font-size: 11px; margin-left: auto; flex: 0 0 auto; }
-  /* Recap card — synthesised from the latest assistant turn (free-form
-     text + any <session-state> block), appended as the last "message"
-     in the transcript so the user can see "what just happened" without
-     scrolling up through tool calls. */
-  .session-recap-card {
-    margin: 16px 0 12px;
-    padding: 12px 14px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
-    border-radius: 6px;
-    font-size: 13px; line-height: 1.5;
-    color: var(--text);
-  }
-  .session-recap-card .src-header {
-    display: flex; align-items: center; gap: 8px;
-    color: var(--text-muted); font-size: 11px;
-    text-transform: uppercase; letter-spacing: 0.04em;
-    margin-bottom: 8px;
-  }
-  .session-recap-card .src-title { font-weight: 600; color: var(--accent); }
-  .session-recap-card .src-freeform {
-    white-space: pre-wrap; word-wrap: break-word;
-  }
-  .session-recap-card .src-freeform code {
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
-    font-size: 12px; background: var(--bg); padding: 1px 5px;
-    border-radius: 3px; color: var(--orange);
-  }
-  .session-recap-card .src-state {
-    margin-top: 10px; padding-top: 10px;
-    border-top: 1px dashed var(--border);
-  }
-  .session-recap-card .src-state-row { margin-bottom: 6px; }
-  .session-recap-card .src-state-row:last-child { margin-bottom: 0; }
-  .session-recap-card .src-label {
-    font-size: 10px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.06em; color: var(--text-muted);
-    margin-right: 6px;
-  }
   /* When the live-tool strip is present above the sticky header, push the
      header down so they don't both stick at y=0 and overlap.
      `top: 24px` deliberately *underlaps* the strip's bottom edge by a few
@@ -6940,7 +6900,6 @@
     fetchSessionTimeline(timelineSid);
     fetchSessionWorkspace(timelineSid);
     fetchSessionUsage(timelineSid);
-    fetchSessionRecap(timelineSid);
     const $view = getConvView();
     $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading...</div>';
     // Update active state in sidebar (list view)
@@ -7460,76 +7419,6 @@
     }
   }
 
-  // Recap card — pulls the latest assistant turn's free-form text plus
-  // any <session-state> block, renders both as the trailing message in
-  // the transcript so the user sees "what just happened" without
-  // scrolling through every tool call.
-  let _recapSessionId = null;
-  let _recapData = null;
-  async function fetchSessionRecap(sid) {
-    _recapSessionId = sid;
-    _recapData = null;
-    // Drop any existing recap card from the previous session.
-    const existing = document.querySelector('.session-recap-card');
-    if (existing) existing.remove();
-    if (!sid) return;
-    try {
-      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/recap');
-      const data = await res.json();
-      if (_recapSessionId !== sid) return;  // session changed mid-fetch
-      _recapData = data;
-      renderSessionRecapCard();
-    } catch (_) {}
-  }
-
-  function _linkifyInlineCode(s) {
-    // Mirror the lightweight inline-code detection used elsewhere — no
-    // path-link rewriting since recap text is informational, not nav.
-    return escapeHtml(s).replace(/`([^`]{1,200})`/g, '<code>$1</code>');
-  }
-
-  function renderSessionRecapCard() {
-    const $view = (typeof getConvView === 'function') ? getConvView() : null;
-    if (!$view || !_recapData || !_recapData.has_recap) return;
-    let card = $view.querySelector('.session-recap-card');
-    if (!card) {
-      card = document.createElement('div');
-      card.className = 'session-recap-card';
-    }
-    const ff = _recapData.freeform || '';
-    const ss = _recapData.session_state || null;
-    let html = '<div class="src-header"><span class="src-title">Recap</span><span>latest assistant turn</span></div>';
-    if (ff) {
-      html += '<div class="src-freeform">' + _linkifyInlineCode(ff) + '</div>';
-    }
-    if (ss && Object.keys(ss).length) {
-      html += '<div class="src-state">';
-      // Render in a stable order: did → finding → next_step_user → others.
-      const order = ['did', 'finding', 'insight', 'next_step_user', 'next_step'];
-      const seen = new Set();
-      for (const key of order) {
-        if (ss[key]) {
-          html += '<div class="src-state-row"><span class="src-label">'
-            + escapeHtml(key.replace(/_/g, ' ')) + '</span>'
-            + _linkifyInlineCode(ss[key]) + '</div>';
-          seen.add(key);
-        }
-      }
-      for (const [k, v] of Object.entries(ss)) {
-        if (seen.has(k) || !v) continue;
-        html += '<div class="src-state-row"><span class="src-label">'
-          + escapeHtml(k.replace(/_/g, ' ')) + '</span>'
-          + _linkifyInlineCode(v) + '</div>';
-      }
-      html += '</div>';
-    }
-    card.innerHTML = html;
-    // Anchor at the very end of $view; the live-tool inline indicator
-    // (if any) re-appends itself on every poll, so it'll naturally end
-    // up *below* the recap card on the next updateLiveToolStrip tick.
-    $view.appendChild(card);
-  }
-
   // Session-activity timeline — fetched per conversation, rendered into
   // the sticky header's `[data-timeline]` slot. Shows commit / push / PR
   // events with their assistant-turn position and the gap to the next.
@@ -7873,14 +7762,8 @@
     if (events.length > 0 && wasAtBottom) {
       $view.scrollTop = $view.scrollHeight;
     }
-    // Refresh the recap card if any assistant text arrived (the recap
-    // mirrors the latest assistant turn). Re-anchor the inline live-tool
-    // indicator afterwards so it ends up below the recap card.
-    const sawAssistant = events.some(e => e && (e.type === 'assistant' || e.type === 'assistant_text'));
-    if (sawAssistant && currentConversation) {
-      const sid = (conversationsData.find(x => x.id === currentConversation) || {}).session_id || currentConversation;
-      fetchSessionRecap(sid);
-    }
+    // Re-anchor the inline live-tool indicator at the bottom; new events
+    // just appended would otherwise push past it.
     if (typeof updateLiveToolStrip === 'function') updateLiveToolStrip();
   }
 
