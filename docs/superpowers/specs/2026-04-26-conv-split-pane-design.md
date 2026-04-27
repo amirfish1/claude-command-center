@@ -77,14 +77,12 @@ The functions that need a `paneId` parameter (with default = active pane, so uns
 
 ## DOM
 
-The kanban-mode pane (`#convPanelView` inside `.conv-panel`) already has a CSS-grid-friendly slot. Generalize it:
+The conversation pane is `#conversationsView` inside `.main`. The historical split-pane kanban layout (`#kanbanLayout` / `#convPanelView`) has been retired — `getConvView()` always returns `$conversationsView`, and kanban view today is a sidebar-mode swap, not a split. So there is exactly one drop target and one container to refactor:
 
-- Wrap the existing single-pane chrome in a `.conv-pane` element with the per-pane header, transcript area, and composer.
-- When `splitState.orientation` is set, wrap two `.conv-pane` elements inside a `.conv-split[data-orientation="vertical|horizontal"]` flex container.
-- A 4px draggable divider (reuses the existing `#splitResizer` pattern) sits between panes; drag adjusts `splitState.ratio` (default 0.5) and persists to the layout's flex-basis.
-- The drop overlay is a single absolutely positioned element appended to the pane on `dragenter`, removed on `dragleave` / `drop` / `dragend`.
-
-The default-view container (`#conversationsView`) gets the same wrapping treatment so split works identically outside kanban mode.
+- Wrap the existing single-pane chrome (toolbar + view + input) in a `.conv-pane` element with a per-pane header, transcript area, and composer.
+- When `splitState.orientation` is set, render two `.conv-pane` elements inside a `.conv-split[data-orientation="vertical|horizontal"]` flex container that replaces the single `.conv-pane` in flow.
+- A 4px draggable divider sits between panes; drag adjusts `splitState.ratio` (default 0.5) which drives flex-basis on each pane.
+- The drop overlay is a single absolutely positioned element appended to the pane on `dragenter`, removed on `dragleave` / `drop` / `dragend`. A counter tracks nested `dragenter`/`dragleave` events so the overlay doesn't flicker as the cursor crosses child elements.
 
 ## Visuals
 
@@ -97,7 +95,7 @@ The default-view container (`#conversationsView`) gets the same wrapping treatme
 
 - **Same conversation dragged into the other pane.** Reject (no-op + brief tooltip "Already open"). Avoids two SSE streams for the same conversation id.
 - **Closing the active pane.** The remaining pane becomes active; sidebar highlight updates.
-- **Switching off kanban view while split.** Layout carries over to the default view (since both views now host `.conv-pane` containers).
+- **Toggling kanban view while split.** Drag sources change (sidebar list ↔ kanban board) but the split layout is unaffected — both share the same `#conversationsView` host.
 - **Viewport < 900px.** Drop zones do not appear. If a split is already active and the viewport shrinks below the threshold, fall back to the active pane only (the second pane is hidden, its SSE connection closed; restored on resize back).
 - **Pkood / live agent panes.** `sendToSplitTerminal` already keys off the conversation; once `paneId` flows through, an agent conversation can sit in either pane.
 
