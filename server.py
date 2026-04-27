@@ -6210,8 +6210,12 @@ def parse_conversation_by_sid(session_id, after_line=0):
 # `cd /abs/path` and `git -C /abs/path ...` — capture the path argument so
 # we can attribute the session's edits to a repo even when its launch cwd
 # is an empty stub directory.
-_BASH_CD_RE = re.compile(r"\bcd\s+(?:--\s+)?([^\s;&|<>]+)")
-_BASH_GIT_C_RE = re.compile(r"\bgit\s+-C\s+([^\s;&|<>]+)")
+# Match `cd` / `git -C` only when they start a command — i.e., at the
+# beginning of the bash string or after a separator (`;`, `&&`, `||`,
+# newline). Without this, a quoted argument like `grep 'cd /path'`
+# false-positives as the session having relocated to that path.
+_BASH_CD_RE = re.compile(r"(?:^|\n|;|&&|\|\|)\s*cd\s+(?:--\s+)?([^\s;&|<>]+)")
+_BASH_GIT_C_RE = re.compile(r"(?:^|\n|;|&&|\|\|)\s*git\s+-C\s+([^\s;&|<>]+)")
 
 _TIMELINE_COMMIT_RE = re.compile(r"\bgit\s+(?:-\w+\s+\S+\s+)*commit\b")
 _TIMELINE_COMMIT_MSG_RE = re.compile(r"-m\s+[\"']([^\"']{1,200})[\"']")
@@ -6421,7 +6425,96 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None):
     if not file_paths and not cd_targets:
         _EFFECTIVE_REPO_CACHE[cache_key] = None
         return None
+
+    # When the literal cwd is itself a worktree, the row pill already
+    # shows the correct branch. Skip inference so brief cd's into the
+    # main repo or sibling repos don't override the worktree label.
+    if literal_cwd:
+        try:
+            if (Path(literal_cwd) / ".git").is_file():
+                _EFFECTIVE_REPO_CACHE[cache_key] = None
+                return None
+        except OSError:
+            pass
+
     cache = {}
+
+    def _build_result(top, count, total):
+        def git(*args, timeout=2):
+            try:
+                r = subprocess.run(
+                    ["git", "-C", top, *args],
+                    capture_output=True, text=True, timeout=timeout,
+                )
+                if r.returncode == 0:
+                    return r.stdout.strip()
+            except (subprocess.SubprocessError, OSError):
+                pass
+            return None
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
+        if branch == "HEAD":
+            branch = None
+        upstream = git("rev-parse", "--abbrev-ref", "@{u}")
+        base = upstream or "main"
+        ahead = behind = None
+        rl = git("rev-list", "--left-right", "--count", f"{base}...HEAD")
+        if rl:
+            try:
+                b_str, a_str = rl.split()
+                behind = int(b_str)
+                ahead = int(a_str)
+            except (ValueError, IndexError):
+                pass
+        kind = "clone"
+        try:
+            gp = Path(top) / ".git"
+            if gp.is_file():
+                kind = "worktree"
+        except OSError:
+            pass
+        return {
+            "top": top, "count": count, "total": total,
+            "branch": branch, "kind": kind,
+            "ahead": ahead, "behind": behind,
+        }
+
+    # Worktree shortcut: if the session explicitly cd'd into a registered
+    # sibling worktree of its launch repo, surface that worktree directly
+    # instead of relying on the count heuristic. The count path treats
+    # Read/Edit hits in the launch cwd as overwhelming evidence and
+    # excludes that repo as the cwd, dropping a clear sibling-worktree
+    # signal on the floor (see the "drifted into a worktree" case where a
+    # session reads README.md many times in the shared clone but is
+    # actively editing in `<repo>-wt-<name>`).
+    #
+    # Only redirect *into* true worktrees (`.git` is a file) — a session
+    # launched in a worktree that briefly cd's back to the shared clone
+    # shouldn't be reclassified as living on main; the launch worktree is
+    # still the right answer.
+    if exclude_top and cd_targets:
+        siblings = set()
+        for wt in _list_worktrees(exclude_top):
+            wt_path = wt.get("path")
+            if not wt_path or wt_path == exclude_top:
+                continue
+            try:
+                if (Path(wt_path) / ".git").is_file():
+                    siblings.add(wt_path)
+            except OSError:
+                continue
+        if siblings:
+            matches = 0
+            picked = None
+            for target in cd_targets:
+                t_top = _git_toplevel_for_path(target, cache)
+                if t_top and t_top in siblings:
+                    matches += 1
+                    picked = t_top  # last match wins → most recent cd
+            if picked:
+                result = _build_result(picked, matches, len(cd_targets))
+                _EFFECTIVE_REPO_CACHE[cache_key] = result
+                return result
+
     counts = {}
 
     # Strong evidence: every cd/git-C target counts once. If the session
@@ -6455,52 +6548,7 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None):
         _EFFECTIVE_REPO_CACHE[cache_key] = None
         return None
 
-    # Cheap re-use of git for branch + ahead/behind on the inferred repo.
-    def git(*args, timeout=2):
-        try:
-            r = subprocess.run(
-                ["git", "-C", top, *args],
-                capture_output=True, text=True, timeout=timeout,
-            )
-            if r.returncode == 0:
-                return r.stdout.strip()
-        except (subprocess.SubprocessError, OSError):
-            pass
-        return None
-
-    branch = git("rev-parse", "--abbrev-ref", "HEAD")
-    if branch == "HEAD":
-        branch = None
-    upstream = git("rev-parse", "--abbrev-ref", "@{u}")
-    base = upstream or "main"
-    ahead = behind = None
-    rl = git("rev-list", "--left-right", "--count", f"{base}...HEAD")
-    if rl:
-        try:
-            b_str, a_str = rl.split()
-            behind = int(b_str)
-            ahead = int(a_str)
-        except (ValueError, IndexError):
-            pass
-
-    # worktree vs shared clone — same .git-file-vs-dir test as the literal cwd.
-    kind = "clone"
-    try:
-        gp = Path(top) / ".git"
-        if gp.is_file():
-            kind = "worktree"
-    except OSError:
-        pass
-
-    result = {
-        "top": top,
-        "count": count,
-        "total": total,
-        "branch": branch,
-        "kind": kind,
-        "ahead": ahead,
-        "behind": behind,
-    }
+    result = _build_result(top, count, total)
     _EFFECTIVE_REPO_CACHE[cache_key] = result
     return result
 
