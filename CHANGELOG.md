@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Sibling-worktree detection in the workspace strip.** Workspace pill now
+  surfaces a `🌿 +N worktrees (X subagent · Y manual)` chip when the session's
+  repo has worktrees besides the one it's editing in. Tooltip lists each
+  path · branch with `[agent]` for entries locked by superpowers /
+  orchestration skills (lock reason starts with `claude agent`). Catches
+  the "subagent silently forked a branch" case the user might not realise
+  happened. Uses `git worktree list --porcelain` against the session's
+  canonical repo (cwd's main repo if it's a worktree, the cwd itself if a
+  shared clone, or the inferred `effective_cwd`). New `worktrees`,
+  `worktrees_agent_count`, `worktrees_manual_count` fields on
+  `/api/session/<id>/workspace`.
 - **Effective-workspace inference from tool calls.** When a session's launch
   cwd is an empty stub directory but its actual edits land in a real repo
   elsewhere (e.g. cwd `~/my-finance-app` while the session reads/writes files

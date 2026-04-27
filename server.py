@@ -5642,6 +5642,60 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None):
     }
 
 
+def _list_worktrees(repo_top):
+    """Run `git worktree list --porcelain` for a repo and return its
+    worktrees as a list of dicts: {path, branch, detached, locked,
+    lock_reason}. The lock_reason often distinguishes user-created
+    worktrees from subagent-spawned ones — superpowers / orchestration
+    skills typically lock with a reason starting with "claude agent".
+
+    Returns [] on any failure.
+    """
+    if not repo_top:
+        return []
+    try:
+        r = subprocess.run(
+            ["git", "-C", repo_top, "worktree", "list", "--porcelain"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if r.returncode != 0:
+            return []
+    except (subprocess.SubprocessError, OSError):
+        return []
+    out = []
+    cur = {}
+
+    def flush():
+        if cur.get("path"):
+            out.append({
+                "path": cur.get("path"),
+                "branch": cur.get("branch"),
+                "detached": cur.get("detached", False),
+                "locked": cur.get("locked", False),
+                "lock_reason": cur.get("lock_reason") or "",
+            })
+
+    for line in r.stdout.splitlines():
+        if not line.strip():
+            flush()
+            cur = {}
+            continue
+        parts = line.split(maxsplit=1)
+        key = parts[0]
+        val = parts[1] if len(parts) > 1 else ""
+        if key == "worktree":
+            cur["path"] = val
+        elif key == "branch":
+            cur["branch"] = val.replace("refs/heads/", "", 1)
+        elif key == "detached":
+            cur["detached"] = True
+        elif key == "locked":
+            cur["locked"] = True
+            cur["lock_reason"] = val
+    flush()
+    return out
+
+
 def extract_session_workspace(session_id):
     """Resolve which workspace (shared clone vs. git worktree) a session
     is editing in, plus branch + ahead/behind. Powers the conv pane's
@@ -5667,6 +5721,15 @@ def extract_session_workspace(session_id):
         "effective_path_count": 0,
         "effective_total_paths": 0,
         "effective_source": None,
+        # Sibling worktrees of the session's repo (excluding the session's
+        # own worktree). Each entry: {path, branch, detached, locked,
+        # lock_reason, is_agent}. is_agent is true when the lock_reason
+        # starts with "claude agent" — superpowers / orchestration skills
+        # auto-spawn locked agent worktrees that the user may not realise
+        # exist.
+        "worktrees": [],
+        "worktrees_agent_count": 0,
+        "worktrees_manual_count": 0,
     }
     cwd = find_session_cwd(session_id)
     if not cwd:
@@ -5761,6 +5824,44 @@ def extract_session_workspace(session_id):
         out["effective_path_count"] = eff["count"]
         out["effective_total_paths"] = eff["total"]
         out["effective_source"] = "tool-calls"
+
+    # Sibling worktrees of whatever repo the session is actually editing.
+    # Pick a single canonical "anchor" repo so `git worktree list` emits
+    # the same set regardless of which worktree we query from:
+    #   - if cwd is a worktree → its main_repo_path
+    #   - else if cwd is a repo (shared clone) → cwd itself
+    #   - else if inference picked an effective repo → that
+    anchor = None
+    if out["is_worktree"] and out["main_repo_path"]:
+        anchor = out["main_repo_path"]
+    elif out["is_repo"]:
+        anchor = cwd
+    elif out["effective_cwd"]:
+        anchor = out["effective_cwd"]
+    if anchor:
+        try:
+            wts = _list_worktrees(anchor)
+        except Exception:
+            wts = []
+        # Exclude the session's own worktree from the list — the user
+        # already sees that one as the "main" pill.
+        self_path = cwd if (cwd and out["is_repo"]) else out.get("effective_cwd")
+        siblings = []
+        agent_n = manual_n = 0
+        for wt in wts:
+            if self_path and wt.get("path") == self_path:
+                continue
+            reason = (wt.get("lock_reason") or "").strip()
+            is_agent = reason.lower().startswith("claude agent")
+            wt["is_agent"] = is_agent
+            if is_agent:
+                agent_n += 1
+            else:
+                manual_n += 1
+            siblings.append(wt)
+        out["worktrees"] = siblings
+        out["worktrees_agent_count"] = agent_n
+        out["worktrees_manual_count"] = manual_n
 
     return out
 

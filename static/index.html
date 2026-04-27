@@ -697,6 +697,8 @@
   }
   .conv-input-context .wp-usage-pill.wp-usage-warm { color: var(--orange); background: rgba(210,153,34,0.12); }
   .conv-input-context .wp-usage-pill.wp-usage-hot  { color: var(--red);    background: rgba(248,81,73,0.14); }
+  .conv-input-context .wp-usage-clickable { cursor: pointer; user-select: none; }
+  .conv-input-context .wp-usage-clickable:hover { filter: brightness(1.2); }
   .conv-input-context .wp-usage-pct { opacity: 0.7; font-weight: 400; }
   .conv-input-context .wp-usage-peak { color: var(--text-muted); font-size: 10px; opacity: 0.7; }
   .conv-input-context .wp-ahead { color: var(--green); }
@@ -723,6 +725,19 @@
     color: var(--text-muted);
     background: rgba(255,255,255,0.05);
     border: 1px dashed var(--border);
+  }
+  .conv-input-context .wp-worktrees {
+    font-size: 12px; padding: 2px 7px; border-radius: 3px;
+    color: var(--text-muted);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    cursor: help;
+    white-space: pre;
+  }
+  .conv-input-context .wp-worktrees-agent {
+    color: var(--orange);
+    background: rgba(210,153,34,0.10);
+    border-color: rgba(210,153,34,0.30);
   }
   .conv-sticky-header .csh-col-activity .session-timeline {
     margin-top: 0;
@@ -7266,6 +7281,30 @@
       parts.push('<span class="wp-eff-divider"></span>' + eParts.join(' '));
     }
 
+    // Sibling worktrees of this session's repo. Surfaces "your subagent
+    // quietly forked a branch" cases: superpowers / orchestration skills
+    // auto-create locked worktrees the user may not realise exist.
+    const wts = w.worktrees || [];
+    if (wts.length > 0) {
+      const agentN = w.worktrees_agent_count || 0;
+      const manualN = w.worktrees_manual_count || 0;
+      const tipLines = wts.slice(0, 12).map(function (wt) {
+        const tag = wt.is_agent ? ' [agent]' : (wt.locked ? ' [locked]' : '');
+        const branch = wt.branch || (wt.detached ? '(detached)' : '');
+        const tildePath = (wt.path || '').replace(/^\/Users\/[^/]+/, '~');
+        return tildePath + '  ⎇ ' + branch + tag;
+      });
+      if (wts.length > 12) tipLines.push('... and ' + (wts.length - 12) + ' more');
+      const tip = tipLines.join('\n');
+      const labelParts = [];
+      if (agentN > 0) labelParts.push(agentN + ' subagent');
+      if (manualN > 0) labelParts.push(manualN + ' manual');
+      const label = '+' + wts.length + ' worktree' + (wts.length === 1 ? '' : 's') +
+        (labelParts.length ? ' (' + labelParts.join(' · ') + ')' : '');
+      const cls = agentN > 0 ? 'wp-worktrees wp-worktrees-agent' : 'wp-worktrees';
+      parts.push('<span class="' + cls + '" title="' + escapeHtml(tip) + '">🌿 ' + escapeHtml(label) + '</span>');
+    }
+
     wsSlot.innerHTML = parts.join(' ');
     slot.classList.add('visible');
   }
@@ -7298,6 +7337,11 @@
     return String(n);
   }
 
+  function _getCtxLimitOverride() {
+    const v = parseInt(localStorage.getItem('ccc-context-limit') || '0', 10);
+    return v === 1_000_000 || v === 200_000 ? v : 0;
+  }
+
   function renderSessionUsageIntoStrip() {
     const slot = document.getElementById('convInputContext');
     const uSlot = slot && slot.querySelector('[data-usage]');
@@ -7305,25 +7349,41 @@
     const u = _usageData || {};
     const latest = u.latest_input_tokens || 0;
     const peak = u.peak_input_tokens || 0;
-    const limit = u.context_limit || 200000;
+    // Click-toggle override: if you're on the 1M variant the server's
+    // 200k default is wrong; one click flips and persists.
+    const override = _getCtxLimitOverride();
+    const limit = override || u.context_limit || 200000;
     if (!latest && !peak) {
       uSlot.innerHTML = '';
       return;
     }
     const pct = Math.round((latest / limit) * 100);
-    let cls = 'wp-usage-pill';
+    let cls = 'wp-usage-pill wp-usage-clickable';
     if (pct >= 85) cls += ' wp-usage-hot';
     else if (pct >= 60) cls += ' wp-usage-warm';
     const peakNote = peak > latest
       ? ' <span class="wp-usage-peak" title="Peak across the session">peak ' + _formatTokens(peak) + '</span>'
       : '';
+    const overrideNote = override ? ' (override)' : '';
     const title = 'Latest assistant turn: ' + latest.toLocaleString() + ' tokens / '
-      + limit.toLocaleString() + ' context limit (' + (u.model || 'model unknown') + ')';
+      + limit.toLocaleString() + ' context limit' + overrideNote
+      + ' (' + (u.model || 'model unknown') + ')\n\nClick to toggle between 200k and 1M.';
     uSlot.innerHTML = '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
       + 'ctx ' + _formatTokens(latest) + ' / ' + _formatTokens(limit)
       + ' <span class="wp-usage-pct">(' + pct + '%)</span>'
       + '</span>' + peakNote;
     slot.classList.add('visible');
+    const pill = uSlot.querySelector('.wp-usage-clickable');
+    if (pill) {
+      pill.addEventListener('click', () => {
+        // Toggle between 200k, 1M, and clear (back to server-detected).
+        const cur = _getCtxLimitOverride();
+        const next = cur === 0 ? 1_000_000 : (cur === 1_000_000 ? 200_000 : 0);
+        if (next === 0) localStorage.removeItem('ccc-context-limit');
+        else localStorage.setItem('ccc-context-limit', String(next));
+        renderSessionUsageIntoStrip();
+      });
+    }
   }
 
   // Recap card — pulls the latest assistant turn's free-form text plus
