@@ -3463,7 +3463,18 @@
     if (_isWebRoutePath(p)) {
       const base = _vercelDeployUrl || '';  // empty → relative to current origin
       const target = base ? base + p : p;
-      window.open(target, '_blank', 'noopener');
+      // Synthesise an <a target="_blank"> click instead of window.open().
+      // window.open() got eaten by Safari's popup blocker because the call
+      // sat behind an async stack; a real anchor click in user-gesture
+      // context is honoured every time.
+      const tmp = document.createElement('a');
+      tmp.href = target;
+      tmp.target = '_blank';
+      tmp.rel = 'noopener noreferrer';
+      tmp.style.display = 'none';
+      document.body.appendChild(tmp);
+      tmp.click();
+      document.body.removeChild(tmp);
       return;
     }
     a.style.opacity = '0.5';
