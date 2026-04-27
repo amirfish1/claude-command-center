@@ -563,9 +563,32 @@
   .conversations-view .tool-call-group:not(.collapsed) .tool-call-group-header .tcg-arrow { transform: rotate(90deg); }
   .conversations-view .tool-call-group.collapsed .tool-call-group-body { display: none; }
   .conversations-view .tool-call-group-body { padding: 4px 12px 10px; border-top: 1px solid var(--border); }
+  /* Inline tool_result output preview, attached under .tool-call */
+  .tool-result-output {
+    margin: 4px 0 0 18px;
+    padding: 6px 10px;
+    background: var(--bg);
+    border-left: 2px solid var(--border);
+    border-radius: 0 4px 4px 0;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    overflow-x: auto;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .tool-result-output.is-error { border-left-color: var(--red); color: var(--red); }
   .conversations-view .tool-call-group-body .event { margin: 4px 0; padding: 2px 0; background: transparent; border: none; }
   .conversations-view .tool-call-group-body .event .line-num,
   .conversations-view .tool-call-group-body .event .msg-ts { display: none; }
+  /* When the user has "Hide tools" toggled on (which normally hides
+     every .event.tool-only and .tool-call), still show them inside an
+     expanded group — the whole point of expanding is to see them. */
+  .hide-tools .conversations-view .tool-call-group-body .event.tool-only,
+  .conversations-view.hide-tools .tool-call-group-body .event.tool-only { display: block !important; }
+  .hide-tools .conversations-view .tool-call-group-body .tool-call,
+  .conversations-view.hide-tools .tool-call-group-body .tool-call { display: block !important; }
   .conversations-view .event.result { background: rgba(57, 210, 192, 0.08); border-left-color: var(--cyan); font-size: 12px; }
   .conversations-view .event.result .label { color: var(--cyan); font-weight: 600; text-transform: uppercase; font-size: 11px; }
   .conversations-view .event.result .stats { margin-top: 4px; }
@@ -6719,6 +6742,43 @@
     $view.scrollTop = 0;
   }
 
+  // Produce a human-readable summary for a single tool-only assistant event,
+  // used as the collapsed-group header label when the group has exactly one
+  // command. Reads the rendered .tool-call's .tool-name and .tool-detail
+  // text so we don't need to re-parse the underlying ev. Falls back to
+  // "Ran <Tool>" if the shape isn't what we expect.
+  function summarizeToolCall(div) {
+    const tc = div.querySelector('.tool-call');
+    if (!tc) return 'Ran 1 command';
+    const name = (tc.querySelector('.tool-name')?.textContent || '').trim();
+    const detail = (tc.querySelector('.tool-detail')?.textContent || '').trim();
+    const basename = (s) => {
+      if (!s) return '';
+      const cleaned = s.replace(/^[\"\'\s]+|[\"\'\s]+$/g, '');
+      const parts = cleaned.split('/');
+      return parts[parts.length - 1] || cleaned;
+    };
+    const trunc = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
+    switch (name) {
+      case 'Read':         return detail ? 'Read ' + basename(detail) : 'Ran Read';
+      case 'Edit':         return detail ? 'Edited ' + basename(detail) : 'Ran Edit';
+      case 'Write':        return detail ? 'Wrote ' + basename(detail) : 'Ran Write';
+      case 'NotebookEdit': return detail ? 'Edited ' + basename(detail) : 'Ran NotebookEdit';
+      case 'Bash':         return detail ? 'Ran ' + trunc(detail, 60) : 'Ran Bash';
+      case 'Grep':         return detail ? 'Searched ' + trunc(detail, 50) : 'Ran Grep';
+      case 'Glob':         return detail ? 'Globbed ' + trunc(detail, 50) : 'Ran Glob';
+      case 'WebFetch':     return detail ? 'Fetched ' + trunc(detail, 60) : 'Ran WebFetch';
+      case 'WebSearch':    return detail ? 'Searched the web for ' + trunc(detail, 50) : 'Ran WebSearch';
+      case 'TodoWrite':    return 'Updated todos';
+      case 'Task':         return detail ? 'Spawned subagent: ' + trunc(detail, 50) : 'Spawned subagent';
+      case 'TaskCreate':   return 'Created task';
+      case 'TaskUpdate':   return 'Updated task';
+      case 'AskUserQuestion': return 'Asked a question';
+      case 'ExitPlanMode': return 'Exited plan mode';
+      default:             return detail ? 'Ran ' + name + ': ' + trunc(detail, 40) : 'Ran ' + (name || 'tool');
+    }
+  }
+
   function renderConversationEvents(events) {
     if (!Array.isArray(events)) return;  // defensive: backlog/unknown responses
     const $view = getConvView();
@@ -6897,7 +6957,21 @@
           + tsSpan(ev.ts)
           + '<div class="stats"><span>Cost: ' + escapeHtml(String(cost)) + '</span><span>Duration: ' + escapeHtml(String(dur)) + '</span></div>';
       } else if (ev.type === 'tool_result') {
-        // Hidden by CSS
+        // Inline the result text under the most recent tool_call in the
+        // current group. If we can't find one, drop the marker silently —
+        // empty .event.tool_result rows are hidden by CSS anyway.
+        const text = (ev.text || '').trim();
+        if (text && _currentToolGroup) {
+          const calls = _currentToolGroup.querySelectorAll('.tool-call');
+          const last = calls[calls.length - 1];
+          if (last && !last.querySelector('.tool-result-output')) {
+            const out = document.createElement('pre');
+            out.className = 'tool-result-output' + (ev.is_error ? ' is-error' : '');
+            out.textContent = text;
+            last.appendChild(out);
+          }
+        }
+        continue;
       }
 
       // Route tool-only assistant events into a fused group so the chat
@@ -6921,8 +6995,15 @@
         }
         _currentToolGroup.querySelector('.tool-call-group-body').appendChild(div);
         _currentToolCount += 1;
-        _currentToolGroup.querySelector('.tcg-label').textContent =
-          'Ran ' + _currentToolCount + ' command' + (_currentToolCount === 1 ? '' : 's');
+        // Update the header label. Single-command groups get a smart
+        // tool-specific summary ("Read foo.py"); multi-command groups
+        // collapse to "Ran N commands".
+        const $lbl = _currentToolGroup.querySelector('.tcg-label');
+        if (_currentToolCount === 1) {
+          $lbl.textContent = summarizeToolCall(div);
+        } else {
+          $lbl.textContent = 'Ran ' + _currentToolCount + ' commands';
+        }
       } else {
         // Any non-tool-only event closes the current group.
         _currentToolGroup = null;

@@ -3618,11 +3618,32 @@ def _parse_conversation_event(ev, line_num):
             # Preview placeholder "[image]" shouldn't leak into the rendered message.
             display_text = "" if (text == "[image]" and images) else text
             return {"line": line_num, "ts": ts, "type": "user_text", "text": display_text, "images": images}
-        # Check for tool results in content list
+        # Check for tool results in content list. Capture the result text so
+        # the UI can render it inline under the matching tool_call (Claude
+        # Desktop-style "Bash $ npm test \n <stdout>" preview).
         if isinstance(content, list):
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "tool_result":
-                    return {"line": line_num, "ts": ts, "type": "tool_result"}
+                    result_content = item.get("content")
+                    result_text = ""
+                    if isinstance(result_content, str):
+                        result_text = result_content
+                    elif isinstance(result_content, list):
+                        # tool_result content can be a list of text/image blocks
+                        parts = []
+                        for sub in result_content:
+                            if isinstance(sub, dict) and sub.get("type") == "text":
+                                parts.append(sub.get("text", ""))
+                        result_text = "\n".join(p for p in parts if p)
+                    # Truncate aggressively — the UI is for glancing, not deep inspection.
+                    if len(result_text) > 800:
+                        result_text = result_text[:800] + "\n…"
+                    return {
+                        "line": line_num, "ts": ts, "type": "tool_result",
+                        "text": result_text,
+                        "tool_use_id": item.get("tool_use_id", ""),
+                        "is_error": bool(item.get("is_error")),
+                    }
         return None
 
     if ev_type == "assistant":

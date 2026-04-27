@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Conversation pane styled to match Claude Desktop.** User messages render
+  as a chat bubble (blue tint, rounded corners, no USER label or timestamp)
+  with explicit SF Pro / system-ui font, 16px / line-height 1.6. Assistant
+  rows lose their purple background and left border; metadata (line number,
+  timestamp) dimmed to 35% opacity. Body gets `-webkit-font-smoothing:
+  antialiased` and `font-feature-settings: "kern", "liga", "calt"` for
+  crisper type rendering on macOS.
+- **Tool calls now collapse into a "Ran N commands ▶" group.** Consecutive
+  Bash/Read/Edit/Grep events fuse into one collapsible container in the
+  conversation pane. Single-command groups get a smart label
+  ("Read foo.py", "Edited bar.tsx", "Ran lsof -i :3001…", "Spawned
+  subagent: …"); multi-command groups read "Ran 3 commands". Click the
+  header to expand. Inside expanded groups, tool rows stay visible even
+  when the global "Hide tools" toggle is on.
+- **Tool results now render inline.** The server captures tool_result
+  content (truncated to 800 chars) and the UI renders it as a monospace
+  preview block under the matching tool_call (red left border for errors,
+  default muted for stdout). Replaces the previous behaviour of hiding
+  tool_result events entirely.
+
 ### Fixed
 - "Send to terminal…" input bar now appears for **dormant** sessions, not
   just live ones with a TTY. The backend's `/api/inject-input` endpoint
