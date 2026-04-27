@@ -98,6 +98,10 @@ writes sidecar state the UI uses for the kanban.
 - **Attach to existing sessions** — terminal `claude` processes show up
   automatically. Jump-to-terminal focuses them by TTY; rename/color the
   tab via Claude's own slash commands.
+- **Open in Claude Desktop** (macOS) — third destination button beside
+  Jump/Launch in the conversation toolbar; resumes the current CLI
+  session inside the Claude Desktop app via the `claude://resume` deep
+  link.
 - **Headless spawn with follow-up** — launch `claude -p` sessions from the
   dashboard and keep talking to them via an in-browser input bar (no
   terminal needed, stdin pipe stays open).

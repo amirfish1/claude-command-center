@@ -26,6 +26,22 @@ class TestServerImports(unittest.TestCase):
         self.assertIsInstance(server.__version__, str)
         self.assertRegex(server.__version__, r"^\d+\.\d+\.\d+")
 
+    def test_open_session_in_claude_desktop_rejects_bad_input(self):
+        """The helper exists and rejects empty / non-UUID session IDs
+        without trying to spawn `open(1)`."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        self.assertTrue(hasattr(server, "open_session_in_claude_desktop"))
+        # Empty
+        r = server.open_session_in_claude_desktop("")
+        self.assertFalse(r["ok"])
+        self.assertIn("error", r)
+        # Not a UUID
+        r = server.open_session_in_claude_desktop("not-a-uuid")
+        self.assertFalse(r["ok"])
+        self.assertIn("error", r)
+
     def test_morning_disabled_when_plugin_absent(self):
         """If morning.py isn't importable, MORNING_ENABLED must be False
         no matter what CCC_ENABLE_MORNING says."""
