@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Effective-workspace inference from tool calls.** When a session's launch
+  cwd is an empty stub directory but its actual edits land in a real repo
+  elsewhere (e.g. cwd `~/my-finance-app` while the session reads/writes files
+  under `~/Apps/BYM+Finie`), the workspace strip above the input bar now
+  surfaces a second `via tool calls: ~/Apps/BYM+Finie ⎇ main ↑1` pill.
+  Inference walks the session JSONL collecting Read/Edit/Write `file_path`s
+  and Bash `cd` / `git -C` redirects, resolves each to its git toplevel, and
+  picks the dominant repo (>50% of resolved paths, ≥2 evidence points).
+  Stale paths under the literal cwd are remapped to known `cd` targets when
+  the substituted variant exists on disk. Display-only — never used to
+  dispatch git writes; future write actions must use literal cwd or
+  per-action evidence. New `effective_*` fields on `/api/session/<id>/workspace`.
 - **Session-activity timeline.** New collapsible strip under the conv pane's
   "Original ask" header shows a chronological log of `git commit`, `git push`,
   and `gh pr create` events that occurred during the session, with the
