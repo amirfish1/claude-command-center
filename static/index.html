@@ -6988,12 +6988,15 @@
       });
       attachDragHandlers(el);
     });
-    // Click on the title element to start inline rename — replaces the
-    // dedicated pencil button.
+    // Click on the title element: select the row (open convo on the
+    // right) AND start the inline rename. Replaces the dedicated pencil
+    // button — the title is now a dual-purpose target.
     $convList.querySelectorAll('[data-role="title"]').forEach(el => {
       el.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        startInlineRename(el.closest('.conv-item'));
+        const item = el.closest('.conv-item');
+        if (item && item.dataset.id) selectConversation(item.dataset.id);
+        startInlineRename(item);
       });
     });
     $convList.querySelectorAll('.conv-archive-btn').forEach(btn => {
