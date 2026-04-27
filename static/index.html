@@ -601,6 +601,47 @@
   .conv-sticky-header__resize-handle.is-dragging {
     background: rgba(88,166,255,0.08);
   }
+  /* Collapse/expand chevron — small tab anchored at the bottom-center
+     of the sticky header. Click toggles `.is-collapsed`, which hides the
+     content rows and shrinks the box to a thin strip. State persists in
+     localStorage so the user's pick survives page reloads. */
+  .conv-sticky-header__collapse {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: -10px;
+    width: 32px; height: 18px;
+    display: flex; align-items: center; justify-content: center;
+    background: #10151c;
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    color: var(--text-muted);
+    font-size: 11px; font-family: inherit;
+    cursor: pointer; padding: 0; line-height: 1;
+    z-index: 7;
+    transition: color 0.12s, background 0.12s, border-color 0.12s;
+  }
+  .conv-sticky-header__collapse:hover {
+    color: var(--accent);
+    border-color: rgba(88,166,255,0.4);
+    background: #141b25;
+  }
+  .conv-sticky-header__collapse-icon { display: inline-block; line-height: 1; }
+  .conv-sticky-header.is-collapsed { padding-top: 6px; padding-bottom: 6px; }
+  .conv-sticky-header.is-collapsed .csh-row,
+  .conv-sticky-header.is-collapsed .tools-toggle,
+  .conv-sticky-header.is-collapsed .conv-sticky-header__resize-handle {
+    display: none;
+  }
+  .conv-sticky-header.is-collapsed::before {
+    content: 'header collapsed — click ▾ to expand';
+    display: block;
+    text-align: center;
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.6;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
   .conversations-view .event { margin-bottom: 12px; padding: 10px 14px; border-radius: 6px; border-left: 3px solid transparent; }
   /* Assistant rows — Claude-Desktop-style clean prose. No background fill,
      no left border, subtle metadata so the eye lands on the prose itself. */
@@ -677,9 +718,19 @@
   }
   .conv-sticky-header .csh-col-ask {
     flex: 5 1 0; min-width: 0;
-    display: flex; flex-direction: column; gap: 6px;
+    display: flex; flex-direction: column; gap: 8px;
     overflow-y: auto;
   }
+  /* Earlier-ask sub-block — appears under the original when scrolled past
+     a later user message. The two share .user-msg styling but each has
+     its own labelled box so it's obvious which message the user is
+     looking at right now. */
+  .conv-sticky-header .csh-ask-earlier {
+    border-top: 1px dashed var(--border);
+    padding-top: 6px;
+    margin-top: 2px;
+  }
+  .conv-sticky-header .csh-ask-earlier .label { color: var(--orange); }
   .conv-sticky-header .csh-col-activity {
     flex: 5 1 0; min-width: 0; min-height: 0;
     display: flex; flex-direction: column;
@@ -844,6 +895,8 @@
   .wt-tag-agent { color: var(--orange); background: rgba(210,153,34,0.10); border-color: rgba(210,153,34,0.30); }
   .wt-tag-locked { color: var(--accent); background: rgba(88,166,255,0.10); border-color: rgba(88,166,255,0.30); }
   .wt-tag-detached { color: var(--red); background: rgba(248,81,73,0.10); border-color: rgba(248,81,73,0.30); }
+  .wt-tag-dirty { color: var(--orange); background: rgba(210,153,34,0.10); border-color: rgba(210,153,34,0.30); }
+  .wt-row-dirty { border-left: 3px solid var(--orange); }
   .wt-empty {
     padding: 16px; text-align: center; color: var(--text-muted);
     font-size: 13px;
@@ -854,6 +907,77 @@
     font-style: italic;
     padding-top: 2px;
   }
+
+  /* ── Live badge + streaming bubble ─────────────────────────────
+     Shown when CCC is tailing a spawn log for the active session.
+     The badge sits next to the Launch/Jump buttons; the bubble
+     anchors at the bottom of the conv view and renders block-level
+     events as they land. Both disappear when the headless agent
+     finishes the turn (`result` event in stream-json) or the user
+     switches conversations. */
+  .live-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border-radius: 999px;
+    background: rgba(63,185,80,0.10);
+    border: 1px solid rgba(63,185,80,0.35);
+    color: var(--green, #3fb950);
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .live-badge-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green, #3fb950);
+    box-shadow: 0 0 0 0 rgba(63,185,80,0.5);
+    animation: live-pulse 1.4s ease-out infinite;
+  }
+  @keyframes live-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(63,185,80,0.55); }
+    70%  { box-shadow: 0 0 0 6px rgba(63,185,80,0);   }
+    100% { box-shadow: 0 0 0 0 rgba(63,185,80,0);     }
+  }
+  .stream-bubble {
+    margin: 8px 0; padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(63,185,80,0.05);
+    border: 1px dashed rgba(63,185,80,0.35);
+    font-size: 13px; line-height: 1.5;
+    color: var(--text);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .stream-bubble-header {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--green, #3fb950);
+    margin-bottom: 6px; opacity: 0.85;
+  }
+  .stream-bubble-blocks { display: flex; flex-direction: column; gap: 8px; }
+  .stream-block-text { white-space: pre-wrap; }
+  .stream-block-tool {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 12px; color: var(--text-muted);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 8px;
+    align-self: flex-start;
+  }
+  .stream-block-tool .stream-tool-name { color: var(--accent); font-weight: 600; }
+  .stream-block-thinking {
+    font-size: 11px; color: var(--text-muted);
+    font-style: italic; opacity: 0.7;
+  }
+  .stream-bubble-settled {
+    border-style: solid;
+    opacity: 0.8;
+    transition: opacity 0.4s ease-out;
+  }
+  .stream-bubble-settled .stream-bubble-header span:last-child::after {
+    content: ' · settled';
+    opacity: 0.7;
+  }
+  .stream-bubble-settled .live-badge-dot { animation: none; opacity: 0.5; }
   .conv-sticky-header .csh-col-activity .session-timeline {
     margin-top: 0;
     flex: 1 1 auto; min-height: 0;
@@ -968,12 +1092,86 @@
   .conv-item:hover { background: var(--surface-2); }
   .conv-item.active { background: var(--surface-2); border-left-color: var(--purple); }
   .conv-item .conv-title-row {
-    display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap;
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   }
   .conv-item .conv-title {
-    font-size: 17px; font-weight: 600; color: var(--text);
-    line-height: 1.3; flex: 1;
+    font-size: 14px; font-weight: 400; color: var(--text);
+    line-height: 1.3; flex: 1 1 auto; min-width: 0;
     word-break: break-word;
+  }
+  /* Meta-inline — rel-time, size, branch — squeezed onto the title row
+     so each card stays one+one lines instead of three. Numeric data sits
+     muted next to the heading rather than hogging its own row. */
+  .conv-item .conv-meta-inline {
+    font-size: 11px; color: var(--text-muted);
+    display: inline-flex; align-items: center; gap: 6px;
+    flex: 0 0 auto;
+  }
+  .conv-item .conv-meta-inline .sep { opacity: 0.4; }
+  /* Time-first column on the row — fixed-ish width so titles still
+     align across cards regardless of "5m ago" vs "23h ago". */
+  .conv-item .conv-rel {
+    font-size: 11px; color: var(--text-muted);
+    flex: 0 0 auto;
+    min-width: 56px;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Date-gap separator — slim labelled rule between cards whose
+     modified-times are far apart. Visual cue that you're crossing a
+     work session boundary in the list. */
+  .conv-gap-separator {
+    display: flex; align-items: center; gap: 8px;
+    margin: 14px 6px 8px;
+    font-size: 10px; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    opacity: 0.55;
+  }
+  .conv-gap-line {
+    flex: 1 1 auto; height: 1px; background: var(--border);
+  }
+  .compact-rows .conv-gap-separator { margin: 8px 6px 4px; }
+  /* Inline twin of .kanban-live-tool — fits in the row's title line so
+     "what is the agent doing right now" is visible at a glance even in
+     compact-rows mode. Same yellow→blue tint pattern as kanban: yellow
+     for "last completed", blue for "currently in flight". */
+  .conv-item .conv-live-tool {
+    display: inline-flex; align-items: center; gap: 4px;
+    flex: 0 1 auto; min-width: 0;
+    max-width: 240px;
+    font-size: 11px;
+    color: #FBCA04;
+    background: rgba(251,202,4,0.10);
+    border-left: 2px solid rgba(251,202,4,0.6);
+    padding: 2px 6px; border-radius: 3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    animation: pulse 2s infinite;
+  }
+  .conv-item .conv-live-tool .conv-live-name { font-weight: 600; }
+  .conv-item .conv-live-tool .conv-live-file { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; }
+  .conv-item .conv-live-tool.in-flight {
+    color: #58a6ff;
+    background: rgba(88,166,255,0.10);
+    border-left-color: rgba(88,166,255,0.6);
+    animation: pulse 1.2s infinite;
+  }
+  /* Compact rows — toggle on the conv list. Forces every card to a
+     single line: truncate the title with ellipsis and hide the ask
+     preview. Meta + signals stay so you can still scan state. The
+     selector targets `.compact-rows` directly so the rule fires whether
+     the parent is `.log-list`, `.conv-list`, or any other wrapper. */
+  .compact-rows .conv-item {
+    padding: 3px 14px;
+    margin-bottom: 1px;
+  }
+  .compact-rows .conv-item .conv-title {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    word-break: keep-all;
+    line-height: 1.2;
+  }
+  .compact-rows .conv-item .conv-last { display: none; }
+  .compact-rows .conv-item .conv-title-row {
+    flex-wrap: nowrap;
+    align-items: center;
   }
   .conv-item .conv-title.untitled {
     font-weight: 500; color: var(--text-muted); font-style: italic;
@@ -983,8 +1181,10 @@
   .conv-item .conv-edit-btn {
     opacity: 0; font-size: 13px; cursor: pointer;
     background: none; border: none; color: var(--text-muted);
-    padding: 2px 4px; border-radius: 3px; flex-shrink: 0;
+    padding: 2px 2px; border-radius: 3px; flex-shrink: 0;
+    margin-right: -2px;  /* pull title closer than the row's gap */
     transition: opacity 0.15s, color 0.15s, background 0.15s;
+    transform: scaleX(-1);  /* mirror so the pencil tip points back at the title */
   }
   .conv-item:hover .conv-edit-btn { opacity: 0.7; }
   .conv-item .conv-edit-btn:hover { opacity: 1; color: var(--accent); background: rgba(88,166,255,0.12); }
@@ -2709,6 +2909,7 @@
       &#9873; Report a bug
     </button>
     <button id="kptSummarizeAllBtn" class="topbar-btn" title="Use Claude haiku to generate concise titles for every card whose name hasn't been touched. Runs in the background, ~3 cards in parallel." aria-label="Summarize titles for all unnamed cards">&#10024; Titles</button>
+    <button id="kptWorktreesBtn" class="topbar-btn" title="Show all worktrees of this repo, with an indicator for those that have uncommitted changes." aria-label="Show worktrees">&#127807; Worktrees</button>
     <!-- View menu — collapses three rarely-changed toggles (Last 10h /
          Compact / GitHub only) into one disclosure popover. -->
     <div class="kpt-view-menu-wrap" style="position:relative;">
@@ -2728,6 +2929,7 @@
       <span class="dot"></span>
       <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
       <div class="sidebar-header-actions">
+        <button class="conv-compact-toggle sh-btn" id="convCompactToggle" title="Compact rows — keep each card to a single line" aria-label="Toggle compact rows"><span aria-hidden="true">&#8801;</span></button>
         <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Toggle Kanban board view" aria-label="Toggle Kanban board view"><span aria-hidden="true">&#9783;</span> Board</button>
         <button class="conv-archive-toggle sh-btn" id="convArchiveToggle" title="Show archived">&#128230;</button>
         <button class="conv-sort-btn sh-btn" id="convSortBtn" title="Sort by latest response (ignores custom order)">&#8693;</button>
@@ -2823,6 +3025,10 @@
         <span class="jump-icon">&#43;</span>
         <span class="jump-label">Launch in terminal</span>
       </button>
+      <span class="live-badge" id="liveBadgeConv" style="display:none;" title="Streaming directly from the headless agent's stdout (block-level)">
+        <span class="live-badge-dot"></span>
+        <span class="live-badge-label">live</span>
+      </span>
       <span class="status" id="convStatus"></span>
       <div class="font-size-controls" style="margin-left:auto;">
         <button class="font-size-btn" id="fontMinus" title="Decrease font size">A-</button>
@@ -2877,6 +3083,10 @@
         <button class="mobile-back-btn" id="cpMobileBackBtn" title="Back to board">&#8592; Back</button>
         <button id="cpJumpBtn" style="display:none;" title="Jump to terminal"><span>&#8599;</span> Jump</button>
         <button id="cpLaunchBtn" style="display:none;" title="Launch in terminal"><span>&#43;</span> Launch</button>
+        <span class="live-badge" id="cpLiveBadge" style="display:none;" title="Streaming directly from the headless agent's stdout (block-level)">
+          <span class="live-badge-dot"></span>
+          <span class="live-badge-label">live</span>
+        </span>
         <button id="cpKillBtn" style="display:none;" title="Kill agent">Kill</button>
         <div style="display:flex;gap:4px;margin-left:auto;">
           <button id="cpFontMinus" title="Decrease font size">A-</button>
@@ -3183,7 +3393,15 @@
     if (!text) return '';
     const chunks = String(text).split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
     let first = chunks[0] || String(text).trim();
-    if (first.length > maxLen) first = first.slice(0, maxLen).trim() + '…';
+    if (first.length > maxLen) {
+      // Back up to the last word boundary so we don't cut mid-word like
+      // "documentation of al…". 8-char minimum stops the boundary search
+      // from collapsing very-long-first-word strings to a useless stub.
+      let cut = first.slice(0, maxLen);
+      const lastSpace = cut.lastIndexOf(' ');
+      if (lastSpace > 8) cut = cut.slice(0, lastSpace);
+      first = cut.trim() + '…';
+    }
     return first;
   }
   // Split a prompt into [first sentence, rest] so the sticky-header
@@ -3457,7 +3675,7 @@
       if (canJump) {
         btn.style.display = 'inline-flex';
         btn.title = 'Focus ' + liveStatus.terminalApp + ' (' + liveStatus.tty + ') running this session';
-        btn.querySelector('.jump-label').textContent = 'Jump to terminal (' + liveStatus.terminalApp + ')';
+        btn.querySelector('.jump-label').textContent = 'Terminal';
       } else {
         btn.style.display = 'none';
       }
@@ -5011,6 +5229,11 @@
   }
 
   function renderSidebar(convs) {
+    // Skip the entire render if the user has an inline rename in flight
+    // — replacing innerHTML mid-edit would obliterate the input element
+    // and lose what they were typing. The next refresh tick will pick
+    // up the data once they're done.
+    if (document.querySelector('.conv-title-input')) return;
     // Preserve scroll across ALL re-renders (board + per-column + list)
     const scrolls = {};
     document.querySelectorAll('.kanban-board, .kanban-board-split, #convList').forEach(el => {
@@ -6632,7 +6855,33 @@
         + '</div>';
       return;
     }
-    $convList.innerHTML = convs.map(c => {
+    // Threshold for inserting a date-gap separator between rows. The list
+    // is sorted newest-first, so a "gap" is the seconds between this
+    // card's modified timestamp and the previous (newer) card's. 6h
+    // catches "morning vs evening" + "today vs yesterday" without
+    // littering the list with separators between consecutive turns.
+    const GAP_SEPARATOR_S = 6 * 3600;
+    const _gapLabel = (newer, older) => {
+      const gapH = (newer - older) / 3600;
+      if (gapH < 24) return Math.round(gapH) + 'h gap';
+      const days = Math.round(gapH / 24);
+      return days + (days === 1 ? ' day gap' : ' days gap');
+    };
+    $convList.innerHTML = convs.map((c, i, arr) => {
+      let separator = '';
+      if (i > 0) {
+        const prev = arr[i - 1];
+        const newer = (prev && prev.modified) || 0;
+        const older = (c.modified) || 0;
+        if (newer && older && (newer - older) >= GAP_SEPARATOR_S) {
+          separator = '<div class="conv-gap-separator">'
+            + '<span class="conv-gap-line"></span>'
+            + '<span class="conv-gap-label">' + escapeHtml(_gapLabel(newer, older)) + '</span>'
+            + '<span class="conv-gap-line"></span>'
+            + '</div>';
+        }
+      }
+      return separator + (function () {
       const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
       const rawTitle = c.display_name || (cleanFirst ? firstSentenceOf(cleanFirst, 60) : '(untitled)');
       const title = rawTitle.replace(/-/g, ' ');
@@ -6649,13 +6898,33 @@
         askHtml = '<div class="conv-last">' + escapeHtml(cleanFirst.slice(0, 100)) + '</div>';
       }
       const ask = askHtml;
-      const last = c.last_prompt
-        ? '<div class="conv-last"><span class="label">last:</span>' + escapeHtml(c.last_prompt.slice(0, 80)) + '</div>'
-        : '';
       const branch = c.branch ? '<span class="branch-badge">' + escapeHtml(c.branch) + '</span>' : '';
+      // Live "what is the agent doing right now" pill — same data and
+      // freshness rules as the kanban card's .kanban-live-tool, just
+      // squeezed onto the row's title line so compact rows stay scannable.
+      let liveToolHtml = '';
+      if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool) {
+        const sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
+        if (sidecarAge < 300) {
+          // Row view stays compact: tool name only, no file path. The
+          // hover title still surfaces the file for quick reference.
+          const shortFile = c.sidecar_file
+            ? (c.sidecar_file.length > 40 ? '…' + c.sidecar_file.slice(-39) : c.sidecar_file)
+            : '';
+          const arrow = c.sidecar_in_flight ? '▶ ' : '';
+          liveToolHtml = '<span class="conv-live-tool' + (c.sidecar_in_flight ? ' in-flight' : '') + '" '
+            + 'title="' + (c.sidecar_in_flight ? 'Currently running' : 'Last completed') + ': '
+            + escapeHtml(c.sidecar_tool) + (shortFile ? ' ' + escapeHtml(shortFile) : '') + '">'
+            + '<span class="conv-live-name">' + arrow + escapeHtml(c.sidecar_tool) + '</span>'
+            + '</span>';
+        }
+      }
       let sourceBadge = '';
       if (c.source === 'pkood') sourceBadge = '<span class="source-badge pkood">pkood</span>';
-      const rel = relativeTime(c.modified);
+      // Prefer "last interacted" (the user's last UI action) over "last
+      // event" (which includes Claude's autonomous responses) so the row
+      // time mirrors the user's mental model: when did *I* last touch this?
+      const rel = relativeTime(c.last_interacted || c.modified);
       const active = currentConversation === c.id ? ' active' : '';
 
       // Session signals
@@ -6694,34 +6963,37 @@
       return '<div class="conv-item' + active + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
-          + '<div class="conv-title ' + titleClass + '" data-role="title">' + escapeHtml(title) + '</div>'
+          + '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
+          + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to rename">' + escapeHtml(title) + '</div>'
+          + liveToolHtml
+          + '<span class="conv-meta-inline">'
+          +   '<span>' + formatSize(c.size) + '</span>'
+          +   (branch ? '<span class="sep">&middot;</span>' + branch : '')
+          +   (sourceBadge ? '<span class="sep">&middot;</span>' + sourceBadge : '')
+          + '</span>'
           + signals
           + '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>'
-          + '<button class="conv-edit-btn" data-role="edit" title="Rename">&#9998;</button>'
         + '</div>'
         + ask
-        + last
-        + '<div class="meta">'
-          + '<span data-role="rel">' + escapeHtml(rel) + '</span>'
-          + '<span class="sep">&middot;</span>'
-          + '<span>' + formatSize(c.size) + '</span>'
-          + (branch ? '<span class="sep">&middot;</span>' + branch : '')
-          + (sourceBadge ? '<span class="sep">&middot;</span>' + sourceBadge : '')
-        + '</div>'
       + '</div>';
+      })();
     }).join('');
     $convList.querySelectorAll('.conv-item').forEach(el => {
       el.addEventListener('click', (ev) => {
-        // Ignore clicks that started the inline editor or archive button
-        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('.conv-title-input')) return;
+        // Ignore clicks that started the inline editor, archive button,
+        // or that landed on the title (which now triggers rename instead
+        // of opening the conversation — the pencil's job moved here).
+        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
         selectConversation(el.dataset.id);
       });
       attachDragHandlers(el);
     });
-    $convList.querySelectorAll('.conv-edit-btn').forEach(btn => {
-      btn.addEventListener('click', (ev) => {
+    // Click on the title element to start inline rename — replaces the
+    // dedicated pencil button.
+    $convList.querySelectorAll('[data-role="title"]').forEach(el => {
+      el.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        startInlineRename(btn.closest('.conv-item'));
+        startInlineRename(el.closest('.conv-item'));
       });
     });
     $convList.querySelectorAll('.conv-archive-btn').forEach(btn => {
@@ -6833,7 +7105,7 @@
       // Sort by whichever is later: the user's last UI interaction or the
       // session's last meaningful event. Keeps the just-typed card on top
       // even before Claude responds.
-      const score = (c) => Math.max(c.last_interacted || 0, c.modified || 0);
+      const score = (c) => c.last_interacted || c.modified || 0;
       return [...data].sort((a, b) => score(b) - score(a));
     }
     return data; // custom/default order from server
@@ -6893,6 +7165,23 @@
       renderSidebar(filterConversations($convSearch.value));
     });
   }
+  // Compact-rows toggle. Adds a class to the conv-list so the row
+  // styles in CSS take over: titles truncate to a single line and the
+  // ask preview disappears. Persists in localStorage so it sticks.
+  const $convCompactToggle = document.getElementById('convCompactToggle');
+  function applyCompactRowsState() {
+    const compact = localStorage.getItem('ccc-compact-rows') === '1';
+    if ($convList) $convList.classList.toggle('compact-rows', compact);
+    if ($convCompactToggle) $convCompactToggle.classList.toggle('active', compact);
+  }
+  if ($convCompactToggle) {
+    $convCompactToggle.addEventListener('click', () => {
+      const next = localStorage.getItem('ccc-compact-rows') !== '1';
+      localStorage.setItem('ccc-compact-rows', next ? '1' : '0');
+      applyCompactRowsState();
+    });
+  }
+  applyCompactRowsState();
   // Back-to-list button in split toolbar
   const $kptListViewBtn = document.getElementById('kptListViewBtn');
   if ($kptListViewBtn) {
@@ -7228,6 +7517,7 @@
   async function selectConversation(id) {
     // Stop any existing SSE stream or pollers
     stopConvStream();
+    stopSpawnStream();
     mobileShowForCurrentMode();
     currentConversation = id;
     // Remember which card was last opened so we can re-open it on the
@@ -7315,6 +7605,11 @@
       if ($pkoodKillBtn) $pkoodKillBtn.style.display = 'none';
       await fetchConversationEvents();
       startConvStream();
+      // Block-level streaming from the spawn log — only succeeds if the
+      // backend finds a CCC-spawned headless process for this session.
+      // No-op for externally launched, IDE-launched, or pkood sessions.
+      const sid = sessionIdByConv[id] || '';
+      if (sid) startSpawnStream(sid);
     }
   }
 
@@ -7417,6 +7712,174 @@
     }
   }
 
+  // ── Spawn-log streaming ──
+  // Live, block-level event stream from a CCC-spawned headless session's
+  // stdout. Granularity is one `assistant` event per content block
+  // (thinking/text/tool_use), not per token — claude `-p` doesn't surface
+  // token deltas. Still meaningfully faster than the JSONL transcript,
+  // which is end-of-turn only. The streaming bubble is transient: it
+  // gets cleared when `result` lands (turn over) or when the user
+  // switches conversations.
+  let spawnEventSource = null;
+  let _streamingBubble = null;       // DOM node for the in-flight bubble
+  let _streamingMsgId = null;        // current message_id we're appending into
+  let _spawnLiveSid = null;          // session_id whose spawn we're tailing
+
+  function setLiveBadgeVisible(visible) {
+    const a = document.getElementById('liveBadgeConv');
+    const b = document.getElementById('cpLiveBadge');
+    if (a) a.style.display = visible ? '' : 'none';
+    if (b) b.style.display = visible ? '' : 'none';
+  }
+
+  async function startSpawnStream(sid) {
+    stopSpawnStream();
+    if (!sid) return;
+    let info;
+    try {
+      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/spawn-info');
+      info = await res.json();
+    } catch (_) { return; }
+    // Race guard: user may have switched away while we were fetching.
+    if (currentSession.id !== sid) return;
+    if (!info || !info.has_log || !info.alive) return;
+    setLiveBadgeVisible(true);
+    _spawnLiveSid = sid;
+    const url = '/api/session/' + encodeURIComponent(sid) + '/spawn-stream';
+    spawnEventSource = new EventSource(url);
+    spawnEventSource.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        if (data && Array.isArray(data.events)) handleSpawnEvents(data.events);
+      } catch (_) {}
+    };
+    spawnEventSource.onerror = () => {
+      // Subprocess exited or server hiccup — drop the bubble + badge.
+      // No auto-retry: a finished headless session has no more output to stream.
+      stopSpawnStream();
+    };
+  }
+
+  function stopSpawnStream() {
+    if (spawnEventSource) {
+      spawnEventSource.close();
+      spawnEventSource = null;
+    }
+    _spawnLiveSid = null;
+    setLiveBadgeVisible(false);
+    clearStreamingBubble();
+  }
+
+  let _streamingBubbleLingerTimer = null;
+
+  function clearStreamingBubble(opts) {
+    if (_streamingBubbleLingerTimer) {
+      clearTimeout(_streamingBubbleLingerTimer);
+      _streamingBubbleLingerTimer = null;
+    }
+    const linger = opts && typeof opts.lingerMs === 'number' ? opts.lingerMs : 0;
+    const doRemove = () => {
+      if (_streamingBubble && _streamingBubble.parentNode) {
+        _streamingBubble.parentNode.removeChild(_streamingBubble);
+      }
+      _streamingBubble = null;
+      _streamingMsgId = null;
+      _streamingBubbleLingerTimer = null;
+    };
+    if (linger > 0 && _streamingBubble) {
+      // Mark the bubble as "settled" so the dashed border + pulsing dot
+      // stop animating during the linger — visually distinct from the
+      // active streaming state.
+      _streamingBubble.classList.add('stream-bubble-settled');
+      _streamingBubbleLingerTimer = setTimeout(doRemove, linger);
+    } else {
+      doRemove();
+    }
+  }
+
+  function ensureStreamingBubble(msgId) {
+    const $view = getConvView();
+    if (!$view) return null;
+    // New message id → reset (the JSONL renderer is responsible for
+    // persisting whatever the previous message produced).
+    if (_streamingBubble && _streamingMsgId && msgId && _streamingMsgId !== msgId) {
+      clearStreamingBubble();
+    }
+    if (!_streamingBubble) {
+      const node = document.createElement('div');
+      node.className = 'stream-bubble';
+      node.innerHTML =
+        '<div class="stream-bubble-header">'
+        + '<span class="live-badge-dot"></span>'
+        + '<span>streaming</span>'
+        + '</div>'
+        + '<div class="stream-bubble-blocks"></div>';
+      $view.appendChild(node);
+      _streamingBubble = node;
+      _streamingMsgId = msgId || null;
+    }
+    // Re-anchor to the bottom in case JSONL events were appended after us.
+    if (_streamingBubble.parentNode === $view && _streamingBubble !== $view.lastElementChild) {
+      $view.appendChild(_streamingBubble);
+    }
+    return _streamingBubble.querySelector('.stream-bubble-blocks');
+  }
+
+  function handleSpawnEvents(events) {
+    if (!Array.isArray(events)) return;
+    const $view = getConvView();
+    const wasAtBottom = $view && ($view.scrollHeight - $view.scrollTop - $view.clientHeight) < 80;
+    for (const ev of events) {
+      if (!ev || typeof ev !== 'object') continue;
+      if (ev.type === 'result') {
+        // Turn finished — settle the bubble for a few seconds so it's
+        // actually visible (the JSONL renderer paints the same blocks
+        // simultaneously, so a 0-linger removal is invisible). The
+        // settled state freezes the pulsing-dot animation as a visual
+        // cue that streaming is done.
+        clearStreamingBubble({ lingerMs: 3000 });
+        continue;
+      }
+      if (ev.type !== 'assistant_block') continue;
+      const slot = ensureStreamingBubble(ev.message_id);
+      if (!slot) continue;
+      _streamingMsgId = ev.message_id || _streamingMsgId;
+      for (const b of (ev.blocks || [])) {
+        if (b.type === 'text') {
+          // Append-or-merge: consecutive text blocks for the same message
+          // accumulate in one element so the bubble reads naturally.
+          let last = slot.lastElementChild;
+          if (last && last.classList.contains('stream-block-text')) {
+            last.textContent += b.text || '';
+          } else {
+            const div = document.createElement('div');
+            div.className = 'stream-block-text';
+            div.textContent = b.text || '';
+            slot.appendChild(div);
+          }
+        } else if (b.type === 'tool_use') {
+          const div = document.createElement('div');
+          div.className = 'stream-block-tool';
+          const summary = b.summary ? ' — ' + b.summary : '';
+          div.innerHTML = '<span>⚙</span> <span class="stream-tool-name">'
+            + escapeHtml(b.name || 'tool') + '</span>'
+            + '<span style="opacity:0.8;">' + escapeHtml(summary) + '</span>';
+          slot.appendChild(div);
+        } else if (b.type === 'thinking') {
+          // Don't bother rendering empty thinking blocks — they appear
+          // as the first block of every assistant turn and are noisy.
+          if (!slot.querySelector('.stream-block-thinking')) {
+            const div = document.createElement('div');
+            div.className = 'stream-block-thinking';
+            div.textContent = '(thinking…)';
+            slot.appendChild(div);
+          }
+        }
+      }
+    }
+    if (wasAtBottom && $view) $view.scrollTop = $view.scrollHeight;
+  }
+
   function stopPkoodTailPoller() {
     if (pkoodTailPoller) {
       clearInterval(pkoodTailPoller);
@@ -7478,14 +7941,20 @@
   function _dynAskApply(idx, items) {
     const st = _dynamicAskState;
     if (!st || st.currentIdx === idx) return;
+    // Unhide whichever later item was hidden during the previous swap so
+    // it pops back into view as soon as the sticky moves on. Index 0
+    // (the original ask) keeps `is-pinned-in-sticky` permanently — that
+    // hide is owned by the sticky-header init code, not by this
+    // tracker, so we never touch it here.
+    if (st.currentIdx > 0 && items[st.currentIdx]) {
+      items[st.currentIdx].classList.remove('is-pinned-in-sticky');
+    }
     if (idx <= 0) {
+      // No earlier ask in play — collapse the second block. The original
+      // sub-block is static HTML, so we never touch it.
       st.currentIdx = 0;
-      if (st.label) st.label.textContent = 'Original ask';
-      if (st.askFirst) st.askFirst.textContent = st.original.first;
-      if (st.askRest) {
-        st.askRest.textContent = st.original.rest;
-        st.askRest.style.display = st.original.rest ? '' : 'none';
-      }
+      if (st.earlierBox) st.earlierBox.style.display = 'none';
+      if (st.earlierFirst) st.earlierFirst.textContent = '';
       return;
     }
     const item = items[idx];
@@ -7496,17 +7965,14 @@
       _dynAskApply(0, items);
       return;
     }
-    // "Earlier ask" shows the full message in regular weight — no
-    // first-sentence/grey-rest split. Cleaner read than slicing into
-    // headline+body for ad-hoc later turns where there's no editorial
-    // first sentence.
+    // Both blocks visible: original stays put, earlier-block shows the
+    // most-recent user message that's scrolled behind the sticky. Hide
+    // the in-conv bubble for the pinned message so the user doesn't see
+    // the same text twice (sticky + bubble).
     st.currentIdx = idx;
-    if (st.label) st.label.textContent = 'Earlier ask';
-    if (st.askFirst) st.askFirst.textContent = text;
-    if (st.askRest) {
-      st.askRest.textContent = '';
-      st.askRest.style.display = 'none';
-    }
+    item.classList.add('is-pinned-in-sticky');
+    if (st.earlierFirst) st.earlierFirst.textContent = text;
+    if (st.earlierBox) st.earlierBox.style.display = '';
   }
   function _dynAskUpdate() {
     const st = _dynamicAskState;
@@ -7681,38 +8147,24 @@
     slot.classList.add('visible');
   }
 
-  // Worktrees modal — opened by clicking the 🌿 pill. Reads from
-  // _workspaceData (already fetched for the current session) so we
-  // don't refetch on click. Delegated click handler is attached once
-  // to the input-context strip.
-  function openWorktreesModal() {
-    const w = _workspaceData;
-    if (!w) return;
-    const wts = w.worktrees || [];
-    const agentN = w.worktrees_agent_count || 0;
-    const manualN = w.worktrees_manual_count || 0;
+  // Shared renderer for the worktrees modal. Used by both the per-session
+  // 🌿 pill (sibling worktrees of the active session's repo) and the
+  // topbar Worktrees button (every worktree in the watched repo, with a
+  // dirty marker for those carrying uncommitted changes).
+  function _renderWorktreesModal({ worktrees, summaryItems, emptyText }) {
     const $modal = document.getElementById('worktreesModal');
     const $summary = document.getElementById('worktreesSummary');
     const $list = document.getElementById('worktreesList');
     if (!$modal || !$summary || !$list) return;
-
-    const total = wts.length;
-    const summaryParts = ['<span><strong>' + total + '</strong> worktree' + (total === 1 ? '' : 's') + '</span>'];
-    if (agentN > 0) summaryParts.push('<span><strong>' + agentN + '</strong> subagent</span>');
-    if (manualN > 0) summaryParts.push('<span><strong>' + manualN + '</strong> manual</span>');
-    if (w.is_worktree && w.cwd) {
-      const here = (w.cwd || '').replace(/^\/Users\/[^/]+/, '~');
-      summaryParts.push('<span style="margin-left:auto;opacity:0.7;">this session: ' + escapeHtml(here) + '</span>');
-    }
-    $summary.innerHTML = summaryParts.join(' ');
-
-    if (total === 0) {
-      $list.innerHTML = '<div class="wt-empty">No sibling worktrees.</div>';
+    $summary.innerHTML = (summaryItems || []).join(' ');
+    if (!worktrees || worktrees.length === 0) {
+      $list.innerHTML = '<div class="wt-empty">' + escapeHtml(emptyText || 'No worktrees.') + '</div>';
     } else {
-      const rows = wts.map(function (wt) {
+      const rows = worktrees.map(function (wt) {
         const tildePath = (wt.path || '').replace(/^\/Users\/[^/]+/, '~');
         const branch = wt.branch || '';
         const tags = [];
+        if (wt.dirty) tags.push('<span class="wt-tag wt-tag-dirty" title="Has uncommitted changes">uncommitted</span>');
         if (wt.is_agent) tags.push('<span class="wt-tag wt-tag-agent">subagent</span>');
         else if (wt.locked) tags.push('<span class="wt-tag wt-tag-locked">locked</span>');
         if (wt.detached) tags.push('<span class="wt-tag wt-tag-detached">detached</span>');
@@ -7723,7 +8175,9 @@
         const reasonHtml = (reason && !wt.is_agent)
           ? '<div class="wt-lock-reason">' + escapeHtml(reason) + '</div>'
           : '';
-        const cls = wt.is_agent ? 'wt-row wt-row-agent' : 'wt-row';
+        let cls = 'wt-row';
+        if (wt.is_agent) cls += ' wt-row-agent';
+        if (wt.dirty) cls += ' wt-row-dirty';
         return '<div class="' + cls + '">'
           + '<span class="wt-row-path" title="' + escapeHtml(wt.path || '') + '">' + escapeHtml(tildePath) + '</span>'
           + branchHtml
@@ -7733,8 +8187,61 @@
       });
       $list.innerHTML = rows.join('');
     }
-
     $modal.classList.add('open');
+  }
+
+  // Per-session worktrees modal — opened by clicking the 🌿 pill. Reads
+  // from _workspaceData (already fetched for the current session) so we
+  // don't refetch on click.
+  function openWorktreesModal() {
+    const w = _workspaceData;
+    if (!w) return;
+    const wts = w.worktrees || [];
+    const agentN = w.worktrees_agent_count || 0;
+    const manualN = w.worktrees_manual_count || 0;
+    const total = wts.length;
+    const items = ['<span><strong>' + total + '</strong> worktree' + (total === 1 ? '' : 's') + '</span>'];
+    if (agentN > 0) items.push('<span><strong>' + agentN + '</strong> subagent</span>');
+    if (manualN > 0) items.push('<span><strong>' + manualN + '</strong> manual</span>');
+    if (w.is_worktree && w.cwd) {
+      const here = (w.cwd || '').replace(/^\/Users\/[^/]+/, '~');
+      items.push('<span style="margin-left:auto;opacity:0.7;">this session: ' + escapeHtml(here) + '</span>');
+    }
+    _renderWorktreesModal({
+      worktrees: wts,
+      summaryItems: items,
+      emptyText: 'No sibling worktrees.',
+    });
+  }
+
+  // Repo-wide worktrees modal — opened from the topbar "🌿 Worktrees"
+  // button. Fetches /api/repo/worktrees on every click so the dirty/clean
+  // state is fresh; the per-worktree `git status` calls there have a 2s
+  // timeout each so a hung worktree can't block the modal.
+  async function openRepoWorktreesModal() {
+    _renderWorktreesModal({
+      worktrees: [],
+      summaryItems: ['<span style="opacity:0.7;">loading…</span>'],
+      emptyText: 'Loading…',
+    });
+    let data;
+    try {
+      const res = await fetch('/api/repo/worktrees');
+      data = await res.json();
+    } catch (_) { return; }
+    const wts = (data && data.worktrees) || [];
+    const items = ['<span><strong>' + wts.length + '</strong> worktree' + (wts.length === 1 ? '' : 's') + '</span>'];
+    if (data && data.dirty_count) {
+      items.push('<span style="color:var(--orange);"><strong>' + data.dirty_count + '</strong> uncommitted</span>');
+    }
+    if (data && data.agent_count) {
+      items.push('<span><strong>' + data.agent_count + '</strong> subagent</span>');
+    }
+    _renderWorktreesModal({
+      worktrees: wts,
+      summaryItems: items,
+      emptyText: 'No worktrees in this repo.',
+    });
   }
   function closeWorktreesModal() {
     const $modal = document.getElementById('worktreesModal');
@@ -7763,6 +8270,8 @@
     const $closeBtn = document.getElementById('worktreesCloseBtn');
     if ($backdrop) $backdrop.addEventListener('click', closeWorktreesModal);
     if ($closeBtn) $closeBtn.addEventListener('click', closeWorktreesModal);
+    const $topbarBtn = document.getElementById('kptWorktreesBtn');
+    if ($topbarBtn) $topbarBtn.addEventListener('click', openRepoWorktreesModal);
   })();
 
   // Token-usage pill — sibling of the workspace info in the same input-
@@ -7998,30 +8507,54 @@
           // overlay in this sticky header; it's now a real button in
           // convToolbar (see #announceBtnConv) so it stays in reach
           // without having to scroll up.
+          const stickyCollapsed = localStorage.getItem('cshCollapsed') === '1';
+          if (stickyCollapsed) sticky.classList.add('is-collapsed');
           sticky.innerHTML = resolveBtn + issueBtn
             + '<button class="tools-toggle" data-tools-toggle' + (hidden ? ' class="active"' : '') + ' title="Toggle tool-call visibility">'
             + (hidden ? 'Show tools' : 'Hide tools') + '</button>'
             + '<div class="csh-row">'
             +   '<div class="csh-col csh-col-ask">'
-            +     '<div class="label">Original ask</div>'
-            +     (function () {
-                    const cleaned = cleanIssuePrompt(ev.text);
-                    const parts = splitFirstSentence(cleaned);
-                    // Always emit .ask-rest so the dynamic-ask tracker has
-                    // a stable target when later messages have a "rest" to
-                    // show. Hide via inline style when this message has none.
-                    let h = '<div class="user-msg">';
-                    h += '<span class="ask-first">' + escapeHtml(parts[0]) + '</span>';
-                    h += '<span class="ask-rest"' + (parts[1] ? '' : ' style="display:none"') + '>' + escapeHtml(parts[1] || '') + '</span>';
-                    h += '</div>';
-                    return h;
-                  })()
+            +     '<div class="csh-ask-original">'
+            +       '<div class="label">Original ask</div>'
+            +       (function () {
+                      const cleaned = cleanIssuePrompt(ev.text);
+                      const parts = splitFirstSentence(cleaned);
+                      let h = '<div class="user-msg">';
+                      h += '<span class="ask-first">' + escapeHtml(parts[0]) + '</span>';
+                      h += '<span class="ask-rest"' + (parts[1] ? '' : ' style="display:none"') + '>' + escapeHtml(parts[1] || '') + '</span>';
+                      h += '</div>';
+                      return h;
+                    })()
+            +     '</div>'
+            +     '<div class="csh-ask-earlier" style="display:none;" data-earlier-block>'
+            +       '<div class="label">Earlier ask</div>'
+            +       '<div class="user-msg"><span class="earlier-first" data-earlier-first></span></div>'
+            +     '</div>'
             +   '</div>'
             +   '<div class="csh-col csh-col-activity">'
             +     '<div class="session-timeline" data-timeline></div>'
             +   '</div>'
-            + '</div>';
+            + '</div>'
+            + '<button type="button" class="conv-sticky-header__collapse" data-csh-collapse '
+            +   'title="Collapse/expand the sticky header" aria-label="Collapse sticky header">'
+            +   '<span class="conv-sticky-header__collapse-icon">'
+            +     (stickyCollapsed ? '▾' : '▴')
+            +   '</span>'
+            + '</button>';
           $view.insertBefore(sticky, $view.firstChild);
+          // Wire the chevron toggle. State persists across reloads via
+          // localStorage so the user's preference sticks for every conv.
+          const collapseBtn = sticky.querySelector('[data-csh-collapse]');
+          if (collapseBtn) {
+            collapseBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              const nowCollapsed = !sticky.classList.contains('is-collapsed');
+              sticky.classList.toggle('is-collapsed', nowCollapsed);
+              localStorage.setItem('cshCollapsed', nowCollapsed ? '1' : '0');
+              const icon = collapseBtn.querySelector('.conv-sticky-header__collapse-icon');
+              if (icon) icon.textContent = nowCollapsed ? '▾' : '▴';
+            });
+          }
           // Sticky auto-sizes to its current message — no resize handle, no
           // stored height. `.csh-col-ask .user-msg` already has
           // max-height:none and overflow:visible, so the box grows or shrinks
@@ -8032,18 +8565,11 @@
           // _dynAskSchedule. Without this block they sit dormant and the
           // sticky never swaps to "Earlier ask".
           {
-            const askFirstEl = sticky.querySelector('.csh-col-ask .ask-first');
-            const askRestEl = sticky.querySelector('.csh-col-ask .ask-rest');
             _dynamicAskState = {
               view: $view,
               sticky,
-              label: sticky.querySelector('.csh-col-ask .label'),
-              askFirst: askFirstEl,
-              askRest: askRestEl,
-              original: {
-                first: askFirstEl ? askFirstEl.textContent : '',
-                rest: askRestEl ? askRestEl.textContent : '',
-              },
+              earlierBox: sticky.querySelector('[data-earlier-block]'),
+              earlierFirst: sticky.querySelector('[data-earlier-first]'),
               currentIdx: 0,
               rafPending: false,
             };
@@ -8226,6 +8752,13 @@
     // Re-anchor the inline live-tool indicator at the bottom; new events
     // just appended would otherwise push past it.
     if (typeof updateLiveToolStrip === 'function') updateLiveToolStrip();
+    // Same story for the spawn-log streaming bubble — keep it pinned to
+    // the tail so it doesn't end up sandwiched between older JSONL events
+    // and newer ones.
+    if (_streamingBubble && _streamingBubble.parentNode === $view
+        && _streamingBubble !== $view.lastElementChild) {
+      $view.appendChild(_streamingBubble);
+    }
   }
 
   function filterConversations(q) {

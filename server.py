@@ -1945,23 +1945,14 @@ def _append_custom_title(path, session_id, name):
     will pick up the new name next time it reads the file.
     """
     event = {"type": "custom-title", "customTitle": name, "sessionId": session_id}
-    # Ensure file ends with a newline before appending (defensive — append
-    # mode writes at EOF, and a missing trailing newline would glue lines)
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, 2)  # end
-            size = f.tell()
-            if size > 0:
-                f.seek(size - 1)
-                tail = f.read(1)
-            else:
-                tail = b"\n"
-    except OSError:
-        tail = b"\n"
+    # Always prepend a newline. POSIX guarantees that O_APPEND writes are
+    # atomic at the kernel level, so an extra leading \n can never glue
+    # onto a partial line claude is mid-writing — at worst we land an
+    # empty line ahead of our event, which JSONL parsers skip. The
+    # previous read-tail-then-append dance had a window where claude
+    # could write between our two opens.
     with open(path, "a", encoding="utf-8") as f:
-        if tail != b"\n":
-            f.write("\n")
-        f.write(json.dumps(event) + "\n")
+        f.write("\n" + json.dumps(event) + "\n")
     # Invalidate our meta cache so next listing picks up the change
     _conv_meta_cache.pop(str(path), None)
 
@@ -1989,17 +1980,14 @@ def rename_session(session_id, name):
     result["live"] = is_live
 
     path = _find_session_jsonl(session_id)
-    # Extra safety: even if the session isn't in the registry, refuse to
-    # write-through if the .jsonl was touched very recently — some entrypoints
-    # (SDK, background tasks) don't write ~/.claude/sessions/<pid>.json and
-    # would race with our append.
-    recently_touched = False
-    if path is not None:
-        try:
-            recently_touched = (time.time() - path.stat().st_mtime) < 30
-        except OSError:
-            pass
-    can_writethrough = (not is_live) and (not recently_touched) and (path is not None) and bool(name)
+    # Always write-through to the JSONL when the file exists and we have
+    # a non-empty name. The previous "skip if live or recently-touched"
+    # guard was meant to avoid racing claude's writes, but POSIX O_APPEND
+    # writes are atomic at the kernel level (see _append_custom_title)
+    # — and skipping the JSONL meant a stale custom-title event from
+    # earlier (e.g. an auto-`/rename` to a path slug) would always win
+    # over the user's pencil rename, which is the bug we hit.
+    can_writethrough = (path is not None) and bool(name)
 
     if can_writethrough:
         try:
@@ -3723,7 +3711,7 @@ def find_conversations():
     # so a card the user just typed into bubbles up immediately even before
     # Claude responds.
     conversations.sort(
-        key=lambda x: max(x.get("last_interacted") or 0, x.get("modified") or 0),
+        key=lambda x: x.get("last_interacted") or x.get("modified") or 0,
         reverse=True,
     )
     # Apply custom order (if any): listed sessions first in saved order,
@@ -4010,7 +3998,7 @@ def find_all_sessions():
     # and backlog cards lack `last_interacted` and fall back to `modified` —
     # the max() handles missing keys uniformly.
     conversations.sort(
-        key=lambda x: max(x.get("last_interacted") or 0, x.get("modified") or 0),
+        key=lambda x: x.get("last_interacted") or x.get("modified") or 0,
         reverse=True,
     )
     order = _load_conversation_order()
@@ -4219,20 +4207,21 @@ def spawn_session(prompt, name=None, cwd=None):
 
     spawn_cwd = cwd if cwd else str(REPO_ROOT)
     log_fh = open(log_path, "w")
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE,
+    fifo_path, child_stdin_fd = _make_stdin_fifo(log_path)
+    popen_kwargs = dict(
         stdout=log_fh,
         stderr=subprocess.STDOUT,
         cwd=spawn_cwd,
         start_new_session=True,
     )
-
-    # Write the initial prompt as the first stream-json user message.
-    # Note: headless `claude -p` doesn't support TUI slash commands like /rename
-    # or /color — they're treated as unknown skills. Tab naming/coloring only
-    # happens when the user "jumps" into the TUI (see launch_terminal_for_session).
-    _write_stream_json_user_message(proc, prompt)
+    popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
+    proc = subprocess.Popen(cmd, **popen_kwargs)
+    # Drop our local copy of the rdwr fd — Popen has dup'd it into the
+    # child as fd 0, and the child's RDWR reference is what keeps the
+    # FIFO from EOFing on a CCC restart.
+    if child_stdin_fd is not None:
+        _close_fd_quiet(child_stdin_fd)
+    stdin_fd = _open_fifo_writer(fifo_path) if fifo_path else None
 
     entry = {
         "pid": proc.pid,
@@ -4242,7 +4231,15 @@ def spawn_session(prompt, name=None, cwd=None):
         "started": timestamp,
         "proc": proc,
         "log_fh": log_fh,
+        "fifo": fifo_path,
+        "stdin_fd": stdin_fd,
     }
+    # Write the initial prompt as the first stream-json user message.
+    # Note: headless `claude -p` doesn't support TUI slash commands like /rename
+    # or /color — they're treated as unknown skills. Tab naming/coloring only
+    # happens when the user "jumps" into the TUI (see launch_terminal_for_session).
+    _write_stream_json_user_message(entry, prompt)
+
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
         pid=proc.pid,
@@ -4251,6 +4248,7 @@ def spawn_session(prompt, name=None, cwd=None):
         cwd=spawn_cwd,
         spawned_at=timestamp,
         command_summary=prompt[:200],
+        fifo=fifo_path,
     )
 
     return {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)}
@@ -4271,8 +4269,110 @@ def _pick_color_for_session(name):
     return _COLOR_PALETTE[h % len(_COLOR_PALETTE)]
 
 
-def _write_stream_json_user_message(proc, text):
-    """Emit a stream-json user message to a running headless claude."""
+def _make_stdin_fifo(log_path):
+    """Create a named pipe alongside the spawn log and open it RDWR.
+
+    The RDWR open is the trick that makes headless agents survive a
+    CCC restart: when we pass this fd to the child as its stdin (Popen
+    dup2's fd → fd 0), the kernel sees the child as a *writer* of its
+    own stdin too (the dup'd fd inherits RDWR mode). So even when every
+    external writer closes — e.g. CCC dies — the kernel's FIFO writer
+    count stays ≥ 1 as long as the child is alive, which means no EOF,
+    which means no premature exit.
+
+    Returns (fifo_path, rdwr_fd), or (None, None) on failure (e.g. a
+    filesystem that doesn't support FIFOs). Callers should fall back
+    to subprocess.PIPE in that case — same behavior as before this
+    feature shipped.
+    """
+    try:
+        log_path = Path(log_path)
+        fifo_path = Path(str(log_path) + ".stdin")
+        # mkfifo refuses if the path already exists; clear any stale
+        # leftover from a previous spawn that didn't get cleaned up.
+        if fifo_path.exists():
+            try:
+                fifo_path.unlink()
+            except OSError:
+                pass
+        os.mkfifo(str(fifo_path), 0o600)
+        # O_RDWR works for FIFOs on both Linux and macOS and never blocks.
+        # O_RDONLY/O_WRONLY would wait for the other side to appear, which
+        # would deadlock the spawn flow.
+        fd = os.open(str(fifo_path), os.O_RDWR | os.O_CLOEXEC)
+        return str(fifo_path), fd
+    except OSError as e:
+        print(f"  [spawn-fifo] mkfifo failed for {log_path} ({e}); falling back to PIPE")
+        return None, None
+
+
+def _open_fifo_writer(fifo_path):
+    """Open a FIFO write-only. Returns fd, or None if the FIFO is gone."""
+    if not fifo_path:
+        return None
+    try:
+        return os.open(fifo_path, os.O_WRONLY | os.O_CLOEXEC)
+    except OSError:
+        return None
+
+
+def _close_fd_quiet(fd):
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def _unlink_quiet(path):
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _cleanup_finished_entry(entry):
+    """Close the FIFO writer fd and unlink the FIFO when a session ends.
+
+    Idempotent: zeroes out the fd/path keys so a second call is a no-op.
+    The on-disk log itself is preserved for forensics — only the
+    transient FIFO node goes away.
+    """
+    fd = entry.get("stdin_fd")
+    if fd is not None:
+        _close_fd_quiet(fd)
+        entry["stdin_fd"] = None
+    fifo = entry.get("fifo")
+    if fifo:
+        _unlink_quiet(fifo)
+        entry["fifo"] = None
+
+
+def _write_via_pipe(proc, line_bytes):
+    if proc is None or getattr(proc, "stdin", None) is None:
+        return False
+    try:
+        proc.stdin.write(line_bytes)
+        proc.stdin.flush()
+        return True
+    except (BrokenPipeError, OSError):
+        return False
+
+
+def _write_stream_json_user_message(target, text):
+    """Emit a stream-json user message to a running headless claude.
+
+    `target` can be:
+      - A dict (spawn entry) — preferred. We write to the FIFO writer
+        fd cached on the entry, reopening from `entry["fifo"]` if it
+        was lost (e.g. across a CCC restart). This path is the whole
+        reason FIFOs exist: it survives the orchestrator dying.
+      - A subprocess.Popen — legacy fallback for spawns that didn't
+        get a FIFO (mkfifo failure → subprocess.PIPE).
+    """
     msg = {
         "type": "user",
         "message": {
@@ -4280,13 +4380,32 @@ def _write_stream_json_user_message(proc, text):
             "content": [{"type": "text", "text": text}],
         },
     }
-    line = json.dumps(msg) + "\n"
-    try:
-        proc.stdin.write(line.encode("utf-8"))
-        proc.stdin.flush()
-        return True
-    except (BrokenPipeError, OSError):
-        return False
+    line = (json.dumps(msg) + "\n").encode("utf-8")
+
+    if isinstance(target, dict):
+        fd = target.get("stdin_fd")
+        if fd is not None:
+            try:
+                os.write(fd, line)
+                return True
+            except (BrokenPipeError, OSError):
+                # Cached fd went bad — drop it and try one fresh open
+                # via the FIFO path before falling back to proc.stdin.
+                _close_fd_quiet(fd)
+                target["stdin_fd"] = None
+        fifo = target.get("fifo")
+        if fifo:
+            new_fd = _open_fifo_writer(fifo)
+            if new_fd is not None:
+                try:
+                    os.write(new_fd, line)
+                    target["stdin_fd"] = new_fd
+                    return True
+                except (BrokenPipeError, OSError):
+                    _close_fd_quiet(new_fd)
+        return _write_via_pipe(target.get("proc"), line)
+
+    return _write_via_pipe(target, line)
 
 
 def inject_into_spawned(pid, text):
@@ -4295,9 +4414,31 @@ def inject_into_spawned(pid, text):
         if s["pid"] == pid:
             if s["proc"].poll() is not None:
                 return {"ok": False, "error": "process exited"}
-            ok = _write_stream_json_user_message(s["proc"], text)
+            ok = _write_stream_json_user_message(s, text)
             return {"ok": ok, "pid": pid}
     return {"ok": False, "error": "unknown pid (not spawned by this server)"}
+
+
+def _find_live_spawn_entry_for_session(session_id):
+    """Return a live `_spawned_sessions` entry whose log mentions `session_id`,
+    or None. Matches both fresh spawns (where the spawn's own session_id is
+    in the log header) and resume subprocesses (where the resumed sid plus
+    the resume's new sid both appear).
+    """
+    if not session_id:
+        return None
+    for s in _spawned_sessions:
+        try:
+            if s["proc"].poll() is not None:
+                continue
+        except Exception:
+            continue
+        if s.get("resumed_sid") == session_id:
+            return s
+        log = s.get("log")
+        if log and session_id in _log_session_ids(log):
+            return s
+    return None
 
 
 def resume_session_headless(session_id, text):
@@ -4308,7 +4449,7 @@ def resume_session_headless(session_id, text):
     # Reuse existing resumed process
     for s in _spawned_sessions:
         if s.get("resumed_sid") == session_id and s["proc"].poll() is None:
-            ok = _write_stream_json_user_message(s["proc"], text)
+            ok = _write_stream_json_user_message(s, text)
             return {"ok": ok, "pid": s["pid"], "resumed": True, "reused": True}
 
     cwd = find_session_cwd(session_id) or str(REPO_ROOT)
@@ -4326,20 +4467,27 @@ def resume_session_headless(session_id, text):
     ]
 
     log_fh = open(log_path, "w")
+    fifo_path, child_stdin_fd = _make_stdin_fifo(log_path)
+    popen_kwargs = dict(
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        cwd=cwd,
+        start_new_session=True,
+    )
+    popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            cwd=cwd,
-            start_new_session=True,
-        )
+        proc = subprocess.Popen(cmd, **popen_kwargs)
     except FileNotFoundError:
         log_fh.close()
+        if child_stdin_fd is not None:
+            _close_fd_quiet(child_stdin_fd)
+        if fifo_path:
+            _unlink_quiet(fifo_path)
         return {"ok": False, "error": "claude CLI not in PATH"}
+    if child_stdin_fd is not None:
+        _close_fd_quiet(child_stdin_fd)
+    stdin_fd = _open_fifo_writer(fifo_path) if fifo_path else None
 
-    ok = _write_stream_json_user_message(proc, text)
     entry = {
         "pid": proc.pid,
         "name": f"resume-{session_id[:8]}",
@@ -4349,7 +4497,10 @@ def resume_session_headless(session_id, text):
         "proc": proc,
         "log_fh": log_fh,
         "resumed_sid": session_id,
+        "fifo": fifo_path,
+        "stdin_fd": stdin_fd,
     }
+    ok = _write_stream_json_user_message(entry, text)
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
         pid=proc.pid,
@@ -4358,6 +4509,7 @@ def resume_session_headless(session_id, text):
         cwd=cwd,
         spawned_at=timestamp,
         command_summary=text[:200],
+        fifo=fifo_path,
     )
     return {"ok": ok, "pid": proc.pid, "log": str(log_path), "resumed": True}
 
@@ -4434,16 +4586,19 @@ def _save_spawn_registry(entries):
         print(f"  [spawn-registry] could not write {SPAWNED_PIDS_FILE} ({e})")
 
 
-def _record_spawn_to_registry(pid, name, log_path, cwd, spawned_at, command_summary):
+def _record_spawn_to_registry(pid, name, log_path, cwd, spawned_at, command_summary, fifo=None):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is filled in lazily by the reattach sweep (it isn't known
-    at fork time — Claude emits it in the first stream-json event)."""
+    at fork time — Claude emits it in the first stream-json event).
+    The fifo path is persisted so a fresh CCC instance can reopen the
+    write side after a restart and continue injecting messages."""
     entries = _load_spawn_registry()
     entries.append({
         "pid": pid,
         "session_id": None,
         "name": name,
         "log": str(log_path),
+        "fifo": str(fifo) if fifo else None,
         "cwd": str(cwd),
         "spawned_at": spawned_at,
         "command_summary": command_summary,
@@ -4536,7 +4691,13 @@ def _reattach_spawned_orphans():
             except Exception:
                 session_id = None
         # Looks legit — re-add to the in-memory map with a stub proc.
+        # Reopen the FIFO writer if the entry has one. This is the whole
+        # point of FIFOs over PIPE: the child is still reading from its
+        # stdin (RDWR-on-the-FIFO), so we can dial back in by opening a
+        # fresh write fd and start injecting messages again.
         stub = _ReattachedProc(pid)
+        fifo_path = entry.get("fifo")
+        stdin_fd = _open_fifo_writer(fifo_path) if fifo_path else None
         synthetic = {
             "pid": pid,
             "name": entry.get("name") or f"reattached-{pid}",
@@ -4545,6 +4706,8 @@ def _reattach_spawned_orphans():
             "started": entry.get("spawned_at", ""),
             "proc": stub,
             "log_fh": None,
+            "fifo": fifo_path,
+            "stdin_fd": stdin_fd,
             "reattached": True,
         }
         if session_id:
@@ -4555,6 +4718,7 @@ def _reattach_spawned_orphans():
             "session_id": session_id,
             "name": entry.get("name"),
             "log": log_path,
+            "fifo": fifo_path,
             "cwd": entry.get("cwd"),
             "spawned_at": entry.get("spawned_at"),
             "command_summary": entry.get("command_summary", ""),
@@ -4584,6 +4748,10 @@ def list_spawned_sessions():
         })
         if poll is not None:
             finished_pids.append(s["pid"])
+            # Subprocess died — close our FIFO writer fd and unlink the
+            # node so we don't leak FIFO files in LOG_DIR. The on-disk
+            # log itself stays for forensics.
+            _cleanup_finished_entry(s)
     if finished_pids:
         try:
             entries = _load_spawn_registry()
@@ -4648,7 +4816,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000):
             start_offset = os.path.getsize(entry["log"])
         except OSError:
             start_offset = 0
-        ok = _write_stream_json_user_message(entry["proc"], text)
+        ok = _write_stream_json_user_message(entry, text)
         if not ok:
             return {"ok": False, "error": "failed to write user message (broken pipe?)"}
 
@@ -5620,11 +5788,11 @@ def close_issue(issue_number, reason, duplicate_of=None):
             comment = f"Duplicate of #{dup}"
             subprocess.run(
                 ["gh", "issue", "comment", str(issue_number), "--body", comment],
-                check=True, capture_output=True, text=True,
+                check=True, capture_output=True, text=True, cwd=str(REPO_ROOT),
             )
             subprocess.run(
                 ["gh", "issue", "close", str(issue_number), "--reason", "not planned"],
-                check=True, capture_output=True, text=True,
+                check=True, capture_output=True, text=True, cwd=str(REPO_ROOT),
             )
             remove_in_progress_label(issue_number)
             _backlog_issues_cache_ts = 0
@@ -5634,7 +5802,7 @@ def close_issue(issue_number, reason, duplicate_of=None):
         elif reason in ("completed", "not planned"):
             subprocess.run(
                 ["gh", "issue", "close", str(issue_number), "--reason", reason],
-                check=True, capture_output=True, text=True,
+                check=True, capture_output=True, text=True, cwd=str(REPO_ROOT),
             )
             remove_in_progress_label(issue_number)
             _backlog_issues_cache_ts = 0
@@ -5755,6 +5923,162 @@ def _scan_session_id_in_log(log_path, max_lines=20):
                     return sid
     except OSError:
         return None
+    return None
+
+
+def _log_session_ids(log_path, max_lines=30):
+    """Return the set of session_ids that appear in a log's first N lines.
+
+    Resume subprocesses mint a fresh session_id of their own AND reference
+    the original session_id they're continuing — both end up in the log
+    header. So matching by "is the target sid in this log?" is the right
+    contract, not "does the first event have this sid?".
+    """
+    sids = set()
+    try:
+        with open(log_path, "r") as f:
+            for i, line in enumerate(f):
+                if i >= max_lines:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                s = ev.get("session_id")
+                if s:
+                    sids.add(s)
+    except OSError:
+        return sids
+    return sids
+
+
+def _resolve_spawn_log_for_session(session_id):
+    """Return (log_path, alive) for a CCC-spawned session, or (None, False).
+
+    A single conversation can have multiple spawn logs over its life
+    (original spawn + N resumes). We scan all of them and prefer the
+    most recent log with a live PID; if none are live we fall back to
+    the most recent log so the SSE handler can decide what to do.
+    """
+    if not session_id:
+        return None, False
+
+    candidates = []  # (sort_key, log_path, alive)
+
+    for s in _spawned_sessions:
+        log = s.get("log")
+        if not log:
+            continue
+        if session_id in _log_session_ids(log):
+            try:
+                alive = s["proc"].poll() is None
+            except Exception:
+                alive = False
+            sort_key = s.get("started", "") or os.path.basename(log)
+            candidates.append((sort_key, log, alive))
+
+    try:
+        for entry in _load_spawn_registry():
+            log = entry.get("log")
+            if not log:
+                continue
+            recorded_sid = entry.get("session_id")
+            sids_in_log = None
+            matches = recorded_sid == session_id
+            if not matches:
+                sids_in_log = _log_session_ids(log)
+                matches = session_id in sids_in_log
+            if matches:
+                pid = entry.get("pid")
+                alive = bool(pid and _pid_alive(pid))
+                sort_key = entry.get("spawned_at", "") or os.path.basename(log)
+                candidates.append((sort_key, log, alive))
+    except Exception:
+        pass
+
+    if not candidates:
+        return None, False
+    # Dedupe by log path (in-memory + registry can both report the same log).
+    seen = {}
+    for key, log, alive in candidates:
+        prev = seen.get(log)
+        if prev is None or (alive and not prev[1]) or key > prev[0]:
+            seen[log] = (key, alive)
+    deduped = [(k, log, a) for log, (k, a) in seen.items()]
+    # Prefer alive, then most-recent.
+    deduped.sort(key=lambda c: (1 if c[2] else 0, c[0]), reverse=True)
+    _, log, alive = deduped[0]
+    return log, alive
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _normalize_spawn_event(ev):
+    """Boil a stream-json event down to the minimum the UI needs.
+
+    We intentionally drop fields the UI doesn't render (full hook bodies,
+    long tool inputs) so the SSE payload stays small and the browser
+    doesn't have to filter on its end. Returns None for events the UI
+    should skip entirely.
+    """
+    if not isinstance(ev, dict):
+        return None
+    t = ev.get("type")
+    if t == "assistant":
+        msg = ev.get("message") or {}
+        content = msg.get("content") or []
+        blocks = []
+        for c in content:
+            if not isinstance(c, dict):
+                continue
+            ct = c.get("type")
+            if ct == "text":
+                blocks.append({"type": "text", "text": c.get("text", "")})
+            elif ct == "tool_use":
+                tu = {
+                    "type": "tool_use",
+                    "name": c.get("name", ""),
+                    "id": c.get("id", ""),
+                }
+                # Surface a one-line summary for common tools so the live
+                # bubble can show "⚙ Read foo.py" instead of an opaque
+                # spinner. Trim aggressively — full inputs land in the
+                # JSONL render at end-of-turn.
+                inp = c.get("input") or {}
+                if isinstance(inp, dict):
+                    summary = (
+                        inp.get("file_path") or inp.get("path")
+                        or inp.get("pattern") or inp.get("command")
+                        or inp.get("description") or ""
+                    )
+                    if summary:
+                        tu["summary"] = str(summary)[:160]
+                blocks.append(tu)
+            elif ct == "thinking":
+                blocks.append({"type": "thinking"})
+        if not blocks:
+            return None
+        return {
+            "type": "assistant_block",
+            "message_id": msg.get("id", ""),
+            "blocks": blocks,
+        }
+    if t == "result":
+        return {
+            "type": "result",
+            "subtype": ev.get("subtype", ""),
+            "duration_ms": ev.get("duration_ms"),
+            "num_turns": ev.get("num_turns"),
+        }
     return None
 
 
@@ -6066,6 +6390,51 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None):
         "kind": kind,
         "ahead": ahead,
         "behind": behind,
+    }
+
+
+def _worktree_is_dirty(path):
+    """True if `git status --porcelain` reports any change in this worktree.
+
+    Best-effort with a short timeout — a hung filesystem can't be allowed
+    to block the modal render. Bare exceptions => report as not-dirty so
+    we don't flag healthy worktrees just because the check timed out.
+    """
+    if not path:
+        return False
+    try:
+        r = subprocess.run(
+            ["git", "-C", path, "status", "--porcelain"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if r.returncode != 0:
+            return False
+        return bool(r.stdout.strip())
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
+def list_repo_worktrees(repo_top=None):
+    """Return all worktrees for a repo with a `dirty` flag (uncommitted
+    changes). Powers the topbar's "open worktrees" modal."""
+    repo_top = repo_top or str(REPO_ROOT)
+    wts = _list_worktrees(repo_top)
+    dirty_n = 0
+    agent_n = 0
+    for wt in wts:
+        wt["dirty"] = _worktree_is_dirty(wt.get("path"))
+        if wt["dirty"]:
+            dirty_n += 1
+        reason = (wt.get("lock_reason") or "").lower()
+        wt["is_agent"] = reason.startswith("claude agent")
+        if wt["is_agent"]:
+            agent_n += 1
+    return {
+        "repo": repo_top,
+        "worktrees": wts,
+        "total": len(wts),
+        "dirty_count": dirty_n,
+        "agent_count": agent_n,
     }
 
 
@@ -7178,6 +7547,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             after_line = int(qs.get("after", ["0"])[0])
             self._stream_conversation(conv_id, after_line)
+        elif re.match(r"^/api/session/[a-f0-9-]+/spawn-info$", path):
+            sid = path.split("/")[-2]
+            log_path, alive = _resolve_spawn_log_for_session(sid)
+            self.send_json({
+                "has_log": bool(log_path),
+                "alive": bool(alive),
+                "log": str(log_path) if log_path else None,
+            })
+        elif path == "/api/repo/worktrees":
+            self.send_json(list_repo_worktrees())
+        elif re.match(r"^/api/session/[a-f0-9-]+/spawn-stream$", path):
+            sid = path.split("/")[-2]
+            self._stream_spawn_deltas(sid)
         elif re.match(r"^/api/conversations/[a-f0-9-]+$", path):
             conv_id = path.split("/")[-1]
             qs = urllib.parse.parse_qs(parsed.query)
@@ -8295,10 +8677,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 status = session_live_status(sid, cwd)
                 tty = status.get("tty")
                 term_app = status.get("terminal_app")
-                if not status.get("live") or not tty:
-                    # Fall back: resume the session headlessly and inject via stream-json
-                    result = resume_session_headless(sid, text)
-                    self.send_json(result)
+                # `??` is a sentinel for "process is alive but we couldn't
+                # pin down a tty" — typical of headless agents that never
+                # had a terminal. Treat it as no-tty so we route to FIFO/
+                # resume injection instead of AppleScripting into a tab
+                # that doesn't exist.
+                has_tty = bool(tty) and tty != "??"
+                if not status.get("live") or not has_tty:
+                    # Prefer an existing live spawn (FIFO-equipped, no
+                    # process-spawn cost) over `claude --resume`. Falls
+                    # through to resume_session_headless when there's no
+                    # matching spawn — same behavior as before.
+                    spawn = _find_live_spawn_entry_for_session(sid)
+                    if spawn is not None:
+                        ok = _write_stream_json_user_message(spawn, text)
+                        self.send_json({
+                            "ok": ok,
+                            "pid": spawn["pid"],
+                            "via": "spawn-fifo",
+                        })
+                    else:
+                        self.send_json(resume_session_headless(sid, text))
                 else:
                     result = inject_input_via_keystroke(
                         tty, term_app or "Terminal", text
@@ -8359,6 +8758,90 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(focus_terminal_by_tty(tty, term_app))
         else:
             self.send_json({"error": "Not found"}, 404)
+
+    def _stream_spawn_deltas(self, session_id):
+        """SSE: tail a CCC-spawned session's stream-json log and forward
+        block-level events to the browser.
+
+        Granularity is content-block, not token: claude `-p` emits one
+        `assistant` event per block (thinking/text/tool_use), all sharing
+        a `message.id`. So the browser sees prose blocks and tool calls
+        as they complete, but not partial text. The JSONL transcript
+        still produces the canonical end-of-turn record — this stream is
+        an in-flight preview that the client clears once the matching
+        finalized event lands via /api/conversations/<id>/stream.
+        """
+        log_path, _alive = _resolve_spawn_log_for_session(session_id)
+        if not log_path:
+            self.send_json({"error": "no spawn log for this session"}, 404)
+            return
+        try:
+            start_offset = os.path.getsize(log_path)
+        except OSError:
+            self.send_json({"error": "spawn log unreadable"}, 500)
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        offset = start_offset
+        leftover = ""
+        last_keepalive = time.time()
+        try:
+            while True:
+                events_to_send = []
+                try:
+                    size = os.path.getsize(log_path)
+                except OSError:
+                    break
+                if size > offset:
+                    try:
+                        with open(log_path, "r") as f:
+                            f.seek(offset)
+                            chunk = f.read(size - offset)
+                            offset = size
+                    except OSError:
+                        break
+                    leftover += chunk
+                    # Process complete lines; keep any trailing partial line
+                    # as leftover for the next pass.
+                    lines = leftover.split("\n")
+                    leftover = lines.pop()
+                    for raw in lines:
+                        s = raw.strip()
+                        if not s:
+                            continue
+                        try:
+                            ev = json.loads(s)
+                        except json.JSONDecodeError:
+                            continue
+                        norm = _normalize_spawn_event(ev)
+                        if norm:
+                            events_to_send.append(norm)
+
+                if events_to_send:
+                    payload = {"events": events_to_send}
+                    try:
+                        self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+
+                now = time.time()
+                if now - last_keepalive >= 5:
+                    try:
+                        self.wfile.write(b"event: keepalive\ndata: {}\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+                    last_keepalive = now
+
+                time.sleep(0.25)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def _stream_conversation(self, conversation_id, after_line):
         """SSE endpoint for real-time conversation tailing."""
