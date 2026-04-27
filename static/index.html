@@ -531,6 +531,9 @@
   }
   .conv-split[data-orientation="vertical"] .conv-pane-header,
   .conv-split[data-orientation="horizontal"] .conv-pane-header { display: flex; }
+  .conv-split[data-orientation] .conv-pane.is-active {
+    box-shadow: inset 0 0 0 1px var(--accent, #4ea1ff);
+  }
   .conv-pane-close {
     background: none;
     border: none;
@@ -3518,7 +3521,11 @@
     }
   }
 
-  async function sendToTerminal() {
+  async function sendToTerminal(paneId) {
+    if (paneId) {
+      const idx = paneIndexByPaneId(paneId);
+      if (idx >= 0) splitState.activeIndex = idx;
+    }
     const text = ($convInput && $convInput.value || '').trim();
     if (!text || !currentSession.id) return;
     $convSendBtn.disabled = true;
@@ -6814,6 +6821,23 @@
     // Reveal the close button (was inline display:none in p1's static HTML).
     const closeBtn = clone.querySelector('[data-role="pane-close"]');
     if (closeBtn) closeBtn.style.display = '';
+    // Wire the cloned input bar to send into this specific pane.
+    const sendBtn = clone.querySelector('.send-btn');
+    const input = clone.querySelector('input[type="text"]');
+    if (sendBtn) {
+      sendBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        sendToTerminal(paneId);
+      });
+    }
+    if (input) {
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' && !ev.shiftKey) {
+          ev.preventDefault();
+          sendToTerminal(paneId);
+        }
+      });
+    }
     return clone;
   }
 
@@ -6961,6 +6985,34 @@
   function attachAllPaneDropZones() {
     document.querySelectorAll('.conv-pane').forEach(attachDropZones);
   }
+
+  // Click anywhere inside a pane to mark it active (drives composer
+  // routing via the shim, and the sidebar `.active` highlight).
+  document.addEventListener('click', (ev) => {
+    const pane = ev.target.closest && ev.target.closest('.conv-pane');
+    if (!pane) return;
+    const pid = pane.getAttribute('data-pane-id');
+    const idx = paneIndexByPaneId(pid);
+    if (idx < 0 || idx === splitState.activeIndex) return;
+    splitState.activeIndex = idx;
+    document.querySelectorAll('.conv-pane').forEach(el => {
+      el.classList.toggle('is-active', el.getAttribute('data-pane-id') === pid);
+    });
+    // Sidebar highlight follows the new active pane. Mirrors the inline
+    // toggle in selectConversation (~line 6906-6917) but reads the conv
+    // id from the active pane (via the shim) instead of taking a param.
+    const activeConvId = currentConversation;
+    if ($convList) {
+      $convList.querySelectorAll('.conv-item').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === activeConvId);
+      });
+    }
+    if ($kanbanBoard) {
+      $kanbanBoard.querySelectorAll('.kanban-card').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === activeConvId);
+      });
+    }
+  }, true);
 
   // Open `convId` in a new pane, splitting the existing pane in the
   // requested orientation. Used by the drop handler. No-op if the same
