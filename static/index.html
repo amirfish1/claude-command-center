@@ -586,6 +586,10 @@
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
     font-weight: 400;
   }
+  /* The first user message is pinned in the sticky header as "Original ask".
+     Hide its in-conversation chat bubble so the same text isn't shown twice
+     (sticky + bubble) when no scrolling has occurred yet. */
+  .conversations-view .event.user_text.is-pinned-in-sticky { display: none; }
   .conversations-view .event.tool_result { display: none; }
   /* Tool-call group — fused "Ran N commands ▾" container. */
   .conversations-view .tool-call-group {
@@ -731,13 +735,76 @@
     color: var(--text-muted);
     background: rgba(255,255,255,0.04);
     border: 1px solid var(--border);
-    cursor: help;
+    cursor: pointer;
     white-space: pre;
+    font-family: inherit;
+    appearance: none;
+    transition: filter 0.12s ease-out, background 0.12s ease-out;
   }
+  .conv-input-context .wp-worktrees:hover { filter: brightness(1.25); background: rgba(255,255,255,0.07); }
+  .conv-input-context .wp-worktrees:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .conv-input-context .wp-worktrees-agent {
     color: var(--orange);
     background: rgba(210,153,34,0.10);
     border-color: rgba(210,153,34,0.30);
+  }
+  .conv-input-context .wp-worktrees-agent:hover { background: rgba(210,153,34,0.16); }
+
+  /* ── Worktrees modal ─────────────────────────────────────────
+     Opens when the user clicks the 🌿 worktrees pill in the input-
+     context strip. Lists each sibling worktree (path · branch · tag)
+     in a scrollable, copyable form. Reuses .upd-overlay/.upd-dialog
+     shells. */
+  .wt-summary {
+    font-size: 12px; color: var(--text-muted);
+    display: flex; gap: 10px; flex-wrap: wrap;
+  }
+  .wt-summary strong { color: var(--text); font-weight: 600; }
+  .wt-list {
+    display: flex; flex-direction: column; gap: 6px;
+    max-height: 50vh; overflow-y: auto;
+    padding: 2px;
+  }
+  .wt-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 10px; align-items: center;
+    padding: 8px 10px; border-radius: 6px;
+    background: var(--bg); border: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .wt-row-agent { border-color: rgba(210,153,34,0.30); }
+  .wt-row-path {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    color: var(--text); word-break: break-all; overflow-wrap: anywhere;
+    min-width: 0;
+  }
+  .wt-row-branch {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .wt-row-branch .wt-icon { opacity: 0.6; margin-right: 3px; }
+  .wt-tag {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 2px 6px; border-radius: 3px; font-weight: 600;
+    color: var(--text-muted);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .wt-tag-agent { color: var(--orange); background: rgba(210,153,34,0.10); border-color: rgba(210,153,34,0.30); }
+  .wt-tag-locked { color: var(--accent); background: rgba(88,166,255,0.10); border-color: rgba(88,166,255,0.30); }
+  .wt-tag-detached { color: var(--red); background: rgba(248,81,73,0.10); border-color: rgba(248,81,73,0.30); }
+  .wt-empty {
+    padding: 16px; text-align: center; color: var(--text-muted);
+    font-size: 13px;
+  }
+  .wt-lock-reason {
+    grid-column: 1 / -1;
+    font-size: 11px; color: var(--text-muted);
+    font-style: italic;
+    padding-top: 2px;
   }
   .conv-sticky-header .csh-col-activity .session-timeline {
     margin-top: 0;
@@ -2969,6 +3036,21 @@
       <div class="upd-actions">
         <button type="button" class="upd-btn" id="networkCancelBtn">Cancel</button>
         <button type="button" class="upd-btn upd-primary" id="networkSaveBtn">Save &amp; restart</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Worktrees modal. Opened from the 🌿 pill in the input-context
+       strip. Lists sibling worktrees of the session's repo so the user
+       can spot subagent-spawned forks they may not realise exist. -->
+  <div id="worktreesModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="worktreesTitle">
+    <div class="upd-backdrop" id="worktreesBackdrop"></div>
+    <div class="upd-dialog" style="width:min(720px,94vw);">
+      <div class="upd-title" id="worktreesTitle">Worktrees</div>
+      <div class="wt-summary" id="worktreesSummary"></div>
+      <div class="wt-list" id="worktreesList"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="worktreesCloseBtn">Close</button>
       </div>
     </div>
   </div>
@@ -5246,6 +5328,8 @@
         hint: 'Live session — Claude is running. Glows when mid-turn.' },
       { key: 'waiting',         label: 'Waiting',         defaultExpanded: true,
         hint: 'Claude is asking for permission (Notification hook). Approve or deny in the terminal.' },
+      { key: 'inactive',        label: 'Inactive',        defaultExpanded: false,
+        hint: 'Dead sessions that never produced commits. Resume from here when you pick one back up.' },
       { key: 'review',          label: 'Review',          defaultExpanded: true,
         hint: 'Committed or pushed work waiting for you to read and verify.' },
       { key: 'testing',         label: 'In Testing',      defaultExpanded: true,
@@ -5254,8 +5338,6 @@
         hint: 'Marked done by you, or GitHub issue closed as completed.' },
       { key: 'archived',        label: 'Archived',        defaultExpanded: false,
         hint: 'Dismissed / not planned — kept for context, not actionable.' },
-      { key: 'inactive',        label: 'Inactive',        defaultExpanded: false,
-        hint: 'Dormant sessions with no commits. Resume from here when you pick them back up.' },
     ];
     // Apply user-defined column order from localStorage.
     let savedOrder = [];
@@ -6996,6 +7078,7 @@
     try { if (id) localStorage.setItem('ccc-last-conv', id); } catch (_) {}
     convLastLine = 0;
     _firstUserMsgRendered = false;
+    _dynamicAskState = null;  // sticky-header scroll tracker — repopulated when the new sticky is built
     _currentToolGroup = null;
     _currentToolCount = 0;
     _pendingSends = [];  // drop any optimistic sends from the previous conv
@@ -7427,26 +7510,102 @@
     if (wts.length > 0) {
       const agentN = w.worktrees_agent_count || 0;
       const manualN = w.worktrees_manual_count || 0;
-      const tipLines = wts.slice(0, 12).map(function (wt) {
-        const tag = wt.is_agent ? ' [agent]' : (wt.locked ? ' [locked]' : '');
-        const branch = wt.branch || (wt.detached ? '(detached)' : '');
-        const tildePath = (wt.path || '').replace(/^\/Users\/[^/]+/, '~');
-        return tildePath + '  ⎇ ' + branch + tag;
-      });
-      if (wts.length > 12) tipLines.push('... and ' + (wts.length - 12) + ' more');
-      const tip = tipLines.join('\n');
       const labelParts = [];
       if (agentN > 0) labelParts.push(agentN + ' subagent');
       if (manualN > 0) labelParts.push(manualN + ' manual');
       const label = '+' + wts.length + ' worktree' + (wts.length === 1 ? '' : 's') +
         (labelParts.length ? ' (' + labelParts.join(' · ') + ')' : '');
       const cls = agentN > 0 ? 'wp-worktrees wp-worktrees-agent' : 'wp-worktrees';
-      parts.push('<span class="' + cls + '" title="' + escapeHtml(tip) + '">🌿 ' + escapeHtml(label) + '</span>');
+      parts.push('<button type="button" class="' + cls + '" data-action="open-worktrees" title="Click to view worktrees">🌿 ' + escapeHtml(label) + '</button>');
     }
 
     wsSlot.innerHTML = parts.join(' ');
     slot.classList.add('visible');
   }
+
+  // Worktrees modal — opened by clicking the 🌿 pill. Reads from
+  // _workspaceData (already fetched for the current session) so we
+  // don't refetch on click. Delegated click handler is attached once
+  // to the input-context strip.
+  function openWorktreesModal() {
+    const w = _workspaceData;
+    if (!w) return;
+    const wts = w.worktrees || [];
+    const agentN = w.worktrees_agent_count || 0;
+    const manualN = w.worktrees_manual_count || 0;
+    const $modal = document.getElementById('worktreesModal');
+    const $summary = document.getElementById('worktreesSummary');
+    const $list = document.getElementById('worktreesList');
+    if (!$modal || !$summary || !$list) return;
+
+    const total = wts.length;
+    const summaryParts = ['<span><strong>' + total + '</strong> worktree' + (total === 1 ? '' : 's') + '</span>'];
+    if (agentN > 0) summaryParts.push('<span><strong>' + agentN + '</strong> subagent</span>');
+    if (manualN > 0) summaryParts.push('<span><strong>' + manualN + '</strong> manual</span>');
+    if (w.is_worktree && w.cwd) {
+      const here = (w.cwd || '').replace(/^\/Users\/[^/]+/, '~');
+      summaryParts.push('<span style="margin-left:auto;opacity:0.7;">this session: ' + escapeHtml(here) + '</span>');
+    }
+    $summary.innerHTML = summaryParts.join(' ');
+
+    if (total === 0) {
+      $list.innerHTML = '<div class="wt-empty">No sibling worktrees.</div>';
+    } else {
+      const rows = wts.map(function (wt) {
+        const tildePath = (wt.path || '').replace(/^\/Users\/[^/]+/, '~');
+        const branch = wt.branch || '';
+        const tags = [];
+        if (wt.is_agent) tags.push('<span class="wt-tag wt-tag-agent">subagent</span>');
+        else if (wt.locked) tags.push('<span class="wt-tag wt-tag-locked">locked</span>');
+        if (wt.detached) tags.push('<span class="wt-tag wt-tag-detached">detached</span>');
+        const branchHtml = branch
+          ? '<span class="wt-row-branch"><span class="wt-icon">⎇</span>' + escapeHtml(branch) + '</span>'
+          : '<span class="wt-row-branch" style="opacity:0.5;">—</span>';
+        const reason = (wt.lock_reason || '').trim();
+        const reasonHtml = (reason && !wt.is_agent)
+          ? '<div class="wt-lock-reason">' + escapeHtml(reason) + '</div>'
+          : '';
+        const cls = wt.is_agent ? 'wt-row wt-row-agent' : 'wt-row';
+        return '<div class="' + cls + '">'
+          + '<span class="wt-row-path" title="' + escapeHtml(wt.path || '') + '">' + escapeHtml(tildePath) + '</span>'
+          + branchHtml
+          + '<span>' + (tags.join(' ') || '') + '</span>'
+          + reasonHtml
+          + '</div>';
+      });
+      $list.innerHTML = rows.join('');
+    }
+
+    $modal.classList.add('open');
+  }
+  function closeWorktreesModal() {
+    const $modal = document.getElementById('worktreesModal');
+    if ($modal) $modal.classList.remove('open');
+  }
+  // Delegated click on the input-context strip — survives re-renders
+  // of [data-workspace] without rebinding.
+  (function () {
+    const slot = document.getElementById('convInputContext');
+    if (!slot) return;
+    slot.addEventListener('click', function (ev) {
+      const btn = ev.target && ev.target.closest && ev.target.closest('[data-action="open-worktrees"]');
+      if (!btn) return;
+      ev.preventDefault();
+      openWorktreesModal();
+    });
+  })();
+  document.addEventListener('keydown', function (e) {
+    const $modal = document.getElementById('worktreesModal');
+    if (e.key === 'Escape' && $modal && $modal.classList.contains('open')) {
+      closeWorktreesModal();
+    }
+  });
+  (function () {
+    const $backdrop = document.getElementById('worktreesBackdrop');
+    const $closeBtn = document.getElementById('worktreesCloseBtn');
+    if ($backdrop) $backdrop.addEventListener('click', closeWorktreesModal);
+    if ($closeBtn) $closeBtn.addEventListener('click', closeWorktreesModal);
+  })();
 
   // Token-usage pill — sibling of the workspace info in the same input-
   // context row. Shows latest input tokens out of the model's context
@@ -7651,6 +7810,12 @@
       // Make the first user message sticky at the top
       if (ev.type === 'user_text' && !_firstUserMsgRendered) {
         _firstUserMsgRendered = true;
+        // The first user message lives permanently in the sticky header as
+        // "Original ask" — hide its in-conversation bubble so we don't show
+        // the same text twice (sticky + bubble) when no scrolling has
+        // happened yet. The dynamic-ask tracker still walks DOM and treats
+        // index 0 as "viewing the original," so the hidden node is harmless.
+        div.classList.add('is-pinned-in-sticky');
         let sticky = $view.querySelector('.conv-sticky-header');
         if (!sticky) {
           sticky = document.createElement('div');
@@ -7684,9 +7849,12 @@
             +     (function () {
                     const cleaned = cleanIssuePrompt(ev.text);
                     const parts = splitFirstSentence(cleaned);
+                    // Always emit .ask-rest so the dynamic-ask tracker has
+                    // a stable target when later messages have a "rest" to
+                    // show. Hide via inline style when this message has none.
                     let h = '<div class="user-msg">';
                     h += '<span class="ask-first">' + escapeHtml(parts[0]) + '</span>';
-                    if (parts[1]) h += '<span class="ask-rest">' + escapeHtml(parts[1]) + '</span>';
+                    h += '<span class="ask-rest"' + (parts[1] ? '' : ' style="display:none"') + '>' + escapeHtml(parts[1] || '') + '</span>';
                     h += '</div>';
                     return h;
                   })()
@@ -7694,10 +7862,39 @@
             +   '<div class="csh-col csh-col-activity">'
             +     '<div class="session-timeline" data-timeline></div>'
             +   '</div>'
-            + '</div>'
-            + '<div class="conv-sticky-header__resize-handle" data-sticky-resize title="Drag to resize"></div>';
+            + '</div>';
           $view.insertBefore(sticky, $view.firstChild);
-          attachStickyHeaderResize(sticky, $view);
+          // Sticky auto-sizes to its current message — no resize handle, no
+          // stored height. `.csh-col-ask .user-msg` already has
+          // max-height:none and overflow:visible, so the box grows or shrinks
+          // with whichever ask is being shown.
+          // Wire the dynamic-ask scroll tracker. The helpers (_dynAskItems,
+          // _dynAskApply, _dynAskUpdate, _dynAskSchedule) only do work when
+          // _dynamicAskState is populated and a scroll listener fires
+          // _dynAskSchedule. Without this block they sit dormant and the
+          // sticky never swaps to "Earlier ask".
+          {
+            const askFirstEl = sticky.querySelector('.csh-col-ask .ask-first');
+            const askRestEl = sticky.querySelector('.csh-col-ask .ask-rest');
+            _dynamicAskState = {
+              view: $view,
+              sticky,
+              label: sticky.querySelector('.csh-col-ask .label'),
+              askFirst: askFirstEl,
+              askRest: askRestEl,
+              original: {
+                first: askFirstEl ? askFirstEl.textContent : '',
+                rest: askRestEl ? askRestEl.textContent : '',
+              },
+              currentIdx: 0,
+              rafPending: false,
+            };
+            if (!$view._dynAskListenerAttached) {
+              $view._dynAskListenerAttached = true;
+              $view.addEventListener('scroll', _dynAskSchedule, { passive: true });
+            }
+            _dynAskSchedule();  // settle initial state in case view mounts pre-scrolled
+          }
           // Populate the timeline + workspace panels if the fetches already
           // landed; otherwise the fetch handlers will populate them.
           renderSessionTimelineIntoSticky();
