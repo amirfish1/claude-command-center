@@ -4050,14 +4050,20 @@
     const live = liveStatus.live && liveStatus.tty;
     const isConvTab = activeTab === 'sessions';
     const hasSession = !!currentSession.id;
+    const isNewSession = currentConversation === '__new__';
     // Show the bar for any selected session — /api/inject-input routes to
     // live-TTY keystroke injection when the session is alive and falls back
     // to headless `claude --resume` when dormant, so the user can always
     // type a follow-up. Previously hidden for dormant sessions, which left
     // the user with Resume/Launch buttons and no way to just send a message.
-    if (isConvTab && hasSession) {
+    // Also show in "new session" mode where the input doubles as the
+    // prompt for spawning a fresh agent.
+    if (isConvTab && (hasSession || isNewSession)) {
       $convInputBar.classList.add('visible');
-      if (isPkood) {
+      if (isNewSession) {
+        $convTtyLabel.textContent = 'new';
+        $convInput.placeholder = 'Type a prompt to start a new session…';
+      } else if (isPkood) {
         $convTtyLabel.textContent = 'pkood';
         $convInput.placeholder = 'Send to pkood agent...';
       } else if (live) {
@@ -4074,7 +4080,13 @@
 
   async function sendToTerminal() {
     const text = ($convInput && $convInput.value || '').trim();
-    if (!text || !currentSession.id) return;
+    if (!text) return;
+    // New-session mode: input doubles as the prompt for a fresh spawn.
+    if (currentConversation === '__new__') {
+      await spawnFromInlineInput(text);
+      return;
+    }
+    if (!currentSession.id) return;
     $convSendBtn.disabled = true;
     const flashRed = () => {
       $convInput.style.borderColor = 'var(--red)';

@@ -3692,18 +3692,41 @@ def find_conversations():
         cwd = find_session_cwd(sid)
         tail_meta = _extract_tail_meta(f)
         override = name_overrides.get(sid) or name_overrides.get(conv_id)
-        # Display value priority: authoritative jsonl > side-car override > None
-        # (flipped: jsonl is authoritative because claude /rename may have
-        # updated the name after our write-through)
+        # Display value priority: side-car override > jsonl > None.
+        # The sidecar is set ONLY by CCC's pencil rename — it's a
+        # user-intent marker. Claude's `/rename` (which is sometimes
+        # auto-fired by hooks/skills with no arg, producing a slugified
+        # name from session context) writes a custom-title event to the
+        # JSONL and would otherwise clobber the user's pick on the next
+        # refresh. Putting the sidecar first means once the user touches
+        # the title from the UI, it's pinned there until they explicitly
+        # clear it (rename to empty).
         display_name = (
-            tail_meta.get("custom_title")
+            override
+            or tail_meta.get("custom_title")
             or tail_meta.get("agent_name")
-            or override
             or None
         )
         # name_overridden means "user touched the name from the command center"
         # (used for teal visual marker). Decoupled from display value.
         name_overridden = bool(override)
+
+        # Tool-call inference: when a session was launched in the shared
+        # clone but all its Edit/Write paths land in a sibling worktree,
+        # surface the *real* branch on the sidebar row. Cached on
+        # (session_id, jsonl_mtime) so repeated /api/sessions polls
+        # don't repay the JSONL walk for inactive sessions.
+        eff_branch = None
+        eff_kind = None
+        try:
+            cwd_top = _git_toplevel_for_path(cwd, {}) if cwd else None
+            eff = _infer_effective_repo(sid, literal_cwd=cwd, exclude_top=cwd_top)
+            if eff:
+                eff_branch = eff.get("branch")
+                eff_kind = eff.get("kind")
+        except Exception:
+            pass
+
         conversations.append({
             "id": conv_id,
             "session_id": sid,
@@ -3723,6 +3746,19 @@ def find_conversations():
             ),
             "session_cwd": cwd,
             "session_cwd_exists": bool(cwd and Path(cwd).is_dir()),
+            # Cheap detection: a worktree's `.git` is a file, the shared
+            # clone's `.git` is a directory. Lets the sidebar row render
+            # a worktree-styled branch pill without paying for the full
+            # workspace inference per row.
+            "session_cwd_is_worktree": bool(
+                cwd and (Path(cwd) / ".git").is_file()
+            ),
+            # Tool-call-inferred effective branch/kind, populated above.
+            # Lets the sidebar row reflect "where edits actually land"
+            # for sessions launched in the shared clone but doing all
+            # their work in a sibling worktree.
+            "effective_branch": eff_branch,
+            "effective_kind": eff_kind,
             # Session signals
             "has_edit": tail_meta.get("has_edit", False),
             "has_commit": tail_meta.get("has_commit", False),
@@ -6334,6 +6370,14 @@ def _remap_stale_path(path, literal_cwd, cd_targets):
     return None
 
 
+# Cache effective-repo inference per (session_id, jsonl_mtime, literal_cwd,
+# exclude_top). Each call walks up to 400 JSONL events + does git shellouts;
+# the conversation-list endpoint runs this for every session on every 10s
+# refresh, so a bare cache here knocks the hot-path latency down by an order
+# of magnitude. Invalidated naturally when the JSONL appends new events.
+_EFFECTIVE_REPO_CACHE = {}
+
+
 def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None):
     """From a session's tool-call file paths, find the dominant git repo.
 
@@ -6348,8 +6392,28 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None):
     `exclude_top` lets callers say "I already know cwd resolves to repo X,
     only surface inference if a *different* repo dominates."
     """
+    # Cache key: jsonl mtime makes the entry self-invalidate when new
+    # tool calls land. literal_cwd / exclude_top affect the result so
+    # they're part of the key.
+    jsonl_mtime = 0.0
+    if PROJECTS_ROOT.is_dir():
+        for pd in PROJECTS_ROOT.iterdir():
+            if not pd.is_dir():
+                continue
+            cand = pd / f"{session_id}.jsonl"
+            if cand.is_file():
+                try:
+                    jsonl_mtime = cand.stat().st_mtime
+                except OSError:
+                    jsonl_mtime = 0.0
+                break
+    cache_key = (session_id, jsonl_mtime, literal_cwd, exclude_top)
+    if cache_key in _EFFECTIVE_REPO_CACHE:
+        return _EFFECTIVE_REPO_CACHE[cache_key]
+
     file_paths, cd_targets = _scan_session_tool_paths(session_id)
     if not file_paths and not cd_targets:
+        _EFFECTIVE_REPO_CACHE[cache_key] = None
         return None
     cache = {}
     counts = {}
@@ -6372,14 +6436,17 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None):
             counts[top] = counts.get(top, 0) + 1
 
     if not counts:
+        _EFFECTIVE_REPO_CACHE[cache_key] = None
         return None
     total = sum(counts.values())
     top, count = max(counts.items(), key=lambda kv: kv[1])
     # Need at least 2 evidence points so a single incidental match doesn't
     # win, AND >50% of resolved paths so a clear winner exists.
     if count < 2 or count * 2 <= total:
+        _EFFECTIVE_REPO_CACHE[cache_key] = None
         return None
     if exclude_top and top == exclude_top:
+        _EFFECTIVE_REPO_CACHE[cache_key] = None
         return None
 
     # Cheap re-use of git for branch + ahead/behind on the inferred repo.
@@ -6419,7 +6486,7 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None):
     except OSError:
         pass
 
-    return {
+    result = {
         "top": top,
         "count": count,
         "total": total,
@@ -6428,6 +6495,8 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None):
         "ahead": ahead,
         "behind": behind,
     }
+    _EFFECTIVE_REPO_CACHE[cache_key] = result
+    return result
 
 
 def _worktree_is_dirty(path):
