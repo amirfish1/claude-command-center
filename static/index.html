@@ -1000,6 +1000,17 @@
     font-size: 10px; color: var(--text-muted); opacity: 0.75;
     margin-right: 6px; display: inline-block;
   }
+  /* Tool-only events get fused into a collapsed .tool-call-group, which hides
+     the per-event stamps. Surface the latest tool's arrival on the visible
+     group header so we can still see when tail tools landed. attr() in
+     content only reads the pseudo's own element, so the data attribute has
+     to live on .tool-call-group-header itself, not on the parent group. */
+  .tool-call-group-header[data-render-ts]::before {
+    content: '[J ' attr(data-render-ts) ']';
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 10px; color: var(--text-muted); opacity: 0.75;
+    margin-right: 6px;
+  }
   .stream-bubble-settled .stream-bubble-header span:last-child::after {
     content: ' · settled';
     opacity: 0.7;
@@ -8085,6 +8096,15 @@
   function ensureStreamingBubble(msgId) {
     const $view = getConvView();
     if (!$view) return null;
+    // Hand-off short-circuit: if the JSONL renderer already painted this
+    // message (formatted, with markdown / tool detail / result output), skip
+    // the low-fidelity bubble entirely.
+    if (msgId) {
+      const escId = (window.CSS && CSS.escape) ? CSS.escape(msgId) : msgId;
+      if ($view.querySelector('.event.assistant[data-msg-id="' + escId + '"]')) {
+        return null;
+      }
+    }
     // New message id → reset (the JSONL renderer is responsible for
     // persisting whatever the previous message produced).
     if (_streamingBubble && _streamingMsgId && msgId && _streamingMsgId !== msgId) {
@@ -8093,6 +8113,7 @@
     if (!_streamingBubble) {
       const node = document.createElement('div');
       node.className = 'stream-bubble';
+      if (msgId) node.dataset.msgId = msgId;
       node.innerHTML =
         '<div class="stream-bubble-header">'
         + '<span class="live-badge-dot"></span>'
@@ -8102,6 +8123,10 @@
       $view.appendChild(node);
       _streamingBubble = node;
       _streamingMsgId = msgId || null;
+    } else if (msgId && !_streamingBubble.dataset.msgId) {
+      // First spawn event sometimes lacks a message_id; backfill so the
+      // JSONL hand-off can find this bubble when it arrives.
+      _streamingBubble.dataset.msgId = msgId;
     }
     // Re-anchor to the bottom in case JSONL events were appended after us.
     if (_streamingBubble.parentNode === $view && _streamingBubble !== $view.lastElementChild) {
@@ -8117,12 +8142,10 @@
     for (const ev of events) {
       if (!ev || typeof ev !== 'object') continue;
       if (ev.type === 'result') {
-        // Turn finished — settle the bubble for a few seconds so it's
-        // actually visible (the JSONL renderer paints the same blocks
-        // simultaneously, so a 0-linger removal is invisible). The
-        // settled state freezes the pulsing-dot animation as a visual
-        // cue that streaming is done.
-        clearStreamingBubble({ lingerMs: 3000 });
+        // Turn finished. The JSONL hand-off (in renderConversationEvents)
+        // is the primary trigger that drops the bubble; this is the
+        // fallback when JSONL is slow or never publishes.
+        clearStreamingBubble();
         continue;
       }
       if (ev.type !== 'assistant_block') continue;
@@ -8776,6 +8799,20 @@
       const div = document.createElement('div');
       div.className = 'event ' + ev.type;
       div.dataset.renderTs = nowStamp();
+      // Tag assistant rows with the source message_id so the streaming
+      // bubble can detect "JSONL already won" and hand off cleanly.
+      if (ev.type === 'assistant' && ev.message_id) {
+        div.dataset.msgId = ev.message_id;
+        const escId = (window.CSS && CSS.escape) ? CSS.escape(ev.message_id) : ev.message_id;
+        const liveBubble = $view.querySelector('.stream-bubble[data-msg-id="' + escId + '"]');
+        if (liveBubble) {
+          if (liveBubble.parentNode) liveBubble.parentNode.removeChild(liveBubble);
+          if (_streamingBubble === liveBubble) {
+            _streamingBubble = null;
+            _streamingMsgId = null;
+          }
+        }
+      }
 
       // Make the first user message sticky at the top
       if (ev.type === 'user_text' && !_firstUserMsgRendered) {
@@ -9005,7 +9042,21 @@
           if (last && !last.querySelector('.tool-result-output')) {
             const out = document.createElement('pre');
             out.className = 'tool-result-output' + (ev.is_error ? ' is-error' : '');
-            out.textContent = text;
+            // Diagnostic: stamp the actual moment the JSON output landed in
+            // the DOM. Surfaced as a bracketed prefix because the parent
+            // .event.tool_result row is display:none and a CSS ::before
+            // would never render.
+            out.dataset.renderTs = nowStamp();
+            out.textContent = '[J ' + out.dataset.renderTs + ']  ' + text;
+            // Bump the group's header stamp too so it reflects the most
+            // recent activity (tool_use OR tool_result), not just tool_use.
+            // CSS ::before reads attr() from its own element, so the header
+            // node needs the attribute set, not just the parent group.
+            if (_currentToolGroup) {
+              _currentToolGroup.dataset.renderTs = out.dataset.renderTs;
+              const $h = _currentToolGroup.querySelector('.tool-call-group-header');
+              if ($h) $h.dataset.renderTs = out.dataset.renderTs;
+            }
             last.appendChild(out);
           }
         }
@@ -9020,8 +9071,10 @@
           // No open group, or another event closed it — start a new one.
           const grp = document.createElement('div');
           grp.className = 'tool-call-group collapsed';
+          const _grpTs = nowStamp();
+          grp.dataset.renderTs = _grpTs;
           grp.innerHTML =
-              '<div class="tool-call-group-header">'
+              '<div class="tool-call-group-header" data-render-ts="' + _grpTs + '">'
             + '<span class="tcg-arrow">▶</span> <span class="tcg-label">Ran 1 command</span>'
             + '</div>'
             + '<div class="tool-call-group-body"></div>';
@@ -9032,6 +9085,11 @@
           _currentToolCount = 0;
         }
         _currentToolGroup.querySelector('.tool-call-group-body').appendChild(div);
+        // Diagnostic: bump both stamps to the latest tool's arrival. The
+        // header's own data-render-ts is what the CSS ::before reads.
+        const _ts = nowStamp();
+        _currentToolGroup.dataset.renderTs = _ts;
+        _currentToolGroup.querySelector('.tool-call-group-header').dataset.renderTs = _ts;
         _currentToolCount += 1;
         // Update the header label. Single-command groups get a smart
         // tool-specific summary ("Read foo.py"); multi-command groups

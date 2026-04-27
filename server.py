@@ -4223,7 +4223,13 @@ def _parse_conversation_event(ev, line_num):
                     blocks.append({"kind": "thinking", "text": preview})
 
         if blocks:
-            return {"line": line_num, "ts": ts, "type": "assistant", "blocks": blocks}
+            return {
+                "line": line_num,
+                "ts": ts,
+                "type": "assistant",
+                "message_id": msg.get("id", ""),
+                "blocks": blocks,
+            }
 
     if ev_type == "result":
         cost = ev.get("cost_usd", "?")

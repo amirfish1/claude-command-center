@@ -33,6 +33,10 @@ venv/
 /.claude/
 *.log
 
+# Coordination file for parallel Claude Code sessions sharing this clone.
+# Local-only — see GROUP_CHAT.md itself for the convention.
+/GROUP_CHAT.md
+
 # Pre-publish workspace — audit reports, archive prep, etc.
 /oss-prep/
 
