@@ -7083,6 +7083,24 @@
     splitState.orientation = null;
     splitState.activeIndex = 0; // survivor is now the only pane
     renderSplitLayout();
+    // Re-render sidebar highlight for the survivor pane (mirrors the
+    // click-pane-active handler's three-block pattern).
+    const activeConvId = currentConversation;
+    if ($convList) {
+      $convList.querySelectorAll('.conv-item').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === activeConvId);
+      });
+    }
+    if ($kanbanBoard) {
+      $kanbanBoard.querySelectorAll('.kanban-card').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === activeConvId);
+      });
+    }
+    if ($kanbanBoardSplit) {
+      $kanbanBoardSplit.querySelectorAll('.kanban-card').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === activeConvId);
+      });
+    }
   }
 
   const STICKY_HEADER_HEIGHT_KEY = 'ccc-sticky-header-height';
