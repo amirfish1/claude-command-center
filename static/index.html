@@ -10258,37 +10258,36 @@
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
+      // Closing p1 while split is engaged: route the survivor's conv
+      // into p1's slot via selectConversation, which handles transcript
+      // clear, sticky header reset, workspace/usage pills, session id
+      // label, pkood tail polling, and localStorage sync. Manually
+      // transplanting state (and skipping selectConversation) leaves
+      // those surfaces stale.
       if (splitState.panes.length < 2) return;
       const survivor = splitState.panes.find(p => p.id !== 'p1');
       if (!survivor) return;
-      // Remove the survivor's DOM element; the static p1 element stays.
-      const survivorEl = document.querySelector(`.conv-pane[data-pane-id="${survivor.id}"]`);
-      if (survivorEl) survivorEl.remove();
-      // Tear down survivor's SSE; we'll restart on p1.
+      const survivorConvId = survivor.conversationId;
+      // Tear down both panes' SSE before we mutate state.
       if (survivor.eventSource) { try { survivor.eventSource.close(); } catch (e) {} }
-      // Tear down p1's old SSE before restarting on the new conv.
       if (splitState.panes[0].eventSource) {
         try { splitState.panes[0].eventSource.close(); } catch (e) {}
         splitState.panes[0].eventSource = null;
       }
-      // Transplant survivor's per-pane state into p1.
-      splitState.panes[0].conversationId = survivor.conversationId;
-      splitState.panes[0].lastLine = survivor.lastLine;
-      splitState.panes[0].pendingSends = survivor.pendingSends;
-      splitState.panes[0].firstUserMsgRendered = survivor.firstUserMsgRendered;
-      splitState.panes[0].currentToolGroup = survivor.currentToolGroup;
-      splitState.panes[0].currentToolCount = survivor.currentToolCount;
-      splitState.panes[0].currentSession = survivor.currentSession;
-      // Collapse state.
+      // Remove survivor's DOM (p1's static element stays put).
+      const survivorEl = document.querySelector(`.conv-pane[data-pane-id="${survivor.id}"]`);
+      if (survivorEl) survivorEl.remove();
+      // Collapse splitState back to single-pane mode and reset p1's
+      // per-pane data so selectConversation runs against a clean slate.
       splitState.panes.splice(1);
       splitState.orientation = null;
       splitState.activeIndex = 0;
+      Object.assign(splitState.panes[0], _newPaneState('p1'));
       renderSplitLayout();
-      // Re-render p1's transcript with the moved conversation.
-      if (splitState.panes[0].conversationId) {
-        fetchConversationEvents('p1');
-        startConvStream('p1');
-      }
+      // Open the survivor's conv in p1 — fully exercised code path
+      // that refreshes every UI surface (transcript, sticky header,
+      // workspace pills, session id, pkood polling, etc.).
+      if (survivorConvId) selectConversation(survivorConvId, 'p1');
     });
   });
 
