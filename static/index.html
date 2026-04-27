@@ -7156,6 +7156,77 @@
   }
 
   let _firstUserMsgRendered = false;
+  // Sticky-header dynamic ask tracker. The .conv-sticky-header normally
+  // shows the first user message ("Original ask"). As the user scrolls past
+  // later user messages, this state machine swaps the sticky's body to
+  // whichever user message they've most recently scrolled past (label
+  // flips to "Earlier ask"). Reset on conv switch; the scroll listener is
+  // attached once per .conversations-view node (guarded by a property on
+  // the node itself so we don't stack listeners across renders).
+  let _dynamicAskState = null;
+  function _dynAskItems() {
+    const st = _dynamicAskState;
+    if (!st) return [];
+    return Array.from(st.view.querySelectorAll(':scope > .event.user_text'));
+  }
+  function _dynAskApply(idx, items) {
+    const st = _dynamicAskState;
+    if (!st || st.currentIdx === idx) return;
+    if (idx <= 0) {
+      st.currentIdx = 0;
+      if (st.label) st.label.textContent = 'Original ask';
+      if (st.askFirst) st.askFirst.textContent = st.original.first;
+      if (st.askRest) {
+        st.askRest.textContent = st.original.rest;
+        st.askRest.style.display = st.original.rest ? '' : 'none';
+      }
+      return;
+    }
+    const item = items[idx];
+    if (!item) return;
+    const msgEl = item.querySelector('.user-msg');
+    const text = msgEl ? msgEl.textContent.trim() : '';
+    if (!text) {  // image-only message — fall back rather than going blank
+      _dynAskApply(0, items);
+      return;
+    }
+    // "Earlier ask" shows the full message in regular weight — no
+    // first-sentence/grey-rest split. Cleaner read than slicing into
+    // headline+body for ad-hoc later turns where there's no editorial
+    // first sentence.
+    st.currentIdx = idx;
+    if (st.label) st.label.textContent = 'Earlier ask';
+    if (st.askFirst) st.askFirst.textContent = text;
+    if (st.askRest) {
+      st.askRest.textContent = '';
+      st.askRest.style.display = 'none';
+    }
+  }
+  function _dynAskUpdate() {
+    const st = _dynamicAskState;
+    if (!st) return;
+    st.rafPending = false;
+    const items = _dynAskItems();
+    if (!items.length) return;
+    // Only switch to "Earlier ask" once the whole bubble has scrolled
+    // behind the sticky — i.e. its BOTTOM has cleared stickyBottom.
+    // Comparing item.top would fire as soon as the top edge slid under
+    // the sticky, so the same message ended up rendered twice (once in
+    // the sticky, once still visible in the viewport just below).
+    const stickyBottom = st.sticky.getBoundingClientRect().bottom;
+    let idx = 0;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].getBoundingClientRect().bottom <= stickyBottom) idx = i;
+      else break;
+    }
+    _dynAskApply(idx, items);
+  }
+  function _dynAskSchedule() {
+    const st = _dynamicAskState;
+    if (!st || st.rafPending) return;
+    st.rafPending = true;
+    requestAnimationFrame(_dynAskUpdate);
+  }
   // Tool-call grouping state — consecutive `.event.tool-only` events fuse
   // into one collapsed `.tool-call-group` with a "Ran N commands ▾" header,
   // matching Claude Desktop's chat pane. Reset whenever the conv view is
