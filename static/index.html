@@ -504,6 +504,44 @@
   }
   .issues-section-header:first-child { margin-top: 0; }
 
+  /* Conversation split layout */
+  .conv-split {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column; /* unsplit = single child fills the column */
+  }
+  .conv-split[data-orientation="vertical"] { flex-direction: row; }
+  .conv-split[data-orientation="horizontal"] { flex-direction: column; }
+  .conv-pane {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 0;
+    min-width: 0;
+    position: relative; /* drop overlay anchor */
+  }
+  .conv-pane-header {
+    display: none;            /* shown only when split is active */
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border, #2a2a2a);
+  }
+  .conv-split[data-orientation] .conv-pane-header { display: flex; }
+  .conv-pane-close {
+    background: none;
+    border: none;
+    color: var(--text-muted, #888);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  .conv-pane-close:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
+
   /* Conversations view */
   .conversations-view { flex: 1; overflow-y: auto; padding: 0 20px 16px; position: relative; }
   .conv-sticky-header {
@@ -2661,17 +2699,24 @@
     <div class="issues-view" id="issuesView" style="display:none;">
       <div class="empty-state" style="height:auto;padding:40px;">Loading issues...</div>
     </div>
-    <div class="conversations-view" id="conversationsView">
-      <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
-    </div>
-    <div class="conv-input-context" id="convInputContext">
-      <span class="wp-row" data-workspace></span>
-      <span class="wp-usage" data-usage></span>
-    </div>
-    <div class="conv-input-bar" id="convInputBar">
-      <input type="text" id="convInput" placeholder="Send to terminal..." autocomplete="off">
-      <button class="send-btn" id="convSendBtn" title="Send to terminal">&gt;</button>
-      <span class="tty-label" id="convTtyLabel"></span>
+    <div class="conv-split" id="convSplit" data-orientation="">
+      <div class="conv-pane" data-pane-id="p1">
+        <div class="conv-pane-header" data-role="pane-header">
+          <button class="conv-pane-close" data-role="pane-close" title="Close pane" aria-label="Close pane" style="display:none;">&times;</button>
+        </div>
+        <div class="conversations-view" id="conversationsView">
+          <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
+        </div>
+        <div class="conv-input-context" id="convInputContext">
+          <span class="wp-row" data-workspace></span>
+          <span class="wp-usage" data-usage></span>
+        </div>
+        <div class="conv-input-bar" id="convInputBar">
+          <input type="text" id="convInput" placeholder="Send to terminal..." autocomplete="off">
+          <button class="send-btn" id="convSendBtn" title="Send to terminal">&gt;</button>
+          <span class="tty-label" id="convTtyLabel"></span>
+        </div>
+      </div>
     </div>
   </div>
 
