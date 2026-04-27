@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Session-activity timeline.** New collapsible strip under the conv pane's
+  "Original ask" header shows a chronological log of `git commit`, `git push`,
+  and `gh pr create` events that occurred during the session, with the
+  assistant-turn position of each (`T179 ● commit 22b733d feat(ui): …`),
+  the gap to the next event (`↓ 50 turns later`), and how many turns
+  continued after the last event (`↓ 8 more turns since`). Server walks the
+  JSONL transcript regex-matching Bash tool calls and reading the matching
+  tool_results for SHA / PR number / success state. New endpoint
+  `GET /api/session/<id>/timeline` returns `{events, total_turns}`. Hidden
+  entirely for sessions with no commit/push/PR events.
+
 ### Changed
 - **Conversation pane styled to match Claude Desktop.** User messages render
   as a chat bubble (blue tint, rounded corners, no USER label or timestamp)

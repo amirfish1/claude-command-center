@@ -563,6 +563,60 @@
   .conversations-view .tool-call-group:not(.collapsed) .tool-call-group-header .tcg-arrow { transform: rotate(90deg); }
   .conversations-view .tool-call-group.collapsed .tool-call-group-body { display: none; }
   .conversations-view .tool-call-group-body { padding: 4px 12px 10px; border-top: 1px solid var(--border); }
+  /* Session-activity timeline — chronological commit / push / PR strip
+     under the sticky "Original ask" header, with turn-position + gaps. */
+  .session-timeline {
+    margin-top: 10px; padding: 8px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border); border-radius: 6px;
+    font-size: 12px;
+  }
+  .session-timeline .stl-header {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--text-muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    margin-bottom: 6px;
+  }
+  .session-timeline .stl-title { font-weight: 600; }
+  .session-timeline .stl-counter { font-weight: 400; opacity: 0.7; }
+  .session-timeline .stl-toggle {
+    margin-left: auto; background: transparent; border: none; color: var(--text-muted);
+    cursor: pointer; padding: 2px 6px; font-size: 11px; border-radius: 3px;
+  }
+  .session-timeline .stl-toggle:hover { background: var(--surface-2); color: var(--text); }
+  .session-timeline.collapsed .stl-body { display: none; }
+  .session-timeline .stl-body {
+    display: flex; flex-direction: column; gap: 2px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  }
+  .session-timeline .stl-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 3px 4px; border-radius: 4px;
+  }
+  .session-timeline .stl-row:hover { background: var(--surface-2); }
+  .session-timeline .stl-turn {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 10px; color: var(--text-muted);
+    background: var(--bg); padding: 1px 6px; border-radius: 3px;
+    min-width: 36px; text-align: center;
+  }
+  .session-timeline .stl-icon { font-size: 11px; opacity: 0.85; min-width: 12px; text-align: center; }
+  .session-timeline .stl-commit .stl-icon { color: var(--green); }
+  .session-timeline .stl-push   .stl-icon { color: var(--accent); }
+  .session-timeline .stl-pr     .stl-icon { color: var(--purple); }
+  .session-timeline .stl-failed .stl-icon { color: var(--red); }
+  .session-timeline .stl-text { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+  .session-timeline .stl-text code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 11px; background: var(--bg); padding: 1px 4px; border-radius: 2px;
+    color: var(--orange);
+  }
+  .session-timeline .stl-gap {
+    color: var(--text-muted); font-size: 10px; opacity: 0.6;
+    padding-left: 14px;
+  }
+  .session-timeline .stl-gap.stl-final { font-style: italic; }
+
   /* Inline tool_result output preview, attached under .tool-call */
   .tool-result-output {
     margin: 4px 0 0 18px;
@@ -6492,6 +6546,11 @@
     _currentToolGroup = null;
     _currentToolCount = 0;
     _pendingSends = [];  // drop any optimistic sends from the previous conv
+    // Kick off the session-activity-timeline fetch in parallel — render
+    // happens after sticky header lands (or this fetch returns, whichever
+    // is later, via renderSessionTimelineIntoSticky).
+    const timelineSid = (conversationsData.find(x => x.id === id) || {}).session_id || id;
+    fetchSessionTimeline(timelineSid);
     const $view = getConvView();
     $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading...</div>';
     // Update active state in sidebar (list view)
@@ -6742,6 +6801,84 @@
     $view.scrollTop = 0;
   }
 
+  // Session-activity timeline — fetched per conversation, rendered into
+  // the sticky header's `[data-timeline]` slot. Shows commit / push / PR
+  // events with their assistant-turn position and the gap to the next.
+  let _timelineSessionId = null;
+  let _timelineData = null;
+  async function fetchSessionTimeline(sid) {
+    _timelineSessionId = sid;
+    _timelineData = null;
+    if (!sid) return;
+    try {
+      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/timeline');
+      const data = await res.json();
+      // Drop the response if the user already moved to a different session
+      // before our fetch landed.
+      if (_timelineSessionId !== sid) return;
+      _timelineData = data;
+      renderSessionTimelineIntoSticky();
+    } catch (_) {}
+  }
+
+  function renderSessionTimelineIntoSticky() {
+    const slot = document.querySelector('.conv-sticky-header [data-timeline]');
+    if (!slot || !_timelineData) return;
+    const evs = _timelineData.events || [];
+    const total = _timelineData.total_turns || 0;
+    if (!evs.length) {
+      slot.innerHTML = '';
+      slot.style.display = 'none';
+      return;
+    }
+    slot.style.display = '';
+    const iconFor = (k) => ({commit: '●', push: '↑', pr: '⊕'}[k] || '·');
+    const labelFor = (e) => {
+      if (e.kind === 'commit') {
+        const sha = e.sha ? '<code>' + escapeHtml(e.sha.slice(0, 7)) + '</code> ' : '';
+        const subj = e.subject ? escapeHtml(e.subject.slice(0, 70)) : 'commit';
+        return 'commit ' + sha + subj;
+      }
+      if (e.kind === 'push') return 'push' + (e.success === false ? ' (failed)' : '');
+      if (e.kind === 'pr') {
+        const num = e.pr_number ? '#' + e.pr_number : '';
+        const subj = e.subject ? ' ' + escapeHtml(e.subject.slice(0, 60)) : '';
+        return 'PR ' + num + (num ? ' opened' : 'opened') + subj;
+      }
+      return escapeHtml(e.kind);
+    };
+    let html = '<div class="stl-header"><span class="stl-title">Session activity</span><span class="stl-counter">' + evs.length + ' event' + (evs.length === 1 ? '' : 's') + ' · ' + total + ' turns</span><button class="stl-toggle" data-stl-toggle title="Collapse"><span aria-hidden="true">▾</span></button></div>';
+    html += '<div class="stl-body">';
+    let prevTurn = 0;
+    for (let i = 0; i < evs.length; i++) {
+      const e = evs[i];
+      const gap = e.turn - prevTurn;
+      if (i > 0 && gap > 0) {
+        html += '<div class="stl-gap">↓ ' + gap + ' turn' + (gap === 1 ? '' : 's') + ' later</div>';
+      }
+      const failed = e.success === false ? ' stl-failed' : '';
+      html += '<div class="stl-row stl-' + e.kind + failed + '">'
+        + '<span class="stl-turn" title="Assistant turn">T' + e.turn + '</span>'
+        + '<span class="stl-icon">' + iconFor(e.kind) + '</span>'
+        + '<span class="stl-text">' + labelFor(e) + '</span>'
+        + '</div>';
+      prevTurn = e.turn;
+    }
+    const tail = total - (evs[evs.length - 1].turn);
+    if (tail > 0) {
+      html += '<div class="stl-gap stl-final">↓ ' + tail + ' more turn' + (tail === 1 ? '' : 's') + ' since</div>';
+    }
+    html += '</div>';
+    slot.innerHTML = html;
+    const toggleBtn = slot.querySelector('[data-stl-toggle]');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+        slot.classList.toggle('collapsed');
+        toggleBtn.querySelector('span').textContent = slot.classList.contains('collapsed') ? '▸' : '▾';
+      });
+    }
+  }
+
   // Produce a human-readable summary for a single tool-only assistant event,
   // used as the collapsed-group header label when the group has exactly one
   // command. Reads the rendered .tool-call's .tool-name and .tool-detail
@@ -6817,9 +6954,13 @@
             + (hidden ? 'Show tools' : 'Hide tools') + '</button>'
             + '<div class="label">Original ask</div>'
             + '<div class="user-msg">' + escapeHtml(cleanIssuePrompt(ev.text)) + '</div>'
+            + '<div class="session-timeline" data-timeline></div>'
             + '<div class="conv-sticky-header__resize-handle" data-sticky-resize title="Drag to resize"></div>';
           $view.insertBefore(sticky, $view.firstChild);
           attachStickyHeaderResize(sticky, $view);
+          // Populate the session-activity timeline if the fetch already
+          // landed; otherwise the fetch's success handler will populate it.
+          renderSessionTimelineIntoSticky();
           sticky.querySelector('[data-tools-toggle]').addEventListener('click', (e) => {
             e.stopPropagation();
             const nowHidden = !$view.classList.contains('hide-tools');

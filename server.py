@@ -5308,6 +5308,143 @@ def parse_conversation_by_sid(session_id, after_line=0):
     return {"events": [], "last_line": 0}
 
 
+# Patterns for the session-timeline endpoint. Bash command prefixes that
+# represent shipping-relevant events; we capture them so the conv pane can
+# render a chronological strip ("Turn 4: commit, Turn 7: push, Turn 12: PR").
+_TIMELINE_COMMIT_RE = re.compile(r"^\s*git\s+commit\b")
+_TIMELINE_COMMIT_MSG_RE = re.compile(r"-m\s+[\"']([^\"']{1,200})[\"']")
+_TIMELINE_PUSH_RE = re.compile(r"^\s*git\s+push\b")
+_TIMELINE_PR_CREATE_RE = re.compile(r"^\s*gh\s+pr\s+create\b")
+_TIMELINE_PR_TITLE_RE = re.compile(r"--title\s+[\"']([^\"']{1,200})[\"']")
+_TIMELINE_PR_NUMBER_FROM_URL_RE = re.compile(r"/pull/(\d+)")
+# `git commit` output starts with `[branch sha] subject` — capture both.
+_TIMELINE_COMMIT_RESULT_RE = re.compile(r"\[[^\]]+\s+([0-9a-f]{7,40})\]\s*(.+)")
+
+
+def extract_session_timeline(session_id):
+    """Walk a session's JSONL transcript and return chronological commit /
+    push / PR events with their assistant-turn position. Used by the conv
+    pane to render a session-activity strip under the "Original ask" header.
+
+    Returns: {events: [{kind, turn, ts, subject?, sha?, pr_number?, success}],
+              total_turns}
+    """
+    if not PROJECTS_ROOT.is_dir():
+        return {"events": [], "total_turns": 0}
+    jsonl = None
+    for pd in PROJECTS_ROOT.iterdir():
+        if not pd.is_dir():
+            continue
+        cand = pd / f"{session_id}.jsonl"
+        if cand.is_file():
+            jsonl = cand
+            break
+    if not jsonl:
+        return {"events": [], "total_turns": 0}
+
+    events = []
+    pending_by_id = {}  # tool_use_id -> index into events (so result can update success/sha/pr#)
+    turn = 0
+    try:
+        with open(jsonl, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ev_type = ev.get("type", "")
+                ts = ev.get("timestamp", "")
+                if ev_type == "assistant":
+                    # Sidechain (subagent) turns don't count toward the user-
+                    # facing turn count; they're internal to a Task tool call.
+                    if ev.get("isSidechain"):
+                        continue
+                    turn += 1
+                    msg = _safe_parse_message(ev.get("message", {}))
+                    for block in msg.get("content", []):
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") != "tool_use":
+                            continue
+                        if block.get("name") != "Bash":
+                            continue
+                        cmd = (block.get("input") or {}).get("command", "")
+                        if not isinstance(cmd, str) or not cmd:
+                            continue
+                        kind = None
+                        subject = ""
+                        if _TIMELINE_PR_CREATE_RE.search(cmd):
+                            kind = "pr"
+                            m = _TIMELINE_PR_TITLE_RE.search(cmd)
+                            if m:
+                                subject = m.group(1)
+                        elif _TIMELINE_PUSH_RE.search(cmd):
+                            kind = "push"
+                        elif _TIMELINE_COMMIT_RE.search(cmd):
+                            kind = "commit"
+                            m = _TIMELINE_COMMIT_MSG_RE.search(cmd)
+                            if m:
+                                subject = m.group(1)
+                        if not kind:
+                            continue
+                        entry = {
+                            "kind": kind,
+                            "turn": turn,
+                            "ts": ts,
+                            "subject": subject,
+                            "success": None,  # filled by tool_result
+                        }
+                        events.append(entry)
+                        tu_id = block.get("id") or ""
+                        if tu_id:
+                            pending_by_id[tu_id] = len(events) - 1
+                elif ev_type == "user":
+                    # Tool results land as a user-role event with a content list.
+                    msg = _safe_parse_message(ev.get("message", {}))
+                    content = msg.get("content")
+                    if not isinstance(content, list):
+                        continue
+                    for sub in content:
+                        if not isinstance(sub, dict) or sub.get("type") != "tool_result":
+                            continue
+                        tu_id = sub.get("tool_use_id", "")
+                        if tu_id not in pending_by_id:
+                            continue
+                        idx = pending_by_id.pop(tu_id)
+                        e = events[idx]
+                        e["success"] = not bool(sub.get("is_error"))
+                        # Try to extract richer detail from the result text:
+                        # commit SHA, PR number.
+                        result_text = ""
+                        rc = sub.get("content")
+                        if isinstance(rc, str):
+                            result_text = rc
+                        elif isinstance(rc, list):
+                            parts = [t.get("text", "") for t in rc if isinstance(t, dict) and t.get("type") == "text"]
+                            result_text = "\n".join(parts)
+                        if e["kind"] == "commit":
+                            m = _TIMELINE_COMMIT_RESULT_RE.search(result_text)
+                            if m:
+                                e["sha"] = m.group(1)
+                                # Replace shell-mangled subjects (heredoc syntax
+                                # like `$(cat <<` etc.) with the real subject
+                                # line git itself emitted on commit.
+                                real_subject = m.group(2).strip()
+                                if real_subject and (not e.get("subject") or e["subject"].startswith("$(") or e["subject"].startswith("cat ")):
+                                    e["subject"] = real_subject[:200]
+                        elif e["kind"] == "pr":
+                            m = _TIMELINE_PR_NUMBER_FROM_URL_RE.search(result_text)
+                            if m:
+                                e["pr_number"] = int(m.group(1))
+    except OSError:
+        return {"events": [], "total_turns": 0}
+
+    return {"events": events, "total_turns": turn}
+
+
 _MORNING_BRAINDUMP_PROMPT = """You are analyzing the user's morning brain-dump.
 
 For each item in the dump, classify as exactly one of:
@@ -5911,6 +6048,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             after_line = int(qs.get("after", ["0"])[0])
             self.send_json(parse_conversation_by_sid(sid, after_line))
+        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/timeline$", path):
+            # Chronological strip of commit / push / PR events for a session,
+            # with the assistant-turn position of each. Powers the activity
+            # log under the conv pane's "Original ask" header.
+            sid = path.rsplit("/", 2)[-2]
+            self.send_json(extract_session_timeline(sid))
         elif path == "/morning/kanban":
             try:
                 html = (MORNING_STATIC_DIR / "kanban.html").read_text()
