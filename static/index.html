@@ -3113,8 +3113,7 @@
   let sessionCwdExistsByConv = {}; // {convId: bool}
   let sessionSourceByConv = {}; // {convId: 'interactive'|'pkood'|'task'}
   let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
-  // Currently-focused session and its live-process state
-  let currentSession = { id: null, cwd: null, cwdExists: false, source: null };
+  // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
   let liveStatus = { live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false };
   let liveStatusTimer = null;
   // Separate 1s tick that just re-renders the live-tool strip + inline
@@ -3527,12 +3526,19 @@
       const idx = paneIndexByPaneId(paneId);
       if (idx >= 0) splitState.activeIndex = idx;
     }
-    const text = ($convInput && $convInput.value || '').trim();
+    // Look up the input and send-button scoped to the target pane.
+    // The static-HTML p1 element retains the global ids; cloned panes
+    // (built by buildPaneElement) had their ids stripped, so we have
+    // to query by class/tag scoped to the pane element.
+    const _paneEl = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
+    const $input = (_paneEl && _paneEl.querySelector('input[type="text"]')) || $convInput;
+    const $sendBtn = (_paneEl && _paneEl.querySelector('.send-btn')) || $convSendBtn;
+    const text = ($input && $input.value || '').trim();
     if (!text || !currentSession.id) return;
-    $convSendBtn.disabled = true;
+    $sendBtn.disabled = true;
     const flashRed = () => {
-      $convInput.style.borderColor = 'var(--red)';
-      setTimeout(() => { $convInput.style.borderColor = ''; }, 1500);
+      $input.style.borderColor = 'var(--red)';
+      setTimeout(() => { $input.style.borderColor = ''; }, 1500);
     };
     try {
       let res;
@@ -3566,7 +3572,7 @@
           $view.scrollTop = $view.scrollHeight;
           _pendingSends.push({ text, element: pendingDiv });
         }
-        $convInput.value = '';
+        $input.value = '';
       } else {
         flashRed();
         const reason = data.error || ('HTTP ' + res.status);
@@ -3576,11 +3582,11 @@
       flashRed();
       showOpToast('Send failed: ' + (err.message || 'network error'), 'error');
     }
-    $convSendBtn.disabled = false;
-    $convInput.focus();
+    $sendBtn.disabled = false;
+    $input.focus();
   }
 
-  if ($convSendBtn) $convSendBtn.addEventListener('click', sendToTerminal);
+  if ($convSendBtn) $convSendBtn.addEventListener('click', () => sendToTerminal('p1'));
   if ($convInput) $convInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); sendToTerminal(); }
   });
@@ -4183,6 +4189,7 @@
       firstUserMsgRendered: false,
       currentToolGroup: null,
       currentToolCount: 0,
+      currentSession: { id: null, cwd: null, cwdExists: false, source: null },
     };
   }
   const splitState = {
@@ -7013,6 +7020,11 @@
         el.classList.toggle('active', el.dataset.id === activeConvId);
       });
     }
+    if ($kanbanBoardSplit) {
+      $kanbanBoardSplit.querySelectorAll('.kanban-card').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === activeConvId);
+      });
+    }
   }, true);
 
   // Open `convId` in a new pane, splitting the existing pane in the
@@ -7664,6 +7676,11 @@
     configurable: true,
     get() { return splitState.panes[splitState.activeIndex].currentToolCount; },
     set(v) { splitState.panes[splitState.activeIndex].currentToolCount = v; },
+  });
+  Object.defineProperty(window, 'currentSession', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].currentSession; },
+    set(v) { splitState.panes[splitState.activeIndex].currentSession = v; },
   });
   const _normSend = (s) => (s || '').replace(/\s+/g, ' ').trim();
 
