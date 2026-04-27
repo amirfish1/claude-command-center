@@ -23,6 +23,9 @@ venv/
 /tmp/
 /scratch/
 
+# Git worktrees created by superpowers:using-git-worktrees skill
+.worktrees/
+
 # Build output (none today, but don't commit if any tooling is added later)
 /dist/
 /build/
