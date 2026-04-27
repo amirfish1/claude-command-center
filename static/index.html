@@ -4080,10 +4080,59 @@
   // ── Conversations ──
   let conversationsData = [];
   let conversationsLoaded = false;
-  let currentConversation = null;
+  // ── Split-pane state ──
+  // The conversation pane can show one or two conversations side-by-side
+  // (vertical) or stacked (horizontal). Per-pane state lives in
+  // splitState.panes[]; the *active* pane is the one keyboard/sidebar
+  // actions target. The old single-instance globals (currentConversation,
+  // convLastLine, convEventSource, _pendingSends, _firstUserMsgRendered)
+  // are kept as compatibility-shim getters/setters on `window` that proxy
+  // to splitState.panes[splitState.activeIndex].* so the thousands of
+  // existing references compile against the active pane unchanged.
+  // Only the renderer / SSE / composer entry points learn paneId.
+  function _newPaneState(id) {
+    return {
+      id: id,
+      conversationId: null,
+      lastLine: 0,
+      eventSource: null,
+      pendingSends: [],
+      firstUserMsgRendered: false,
+    };
+  }
+  const splitState = {
+    orientation: null, // null | 'vertical' | 'horizontal'
+    panes: [_newPaneState('p1')],
+    activeIndex: 0,
+    ratio: 0.5,
+  };
+  function activePaneId() { return splitState.panes[splitState.activeIndex].id; }
+  function paneByPaneId(pid) { return splitState.panes.find(p => p.id === pid) || null; }
+  function paneIndexByPaneId(pid) {
+    for (let i = 0; i < splitState.panes.length; i++) if (splitState.panes[i].id === pid) return i;
+    return -1;
+  }
+
+  // Compatibility shim — read/write the active pane via the old global names.
+  // DO NOT remove without auditing every reference to currentConversation,
+  // convLastLine, convEventSource, _pendingSends, _firstUserMsgRendered.
+  Object.defineProperty(window, 'currentConversation', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].conversationId; },
+    set(v) { splitState.panes[splitState.activeIndex].conversationId = v; },
+  });
+  Object.defineProperty(window, 'convLastLine', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].lastLine; },
+    set(v) { splitState.panes[splitState.activeIndex].lastLine = v; },
+  });
+  Object.defineProperty(window, 'convEventSource', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].eventSource; },
+    set(v) { splitState.panes[splitState.activeIndex].eventSource = v; },
+  });
+
   let showArchived = false;  // false = show non-archived, true = show only archived
-  let convLastLine = 0;
-  let convEventSource = null;  // SSE connection for tailing live conversations
 
   // Track session_ids first observed *during* this page session (not on the
   // initial load — those aren't "new"). Powers the `.recently-born` glow that
@@ -7114,7 +7163,11 @@
     }
   }
 
-  let _firstUserMsgRendered = false;
+  Object.defineProperty(window, '_firstUserMsgRendered', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].firstUserMsgRendered; },
+    set(v) { splitState.panes[splitState.activeIndex].firstUserMsgRendered = v; },
+  });
   // Sticky-header dynamic ask tracker. The .conv-sticky-header normally
   // shows the first user message ("Original ask"). As the user scrolls past
   // later user messages, this state machine swaps the sticky's body to
@@ -7196,7 +7249,11 @@
   // that haven't yet appeared in the conversation jsonl. Each entry is
   // { text, element } — we strip pending styling (or remove the div) when
   // the real user_text event lands via the render loop.
-  let _pendingSends = [];
+  Object.defineProperty(window, '_pendingSends', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].pendingSends; },
+    set(v) { splitState.panes[splitState.activeIndex].pendingSends = v; },
+  });
   const _normSend = (s) => (s || '').replace(/\s+/g, ' ').trim();
 
   // Render a TODO.md backlog card in the conv pane. No session exists yet —
