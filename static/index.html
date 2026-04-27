@@ -46,6 +46,10 @@
     font-family: var(--font-ui);
     background: var(--bg); color: var(--text);
     display: flex; height: 100vh; overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "kern", "liga", "calt";
   }
   /* Keyboard-nav focus ring — only shown when focusing via keyboard */
   :focus { outline: none; }
@@ -504,7 +508,17 @@
     background: rgba(88,166,255,0.08);
   }
   .conversations-view .event { margin-bottom: 12px; padding: 10px 14px; border-radius: 6px; border-left: 3px solid transparent; }
-  .conversations-view .event.assistant { background: rgba(188, 140, 255, 0.06); border-left-color: var(--purple); }
+  /* Assistant rows — Claude-Desktop-style clean prose. No background fill,
+     no left border, subtle metadata so the eye lands on the prose itself. */
+  .conversations-view .event.assistant { background: transparent; border: none; padding: 6px 0; }
+  .conversations-view .event.assistant .line-num,
+  .conversations-view .event.assistant .msg-ts { opacity: 0.35; font-size: 10px; }
+  .conversations-view .event.assistant .assistant-text {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    font-weight: 400;
+  }
   /* User bubble — Claude-Desktop-style chat bubble. No label, no left
      border, rounded corners, constrained width, subtle blue tint. */
   .conversations-view .event.user_text {
@@ -527,6 +541,31 @@
     font-weight: 400;
   }
   .conversations-view .event.tool_result { display: none; }
+  /* Tool-call group — fused "Ran N commands ▾" container. */
+  .conversations-view .tool-call-group {
+    margin: 8px 0 12px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+  }
+  .conversations-view .tool-call-group-header {
+    cursor: pointer; user-select: none;
+    padding: 8px 12px;
+    font-size: 13px; color: var(--text-muted);
+    display: flex; align-items: center; gap: 8px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  }
+  .conversations-view .tool-call-group-header:hover { background: var(--surface-2); border-radius: 6px; }
+  .conversations-view .tool-call-group-header .tcg-arrow {
+    display: inline-block; transition: transform 0.15s; font-size: 10px; color: var(--orange);
+  }
+  .conversations-view .tool-call-group:not(.collapsed) .tool-call-group-header .tcg-arrow { transform: rotate(90deg); }
+  .conversations-view .tool-call-group.collapsed .tool-call-group-body { display: none; }
+  .conversations-view .tool-call-group-body { padding: 4px 12px 10px; border-top: 1px solid var(--border); }
+  .conversations-view .tool-call-group-body .event { margin: 4px 0; padding: 2px 0; background: transparent; border: none; }
+  .conversations-view .tool-call-group-body .event .line-num,
+  .conversations-view .tool-call-group-body .event .msg-ts { display: none; }
   .conversations-view .event.result { background: rgba(57, 210, 192, 0.08); border-left-color: var(--cyan); font-size: 12px; }
   .conversations-view .event.result .label { color: var(--cyan); font-weight: 600; text-transform: uppercase; font-size: 11px; }
   .conversations-view .event.result .stats { margin-top: 4px; }
@@ -2644,9 +2683,10 @@
     applyConfigToDom();
   }
   function applyConfigToDom() {
-    // Hide optional panels that aren't configured on this machine.
-    const $deployPanel = document.getElementById('deployPanel');
-    if ($deployPanel) $deployPanel.style.display = APP_CONFIG.vercel_enabled ? '' : 'none';
+    // Vercel deploy panel stays visible always — pollVercelDeploy swaps in
+    // a "Not configured" message when the project has no .vercel/project.json
+    // (and no $VERCEL_PROJECT env override). Hiding it per-repo hid the
+    // feature itself; keeping it visible nudges users to `vercel link`.
     const $kptDeploy = document.getElementById('kptDeployStatus');
     if ($kptDeploy && !APP_CONFIG.vercel_enabled) $kptDeploy.style.display = 'none';
     document.querySelectorAll('.pkood-toggle-label, .kpt-label, .nsm-pkood').forEach(el => {
@@ -6415,6 +6455,8 @@
     currentConversation = id;
     convLastLine = 0;
     _firstUserMsgRendered = false;
+    _currentToolGroup = null;
+    _currentToolCount = 0;
     _pendingSends = [];  // drop any optimistic sends from the previous conv
     const $view = getConvView();
     $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading...</div>';
@@ -6631,6 +6673,12 @@
   }
 
   let _firstUserMsgRendered = false;
+  // Tool-call grouping state — consecutive `.event.tool-only` events fuse
+  // into one collapsed `.tool-call-group` with a "Ran N commands ▾" header,
+  // matching Claude Desktop's chat pane. Reset whenever the conv view is
+  // cleared (see _firstUserMsgRendered = false sites).
+  let _currentToolGroup = null;
+  let _currentToolCount = 0;
   // Optimistic pending sends: messages the user submitted via the input bar
   // that haven't yet appeared in the conversation jsonl. Each entry is
   // { text, element } — we strip pending styling (or remove the div) when
@@ -6841,7 +6889,35 @@
         // Hidden by CSS
       }
 
-      $view.appendChild(div);
+      // Route tool-only assistant events into a fused group so the chat
+      // pane reads "Ran N commands ▾" instead of one row per Bash/Read/Edit.
+      const isToolOnly = div.classList.contains('tool-only');
+      if (isToolOnly) {
+        if (!_currentToolGroup || _currentToolGroup !== $view.lastElementChild) {
+          // No open group, or another event closed it — start a new one.
+          const grp = document.createElement('div');
+          grp.className = 'tool-call-group collapsed';
+          grp.innerHTML =
+              '<div class="tool-call-group-header">'
+            + '<span class="tcg-arrow">▶</span> <span class="tcg-label">Ran 1 command</span>'
+            + '</div>'
+            + '<div class="tool-call-group-body"></div>';
+          $view.appendChild(grp);
+          grp.querySelector('.tool-call-group-header')
+             .addEventListener('click', () => grp.classList.toggle('collapsed'));
+          _currentToolGroup = grp;
+          _currentToolCount = 0;
+        }
+        _currentToolGroup.querySelector('.tool-call-group-body').appendChild(div);
+        _currentToolCount += 1;
+        _currentToolGroup.querySelector('.tcg-label').textContent =
+          'Ran ' + _currentToolCount + ' command' + (_currentToolCount === 1 ? '' : 's');
+      } else {
+        // Any non-tool-only event closes the current group.
+        _currentToolGroup = null;
+        _currentToolCount = 0;
+        $view.appendChild(div);
+      }
     }
     if (events.length > 0) {
       $view.scrollTop = $view.scrollHeight;
@@ -7085,9 +7161,22 @@
     try {
       const res = await fetch('/api/vercel-deploy');
       const d = await res.json();
+      if (d.disabled) {
+        // No .vercel/project.json (and no $VERCEL_PROJECT env override).
+        // Show a friendly hint instead of the raw error string.
+        $deployDot.className = 'deploy-dot';
+        $deployInfo.innerHTML =
+          '<span style="color:var(--text-muted);">Not configured.</span>' +
+          ' <span style="color:var(--text-muted);opacity:0.75;">' +
+          'Run <code style="background:rgba(255,255,255,0.06);padding:1px 4px;border-radius:3px;font-size:11px;">vercel link</code> ' +
+          'in this project to enable.</span>';
+        _vercelDeployUrl = '';
+        return;
+      }
       if (d.error) {
         $deployDot.className = 'deploy-dot';
         $deployInfo.textContent = d.error;
+        _vercelDeployUrl = '';
         return;
       }
       const st = d.state || 'UNKNOWN';
