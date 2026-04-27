@@ -4173,6 +4173,8 @@
       eventSource: null,
       pendingSends: [],
       firstUserMsgRendered: false,
+      currentToolGroup: null,
+      currentToolCount: 0,
     };
   }
   const splitState = {
@@ -7487,11 +7489,21 @@
       // while the fetch was in-flight), discard the stale response.
       const currentPane = paneByPaneId(fetchPaneId);
       if (!currentPane || currentPane.conversationId !== id) return;
-      if (convLastLine === 0) {
-        $view.innerHTML = '';
+      // Re-anchor activeIndex to fetchPaneId — the user may have clicked
+      // another conv (in either pane) while this fetch was in-flight, shifting
+      // splitState.activeIndex away. Mirror the savedIdx/try/finally pattern
+      // used in startConvStream's onmessage handler.
+      const savedIdx = splitState.activeIndex;
+      splitState.activeIndex = paneIndexByPaneId(fetchPaneId);
+      try {
+        if (convLastLine === 0) {
+          $view.innerHTML = '';
+        }
+        renderConversationEvents(data.events, fetchPaneId);
+        convLastLine = data.last_line;
+      } finally {
+        splitState.activeIndex = savedIdx;
       }
-      renderConversationEvents(data.events, fetchPaneId);
-      convLastLine = data.last_line;
     } catch (err) {
       if (convLastLine === 0) {
         $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load conversation: ' + escapeHtml(err.message) + '</div>';
@@ -7579,8 +7591,8 @@
   // into one collapsed `.tool-call-group` with a "Ran N commands ▾" header,
   // matching Claude Desktop's chat pane. Reset whenever the conv view is
   // cleared (see _firstUserMsgRendered = false sites).
-  let _currentToolGroup = null;
-  let _currentToolCount = 0;
+  // NB: these are shim-routed per-pane (see Object.defineProperty below) —
+  // do NOT re-add `let` declarations here.
   // Optimistic pending sends: messages the user submitted via the input bar
   // that haven't yet appeared in the conversation jsonl. Each entry is
   // { text, element } — we strip pending styling (or remove the div) when
@@ -7589,6 +7601,16 @@
     configurable: true,
     get() { return splitState.panes[splitState.activeIndex].pendingSends; },
     set(v) { splitState.panes[splitState.activeIndex].pendingSends = v; },
+  });
+  Object.defineProperty(window, '_currentToolGroup', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].currentToolGroup; },
+    set(v) { splitState.panes[splitState.activeIndex].currentToolGroup = v; },
+  });
+  Object.defineProperty(window, '_currentToolCount', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].currentToolCount; },
+    set(v) { splitState.panes[splitState.activeIndex].currentToolCount = v; },
   });
   const _normSend = (s) => (s || '').replace(/\s+/g, ' ').trim();
 
