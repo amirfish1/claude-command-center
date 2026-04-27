@@ -7409,11 +7409,22 @@
           // Route into the pane that owns this stream, not the currently
           // active pane (which may have shifted to the other pane).
           const streamPane = paneByPaneId(streamPaneId);
-          if (streamPane) {
-            const savedIdx = splitState.activeIndex;
-            splitState.activeIndex = paneIndexByPaneId(streamPaneId);
+          // Stale-stream guard: bail out if the pane was closed OR if its
+          // conversation has changed since the stream started. Without this,
+          // a queued message from the old conversation can write into the
+          // new conversation's transcript when the user switches convs in
+          // the same pane.
+          if (!streamPane || streamPane.conversationId !== streamConvId) return;
+          const savedIdx = splitState.activeIndex;
+          splitState.activeIndex = paneIndexByPaneId(streamPaneId);
+          try {
             renderConversationEvents(data.events, streamPaneId);
             convLastLine = data.last_line;
+          } finally {
+            // Always restore activeIndex, even if renderConversationEvents
+            // throws — otherwise the shim stays pointed at streamPaneId
+            // and corrupts every subsequent shim read until another action
+            // shifts it.
             splitState.activeIndex = savedIdx;
           }
         }
