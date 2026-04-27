@@ -6737,11 +6737,75 @@
     input.addEventListener('blur', () => commit(true));
   }
 
-  // Return the active conversation view element. The split-panel
-  // (`$convPanelView`) is no longer engaged from the user-facing toggle,
-  // so all conversation rendering goes into `.main`'s `$conversationsView`.
+  // Return the active conversation view element for the active pane.
+  // For single-pane mode this is `$conversationsView` (the original element,
+  // re-parented into `.conv-pane[data-pane-id="p1"]` by Task 2). For split
+  // mode each pane has its own `.conversations-view` inside it; we look
+  // it up via the active pane's data-pane-id attribute.
+  function getConvViewForPane(pid) {
+    const pane = document.querySelector(`.conv-pane[data-pane-id="${pid}"]`);
+    return pane ? pane.querySelector('.conversations-view') : null;
+  }
   function getConvView() {
-    return $conversationsView;
+    return getConvViewForPane(activePaneId()) || $conversationsView;
+  }
+  function getConvInputBarForPane(pid) {
+    const pane = document.querySelector(`.conv-pane[data-pane-id="${pid}"]`);
+    return pane ? pane.querySelector('.conv-input-bar') : null;
+  }
+
+  // Build a fresh `.conv-pane` element for paneId, cloning the chrome of
+  // pane "p1" so styling / wiring stays in lockstep. Called only when
+  // splitting from one pane to two.
+  function buildPaneElement(paneId) {
+    const tmpl = document.querySelector('.conv-pane[data-pane-id="p1"]');
+    const clone = tmpl.cloneNode(true);
+    clone.setAttribute('data-pane-id', paneId);
+    // Empty state for the new pane; its conversation will be loaded by
+    // selectConversation(id, paneId) immediately after attach.
+    const view = clone.querySelector('.conversations-view');
+    if (view) {
+      view.id = '';                           // ids must be unique; only p1 keeps #conversationsView
+      view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading…</div>';
+    }
+    const inputBar = clone.querySelector('.conv-input-bar');
+    if (inputBar) inputBar.id = '';            // free the global id
+    const ctxBar = clone.querySelector('.conv-input-context');
+    if (ctxBar) ctxBar.id = '';
+    const closeBtn = clone.querySelector('[data-role="pane-close"]');
+    if (closeBtn) closeBtn.style.display = '';
+    return clone;
+  }
+
+  // Toggle the split layout between single, vertical, horizontal.
+  // Re-mounts panes inside `#convSplit` and updates orientation.
+  function renderSplitLayout() {
+    const $split = document.getElementById('convSplit');
+    if (!$split) return;
+    if (!splitState.orientation || splitState.panes.length < 2) {
+      $split.setAttribute('data-orientation', '');
+      // Drop any stray second pane elements (defensive — should already be 1).
+      const extras = $split.querySelectorAll('.conv-pane:not([data-pane-id="p1"])');
+      extras.forEach(n => n.remove());
+      // Hide close buttons in single mode.
+      $split.querySelectorAll('.conv-pane-close').forEach(b => b.style.display = 'none');
+      return;
+    }
+    $split.setAttribute('data-orientation', splitState.orientation);
+    // Ensure both panes exist in the DOM in order.
+    splitState.panes.forEach((p, idx) => {
+      let el = $split.querySelector(`.conv-pane[data-pane-id="${p.id}"]`);
+      if (!el) {
+        el = buildPaneElement(p.id);
+        $split.appendChild(el);
+      }
+      el.style.flex = '1 1 0';
+      el.querySelectorAll('.conv-pane-close').forEach(b => b.style.display = '');
+    });
+    // Mark the active pane.
+    $split.querySelectorAll('.conv-pane').forEach(el => {
+      el.classList.toggle('is-active', el.getAttribute('data-pane-id') === activePaneId());
+    });
   }
 
   const STICKY_HEADER_HEIGHT_KEY = 'ccc-sticky-header-height';
