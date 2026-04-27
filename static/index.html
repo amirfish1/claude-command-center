@@ -9062,6 +9062,25 @@
         && _streamingBubble !== $view.lastElementChild) {
       $view.appendChild(_streamingBubble);
     }
+    // The optimistic "Sending…" pill needs two things:
+    //   1) If the agent has already produced a real reply (assistant /
+    //      tool_use / result event in this batch), kill it — "starting up"
+    //      is over. Otherwise it sticks forever when the agent answers
+    //      before the 5s sidecar poll catches a tool in flight.
+    //   2) Otherwise (still waiting), re-anchor it to the tail so the
+    //      newly-appended user_text bubble doesn't end up below the pill.
+    const _agentReplied = events.some(e =>
+      e && (e.type === 'assistant' || e.type === 'result' || e.type === 'tool_result')
+    );
+    if (_agentReplied) {
+      clearOptimisticAgentIndicator($view);
+      if (currentSession.id) clearSessionSending(currentSession.id);
+    } else {
+      const _optimistic = $view.querySelector('.conv-live-tool-inline.optimistic');
+      if (_optimistic && _optimistic !== $view.lastElementChild) {
+        $view.appendChild(_optimistic);
+      }
+    }
   }
 
   function filterConversations(q) {
