@@ -529,7 +529,8 @@
     padding: 4px 8px;
     border-bottom: 1px solid var(--border, #2a2a2a);
   }
-  .conv-split[data-orientation] .conv-pane-header { display: flex; }
+  .conv-split[data-orientation="vertical"] .conv-pane-header,
+  .conv-split[data-orientation="horizontal"] .conv-pane-header { display: flex; }
   .conv-pane-close {
     background: none;
     border: none;
