@@ -1,0 +1,1 @@
+- Fixed: spawning a new session no longer makes its row in the sidebar disappear for ~2 seconds before reappearing, and the right pane now follows the spawn end-to-end — the new card is auto-selected on click and the selection carries through the placeholder→real swap with no "Loading…" flash.

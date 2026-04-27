@@ -4946,6 +4946,13 @@
     columnOverrides[id] = 'working';
     try { localStorage.setItem('ccc-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
     renderSidebar(filterConversations($convSearch.value));
+    // Auto-select the placeholder so the right pane lands on the new
+    // session immediately. Once the real session materializes, the
+    // placeholder→real swap in loadConversationList re-binds the right
+    // pane in place — selection follows the spawn end-to-end.
+    if (typeof selectConversation === 'function') {
+      selectConversation(id);
+    }
     // Auto-cleanup after 30s regardless of refresh cadence
     setTimeout(() => {
       if (pendingSpawns.has(pid)) {
@@ -4975,16 +4982,33 @@
     try {
       const res = await fetch('/api/sessions');
       const fresh = await res.json();
+      // Preserve user-set fields (e.g. display_name overrides) from the
+      // previous snapshot — the server can re-derive a default name on the
+      // next scan and clobber a rename otherwise.
+      const oldBySessionId = {};
+      for (const c of conversationsData) oldBySessionId[c.session_id] = c;
+      for (const c of fresh) {
+        const old = oldBySessionId[c.session_id];
+        if (old && old.name_overridden && !c.name_overridden) {
+          c.display_name = old.display_name;
+          c.name_overridden = true;
+        }
+      }
       // Drop pending placeholders whose real session has appeared (matched by spawn_pid).
       // When we do the swap, carry the placeholder's column preference over to
       // the real session via the sticky mechanism so the card doesn't jump on
       // first render. Also pre-stamp _firstSeenSessions so `.recently-born`
       // kicks in on the very first render of the real card (no frame where the
       // card has neither pending-spawn nor recently-born).
+      // If the user has a placeholder selected, capture the placeholder→real
+      // transition so we can carry the right-pane selection over in place
+      // (handled below, after the session-id maps are rebuilt).
+      let _selectionSwap = null;
       const realPids = new Set(fresh.filter(c => c.spawn_pid).map(c => c.spawn_pid));
       for (const pid of Array.from(pendingSpawns.keys())) {
         if (realPids.has(pid)) {
-          const placeholderCol = columnOverrides['spawning-' + pid];
+          const placeholderId = 'spawning-' + pid;
+          const placeholderCol = columnOverrides[placeholderId];
           const realCard = fresh.find(c => c.spawn_pid === pid);
           if (realCard && realCard.session_id) {
             _firstSeenSessions.set(realCard.session_id, Date.now());
@@ -4994,8 +5018,11 @@
                 signals: _signalSnapshot(realCard),
               });
             }
+            if (currentConversation === placeholderId) {
+              _selectionSwap = { realCard };
+            }
           }
-          delete columnOverrides['spawning-' + pid];
+          delete columnOverrides[placeholderId];
           pendingSpawns.delete(pid);
         }
       }
@@ -5023,6 +5050,38 @@
         sessionCwdExistsByConv[c.id] = !!c.session_cwd_exists;
         sessionSourceByConv[c.id] = c.source || 'interactive';
         if (c.spawn_pid) sessionSpawnPidByConv[c.id] = c.spawn_pid;
+      }
+      // Carry the right-pane selection across the placeholder→real swap.
+      // selectConversation() would flash a "Loading..." empty state and feel
+      // like a switch; instead we re-bind streams and session pointers in
+      // place so the right pane reads as the same conversation throughout.
+      if (_selectionSwap) {
+        const real = _selectionSwap.realCard;
+        currentConversation = real.id;
+        try { localStorage.setItem('ccc-last-conv', real.id); } catch (_) {}
+        if (typeof stopConvStream === 'function') stopConvStream();
+        if (typeof stopSpawnStream === 'function') stopSpawnStream();
+        setCurrentSession(
+          real.source || 'interactive',
+          real.session_id,
+          real.session_cwd,
+          real.session_cwd_exists,
+          real.spawn_pid
+        );
+        // Reset the per-conv tail cursor so fetchConversationEvents pulls the
+        // real JSONL from the start. Tool-grouping state must reset too —
+        // otherwise the next tool block tries to extend a group that belongs
+        // to the placeholder's (empty) view.
+        convLastLine = 0;
+        _firstUserMsgRendered = false;
+        _currentToolGroup = null;
+        _currentToolCount = 0;
+        if ($cpSessionId) $cpSessionId.textContent = real.session_id || '';
+        fetchConversationEvents();
+        startConvStream();
+        if (real.session_id) startSpawnStream(real.session_id);
+        updateSplitInputBar();
+        updateSplitToolbar();
       }
       renderSidebar(filterConversations($convSearch.value));
       loadAttentionList();  // piggy-back on the same refresh cycle
@@ -10325,37 +10384,13 @@
   if ($convPanelView) $convPanelView.style.zoom = convFontScale;
 
   // Auto-refresh session data every 10s — keeps kanban columns, signals,
-  // and relative times up to date without manual refresh.
-  setInterval(async () => {
+  // and relative times up to date without manual refresh. Routes through
+  // loadConversationList() so the merge logic (placeholder preservation,
+  // display-name override carry-over, sticky columns) lives in one place —
+  // divergence here was what caused new-session rows to flicker.
+  setInterval(() => {
     if (activeTab !== 'sessions') return;
-    try {
-      const res = await fetch('/api/sessions');
-      const fresh = await res.json();
-      // Preserve user-set fields from cached data (display_name overrides, etc.)
-      const oldBySessionId = {};
-      for (const c of conversationsData) oldBySessionId[c.session_id] = c;
-      for (const c of fresh) {
-        const old = oldBySessionId[c.session_id];
-        if (old && old.name_overridden && !c.name_overridden) {
-          c.display_name = old.display_name;
-          c.name_overridden = true;
-        }
-      }
-      stampFreshSessionsAsBorn(fresh);
-      conversationsData = fresh;
-      applyOptimisticOverrides(conversationsData);
-      // Re-cache session IDs/cwds for Resume/Jump
-      sessionIdByConv = {};
-      sessionCwdByConv = {};
-      sessionCwdExistsByConv = {};
-      for (const c of conversationsData) {
-        if (c.session_id) sessionIdByConv[c.id] = c.session_id;
-        if (c.session_cwd) sessionCwdByConv[c.id] = c.session_cwd;
-        sessionCwdExistsByConv[c.id] = !!c.session_cwd_exists;
-      }
-      renderSidebar(filterConversations($convSearch.value));
-      loadAttentionList();  // keep the top panel current with the board
-    } catch (_) {}
+    loadConversationList();
   }, 10000);
 
   // The convToolbar new-session input + Run/pkood toggle were removed —
