@@ -6937,8 +6937,14 @@
         const convId = readConvIdFromDrop(ev);
         const targetPaneId = paneEl.getAttribute('data-pane-id');
         const orientation = zone.getAttribute('data-zone') === 'right' ? 'vertical' : 'horizontal';
-        // For now: log only. Task 5 implements the actual split.
-        console.log('[conv-split] drop', { convId, targetPaneId, orientation });
+        if (!convId) return;
+        // If split is already full, caller shouldn't have shown the overlay,
+        // but reject defensively.
+        if (splitState.orientation && splitState.panes.length >= 2) return;
+        // Same-conv guard: if convId is already open in the current pane,
+        // do nothing (Task 8 adds a transient tooltip).
+        if (splitState.panes.some(p => p.conversationId === convId)) return;
+        openConversationInPane(convId, targetPaneId, orientation);
       });
     });
     // Also reset on drop outside any zone.
@@ -6952,6 +6958,33 @@
   // Wire drop zones on every existing pane after each layout change.
   function attachAllPaneDropZones() {
     document.querySelectorAll('.conv-pane').forEach(attachDropZones);
+  }
+
+  // Open `convId` in a new pane, splitting the existing pane in the
+  // requested orientation. Used by the drop handler. No-op if the same
+  // conv is already open in the current pane (avoids a duplicate
+  // SSE stream and a confusing UX).
+  async function openConversationInPane(convId, targetPaneId, orientation) {
+    if (!convId) return;
+    if (splitState.orientation && splitState.panes.length >= 2) {
+      // Split is already full — caller should not have invoked us, but
+      // we guard anyway.
+      return;
+    }
+    if (splitState.panes.length === 1 && splitState.panes[0].conversationId === convId) {
+      // Same conversation as the only existing pane — no-op (visible
+      // tooltip handled by the caller's UX in Task 8).
+      return;
+    }
+    const newPane = _newPaneState('p2');
+    splitState.orientation = orientation;
+    splitState.panes.push(newPane);
+    renderSplitLayout();          // creates the DOM for p2
+    attachAllPaneDropZones();     // wire its drop overlay
+    // Make p2 active and load the conversation in it.
+    const newIdx = splitState.panes.length - 1;
+    splitState.activeIndex = newIdx;
+    await selectConversation(convId, newPane.id);
   }
 
   const STICKY_HEADER_HEIGHT_KEY = 'ccc-sticky-header-height';
@@ -7184,9 +7217,16 @@
     return html;
   }
 
-  async function selectConversation(id) {
+  async function selectConversation(id, paneId) {
+    paneId = paneId || activePaneId();
+    const paneIdx = paneIndexByPaneId(paneId);
+    const pane = paneByPaneId(paneId);
+    if (!pane) return;
+    // Make this pane active so the existing globals (which proxy through
+    // splitState.activeIndex) target the right pane while we run.
+    splitState.activeIndex = paneIdx;
     // Stop any existing SSE stream or pollers
-    stopConvStream();
+    stopConvStream(paneId);
     mobileShowForCurrentMode();
     currentConversation = id;
     // Remember which card was last opened so we can re-open it on the
@@ -7271,8 +7311,8 @@
     } else {
       stopPkoodTailPoller();
       if ($pkoodKillBtn) $pkoodKillBtn.style.display = 'none';
-      await fetchConversationEvents();
-      startConvStream();
+      await fetchConversationEvents(paneId);
+      startConvStream(paneId);
     }
   }
 
@@ -7348,27 +7388,48 @@
     $cpKillBtn.style.display = isPkood ? '' : 'none';
   }
 
-  function startConvStream() {
-    stopConvStream();
+  function startConvStream(paneId) {
+    if (paneId) {
+      const idx = paneIndexByPaneId(paneId);
+      if (idx >= 0) splitState.activeIndex = idx;
+    }
+    stopConvStream(paneId);
     if (!currentConversation) return;
-    const url = '/api/conversations/' + currentConversation + '/stream?after=' + convLastLine;
+    // Snapshot the pane and conv id at stream-start time so the SSE
+    // event-handler closures always target THIS pane's stream even if
+    // the user switches the active pane between SSE events.
+    const streamPaneId = activePaneId();
+    const streamConvId = currentConversation;
+    const url = '/api/conversations/' + streamConvId + '/stream?after=' + convLastLine;
     convEventSource = new EventSource(url);
     convEventSource.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data);
         if (data.events && data.events.length > 0) {
-          renderConversationEvents(data.events);
-          convLastLine = data.last_line;
+          // Route into the pane that owns this stream, not the currently
+          // active pane (which may have shifted to the other pane).
+          const streamPane = paneByPaneId(streamPaneId);
+          if (streamPane) {
+            const savedIdx = splitState.activeIndex;
+            splitState.activeIndex = paneIndexByPaneId(streamPaneId);
+            renderConversationEvents(data.events, streamPaneId);
+            convLastLine = data.last_line;
+            splitState.activeIndex = savedIdx;
+          }
         }
       } catch (err) {}
     };
     convEventSource.onerror = () => {
-      stopConvStream();
-      setTimeout(startConvStream, 2000);
+      stopConvStream(streamPaneId);
+      setTimeout(() => startConvStream(streamPaneId), 2000);
     };
   }
 
-  function stopConvStream() {
+  function stopConvStream(paneId) {
+    if (paneId) {
+      const idx = paneIndexByPaneId(paneId);
+      if (idx >= 0) splitState.activeIndex = idx;
+    }
     if (convEventSource) {
       convEventSource.close();
       convEventSource = null;
@@ -7399,18 +7460,26 @@
     }
   }
 
-  async function fetchConversationEvents() {
+  async function fetchConversationEvents(paneId) {
+    if (paneId) {
+      const idx = paneIndexByPaneId(paneId);
+      if (idx >= 0) splitState.activeIndex = idx;
+    }
+    const fetchPaneId = activePaneId();
     if (!currentConversation) return;
     const id = currentConversation;
-    const $view = getConvView();
+    const $view = getConvViewForPane(fetchPaneId) || $conversationsView;
     try {
       const res = await fetch('/api/conversations/' + id + '?after=' + convLastLine);
       const data = await res.json();
-      if (id !== currentConversation) return;
+      // Guard: if the pane's conv id shifted (e.g. user navigated away
+      // while the fetch was in-flight), discard the stale response.
+      const currentPane = paneByPaneId(fetchPaneId);
+      if (!currentPane || currentPane.conversationId !== id) return;
       if (convLastLine === 0) {
         $view.innerHTML = '';
       }
-      renderConversationEvents(data.events);
+      renderConversationEvents(data.events, fetchPaneId);
       convLastLine = data.last_line;
     } catch (err) {
       if (convLastLine === 0) {
@@ -7843,9 +7912,10 @@
     }
   }
 
-  function renderConversationEvents(events) {
+  function renderConversationEvents(events, paneId) {
     if (!Array.isArray(events)) return;  // defensive: backlog/unknown responses
-    const $view = getConvView();
+    paneId = paneId || activePaneId();
+    const $view = getConvViewForPane(paneId) || $conversationsView;
     // Stick-to-bottom only when the user is *already* near the bottom.
     // If they've scrolled up to read, leave the scroll position alone so
     // newly-streamed events don't yank them back down. 80px tolerance is
