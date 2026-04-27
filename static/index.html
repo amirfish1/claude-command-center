@@ -234,6 +234,17 @@
   .toolbar .announce-btn-conv:hover { opacity: 0.9; }
   .toolbar .announce-btn-conv:active { transform: scale(0.97); }
   .toolbar .announce-btn-conv:disabled { opacity: 0.6; cursor: default; }
+  .toolbar .desktop-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer;
+    background: rgba(57, 210, 192, 0.12); color: var(--cyan);
+    border: 1px solid rgba(57, 210, 192, 0.35);
+    font-size: 12px; font-weight: 600; font-family: inherit;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .toolbar .desktop-btn:hover { background: rgba(57, 210, 192, 0.22); }
+  .toolbar .desktop-btn:active { transform: scale(0.97); }
+  .toolbar .desktop-btn.opening { opacity: 0.6; }
 
   .content {
     flex: 1; overflow-y: auto; padding: 16px 20px;
@@ -2272,8 +2283,8 @@
     /* Jump/Launch only affect the host's Terminal.app — useless when the UI is
        viewed from a remote/mobile context. Hide to avoid the "clicked, nothing
        happened" UX. */
-    #cpJumpBtn, #cpLaunchBtn,
-    #jumpBtnConv, #launchBtnConv,
+    #cpJumpBtn, #cpLaunchBtn, #cpDesktopBtn,
+    #jumpBtnConv, #launchBtnConv, #desktopBtnConv,
     .toolbar .resume-btn { display: none !important; }
 
     /* Kill iOS double-tap-to-click on cards (hover states triggered first tap) */
@@ -2692,6 +2703,10 @@
         <span class="jump-icon">&#43;</span>
         <span class="jump-label">Launch in terminal</span>
       </button>
+      <button class="desktop-btn" id="desktopBtnConv" style="display:none;" title="Resume this session in the Claude Desktop app">
+        <span class="jump-icon">&#9636;</span>
+        <span class="jump-label">Open in Claude Desktop</span>
+      </button>
       <span class="status" id="convStatus"></span>
       <div class="font-size-controls" style="margin-left:auto;">
         <button class="font-size-btn" id="fontMinus" title="Decrease font size">A-</button>
@@ -2742,6 +2757,7 @@
         <button class="mobile-back-btn" id="cpMobileBackBtn" title="Back to board">&#8592; Back</button>
         <button id="cpJumpBtn" style="display:none;" title="Jump to terminal"><span>&#8599;</span> Jump</button>
         <button id="cpLaunchBtn" style="display:none;" title="Launch in terminal"><span>&#43;</span> Launch</button>
+        <button id="cpDesktopBtn" style="display:none;" title="Open in Claude Desktop"><span>&#9636;</span> Desktop</button>
         <button id="cpKillBtn" style="display:none;" title="Kill agent">Kill</button>
         <div style="display:flex;gap:4px;margin-left:auto;">
           <button id="cpFontMinus" title="Decrease font size">A-</button>
@@ -3108,6 +3124,7 @@
 
   const $jumpBtnConv = document.getElementById('jumpBtnConv');
   const $launchBtnConv = document.getElementById('launchBtnConv');
+  const $desktopBtnConv = document.getElementById('desktopBtnConv');
   const $convToolbar = document.getElementById('convToolbar');
   const $announceBtnConv = document.getElementById('announceBtnConv');
   const $pkoodKillBtn = document.getElementById('pkoodKillBtn');
@@ -3149,9 +3166,14 @@
     if (activeTab === 'sessions') return [$launchBtnConv];
     return [];
   }
+  function desktopButtonsForActiveTab() {
+    if (activeTab === 'sessions') return [$desktopBtnConv];
+    return [];
+  }
   function allResumeButtons() { return []; }
   function allJumpButtons() { return [$jumpBtnConv].filter(Boolean); }
   function allLaunchButtons() { return [$launchBtnConv].filter(Boolean); }
+  function allDesktopButtons() { return [$desktopBtnConv].filter(Boolean); }
 
   // The Resume-in-CLI button used to live in convToolbar; it was removed
   // because every session row already exposes the same command via its
@@ -3206,6 +3228,7 @@
     const sid = currentSession.id;
     const canJump = live && liveStatus.tty && liveStatus.terminalApp;
     const canLaunch = !!sid && !canJump;  // only show Launch when Jump isn't available
+    const canOpenDesktop = !!sid;  // always available when a session is selected
 
     // Jump buttons
     const activeJump = jumpButtonsForActiveTab();
@@ -3234,6 +3257,22 @@
         btn.style.display = 'inline-flex';
         btn.title = 'Open a new Terminal window and run claude --resume';
         btn.querySelector('.jump-label').textContent = 'Launch in terminal';
+      } else {
+        btn.style.display = 'none';
+      }
+    }
+
+    // Desktop buttons (always-visible third destination)
+    const activeDesktop = desktopButtonsForActiveTab();
+    for (const btn of allDesktopButtons()) {
+      if (!activeDesktop.includes(btn)) btn.style.display = 'none';
+    }
+    for (const btn of activeDesktop) {
+      if (!btn) continue;
+      if (canOpenDesktop) {
+        btn.style.display = 'inline-flex';
+        btn.title = 'Resume this session in the Claude Desktop app';
+        btn.querySelector('.jump-label').textContent = 'Open in Claude Desktop';
       } else {
         btn.style.display = 'none';
       }
@@ -3508,6 +3547,39 @@
     }
   }
 
+  async function openInClaudeDesktop(ev) {
+    const btn = ev && ev.currentTarget;
+    if (!btn || !currentSession.id) return;
+    const origLabel = btn.querySelector('.jump-label').textContent;
+    btn.classList.add('opening');
+    btn.querySelector('.jump-label').textContent = 'Opening…';
+    try {
+      const res = await fetch('/api/open-in-desktop', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ session_id: currentSession.id }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        btn.querySelector('.jump-label').textContent = 'Opened!';
+        setTimeout(() => {
+          btn.classList.remove('opening');
+          btn.querySelector('.jump-label').textContent = origLabel;
+        }, 1500);
+      } else {
+        btn.querySelector('.jump-label').textContent = 'Failed: ' + (data.error || 'unknown');
+        setTimeout(() => {
+          btn.classList.remove('opening');
+          btn.querySelector('.jump-label').textContent = origLabel;
+        }, 3000);
+      }
+    } catch (err) {
+      btn.classList.remove('opening');
+      btn.querySelector('.jump-label').textContent = 'Error';
+      setTimeout(() => { btn.querySelector('.jump-label').textContent = origLabel; }, 2000);
+    }
+  }
+
   // ── Inject-to-terminal input bar ──
   const $convInputBar = document.getElementById('convInputBar');
   const $convInput = document.getElementById('convInput');
@@ -3611,6 +3683,7 @@
   for (const btn of allResumeButtons()) btn.addEventListener('click', copyResumeCommand);
   for (const btn of allJumpButtons()) btn.addEventListener('click', jumpToTerminal);
   for (const btn of allLaunchButtons()) btn.addEventListener('click', launchTerminal);
+  for (const btn of allDesktopButtons()) btn.addEventListener('click', openInClaudeDesktop);
 
   function formatSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
@@ -7101,6 +7174,7 @@
   function updateSplitToolbar() {
     const $cpJumpBtn = document.getElementById('cpJumpBtn');
     const $cpLaunchBtn = document.getElementById('cpLaunchBtn');
+    const $cpDesktopBtn = document.getElementById('cpDesktopBtn');
     const $cpKillBtn = document.getElementById('cpKillBtn');
     if (!$cpJumpBtn) return;
     const sid = currentSession.id;
@@ -7144,6 +7218,34 @@
       } catch (_) {
         $cpLaunchBtn.innerHTML = '<span>&#43;</span> Launch';
       }
+    };
+    // Desktop: always show when a session is selected (not for pkood)
+    $cpDesktopBtn.style.display = (sid && !isPkood) ? '' : 'none';
+    $cpDesktopBtn.onclick = async () => {
+      if (!sid) return;
+      const origHTML = $cpDesktopBtn.innerHTML;
+      $cpDesktopBtn.textContent = 'Opening…';
+      $cpDesktopBtn.disabled = true;
+      let ok = false;
+      try {
+        const res = await fetch('/api/open-in-desktop', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ session_id: sid }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          $cpDesktopBtn.textContent = 'Opened!';
+          ok = true;
+        } else {
+          $cpDesktopBtn.textContent = 'Failed: ' + (data.error || 'unknown');
+        }
+      } catch (_) {
+        $cpDesktopBtn.textContent = 'Error';
+      }
+      setTimeout(() => {
+        $cpDesktopBtn.innerHTML = origHTML;
+        $cpDesktopBtn.disabled = false;
+      }, ok ? 1500 : 3000);
     };
     // Kill: show for pkood
     $cpKillBtn.style.display = isPkood ? '' : 'none';
