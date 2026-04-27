@@ -531,7 +531,8 @@
   }
   .conv-split[data-orientation="vertical"] .conv-pane-header,
   .conv-split[data-orientation="horizontal"] .conv-pane-header { display: flex; }
-  .conv-split[data-orientation] .conv-pane.is-active {
+  .conv-split[data-orientation="vertical"] .conv-pane.is-active,
+  .conv-split[data-orientation="horizontal"] .conv-pane.is-active {
     box-shadow: inset 0 0 0 1px var(--accent, #4ea1ff);
   }
   .conv-pane-close {
