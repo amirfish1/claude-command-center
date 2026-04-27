@@ -543,6 +543,35 @@
   }
   .conv-pane-close:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
 
+  .conv-pane-drop-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 50;
+    display: none;
+  }
+  .conv-pane-drop-overlay.active { display: block; }
+  .conv-pane-drop-overlay .drop-zone {
+    position: absolute;
+    pointer-events: auto;
+    border: 1px dashed var(--accent, #4ea1ff);
+    background: rgba(78, 161, 255, 0.06);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent, #4ea1ff);
+    font-size: 12px;
+    font-weight: 500;
+    transition: background 0.08s ease;
+  }
+  .conv-pane-drop-overlay .drop-zone.right  { right: 0; top: 0; bottom: 0; width: 22%; }
+  .conv-pane-drop-overlay .drop-zone.bottom { left: 0; right: 0; bottom: 0; height: 22%; }
+  .conv-pane-drop-overlay .drop-zone.over   { background: rgba(78, 161, 255, 0.18); }
+  /* Suppress overlay below 900px viewport (split is unsupported there). */
+  @media (max-width: 900px) {
+    .conv-pane-drop-overlay { display: none !important; }
+  }
+
   /* Conversations view */
   .conversations-view { flex: 1; overflow-y: auto; padding: 0 20px 16px; position: relative; }
   .conv-sticky-header {
@@ -6815,6 +6844,104 @@
     $split.querySelectorAll('.conv-pane').forEach(el => {
       el.classList.toggle('is-active', el.getAttribute('data-pane-id') === activePaneId());
     });
+    attachAllPaneDropZones();
+  }
+
+  // Returns true if the active drag carries a conversation card payload
+  // (sidebar conv-item or kanban-card). Some browsers restrict
+  // dataTransfer reads during dragenter/dragover; fall back to checking
+  // dataTransfer.types for the payload key set by the source handlers.
+  function dragHasConversationPayload(ev) {
+    const types = (ev.dataTransfer && ev.dataTransfer.types) || [];
+    return Array.from(types).some(t => t === 'text/plain' || t === 'application/x-conv-card');
+  }
+
+  // Read the conversation id out of the drop event. Both .conv-item drag
+  // and .kanban-card drag set 'text/plain' to a comma-joined id list; we
+  // take the first id. (Multi-select drag from kanban → split is not in
+  // scope; the first id is the lead card.)
+  function readConvIdFromDrop(ev) {
+    const raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
+    if (!raw) return null;
+    const first = String(raw).split(',')[0].trim();
+    return first || null;
+  }
+
+  function attachDropZones(paneEl) {
+    if (!paneEl || paneEl._dropZonesAttached) return;
+    paneEl._dropZonesAttached = true;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'conv-pane-drop-overlay';
+    overlay.innerHTML = `
+      <div class="drop-zone right"  data-zone="right">Open on the right</div>
+      <div class="drop-zone bottom" data-zone="bottom">Open on the bottom</div>
+    `;
+    paneEl.appendChild(overlay);
+
+    // Reject drops outright when a 2-pane split is already filled. The
+    // overlay never activates, the pane shows no drop affordance, and
+    // dragenter/over/leave/drop short-circuit to the pane's children.
+    function splitIsFull() {
+      return splitState.orientation && splitState.panes.length >= 2;
+    }
+    function viewportTooNarrow() {
+      return window.innerWidth < 900;
+    }
+
+    // dragenter fires on every child element entry; track depth so the
+    // overlay doesn't flicker when the cursor crosses internal nodes.
+    let depth = 0;
+
+    paneEl.addEventListener('dragenter', (ev) => {
+      if (!dragHasConversationPayload(ev)) return;
+      if (splitIsFull() || viewportTooNarrow()) return;
+      depth += 1;
+      overlay.classList.add('active');
+      ev.preventDefault();
+    });
+    paneEl.addEventListener('dragleave', (ev) => {
+      if (depth === 0) return;
+      depth -= 1;
+      if (depth === 0) {
+        overlay.classList.remove('active');
+        overlay.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('over'));
+      }
+    });
+    paneEl.addEventListener('dragover', (ev) => {
+      if (!overlay.classList.contains('active')) return;
+      ev.preventDefault();          // required to enable drop
+      ev.dataTransfer.dropEffect = 'copy';
+    });
+
+    overlay.querySelectorAll('.drop-zone').forEach(zone => {
+      zone.addEventListener('dragenter', () => zone.classList.add('over'));
+      zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+      zone.addEventListener('dragover', (ev) => { ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; });
+      zone.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        depth = 0;
+        overlay.classList.remove('active');
+        zone.classList.remove('over');
+        const convId = readConvIdFromDrop(ev);
+        const targetPaneId = paneEl.getAttribute('data-pane-id');
+        const orientation = zone.getAttribute('data-zone') === 'right' ? 'vertical' : 'horizontal';
+        // For now: log only. Task 5 implements the actual split.
+        console.log('[conv-split] drop', { convId, targetPaneId, orientation });
+      });
+    });
+    // Also reset on drop outside any zone.
+    paneEl.addEventListener('drop', () => {
+      depth = 0;
+      overlay.classList.remove('active');
+      overlay.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('over'));
+    });
+  }
+
+  // Wire drop zones on every existing pane after each layout change.
+  function attachAllPaneDropZones() {
+    document.querySelectorAll('.conv-pane').forEach(attachDropZones);
   }
 
   const STICKY_HEADER_HEIGHT_KEY = 'ccc-sticky-header-height';
@@ -9890,6 +10017,7 @@
 
   // Init
   loadConversationList();
+  attachAllPaneDropZones();
   pollVercelDeploy();
   setInterval(pollVercelDeploy, 15000);
 })();
