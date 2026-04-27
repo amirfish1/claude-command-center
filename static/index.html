@@ -5228,12 +5228,13 @@
     return 'stage';
   }
 
+  // Set while the user is mid-rename so background refreshes don't yank
+  // the input out from under them. Cleared by the commit/cancel path
+  // *before* it asks for a re-render, so the legitimate post-save
+  // refresh still flows through.
+  let _renameInProgress = false;
   function renderSidebar(convs) {
-    // Skip the entire render if the user has an inline rename in flight
-    // — replacing innerHTML mid-edit would obliterate the input element
-    // and lose what they were typing. The next refresh tick will pick
-    // up the data once they're done.
-    if (document.querySelector('.conv-title-input')) return;
+    if (_renameInProgress) return;
     // Preserve scroll across ALL re-renders (board + per-column + list)
     const scrolls = {};
     document.querySelectorAll('.kanban-board, .kanban-board-split, #convList').forEach(el => {
@@ -7234,11 +7235,13 @@
     if (editBtn) editBtn.style.display = 'none';
     input.focus();
     input.select();
+    _renameInProgress = true;  // freeze background re-renders
 
     let finished = false;
     async function commit(save) {
       if (finished) return;
       finished = true;
+      _renameInProgress = false;  // clear before our own re-render below
       if (save) {
         const newName = input.value.trim();
         try {
