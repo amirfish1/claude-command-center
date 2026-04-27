@@ -15,14 +15,17 @@ Usage:
 __version__ = "0.2.0"
 
 import ast
+import base64
 import http.server
 import json
 import os
 import platform
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -187,41 +190,66 @@ else:
     persisted = _load_persisted_repo()
     REPO_ROOT = persisted if persisted else Path.cwd().resolve()
 LOG_DIR = REPO_ROOT / ".claude" / "logs"
-# Claude Code encodes project path by replacing "/" with "-" under ~/.claude/projects/
-_cc_project_slug = "-" + str(REPO_ROOT).lstrip("/").replace("/", "-")
+
+def _encode_project_slug(path):
+    """Encode an absolute filesystem path the way claude-code does when
+    naming subdirs under ~/.claude/projects/.
+
+    Claude Code 2.x replaces every non-alphanumeric character with '-'
+    (so '/foo/.claude/BYM+Finie' becomes '-foo--claude-BYM-Finie').
+    Older claude-code versions only replaced '/', which is why some
+    legacy project dirs still contain '+', '.', etc.
+
+    CCC has to match the current encoder — otherwise sessions spawned
+    in repos whose path contains '+', '.', '_', or spaces land in a
+    project dir CCC isn't scanning, and they're invisible on the kanban.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path))
+
+def _legacy_project_slug(path):
+    """Pre-2.x claude-code only replaced '/' with '-' — leaving '+',
+    '.', '_', and spaces intact. We still need to surface conversations
+    that historic claude-code versions wrote into those dirs, so the
+    scan covers both the modern and legacy slugs for a given REPO_ROOT.
+    """
+    return "-" + str(path).lstrip("/").replace("/", "-")
+
+def _candidate_conversation_dirs(path):
+    """Every ~/.claude/projects/<slug>/ that could hold conversations for
+    `path`. Both encoders are tried; only existing dirs are returned.
+    Modern slug first so it wins on shared keys (newer is fresher)."""
+    seen = set()
+    candidates = []
+    root = Path.home() / ".claude" / "projects"
+    for slug in (_encode_project_slug(path), _legacy_project_slug(path)):
+        if slug in seen:
+            continue
+        seen.add(slug)
+        d = root / slug
+        if d.is_dir():
+            candidates.append(d)
+    return candidates
+
+def _resolve_conversation_path(conversation_id):
+    """Find <conversation_id>.jsonl across every candidate project dir
+    for the current REPO_ROOT (modern + legacy slug)."""
+    name = conversation_id + ".jsonl"
+    for d in _candidate_conversation_dirs(REPO_ROOT):
+        p = d / name
+        if p.is_file():
+            return p
+    # Fall back to the canonical dir even if it doesn't exist — callers
+    # check existence and produce a 404 with a recognizable path.
+    return CONVERSATIONS_DIR / name
+
+_cc_project_slug = _encode_project_slug(REPO_ROOT)
 CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
 
 
-def _slug_variants_for(repo_root):
-    """Return all project-dir slug variants Claude Code might use for
-    the given cwd. CC 2.1.119 regressed and now substitutes `+` → `-`
-    when forming the project dir, so a single cwd can land in either
-    `-Users-foo-Apps-BYM+Finie/` (older builds) or `-Users-foo-Apps-BYM-Finie/`
-    (newer builds). Return both so we don't lose sessions to the regression.
-
-    Always returns the canonical slug first; callers should prefer it
-    for *writes* (we don't want to encourage the buggy variant).
-    """
-    base = str(repo_root).lstrip("/").replace("/", "-")
-    canonical = "-" + base
-    variants = [canonical]
-    # Known CC 2.1.119 substitution. Add to this set if more characters
-    # turn out to be sanitized by future versions.
-    sanitized = "-" + base.replace("+", "-")
-    if sanitized != canonical:
-        variants.append(sanitized)
-    return variants
-
-
+# Backwards-compat alias for code that called the older helper before the
+# merge with origin/main introduced _candidate_conversation_dirs.
 def _conversation_dirs():
-    """All project-dir Paths to scan for sessions belonging to the
-    current REPO_ROOT, including slug-variant fallbacks."""
-    out = []
-    for slug in _slug_variants_for(REPO_ROOT):
-        p = Path.home() / ".claude" / "projects" / slug
-        if p.is_dir():
-            out.append(p)
-    return out
+    return _candidate_conversation_dirs(REPO_ROOT)
 
 def load_known_repos():
     """Auto-detect projects for the picker by scanning $HOME.
@@ -427,16 +455,50 @@ def _self_update():
 # available we return the rendered markdown so the UI can offer a
 # copy-to-clipboard fallback for manual filing.
 _BUG_REPORT_REPO = "amirfish1/claude-command-center"
+# Screenshot support (macOS only): the modal can capture an area screenshot
+# via `screencapture -i`, which is then committed to a dedicated public
+# branch (`bug-screenshots`) of this repo so the issue body can render the
+# image inline via raw.githubusercontent.com. If the push fails (random OSS
+# user without write access) we keep the local copy and tell the user to
+# drag-drop manually. The local save ALWAYS happens first so the image is
+# never lost regardless of upload outcome.
+_BUG_SCREENSHOT_DIR = Path.home() / ".claude" / "command-center" / "bug-screenshots"
+_BUG_SCREENSHOT_WT = Path.home() / ".claude" / "command-center" / "bug-screenshots-wt"
+_BUG_SCREENSHOT_BRANCH = "bug-screenshots"
 
 
-def _build_bug_report_body(description, ccc_version, user_agent, session_id):
+def _build_bug_report_body(description, ccc_version, user_agent, session_id,
+                           screenshot_url=None, screenshot_local_path=None):
     """Render the GitHub issue body (markdown). Pure — no I/O — so it's
-    cheap to also return on the failure path for clipboard fallback."""
+    cheap to also return on the failure path for clipboard fallback.
+
+    Screenshot rendering: if `screenshot_url` is given we embed it as an
+    inline image (the happy path — image was pushed to the bug-screenshots
+    branch). Otherwise if `screenshot_local_path` is given we surface the
+    local path with a drag-drop instruction so the user can manually
+    attach it to the issue after it's filed."""
     lines = [
         "## Description",
         "",
         description.strip(),
         "",
+    ]
+    if screenshot_url:
+        lines += [
+            "## Screenshot",
+            "",
+            f"![screenshot]({screenshot_url})",
+            "",
+        ]
+    elif screenshot_local_path:
+        lines += [
+            "## Screenshot",
+            "",
+            f"📎 Saved locally at `{screenshot_local_path}`. After this issue "
+            "opens, drag the file into a comment to attach it.",
+            "",
+        ]
+    lines += [
         "## Context",
         "",
         "| Field | Value |",
@@ -450,15 +512,256 @@ def _build_bug_report_body(description, ccc_version, user_agent, session_id):
     return "\n".join(lines)
 
 
+def _capture_screenshot_native(timeout=120):
+    """Trigger the macOS area-screenshot picker (`screencapture -i`) and
+    return the resulting PNG as base64. Blocks until the user finishes
+    drawing the rectangle, presses Esc to cancel, or `timeout` elapses.
+
+    Returns one of:
+      {ok: True,  image_b64: "...", mime: "image/png", path: "/tmp/..."}
+      {ok: False, cancelled: True}                  — user pressed Esc
+      {ok: False, error: "..."}                     — non-mac, timeout, etc.
+
+    macOS-only: `screencapture` is a shipped system tool. On other OSes we
+    return an explanatory error so the UI can hide / explain the feature.
+    """
+    if platform.system() != "Darwin":
+        return {"ok": False, "error": "area screenshots are macOS-only today"}
+    if not _which("screencapture"):
+        return {"ok": False, "error": "`screencapture` not found on PATH"}
+    # NamedTemporaryFile(delete=False) so screencapture (a separate process)
+    # can write to the path; we reap it ourselves once we've base64-encoded.
+    tmp = tempfile.NamedTemporaryFile(prefix="ccc-bug-", suffix=".png", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    try:
+        # `-i` is interactive: shows the crosshair / area-selector overlay.
+        # `-x` suppresses the camera-shutter sound so this isn't disruptive
+        # in a quiet office. The user draws an area; on Esc the file is left
+        # zero-bytes and screencapture exits 0.
+        try:
+            proc = subprocess.run(
+                ["screencapture", "-i", "-x", tmp_path],
+                capture_output=True, text=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": f"screencapture timed out after {timeout}s"}
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "").strip()[:200]
+            return {"ok": False, "error": err or f"screencapture exited {proc.returncode}"}
+        try:
+            data = Path(tmp_path).read_bytes()
+        except OSError as e:
+            return {"ok": False, "error": f"could not read capture: {e}"}
+        # Esc / cancel leaves a zero-byte file behind. Treat as cancellation.
+        if not data:
+            return {"ok": False, "cancelled": True}
+        return {
+            "ok": True,
+            "image_b64": base64.b64encode(data).decode("ascii"),
+            "mime": "image/png",
+            "path": tmp_path,
+            "bytes": len(data),
+        }
+    finally:
+        # The client got the bytes inline; the temp file is no longer
+        # needed. Best-effort cleanup so /tmp doesn't fill up over time.
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _save_screenshot_locally(image_b64):
+    """Decode `image_b64` and write to ~/.claude/command-center/bug-screenshots/.
+    Returns the absolute path on success, or raises ValueError on bad input.
+    Called on the bug-report submission path BEFORE the upload attempt so
+    the screenshot survives even if everything else fails."""
+    try:
+        raw = base64.b64decode(image_b64, validate=True)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"invalid base64: {e}") from e
+    if not raw:
+        raise ValueError("empty screenshot")
+    _BUG_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    # Filename: timestamp + short random suffix so back-to-back submissions
+    # in the same second don't collide.
+    fname = f"bug-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}.png"
+    out = _BUG_SCREENSHOT_DIR / fname
+    out.write_bytes(raw)
+    return str(out)
+
+
+def _origin_owner_repo():
+    """Return (owner, repo) parsed from the install dir's `origin` remote, or
+    None if the dir isn't a clone or the URL doesn't look like GitHub.
+    Used to build the raw.githubusercontent.com URL for embedded screenshots
+    AND to derive the push URL for the bug-screenshots branch."""
+    rc, out, _ = _git(["remote", "get-url", "origin"], _install_dir())
+    if rc != 0:
+        return None
+    url = out.strip()
+    # Match git@github.com:owner/repo(.git) and https://github.com/owner/repo(.git).
+    m = re.match(r"^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if not m:
+        m = re.match(r"^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    if not m:
+        return None
+    return (m.group(1), m.group(2))
+
+
+def _push_screenshot_to_branch(local_path, commit_subject):
+    """Copy `local_path` into the bug-screenshots scratch worktree, commit,
+    and push. Returns one of:
+      {ok: True,  raw_url: "https://raw.githubusercontent.com/.../<file>"}
+      {ok: False, error: "..."}
+
+    The scratch worktree at ~/.claude/command-center/bug-screenshots-wt/
+    is reused across runs. On first run the `bug-screenshots` branch
+    doesn't exist on origin so we create it as an orphan (no parent
+    commits — keeps it clean of main's history)."""
+    install = _install_dir()
+    rc, origin_url, err = _git(["remote", "get-url", "origin"], install)
+    if rc != 0:
+        return {"ok": False, "error": f"no origin remote: {err or 'rc={}'.format(rc)}"}
+    origin_url = origin_url.strip()
+    owner_repo = _origin_owner_repo()
+    if not owner_repo:
+        return {"ok": False, "error": f"origin URL not recognised as GitHub: {origin_url}"}
+    owner, repo = owner_repo
+
+    wt = _BUG_SCREENSHOT_WT
+    # Always rebuild the scratch dir if it isn't a healthy git clone — this
+    # keeps the logic dead-simple and avoids subtle stuck-state bugs (e.g.
+    # half-applied orphan switch from a prior crashed run). The cost is one
+    # extra `git init` + fetch per submission, which is negligible.
+    if not (wt / ".git").is_dir():
+        shutil.rmtree(wt, ignore_errors=True)
+        wt.mkdir(parents=True, exist_ok=True)
+        rc, _, err = _git(["init", "--quiet", "-b", "main"], wt)
+        if rc != 0:
+            # Older git without -b flag — retry without it.
+            shutil.rmtree(wt, ignore_errors=True)
+            wt.mkdir(parents=True, exist_ok=True)
+            rc, _, err = _git(["init", "--quiet"], wt)
+            if rc != 0:
+                return {"ok": False, "error": f"git init failed: {err}"}
+        rc, _, err = _git(["remote", "add", "origin", origin_url], wt)
+        if rc != 0:
+            return {"ok": False, "error": f"git remote add failed: {err}"}
+
+    # Try to fetch the existing bug-screenshots branch. If origin doesn't
+    # have it yet (first push ever), we'll create it as an orphan below.
+    rc, _, fetch_err = _git(
+        ["fetch", "origin", _BUG_SCREENSHOT_BRANCH, "--quiet"], wt, timeout=30,
+    )
+    branch_on_origin = (rc == 0)
+
+    if branch_on_origin:
+        # Hard-reset to remote so we don't accumulate junk commits locally
+        # when the user submits multiple bug reports.
+        rc, _, err = _git(
+            ["checkout", "-B", _BUG_SCREENSHOT_BRANCH,
+             f"origin/{_BUG_SCREENSHOT_BRANCH}", "--quiet"], wt,
+        )
+        if rc != 0:
+            return {"ok": False, "error": f"checkout bug-screenshots failed: {err}"}
+    else:
+        # First-ever push: create the branch as an orphan so its history is
+        # independent from main. Wipe any tracked files left over from a
+        # previous half-baked run (`git switch --orphan` doesn't touch the
+        # working tree).
+        rc, _, err = _git(["switch", "--orphan", _BUG_SCREENSHOT_BRANCH], wt)
+        if rc != 0:
+            # `git switch` requires git 2.23+. On ancient git fall back to
+            # the symbolic-ref + rm-cached dance.
+            rc, _, err = _git(
+                ["symbolic-ref", "HEAD", f"refs/heads/{_BUG_SCREENSHOT_BRANCH}"], wt,
+            )
+            if rc != 0:
+                return {"ok": False, "error": f"orphan branch create failed: {err}"}
+            # Drop any stale index entries so the orphan starts empty.
+            _git(["rm", "-rf", "--cached", "--quiet", "."], wt)
+        # Clean the working tree of any leftover files (other than .git).
+        for entry in wt.iterdir():
+            if entry.name == ".git":
+                continue
+            try:
+                if entry.is_dir():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
+            except OSError:
+                pass
+
+    # Configure local user/email for the commit so this works on a fresh
+    # box without ~/.gitconfig user.email set. Safe scope: --local only
+    # touches this scratch dir's .git/config, never global config.
+    _git(["config", "--local", "user.name", "Claude Command Center"], wt)
+    _git(["config", "--local", "user.email", "ccc-bug-report@localhost"], wt)
+
+    # Copy the screenshot in under its basename and stage it explicitly —
+    # never `git add -A`, both because of the multi-agent rule and because
+    # we want to be defensive about anything else lingering in the WT.
+    fname = Path(local_path).name
+    dest = wt / fname
+    try:
+        shutil.copy2(local_path, dest)
+    except OSError as e:
+        return {"ok": False, "error": f"copy failed: {e}"}
+
+    rc, _, err = _git(["add", fname], wt)
+    if rc != 0:
+        return {"ok": False, "error": f"git add failed: {err}"}
+
+    # Cap the commit subject so a pathological title doesn't push the
+    # commit message over GitHub's display limits.
+    subject = (commit_subject or "screenshot").strip()
+    if len(subject) > 100:
+        subject = subject[:100].rstrip() + "…"
+    rc, _, err = _git(
+        ["commit", "-m", f"add screenshot: {subject}", "--quiet"], wt,
+    )
+    if rc != 0:
+        return {"ok": False, "error": f"git commit failed: {err}"}
+
+    rc, _, err = _git(
+        ["push", "-u", "origin", _BUG_SCREENSHOT_BRANCH, "--quiet"], wt, timeout=30,
+    )
+    if rc != 0:
+        return {"ok": False, "error": f"git push failed: {err[:300] if err else 'rc={}'.format(rc)}"}
+
+    raw_url = (
+        f"https://raw.githubusercontent.com/{owner}/{repo}/"
+        f"{_BUG_SCREENSHOT_BRANCH}/{urllib.parse.quote(fname)}"
+    )
+    return {"ok": True, "raw_url": raw_url, "filename": fname}
+
+
+def _bug_log(msg):
+    """Single-line stderr logger for the bug-report flow. Useful when the
+    push succeeds silently but the user-side render looks off — easier to
+    grep `[bug-report]` in the server console than to hunt timestamps."""
+    print(f"[bug-report] {msg}", file=sys.stderr, flush=True)
+
+
 def _create_bug_report_issue(payload):
     """Validate the payload, build a GitHub issue, file it via `gh`.
 
     Returns one of:
-      {ok: True,  url: "https://github.com/.../issues/N", number: N}
+      {ok: True,  url: ".../issues/N", number: N,
+       screenshot_needs_manual?: True, screenshot_path?: "<abs>"}
       {ok: False, error: "...",  markdown: "..."}   # gh missing / failed
       {ok: False, error: "..."}                     # validation failure
     The `markdown` key on the failure path lets the client offer a
     copy-to-clipboard fallback so the user can file it manually.
+
+    Optional `screenshot_b64` field: PNG bytes (base64, no data: prefix).
+    Always saved locally first; then we try to push to the bug-screenshots
+    branch for inline rendering. On push failure the issue body falls back
+    to the local path + drag-drop instructions, and the response carries
+    `screenshot_needs_manual=true` so the client can `open -R` the file
+    and surface the issue URL for manual attachment.
     """
     title = (payload.get("title") or "").strip()
     description = (payload.get("description") or "").strip()
@@ -475,7 +778,38 @@ def _create_bug_report_issue(payload):
     user_agent = (payload.get("user_agent") or "").strip()
     session_id = (payload.get("session_id") or "").strip()
 
-    body = _build_bug_report_body(description, ccc_version, user_agent, session_id)
+    # ── Screenshot pre-flight ──
+    # Save first (always), then try to push, then build the body. The
+    # `screenshot_*` locals stay None when no image was supplied so the
+    # body builder skips the screenshot section entirely.
+    screenshot_b64 = (payload.get("screenshot_b64") or "").strip()
+    screenshot_local_path = None
+    screenshot_url = None
+    screenshot_needs_manual = False
+    if screenshot_b64:
+        try:
+            screenshot_local_path = _save_screenshot_locally(screenshot_b64)
+            _bug_log(f"screenshot saved locally at {screenshot_local_path}")
+        except ValueError as e:
+            # Bad base64 isn't fatal — we just skip the screenshot section
+            # so the bug report itself still gets filed. Log loudly so the
+            # client-side bug is findable.
+            _bug_log(f"screenshot decode failed, skipping: {e}")
+            screenshot_local_path = None
+        if screenshot_local_path:
+            push = _push_screenshot_to_branch(screenshot_local_path, title)
+            if push.get("ok"):
+                screenshot_url = push["raw_url"]
+                _bug_log(f"screenshot pushed: {screenshot_url}")
+            else:
+                screenshot_needs_manual = True
+                _bug_log(f"screenshot push failed, using local fallback: {push.get('error')}")
+
+    body = _build_bug_report_body(
+        description, ccc_version, user_agent, session_id,
+        screenshot_url=screenshot_url,
+        screenshot_local_path=screenshot_local_path if screenshot_needs_manual else None,
+    )
     fallback_md = f"## {title}\n\n{body}"
 
     if not _which("gh"):
@@ -484,6 +818,7 @@ def _create_bug_report_issue(payload):
             "error": "gh CLI not found on PATH — copy the markdown and file the issue manually.",
             "markdown": fallback_md,
             "repo_url": f"https://github.com/{_BUG_REPORT_REPO}/issues/new",
+            "screenshot_path": screenshot_local_path,
         }
 
     try:
@@ -501,9 +836,11 @@ def _create_bug_report_issue(payload):
             capture_output=True, text=True, timeout=20,
         )
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "gh issue create timed out", "markdown": fallback_md}
+        return {"ok": False, "error": "gh issue create timed out", "markdown": fallback_md,
+                "screenshot_path": screenshot_local_path}
     except (OSError, subprocess.SubprocessError) as e:
-        return {"ok": False, "error": f"gh failed to launch: {e}", "markdown": fallback_md}
+        return {"ok": False, "error": f"gh failed to launch: {e}", "markdown": fallback_md,
+                "screenshot_path": screenshot_local_path}
 
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()[:400]
@@ -512,6 +849,7 @@ def _create_bug_report_issue(payload):
             "error": err or f"gh issue create exited {proc.returncode}",
             "markdown": fallback_md,
             "repo_url": f"https://github.com/{_BUG_REPORT_REPO}/issues/new",
+            "screenshot_path": screenshot_local_path,
         }
 
     url = (proc.stdout or "").strip().splitlines()[-1] if proc.stdout else ""
@@ -519,7 +857,35 @@ def _create_bug_report_issue(payload):
     m = re.search(r"/issues/(\d+)", url)
     if m:
         number = int(m.group(1))
-    return {"ok": True, "url": url, "number": number}
+    result = {"ok": True, "url": url, "number": number}
+    if screenshot_needs_manual and screenshot_local_path:
+        result["screenshot_needs_manual"] = True
+        result["screenshot_path"] = screenshot_local_path
+    return result
+
+
+def _reveal_bug_screenshot(path_str):
+    """Reveal `path_str` in Finder via `open -R`. Sandbox-clamped to the
+    bug-screenshots dir so this can't be abused to reveal arbitrary files.
+    Used by the manual-attach fallback after the issue is filed."""
+    if platform.system() != "Darwin":
+        return {"ok": False, "error": "macOS-only"}
+    if not path_str:
+        return {"ok": False, "error": "missing path"}
+    try:
+        rp = Path(path_str).expanduser().resolve(strict=False)
+        root = _BUG_SCREENSHOT_DIR.resolve()
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    if not (str(rp).startswith(str(root) + os.sep) or rp == root):
+        return {"ok": False, "error": "path outside bug-screenshots sandbox"}
+    if not rp.exists():
+        return {"ok": False, "error": "file not found", "path": str(rp)}
+    try:
+        subprocess.Popen(["open", "-R", str(rp)])
+        return {"ok": True, "path": str(rp)}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
 
 
 def _schedule_restart(delay=0.5):
@@ -869,7 +1235,7 @@ def switch_repo_root(new_path):
         raise ValueError(f"not a directory: {new_root}")
     REPO_ROOT = new_root
     LOG_DIR = REPO_ROOT / ".claude" / "logs"
-    _cc_project_slug = "-" + str(REPO_ROOT).lstrip("/").replace("/", "-")
+    _cc_project_slug = _encode_project_slug(REPO_ROOT)
     CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
     # Invalidate every repo-scoped cache.
     _backlog_issues_cache = []
@@ -3239,8 +3605,11 @@ def _extract_images_from_content(content):
 def find_conversations():
     """Return list of conversation metadata dicts, newest first."""
     conversations = []
-    conv_dirs = _conversation_dirs()
-    if not conv_dirs:
+    # Scan every project dir whose slug encodes back to REPO_ROOT — both
+    # the modern claude-code 2.x slug AND the legacy '/'-only slug, so
+    # we don't drop historic sessions when claude-code's encoder changes.
+    project_dirs = _candidate_conversation_dirs(REPO_ROOT)
+    if not project_dirs:
         return conversations
     name_overrides = _load_session_name_overrides()
     archived_set = set(_load_archived_conversations())
@@ -3258,15 +3627,22 @@ def find_conversations():
         "Produce a concise 4-8 word title for the GitHub issue below",
     )
 
-    files = []
-    for d in conv_dirs:
-        try:
-            files.extend(d.iterdir())
-        except OSError:
-            pass
-    for f in files:
-        if not f.name.endswith(".jsonl") or not f.is_file():
-            continue
+    # If the same session_id (file name) appears in multiple candidate
+    # dirs (unlikely — claude-code uses one slug per process — but
+    # possible if a repo path was historically encoded both ways), the
+    # first one wins; project_dirs are ordered modern-first.
+    seen_jsonl = set()
+    jsonl_files = []
+    for project_dir in project_dirs:
+        for f in project_dir.iterdir():
+            if not f.name.endswith(".jsonl") or not f.is_file():
+                continue
+            if f.name in seen_jsonl:
+                continue
+            seen_jsonl.add(f.name)
+            jsonl_files.append(f)
+
+    for f in jsonl_files:
         try:
             stat = f.stat()
         except OSError:
@@ -4578,7 +4954,7 @@ def _resolve_claude_session_for_pkood(agent_id):
     # have it, otherwise all of them (slower — but still bounded).
     candidate_dirs = []
     if spawn_cwd:
-        slug = "-" + spawn_cwd.lstrip("/").replace("/", "-")
+        slug = _encode_project_slug(spawn_cwd)
         candidate = PROJECTS_ROOT / slug
         if candidate.is_dir():
             candidate_dirs.append(candidate)
@@ -6166,104 +6542,6 @@ def extract_session_usage(session_id):
     }
 
 
-_SESSION_STATE_BLOCK_RE = re.compile(
-    r"<session-state>\s*(.*?)\s*</session-state>", re.DOTALL | re.IGNORECASE
-)
-# Inside a <session-state> block we expect labelled lines: DID, FINDING,
-# NEXT_STEP_USER. Tolerant of extra fields by capturing any UPPER_SNAKE label.
-_SESSION_STATE_FIELD_RE = re.compile(
-    r"^([A-Z][A-Z_]+):\s*(.+?)\s*$", re.MULTILINE
-)
-
-
-def _extract_assistant_text(msg):
-    """Pull the human-readable text out of an assistant `message.content`."""
-    out = []
-    for block in (msg or {}).get("content") or []:
-        if not isinstance(block, dict):
-            continue
-        if block.get("type") == "text":
-            t = block.get("text") or ""
-            if t.strip():
-                out.append(t)
-    return "\n\n".join(out).strip()
-
-
-def extract_session_recap(session_id):
-    """Return both the free-form last-assistant-message text and any
-    structured <session-state> block from the most recent turns. The
-    conv pane appends this as a synthetic "recap" card at the bottom
-    so the user can see "what just happened" without scrolling.
-    """
-    empty = {
-        "freeform": "",
-        "session_state": None,
-        "session_state_raw": None,
-        "has_recap": False,
-    }
-    if not PROJECTS_ROOT.is_dir():
-        return empty
-    jsonl = None
-    for pd in PROJECTS_ROOT.iterdir():
-        if not pd.is_dir():
-            continue
-        cand = pd / f"{session_id}.jsonl"
-        if cand.is_file():
-            jsonl = cand
-            break
-    if not jsonl:
-        return empty
-
-    last_text = ""
-    last_session_state_raw = None
-    try:
-        with open(jsonl, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if ev.get("type") != "assistant":
-                    continue
-                if ev.get("isSidechain"):
-                    continue
-                msg = _safe_parse_message(ev.get("message", {}))
-                text = _extract_assistant_text(msg)
-                if not text:
-                    continue
-                last_text = text
-                m = _SESSION_STATE_BLOCK_RE.search(text)
-                if m:
-                    last_session_state_raw = m.group(1).strip()
-    except OSError:
-        return empty
-
-    if not last_text and not last_session_state_raw:
-        return empty
-
-    # Strip the <session-state> block from the freeform text so we don't
-    # double-display it.
-    freeform_clean = _SESSION_STATE_BLOCK_RE.sub("", last_text).strip()
-
-    structured = None
-    if last_session_state_raw:
-        structured = {}
-        for fm in _SESSION_STATE_FIELD_RE.finditer(last_session_state_raw):
-            structured[fm.group(1).lower()] = fm.group(2).strip()
-        if not structured:
-            structured = None
-
-    return {
-        "freeform": freeform_clean,
-        "session_state": structured,
-        "session_state_raw": last_session_state_raw,
-        "has_recap": bool(freeform_clean or last_session_state_raw),
-    }
-
-
 _MORNING_BRAINDUMP_PROMPT = """You are analyzing the user's morning brain-dump.
 
 For each item in the dump, classify as exactly one of:
@@ -6877,12 +7155,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Token-usage stats for the conv pane's "Context: 142k / 200k" pill.
             sid = path.rsplit("/", 2)[-2]
             self.send_json(extract_session_usage(sid))
-        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/recap$", path):
-            # Free-form last-assistant text + structured <session-state>
-            # block, rendered as a synthetic "recap" card at the bottom
-            # of the conversation transcript.
-            sid = path.rsplit("/", 2)[-2]
-            self.send_json(extract_session_recap(sid))
         elif re.match(r"^/api/session/[a-zA-Z0-9-]+/workspace$", path):
             # Workspace info — cwd, branch, worktree?, ahead/behind, co-tenants.
             sid = path.rsplit("/", 2)[-2]
@@ -7244,6 +7516,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(result, 400)
             else:
                 self.send_json(result)
+            return
+        if path == "/api/bug-report/capture":
+            # Trigger the macOS area-screenshot picker. Blocks the request
+            # thread until the user finishes drawing or hits Esc — fine
+            # because each request runs on its own thread under
+            # ThreadingHTTPServer. 120s timeout so an idle dialog can't
+            # tie up a server thread forever.
+            result = _capture_screenshot_native()
+            self.send_json(result)
+            return
+        if path == "/api/bug-report/reveal":
+            # Reveal a previously-saved bug screenshot in Finder so the
+            # user can drag-drop it into a GitHub issue comment. Sandbox-
+            # clamped to ~/.claude/command-center/bug-screenshots/ inside
+            # the helper so this can't be abused as a generic file-reveal.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            self.send_json(_reveal_bug_screenshot((payload.get("path") or "").strip()))
             return
         if path == "/api/fs/pick-folder":
             # Open the OS-native folder chooser and return the picked absolute
