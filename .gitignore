@@ -27,13 +27,19 @@ venv/
 /dist/
 /build/
 
-# Local logs or state that might end up in-tree
-/.claude/logs/
-/.claude/pasted-images/
+# Local logs or state that might end up in-tree.
+# Whole `.claude/` dir is per-machine — settings, session logs, pasted
+# images, locks, agent worktree scratch — none of it belongs in git.
+/.claude/
 *.log
 
 # Pre-publish workspace — audit reports, archive prep, etc.
 /oss-prep/
+
+# Maintainer's local research notes (competitor scans, licensing reading,
+# scratch markdown). Useful for the maintainer, not part of the project.
+/competitor-analysis/
+/About licensing.md
 
 # Local-only asset workspace (large videos, raw recordings, full-res screenshots)
 # Repo only ships compressed/optimized derivatives in docs/images/
