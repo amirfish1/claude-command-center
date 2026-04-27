@@ -547,6 +547,17 @@
   }
   .conv-pane-close:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
 
+  .conv-split-divider {
+    flex: 0 0 4px;
+    background: var(--border, #2a2a2a);
+    cursor: col-resize;
+    transition: background 0.1s ease;
+  }
+  .conv-split-divider:hover { background: var(--accent, #4ea1ff); }
+  .conv-split[data-orientation="horizontal"] .conv-split-divider {
+    cursor: row-resize;
+  }
+
   .conv-toast {
     position: fixed;
     bottom: 24px;
@@ -6886,6 +6897,9 @@
       extras.forEach(n => n.remove());
       // Hide close buttons in single mode.
       $split.querySelectorAll('.conv-pane-close').forEach(b => b.style.display = 'none');
+      // Remove any stray divider in unsplit mode.
+      const oldDivider = $split.querySelector('.conv-split-divider');
+      if (oldDivider) oldDivider.remove();
       return;
     }
     $split.setAttribute('data-orientation', splitState.orientation);
@@ -6896,14 +6910,64 @@
         el = buildPaneElement(p.id);
         $split.appendChild(el);
       }
-      el.style.flex = '1 1 0';
       el.querySelectorAll('.conv-pane-close').forEach(b => b.style.display = '');
     });
+    // Ensure the divider exists between the two panes.
+    let divider = $split.querySelector('.conv-split-divider');
+    if (!divider) {
+      divider = document.createElement('div');
+      divider.className = 'conv-split-divider';
+      attachDividerDrag(divider);
+    }
+    // Reorder: panes[0], divider, panes[1].
+    const p0 = $split.querySelector(`.conv-pane[data-pane-id="${splitState.panes[0].id}"]`);
+    const p1 = $split.querySelector(`.conv-pane[data-pane-id="${splitState.panes[1].id}"]`);
+    $split.append(p0, divider, p1);
+    // Apply ratio.
+    p0.style.flex = `${splitState.ratio} 1 0`;
+    p1.style.flex = `${1 - splitState.ratio} 1 0`;
     // Mark the active pane.
     $split.querySelectorAll('.conv-pane').forEach(el => {
       el.classList.toggle('is-active', el.getAttribute('data-pane-id') === activePaneId());
     });
     attachAllPaneDropZones();
+  }
+
+  function attachDividerDrag(divider) {
+    let dragging = false;
+    let startPos = 0;
+    let startRatio = 0.5;
+    let containerSize = 0;
+    let isVertical = true;
+
+    divider.addEventListener('pointerdown', (ev) => {
+      const $split = document.getElementById('convSplit');
+      if (!$split) return;
+      isVertical = $split.getAttribute('data-orientation') === 'vertical';
+      containerSize = isVertical ? $split.clientWidth : $split.clientHeight;
+      if (containerSize <= 0) return;
+      dragging = true;
+      startPos = isVertical ? ev.clientX : ev.clientY;
+      startRatio = splitState.ratio;
+      divider.setPointerCapture(ev.pointerId);
+      ev.preventDefault();
+    });
+    divider.addEventListener('pointermove', (ev) => {
+      if (!dragging) return;
+      const cur = isVertical ? ev.clientX : ev.clientY;
+      const delta = (cur - startPos) / containerSize;
+      let next = startRatio + delta;
+      next = Math.max(0.15, Math.min(0.85, next));
+      splitState.ratio = next;
+      const p0el = document.querySelector(`.conv-pane[data-pane-id="${splitState.panes[0].id}"]`);
+      const p1el = document.querySelector(`.conv-pane[data-pane-id="${splitState.panes[1].id}"]`);
+      if (p0el) p0el.style.flex = `${next} 1 0`;
+      if (p1el) p1el.style.flex = `${1 - next} 1 0`;
+    });
+    divider.addEventListener('pointerup', (ev) => {
+      dragging = false;
+      try { divider.releasePointerCapture(ev.pointerId); } catch (e) {}
+    });
   }
 
   // Returns true if the active drag carries a conversation card payload
