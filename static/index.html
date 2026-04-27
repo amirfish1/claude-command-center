@@ -1296,6 +1296,17 @@
   .conv-signal.stage { background: rgba(188,140,255,0.15); color: var(--purple); }
   .conv-signal.committed { background: rgba(63,185,80,0.15); color: var(--green); }
   .conv-signal.pushed { background: rgba(57,210,192,0.15); color: var(--cyan); }
+  /* Two side-by-side "uncommitted" signals — kept visually paired so a
+   * row showing only one of them is obviously a divergence between
+   * tool-event tracking and ground-truth git. Solid = tool-tracked
+   * (has_edit && !has_commit), outlined = git status --porcelain. */
+  .conv-signal.uncomm-tools {
+    background: rgba(240,136,62,0.18); color: #F0883E;
+  }
+  .conv-signal.uncomm-git {
+    background: transparent; color: #F0883E;
+    box-shadow: inset 0 0 0 1px rgba(240,136,62,0.55);
+  }
   .conv-signal.activity-working { background: rgba(251,202,4,0.15); color: #FBCA04; animation: pulse 2s infinite; }
   .conv-signal.activity-waiting { background: rgba(88,166,255,0.1); color: var(--accent); }
   .conv-signal.activity-idle { background: rgba(139,148,158,0.08); color: var(--text-muted); }
@@ -7222,6 +7233,18 @@
         signals += '<span class="conv-signal pushed">pushed</span>';
       } else if (c.has_commit) {
         signals += '<span class="conv-signal committed">committed</span>';
+      }
+      // Two "uncommitted" pills, additive on top of the chain above.
+      // We deliberately render BOTH while we watch them for agreement
+      // — solid = tool-event tracking (Edit/Write seen, no commit),
+      // outlined = ground-truth `git status --porcelain` from the
+      // session's worktree. A row with only one of them flags a gap
+      // between what the agent thought it did and what git sees.
+      if (c.has_edit && !c.has_commit) {
+        signals += '<span class="conv-signal uncomm-tools" title="Tool events: Edit/Write seen, no commit yet">tools</span>';
+      }
+      if (c.worktree_dirty) {
+        signals += '<span class="conv-signal uncomm-git" title="git status --porcelain: working tree has changes">git</span>';
       }
 
       return '<div class="conv-item' + active + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
