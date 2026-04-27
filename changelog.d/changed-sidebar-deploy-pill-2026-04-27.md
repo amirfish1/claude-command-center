@@ -1,0 +1,1 @@
+- Sidebar header now shows a compact Vercel deploy pill (status detail moved to its hover tooltip), and the "+ New session" button takes the prominent slot below the header where the Vercel panel used to live.

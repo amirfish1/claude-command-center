@@ -121,36 +121,24 @@
 
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-  /* Vercel deploy status */
-  .deploy-panel {
-    border-top: 1px solid var(--border); padding: 12px;
-  }
-  .deploy-header {
-    font-size: 11px; font-weight: 600; text-transform: uppercase;
-    color: var(--text-muted); margin-bottom: 8px;
-    display: flex; align-items: center; gap: 6px;
-  }
-  .deploy-header .deploy-dot {
+  /* Vercel deploy status — compact pill that lives in the sidebar header
+     actions cluster. The "not configured" / state details live in the
+     pill's title attribute (hover tooltip) so the sidebar stays clean. */
+  .deploy-dot {
     width: 6px; height: 6px; border-radius: 50%;
-    background: var(--text-muted);
+    background: var(--text-muted); display: inline-block;
   }
-  .deploy-header .deploy-dot.ready { background: var(--green); }
-  .deploy-header .deploy-dot.error { background: var(--red); }
-  .deploy-header .deploy-dot.building { background: #FBCA04; animation: pulse 2s infinite; }
-  .deploy-info {
-    font-size: 11px; color: var(--text-secondary); line-height: 1.5;
+  .deploy-dot.ready { background: var(--green); }
+  .deploy-dot.error { background: var(--red); }
+  .deploy-dot.building { background: #FBCA04; animation: pulse 2s infinite; }
+  .sidebar-header-actions .sh-btn-deploy {
+    display: inline-flex; align-items: center; gap: 5px;
+    text-decoration: none;
   }
-  .deploy-info .deploy-state { font-weight: 600; }
-  .deploy-info .deploy-state.ready { color: var(--green); }
-  .deploy-info .deploy-state.error { color: var(--red); }
-  .deploy-info .deploy-state.building { color: #FBCA04; }
-  .deploy-info .deploy-commit {
-    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-    font-size: 10px; color: var(--text-muted);
-    margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  .sidebar-header-actions .sh-btn-deploy .deploy-label {
+    font-size: 11px; color: var(--text-muted);
   }
-  .deploy-info a { color: var(--accent); text-decoration: none; }
-  .deploy-info a:hover { text-decoration: underline; }
+  .sidebar-header-actions .sh-btn-deploy:hover .deploy-label { color: var(--text); }
 
   .log-item {
     padding: 10px 12px; border-radius: 6px; cursor: pointer;
@@ -2607,8 +2595,8 @@
     .toolbar .font-size-controls { display: none !important; }
     #convSessionId { display: none !important; }
 
-    /* Panels that don't make sense on phones */
-    .deploy-panel { display: none !important; }
+    /* Controls that don't make sense on phones */
+    .sh-btn-deploy { display: none !important; }
 
     /* --- Kanban-split --- */
     #kanbanLayout.active { flex-direction: column; }
@@ -2751,14 +2739,28 @@
     .mobile-reload-btn:active { background: var(--accent); color: #fff; }
   }
 
-  /* "+ New" lives in the sidebar-header-actions cluster next to the
-     Claude Command Center title. Same .sh-btn shape as its siblings;
-     the + glyph is tinted with the accent so the primary action still
-     reads at a glance. */
-  .sidebar-header-actions .sh-btn-new .plus {
-    color: var(--accent); font-weight: 700; margin-right: 1px;
+  /* Prominent "+ New session" button — sits in the slot the Vercel
+     deploy panel used to occupy (just below the sidebar header). The
+     deploy indicator moved up into the header actions cluster as a
+     compact pill, freeing this slot for the primary CTA. */
+  .new-session-panel {
+    border-bottom: 1px solid var(--border);
+    padding: 10px 12px;
   }
-  .sidebar-header-actions .sh-btn-new:hover { border-color: rgba(88,166,255,0.4); }
+  .new-session-btn {
+    width: 100%;
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: 6px;
+    padding: 8px 12px; border-radius: 6px;
+    background: rgba(88, 166, 255, 0.10);
+    border: 1px solid rgba(88, 166, 255, 0.35);
+    color: var(--accent);
+    font-family: inherit; font-size: 13px; font-weight: 600;
+    cursor: pointer; line-height: 1.2;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .new-session-btn:hover { background: rgba(88, 166, 255, 0.18); border-color: rgba(88, 166, 255, 0.55); }
+  .new-session-btn .plus { font-weight: 700; }
 
   /* Sidebar footer strip — appearance + settings (Claude-Desktop pattern) */
   .sidebar-footer {
@@ -3017,7 +3019,7 @@
       <span class="dot"></span>
       <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
       <div class="sidebar-header-actions">
-        <button class="sh-btn sh-btn-new" id="sidebarNewBtn" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New</button>
+        <a class="sh-btn sh-btn-deploy" id="sidebarDeployPill" target="_blank" rel="noopener" title="Vercel deploy — loading…" aria-label="Vercel deploy status"><span class="deploy-dot" id="deployDot"></span><span class="deploy-label" id="deployStateLabel">Vercel</span></a>
         <button class="conv-compact-toggle sh-btn" id="convCompactToggle" title="Compact rows — keep each card to a single line" aria-label="Toggle compact rows"><span aria-hidden="true">&#8801;</span></button>
         <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Toggle Kanban board view" aria-label="Toggle Kanban board view"><span aria-hidden="true">&#9783;</span> Board</button>
         <button class="conv-archive-toggle sh-btn" id="convArchiveToggle" title="Show archived">&#128230;</button>
@@ -3026,12 +3028,8 @@
       </div>
     </div>
 
-    <div class="deploy-panel" id="deployPanel">
-      <div class="deploy-header">
-        <span class="deploy-dot" id="deployDot"></span>
-        <span>Vercel Deploy</span>
-      </div>
-      <div class="deploy-info" id="deployInfo">Loading...</div>
+    <div class="new-session-panel">
+      <button class="new-session-btn" id="sidebarNewBtn" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New session</button>
     </div>
     <div class="conv-list-panel" id="convListPanel">
       <div class="conv-list-header">
@@ -9488,11 +9486,27 @@
 
   // ── Vercel deploy status ──
   const $deployDot = document.getElementById('deployDot');
-  const $deployInfo = document.getElementById('deployInfo');
+  const $deployPill = document.getElementById('sidebarDeployPill');
+  const $deployLabel = document.getElementById('deployStateLabel');
   // Latest production deploy URL — stashed so the inline-code path-link
   // handler can open URL-shaped paths (`/api/foo/bar`) on the right
   // domain instead of localhost (or, for file paths, the editor).
   let _vercelDeployUrl = '';
+
+  function setDeployPill({ dotClass, label, title, href }) {
+    if ($deployDot) $deployDot.className = 'deploy-dot' + (dotClass ? ' ' + dotClass : '');
+    if ($deployLabel) $deployLabel.textContent = label;
+    if ($deployPill) {
+      $deployPill.title = title;
+      if (href) {
+        $deployPill.setAttribute('href', href);
+        $deployPill.style.cursor = 'pointer';
+      } else {
+        $deployPill.removeAttribute('href');
+        $deployPill.style.cursor = 'default';
+      }
+    }
+  }
 
   async function pollVercelDeploy() {
     try {
@@ -9500,25 +9514,23 @@
       const d = await res.json();
       if (d.disabled) {
         // No .vercel/project.json (and no $VERCEL_PROJECT env override).
-        // Show a friendly hint instead of the raw error string.
-        $deployDot.className = 'deploy-dot';
-        $deployInfo.innerHTML =
-          '<span style="color:var(--text-muted);">Not configured.</span>' +
-          ' <span style="color:var(--text-muted);opacity:0.75;">' +
-          'Run <code style="background:rgba(255,255,255,0.06);padding:1px 4px;border-radius:3px;font-size:11px;">vercel link</code> ' +
-          'in this project to enable.</span>';
+        // Friendly hint moved to the pill's title attribute (hover).
+        setDeployPill({
+          dotClass: '',
+          label: 'Vercel',
+          title: 'Vercel deploy: not configured. Run `vercel link` in this project to enable.',
+          href: '',
+        });
         _vercelDeployUrl = '';
         return;
       }
       if (d.error) {
-        $deployDot.className = 'deploy-dot';
-        $deployInfo.textContent = d.error;
+        setDeployPill({ dotClass: '', label: 'Vercel', title: 'Vercel deploy: ' + d.error, href: '' });
         _vercelDeployUrl = '';
         return;
       }
       const st = d.state || 'UNKNOWN';
       const stLower = st === 'READY' ? 'ready' : st === 'ERROR' || st === 'CANCELED' ? 'error' : st === 'BUILDING' || st === 'INITIALIZING' || st === 'QUEUED' ? 'building' : '';
-      $deployDot.className = 'deploy-dot' + (stLower ? ' ' + stLower : '');
 
       const age = d.created_at ? timeAgo(d.created_at) : '';
       const dur = d.duration_s ? d.duration_s + 's' : '';
@@ -9526,17 +9538,18 @@
       const link = d.url ? 'https://' + d.url : '';
       _vercelDeployUrl = link;
 
-      let html = '<span class="deploy-state ' + stLower + '">' + st + '</span>';
-      if (age) html += ' &middot; ' + age;
-      if (dur) html += ' &middot; ' + dur;
-      if (link) html += ' &middot; <a href="' + link + '" target="_blank">↗</a>';
-      if (commitInfo || d.commit_msg) {
-        html += '<div class="deploy-commit">';
-        if (commitInfo) html += commitInfo;
-        if (d.commit_msg) html += ' ' + d.commit_msg.replace(/</g, '&lt;');
-        html += '</div>';
-      }
-      $deployInfo.innerHTML = html;
+      let titleParts = ['Vercel deploy: ' + st];
+      if (age) titleParts.push(age);
+      if (dur) titleParts.push(dur);
+      if (commitInfo) titleParts.push(commitInfo);
+      if (d.commit_msg) titleParts.push(d.commit_msg);
+      if (link) titleParts.push(link);
+      setDeployPill({
+        dotClass: stLower,
+        label: st,
+        title: titleParts.join(' · '),
+        href: link,
+      });
       // Also update the compact kanban toolbar indicator
       const $kptDeploy = document.getElementById('kptDeployStatus');
       if ($kptDeploy) {
