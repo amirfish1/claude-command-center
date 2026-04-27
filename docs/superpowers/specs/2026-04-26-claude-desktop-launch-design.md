@@ -24,7 +24,7 @@ session, in one click.
 
 ## Solution
 
-Add an always-visible third button next to Jump/Launch — **"Opening Claude
+Add an always-visible third button next to Jump/Launch — **"Open in Claude
 Desktop"** — that opens the macOS Claude Desktop app (`/Applications/Claude.app`,
 bundle id `com.anthropic.claudefordesktop`) and navigates it to the same
 session via the app's `claude://resume?session=<uuid>` URL scheme.
@@ -117,7 +117,8 @@ Both use a new `.desktop-btn` CSS class colour-twinned to the existing
 - New function `openInClaudeDesktop(ev)` parallel to `launchTerminal` (line
   2816) and `jumpToTerminal` (line 2715).
 - POSTs `/api/open-in-desktop` with `{session_id}`.
-- Idle label: **"Opening Claude Desktop"**.
+- Idle label: **"Open in Claude Desktop"** (imperative, matches the
+  "Jump to terminal" / "Launch in terminal" siblings).
 - During request: label changes to `"Opening…"`.
 - On success: brief `"Opened!"` confirmation, then revert.
 - On failure: `"Failed: <error>"` for ~3s, then revert.
