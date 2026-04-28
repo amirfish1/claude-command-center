@@ -3753,6 +3753,14 @@ def find_conversations():
             "session_cwd_is_worktree": bool(
                 cwd and (Path(cwd) / ".git").is_file()
             ),
+            # Ground-truth uncommitted state from `git status --porcelain`,
+            # cached on the session's last-event timestamp. Pairs with
+            # has_edit && !has_commit (tool-event derived) on the client
+            # — both surface as side-by-side pills on the row so we can
+            # watch them for divergence.
+            "worktree_dirty": _worktree_dirty_cached(
+                cwd, tail_meta.get("last_meaningful_ts") or stat.st_mtime
+            ),
             # Tool-call-inferred effective branch/kind, populated above.
             # Lets the sidebar row reflect "where edits actually land"
             # for sessions launched in the shared clone but doing all
@@ -6572,6 +6580,39 @@ def _worktree_is_dirty(path):
         return bool(r.stdout.strip())
     except (subprocess.SubprocessError, OSError):
         return False
+
+
+# path -> (last_session_event_ts, dirty, polled_at). The sidebar list
+# refreshes every 10s and may include 20+ sessions; a bare git shellout
+# per row would dominate the response. Two layers:
+#   * Hard floor: never shell out twice for the same path inside 5s.
+#     Multiple sessions sharing a worktree dedupe inside one response,
+#     and active paths still cap at one shellout per poll.
+#   * Soft TTL: between 5s and 30s, only shell out if the session's
+#     last meaningful event has advanced — the user's "if no update,
+#     don't re-poll" rule. Past 30s we re-poll regardless to catch
+#     commits that happen outside the agent (manual commit in another
+#     shell).
+_WORKTREE_DIRTY_CACHE = {}
+_WORKTREE_DIRTY_FLOOR = 5.0
+_WORKTREE_DIRTY_TTL = 30.0
+
+
+def _worktree_dirty_cached(path, event_ts):
+    if not path:
+        return False
+    now = time.time()
+    hit = _WORKTREE_DIRTY_CACHE.get(path)
+    if hit is not None:
+        cached_event_ts, cached_dirty, polled_at = hit
+        age = now - polled_at
+        if age < _WORKTREE_DIRTY_FLOOR:
+            return cached_dirty
+        if age < _WORKTREE_DIRTY_TTL and cached_event_ts == event_ts:
+            return cached_dirty
+    dirty = _worktree_is_dirty(path)
+    _WORKTREE_DIRTY_CACHE[path] = (event_ts, dirty, now)
+    return dirty
 
 
 def list_repo_worktrees(repo_top=None):
