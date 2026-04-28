@@ -1438,15 +1438,13 @@
   ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
   /* ── Kanban board (vertical stacked columns in sidebar) ── */
+  /* Sizing comes from .sh-btn (padding-based) so the " Board" label fits;
+     keep the flex centering so the ☷ glyph + text line up. */
   .conv-kanban-toggle {
-    width: 28px; height: 28px; flex-shrink: 0;
-    border-radius: 4px; border: 1px solid var(--border);
-    background: transparent; color: var(--text-muted);
-    cursor: pointer; font-size: 14px; line-height: 1;
-    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center; gap: 4px;
     transition: background 0.15s, color 0.15s;
   }
-  .conv-kanban-toggle:hover { color: var(--text); background: var(--surface-2); }
   .conv-kanban-toggle.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
 
   .kanban-board {
