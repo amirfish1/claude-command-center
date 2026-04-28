@@ -7293,6 +7293,10 @@
         else if (ps === 'IDLE') signals += '<span class="conv-signal pkood-idle">idle</span>';
         else if (ps === 'BLOCKED') signals += '<span class="conv-signal pkood-blocked">blocked</span>';
         if (c.pkood_is_stuck) signals += '<span class="conv-signal pkood-stuck">stuck</span>';
+      } else if (isWorktree && c.tail_pr_number) {
+        // Worktree rows: PR# is the more actionable signal than the
+        // generic committed/pushed chip — surface it instead.
+        signals += '<span class="conv-signal pushed" title="PR opened by this session">PR #' + c.tail_pr_number + '</span>';
       } else if (c.has_push) {
         signals += '<span class="conv-signal pushed">pushed</span>';
       } else if (c.has_commit) {

@@ -9172,6 +9172,58 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "archived": now_archived, "github": gh_result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/conversations/[a-f0-9-]+/merge-pr$", path):
+            conv_id = path.split("/")[-2]
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = payload.get("session_id") or conv_id
+            branch = (payload.get("branch") or "").strip()
+            pr_number = payload.get("pr_number")
+            # Prefer the recorded PR number when we have one; fall back to the
+            # branch name (gh resolves the PR by head branch). Without either,
+            # there is nothing to act on.
+            target = None
+            if pr_number is not None:
+                try:
+                    target = str(int(pr_number))
+                except (TypeError, ValueError):
+                    target = None
+            if not target and branch:
+                target = branch
+            if not target:
+                self.send_json({"ok": False, "error": "no PR number or branch"}, 400)
+                return
+            cwd = find_session_cwd(sid) or str(REPO_ROOT)
+            try:
+                # Intentionally no --delete-branch: when the head branch is
+                # checked out in a worktree (the common case here), gh tries
+                # to `git branch -D` it after a successful API merge and that
+                # step fails, surfacing as a misleading "Merge failed" even
+                # though the PR is already merged. Branch cleanup is a
+                # separate worktree-removal flow.
+                out = subprocess.run(
+                    ["gh", "pr", "merge", target, "--squash"],
+                    capture_output=True, text=True, timeout=60, cwd=cwd,
+                )
+                if out.returncode == 0:
+                    self.send_json({
+                        "ok": True,
+                        "target": target,
+                        "stdout": (out.stdout or "").strip()[:500],
+                    })
+                else:
+                    err = ((out.stderr or "").strip() or (out.stdout or "").strip())
+                    self.send_json({
+                        "ok": False,
+                        "target": target,
+                        "error": err[:500] or "gh pr merge failed",
+                    })
+            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/verify$", path) or re.match(r"^/api/conversations/issue-\d+/verify$", path) or re.match(r"^/api/conversations/pkood-[^/]+/verify$", path):
             conv_id = path.split("/")[-2]
             length = int(self.headers.get("Content-Length", "0"))
