@@ -807,6 +807,11 @@
   .conv-input-context .wp-usage-clickable:hover { filter: brightness(1.2); }
   .conv-input-context .wp-usage-pct { opacity: 0.7; font-weight: 400; }
   .conv-input-context .wp-usage-peak { color: var(--text-muted); font-size: 10px; opacity: 0.7; }
+  .conv-input-context .wp-cost-pill {
+    padding: 2px 7px; border-radius: 3px; font-weight: 600;
+    color: var(--text-muted); background: rgba(139,148,158,0.06);
+    cursor: help;
+  }
   .conv-input-context .wp-ahead { color: var(--green); }
   .conv-input-context .wp-behind { color: var(--orange); }
   .conv-input-context .wp-even { color: var(--text-muted); opacity: 0.6; }
@@ -3020,6 +3025,7 @@
         <button id="kptDescToggle" title="Compact mode — hide the description preview on cards" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Compact</button>
         <button id="kptGitOnlyToggle" title="Show only cards linked to a GitHub issue" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">GitHub only</button>
         <label class="kpt-label" title="Spawn via Pkood (background agent runner) instead of headless Claude — see docs" style="display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text);"><input type="checkbox" id="kptPkoodToggle" style="margin:0;"> pkood spawn</label>
+        <label class="kpt-label" title="Spawn the new session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main" style="display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text);"><input type="checkbox" id="kptWorktreeToggle" style="margin:0;"> 🌿 worktree</label>
       </div>
     </div>
     <div id="setupBanner" class="ccc-setup-banner"></div>
@@ -3250,6 +3256,7 @@
       <textarea id="nsmBody" placeholder="What should this session do? (the first sentence becomes the card title — you can rename later or hit ✨ to AI-generate one)"></textarea>
       <div class="nsm-actions">
         <label class="nsm-pkood"><input type="checkbox" id="nsmPkood"> pkood</label>
+        <label class="nsm-pkood" title="Spawn the session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main."><input type="checkbox" id="nsmWorktree"> 🌿 worktree</label>
         <span style="flex:1;"></span>
         <button id="nsmCancel" class="nsm-btn">Cancel</button>
         <button id="nsmSubmit" class="nsm-btn nsm-primary">Launch</button>
@@ -8800,10 +8807,27 @@
     const title = 'Latest assistant turn: ' + latest.toLocaleString() + ' tokens / '
       + limit.toLocaleString() + ' context limit' + overrideNote
       + ' (' + (u.model || 'model unknown') + ')\n\nClick to toggle between 200k and 1M.';
+    // Cost pill — Anthropic API list-price equivalent. Subscription users
+    // (Pro/Max) pay flat, but the figure is still the cleanest cross-model
+    // comparison of "how expensive was this session" so we surface it.
+    const cost = u.cost_usd || 0;
+    const breakdown = u.cost_breakdown_usd || {};
+    let costPill = '';
+    if (cost > 0) {
+      const fmt = (n) => n >= 1 ? '$' + n.toFixed(2) : '$' + n.toFixed(4);
+      const costTip = 'API list-price equivalent for ' + (u.model || 'unknown model') + '\n'
+        + '  Input:        ' + fmt(breakdown.input || 0) + '  (' + (u.total_input_tokens || 0).toLocaleString() + ' tok)\n'
+        + '  Cache write:  ' + fmt(breakdown.cache_creation || 0) + '  (' + (u.total_cache_creation_tokens || 0).toLocaleString() + ' tok)\n'
+        + '  Cache read:   ' + fmt(breakdown.cache_read || 0) + '  (' + (u.total_cache_read_tokens || 0).toLocaleString() + ' tok)\n'
+        + '  Output:       ' + fmt(breakdown.output || 0) + '  (' + (u.total_output_tokens || 0).toLocaleString() + ' tok)\n\n'
+        + 'Subscription users (Claude Pro/Max) pay flat — this is the\n'
+        + 'list-price equivalent if metered against the API directly.';
+      costPill = ' <span class="wp-cost-pill" title="' + escapeHtml(costTip) + '">' + fmt(cost) + '</span>';
+    }
     uSlot.innerHTML = '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
       + 'ctx ' + _formatTokens(latest) + ' / ' + _formatTokens(limit)
       + ' <span class="wp-usage-pct">(' + pct + '%)</span>'
-      + '</span>' + peakNote;
+      + '</span>' + peakNote + costPill;
     slot.classList.add('visible');
     const pill = uSlot.querySelector('.wp-usage-clickable');
     if (pill) {
@@ -10178,6 +10202,8 @@
       let prompt = ($kptNewSession && $kptNewSession.value || '').trim();
       if (!prompt) return;
       const usePkood = ($kptPkoodToggle && $kptPkoodToggle.checked) || prompt.startsWith('pkood:');
+      const $kptWorktreeToggle = document.getElementById('kptWorktreeToggle');
+      const useWorktree = !!($kptWorktreeToggle && $kptWorktreeToggle.checked);
       if (prompt.startsWith('pkood:')) prompt = prompt.slice(6).trim();
       if (!prompt) return;
       // Show the placeholder immediately — don't wait for the spawn POST to
@@ -10190,10 +10216,12 @@
       $kptRunBtn.textContent = 'Spawning...';
       try {
         const endpoint = usePkood ? '/api/pkood/spawn' : '/api/sessions/spawn';
+        // pkood doesn't support the worktree flag — silently drop it for that path.
+        const body = usePkood ? { prompt } : { prompt, worktree: useWorktree };
         const res = await fetch(endpoint, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ prompt }),
+          body: JSON.stringify(body),
         });
         const data = await res.json();
         if (data.ok) {
@@ -10250,6 +10278,9 @@
     _clearNsmError();
     $nsmBody.value = body || '';
     if ($nsmPkood && $kptPkoodToggle) $nsmPkood.checked = $kptPkoodToggle.checked;
+    const $nsmWorktree = document.getElementById('nsmWorktree');
+    const $kptWorktreeToggle = document.getElementById('kptWorktreeToggle');
+    if ($nsmWorktree && $kptWorktreeToggle) $nsmWorktree.checked = $kptWorktreeToggle.checked;
     $nsm.style.display = 'flex';
     setTimeout(() => { $nsmBody.focus(); }, 30);
   }
@@ -10269,13 +10300,18 @@
     const effectiveSubject = firstSentence(body);
     const prompt = body + SESSION_STATE_INSTRUCTION;
     const usePkood = !!($nsmPkood && $nsmPkood.checked);
+    const $nsmWorktree = document.getElementById('nsmWorktree');
+    const useWorktree = !!($nsmWorktree && $nsmWorktree.checked);
     $nsmSubmit.disabled = true;
     $nsmSubmit.textContent = 'Launching...';
     try {
       const endpoint = usePkood ? '/api/pkood/spawn' : '/api/sessions/spawn';
+      const body = usePkood
+        ? { prompt, name: effectiveSubject }
+        : { prompt, name: effectiveSubject, worktree: useWorktree };
       const res = await fetch(endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ prompt, name: effectiveSubject }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
