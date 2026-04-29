@@ -1304,6 +1304,7 @@
   .conv-signal.activity-blocked { background: rgba(248,81,73,0.15); color: var(--red); animation: pulse 2s infinite; }
   .conv-signal.pkood-running { background: rgba(63,185,80,0.15); color: var(--green); }
   .conv-signal.pkood-idle { background: rgba(88,166,255,0.1); color: var(--accent); }
+  .conv-signal.no-edits { background: rgba(88,166,255,0.1); color: var(--accent); }
   .conv-signal.pkood-blocked { background: rgba(248,81,73,0.15); color: var(--red); animation: pulse 2s infinite; }
   .conv-signal.pkood-stuck { background: rgba(248,81,73,0.25); color: var(--red); font-weight: 700; }
   .conv-item .source-badge.pkood { background: rgba(210,153,34,0.2); color: var(--orange); }
@@ -1467,7 +1468,6 @@
   .kanban-column.working  .kanban-card { background: linear-gradient(rgba(210,153,34,0.16), rgba(210,153,34,0.16)), var(--surface); }
   .kanban-column.review   .kanban-card { background: linear-gradient(rgba(57,210,192,0.14), rgba(57,210,192,0.14)), var(--surface); }
   .kanban-column.testing  .kanban-card { background: linear-gradient(rgba(251,202,4,0.14), rgba(251,202,4,0.14)), var(--surface); }
-  .kanban-column.inactive .kanban-card { background: linear-gradient(rgba(139,148,158,0.06), rgba(139,148,158,0.06)), var(--surface); }
   .kanban-column.verified .kanban-card { background: linear-gradient(rgba(63,185,80,0.16), rgba(63,185,80,0.16)), var(--surface); }
   .kanban-column.archived .kanban-card { background: linear-gradient(rgba(139,148,158,0.04), rgba(139,148,158,0.04)), var(--surface); }
   .kanban-column-header { cursor: grab; }
@@ -1506,8 +1506,6 @@
   .kanban-column.review .count { background: rgba(57,210,192,0.2); color: var(--cyan); }
   .kanban-column.backlog .kanban-column-header { color: var(--text-muted); }
   .kanban-column.backlog .count { background: rgba(139,148,158,0.15); color: var(--text-muted); }
-  .kanban-column.inactive .kanban-column-header { color: var(--text-muted); }
-  .kanban-column.inactive .count { background: rgba(139,148,158,0.15); color: var(--text-muted); }
   .kanban-column.testing .kanban-column-header { color: #FBCA04; }
   .kanban-column.testing .count { background: rgba(251,202,4,0.2); color: #FBCA04; }
   .kanban-column.archived .kanban-column-header { color: var(--text-muted); opacity: 0.6; }
@@ -1530,6 +1528,10 @@
     animation: working-glow 1.6s ease-in-out infinite !important;
     border: 1px solid rgba(251,202,4,0.4) !important;
   }
+  /* "no edits" attribute: shown on cards whose Claude has never edited a file
+     (live or dead — liveness doesn't matter). Renders as a small lowercase
+     blue chip next to the stage chip. No card-level dimming so cards stay
+     scannable. */
   /* Pending (optimistic placeholder while /api/sessions/spawn is in flight)
      and recently-born (the real session that replaced it, or any session
      that first appeared during a live poll) share one shimmer style so the
@@ -1661,6 +1663,7 @@
   .kanban-card .kanban-card-stage.stage { background: rgba(188,140,255,0.15); color: var(--purple); }
   .kanban-card .kanban-card-stage.committed { background: rgba(63,185,80,0.15); color: var(--green); }
   .kanban-card .kanban-card-stage.testing { background: rgba(251,202,4,0.15); color: #FBCA04; }
+  .kanban-card .kanban-card-stage.no-edits { background: rgba(88,166,255,0.1); color: var(--accent); margin-left: 4px; }
   .kanban-issue-badge {
     display: inline-block; font-size: 14px; padding: 2px 8px;
     border-radius: 4px; margin-right: 8px; font-weight: 700;
@@ -5927,9 +5930,10 @@
       const stage = sessionStage(c);
       const ghClosed = (c.gh_state || '').toUpperCase() === 'CLOSED';
       const stale =
-        // Migration: 'planning' was renamed to 'icebox' in the planning→icebox
-        // refactor. Drop any leftover overrides from older builds on first render.
-        ov === 'planning' ||
+        // Migration: 'planning' was renamed to 'icebox' (planning→icebox refactor)
+        // and the 'inactive' column was dropped (idle is now an attribute on
+        // Working cards). Drop any leftover overrides from older builds.
+        ov === 'planning' || ov === 'inactive' ||
         // Server truth wins: verified/archived cannot coexist with an active-work override.
         c.verified || c.archived ||
         // Only flag working/icebox as stale when work has truly shipped (pushed)
@@ -5985,8 +5989,23 @@
     // belongs in Working (the label says this is the active work).
     if (hasLabel('claude-in-progress')) return 'working';
 
-    // Fallback: never hide anything — every session gets a column.
-    return 'inactive';
+    // Fallback: dead session with no commits/edits/labels. Used to land in a
+    // separate 'inactive' column; now lives in Working. The "no edits" chip
+    // (see hasNoEdits) flags any card — live or dead — that has yet to touch
+    // a file, so the user can spot resumable shells without a separate column.
+    return 'working';
+  }
+
+  // True when this session has never edited a file. Drives the "no edits"
+  // chip in both the list view and the kanban card. Doesn't care about
+  // liveness — a live session that hasn't touched anything yet is just as
+  // "no edits" as a dead one. Excludes verified / archived (terminal state,
+  // chip is noise) and backlog (different render path).
+  function hasNoEdits(c) {
+    if (!c) return false;
+    if (c.verified || c.archived) return false;
+    if (c.source === 'backlog') return false;
+    return !c.has_edit;
   }
 
   function renderKanbanBoard(convs, targetEl, isSplit) {
@@ -5999,11 +6018,9 @@
       { key: 'icebox',          label: 'Icebox',          defaultExpanded: true,
         hint: 'Parked. The `icebox` GitHub label is set, or you dragged it here. Active intent: don\'t work on this right now.' },
       { key: 'working',         label: 'Working',         defaultExpanded: true,
-        hint: 'Live session — Claude is running. Glows when mid-turn.' },
+        hint: 'Live or resumable sessions. Idle ones (no commits / no live process) get a blue Idle pill — pick one back up by jumping in.' },
       { key: 'waiting',         label: 'Waiting',         defaultExpanded: true,
         hint: 'Claude is asking for permission (Notification hook). Approve or deny in the terminal.' },
-      { key: 'inactive',        label: 'Inactive',        defaultExpanded: false,
-        hint: 'Dead sessions that never produced commits. Resume from here when you pick one back up.' },
       { key: 'review',          label: 'Review',          defaultExpanded: true,
         hint: 'Committed or pushed work waiting for you to read and verify.' },
       { key: 'testing',         label: 'In Testing',      defaultExpanded: true,
@@ -6028,7 +6045,11 @@
       const col = classifyKanbanColumn(c);
       if (col && groups[col]) groups[col].push(c);
     }
-    // Within "Working", sort actively-writing sessions to the top.
+    // Within "Working": actively-writing sessions sort to the top so glow
+    // animations stay visible. Idle (resumable, no commits) cards otherwise
+    // mix with live work in natural order — the blue Idle pill is enough
+    // visual distinction; sinking them to the bottom would hide them behind
+    // the column's maxVisible cap when Working is busy.
     if (groups.working) {
       groups.working.sort((a, b) => {
         const aActive = a.is_live && a.sidecar_status === 'active' && a.sidecar_has_writes ? 1 : 0;
@@ -6062,13 +6083,12 @@
           'backlog': 'No open issues or TODO items.',
           'needs-attention': 'Nothing flagged for triage.',
           'icebox': 'Nothing parked. Drag a card here, or label its issue `icebox`, to park it.',
-          'working': 'No live sessions.',
+          'working': 'No live or idle sessions.',
           'waiting': 'No sessions waiting for approval.',
           'review': 'Nothing waiting for review.',
           'testing': 'Drag cards here to mark as testing.',
           'verified': 'No verified work yet.',
           'archived': 'No archived items.',
-          'inactive': 'No dormant sessions.',
         }[col.key] || 'Empty.';
         html += '<div class="kanban-column-empty" style="padding:14px 12px;color:var(--text-muted);font-size:11px;font-style:italic;text-align:center;opacity:0.6;">' + escapeHtml(emptyMsg) + '</div>';
       }
@@ -6238,7 +6258,8 @@
         const trulyActive = c.is_live && c.sidecar_status === 'active' && (sidecarAge < 300 || midTurn) ? ' truly-active' : '';
         const pendingSpawn = c.pending_spawn ? ' pending-spawn' : '';
         const recentlyBorn = isRecentlyBorn(c.session_id) ? ' recently-born' : '';
-        html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + recentlyBorn + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
+        const noEditsAttr = hasNoEdits(c) ? ' no-edits' : '';
+        html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + recentlyBorn + noEditsAttr + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
         // Create-issue button only when no issue is linked. The "view issue" link
         // was removed — tapping the #NNN badge in the title opens the issue.
         const linkedIssue = c.linked_issue || c.issue_number || '';
@@ -6331,6 +6352,9 @@
             + '</div>';
         }
         html += '<div class="kanban-card-stage ' + stageCls + '">' + escapeHtml(stageLabel) + '</div>';
+        if (noEditsAttr) {
+          html += '<span class="kanban-card-stage no-edits" title="Claude has not edited any files in this session">no edits</span>';
+        }
 
         // ── Task 8: Approve/Deny for waiting cards with pending_tool ──
         // Live "what's running right now" \u2014 render whenever sidecar shows
@@ -7268,6 +7292,8 @@
         signals += '<span class="conv-signal pushed">pushed</span>';
       } else if (c.has_commit) {
         signals += '<span class="conv-signal committed">committed</span>';
+      } else if (hasNoEdits(c)) {
+        signals += '<span class="conv-signal no-edits" title="Claude has not edited any files in this session">no edits</span>';
       }
       // Two "uncommitted" pills, additive on top of the chain above.
       // We deliberately render BOTH while we watch them for agreement

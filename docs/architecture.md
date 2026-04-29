@@ -94,7 +94,7 @@ All three converge into the same card model in the UI.
 
 `classifyKanbanColumn` (client-side, in `static/index.html`) takes a session
 entry and returns one of: `backlog / needs-attention / icebox / working /
-review / testing / verified / archived / inactive`. The rules:
+waiting / review / testing / verified / archived`. The rules:
 
 ```
 archived flag           -> archived
@@ -108,8 +108,14 @@ pushed / committed      -> review
 not live + edits + assistant-last -> review
 needs-attention label   -> needs-attention
 claude-in-progress (dead) -> working
-otherwise               -> inactive
+otherwise               -> working       (dead + empty — render adds a blue
+                                          "no edits" chip via hasNoEdits())
 ```
+
+A separate `hasNoEdits(c)` helper drives a small blue **"no edits"** chip in
+both the list view and the kanban card. Liveness is irrelevant — any session
+whose Claude has never touched a file gets the chip, so you can spot
+resumable shells (and pre-tool fresh sessions) without a separate column.
 
 The full annotated list lives in [`kanban-rules.md`](kanban-rules.md), with a
 draggable diagram in [`kanban-rules.html`](kanban-rules.html).
@@ -117,8 +123,8 @@ draggable diagram in [`kanban-rules.html`](kanban-rules.html).
 Manual drag-drop writes a client-side override into `localStorage`
 (`ccc-column-overrides`). Overrides auto-clear only when the session's natural
 state advances past the override (e.g., an override of `working` is dropped
-once the session's commits get pushed). Stale `planning` overrides from older
-builds are dropped on first render.
+once the session's commits get pushed). Stale `planning` and `inactive`
+overrides from older builds are dropped on first render.
 
 ## Hooks
 
