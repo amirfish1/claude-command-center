@@ -573,11 +573,21 @@
   }
   .conv-sticky-header .user-msg {
     font-size: 14px; color: var(--text); line-height: 1.4;
-    max-height: 3.6em; overflow: hidden;
+    /* Hard cap at ~25% of viewport with internal scroll. Sibling-spawn
+     * prompts can be 50+ lines of preamble; without a cap they push the
+     * actual conversation off-screen. The cap composes with the existing
+     * 3.6em "collapsed" preview via :not(.is-resized) below. */
+    max-height: 25vh; overflow-y: auto;
     flex: 1 1 auto; min-height: 0;
   }
+  /* Preview-mode (default, sticky NOT user-resized): keep the tight 3.6em
+   * peek so the conversation events below stay visible. User drags the
+   * resize handle → .is-resized → cap reverts to 25vh with scroll. */
+  .conv-sticky-header:not(.is-resized) .user-msg {
+    max-height: 3.6em; overflow: hidden;
+  }
   .conv-sticky-header.is-resized .user-msg {
-    max-height: none; overflow: auto;
+    max-height: 25vh; overflow-y: auto;
   }
   .conv-sticky-header .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }
   .conv-sticky-header__resize-handle {
@@ -740,9 +750,16 @@
     border: none; background: transparent;
   }
   /* Original ask: first sentence at default size, rest small + grey,
-     always wraps (no horizontal scroll). */
+     always wraps (no horizontal scroll). Capped at ~25vh with internal
+     scroll — sibling-spawn prompts are 50+ lines and would otherwise
+     push the conversation events off-screen. */
   .conv-sticky-header .csh-col-ask .user-msg {
     white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+    max-height: 25vh; overflow-y: auto;
+  }
+  .conv-sticky-header.is-resized .csh-col-ask .user-msg {
+    /* User-resized via the drag handle — honor their pick (none = let it
+     * grow to the height stamped on the sticky header itself). */
     max-height: none; overflow: visible;
   }
   .conv-sticky-header .csh-col-ask .ask-first,
@@ -8641,6 +8658,17 @@
     if (!currentConversation) return;
     const id = currentConversation;
     const $view = getConvView();
+    // Backlog cards (open GH issues + TODO/PARKING/native-task) have no
+    // session JSONL — /api/conversations/<id> returns 404. Render the
+    // issue body directly from the card's already-loaded fields so the
+    // detail pane isn't a permanent "Loading…".
+    if (id.startsWith('backlog-')) {
+      const c = (conversationsData || []).find(x => x.id === id);
+      if (c) {
+        $view.innerHTML = _renderBacklogDetail(c);
+        return;
+      }
+    }
     try {
       const res = await fetch('/api/conversations/' + id + '?after=' + convLastLine);
       const data = await res.json();
@@ -8655,6 +8683,54 @@
         $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load conversation: ' + escapeHtml(err.message) + '</div>';
       }
     }
+  }
+
+  // Render a read-only detail panel for backlog cards (GH issues, TODO.md
+  // entries, PARKING_LOT items, native-task summaries). No session events
+  // exist for these — only the card's own metadata + issue body.
+  function _renderBacklogDetail(c) {
+    const title = c.display_name || '';
+    const body = c.first_message || '';
+    const labels = (c.issue_labels || c.gh_labels || []).map(function(l) {
+      return '<span class="conv-signal" style="margin-right:4px;background:rgba(139,148,158,0.15);color:var(--text-muted);">' + escapeHtml(l) + '</span>';
+    }).join('');
+    let stateChip = '';
+    if (c.issue_state) {
+      const reason = (c.issue_state_reason || '').toUpperCase();
+      const isClosed = c.issue_state === 'CLOSED';
+      const label = isClosed ? ('closed' + (reason ? ' · ' + reason.toLowerCase() : '')) : 'open';
+      const bg = isClosed ? 'rgba(248,81,73,0.12)' : 'rgba(63,185,80,0.12)';
+      const color = isClosed ? 'var(--red)' : 'var(--green)';
+      stateChip = '<span class="conv-signal" style="background:' + bg + ';color:' + color + ';font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">' + escapeHtml(label) + '</span>';
+    }
+    let issueLink = '';
+    if (c.issue_number) {
+      // gh CLI gives us nameWithOwner via /api/config; the link is best-effort
+      // — falling back to a relative #<n> if we don't have a repo slug yet.
+      const repo = (window._cccConfig && window._cccConfig.repo) || '';
+      if (repo) {
+        issueLink = '<a href="https://github.com/' + escapeHtml(repo) + '/issues/' + escapeHtml(String(c.issue_number)) + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-size:12px;margin-left:auto;">View on GitHub ↗</a>';
+      }
+    }
+    const created = c.issue_created_at
+      ? '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Opened ' + escapeHtml(new Date(c.issue_created_at).toLocaleString()) + '</div>'
+      : '';
+    // Use the in-house renderMarkdown — handles headers, lists, tables,
+    // inline code, fenced code blocks. Same renderer used for assistant
+    // messages, so backlog body styling matches the rest of the app.
+    const bodyHtml = body
+      ? renderMarkdown(body)
+      : '<em style="color:var(--text-muted);">(no body)</em>';
+    return '<div class="backlog-detail" style="padding:24px 28px;max-width:780px;">'
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
+      +   stateChip
+      +   labels
+      +   issueLink
+      + '</div>'
+      + '<h2 style="margin:0 0 4px;font-size:18px;line-height:1.35;">' + escapeHtml(title) + '</h2>'
+      +   created
+      + '<div style="margin-top:18px;line-height:1.55;color:var(--text);">' + bodyHtml + '</div>'
+      + '</div>';
   }
 
   let _firstUserMsgRendered = false;

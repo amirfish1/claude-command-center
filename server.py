@@ -2211,6 +2211,48 @@ def rename_session(session_id, name):
     return result
 
 
+_SIBLING_PROMPT_PREFIX = "you are a sibling claude code session"
+
+
+def _sibling_feature_title(first_message):
+    """Pull the real title out of a sibling-Claude-Code spawn prompt.
+
+    Sessions spawned by the sibling-orchestrator skill all begin with the
+    boilerplate "You are a sibling Claude Code session …" preamble, then
+    embed the real task under a markdown heading like:
+
+        ## Feature: in-app bug reporting
+        ## Task: refactor the X
+        ## Goal: rewire Y
+
+    Without this rewrite, the sidebar row, sticky header, and kanban card
+    all show the boilerplate ("you-are-a-sibling-claude-code-session-…")
+    which is identical across every sibling spawn — useless for scanning.
+
+    Returns the heading payload (sans the `## Feature:` prefix) or None
+    when the message isn't a sibling spawn or has no recognizable heading.
+    Length-capped at 80 chars so the title fits the row chrome.
+    """
+    if not first_message:
+        return None
+    head = first_message.lstrip()[:80].lower()
+    if not head.startswith(_SIBLING_PROMPT_PREFIX):
+        return None
+    # Look for "## <Word>:" style heading. Keep the keyword (Feature/Task/
+    # Goal) so the row tells you which kind of work it is.
+    m = re.search(
+        r"^##\s+(Feature|Task|Goal|Bug|Fix|Spec)\s*:\s*(.+?)\s*$",
+        first_message,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if not m:
+        return None
+    kind = m.group(1).strip().capitalize()
+    body = m.group(2).strip().rstrip(".")
+    title = f"{kind}: {body}"
+    return title[:80] if len(title) > 80 else title
+
+
 def _extract_first_message(session_id):
     """Read a session's opening user prompt from its .jsonl."""
     path = _find_session_jsonl(session_id)
@@ -3948,6 +3990,7 @@ def find_conversations():
             override
             or tail_meta.get("custom_title")
             or tail_meta.get("agent_name")
+            or _sibling_feature_title(first_message)
             or None
         )
         # name_overridden means "user touched the name from the command center"

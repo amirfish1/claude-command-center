@@ -1,0 +1,1 @@
+- Clicking a backlog issue or task card in the sidebar now renders an inline detail pane (state chip, labels, title, opened date, issue body as markdown) instead of leaving the conversation pane blank. Previously `/api/conversations/<backlog-id>` 404'd because there's no session JSONL, and the frontend never recovered.
