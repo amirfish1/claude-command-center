@@ -2758,7 +2758,7 @@
     .kanban-panel-toolbar .kpt-new-session,
     .kanban-panel-toolbar #kptRunBtn,
     .kanban-panel-toolbar #kptRecentBtn,
-    .kanban-panel-toolbar #kptPkoodToggle,
+    .kanban-panel-toolbar #kptEngineSelect,
     .kanban-panel-toolbar #kptGitOnlyToggle,
     .kanban-panel-toolbar #kptDescToggle,
     .kanban-panel-toolbar .kpt-label,
@@ -3132,7 +3132,13 @@
         <button id="kptRecentBtn" title="Show only sessions/issues touched in the last 10 hours" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Last 10h</button>
         <button id="kptDescToggle" title="Compact mode — hide the description preview on cards" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Compact</button>
         <button id="kptGitOnlyToggle" title="Show only cards linked to a GitHub issue" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">GitHub only</button>
-        <label class="kpt-label" title="Spawn via Pkood (background agent runner) instead of headless Claude — see docs" style="display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text);"><input type="checkbox" id="kptPkoodToggle" style="margin:0;"> pkood spawn</label>
+        <label class="kpt-label" title="Pick which engine spawns the next session — Claude (default) or OpenAI Codex" style="display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text);">
+          Engine
+          <select id="kptEngineSelect" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:12px;">
+            <option value="claude">claude</option>
+            <option value="codex">codex</option>
+          </select>
+        </label>
         <label class="kpt-label" title="Spawn the new session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main" style="display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text);"><input type="checkbox" id="kptWorktreeToggle" style="margin:0;"> 🌿 worktree</label>
       </div>
     </div>
@@ -10538,7 +10544,23 @@
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
-  const $kptPkoodToggle = document.getElementById('kptPkoodToggle');
+  // Legacy reference kept so dispatcher branches that read $kptPkoodToggle
+  // (rewritten in Task 8 of the codex-spawn series) don't crash. Always
+  // null — pkood spawning still works via the `pkood:` prompt prefix.
+  let $kptPkoodToggle = null;
+
+  const $kptEngineSelect = document.getElementById('kptEngineSelect');
+  // Restore last-used engine from localStorage so the user's choice
+  // persists across reloads. Defaults to 'claude' on first launch.
+  if ($kptEngineSelect) {
+    try {
+      const saved = localStorage.getItem('ccc.spawnEngine');
+      if (saved === 'claude' || saved === 'codex') $kptEngineSelect.value = saved;
+    } catch (_) {}
+    $kptEngineSelect.addEventListener('change', () => {
+      try { localStorage.setItem('ccc.spawnEngine', $kptEngineSelect.value); } catch (_) {}
+    });
+  }
   // Hide-descriptions toggle
   const $kptDescToggle = document.getElementById('kptDescToggle');
   if ($kptDescToggle) {
