@@ -5675,6 +5675,10 @@ def find_pkood_agents():
     """Scan ~/.pkood/state/*_meta.json and return unified session dicts."""
     if not PKOOD_STATE_DIR.is_dir():
         return []
+    # Pkood cards share the same archive list as claude sessions — without
+    # consulting it here, archive toggles on a pkood-* id would persist
+    # but the rendered card would still show archived=False.
+    archived_set = set(_load_archived_conversations())
     agents = []
     for meta_file in PKOOD_STATE_DIR.glob("*_meta.json"):
         try:
@@ -5731,7 +5735,7 @@ def find_pkood_agents():
             "last_event_type": None,
             "pending_tool": None,
             "pending_file": None,
-            "archived": False,
+            "archived": (f"pkood-{agent_id}" in archived_set),
             "verified": False,
             "name_overridden": False,
             # Pkood-specific fields

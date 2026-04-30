@@ -1231,6 +1231,15 @@
   }
   .conv-item:hover .conv-archive-btn { opacity: 0.7; }
   .conv-item .conv-archive-btn:hover { opacity: 1; color: var(--orange); background: rgba(255,166,87,0.12); }
+  .conv-item .conv-merge-btn {
+    opacity: 0; font-size: 13px; cursor: pointer;
+    background: none; border: none; color: var(--text-muted);
+    padding: 2px 4px; border-radius: 3px; flex-shrink: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s;
+  }
+  .conv-item:hover .conv-merge-btn { opacity: 0.7; }
+  .conv-item .conv-merge-btn:hover { opacity: 1; color: var(--green); background: rgba(63,185,80,0.12); }
+  .conv-item .conv-merge-btn:disabled { cursor: progress; opacity: 0.5; }
   .conv-item .conv-title-input {
     flex: 1; font-size: 15px; font-weight: 600; color: var(--text);
     background: var(--bg); border: 1px solid var(--accent);
@@ -1606,12 +1615,21 @@
   .kanban-card:hover { border-color: var(--text-muted); }
   .kanban-card.active { border-color: var(--accent); }
   .kanban-card .kanban-card-title {
-    font-size: 14px; font-weight: 600; color: var(--text);
-    line-height: 1.3; word-break: break-word;
-    /* Reserve room for the top-right action-icon cluster (3 × 22px + gaps +
-       right offset). Without this, long titles wrap under the icons and look
-       like the icons are overcasting the text. */
-    padding-right: 82px;
+    font-size: 13px; font-weight: 500; color: var(--text);
+    line-height: 1.35; word-break: break-word;
+    /* No right-padding — titles fill the full card width. The action-icon
+       cluster is opacity:0 by default and only fades in on :hover, so a
+       permanent gutter for it wasted card real estate. On hover the icons
+       float over the title's right edge with their own bg, which reads as
+       a normal floating-button pattern (Notion / GitHub / etc.). */
+    padding-right: 0;
+  }
+  /* State badges (GH #NNN, open/closed, needs-attention, Desktop) live on
+     their own row above the title so the title can use the full card width. */
+  .kanban-card .kanban-card-badges {
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: 4px 0; margin-bottom: 4px;
+    padding-right: 0;
   }
   .kanban-card .kanban-card-desc {
     font-size: 12px; color: var(--text-muted);
@@ -1685,8 +1703,8 @@
   .kanban-card .kanban-card-stage.testing { background: rgba(251,202,4,0.15); color: #FBCA04; }
   .kanban-card .kanban-card-stage.no-edits { background: rgba(88,166,255,0.1); color: var(--accent); margin-left: 4px; }
   .kanban-issue-badge {
-    display: inline-block; font-size: 14px; padding: 2px 8px;
-    border-radius: 4px; margin-right: 8px; font-weight: 700;
+    display: inline-block; font-size: 11px; padding: 1px 6px;
+    border-radius: 3px; margin-right: 6px; font-weight: 600;
     background: rgba(63,185,80,0.18); color: var(--green);
     vertical-align: middle; letter-spacing: 0.3px;
   }
@@ -1750,13 +1768,13 @@
     0%, 100% { background: rgba(88,166,255,0.18); }
     50%      { background: rgba(88,166,255,0.32); }
   }
-  /* Backlog card issue chip (the "#NNN ↗" button) */
-  .kanban-card.backlog-card [data-action="view-issue"] {
-    font-size: 14px !important;
-    font-weight: 700 !important;
-    padding: 2px 8px !important;
-    color: var(--accent) !important;
-    border-color: rgba(88,166,255,0.35) !important;
+  /* The GH #NNN badge on backlog cards is also a click target (opens the
+     issue on GitHub). Show that affordance. */
+  .kanban-card.backlog-card .kanban-issue-badge[data-action="view-issue"] {
+    cursor: pointer;
+  }
+  .kanban-card.backlog-card .kanban-issue-badge[data-action="view-issue"]:hover {
+    background: rgba(63,185,80,0.32);
   }
   .kanban-card .kanban-card-stage.pushed { background: rgba(57,210,192,0.15); color: var(--cyan); }
   .kanban-show-all {
@@ -2436,7 +2454,8 @@
      header label so the empty space to the right of the title gets used. */
   .sidebar-header-actions {
     display: flex; align-items: center; gap: 4px;
-    margin-left: auto;
+    margin-left: auto; flex-wrap: wrap; row-gap: 4px;
+    justify-content: flex-end;
   }
   .sidebar-header-actions .sh-btn {
     background: transparent; border: 1px solid var(--border);
@@ -3059,6 +3078,7 @@
         <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Toggle Kanban board view" aria-label="Toggle Kanban board view"><span aria-hidden="true">&#9783;</span> Board</button>
         <button class="conv-archive-toggle sh-btn" id="convArchiveToggle" title="Show archived">&#128230;</button>
         <button class="conv-sort-btn sh-btn" id="convSortBtn" title="Sort by latest response (ignores custom order)">&#8693;</button>
+        <button class="conv-sort-btn sh-btn" id="convAlphaSortBtn" title="Sort alphabetically by title">A&#8595;</button>
         <button class="conv-refresh-btn sh-btn" id="convRefreshBtn" title="Refresh conversation list">&#8634;</button>
       </div>
     </div>
@@ -6209,37 +6229,53 @@
             const bg = isAttn ? 'rgba(248,81,73,0.15)' : 'rgba(139,148,158,0.15)';
             return '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + bg + ';color:' + color + ';font-weight:600;margin-right:3px;">' + escapeHtml(l) + '</span>';
           }).join('');
+          // Source / origin chip (PARKING_LOT, TodoWrite task, TODO.md). For
+          // GitHub backlog items, the source is conveyed by the GH #NNN chip
+          // below — no separate sourceTag needed.
           let sourceTag = '';
-          if (c.backlog_type === 'github') {
-            sourceTag = '<button class="kanban-action-btn" data-action="view-issue" data-issue="' + escapeHtml(c.issue_number || '') + '" title="Open issue #' + escapeHtml(c.issue_number || '') + ' on GitHub (full body + images)" style="display:inline-flex;align-items:center;gap:3px;padding:0 4px;font-size:10px;color:var(--text-muted);border:1px solid var(--border);border-radius:3px;background:transparent;cursor:pointer;">#' + escapeHtml(c.issue_number || '') + ' &#x2197;</button>';
-          } else if (c.backlog_type === 'parking') {
-            sourceTag = '<span style="font-size:10px;color:var(--cyan);">PARKING_LOT.md</span>';
+          if (c.backlog_type === 'parking') {
+            sourceTag = '<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(57,210,192,0.15);color:var(--cyan);font-weight:600;">PARKING_LOT.md</span>';
           } else if (c.backlog_type === 'native_task') {
-            // Counts: "3/6 done" — gives the user a quick read on session progress.
             const total = c.task_total || 0;
             const done = c.task_completed || 0;
             const ip = c.task_in_progress || 0;
             const countStr = total ? (' &middot; ' + done + '/' + total + ' done' + (ip ? ' &middot; ' + ip + ' in progress' : '')) : '';
-            sourceTag = '<span title="From ~/.claude/tasks/ (TodoWrite)" style="font-size:10px;color:var(--purple);">&#128203; task' + countStr + '</span>';
-          } else {
-            sourceTag = '<span style="font-size:10px;color:var(--accent);">TODO.md</span>';
+            sourceTag = '<span title="From ~/.claude/tasks/ (TodoWrite)" style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(188,140,255,0.15);color:var(--purple);font-weight:600;">&#128203; task' + countStr + '</span>';
+          } else if (c.backlog_type !== 'github') {
+            sourceTag = '<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(88,166,255,0.15);color:var(--accent);font-weight:600;">TODO.md</span>';
           }
-          // Date + relative time for GitHub issues
+          // GH issue chip — clickable, opens the issue on GitHub. Same visual
+          // language as session cards so backlog/working/review/verified all
+          // read the same.
+          let backlogIssueBadge = '';
+          if (c.backlog_type === 'github' && c.issue_number) {
+            backlogIssueBadge = '<span class="kanban-issue-badge" data-action="view-issue" data-issue="'
+              + escapeHtml(c.issue_number)
+              + '" title="Open issue #' + escapeHtml(c.issue_number) + ' on GitHub">GH #'
+              + escapeHtml(c.issue_number) + '</span>';
+          }
+          // Strip the leading "#NNN" / "#NNN:" / "#NNN -" from the title when
+          // the issue chip already carries that information.
+          let renderBacklogTitle = title;
+          if (c.backlog_type === 'github' && c.issue_number) {
+            const stripRe = new RegExp('^#?' + c.issue_number + '\\s*[:\\-—]?\\s*', 'i');
+            renderBacklogTitle = title.replace(stripRe, '');
+          }
+          // Date + relative time
           let dateInfo = '';
           if (c.modified && c.modified > 0) {
             const d = new Date(c.modified * 1000);
             const abs = d.toLocaleDateString(undefined, {month:'short',day:'numeric'}) + ' ' +
                         d.toLocaleTimeString(undefined, {hour:'2-digit',minute:'2-digit'});
-            dateInfo = '<span style="font-size:10px;color:var(--text-muted);margin-left:8px;">' +
+            dateInfo = '<span style="font-size:10px;color:var(--text-muted);">' +
                        escapeHtml(abs) + ' &middot; ' + escapeHtml(relativeTime(c.modified)) + '</span>';
           }
           html += '<div class="kanban-card backlog-card" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="backlog">';
-          html += '<div class="kanban-card-title">' + escapeHtml(title) + '</div>';
-          if (stateBadge || labels) html += '<div style="margin-top:3px;">' + stateBadge + labels + '</div>';
-          const wipChip = c.gh_in_progress
-            ? '<span class="kanban-gh-wip" style="margin-left:6px;" title="claude-in-progress label on GitHub">WIP</span>'
-            : '';
-          html += '<div style="margin-top:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' + sourceTag + wipChip + dateInfo + '</div>';
+          // Unified badges row — matches session-card layout: GH chip, state, labels, source.
+          const badgeRow = backlogIssueBadge + stateBadge + labels + sourceTag;
+          if (badgeRow) html += '<div class="kanban-card-badges">' + badgeRow + '</div>';
+          html += '<div class="kanban-card-title">' + escapeHtml(renderBacklogTitle) + '</div>';
+          if (dateInfo) html += '<div style="margin-top:6px;">' + dateInfo + '</div>';
           html += '<div style="display:flex;gap:4px;margin-top:6px;">';
           html += '<button class="kanban-start-btn" data-issue="' + escapeHtml(c.issue_number || '') + '" data-title="' + escapeHtml(c.display_name || c.first_message || '') + '" style="flex:1;padding:4px 10px;border-radius:4px;border:1px solid rgba(63,185,80,0.3);background:rgba(63,185,80,0.1);color:var(--green);font-size:11px;font-weight:600;cursor:pointer;">Start session</button>';
           html += '<button class="kanban-start-edit-btn" data-issue="' + escapeHtml(c.issue_number || '') + '" data-title="' + escapeHtml(c.display_name || c.first_message || '') + '" data-body="' + escapeHtml(c.first_message || '') + '" title="Edit the prompt before launching" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text-muted);font-size:11px;cursor:pointer;">Edit &amp; start</button>';
@@ -6325,13 +6361,12 @@
           const ghState = (c.gh_state || '').toUpperCase();
           const ghLabelsArr = c.gh_labels || c.issue_labels || [];
           const hasNA = Array.isArray(ghLabelsArr) && ghLabelsArr.indexOf('needs-attention') >= 0;
-          // Single state chip: WIP absorbs "open" when the claude-in-progress
-          // label is present — avoids showing both "open" and "WIP" side by side.
+          // Single state chip — open/closed only. The "WIP / claude-in-progress"
+          // signal was removed for visual simplicity (the GH #NNN chip itself
+          // is enough to show the issue is linked to an active session).
           let stateChip = '';
           if (ghState === 'CLOSED') {
             stateChip = '<span class="kanban-gh-state gh-closed" title="GitHub issue state: closed">closed</span>';
-          } else if (c.gh_in_progress) {
-            stateChip = '<span class="kanban-gh-wip" title="Open · claude-in-progress label on GitHub">WIP</span>';
           } else if (ghState) {
             stateChip = '<span class="kanban-gh-state gh-open" title="GitHub issue state: open">open</span>';
           }
@@ -6377,7 +6412,10 @@
             + (shortMsg ? '<span class="kanban-needs-approval-msg">' + escapeHtml(shortMsg) + '</span>' : '')
             + '</div>';
         }
-        html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open &amp; rename">' + issueBadge + titleHtml + '</div>';
+        if (issueBadge) {
+          html += '<div class="kanban-card-badges">' + issueBadge + '</div>';
+        }
+        html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open &amp; rename">' + titleHtml + '</div>';
         if (descHtml) {
           html += '<div class="kanban-card-desc">' + descHtml + '</div>';
         }
@@ -6440,7 +6478,6 @@
           else if (c.has_commit) reviewInfo = '\u2713 Committed';
           if (reviewInfo) html += '<div class="kanban-review-info">' + escapeHtml(reviewInfo) + '</div>';
           html += '<div class="kanban-review-actions">'
-            + '<button class="kanban-sendback" data-action="review-sendback" title="Send feedback">Send back</button>'
             + '<button class="kanban-archive-btn" data-action="review-archive" title="Archive without verifying">Archive</button>'
             + '</div>';
         }
@@ -7362,6 +7399,22 @@
         signals += '<span class="conv-signal no-edits" title="Claude has not edited any files in this session">no edits</span>';
       }
 
+      // Merge button: shown when this row plausibly has an open PR.
+      // Strong signal: tail_pr_number (extracted from `gh pr create` output).
+      // Weak fallback: pushed + a non-default feature branch — gh resolves
+      // the PR by branch on click; if there is none, the toast surfaces it.
+      const _MERGE_PROTECTED_BRANCHES = ['main', 'master', 'develop', 'trunk'];
+      const _hasFeatureBranch = !!branchValue
+        && _MERGE_PROTECTED_BRANCHES.indexOf(branchValue) === -1;
+      const _showMerge = c.source !== 'pkood' && !c.archived
+        && (!!c.tail_pr_number || (!!c.has_push && _hasFeatureBranch));
+      const _mergeTitle = c.tail_pr_number
+        ? 'Squash-merge PR #' + c.tail_pr_number
+        : 'Squash-merge PR for ' + branchValue;
+      const mergeBtn = _showMerge
+        ? '<button class="conv-merge-btn" data-role="merge" title="' + escapeHtml(_mergeTitle) + '">&#128256;</button>'
+        : '';
+
       return '<div class="conv-item' + active + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
@@ -7374,6 +7427,7 @@
           + '</span>'
           + signals
           + branch
+          + mergeBtn
           + '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>'
         + '</div>'
         + ask
@@ -7501,7 +7555,7 @@
         // Ignore clicks that started the inline editor, archive button,
         // or that landed on the title (which now triggers rename instead
         // of opening the conversation — the pencil's job moved here).
-        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
+        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
         selectConversation(el.dataset.id);
       });
       attachDragHandlers(el);
@@ -7560,6 +7614,44 @@
           }
         } catch (err) {
           showOpToast('Archive failed (' + err.message + ')', 'error');
+        }
+      });
+    });
+    $convList.querySelectorAll('.conv-merge-btn').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const item = btn.closest('.conv-item');
+        const convId = item.dataset.id;
+        const sessionId = item.dataset.sessionId;
+        const c = conversationsData.find(x => x.id === convId);
+        const branchName = (c && (c.effective_branch || c.branch)) || '';
+        const prNumber = (c && c.tail_pr_number) || null;
+        const prUrl = (c && c.tail_pr_url) || null;
+        const target = prNumber ? ('PR #' + prNumber) : ('branch ' + branchName);
+        if (!prNumber && !branchName) {
+          showOpToast('No PR target found for this row', 'error');
+          return;
+        }
+        if (!confirm('Squash-merge ' + target + '?')) return;
+        btn.disabled = true;
+        try {
+          const data = await ccPostJson('/api/conversations/' + convId + '/merge-pr',
+            { session_id: sessionId, branch: branchName, pr_number: prNumber, pr_url: prUrl });
+          if (data.ok) {
+            if (data.via === 'session') {
+              showOpToast('Asked session to merge ' + target + ' — see chat');
+              selectConversation(convId);
+            } else {
+              showOpToast('Merged ' + target);
+              if (typeof loadConversationList === 'function') loadConversationList();
+            }
+          } else {
+            showOpToast('Merge failed: ' + (data.error || (data.inject && data.inject.error) || 'unknown'), 'error');
+          }
+        } catch (err) {
+          showOpToast('Merge failed (' + err.message + ')', 'error');
+        } finally {
+          btn.disabled = false;
         }
       });
     });
@@ -7626,6 +7718,8 @@
 
   // Sort toggle: "custom" (drag order) vs "recent" (by mtime)
   let convSortMode = 'recent';  // always latest-first
+  // Alphabetical override — when on, sorts by title and ignores convSortMode.
+  let convAlphaSort = localStorage.getItem('ccc-conv-alpha-sort') === '1';
   // Recency filter: '' (off) | '10h' | '7d'.
   // Backwards-compat: old '1' value (binary toggle) maps to '10h'.
   let recencyFilter = (function () {
@@ -7644,8 +7738,25 @@
   let showRecentOnly = !!recencyFilter;  // legacy alias used by other branches
   const RECENT_HOURS = 10;  // legacy const, no longer the source of truth
   const $convSortBtn = document.getElementById('convSortBtn');
+  const $convAlphaSortBtn = document.getElementById('convAlphaSortBtn');
+
+  function _convTitleForSort(c) {
+    const raw = c.display_name
+      || (c.first_message ? String(c.first_message).slice(0, 80) : '')
+      || '';
+    return raw.replace(/-/g, ' ').trim().toLowerCase();
+  }
 
   function applyConvSort(data) {
+    if (convAlphaSort) {
+      return [...data].sort((a, b) => {
+        const ta = _convTitleForSort(a);
+        const tb = _convTitleForSort(b);
+        if (!ta && tb) return 1;
+        if (ta && !tb) return -1;
+        return ta.localeCompare(tb);
+      });
+    }
     if (convSortMode === 'recent') {
       // Sort by whichever is later: the user's last UI interaction or the
       // session's last meaningful event. Keeps the just-typed card on top
@@ -7657,12 +7768,21 @@
   }
 
   function updateSortBtn() {
-    if (!$convSortBtn) return;
-    const isRecent = convSortMode === 'recent';
-    $convSortBtn.classList.toggle('active', isRecent);
-    $convSortBtn.title = isRecent
-      ? 'Sorted by latest response (click for custom order)'
-      : 'Sort by latest response (ignores custom order)';
+    if ($convSortBtn) {
+      const isRecent = convSortMode === 'recent';
+      $convSortBtn.classList.toggle('active', isRecent && !convAlphaSort);
+      $convSortBtn.title = convAlphaSort
+        ? 'Chronological sort (disabled while A↓ is active)'
+        : (isRecent
+            ? 'Sorted by latest response (click for custom order)'
+            : 'Sort by latest response (ignores custom order)');
+    }
+    if ($convAlphaSortBtn) {
+      $convAlphaSortBtn.classList.toggle('active', convAlphaSort);
+      $convAlphaSortBtn.title = convAlphaSort
+        ? 'Alphabetical sort on (click to switch back to chronological)'
+        : 'Sort alphabetically by title';
+    }
   }
 
   if ($convSortBtn) {
@@ -7670,6 +7790,20 @@
     $convSortBtn.addEventListener('click', () => {
       convSortMode = convSortMode === 'recent' ? 'custom' : 'recent';
       localStorage.setItem('ccc-conv-sort', convSortMode);
+      // Clicking the chronological toggle implies the user wants chronological
+      // — turn alpha off so the new mode actually takes effect.
+      if (convAlphaSort) {
+        convAlphaSort = false;
+        localStorage.setItem('ccc-conv-alpha-sort', '0');
+      }
+      updateSortBtn();
+      renderSidebar(filterConversations($convSearch.value));
+    });
+  }
+  if ($convAlphaSortBtn) {
+    $convAlphaSortBtn.addEventListener('click', () => {
+      convAlphaSort = !convAlphaSort;
+      localStorage.setItem('ccc-conv-alpha-sort', convAlphaSort ? '1' : '0');
       updateSortBtn();
       renderSidebar(filterConversations($convSearch.value));
     });
