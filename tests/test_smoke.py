@@ -99,6 +99,18 @@ class TestServerImports(unittest.TestCase):
         self.assertFalse(result["available"])
         self.assertIn("reason", result)
 
+    def test_spawn_session_codex_exists(self):
+        """`spawn_session_codex` must exist alongside `spawn_session`
+        with the same (prompt, name=None, cwd=None) signature so the
+        new endpoint can call it the same way."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        self.assertTrue(hasattr(server, "spawn_session_codex"))
+        import inspect
+        sig = inspect.signature(server.spawn_session_codex)
+        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd"])
+
 
 class TestHealthcheck(unittest.TestCase):
     def test_healthcheck_returns_structured_result(self):

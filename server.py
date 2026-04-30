@@ -4828,6 +4828,90 @@ def spawn_session(prompt, name=None, cwd=None, worktree=False):
     return resp
 
 
+def spawn_session_codex(prompt, name=None, cwd=None):
+    """Spawn a headless Codex CLI run and return tracking info.
+
+    Mirrors `spawn_session` but invokes the Codex CLI's `exec`
+    subcommand instead of `claude -p`. Codex `exec` is one-shot —
+    the prompt comes from argv and the process exits when the model
+    is done — so we use `subprocess.DEVNULL` for stdin (no FIFO,
+    no mid-run inject support).
+
+    Tested against codex-cli 0.125.0-alpha.3.
+
+    If `cwd` is provided, the spawned subprocess runs there AND the
+    Codex `--cd` flag is set so the agent's workspace root matches
+    the launch directory. Otherwise we inherit CCC's REPO_ROOT
+    (backwards-compatible default).
+
+    Returns the same shape as spawn_session:
+      {ok: True,  pid, name, log}                       — success
+      {ok: False, error}                                — resolver failed
+    """
+    resolved = _resolve_codex_bin()
+    if not resolved["available"]:
+        return {"ok": False, "error": resolved["reason"]}
+    bin_path = resolved["bin"]
+
+    session_name = _slugify(name or prompt)
+    if not session_name:
+        session_name = "unnamed"
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"spawn-codex-{session_name}-{timestamp}.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / log_filename
+
+    spawn_cwd = cwd if cwd else str(REPO_ROOT)
+    model = os.environ.get("CCC_CODEX_MODEL", "gpt-5.5-codex")
+
+    cmd = [
+        bin_path, "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--model", model,
+        "--cd", spawn_cwd,
+        "--",
+        prompt,
+    ]
+
+    log_fh = open(log_path, "w")
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        cwd=spawn_cwd,
+        start_new_session=True,
+    )
+
+    entry = {
+        "pid": proc.pid,
+        "name": session_name,
+        "log": str(log_path),
+        "prompt": prompt[:200],
+        "started": timestamp,
+        "proc": proc,
+        "log_fh": log_fh,
+        "fifo": None,         # Codex exec is one-shot; no inject FIFO.
+        "stdin_fd": None,
+        "engine": "codex",
+    }
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid,
+        name=session_name,
+        log_path=log_path,
+        cwd=spawn_cwd,
+        spawned_at=timestamp,
+        command_summary=prompt[:200],
+        fifo=None,
+        engine="codex",
+    )
+
+    return {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)}
+
+
 _COLOR_PALETTE = [
     "red", "orange", "yellow", "green", "cyan", "blue", "purple", "magenta", "pink",
 ]
