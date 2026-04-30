@@ -8339,6 +8339,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(get_issue_details(num))
         elif path == "/api/sessions/spawned":
             self.send_json(list_spawned_sessions())
+        elif path == "/api/sessions/spawn-codex/availability":
+            info = _resolve_codex_bin()
+            info["model"] = os.environ.get("CCC_CODEX_MODEL", "gpt-5.5-codex")
+            self.send_json(info)
         elif path == "/api/sessions":
             self.send_json(find_all_sessions())
         elif path == "/api/conversations":
