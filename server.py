@@ -9341,18 +9341,38 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             prompt = (payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
-            cwd = cwd_raw.strip() if isinstance(cwd_raw, str) else None
+            cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
+            cwd_resolved = None
+            cwd_error = None
+            if cwd_input:
+                try:
+                    expanded = os.path.expanduser(cwd_input)
+                    candidate = Path(expanded).resolve()
+                except (OSError, RuntimeError) as e:
+                    cwd_error = f"could not resolve path ({e})"
+                else:
+                    home = Path.home().resolve()
+                    try:
+                        st = os.stat(candidate)
+                    except OSError as e:
+                        cwd_error = f"path does not exist ({e.strerror or e})"
+                    else:
+                        if not stat.S_ISDIR(st.st_mode):
+                            cwd_error = f"not a directory: {candidate}"
+                        else:
+                            try:
+                                candidate.relative_to(home)
+                            except ValueError:
+                                cwd_error = f"path is outside $HOME ({home}): {candidate}"
+                            else:
+                                cwd_resolved = candidate
             if not prompt:
                 self.send_json({"ok": False, "error": "missing prompt"}, 400)
-            elif cwd and not os.path.isabs(cwd):
-                self.send_json({"ok": False, "error": f"cwd must be an absolute path: {cwd}"}, 400)
-            elif cwd and not os.path.exists(cwd):
-                self.send_json({"ok": False, "error": f"cwd does not exist: {cwd}"}, 400)
-            elif cwd and not os.path.isdir(cwd):
-                self.send_json({"ok": False, "error": f"cwd is not a directory: {cwd}"}, 400)
+            elif cwd_error:
+                self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
             else:
                 try:
-                    result = spawn_session_codex(prompt, name=name, cwd=cwd)
+                    result = spawn_session_codex(prompt, name=name, cwd=str(cwd_resolved) if cwd_resolved else None)
                     # Resolver-side failures (binary not found, CCC_CODEX_BIN
                     # misconfigured) carry a stable `"code": "codex_unavailable"`
                     # so the frontend can render an install hint without

@@ -3711,7 +3711,7 @@
     // feature itself; keeping it visible nudges users to `vercel link`.
     const $kptDeploy = document.getElementById('kptDeployStatus');
     if ($kptDeploy && !APP_CONFIG.vercel_enabled) $kptDeploy.style.display = 'none';
-    document.querySelectorAll('.pkood-toggle-label, .kpt-label, .nsm-pkood').forEach(el => {
+    document.querySelectorAll('.pkood-toggle-label').forEach(el => {
       if (!APP_CONFIG.pkood_enabled) el.style.display = 'none';
     });
     if (APP_CONFIG.repo) document.body.dataset.repo = APP_CONFIG.repo;
