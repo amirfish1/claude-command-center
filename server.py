@@ -5286,7 +5286,7 @@ def _pid_is_engine_process(pid, engine):
     isn't enough — we could end up trying to inject into someone's vim.
     Uses `ps -p <pid> -o command=` (works on macOS + Linux) and matches
     strictly on argv[0] basename — substring matching is too lenient
-    (any python process whose argv mentions 'claude' would otherwise
+    (any python process whose argv mentions the engine name would otherwise
     pass).
 
     `engine` is one of "claude" or "codex" — the basename we expect at
@@ -5311,17 +5311,10 @@ def _pid_is_engine_process(pid, engine):
     return parts[0].rsplit("/", 1)[-1] == engine
 
 
-# Backwards-compat shim — older code paths (and any out-of-tree fork)
-# that imports the old name keeps working without edits. Always asks
-# the engine-aware version with engine="claude".
-def _pid_is_claude_process(pid):
-    return _pid_is_engine_process(pid, "claude")
-
-
 def _reattach_spawned_orphans():
     """Boot-time sweep that re-populates `_spawned_sessions` from the on-disk
-    registry. Verifies every entry's PID is alive AND is still a `claude`
-    process (PIDs can be reused), drops dead/reused ones, and rewrites the
+    registry. Verifies every entry's PID is alive AND is still a process of
+    the recorded engine (PIDs can be reused), drops dead/reused ones, and rewrites the
     registry. Never kills anything — just makes live orphans visible to the
     dashboard again."""
     raw_entries = _load_spawn_registry()

@@ -4,7 +4,9 @@ Anything Morning-specific lives in `tests/test_morning.py` which is
 gitignored alongside the Morning plugin itself; CI never sees it.
 """
 import importlib
+import json
 import os
+import pathlib
 import stat
 import sys
 import tempfile
@@ -117,7 +119,6 @@ class TestServerImports(unittest.TestCase):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
-        import json, pathlib
         with tempfile.TemporaryDirectory() as tmp:
             registry_file = pathlib.Path(tmp) / "spawned-pids.json"
             orig = server.SPAWNED_PIDS_FILE
@@ -141,8 +142,7 @@ class TestServerImports(unittest.TestCase):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
         self.assertTrue(hasattr(server, "_pid_is_engine_process"))
-        import subprocess as sp
-        prev_run = sp.run
+
         def fake_run(args, **kw):
             class R: pass
             r = R(); r.returncode = 0; r.stdout = ""; r.stderr = ""
@@ -153,14 +153,52 @@ class TestServerImports(unittest.TestCase):
                 elif pid == "22222":
                     r.stdout = "/Applications/Codex.app/Contents/Resources/codex exec --json\n"
             return r
-        sp.run = fake_run
-        try:
+
+        with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
             self.assertTrue(server._pid_is_engine_process(11111, "claude"))
             self.assertFalse(server._pid_is_engine_process(11111, "codex"))
             self.assertTrue(server._pid_is_engine_process(22222, "codex"))
             self.assertFalse(server._pid_is_engine_process(22222, "claude"))
-        finally:
-            sp.run = prev_run
+
+    def test_reattach_spawned_orphans_defaults_legacy_rows_to_claude(self):
+        """A registry row written before the `engine` field existed
+        must reattach as engine='claude' — not raise KeyError, not
+        silently drop the row."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmp:
+            registry_file = pathlib.Path(tmp) / "spawned-pids.json"
+            log_file = pathlib.Path(tmp) / "fake.log"
+            log_file.write_text("")
+            # Legacy row — no `engine` key. PID is the current process so
+            # the os.kill(pid, 0) liveness check succeeds without faking.
+            legacy = [{
+                "pid": os.getpid(),
+                "session_id": None,
+                "name": "legacy",
+                "log": str(log_file),
+                "fifo": None,
+                "cwd": tmp,
+                "spawned_at": "20260101T000000",
+                "command_summary": "old row",
+            }]
+            registry_file.write_text(json.dumps(legacy))
+            orig_registry = server.SPAWNED_PIDS_FILE
+            orig_sessions = list(server._spawned_sessions)
+            server.SPAWNED_PIDS_FILE = registry_file
+            server._spawned_sessions.clear()
+            try:
+                # Bypass the real ps-grep — current pid isn't a `claude`
+                # process, so without a stub it would be dropped.
+                with mock.patch.object(server, "_pid_is_engine_process", return_value=True):
+                    server._reattach_spawned_orphans()
+                self.assertEqual(len(server._spawned_sessions), 1)
+                self.assertEqual(server._spawned_sessions[0]["engine"], "claude")
+            finally:
+                server.SPAWNED_PIDS_FILE = orig_registry
+                server._spawned_sessions.clear()
+                server._spawned_sessions.extend(orig_sessions)
 
 
 class TestHealthcheck(unittest.TestCase):
