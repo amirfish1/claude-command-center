@@ -5137,14 +5137,22 @@
   // Pending spawn placeholders (optimistic UI) — keyed by pid.
   const pendingSpawns = new Map();
 
-  function insertPendingSpawnCard(pid, subject, usePkood) {
+  function insertPendingSpawnCard(pid, subject, sourceOrEngine) {
     if (!pid) return;
     const id = 'spawning-' + pid;
+    // Backwards-compat: this used to take `usePkood: bool`. Accept
+    // either the legacy boolean (true → 'pkood') or a new explicit
+    // string ('claude' | 'codex' | 'pkood' | 'interactive').
+    let source;
+    if (sourceOrEngine === true) source = 'pkood';
+    else if (sourceOrEngine === false || sourceOrEngine == null) source = 'interactive';
+    else if (typeof sourceOrEngine === 'string') source = sourceOrEngine;
+    else source = 'interactive';
     const card = {
       id, session_id: id,
       display_name: subject || ('Spawning #' + pid),
       first_message: '',
-      source: usePkood ? 'pkood' : 'interactive',
+      source,
       is_live: true, archived: false, verified: false,
       spawn_pid: pid, pending_spawn: true,
       has_edit: false, has_commit: false, has_push: false,
@@ -10550,11 +10558,6 @@
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
-  // Legacy reference kept so dispatcher branches that read $kptPkoodToggle
-  // (rewritten in Task 8 of the codex-spawn series) don't crash. Always
-  // null — pkood spawning still works via the `pkood:` prompt prefix.
-  let $kptPkoodToggle = null;
-
   const $kptEngineSelect = document.getElementById('kptEngineSelect');
   // Restore last-used engine from localStorage so the user's choice
   // persists across reloads. Defaults to 'claude' on first launch.
@@ -10756,23 +10759,36 @@
     $kptRunBtn.addEventListener('click', async () => {
       let prompt = ($kptNewSession && $kptNewSession.value || '').trim();
       if (!prompt) return;
-      const usePkood = ($kptPkoodToggle && $kptPkoodToggle.checked) || prompt.startsWith('pkood:');
+      const isPkoodPrefix = prompt.startsWith('pkood:');
+      const engine = isPkoodPrefix
+        ? 'pkood'
+        : (($kptEngineSelect && $kptEngineSelect.value) || 'claude');
       const $kptWorktreeToggle = document.getElementById('kptWorktreeToggle');
       const useWorktree = !!($kptWorktreeToggle && $kptWorktreeToggle.checked);
-      if (prompt.startsWith('pkood:')) prompt = prompt.slice(6).trim();
+      if (isPkoodPrefix) prompt = prompt.slice(6).trim();
       if (!prompt) return;
       // Show the placeholder immediately — don't wait for the spawn POST to
       // return. Users were staring at a blank board for a beat because the
       // placeholder only materialized after /api/sessions/spawn responded.
       const subject = prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt;
       const tempPid = 'tmp-' + Date.now();
-      insertPendingSpawnCard(tempPid, subject, usePkood);
+      // Source for the optimistic card: 'codex' renders the codex chip
+      // (Task 9); 'pkood' keeps the orange pkood chip; 'claude' uses
+      // 'interactive' (no chip).
+      const cardSource = engine === 'codex' ? 'codex'
+                       : engine === 'pkood' ? 'pkood'
+                       : 'interactive';
+      insertPendingSpawnCard(tempPid, subject, cardSource);
       $kptRunBtn.disabled = true;
       $kptRunBtn.textContent = 'Spawning...';
       try {
-        const endpoint = usePkood ? '/api/pkood/spawn' : '/api/sessions/spawn';
-        // pkood doesn't support the worktree flag — silently drop it for that path.
-        const body = usePkood ? { prompt } : { prompt, worktree: useWorktree };
+        const endpoint = engine === 'pkood' ? '/api/pkood/spawn'
+                       : engine === 'codex' ? '/api/sessions/spawn-codex'
+                       : '/api/sessions/spawn';
+        // pkood and codex don't support the worktree flag — drop it for those.
+        const body = engine === 'claude'
+          ? { prompt, worktree: useWorktree }
+          : { prompt };
         const res = await fetch(endpoint, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -10828,10 +10844,6 @@
   const $nsmCancel = document.getElementById('nsmCancel');
   const $nsmBackdrop = document.getElementById('nsmBackdrop');
   const $nsmEngineSelect = document.getElementById('nsmEngineSelect');
-  // Legacy reference: kept null so the modal-submit dispatcher
-  // (rewritten in Task 8 of the codex-spawn series) doesn't crash
-  // when it reads `$nsmPkood.checked` before that rewrite lands.
-  let $nsmPkood = null;
   function openNewSessionModal(body = '') {
     if (!$nsm) return;
     _clearNsmError();
@@ -10863,14 +10875,15 @@
     }
     const effectiveSubject = firstSentence(body);
     const prompt = body + SESSION_STATE_INSTRUCTION;
-    const usePkood = !!($nsmPkood && $nsmPkood.checked);
+    const engine = ($nsmEngineSelect && $nsmEngineSelect.value) || 'claude';
     const $nsmWorktree = document.getElementById('nsmWorktree');
     const useWorktree = !!($nsmWorktree && $nsmWorktree.checked);
     $nsmSubmit.disabled = true;
     $nsmSubmit.textContent = 'Launching...';
     try {
-      const endpoint = usePkood ? '/api/pkood/spawn' : '/api/sessions/spawn';
-      const body = usePkood
+      const endpoint = engine === 'codex' ? '/api/sessions/spawn-codex'
+                                          : '/api/sessions/spawn';
+      const body = engine === 'codex'
         ? { prompt, name: effectiveSubject }
         : { prompt, name: effectiveSubject, worktree: useWorktree };
       const res = await fetch(endpoint, {
@@ -10880,7 +10893,8 @@
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
         closeNewSessionModal();
-        insertPendingSpawnCard(data.pid, effectiveSubject, usePkood);
+        const cardSource = engine === 'codex' ? 'codex' : 'interactive';
+        insertPendingSpawnCard(data.pid, effectiveSubject, cardSource);
         // Tight poll schedule so the real card replaces the placeholder fast.
         setTimeout(refreshConversationList, 600);
         setTimeout(refreshConversationList, 1500);
