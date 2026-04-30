@@ -4687,12 +4687,8 @@ def _create_worktree_for_spawn(source_cwd, slug):
 # ---------------------------------------------------------------------------
 # Codex CLI binary resolution
 # ---------------------------------------------------------------------------
-#
-# Tested against codex-cli 0.125.0-alpha.3 (the version bundled inside
-# /Applications/Codex.app on the dev machine that shipped this feature).
-# Flag names may shift in future alpha bumps — if a smoke spawn fails with
-# "unrecognized argument", check `<bin> exec --help` and patch the cmd
-# construction in spawn_session_codex below.
+# Tested against codex-cli 0.125.0-alpha.3, the version currently shipping
+# inside /Applications/Codex.app.
 
 CODEX_APP_BUNDLE_PATH = "/Applications/Codex.app/Contents/Resources/codex"
 
