@@ -10572,6 +10572,35 @@
       try { localStorage.setItem('ccc.spawnEngine', $kptEngineSelect.value); } catch (_) {}
     });
   }
+  // Probe Codex availability so a user with no Codex install sees the
+  // option greyed out instead of getting a 503 mid-spawn. Polled on
+  // window focus too — handles "I just installed it; refresh the UI"
+  // without a hard reload.
+  async function refreshCodexAvailability() {
+    try {
+      const r = await fetch('/api/sessions/spawn-codex/availability');
+      const d = await r.json();
+      const codexOpt = $kptEngineSelect && $kptEngineSelect.querySelector('option[value="codex"]');
+      const nsmCodexOpt = (typeof $nsmEngineSelect !== 'undefined') && $nsmEngineSelect && $nsmEngineSelect.querySelector('option[value="codex"]');
+      const reason = d.available ? '' : (d.reason || 'Codex CLI not found');
+      [codexOpt, nsmCodexOpt].forEach(opt => {
+        if (!opt) return;
+        opt.disabled = !d.available;
+        opt.title = reason;
+        opt.textContent = d.available ? 'codex' : 'codex (unavailable)';
+      });
+      // If the user had codex selected but it's no longer available,
+      // fall back to claude so the next spawn doesn't 503.
+      if (!d.available && $kptEngineSelect && $kptEngineSelect.value === 'codex') {
+        $kptEngineSelect.value = 'claude';
+        try { localStorage.setItem('ccc.spawnEngine', 'claude'); } catch (_) {}
+      }
+    } catch (_) {
+      // Probe is best-effort; a network blip shouldn't disable the dropdown.
+    }
+  }
+  refreshCodexAvailability();
+  window.addEventListener('focus', refreshCodexAvailability);
   // Hide-descriptions toggle
   const $kptDescToggle = document.getElementById('kptDescToggle');
   if ($kptDescToggle) {
