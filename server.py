@@ -4282,11 +4282,14 @@ def find_all_sessions():
     registry = _load_session_registry()
     live_sids = set(registry.keys())
     spawned_pids = {s["pid"] for s in _spawned_sessions if s["proc"].poll() is None}
+    spawned_engine_by_pid = {s["pid"]: s.get("engine", "claude") for s in _spawned_sessions}
     for c in conversations:
         c["source"] = "interactive"
         c["is_live"] = c["session_id"] in live_sids
         reg_pid = (registry.get(c["session_id"]) or {}).get("pid")
         c["spawn_pid"] = reg_pid if reg_pid in spawned_pids else None
+        if c["spawn_pid"]:
+            c["engine"] = spawned_engine_by_pid.get(c["spawn_pid"], "claude")
 
     # Add pkood agents — and merge in their linked claude-session card, if any.
     # Pkood spawns a claude process in a tmux pty, which produces a regular

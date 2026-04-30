@@ -1410,6 +1410,7 @@
    * same row. */
   .conv-signal.gh-link { background: rgba(139,148,158,0.12); color: var(--text-muted); font-weight: 600; }
   .conv-item .source-badge.pkood { background: rgba(210,153,34,0.2); color: var(--orange); }
+  .conv-item .source-badge.codex { background: rgba(63,185,80,0.2); color: var(--green); }
   .pkood-tail-output {
     white-space: pre-wrap; word-break: break-word; font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
     font-size: 13px; line-height: 1.5; padding: 16px 20px; color: var(--text);
@@ -7475,6 +7476,7 @@
       }
       let sourceBadge = '';
       if (c.source === 'pkood') sourceBadge = '<span class="source-badge pkood">pkood</span>';
+      else if (c.source === 'codex' || c.engine === 'codex') sourceBadge = '<span class="source-badge codex">codex</span>';
       // Prefer "last interacted" (the user's last UI action) over "last
       // event" (which includes Claude's autonomous responses) so the row
       // time mirrors the user's mental model: when did *I* last touch this?
