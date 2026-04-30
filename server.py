@@ -7048,6 +7048,49 @@ def _worktree_is_dirty(path):
         return False
 
 
+_OPEN_PRS_CACHE = {}  # repo_top -> (ts, list[dict])
+_OPEN_PRS_TTL = 30.0
+
+
+def _open_prs_cached(repo_top):
+    """Return open PRs for a repo via `gh pr list`, cached for 30s.
+
+    Each entry: {number, title, headRefName, isDraft, url}. Empty list on
+    any failure (no `gh`, no GitHub remote, no auth, network blip) — the
+    worktrees modal must keep working without GitHub access.
+    """
+    if not repo_top:
+        return []
+    now = time.time()
+    cached = _OPEN_PRS_CACHE.get(repo_top)
+    if cached and now - cached[0] < _OPEN_PRS_TTL:
+        return cached[1]
+    prs = []
+    try:
+        r = subprocess.run(
+            ["gh", "pr", "list", "--state", "open", "--limit", "100",
+             "--json", "number,title,headRefName,isDraft,url"],
+            cwd=repo_top, capture_output=True, text=True, timeout=4,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            data = json.loads(r.stdout)
+            if isinstance(data, list):
+                prs = [
+                    {
+                        "number": int(p.get("number") or 0),
+                        "title": p.get("title") or "",
+                        "headRefName": p.get("headRefName") or "",
+                        "isDraft": bool(p.get("isDraft")),
+                        "url": p.get("url") or "",
+                    }
+                    for p in data if p.get("number")
+                ]
+    except (subprocess.SubprocessError, OSError, ValueError):
+        prs = []
+    _OPEN_PRS_CACHE[repo_top] = (now, prs)
+    return prs
+
+
 # path -> (last_session_event_ts, dirty, polled_at). The sidebar list
 # refreshes every 10s and may include 20+ sessions; a bare git shellout
 # per row would dominate the response. Two layers:
@@ -7083,7 +7126,13 @@ def _worktree_dirty_cached(path, event_ts):
 
 def list_repo_worktrees(repo_top=None):
     """Return all worktrees for a repo with a `dirty` flag (uncommitted
-    changes). Powers the topbar's "open worktrees" modal."""
+    changes). Powers the topbar's "open worktrees" modal.
+
+    Also attaches matching open-PR metadata: each worktree gets a `pr`
+    field (or None) when its branch matches an open PR's head ref, and
+    the response includes `orphan_prs` for open PRs whose branch has no
+    local worktree.
+    """
     repo_top = repo_top or str(REPO_ROOT)
     wts = _list_worktrees(repo_top)
     dirty_n = 0
@@ -7096,12 +7145,26 @@ def list_repo_worktrees(repo_top=None):
         wt["is_agent"] = reason.startswith("claude agent")
         if wt["is_agent"]:
             agent_n += 1
+
+    prs = _open_prs_cached(repo_top)
+    pr_by_branch = {p["headRefName"]: p for p in prs if p.get("headRefName")}
+    matched_branches = set()
+    for wt in wts:
+        branch = wt.get("branch")
+        pr = pr_by_branch.get(branch) if branch else None
+        wt["pr"] = pr
+        if pr:
+            matched_branches.add(branch)
+    orphan_prs = [p for p in prs if p.get("headRefName") not in matched_branches]
+
     return {
         "repo": repo_top,
         "worktrees": wts,
         "total": len(wts),
         "dirty_count": dirty_n,
         "agent_count": agent_n,
+        "open_prs_count": len(prs),
+        "orphan_prs": orphan_prs,
     }
 
 

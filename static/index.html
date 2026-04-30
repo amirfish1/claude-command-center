@@ -921,6 +921,13 @@
   .wt-tag-locked { color: var(--accent); background: rgba(88,166,255,0.10); border-color: rgba(88,166,255,0.30); }
   .wt-tag-detached { color: var(--red); background: rgba(248,81,73,0.10); border-color: rgba(248,81,73,0.30); }
   .wt-tag-dirty { color: var(--orange); background: rgba(210,153,34,0.10); border-color: rgba(210,153,34,0.30); }
+  .wt-tag-pr {
+    color: #a371f7; background: rgba(163,113,247,0.10);
+    border-color: rgba(163,113,247,0.30);
+    text-decoration: none;
+  }
+  .wt-tag-pr:hover { background: rgba(163,113,247,0.18); }
+  .wt-tag-pr-draft { opacity: 0.7; }
   .wt-row-dirty { border-left: 3px solid var(--orange); }
   .wt-empty {
     padding: 16px; text-align: center; color: var(--text-muted);
@@ -931,6 +938,38 @@
     font-size: 11px; color: var(--text-muted);
     font-style: italic;
     padding-top: 2px;
+  }
+  /* "PRs without a worktree" section appended below the worktree list
+     in the topbar modal. Same row visual language as the worktree rows
+     so the eye groups them, but with a faint heading separator. */
+  .wt-section-heading {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-muted); font-weight: 600;
+    padding: 10px 2px 4px; border-top: 1px solid var(--border);
+    margin-top: 4px;
+  }
+  .wt-pr-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 10px; align-items: center;
+    padding: 8px 10px; border-radius: 6px;
+    background: var(--bg); border: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .wt-pr-num {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    color: #a371f7; font-weight: 600;
+    text-decoration: none;
+  }
+  .wt-pr-num:hover { text-decoration: underline; }
+  .wt-pr-title {
+    color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .wt-pr-branch {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    color: var(--text-muted); font-size: 11px;
+    white-space: nowrap;
   }
 
   /* ── Live badge + streaming bubble ─────────────────────────────
@@ -1292,14 +1331,25 @@
      boring, the section is supposed to be quiet. */
   #convList .conv-archived-section,
   #convList .conv-ghissues-section,
+  #convList .conv-readytomerge-section,
   #convList .conv-inprogress-section { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 6px; }
   /* The first section in the list (whichever it is — typically GH Issues,
-   * but In progress takes the spot if GH Issues is empty) loses its
-   * divider so the list doesn't start with an empty stripe. */
+   * but the next section takes the spot if earlier ones are empty) loses
+   * its divider so the list doesn't start with an empty stripe. */
   #convList > .conv-ghissues-section:first-child,
+  #convList > .conv-readytomerge-section:first-child,
   #convList > .conv-inprogress-section:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+  /* Ready-to-merge label gets a subtle green tint so the bucket reads as
+   * "action required" at a glance, separate from the muted neutrality of
+   * the other section labels. */
+  #convList .conv-readytomerge-label { color: var(--green); }
+  #convList .conv-readytomerge-count {
+    background: rgba(63,185,80,0.12); border-color: rgba(63,185,80,0.35);
+    color: var(--green);
+  }
   #convList .conv-archived-header,
   #convList .conv-ghissues-header,
+  #convList .conv-readytomerge-header,
   #convList .conv-inprogress-header {
     width: 100%; display: flex; align-items: center; gap: 8px;
     padding: 8px 14px; background: transparent; border: 0; cursor: pointer;
@@ -1308,12 +1358,15 @@
   }
   #convList .conv-archived-header:hover,
   #convList .conv-ghissues-header:hover,
+  #convList .conv-readytomerge-header:hover,
   #convList .conv-inprogress-header:hover { color: var(--text); }
   #convList .conv-archived-arrow,
   #convList .conv-ghissues-arrow,
+  #convList .conv-readytomerge-arrow,
   #convList .conv-inprogress-arrow { font-size: 11px; opacity: 0.7; }
   #convList .conv-archived-count,
   #convList .conv-ghissues-count,
+  #convList .conv-readytomerge-count,
   #convList .conv-inprogress-count {
     margin-left: auto;
     background: var(--bg); border: 1px solid var(--border);
@@ -1322,6 +1375,7 @@
   }
   #convList .conv-archived-section.collapsed .conv-archived-list,
   #convList .conv-ghissues-section.collapsed .conv-ghissues-list,
+  #convList .conv-readytomerge-section.collapsed .conv-readytomerge-list,
   #convList .conv-inprogress-section.collapsed .conv-inprogress-list { display: none; }
   .conv-item .live-dot {
     width: 7px; height: 7px; border-radius: 50%;
@@ -3522,9 +3576,33 @@
   // so the /attention panel can show exact state + next step without heuristics.
   const SESSION_STATE_INSTRUCTION = "\n\nBefore your final reply, end with a block formatted EXACTLY like this (the Claude Command Center dashboard parses it):\n<session-state>\nDID: <one sentence — what you actually changed/learned>\nINSIGHT: <one sentence — the main finding, root cause, or surprise>\nNEXT_STEP_USER: <one sentence — the exact next thing the user should do>\n</session-state>";
 
+  // When a prompt starts with the sibling-orchestrator preamble ("You are
+  // a sibling Claude Code session…"), the boilerplate that follows (your
+  // sandbox, repo rules, footguns) is identical across every spawn —
+  // showing it as the "Original ask" buries the actual task. Pull just
+  // the heading + body out, preserving the "## Feature: …" / "## Task: …"
+  // line so the user can still tell what kind of work this is. Returns
+  // null when not a sibling spawn or when no recognized heading exists.
+  const SIBLING_PROMPT_PREFIX_LC = 'you are a sibling claude code session';
+  const SIBLING_HEADING_RE = /^##\s+(?:Feature|Task|Goal|Bug|Fix|Spec)\s*:\s*.+$/im;
+  function extractSiblingTaskBody(s) {
+    if (!s) return null;
+    const head = String(s).replace(/^\s+/, '').slice(0, 80).toLowerCase();
+    if (!head.startsWith(SIBLING_PROMPT_PREFIX_LC)) return null;
+    const m = SIBLING_HEADING_RE.exec(s);
+    if (!m) return null;
+    // Slice from the heading to end-of-string. The body below the heading
+    // is the actual task — keep it. The boilerplate before it is dropped.
+    return String(s).slice(m.index).trim();
+  }
+
   function cleanIssuePrompt(s) {
     if (!s) return s;
     let out = String(s);
+    // Sibling-orchestrator spawn: strip the preamble down to the heading.
+    // Done first so the rest of the cleanup applies to the real task body.
+    const siblingBody = extractSiblingTaskBody(out);
+    if (siblingBody) out = siblingBody;
     // Strip the session-state instruction CCC appends to spawn prompts.
     // Use the constant rather than a literal so future edits to the
     // template flow through automatically.
@@ -7281,25 +7359,35 @@
     // section header makes that destination visible. Same source of
     // truth as the kanban so tapping archive in either view yields the
     // same resting place.
-    // Three buckets so the row list mirrors the kanban's coarse categories:
-    //   - sessions: real Claude/pkood sessions you're working in. Includes
-    //     sessions LINKED to a GH issue — once you've started work on an
-    //     issue, the session row is the canonical card; the standalone
-    //     backlog card disappears (server-side dedup). The session row
-    //     gets a "#N" chip (rendered below) so you can still scan for
-    //     issue-tied work without leaving the active list.
-    //   - ghIssues: only un-started GH issues (and TODO/PARKING/native-task
-    //     cards, since they share `source==='backlog'`). Mirrors the kanban
-    //     "GH Issues" column 1:1 so the two surfaces agree.
-    //   - archived: same as before
+    // Four buckets so the row list mirrors the kanban's coarse categories
+    // and reads top-to-bottom as a pipeline:
+    //   - ghIssues: un-started GH issues + TODO/PARKING/native-task. 1:1
+    //     with the kanban "GH Issues" column.
+    //   - readyToMerge: sessions with an open PR waiting for human action
+    //     (PR #N recorded). Lifted out of "In progress" because they're a
+    //     distinct kind of work — the session is done; the user just needs
+    //     to click merge. Without this they get lost in the active list.
+    //   - sessions: every other live or resumable session. Sessions LINKED
+    //     to a GH issue stay here with a "#N" chip rather than duplicating
+    //     under GH Issues — server-side dedup hides the backlog card once
+    //     work has started.
+    //   - archived: same as before.
     const _sessionConvs = [];
     const _ghIssueConvs = [];
+    const _readyToMergeConvs = [];
     const _archivedConvs = [];
     for (const c of convs) {
       const col = classifyKanbanColumn(c);
-      if (col === 'archived') _archivedConvs.push(c);
-      else if (col === 'backlog') _ghIssueConvs.push(c);
-      else _sessionConvs.push(c);
+      if (col === 'archived') { _archivedConvs.push(c); continue; }
+      if (col === 'backlog') { _ghIssueConvs.push(c); continue; }
+      // Ready to merge: a recorded PR number is the strong signal — it
+      // means `gh pr create` ran successfully in this session. Pkood
+      // rows are excluded (they don't open PRs the same way).
+      if (c.source !== 'pkood' && c.tail_pr_number) {
+        _readyToMergeConvs.push(c);
+        continue;
+      }
+      _sessionConvs.push(c);
     }
     const _renderRow = (c) => {
       const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
@@ -7486,6 +7574,25 @@
         + '<div class="conv-inprogress-list">' + _activeRowsHtml + '</div>'
         + '</div>';
     }
+    // Ready to merge section: sessions whose work has landed in a PR
+    // and is now waiting for the user to click merge. Lifted out of
+    // "In progress" so action items don't get buried under live work.
+    // Expanded by default — these are the highest-leverage clicks.
+    let _readyToMergeHtml = '';
+    if (_readyToMergeConvs.length > 0) {
+      const _rtmCollapsed = localStorage.getItem('ccc-readytomerge-collapsed') === '1';
+      const _rtmArrow = _rtmCollapsed ? '▸' : '▾';
+      const _rtmRows = _readyToMergeConvs.map(_renderRow).join('');
+      _readyToMergeHtml =
+        '<div class="conv-readytomerge-section' + (_rtmCollapsed ? ' collapsed' : '') + '" data-role="readytomerge-section">'
+        + '<button type="button" class="conv-readytomerge-header" data-role="readytomerge-toggle" aria-expanded="' + (!_rtmCollapsed) + '">'
+        +   '<span class="conv-readytomerge-arrow">' + _rtmArrow + '</span>'
+        +   '<span class="conv-readytomerge-label">Ready to merge</span>'
+        +   '<span class="conv-readytomerge-count">' + _readyToMergeConvs.length + '</span>'
+        + '</button>'
+        + '<div class="conv-readytomerge-list">' + _rtmRows + '</div>'
+        + '</div>';
+    }
     // GH Issues section: open issues + TODO/PARKING_LOT cards with no
     // session yet. Mirrors the kanban "GH Issues" column so the sidebar
     // scan matches the board. Expanded by default — these are pending
@@ -7524,7 +7631,10 @@
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + '</div>';
     }
-    $convList.innerHTML = _ghIssuesHtml + _inProgressHtml + _archivedHtml;
+    // Order: GH Issues (to start) → Ready to merge (action) → In progress
+    // → Archived. "Ready to merge" floats above "In progress" because the
+    // user almost certainly wants to act on these first.
+    $convList.innerHTML = _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
     // Toggle handler for the Archived section header.
     const $archivedToggle = $convList.querySelector('[data-role="archived-toggle"]');
     if ($archivedToggle) {
@@ -7551,6 +7661,20 @@
         const arrowEl = $ghIssuesToggle.querySelector('.conv-ghissues-arrow');
         if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         $ghIssuesToggle.setAttribute('aria-expanded', String(!wasCollapsed));
+      });
+    }
+    // Toggle handler for the Ready to merge section header.
+    const $rtmToggle = $convList.querySelector('[data-role="readytomerge-toggle"]');
+    if ($rtmToggle) {
+      $rtmToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const section = $rtmToggle.closest('[data-role="readytomerge-section"]');
+        if (!section) return;
+        const wasCollapsed = section.classList.toggle('collapsed');
+        localStorage.setItem('ccc-readytomerge-collapsed', wasCollapsed ? '1' : '0');
+        const arrowEl = $rtmToggle.querySelector('.conv-readytomerge-arrow');
+        if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
+        $rtmToggle.setAttribute('aria-expanded', String(!wasCollapsed));
       });
     }
     // Toggle handler for the In progress section header.
@@ -8956,14 +9080,15 @@
   // 🌿 pill (sibling worktrees of the active session's repo) and the
   // topbar Worktrees button (every worktree in the watched repo, with a
   // dirty marker for those carrying uncommitted changes).
-  function _renderWorktreesModal({ worktrees, summaryItems, emptyText }) {
+  function _renderWorktreesModal({ worktrees, summaryItems, emptyText, orphanPrs }) {
     const $modal = document.getElementById('worktreesModal');
     const $summary = document.getElementById('worktreesSummary');
     const $list = document.getElementById('worktreesList');
     if (!$modal || !$summary || !$list) return;
     $summary.innerHTML = (summaryItems || []).join(' ');
+    let html = '';
     if (!worktrees || worktrees.length === 0) {
-      $list.innerHTML = '<div class="wt-empty">' + escapeHtml(emptyText || 'No worktrees.') + '</div>';
+      html += '<div class="wt-empty">' + escapeHtml(emptyText || 'No worktrees.') + '</div>';
     } else {
       const rows = worktrees.map(function (wt) {
         const tildePath = (wt.path || '').replace(/^\/Users\/[^/]+/, '~');
@@ -8973,6 +9098,16 @@
         if (wt.is_agent) tags.push('<span class="wt-tag wt-tag-agent">subagent</span>');
         else if (wt.locked) tags.push('<span class="wt-tag wt-tag-locked">locked</span>');
         if (wt.detached) tags.push('<span class="wt-tag wt-tag-detached">detached</span>');
+        if (wt.pr && wt.pr.number) {
+          const prUrl = wt.pr.url || '';
+          const draftCls = wt.pr.isDraft ? ' wt-tag-pr-draft' : '';
+          const prTitle = (wt.pr.title || '').trim();
+          const tipBase = (wt.pr.isDraft ? 'Draft PR' : 'Open PR') + ' #' + wt.pr.number;
+          const tip = prTitle ? tipBase + ' — ' + prTitle : tipBase;
+          tags.push('<a class="wt-tag wt-tag-pr' + draftCls + '" href="' + escapeHtml(prUrl)
+            + '" target="_blank" rel="noopener" title="' + escapeHtml(tip) + '">'
+            + (wt.pr.isDraft ? 'draft ' : '') + 'PR #' + wt.pr.number + '</a>');
+        }
         const branchHtml = branch
           ? '<span class="wt-row-branch"><span class="wt-icon">⎇</span>' + escapeHtml(branch) + '</span>'
           : '<span class="wt-row-branch" style="opacity:0.5;">—</span>';
@@ -8990,8 +9125,26 @@
           + reasonHtml
           + '</div>';
       });
-      $list.innerHTML = rows.join('');
+      html += rows.join('');
     }
+    if (orphanPrs && orphanPrs.length > 0) {
+      html += '<div class="wt-section-heading">Open PRs without a worktree ('
+        + orphanPrs.length + ')</div>';
+      html += orphanPrs.map(function (pr) {
+        const draftCls = pr.isDraft ? ' wt-tag-pr-draft' : '';
+        const draftLabel = pr.isDraft
+          ? '<span class="wt-tag wt-tag-pr' + draftCls + '">draft</span>'
+          : '';
+        return '<div class="wt-pr-row">'
+          + '<a class="wt-pr-num" href="' + escapeHtml(pr.url || '') + '" target="_blank" rel="noopener">#'
+          + pr.number + '</a>'
+          + '<span class="wt-pr-title" title="' + escapeHtml(pr.title || '') + '">'
+          + escapeHtml(pr.title || '') + '</span>'
+          + '<span class="wt-pr-branch">⎇ ' + escapeHtml(pr.headRefName || '') + ' ' + draftLabel + '</span>'
+          + '</div>';
+      }).join('');
+    }
+    $list.innerHTML = html;
     $modal.classList.add('open');
   }
 
@@ -9035,6 +9188,8 @@
       data = await res.json();
     } catch (_) { return; }
     const wts = (data && data.worktrees) || [];
+    const orphanPrs = (data && data.orphan_prs) || [];
+    const openPrCount = (data && data.open_prs_count) || 0;
     const items = ['<span><strong>' + wts.length + '</strong> worktree' + (wts.length === 1 ? '' : 's') + '</span>'];
     if (data && data.dirty_count) {
       items.push('<span style="color:var(--orange);"><strong>' + data.dirty_count + '</strong> uncommitted</span>');
@@ -9042,10 +9197,14 @@
     if (data && data.agent_count) {
       items.push('<span><strong>' + data.agent_count + '</strong> subagent</span>');
     }
+    if (openPrCount) {
+      items.push('<span><strong>' + openPrCount + '</strong> open PR' + (openPrCount === 1 ? '' : 's') + '</span>');
+    }
     _renderWorktreesModal({
       worktrees: wts,
       summaryItems: items,
       emptyText: 'No worktrees in this repo.',
+      orphanPrs: orphanPrs,
     });
   }
   function closeWorktreesModal() {
