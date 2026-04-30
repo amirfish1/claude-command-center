@@ -12,7 +12,7 @@ Usage:
     CCC_WATCH_REPO=~/dev/foo ./run.sh
 """
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 import ast
 import base64
