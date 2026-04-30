@@ -4684,6 +4684,57 @@ def _create_worktree_for_spawn(source_cwd, slug):
     return str(candidate), branch
 
 
+# ---------------------------------------------------------------------------
+# Codex CLI binary resolution
+# ---------------------------------------------------------------------------
+#
+# Tested against codex-cli 0.125.0-alpha.3 (the version bundled inside
+# /Applications/Codex.app on the dev machine that shipped this feature).
+# Flag names may shift in future alpha bumps — if a smoke spawn fails with
+# "unrecognized argument", check `<bin> exec --help` and patch the cmd
+# construction in spawn_session_codex below.
+
+CODEX_APP_BUNDLE_PATH = "/Applications/Codex.app/Contents/Resources/codex"
+
+
+def _resolve_codex_bin():
+    """Locate a usable Codex CLI binary.
+
+    Priority order:
+      1. $CCC_CODEX_BIN (env override) — if set and executable.
+      2. `shutil.which("codex")` — picks up Homebrew / Cargo / npm-global.
+      3. /Applications/Codex.app/Contents/Resources/codex (macOS Codex
+         desktop app's bundled CLI).
+
+    Returns a dict so the caller and the availability endpoint can share
+    one shape:
+      {available: True,  bin: "<abs path>", source: "env|path|bundle"}
+      {available: False, reason: "<human readable>", bin: None}
+    """
+    env_bin = os.environ.get("CCC_CODEX_BIN")
+    if env_bin:
+        if os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+            return {"available": True, "bin": env_bin, "source": "env"}
+        return {
+            "available": False,
+            "bin": None,
+            "reason": f"CCC_CODEX_BIN is set to {env_bin!r} but it isn't an executable file",
+        }
+    which_bin = shutil.which("codex")
+    if which_bin:
+        return {"available": True, "bin": which_bin, "source": "path"}
+    if os.path.isfile(CODEX_APP_BUNDLE_PATH) and os.access(CODEX_APP_BUNDLE_PATH, os.X_OK):
+        return {"available": True, "bin": CODEX_APP_BUNDLE_PATH, "source": "bundle"}
+    return {
+        "available": False,
+        "bin": None,
+        "reason": (
+            "Codex CLI not found. Install Codex.app, "
+            "`npm i -g @openai/codex`, or set CCC_CODEX_BIN."
+        ),
+    }
+
+
 def spawn_session(prompt, name=None, cwd=None, worktree=False):
     """Spawn a headless Claude Code session and return tracking info.
 

@@ -55,6 +55,63 @@ class TestServerImports(unittest.TestCase):
             self.assertFalse(server.MORNING_ENABLED,
                              "MORNING_ENABLED must be False when plugin missing")
 
+    def test_resolve_codex_bin_prefers_env_override(self):
+        """`_resolve_codex_bin` must honour CCC_CODEX_BIN when it points
+        at an executable file. Verifies the precedence head — env var
+        always wins over `which codex` and the app-bundle fallback."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        self.assertTrue(hasattr(server, "_resolve_codex_bin"))
+
+        import tempfile, stat
+        with tempfile.NamedTemporaryFile(prefix="codex-", suffix=".sh", delete=False) as f:
+            f.write(b"#!/bin/sh\nexit 0\n")
+            fake_bin = f.name
+        os.chmod(fake_bin, os.stat(fake_bin).st_mode | stat.S_IXUSR)
+
+        prev = os.environ.get("CCC_CODEX_BIN")
+        try:
+            os.environ["CCC_CODEX_BIN"] = fake_bin
+            result = server._resolve_codex_bin()
+            self.assertEqual(result["bin"], fake_bin)
+            self.assertTrue(result["available"])
+        finally:
+            if prev is None:
+                os.environ.pop("CCC_CODEX_BIN", None)
+            else:
+                os.environ["CCC_CODEX_BIN"] = prev
+            os.unlink(fake_bin)
+
+    def test_resolve_codex_bin_returns_unavailable_when_missing(self):
+        """When CCC_CODEX_BIN points at a non-existent path AND the
+        Codex.app bundle is absent AND `which codex` finds nothing,
+        the resolver must return {available: False, reason: ...}
+        rather than raising."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        prev = os.environ.get("CCC_CODEX_BIN")
+        try:
+            os.environ["CCC_CODEX_BIN"] = "/definitely/does/not/exist/codex"
+            # Patch resolver helpers so we don't depend on host state.
+            orig_which = server.shutil.which
+            orig_isfile = server.os.path.isfile
+            server.shutil.which = lambda name: None
+            server.os.path.isfile = lambda p: False if "codex" in p else orig_isfile(p)
+            try:
+                result = server._resolve_codex_bin()
+            finally:
+                server.shutil.which = orig_which
+                server.os.path.isfile = orig_isfile
+            self.assertFalse(result["available"])
+            self.assertIn("reason", result)
+        finally:
+            if prev is None:
+                os.environ.pop("CCC_CODEX_BIN", None)
+            else:
+                os.environ["CCC_CODEX_BIN"] = prev
+
 
 class TestHealthcheck(unittest.TestCase):
     def test_healthcheck_returns_structured_result(self):
