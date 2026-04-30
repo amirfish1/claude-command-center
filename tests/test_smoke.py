@@ -111,6 +111,57 @@ class TestServerImports(unittest.TestCase):
         sig = inspect.signature(server.spawn_session_codex)
         self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd"])
 
+    def test_record_spawn_to_registry_persists_engine(self):
+        """The on-disk spawn registry must round-trip an `engine` field
+        so a CCC restart can branch claude-vs-codex reattach logic."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        import json, pathlib
+        with tempfile.TemporaryDirectory() as tmp:
+            registry_file = pathlib.Path(tmp) / "spawned-pids.json"
+            orig = server.SPAWNED_PIDS_FILE
+            server.SPAWNED_PIDS_FILE = registry_file
+            try:
+                server._record_spawn_to_registry(
+                    pid=99999, name="t", log_path=pathlib.Path(tmp) / "x.log",
+                    cwd=tmp, spawned_at="20260430T000000",
+                    command_summary="test", fifo=None, engine="codex",
+                )
+                with registry_file.open() as f:
+                    rows = json.load(f)
+                self.assertEqual(rows[-1]["engine"], "codex")
+            finally:
+                server.SPAWNED_PIDS_FILE = orig
+
+    def test_pid_is_engine_process_recognises_codex(self):
+        """`_pid_is_engine_process` must accept an `engine` arg and match
+        the right argv[0] basename for it (`claude` or `codex`)."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        self.assertTrue(hasattr(server, "_pid_is_engine_process"))
+        import subprocess as sp
+        prev_run = sp.run
+        def fake_run(args, **kw):
+            class R: pass
+            r = R(); r.returncode = 0; r.stdout = ""; r.stderr = ""
+            if args[:2] == ["ps", "-p"]:
+                pid = args[2]
+                if pid == "11111":
+                    r.stdout = "/usr/local/bin/claude -p --verbose\n"
+                elif pid == "22222":
+                    r.stdout = "/Applications/Codex.app/Contents/Resources/codex exec --json\n"
+            return r
+        sp.run = fake_run
+        try:
+            self.assertTrue(server._pid_is_engine_process(11111, "claude"))
+            self.assertFalse(server._pid_is_engine_process(11111, "codex"))
+            self.assertTrue(server._pid_is_engine_process(22222, "codex"))
+            self.assertFalse(server._pid_is_engine_process(22222, "claude"))
+        finally:
+            sp.run = prev_run
+
 
 class TestHealthcheck(unittest.TestCase):
     def test_healthcheck_returns_structured_result(self):

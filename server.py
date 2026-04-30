@@ -4815,6 +4815,7 @@ def spawn_session(prompt, name=None, cwd=None, worktree=False):
         spawned_at=timestamp,
         command_summary=prompt[:200],
         fifo=fifo_path,
+        engine="claude",
     )
     # Cwd determines the ~/.claude/projects/ bucket the new session
     # logs to, which is how the kanban groups it by repo. Print it so
@@ -5168,6 +5169,7 @@ def resume_session_headless(session_id, text):
         spawned_at=timestamp,
         command_summary=text[:200],
         fifo=fifo_path,
+        engine="claude",
     )
     return {"ok": ok, "pid": proc.pid, "log": str(log_path), "resumed": True}
 
@@ -5244,12 +5246,16 @@ def _save_spawn_registry(entries):
         print(f"  [spawn-registry] could not write {SPAWNED_PIDS_FILE} ({e})")
 
 
-def _record_spawn_to_registry(pid, name, log_path, cwd, spawned_at, command_summary, fifo=None):
+def _record_spawn_to_registry(pid, name, log_path, cwd, spawned_at, command_summary, fifo=None, engine="claude"):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is filled in lazily by the reattach sweep (it isn't known
-    at fork time — Claude emits it in the first stream-json event).
+    at fork time — Claude emits it in the first stream-json event, Codex
+    emits it in its `--json` event stream).
     The fifo path is persisted so a fresh CCC instance can reopen the
-    write side after a restart and continue injecting messages."""
+    write side after a restart and continue injecting messages (Claude
+    only — Codex exec is one-shot).
+    `engine` ("claude" or "codex") tells the boot-time reattach sweep
+    which ps-grep to use and which JSONL ingestion path to skip."""
     entries = _load_spawn_registry()
     entries.append({
         "pid": pid,
@@ -5260,6 +5266,7 @@ def _record_spawn_to_registry(pid, name, log_path, cwd, spawned_at, command_summ
         "cwd": str(cwd),
         "spawned_at": spawned_at,
         "command_summary": command_summary,
+        "engine": engine,
     })
     _save_spawn_registry(entries)
 
@@ -5273,13 +5280,19 @@ def _remove_spawn_from_registry(pid):
         _save_spawn_registry(pruned)
 
 
-def _pid_is_claude_process(pid):
-    """Verify a PID is actually a `claude` process before treating it as one
-    of ours. PIDs get reused, so a bare `os.kill(pid, 0)` isn't enough — we
-    could end up trying to inject into someone's vim. Uses `ps -p <pid> -o
-    command=` (works on macOS + Linux) and matches strictly on argv[0]
-    basename — substring matching is too lenient (any python process whose
-    argv mentions 'claude' would otherwise pass)."""
+def _pid_is_engine_process(pid, engine):
+    """Verify a PID is actually a process for the given engine before
+    treating it as one of ours. PIDs get reused, so a bare `os.kill(pid, 0)`
+    isn't enough — we could end up trying to inject into someone's vim.
+    Uses `ps -p <pid> -o command=` (works on macOS + Linux) and matches
+    strictly on argv[0] basename — substring matching is too lenient
+    (any python process whose argv mentions 'claude' would otherwise
+    pass).
+
+    `engine` is one of "claude" or "codex" — the basename we expect at
+    argv[0]."""
+    if engine not in ("claude", "codex"):
+        return False
     try:
         out = subprocess.run(
             ["ps", "-p", str(pid), "-o", "command="],
@@ -5295,9 +5308,14 @@ def _pid_is_claude_process(pid):
     parts = cmd.split()
     if not parts:
         return False
-    # Match the executable basename only; `claude -p ...` shows up as
-    # `/path/to/claude -p ...` on macOS or just `claude -p ...` on Linux.
-    return parts[0].rsplit("/", 1)[-1] == "claude"
+    return parts[0].rsplit("/", 1)[-1] == engine
+
+
+# Backwards-compat shim — older code paths (and any out-of-tree fork)
+# that imports the old name keeps working without edits. Always asks
+# the engine-aware version with engine="claude".
+def _pid_is_claude_process(pid):
+    return _pid_is_engine_process(pid, "claude")
 
 
 def _reattach_spawned_orphans():
@@ -5335,15 +5353,21 @@ def _reattach_spawned_orphans():
         if not alive:
             dropped += 1
             continue
-        # Step 2: is it actually a claude process? (PID reuse defence.)
-        if not _pid_is_claude_process(pid):
+        # Step 2: is it actually a process of the engine we recorded?
+        # Older registry entries pre-date the `engine` field — default
+        # them to "claude" since that's all CCC spawned before Codex
+        # support landed. PID reuse defence.
+        engine = entry.get("engine", "claude")
+        if not _pid_is_engine_process(pid, engine):
             dropped += 1
             continue
         # Step 3: try to backfill session_id from the log file if we don't
-        # have it yet. Best-effort — failures don't block reattach.
+        # have it yet. Claude logs only — Codex's JSONL event shape
+        # differs and ingestion is deferred to a later iteration.
+        # Best-effort — failures don't block reattach.
         session_id = entry.get("session_id")
         log_path = entry.get("log")
-        if not session_id and log_path:
+        if engine == "claude" and not session_id and log_path:
             try:
                 session_id = extract_session_id(log_path)
             except Exception:
@@ -5367,6 +5391,7 @@ def _reattach_spawned_orphans():
             "fifo": fifo_path,
             "stdin_fd": stdin_fd,
             "reattached": True,
+            "engine": engine,
         }
         if session_id:
             synthetic["resumed_sid"] = session_id
@@ -5380,6 +5405,7 @@ def _reattach_spawned_orphans():
             "cwd": entry.get("cwd"),
             "spawned_at": entry.get("spawned_at"),
             "command_summary": entry.get("command_summary", ""),
+            "engine": engine,
         })
         reattached += 1
 
