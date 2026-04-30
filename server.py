@@ -4714,6 +4714,7 @@ def _resolve_codex_bin():
         return {
             "available": False,
             "bin": None,
+            "code": "codex_unavailable",
             "reason": f"CCC_CODEX_BIN is set to {env_bin!r} but it isn't an executable file",
         }
     which_bin = shutil.which("codex")
@@ -4724,6 +4725,7 @@ def _resolve_codex_bin():
     return {
         "available": False,
         "bin": None,
+        "code": "codex_unavailable",
         "reason": (
             "Codex CLI not found. Install Codex.app, "
             "`npm i -g @openai/codex`, or set CCC_CODEX_BIN."
@@ -4851,7 +4853,7 @@ def spawn_session_codex(prompt, name=None, cwd=None):
     """
     resolved = _resolve_codex_bin()
     if not resolved["available"]:
-        return {"ok": False, "error": resolved["reason"]}
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
     bin_path = resolved["bin"]
 
     session_name = _slugify(name or prompt)
@@ -9337,15 +9339,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing prompt"}, 400)
             elif cwd and not os.path.isabs(cwd):
                 self.send_json({"ok": False, "error": f"cwd must be an absolute path: {cwd}"}, 400)
+            elif cwd and not os.path.exists(cwd):
+                self.send_json({"ok": False, "error": f"cwd does not exist: {cwd}"}, 400)
             elif cwd and not os.path.isdir(cwd):
-                self.send_json({"ok": False, "error": f"cwd does not exist or is not a directory: {cwd}"}, 400)
+                self.send_json({"ok": False, "error": f"cwd is not a directory: {cwd}"}, 400)
             else:
                 try:
-                    result = spawn_session_codex(prompt, name=name, cwd=cwd or None)
-                    # Resolver missing-binary failures get a 503 so the
-                    # frontend can distinguish them from generic 500s and
-                    # offer the install hint without parsing the body.
-                    if not result.get("ok") and "not found" in (result.get("error") or "").lower():
+                    result = spawn_session_codex(prompt, name=name, cwd=cwd)
+                    # Resolver-side failures (binary not found, CCC_CODEX_BIN
+                    # misconfigured) carry a stable `"code": "codex_unavailable"`
+                    # so the frontend can render an install hint without
+                    # parsing the human-readable error text.
+                    if result.get("code") == "codex_unavailable":
                         self.send_json(result, 503)
                     else:
                         self.send_json(result)
