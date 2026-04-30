@@ -1,0 +1,1 @@
+- Sessions launched in the shared clone but editing a sibling worktree (via `cd ../<repo>-wt-*`) now show the correct dirty/clean state on the sidebar row. The `worktree_dirty` probe now runs `git status --porcelain` against the *effective* worktree (inferred from tool-call paths), not the literal session cwd.

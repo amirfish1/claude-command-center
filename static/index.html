@@ -1264,22 +1264,39 @@
      the parent .conv-archived-section, which hides .conv-archived-list
      via the rule below. Caret rotates without an animation — keep it
      boring, the section is supposed to be quiet. */
-  #convList .conv-archived-section { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 6px; }
-  #convList .conv-archived-header {
+  #convList .conv-archived-section,
+  #convList .conv-ghissues-section,
+  #convList .conv-inprogress-section { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 6px; }
+  /* The first section in the list (whichever it is — typically GH Issues,
+   * but In progress takes the spot if GH Issues is empty) loses its
+   * divider so the list doesn't start with an empty stripe. */
+  #convList > .conv-ghissues-section:first-child,
+  #convList > .conv-inprogress-section:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+  #convList .conv-archived-header,
+  #convList .conv-ghissues-header,
+  #convList .conv-inprogress-header {
     width: 100%; display: flex; align-items: center; gap: 8px;
     padding: 8px 14px; background: transparent; border: 0; cursor: pointer;
     color: var(--text-muted); font-size: 12px; text-transform: uppercase;
     letter-spacing: 0.5px; font-weight: 600;
   }
-  #convList .conv-archived-header:hover { color: var(--text); }
-  #convList .conv-archived-arrow { font-size: 11px; opacity: 0.7; }
-  #convList .conv-archived-count {
+  #convList .conv-archived-header:hover,
+  #convList .conv-ghissues-header:hover,
+  #convList .conv-inprogress-header:hover { color: var(--text); }
+  #convList .conv-archived-arrow,
+  #convList .conv-ghissues-arrow,
+  #convList .conv-inprogress-arrow { font-size: 11px; opacity: 0.7; }
+  #convList .conv-archived-count,
+  #convList .conv-ghissues-count,
+  #convList .conv-inprogress-count {
     margin-left: auto;
     background: var(--bg); border: 1px solid var(--border);
     border-radius: 10px; padding: 1px 8px; font-size: 11px;
     color: var(--text-muted); font-weight: 600;
   }
-  #convList .conv-archived-section.collapsed .conv-archived-list { display: none; }
+  #convList .conv-archived-section.collapsed .conv-archived-list,
+  #convList .conv-ghissues-section.collapsed .conv-ghissues-list,
+  #convList .conv-inprogress-section.collapsed .conv-inprogress-list { display: none; }
   .conv-item .live-dot {
     width: 7px; height: 7px; border-radius: 50%;
     background: var(--green); animation: pulse 2s infinite;
@@ -1292,16 +1309,11 @@
   .conv-signal.stage { background: rgba(188,140,255,0.15); color: var(--purple); }
   .conv-signal.committed { background: rgba(63,185,80,0.15); color: var(--green); }
   .conv-signal.pushed { background: rgba(57,210,192,0.15); color: var(--cyan); }
-  /* Two side-by-side "uncommitted" signals — kept visually paired so a
-   * row showing only one of them is obviously a divergence between
-   * tool-event tracking and ground-truth git. Solid = tool-tracked
-   * (has_edit && !has_commit), outlined = git status --porcelain. */
-  .conv-signal.uncomm-tools {
+  /* "uncommitted" — `git status --porcelain` against the effective worktree.
+   * Outranks committed/pushed/PR on a worktree row because it means there
+   * are unstaged changes since the last recorded commit. */
+  .conv-signal.uncommitted {
     background: rgba(240,136,62,0.18); color: #F0883E;
-  }
-  .conv-signal.uncomm-git {
-    background: transparent; color: #F0883E;
-    box-shadow: inset 0 0 0 1px rgba(240,136,62,0.55);
   }
   .conv-signal.activity-working { background: rgba(251,202,4,0.15); color: #FBCA04; animation: pulse 2s infinite; }
   .conv-signal.activity-waiting { background: rgba(88,166,255,0.1); color: var(--accent); }
@@ -1312,6 +1324,11 @@
   .conv-signal.no-edits { background: rgba(88,166,255,0.1); color: var(--accent); }
   .conv-signal.pkood-blocked { background: rgba(248,81,73,0.15); color: var(--red); animation: pulse 2s infinite; }
   .conv-signal.pkood-stuck { background: rgba(248,81,73,0.25); color: var(--red); font-weight: 700; }
+  /* "#N" issue-link chip on sidebar rows tied to a GH issue. Muted on
+   * purpose — it's an identifier, not a state — so it doesn't compete
+   * with the lifecycle chip (committed/pushed/PR/uncommitted) on the
+   * same row. */
+  .conv-signal.gh-link { background: rgba(139,148,158,0.12); color: var(--text-muted); font-weight: 600; }
   .conv-item .source-badge.pkood { background: rgba(210,153,34,0.2); color: var(--orange); }
   .pkood-tail-output {
     white-space: pre-wrap; word-break: break-word; font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
@@ -4323,6 +4340,20 @@
     return div.innerHTML;
   }
 
+  // Replace literal `.claude/pasted-images/paste-*.{png,jpg,…}` paths inside
+  // an already-escapeHtml'd string with inline <img> tags. The server's
+  // /api/pasted-image route only serves files actually under `.claude/
+  // pasted-images/` inside the user's home, so a malformed match resolves
+  // to a broken image rather than something dangerous. Reuses .msg-image
+  // so the existing lightbox click handler picks them up for free.
+  const PASTED_IMG_RE = /(\/[^\s<>"]*?\/\.claude\/pasted-images\/paste-[\w.-]+?\.(?:png|jpe?g|gif|webp))/gi;
+  function linkifyPastedImages(escapedHtml) {
+    if (!escapedHtml) return escapedHtml;
+    return String(escapedHtml).replace(PASTED_IMG_RE, (m) =>
+      '<img class="msg-image" src="/api/pasted-image?path=' + encodeURIComponent(m) + '" alt="pasted image">'
+    );
+  }
+
   // Subtle timestamp span shown next to line-num. Returns '' when ts is missing/unparseable.
   // Tiers:
   //   < 1m        → "just now"
@@ -6016,13 +6047,13 @@
   function renderKanbanBoard(convs, targetEl, isSplit) {
     if (!targetEl) targetEl = $kanbanBoard;
     const defaultColumns = [
-      { key: 'backlog',         label: 'Backlog',         defaultExpanded: true,
+      { key: 'backlog',         label: 'GH Issues',       defaultExpanded: true,
         hint: 'Open GitHub issues and TODO.md / PARKING_LOT items with no session yet.' },
       { key: 'needs-attention', label: 'Needs attention', defaultExpanded: true,
         hint: 'Issues labeled `needs-attention` on GitHub — you flagged them for triage.' },
       { key: 'icebox',          label: 'Icebox',          defaultExpanded: true,
         hint: 'Parked. The `icebox` GitHub label is set, or you dragged it here. Active intent: don\'t work on this right now.' },
-      { key: 'working',         label: 'Working',         defaultExpanded: true,
+      { key: 'working',         label: 'In progress',     defaultExpanded: true,
         hint: 'Live or resumable sessions. Idle ones (no commits / no live process) get a blue Idle pill — pick one back up by jumping in.' },
       { key: 'waiting',         label: 'Waiting',         defaultExpanded: true,
         hint: 'Claude is asking for permission (Notification hook). Approve or deny in the terminal.' },
@@ -6170,7 +6201,7 @@
             const label = isClosed ? ('closed' + (reason ? ' · ' + reason : '')) : 'open';
             const color = isClosed ? 'var(--red)' : 'var(--green)';
             const bg = isClosed ? 'rgba(248,81,73,0.12)' : 'rgba(63,185,80,0.12)';
-            stateBadge = '<span title="GitHub state — if CLOSED appears in Backlog, the cache is stale" style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + bg + ';color:' + color + ';font-weight:600;margin-right:3px;text-transform:uppercase;">' + escapeHtml(label) + '</span>';
+            stateBadge = '<span title="GitHub state — if CLOSED appears in GH Issues, the cache is stale" style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + bg + ';color:' + color + ';font-weight:600;margin-right:3px;text-transform:uppercase;">' + escapeHtml(label) + '</span>';
           }
           const labels = (c.issue_labels || []).filter(function(l) { return l !== 'bug'; }).map(function(l) {
             const isAttn = l === 'needs-attention';
@@ -7196,11 +7227,25 @@
     // section header makes that destination visible. Same source of
     // truth as the kanban so tapping archive in either view yields the
     // same resting place.
-    const _activeConvs = [];
+    // Three buckets so the row list mirrors the kanban's coarse categories:
+    //   - sessions: real Claude/pkood sessions you're working in. Includes
+    //     sessions LINKED to a GH issue — once you've started work on an
+    //     issue, the session row is the canonical card; the standalone
+    //     backlog card disappears (server-side dedup). The session row
+    //     gets a "#N" chip (rendered below) so you can still scan for
+    //     issue-tied work without leaving the active list.
+    //   - ghIssues: only un-started GH issues (and TODO/PARKING/native-task
+    //     cards, since they share `source==='backlog'`). Mirrors the kanban
+    //     "GH Issues" column 1:1 so the two surfaces agree.
+    //   - archived: same as before
+    const _sessionConvs = [];
+    const _ghIssueConvs = [];
     const _archivedConvs = [];
     for (const c of convs) {
-      if (classifyKanbanColumn(c) === 'archived') _archivedConvs.push(c);
-      else _activeConvs.push(c);
+      const col = classifyKanbanColumn(c);
+      if (col === 'archived') _archivedConvs.push(c);
+      else if (col === 'backlog') _ghIssueConvs.push(c);
+      else _sessionConvs.push(c);
     }
     const _renderRow = (c) => {
       const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
@@ -7274,28 +7319,40 @@
       const rel = relativeTime(c.last_interacted || c.modified);
       const active = currentConversation === c.id ? ' active' : '';
 
-      // Session signals \u2014 minimal by design. Two distinct chip sets so
-      // the sidebar stays scannable:
-      //   - pkood rows: pkood agents have their own state machine
-      //     (running / idle / blocked / stuck) that the live-tool pill
-      //     can't represent. Keep all four.
-      //   - claude rows: only lifecycle chips that flag something the
-      //     user can't see elsewhere. `committed` = local commits the
-      //     user hasn't pushed; `pushed` = a PR likely exists. Live
-      //     activity ("working", pending-tool, etc.) is already covered
-      //     by the yellow live-tool pill on the same row, so no chip
-      //     for that. Default: zero chips. `planning` and `coding` were
-      //     defaults in signal clothing; both retired.
+      // Session signals \u2014 exactly one lifecycle chip per row. Priority
+      // chain (highest first):
+      //   1. pkood rows have their own state machine (running / idle /
+      //      blocked / stuck) \u2014 keep that set.
+      //   2. uncommitted: ground-truth `git status --porcelain` against
+      //      the EFFECTIVE worktree (server already remaps for sessions
+      //      launched in shared clone but editing a sibling worktree).
+      //      Outranks PR / pushed / committed because it means there are
+      //      changes that haven't landed yet.
+      //   3. PR #N (worktree rows only \u2014 more actionable than "pushed").
+      //   4. pushed.
+      //   5. committed (local commits not yet pushed).
+      //   6. no edits (Claude has touched nothing this session).
       let signals = '';
+      // GH-issue link chip — additive, lives at the front of the signal
+      // chain. Sessions linked to a GH issue show "#N" so they're scannable
+      // in the active list (where they live, since started issues moved
+      // out of the GH Issues section). Skips backlog cards because their
+      // title already starts with "#N:".
+      const _linkedNum = (c.source !== 'backlog')
+        ? (c.linked_issue || c.issue_number)
+        : null;
+      if (_linkedNum) {
+        signals += '<span class="conv-signal gh-link" title="Linked to GitHub issue #' + escapeHtml(String(_linkedNum)) + '">#' + escapeHtml(String(_linkedNum)) + '</span>';
+      }
       if (c.source === 'pkood') {
         const ps = (c.pkood_status || '').toUpperCase();
         if (ps === 'RUNNING') signals += '<span class="conv-signal pkood-running">running</span>';
         else if (ps === 'IDLE') signals += '<span class="conv-signal pkood-idle">idle</span>';
         else if (ps === 'BLOCKED') signals += '<span class="conv-signal pkood-blocked">blocked</span>';
         if (c.pkood_is_stuck) signals += '<span class="conv-signal pkood-stuck">stuck</span>';
+      } else if (isWorktree && c.worktree_dirty) {
+        signals += '<span class="conv-signal uncommitted" title="git status: this worktree has uncommitted changes">uncommitted</span>';
       } else if (isWorktree && c.tail_pr_number) {
-        // Worktree rows: PR# is the more actionable signal than the
-        // generic committed/pushed chip — surface it instead.
         signals += '<span class="conv-signal pushed" title="PR opened by this session">PR #' + c.tail_pr_number + '</span>';
       } else if (c.has_push) {
         signals += '<span class="conv-signal pushed">pushed</span>';
@@ -7303,18 +7360,6 @@
         signals += '<span class="conv-signal committed">committed</span>';
       } else if (hasNoEdits(c)) {
         signals += '<span class="conv-signal no-edits" title="Claude has not edited any files in this session">no edits</span>';
-      }
-      // Two "uncommitted" pills, additive on top of the chain above.
-      // We deliberately render BOTH while we watch them for agreement
-      // — solid = tool-event tracking (Edit/Write seen, no commit),
-      // outlined = ground-truth `git status --porcelain` from the
-      // session's worktree. A row with only one of them flags a gap
-      // between what the agent thought it did and what git sees.
-      if (c.has_edit && !c.has_commit) {
-        signals += '<span class="conv-signal uncomm-tools" title="Tool events: Edit/Write seen, no commit yet">tools</span>';
-      }
-      if (c.worktree_dirty) {
-        signals += '<span class="conv-signal uncomm-git" title="git status --porcelain: working tree has changes">git</span>';
       }
 
       return '<div class="conv-item' + active + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
@@ -7336,7 +7381,7 @@
     };
     // Active list keeps the date-gap separators so morning/evening
     // boundaries stay visible while scanning.
-    const _activeHtml = _activeConvs.map((c, i, arr) => {
+    const _activeRowsHtml = _sessionConvs.map((c, i, arr) => {
       let separator = '';
       if (i > 0) {
         const newer = (arr[i - 1] && arr[i - 1].modified) || 0;
@@ -7351,6 +7396,44 @@
       }
       return separator + _renderRow(c);
     }).join('');
+    // In progress section: every row that's not a backlog card or archived.
+    // Mirrors the kanban "In progress" column (key: 'working' under the
+    // hood — relabel only) so the two surfaces use the same vocabulary.
+    // Hidden entirely when there are no active sessions; collapse state
+    // persists in localStorage.
+    let _inProgressHtml = '';
+    if (_sessionConvs.length > 0) {
+      const _ipCollapsed = localStorage.getItem('ccc-inprogress-collapsed') === '1';
+      const _ipArrow = _ipCollapsed ? '▸' : '▾';
+      _inProgressHtml =
+        '<div class="conv-inprogress-section' + (_ipCollapsed ? ' collapsed' : '') + '" data-role="inprogress-section">'
+        + '<button type="button" class="conv-inprogress-header" data-role="inprogress-toggle" aria-expanded="' + (!_ipCollapsed) + '">'
+        +   '<span class="conv-inprogress-arrow">' + _ipArrow + '</span>'
+        +   '<span class="conv-inprogress-label">In progress</span>'
+        +   '<span class="conv-inprogress-count">' + _sessionConvs.length + '</span>'
+        + '</button>'
+        + '<div class="conv-inprogress-list">' + _activeRowsHtml + '</div>'
+        + '</div>';
+    }
+    // GH Issues section: open issues + TODO/PARKING_LOT cards with no
+    // session yet. Mirrors the kanban "GH Issues" column so the sidebar
+    // scan matches the board. Expanded by default — these are pending
+    // work the user might want to start. State persists in localStorage.
+    let _ghIssuesHtml = '';
+    if (_ghIssueConvs.length > 0) {
+      const _ghCollapsed = localStorage.getItem('ccc-ghissues-collapsed') === '1';
+      const _ghArrow = _ghCollapsed ? '▸' : '▾';
+      const _ghRows = _ghIssueConvs.map(_renderRow).join('');
+      _ghIssuesHtml =
+        '<div class="conv-ghissues-section' + (_ghCollapsed ? ' collapsed' : '') + '" data-role="ghissues-section">'
+        + '<button type="button" class="conv-ghissues-header" data-role="ghissues-toggle" aria-expanded="' + (!_ghCollapsed) + '">'
+        +   '<span class="conv-ghissues-arrow">' + _ghArrow + '</span>'
+        +   '<span class="conv-ghissues-label">GH Issues</span>'
+        +   '<span class="conv-ghissues-count">' + _ghIssueConvs.length + '</span>'
+        + '</button>'
+        + '<div class="conv-ghissues-list">' + _ghRows + '</div>'
+        + '</div>';
+    }
     // Archived section: always present so the destination is obvious,
     // collapsed by default so it doesn't crowd the active list. State
     // persists in localStorage. No gap separators inside — archived
@@ -7370,7 +7453,7 @@
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + '</div>';
     }
-    $convList.innerHTML = _activeHtml + _archivedHtml;
+    $convList.innerHTML = _ghIssuesHtml + _inProgressHtml + _archivedHtml;
     // Toggle handler for the Archived section header.
     const $archivedToggle = $convList.querySelector('[data-role="archived-toggle"]');
     if ($archivedToggle) {
@@ -7383,6 +7466,34 @@
         const arrowEl = $archivedToggle.querySelector('.conv-archived-arrow');
         if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         $archivedToggle.setAttribute('aria-expanded', String(!wasCollapsed));
+      });
+    }
+    // Toggle handler for the GH Issues section header.
+    const $ghIssuesToggle = $convList.querySelector('[data-role="ghissues-toggle"]');
+    if ($ghIssuesToggle) {
+      $ghIssuesToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const section = $ghIssuesToggle.closest('[data-role="ghissues-section"]');
+        if (!section) return;
+        const wasCollapsed = section.classList.toggle('collapsed');
+        localStorage.setItem('ccc-ghissues-collapsed', wasCollapsed ? '1' : '0');
+        const arrowEl = $ghIssuesToggle.querySelector('.conv-ghissues-arrow');
+        if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
+        $ghIssuesToggle.setAttribute('aria-expanded', String(!wasCollapsed));
+      });
+    }
+    // Toggle handler for the In progress section header.
+    const $inProgressToggle = $convList.querySelector('[data-role="inprogress-toggle"]');
+    if ($inProgressToggle) {
+      $inProgressToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const section = $inProgressToggle.closest('[data-role="inprogress-section"]');
+        if (!section) return;
+        const wasCollapsed = section.classList.toggle('collapsed');
+        localStorage.setItem('ccc-inprogress-collapsed', wasCollapsed ? '1' : '0');
+        const arrowEl = $inProgressToggle.querySelector('.conv-inprogress-arrow');
+        if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
+        $inProgressToggle.setAttribute('aria-expanded', String(!wasCollapsed));
       });
     }
     $convList.querySelectorAll('.conv-item').forEach(el => {
@@ -8448,7 +8559,10 @@
     const item = items[idx];
     if (!item) return;
     const msgEl = item.querySelector('.user-msg');
-    const text = msgEl ? msgEl.textContent.trim() : '';
+    // Prefer data-raw-text (the original prose, captured before pasted-image
+    // paths were swapped for <img> tags); fall back to textContent for
+    // bubbles that pre-date the data-raw-text attr.
+    const text = msgEl ? ((msgEl.dataset && msgEl.dataset.rawText) || msgEl.textContent || '').trim() : '';
     if (!text) {  // image-only message — fall back rather than going blank
       _dynAskApply(0, items);
       return;
@@ -8459,7 +8573,7 @@
     // the same text twice (sticky + bubble).
     st.currentIdx = idx;
     item.classList.add('is-pinned-in-sticky');
-    if (st.earlierFirst) st.earlierFirst.textContent = text;
+    if (st.earlierFirst) st.earlierFirst.innerHTML = linkifyPastedImages(escapeHtml(text));
     if (st.earlierBox) st.earlierBox.style.display = '';
   }
   function _dynAskUpdate() {
@@ -9054,8 +9168,8 @@
                       const cleaned = cleanIssuePrompt(ev.text);
                       const parts = splitFirstSentence(cleaned);
                       let h = '<div class="user-msg">';
-                      h += '<span class="ask-first">' + escapeHtml(parts[0]) + '</span>';
-                      h += '<span class="ask-rest"' + (parts[1] ? '' : ' style="display:none"') + '>' + escapeHtml(parts[1] || '') + '</span>';
+                      h += '<span class="ask-first">' + linkifyPastedImages(escapeHtml(parts[0])) + '</span>';
+                      h += '<span class="ask-rest"' + (parts[1] ? '' : ' style="display:none"') + '>' + linkifyPastedImages(escapeHtml(parts[1] || '')) + '</span>';
                       h += '</div>';
                       return h;
                     })()
@@ -9196,7 +9310,12 @@
           }
         }
         const cleanedText = cleanIssuePrompt(ev.text || '');
-        const textHtml = cleanedText ? '<div class="user-msg">' + escapeHtml(cleanedText) + '</div>' : '';
+        // data-raw-text preserves the original prose so _dynAskApply can pin
+        // the same wording in the "Earlier ask" sticky — reading textContent
+        // back would lose any pasted-image path that's been replaced with <img>.
+        const textHtml = cleanedText
+          ? '<div class="user-msg" data-raw-text="' + escapeHtml(cleanedText) + '">' + linkifyPastedImages(escapeHtml(cleanedText)) + '</div>'
+          : '';
         div.innerHTML = '<span class="label">User</span>'
           + '<span class="line-num">L' + ev.line + '</span>'
           + tsSpan(ev.ts)
@@ -9786,12 +9905,19 @@
           '<div class="ccc-loading-detail">Re-scanning sessions and GitHub issues for the new repo.</div>';
       }
     }
+    // Hard cap on the switch POST — without this, a hung request pins the
+    // user on the "Switching to…" overlay with no way out short of a hard
+    // reload. The endpoint itself just reassigns globals + invalidates
+    // caches, so it should return in well under a second; 10s is generous.
+    const _switchAbort = new AbortController();
+    const _switchTimer = setTimeout(() => _switchAbort.abort(), 10000);
     try {
       try { sessionStorage.setItem('ccc-switching-to', targetLabel || targetPath); } catch (_) {}
       const r = await fetch('/api/repo/switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: targetPath }),
+        signal: _switchAbort.signal,
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || 'switch failed');
@@ -9799,12 +9925,16 @@
     } catch (e) {
       try { sessionStorage.removeItem('ccc-switching-to'); } catch (_) {}
       if ($overlay) $overlay.classList.add('fade-out', 'gone');
-      showOpToast('Failed to switch repo: ' + (e.message || e), 'error');
+      const msg = (e && e.name === 'AbortError')
+        ? 'Switch timed out after 10s — server unresponsive. Try again or restart the server.'
+        : 'Failed to switch repo: ' + (e.message || e);
+      showOpToast(msg, 'error');
       // Restore dropdown selection on failure.
       if ($sbRepoPicker && $sbRepoPicker.dataset.prev) {
         $sbRepoPicker.value = $sbRepoPicker.dataset.prev;
       }
     } finally {
+      clearTimeout(_switchTimer);
       if ($sbRepoPicker) $sbRepoPicker.disabled = false;
     }
   }

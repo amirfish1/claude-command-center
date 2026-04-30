@@ -1,0 +1,1 @@
+- Renamed the kanban "Working" column to "In progress" so it matches the new sidebar section header. Internal column key (`working`) and saved column order are unchanged.

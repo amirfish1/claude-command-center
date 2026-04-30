@@ -1,0 +1,1 @@
+- Server no longer dumps `BrokenPipeError` / `ConnectionResetError` tracebacks when the browser disconnects mid-response (typical for hard reloads or tab closes during an in-flight `/api/sessions`). Swallowed at the request-handler level — the underlying disconnect was always benign; only the noise was a problem.

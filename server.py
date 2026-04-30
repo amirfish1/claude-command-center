@@ -3961,6 +3961,7 @@ def find_conversations():
         # don't repay the JSONL walk for inactive sessions.
         eff_branch = None
         eff_kind = None
+        eff_top = None
         try:
             if _PROFILE:
                 _t0 = time.perf_counter()
@@ -4005,6 +4006,7 @@ def find_conversations():
             if eff:
                 eff_branch = eff.get("branch")
                 eff_kind = eff.get("kind")
+                eff_top = eff.get("top")
         except Exception:
             pass
 
@@ -4039,8 +4041,15 @@ def find_conversations():
             # has_edit && !has_commit (tool-event derived) on the client
             # — both surface as side-by-side pills on the row so we can
             # watch them for divergence.
+            # Probe the EFFECTIVE worktree, not the literal session cwd:
+            # sessions launched in the shared clone but editing a sibling
+            # worktree had a misleading "git" chip — it was reflecting the
+            # shared clone's dirtiness, not the worktree's. When inference
+            # found a worktree, run `git status --porcelain` against that
+            # worktree's path. Falls back to the literal cwd otherwise.
             "worktree_dirty": _worktree_dirty_cached(
-                cwd, tail_meta.get("last_meaningful_ts") or stat.st_mtime
+                (eff_top if eff_kind == "worktree" and eff_top else cwd),
+                tail_meta.get("last_meaningful_ts") or stat.st_mtime,
             ),
             # Tool-call-inferred effective branch/kind, populated above.
             # Lets the sidebar row reflect "where edits actually land"
@@ -8271,6 +8280,55 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing id parameter"}, 400)
             else:
                 self.send_json(pkood_tail(agent_id))
+        elif path == "/api/pasted-image":
+            # Serve a user-pasted image referenced by absolute path inside a
+            # message body — e.g. `/Users/foo/Apps/repo/.claude/pasted-images/
+            # paste-1777568603255.png`. The dashboard renders these inline in
+            # "Original ask" / "Earlier ask" / user-message panels.
+            #
+            # Sandbox: path must (a) live under the user's home directory,
+            # (b) sit in a `.claude/pasted-images/` directory, (c) have an
+            # allowed image extension. No path traversal can escape (a).
+            qs = urllib.parse.parse_qs(parsed.query)
+            raw = (qs.get("path", [""])[0] or "").strip()
+            allowed_exts = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+            ext = ("." + raw.rsplit(".", 1)[-1].lower()) if "." in raw else ""
+            if not raw or ext not in allowed_exts:
+                self.send_json({"error": "not found"}, 404)
+                return
+            try:
+                resolved = Path(raw).resolve(strict=False)
+                home = Path.home().resolve()
+            except OSError:
+                self.send_json({"error": "not found"}, 404)
+                return
+            try:
+                resolved.relative_to(home)
+            except ValueError:
+                self.send_json({"error": "forbidden"}, 403)
+                return
+            parts = resolved.parts
+            if len(parts) < 3 or parts[-2] != "pasted-images" or parts[-3] != ".claude":
+                self.send_json({"error": "forbidden"}, 403)
+                return
+            if not resolved.is_file():
+                self.send_json({"error": "not found"}, 404)
+                return
+            try:
+                body = resolved.read_bytes()
+            except OSError:
+                self.send_json({"error": "not found"}, 404)
+                return
+            ct_map = {
+                ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".gif": "image/gif", ".webp": "image/webp",
+            }
+            self.send_response(200)
+            self.send_header("Content-Type", ct_map[ext])
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.end_headers()
+            self.wfile.write(body)
         elif path.startswith("/image-cache/"):
             # Serve user-pasted images from ~/.claude/image-cache/<sid>/<file>.
             # Path sandboxing (realpath under base) is the sole authorization check;
@@ -9737,7 +9795,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
+        try:
+            self.wfile.write(json.dumps(data).encode())
+        except (BrokenPipeError, ConnectionResetError):
+            # Client (browser) disconnected mid-response — typically a hard
+            # reload or tab close cancelling an in-flight /api/sessions.
+            # Not a real error; the noisy traceback was just the stdlib
+            # http.server's default behaviour. Swallow it.
+            pass
+
+    def handle_one_request(self):
+        # Same disconnect-while-writing guard at the request-handler level
+        # so any other endpoint (not just send_json) doesn't dump a
+        # traceback when the client bails on us mid-response.
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
 
     def log_message(self, format, *args):
         # Quieter logging — only errors
