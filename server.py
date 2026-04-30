@@ -9322,6 +9322,35 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     ))
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/sessions/spawn-codex":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            prompt = (payload.get("prompt") or "").strip()
+            name = (payload.get("name") or "").strip() or None
+            cwd_raw = payload.get("cwd")
+            cwd = cwd_raw.strip() if isinstance(cwd_raw, str) else None
+            if not prompt:
+                self.send_json({"ok": False, "error": "missing prompt"}, 400)
+            elif cwd and not os.path.isabs(cwd):
+                self.send_json({"ok": False, "error": f"cwd must be an absolute path: {cwd}"}, 400)
+            elif cwd and not os.path.isdir(cwd):
+                self.send_json({"ok": False, "error": f"cwd does not exist or is not a directory: {cwd}"}, 400)
+            else:
+                try:
+                    result = spawn_session_codex(prompt, name=name, cwd=cwd or None)
+                    # Resolver missing-binary failures get a 503 so the
+                    # frontend can distinguish them from generic 500s and
+                    # offer the install hint without parsing the body.
+                    if not result.get("ok") and "not found" in (result.get("error") or "").lower():
+                        self.send_json(result, 503)
+                    else:
+                        self.send_json(result)
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/sessions/spawned/\d+/inject$", path):
             pid = int(path.split("/")[4])
             length = int(self.headers.get("Content-Length", "0"))
