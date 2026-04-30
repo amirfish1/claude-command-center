@@ -3370,7 +3370,13 @@
       </div>
       <textarea id="nsmBody" placeholder="What should this session do? (the first sentence becomes the card title — you can rename later or hit ✨ to AI-generate one)"></textarea>
       <div class="nsm-actions">
-        <label class="nsm-pkood"><input type="checkbox" id="nsmPkood"> pkood</label>
+        <label class="nsm-engine" style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);">
+          Engine
+          <select id="nsmEngineSelect" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:12px;">
+            <option value="claude">claude</option>
+            <option value="codex">codex</option>
+          </select>
+        </label>
         <label class="nsm-pkood" title="Spawn the session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main."><input type="checkbox" id="nsmWorktree"> 🌿 worktree</label>
         <span style="flex:1;"></span>
         <button id="nsmCancel" class="nsm-btn">Cancel</button>
@@ -10821,12 +10827,21 @@
   const $nsmSubmit = document.getElementById('nsmSubmit');
   const $nsmCancel = document.getElementById('nsmCancel');
   const $nsmBackdrop = document.getElementById('nsmBackdrop');
-  const $nsmPkood = document.getElementById('nsmPkood');
+  const $nsmEngineSelect = document.getElementById('nsmEngineSelect');
+  // Legacy reference: kept null so the modal-submit dispatcher
+  // (rewritten in Task 8 of the codex-spawn series) doesn't crash
+  // when it reads `$nsmPkood.checked` before that rewrite lands.
+  let $nsmPkood = null;
   function openNewSessionModal(body = '') {
     if (!$nsm) return;
     _clearNsmError();
     $nsmBody.value = body || '';
-    if ($nsmPkood && $kptPkoodToggle) $nsmPkood.checked = $kptPkoodToggle.checked;
+    // Sync from the toolbar selector so the modal opens on the same
+    // engine the user just picked. Falls back to 'claude' if the
+    // toolbar element is missing (defensive — both should always exist).
+    if ($nsmEngineSelect && $kptEngineSelect) {
+      $nsmEngineSelect.value = $kptEngineSelect.value || 'claude';
+    }
     const $nsmWorktree = document.getElementById('nsmWorktree');
     const $kptWorktreeToggle = document.getElementById('kptWorktreeToggle');
     if ($nsmWorktree && $kptWorktreeToggle) $nsmWorktree.checked = $kptWorktreeToggle.checked;
