@@ -4868,7 +4868,7 @@ def spawn_session_codex(prompt, name=None, cwd=None):
     log_path = LOG_DIR / log_filename
 
     spawn_cwd = cwd if cwd else str(REPO_ROOT)
-    model = os.environ.get("CCC_CODEX_MODEL", "gpt-5.5-codex")
+    model = os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
 
     cmd = [
         bin_path, "exec",
@@ -8344,7 +8344,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(list_spawned_sessions())
         elif path == "/api/sessions/spawn-codex/availability":
             info = _resolve_codex_bin()
-            info["model"] = os.environ.get("CCC_CODEX_MODEL", "gpt-5.5-codex")
+            info["model"] = os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
             self.send_json(info)
         elif path == "/api/sessions":
             self.send_json(find_all_sessions())
