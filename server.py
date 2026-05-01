@@ -12,7 +12,7 @@ Usage:
     CCC_WATCH_REPO=~/dev/foo ./run.sh
 """
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 import ast
 import base64
@@ -4282,11 +4282,14 @@ def find_all_sessions():
     registry = _load_session_registry()
     live_sids = set(registry.keys())
     spawned_pids = {s["pid"] for s in _spawned_sessions if s["proc"].poll() is None}
+    spawned_engine_by_pid = {s["pid"]: s.get("engine", "claude") for s in _spawned_sessions}
     for c in conversations:
         c["source"] = "interactive"
         c["is_live"] = c["session_id"] in live_sids
         reg_pid = (registry.get(c["session_id"]) or {}).get("pid")
         c["spawn_pid"] = reg_pid if reg_pid in spawned_pids else None
+        if c["spawn_pid"]:
+            c["engine"] = spawned_engine_by_pid.get(c["spawn_pid"], "claude")
 
     # Add pkood agents — and merge in their linked claude-session card, if any.
     # Pkood spawns a claude process in a tmux pty, which produces a regular
@@ -4684,6 +4687,55 @@ def _create_worktree_for_spawn(source_cwd, slug):
     return str(candidate), branch
 
 
+# ---------------------------------------------------------------------------
+# Codex CLI binary resolution
+# ---------------------------------------------------------------------------
+# Tested against codex-cli 0.125.0-alpha.3, the version currently shipping
+# inside /Applications/Codex.app.
+
+CODEX_APP_BUNDLE_PATH = "/Applications/Codex.app/Contents/Resources/codex"
+
+
+def _resolve_codex_bin():
+    """Locate a usable Codex CLI binary.
+
+    Priority order:
+      1. $CCC_CODEX_BIN (env override) — if set and executable.
+      2. `shutil.which("codex")` — picks up Homebrew / Cargo / npm-global.
+      3. /Applications/Codex.app/Contents/Resources/codex (macOS Codex
+         desktop app's bundled CLI).
+
+    Returns a dict so the caller and the availability endpoint can share
+    one shape:
+      {available: True,  bin: "<abs path>", source: "env|path|bundle"}
+      {available: False, reason: "<human readable>", bin: None}
+    """
+    env_bin = os.environ.get("CCC_CODEX_BIN")
+    if env_bin:
+        if os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+            return {"available": True, "bin": env_bin, "source": "env"}
+        return {
+            "available": False,
+            "bin": None,
+            "code": "codex_unavailable",
+            "reason": f"CCC_CODEX_BIN is set to {env_bin!r} but it isn't an executable file",
+        }
+    which_bin = shutil.which("codex")
+    if which_bin:
+        return {"available": True, "bin": which_bin, "source": "path"}
+    if os.path.isfile(CODEX_APP_BUNDLE_PATH) and os.access(CODEX_APP_BUNDLE_PATH, os.X_OK):
+        return {"available": True, "bin": CODEX_APP_BUNDLE_PATH, "source": "bundle"}
+    return {
+        "available": False,
+        "bin": None,
+        "code": "codex_unavailable",
+        "reason": (
+            "Codex CLI not found. Install Codex.app, "
+            "`npm i -g @openai/codex`, or set CCC_CODEX_BIN."
+        ),
+    }
+
+
 def spawn_session(prompt, name=None, cwd=None, worktree=False):
     """Spawn a headless Claude Code session and return tracking info.
 
@@ -4768,6 +4820,7 @@ def spawn_session(prompt, name=None, cwd=None, worktree=False):
         spawned_at=timestamp,
         command_summary=prompt[:200],
         fifo=fifo_path,
+        engine="claude",
     )
     # Cwd determines the ~/.claude/projects/ bucket the new session
     # logs to, which is how the kanban groups it by repo. Print it so
@@ -4779,6 +4832,90 @@ def spawn_session(prompt, name=None, cwd=None, worktree=False):
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
     return resp
+
+
+def spawn_session_codex(prompt, name=None, cwd=None):
+    """Spawn a headless Codex CLI run and return tracking info.
+
+    Mirrors `spawn_session` but invokes the Codex CLI's `exec`
+    subcommand instead of `claude -p`. Codex `exec` is one-shot —
+    the prompt comes from argv and the process exits when the model
+    is done — so we use `subprocess.DEVNULL` for stdin (no FIFO,
+    no mid-run inject support).
+
+    Tested against codex-cli 0.125.0-alpha.3.
+
+    If `cwd` is provided, the spawned subprocess runs there AND the
+    Codex `--cd` flag is set so the agent's workspace root matches
+    the launch directory. Otherwise we inherit CCC's REPO_ROOT
+    (backwards-compatible default).
+
+    Returns the same shape as spawn_session:
+      {ok: True,  pid, name, log}                       — success
+      {ok: False, error}                                — resolver failed
+    """
+    resolved = _resolve_codex_bin()
+    if not resolved["available"]:
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    bin_path = resolved["bin"]
+
+    session_name = _slugify(name or prompt)
+    if not session_name:
+        session_name = "unnamed"
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"spawn-codex-{session_name}-{timestamp}.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / log_filename
+
+    spawn_cwd = cwd if cwd else str(REPO_ROOT)
+    model = os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
+
+    cmd = [
+        bin_path, "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--model", model,
+        "--cd", spawn_cwd,
+        "--",
+        prompt,
+    ]
+
+    log_fh = open(log_path, "w")
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        cwd=spawn_cwd,
+        start_new_session=True,
+    )
+
+    entry = {
+        "pid": proc.pid,
+        "name": session_name,
+        "log": str(log_path),
+        "prompt": prompt[:200],
+        "started": timestamp,
+        "proc": proc,
+        "log_fh": log_fh,
+        "fifo": None,         # Codex exec is one-shot; no inject FIFO.
+        "stdin_fd": None,
+        "engine": "codex",
+    }
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid,
+        name=session_name,
+        log_path=log_path,
+        cwd=spawn_cwd,
+        spawned_at=timestamp,
+        command_summary=prompt[:200],
+        fifo=None,
+        engine="codex",
+    )
+
+    return {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)}
 
 
 _COLOR_PALETTE = [
@@ -5037,6 +5174,7 @@ def resume_session_headless(session_id, text):
         spawned_at=timestamp,
         command_summary=text[:200],
         fifo=fifo_path,
+        engine="claude",
     )
     return {"ok": ok, "pid": proc.pid, "log": str(log_path), "resumed": True}
 
@@ -5113,12 +5251,16 @@ def _save_spawn_registry(entries):
         print(f"  [spawn-registry] could not write {SPAWNED_PIDS_FILE} ({e})")
 
 
-def _record_spawn_to_registry(pid, name, log_path, cwd, spawned_at, command_summary, fifo=None):
+def _record_spawn_to_registry(pid, name, log_path, cwd, spawned_at, command_summary, fifo=None, engine="claude"):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is filled in lazily by the reattach sweep (it isn't known
-    at fork time — Claude emits it in the first stream-json event).
+    at fork time — Claude emits it in the first stream-json event, Codex
+    emits it in its `--json` event stream).
     The fifo path is persisted so a fresh CCC instance can reopen the
-    write side after a restart and continue injecting messages."""
+    write side after a restart and continue injecting messages (Claude
+    only — Codex exec is one-shot).
+    `engine` ("claude" or "codex") tells the boot-time reattach sweep
+    which ps-grep to use and which JSONL ingestion path to skip."""
     entries = _load_spawn_registry()
     entries.append({
         "pid": pid,
@@ -5129,6 +5271,7 @@ def _record_spawn_to_registry(pid, name, log_path, cwd, spawned_at, command_summ
         "cwd": str(cwd),
         "spawned_at": spawned_at,
         "command_summary": command_summary,
+        "engine": engine,
     })
     _save_spawn_registry(entries)
 
@@ -5142,13 +5285,19 @@ def _remove_spawn_from_registry(pid):
         _save_spawn_registry(pruned)
 
 
-def _pid_is_claude_process(pid):
-    """Verify a PID is actually a `claude` process before treating it as one
-    of ours. PIDs get reused, so a bare `os.kill(pid, 0)` isn't enough — we
-    could end up trying to inject into someone's vim. Uses `ps -p <pid> -o
-    command=` (works on macOS + Linux) and matches strictly on argv[0]
-    basename — substring matching is too lenient (any python process whose
-    argv mentions 'claude' would otherwise pass)."""
+def _pid_is_engine_process(pid, engine):
+    """Verify a PID is actually a process for the given engine before
+    treating it as one of ours. PIDs get reused, so a bare `os.kill(pid, 0)`
+    isn't enough — we could end up trying to inject into someone's vim.
+    Uses `ps -p <pid> -o command=` (works on macOS + Linux) and matches
+    strictly on argv[0] basename — substring matching is too lenient
+    (any python process whose argv mentions the engine name would otherwise
+    pass).
+
+    `engine` is one of "claude" or "codex" — the basename we expect at
+    argv[0]."""
+    if engine not in ("claude", "codex"):
+        return False
     try:
         out = subprocess.run(
             ["ps", "-p", str(pid), "-o", "command="],
@@ -5164,15 +5313,13 @@ def _pid_is_claude_process(pid):
     parts = cmd.split()
     if not parts:
         return False
-    # Match the executable basename only; `claude -p ...` shows up as
-    # `/path/to/claude -p ...` on macOS or just `claude -p ...` on Linux.
-    return parts[0].rsplit("/", 1)[-1] == "claude"
+    return parts[0].rsplit("/", 1)[-1] == engine
 
 
 def _reattach_spawned_orphans():
     """Boot-time sweep that re-populates `_spawned_sessions` from the on-disk
-    registry. Verifies every entry's PID is alive AND is still a `claude`
-    process (PIDs can be reused), drops dead/reused ones, and rewrites the
+    registry. Verifies every entry's PID is alive AND is still a process of
+    the recorded engine (PIDs can be reused), drops dead/reused ones, and rewrites the
     registry. Never kills anything — just makes live orphans visible to the
     dashboard again."""
     raw_entries = _load_spawn_registry()
@@ -5204,15 +5351,21 @@ def _reattach_spawned_orphans():
         if not alive:
             dropped += 1
             continue
-        # Step 2: is it actually a claude process? (PID reuse defence.)
-        if not _pid_is_claude_process(pid):
+        # Step 2: is it actually a process of the engine we recorded?
+        # Older registry entries pre-date the `engine` field — default
+        # them to "claude" since that's all CCC spawned before Codex
+        # support landed. PID reuse defence.
+        engine = entry.get("engine", "claude")
+        if not _pid_is_engine_process(pid, engine):
             dropped += 1
             continue
         # Step 3: try to backfill session_id from the log file if we don't
-        # have it yet. Best-effort — failures don't block reattach.
+        # have it yet. Claude logs only — Codex's JSONL event shape
+        # differs and ingestion is deferred to a later iteration.
+        # Best-effort — failures don't block reattach.
         session_id = entry.get("session_id")
         log_path = entry.get("log")
-        if not session_id and log_path:
+        if engine == "claude" and not session_id and log_path:
             try:
                 session_id = extract_session_id(log_path)
             except Exception:
@@ -5236,6 +5389,7 @@ def _reattach_spawned_orphans():
             "fifo": fifo_path,
             "stdin_fd": stdin_fd,
             "reattached": True,
+            "engine": engine,
         }
         if session_id:
             synthetic["resumed_sid"] = session_id
@@ -5249,6 +5403,7 @@ def _reattach_spawned_orphans():
             "cwd": entry.get("cwd"),
             "spawned_at": entry.get("spawned_at"),
             "command_summary": entry.get("command_summary", ""),
+            "engine": engine,
         })
         reattached += 1
 
@@ -8187,6 +8342,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(get_issue_details(num))
         elif path == "/api/sessions/spawned":
             self.send_json(list_spawned_sessions())
+        elif path == "/api/sessions/spawn-codex/availability":
+            info = _resolve_codex_bin()
+            info["model"] = os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
+            self.send_json(info)
         elif path == "/api/sessions":
             self.send_json(find_all_sessions())
         elif path == "/api/conversations":
@@ -9170,6 +9329,58 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         cwd=str(cwd_resolved) if cwd_resolved else None,
                         worktree=worktree_flag,
                     ))
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/sessions/spawn-codex":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            prompt = (payload.get("prompt") or "").strip()
+            name = (payload.get("name") or "").strip() or None
+            cwd_raw = payload.get("cwd")
+            cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
+            cwd_resolved = None
+            cwd_error = None
+            if cwd_input:
+                try:
+                    expanded = os.path.expanduser(cwd_input)
+                    candidate = Path(expanded).resolve()
+                except (OSError, RuntimeError) as e:
+                    cwd_error = f"could not resolve path ({e})"
+                else:
+                    home = Path.home().resolve()
+                    try:
+                        st = os.stat(candidate)
+                    except OSError as e:
+                        cwd_error = f"path does not exist ({e.strerror or e})"
+                    else:
+                        if not stat.S_ISDIR(st.st_mode):
+                            cwd_error = f"not a directory: {candidate}"
+                        else:
+                            try:
+                                candidate.relative_to(home)
+                            except ValueError:
+                                cwd_error = f"path is outside $HOME ({home}): {candidate}"
+                            else:
+                                cwd_resolved = candidate
+            if not prompt:
+                self.send_json({"ok": False, "error": "missing prompt"}, 400)
+            elif cwd_error:
+                self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
+            else:
+                try:
+                    result = spawn_session_codex(prompt, name=name, cwd=str(cwd_resolved) if cwd_resolved else None)
+                    # Resolver-side failures (binary not found, CCC_CODEX_BIN
+                    # misconfigured) carry a stable `"code": "codex_unavailable"`
+                    # so the frontend can render an install hint without
+                    # parsing the human-readable error text.
+                    if result.get("code") == "codex_unavailable":
+                        self.send_json(result, 503)
+                    else:
+                        self.send_json(result)
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/sessions/spawned/\d+/inject$", path):

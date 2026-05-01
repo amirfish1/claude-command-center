@@ -1410,6 +1410,7 @@
    * same row. */
   .conv-signal.gh-link { background: rgba(139,148,158,0.12); color: var(--text-muted); font-weight: 600; }
   .conv-item .source-badge.pkood { background: rgba(210,153,34,0.2); color: var(--orange); }
+  .conv-item .source-badge.codex { background: rgba(63,185,80,0.2); color: var(--green); }
   .pkood-tail-output {
     white-space: pre-wrap; word-break: break-word; font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
     font-size: 13px; line-height: 1.5; padding: 16px 20px; color: var(--text);
@@ -2758,7 +2759,7 @@
     .kanban-panel-toolbar .kpt-new-session,
     .kanban-panel-toolbar #kptRunBtn,
     .kanban-panel-toolbar #kptRecentBtn,
-    .kanban-panel-toolbar #kptPkoodToggle,
+    .kanban-panel-toolbar #kptEngineSelect,
     .kanban-panel-toolbar #kptGitOnlyToggle,
     .kanban-panel-toolbar #kptDescToggle,
     .kanban-panel-toolbar .kpt-label,
@@ -3132,7 +3133,13 @@
         <button id="kptRecentBtn" title="Show only sessions/issues touched in the last 10 hours" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Last 10h</button>
         <button id="kptDescToggle" title="Compact mode — hide the description preview on cards" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Compact</button>
         <button id="kptGitOnlyToggle" title="Show only cards linked to a GitHub issue" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">GitHub only</button>
-        <label class="kpt-label" title="Spawn via Pkood (background agent runner) instead of headless Claude — see docs" style="display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text);"><input type="checkbox" id="kptPkoodToggle" style="margin:0;"> pkood spawn</label>
+        <label class="kpt-label" title="Pick which engine spawns the next session — Claude (default) or OpenAI Codex" style="display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text);">
+          Engine
+          <select id="kptEngineSelect" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:12px;">
+            <option value="claude">claude</option>
+            <option value="codex">codex</option>
+          </select>
+        </label>
         <label class="kpt-label" title="Spawn the new session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main" style="display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text);"><input type="checkbox" id="kptWorktreeToggle" style="margin:0;"> 🌿 worktree</label>
       </div>
     </div>
@@ -3364,7 +3371,13 @@
       </div>
       <textarea id="nsmBody" placeholder="What should this session do? (the first sentence becomes the card title — you can rename later or hit ✨ to AI-generate one)"></textarea>
       <div class="nsm-actions">
-        <label class="nsm-pkood"><input type="checkbox" id="nsmPkood"> pkood</label>
+        <label class="nsm-engine" style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);">
+          Engine
+          <select id="nsmEngineSelect" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:12px;">
+            <option value="claude">claude</option>
+            <option value="codex">codex</option>
+          </select>
+        </label>
         <label class="nsm-pkood" title="Spawn the session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main."><input type="checkbox" id="nsmWorktree"> 🌿 worktree</label>
         <span style="flex:1;"></span>
         <button id="nsmCancel" class="nsm-btn">Cancel</button>
@@ -3698,7 +3711,7 @@
     // feature itself; keeping it visible nudges users to `vercel link`.
     const $kptDeploy = document.getElementById('kptDeployStatus');
     if ($kptDeploy && !APP_CONFIG.vercel_enabled) $kptDeploy.style.display = 'none';
-    document.querySelectorAll('.pkood-toggle-label, .kpt-label, .nsm-pkood').forEach(el => {
+    document.querySelectorAll('.pkood-toggle-label').forEach(el => {
       if (!APP_CONFIG.pkood_enabled) el.style.display = 'none';
     });
     if (APP_CONFIG.repo) document.body.dataset.repo = APP_CONFIG.repo;
@@ -5125,14 +5138,22 @@
   // Pending spawn placeholders (optimistic UI) — keyed by pid.
   const pendingSpawns = new Map();
 
-  function insertPendingSpawnCard(pid, subject, usePkood) {
+  function insertPendingSpawnCard(pid, subject, sourceOrEngine) {
     if (!pid) return;
     const id = 'spawning-' + pid;
+    // Backwards-compat: this used to take `usePkood: bool`. Accept
+    // either the legacy boolean (true → 'pkood') or a new explicit
+    // string ('claude' | 'codex' | 'pkood' | 'interactive').
+    let source;
+    if (sourceOrEngine === true) source = 'pkood';
+    else if (sourceOrEngine === false || sourceOrEngine == null) source = 'interactive';
+    else if (typeof sourceOrEngine === 'string') source = sourceOrEngine;
+    else source = 'interactive';
     const card = {
       id, session_id: id,
       display_name: subject || ('Spawning #' + pid),
       first_message: '',
-      source: usePkood ? 'pkood' : 'interactive',
+      source,
       is_live: true, archived: false, verified: false,
       spawn_pid: pid, pending_spawn: true,
       has_edit: false, has_commit: false, has_push: false,
@@ -7455,6 +7476,7 @@
       }
       let sourceBadge = '';
       if (c.source === 'pkood') sourceBadge = '<span class="source-badge pkood">pkood</span>';
+      else if (c.source === 'codex' || c.engine === 'codex') sourceBadge = '<span class="source-badge codex">codex</span>';
       // Prefer "last interacted" (the user's last UI action) over "last
       // event" (which includes Claude's autonomous responses) so the row
       // time mirrors the user's mental model: when did *I* last touch this?
@@ -10538,7 +10560,47 @@
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
-  const $kptPkoodToggle = document.getElementById('kptPkoodToggle');
+  const $kptEngineSelect = document.getElementById('kptEngineSelect');
+  // Restore last-used engine from localStorage so the user's choice
+  // persists across reloads. Defaults to 'claude' on first launch.
+  if ($kptEngineSelect) {
+    try {
+      const saved = localStorage.getItem('ccc.spawnEngine');
+      if (saved === 'claude' || saved === 'codex') $kptEngineSelect.value = saved;
+    } catch (_) {}
+    $kptEngineSelect.addEventListener('change', () => {
+      try { localStorage.setItem('ccc.spawnEngine', $kptEngineSelect.value); } catch (_) {}
+    });
+  }
+  // Probe Codex availability so a user with no Codex install sees the
+  // option greyed out instead of getting a 503 mid-spawn. Polled on
+  // window focus too — handles "I just installed it; refresh the UI"
+  // without a hard reload.
+  async function refreshCodexAvailability() {
+    try {
+      const r = await fetch('/api/sessions/spawn-codex/availability');
+      const d = await r.json();
+      const codexOpt = $kptEngineSelect && $kptEngineSelect.querySelector('option[value="codex"]');
+      const nsmCodexOpt = (typeof $nsmEngineSelect !== 'undefined') && $nsmEngineSelect && $nsmEngineSelect.querySelector('option[value="codex"]');
+      const reason = d.available ? '' : (d.reason || 'Codex CLI not found');
+      [codexOpt, nsmCodexOpt].forEach(opt => {
+        if (!opt) return;
+        opt.disabled = !d.available;
+        opt.title = reason;
+        opt.textContent = d.available ? 'codex' : 'codex (unavailable)';
+      });
+      // If the user had codex selected but it's no longer available,
+      // fall back to claude so the next spawn doesn't 503.
+      if (!d.available && $kptEngineSelect && $kptEngineSelect.value === 'codex') {
+        $kptEngineSelect.value = 'claude';
+        try { localStorage.setItem('ccc.spawnEngine', 'claude'); } catch (_) {}
+      }
+    } catch (_) {
+      // Probe is best-effort; a network blip shouldn't disable the dropdown.
+    }
+  }
+  refreshCodexAvailability();
+  window.addEventListener('focus', refreshCodexAvailability);
   // Hide-descriptions toggle
   const $kptDescToggle = document.getElementById('kptDescToggle');
   if ($kptDescToggle) {
@@ -10728,23 +10790,36 @@
     $kptRunBtn.addEventListener('click', async () => {
       let prompt = ($kptNewSession && $kptNewSession.value || '').trim();
       if (!prompt) return;
-      const usePkood = ($kptPkoodToggle && $kptPkoodToggle.checked) || prompt.startsWith('pkood:');
+      const isPkoodPrefix = prompt.startsWith('pkood:');
+      const engine = isPkoodPrefix
+        ? 'pkood'
+        : (($kptEngineSelect && $kptEngineSelect.value) || 'claude');
       const $kptWorktreeToggle = document.getElementById('kptWorktreeToggle');
       const useWorktree = !!($kptWorktreeToggle && $kptWorktreeToggle.checked);
-      if (prompt.startsWith('pkood:')) prompt = prompt.slice(6).trim();
+      if (isPkoodPrefix) prompt = prompt.slice(6).trim();
       if (!prompt) return;
       // Show the placeholder immediately — don't wait for the spawn POST to
       // return. Users were staring at a blank board for a beat because the
       // placeholder only materialized after /api/sessions/spawn responded.
       const subject = prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt;
       const tempPid = 'tmp-' + Date.now();
-      insertPendingSpawnCard(tempPid, subject, usePkood);
+      // Source for the optimistic card: 'codex' renders the codex chip
+      // (Task 9); 'pkood' keeps the orange pkood chip; 'claude' uses
+      // 'interactive' (no chip).
+      const cardSource = engine === 'codex' ? 'codex'
+                       : engine === 'pkood' ? 'pkood'
+                       : 'interactive';
+      insertPendingSpawnCard(tempPid, subject, cardSource);
       $kptRunBtn.disabled = true;
       $kptRunBtn.textContent = 'Spawning...';
       try {
-        const endpoint = usePkood ? '/api/pkood/spawn' : '/api/sessions/spawn';
-        // pkood doesn't support the worktree flag — silently drop it for that path.
-        const body = usePkood ? { prompt } : { prompt, worktree: useWorktree };
+        const endpoint = engine === 'pkood' ? '/api/pkood/spawn'
+                       : engine === 'codex' ? '/api/sessions/spawn-codex'
+                       : '/api/sessions/spawn';
+        // pkood and codex don't support the worktree flag — drop it for those.
+        const body = engine === 'claude'
+          ? { prompt, worktree: useWorktree }
+          : { prompt };
         const res = await fetch(endpoint, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -10799,12 +10874,17 @@
   const $nsmSubmit = document.getElementById('nsmSubmit');
   const $nsmCancel = document.getElementById('nsmCancel');
   const $nsmBackdrop = document.getElementById('nsmBackdrop');
-  const $nsmPkood = document.getElementById('nsmPkood');
+  const $nsmEngineSelect = document.getElementById('nsmEngineSelect');
   function openNewSessionModal(body = '') {
     if (!$nsm) return;
     _clearNsmError();
     $nsmBody.value = body || '';
-    if ($nsmPkood && $kptPkoodToggle) $nsmPkood.checked = $kptPkoodToggle.checked;
+    // Sync from the toolbar selector so the modal opens on the same
+    // engine the user just picked. Falls back to 'claude' if the
+    // toolbar element is missing (defensive — both should always exist).
+    if ($nsmEngineSelect && $kptEngineSelect) {
+      $nsmEngineSelect.value = $kptEngineSelect.value || 'claude';
+    }
     const $nsmWorktree = document.getElementById('nsmWorktree');
     const $kptWorktreeToggle = document.getElementById('kptWorktreeToggle');
     if ($nsmWorktree && $kptWorktreeToggle) $nsmWorktree.checked = $kptWorktreeToggle.checked;
@@ -10826,14 +10906,15 @@
     }
     const effectiveSubject = firstSentence(body);
     const prompt = body + SESSION_STATE_INSTRUCTION;
-    const usePkood = !!($nsmPkood && $nsmPkood.checked);
+    const engine = ($nsmEngineSelect && $nsmEngineSelect.value) || 'claude';
     const $nsmWorktree = document.getElementById('nsmWorktree');
     const useWorktree = !!($nsmWorktree && $nsmWorktree.checked);
     $nsmSubmit.disabled = true;
     $nsmSubmit.textContent = 'Launching...';
     try {
-      const endpoint = usePkood ? '/api/pkood/spawn' : '/api/sessions/spawn';
-      const body = usePkood
+      const endpoint = engine === 'codex' ? '/api/sessions/spawn-codex'
+                                          : '/api/sessions/spawn';
+      const body = engine === 'codex'
         ? { prompt, name: effectiveSubject }
         : { prompt, name: effectiveSubject, worktree: useWorktree };
       const res = await fetch(endpoint, {
@@ -10843,7 +10924,8 @@
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
         closeNewSessionModal();
-        insertPendingSpawnCard(data.pid, effectiveSubject, usePkood);
+        const cardSource = engine === 'codex' ? 'codex' : 'interactive';
+        insertPendingSpawnCard(data.pid, effectiveSubject, cardSource);
         // Tight poll schedule so the real card replaces the placeholder fast.
         setTimeout(refreshConversationList, 600);
         setTimeout(refreshConversationList, 1500);
