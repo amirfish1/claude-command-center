@@ -6124,7 +6124,11 @@
     // permission. This is the strongest "human input required" signal we
     // have, so it overrides natural classification and the fresh-session
     // sticky alike. Cleared automatically when PostToolUse fires.
-    if (c && c.needs_approval) return 'waiting';
+    // Server-truth terminal states (archived / verified) still win — an
+    // archived session shouldn't get pinned to Waiting because a stale
+    // _needs_approval marker is still on disk; otherwise the row-list
+    // archive button toggles its icon but the row never leaves "In progress".
+    if (c && c.needs_approval && !c.archived && !c.verified) return 'waiting';
     const raw = _classifyKanbanColumnNatural(c);
     return _applyFreshSessionSticky(c, raw);
   }

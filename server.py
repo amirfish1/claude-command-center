@@ -9771,6 +9771,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     archived.append(sid)
                     now_archived = True
                 _save_archived_conversations(archived)
+                # Archiving retires the session — drop any stale Notification-hook
+                # marker so the dashboard doesn't keep classifying it as Waiting
+                # (which would pin the row to "In progress" and undo the move).
+                if now_archived:
+                    try:
+                        (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
+                    except (OSError, FileNotFoundError):
+                        pass
                 # If this card represents a GitHub issue (id `issue-N`),
                 # also close/reopen the issue on archive/unarchive.
                 issue_match = re.match(r"^issue-(\d+)$", conv_id)
