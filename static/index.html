@@ -1296,6 +1296,28 @@
   .conv-item:hover .conv-merge-btn { opacity: 0.7; }
   .conv-item .conv-merge-btn:hover { opacity: 1; color: var(--green); background: rgba(63,185,80,0.12); }
   .conv-item .conv-merge-btn:disabled { cursor: progress; opacity: 0.5; }
+  /* Backlog-only "Start" pill — surfaces the kanban GH-issue start action
+     directly on the row so users can launch a session without flipping to
+     the board. Greenish to mirror .kanban-start-btn. */
+  .conv-item .conv-start-btn {
+    font-size: 11px; font-weight: 600; cursor: pointer;
+    padding: 2px 8px; border-radius: 3px; flex-shrink: 0;
+    border: 1px solid rgba(63,185,80,0.3);
+    background: rgba(63,185,80,0.1); color: var(--green);
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .conv-item .conv-start-btn:hover { background: rgba(63,185,80,0.2); border-color: rgba(63,185,80,0.55); }
+  .conv-item .conv-start-btn:disabled { cursor: progress; opacity: 0.6; }
+  /* "Close" variant of the row archive button — used for GH issue rows
+     where archiving means closing the issue "not planned" on GitHub. Same
+     hover treatment as conv-archive-btn, but always-visible text label. */
+  .conv-item .conv-archive-btn.is-close {
+    opacity: 0.7; font-size: 11px; font-weight: 600;
+    padding: 2px 8px; border-radius: 3px;
+    border: 1px solid var(--border); background: transparent;
+  }
+  .conv-item:hover .conv-archive-btn.is-close { opacity: 0.9; }
+  .conv-item .conv-archive-btn.is-close:hover { opacity: 1; color: var(--orange); background: rgba(255,166,87,0.12); border-color: rgba(255,166,87,0.4); }
   .conv-item .conv-title-input {
     flex: 1; font-size: 15px; font-weight: 600; color: var(--text);
     background: var(--bg); border: 1px solid var(--accent);
@@ -7623,6 +7645,24 @@
         ? '<button class="conv-merge-btn" data-role="merge" title="' + escapeHtml(_mergeTitle) + '">&#128256;</button>'
         : '';
 
+      // GH Issues / TODO / parking rows live in the GH Issues section and
+      // need two extra affordances vs. session rows: a "Start" pill that
+      // mirrors the kanban-start-btn (spawn a session for this issue), and
+      // a relabelled archive button — for backlog rows "archive" actually
+      // closes the GH issue "not planned", so the verb on the button
+      // matches the action.
+      const isBacklogRow = c.source === 'backlog';
+      let startBtn = '';
+      let archiveBtn;
+      if (isBacklogRow) {
+        const _issueAttr = escapeHtml(c.issue_number || '');
+        const _titleAttr = escapeHtml(c.display_name || c.first_message || '');
+        startBtn = '<button class="conv-start-btn" data-role="start" data-issue="' + _issueAttr + '" data-title="' + _titleAttr + '" title="Spawn a session to work on this issue">Start</button>';
+        archiveBtn = '<button class="conv-archive-btn is-close" data-role="archive" title="Close issue (not planned)">Close</button>';
+      } else {
+        archiveBtn = '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>';
+      }
+
       return '<div class="conv-item' + active + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
@@ -7636,7 +7676,8 @@
           + signals
           + branch
           + mergeBtn
-          + '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>'
+          + startBtn
+          + archiveBtn
         + '</div>'
         + ask
       + '</div>';
@@ -7799,7 +7840,7 @@
         // Ignore clicks that started the inline editor, archive button,
         // or that landed on the title (which now triggers rename instead
         // of opening the conversation — the pencil's job moved here).
-        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
+        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
         selectConversation(el.dataset.id);
       });
       attachDragHandlers(el);
@@ -7859,6 +7900,54 @@
         } catch (err) {
           showOpToast('Archive failed (' + err.message + ')', 'error');
         }
+      });
+    });
+    // Start button on backlog rows — mirrors .kanban-start-btn so the same
+    // spawn flow is reachable from the row list. Reuses _spawningKeys for
+    // duplicate-tap guard and pendingSpawns for the optimistic placeholder.
+    $convList.querySelectorAll('.conv-start-btn').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const issueNum = btn.dataset.issue;
+        const rawTitle = btn.dataset.title;
+        const cleanTitle = (rawTitle || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
+        const sessionName = issueNum
+          ? ('issue-' + issueNum)
+          : cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
+        const prompt = (issueNum
+          ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
+          : cleanTitle) + SESSION_STATE_INSTRUCTION;
+        const spawnKey = issueNum ? ('issue-' + issueNum) : sessionName;
+        if (_spawningKeys.has(spawnKey)) return;
+        _spawningKeys.add(spawnKey);
+        btn.disabled = true;
+        btn.textContent = 'Spawning…';
+        const tempPid = 'tmp-' + Date.now();
+        insertPendingSpawnCard(tempPid, sessionName, false);
+        (async () => {
+          try {
+            const res = await fetch('/api/sessions/spawn', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ prompt: prompt, name: sessionName }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (data.ok && data.pid) {
+              const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
+              if (placeholder) {
+                placeholder.spawn_pid = data.pid;
+                pendingSpawns.delete(tempPid);
+                pendingSpawns.set(data.pid, placeholder);
+              }
+            }
+            if (issueNum) {
+              fetch('/api/issues/' + issueNum + '/mark-in-progress', { method: 'POST' }).catch(() => {});
+            }
+          } catch (_) {}
+          setTimeout(refreshConversationList, 800);
+          setTimeout(refreshConversationList, 2500);
+          setTimeout(() => { _spawningKeys.delete(spawnKey); }, 8000);
+        })();
       });
     });
     $convList.querySelectorAll('.conv-merge-btn').forEach(btn => {
