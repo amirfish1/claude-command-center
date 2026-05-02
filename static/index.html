@@ -10463,6 +10463,100 @@
   const PICKER_SENTINEL = '__pick__';
   const $sbRepoPicker = document.getElementById('sbRepoPicker');
 
+  // ── Multi-repo: peer registry ────────────────────────────────────────────
+  // The dropdown is driven by /api/registry — one entry per live CCC server
+  // on this machine. Selecting a peer navigates to that server's URL; each
+  // CCC serves its own page and shows the same peer list, so the dropdown
+  // follows you across servers. /api/repo/switch is no longer used by the
+  // picker; legacy single-repo flows (modal, custom-repos.txt browser) still
+  // call loadRepoList() below.
+  let peerState = { peers: [], identity: null };
+
+  async function loadPeerRegistry() {
+    let peers = [];
+    let identity = null;
+    try {
+      const [r1, r2] = await Promise.all([
+        fetch('/api/registry'),
+        fetch('/api/identity'),
+      ]);
+      if (r1.ok) {
+        const d1 = await r1.json();
+        peers = Array.isArray(d1.peers) ? d1.peers : [];
+      }
+      if (r2.ok) identity = await r2.json();
+    } catch (_) { /* best-effort — picker is decorative on failure */ }
+    peerState = { peers, identity };
+    return peerState;
+  }
+
+  function isCurrentPeer(peer) {
+    if (!peer || !peerState.identity) return false;
+    return peer.port === peerState.identity.port &&
+           peer.repo_path === peerState.identity.repo_path;
+  }
+
+  // Sentinel prefix marks "switch this server's repo" options (not-running
+  // known repos). Distinguishing them from peer-navigation URLs lets the
+  // change handler route to the right code path.
+  const SWITCH_PREFIX = 'switch::';
+
+  function renderPeerPickerSelect() {
+    if (!$sbRepoPicker) return;
+    const { peers } = peerState;
+    $sbRepoPicker.innerHTML = '';
+
+    const here = window.location;
+    const peerPaths = new Set(peers.map(p => p.repo_path));
+
+    // Section 1: live peers. Selecting navigates to that server's port.
+    if (peers.length) {
+      const grpRunning = document.createElement('optgroup');
+      grpRunning.label = 'Running';
+      for (const peer of peers) {
+        const opt = document.createElement('option');
+        opt.value = `${here.protocol}//${here.hostname}:${peer.port}/`;
+        const isHere = isCurrentPeer(peer);
+        const suffix = isHere ? ' (this server)' : ` (:${peer.port})`;
+        opt.textContent = (peer.label || peer.repo_path) + suffix;
+        opt.title = peer.repo_path;
+        if (isHere) opt.selected = true;
+        grpRunning.appendChild(opt);
+      }
+      $sbRepoPicker.appendChild(grpRunning);
+    }
+
+    // Section 2: known repos that aren't currently peers. Selecting one
+    // POSTs /api/repo/switch on THIS server — the one-off "peek" flow.
+    // Drawn from /api/repo/list (loadRepoList populates repoListState).
+    const knownRepos = (repoListState && repoListState.repos) ? repoListState.repos : [];
+    const switchable = knownRepos.filter(r => !peerPaths.has(r.path));
+    if (switchable.length) {
+      const grpSwitch = document.createElement('optgroup');
+      grpSwitch.label = 'Switch this server to…';
+      for (const repo of switchable) {
+        const opt = document.createElement('option');
+        opt.value = SWITCH_PREFIX + repo.path;
+        opt.textContent = repo.label || repo.path;
+        opt.title = repo.path + '\n(switches this server\'s repo; no new process)';
+        grpSwitch.appendChild(opt);
+      }
+      $sbRepoPicker.appendChild(grpSwitch);
+    }
+
+    if (!peers.length && !switchable.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No repos found';
+      opt.disabled = true;
+      opt.selected = true;
+      $sbRepoPicker.appendChild(opt);
+    }
+
+    $sbRepoPicker.dataset.prev = $sbRepoPicker.value;
+  }
+
+  // ── Legacy repo-list (used by the modal + custom-repos browser) ─────────
   // Shared state so the modal can reuse what the dropdown already fetched
   // and the dropdown can refresh itself after an add-via-modal.
   let repoListState = { repos: [], current: '', recent: [] };
@@ -10553,23 +10647,71 @@
   }
 
   if ($sbRepoPicker) {
+    // Initial: load both the peer registry (running CCC servers) and the
+    // legacy repo list (all known repos, including not-running ones for the
+    // "switch this server to…" group). Render once both are in.
     (async () => {
       try {
-        await loadRepoList();
-        renderPickerSelect();
+        await Promise.all([loadPeerRegistry(), loadRepoList()]);
+        renderPeerPickerSelect();
       } catch (e) { /* picker is best-effort — failure shouldn't break the page */ }
     })();
 
+    // Poll the registry every 10s so a sibling server starting after page
+    // load shows up without a manual refresh. Pause when the tab is hidden.
+    // The repo list is comparatively static — we only refresh it on visibility
+    // change, not on every 10s tick.
+    let _peerPollId = null;
+    const _peerStartPoll = () => {
+      if (_peerPollId) return;
+      _peerPollId = setInterval(async () => {
+        await loadPeerRegistry();
+        renderPeerPickerSelect();
+      }, 10000);
+    };
+    const _peerStopPoll = () => {
+      if (!_peerPollId) return;
+      clearInterval(_peerPollId);
+      _peerPollId = null;
+    };
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        Promise.all([loadPeerRegistry(), loadRepoList()]).then(renderPeerPickerSelect);
+        _peerStartPoll();
+      } else {
+        _peerStopPoll();
+      }
+    });
+    if (document.visibilityState === 'visible') _peerStartPoll();
+
     $sbRepoPicker.addEventListener('change', () => {
       const target = $sbRepoPicker.value;
-      if (target === PICKER_SENTINEL) {
-        // Don't actually switch — reset to prev and open the modal.
-        $sbRepoPicker.value = $sbRepoPicker.dataset.prev || repoListState.current;
-        openRepoPickerModal();
+      if (!target) return;
+      // SWITCH_PREFIX: legacy "switch this server's REPO_ROOT" path. Used
+      // when the user picks a known-but-not-running repo from the dropdown
+      // (the one-off peek flow).
+      if (target.startsWith(SWITCH_PREFIX)) {
+        const repoPath = target.slice(SWITCH_PREFIX.length);
+        const targetLabel = $sbRepoPicker.options[$sbRepoPicker.selectedIndex]?.textContent || repoPath;
+        switchToRepo(repoPath, targetLabel);
         return;
       }
-      const targetLabel = $sbRepoPicker.options[$sbRepoPicker.selectedIndex]?.textContent || target;
-      switchToRepo(target, targetLabel);
+      // Otherwise: navigation URL to a peer's port. Same-origin = no-op.
+      const here = window.location;
+      const sameOriginUrl = `${here.protocol}//${here.host}/`;
+      if (target === sameOriginUrl) return;
+      const $overlay = document.getElementById('cccLoadingOverlay');
+      if ($overlay) {
+        $overlay.classList.remove('fade-out', 'gone');
+        const $label = document.getElementById('cccLoadingLabel');
+        if ($label) {
+          const lbl = $sbRepoPicker.options[$sbRepoPicker.selectedIndex]?.textContent || target;
+          $label.innerHTML =
+            '<strong>Loading ' + String(lbl).replace(/[<>&]/g, '') + '</strong>' +
+            '<div class="ccc-loading-detail">Switching to that server\'s page.</div>';
+        }
+      }
+      window.location.href = target;
     });
 
     // Stash the current value so we can restore on failure.
