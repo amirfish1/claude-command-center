@@ -9910,7 +9910,12 @@
     if (uSlot) uSlot.innerHTML = '';
     if (!sid) return;
     try {
-      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/usage');
+      // cache-buster: usage rollups land sporadically in the JSONL, so the
+      // first fetch after selection often returns latest=0 and the browser
+      // would happily serve that zero response on every subsequent call.
+      // Forcing a fresh request each time is fine — the server-side
+      // computation is fast and uses no cache.
+      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/usage?_t=' + Date.now(), { cache: 'no-store' });
       const data = await res.json();
       if (_usageSessionId !== sid) return;
       _usageData = data;
