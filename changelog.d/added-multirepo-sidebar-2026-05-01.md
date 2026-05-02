@@ -1,0 +1,1 @@
+- Vertical repo sidebar on the left edge: one circular icon per known repo. Running CCC servers appear first (click to navigate to that server's page); known-not-running repos appear below a divider with a dimmer dashed style (click to switch this server's repo, the legacy one-off flow). Active server is highlighted. Hidden when no repos are visible.

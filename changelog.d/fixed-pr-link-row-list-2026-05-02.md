@@ -1,0 +1,1 @@
+- Sidebar rows now recognize Claude Code `pr-link` transcript events, not just `gh pr create` tool output, so sessions like `afcc907b-3ab5-44ac-9222-b42c1f1fe60e` surface `PR #242` in the row list and Ready to merge section. Bumped the conversation metadata cache schema so already-scanned sessions are re-parsed with the new PR-link extractor.

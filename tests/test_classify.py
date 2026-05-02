@@ -38,6 +38,29 @@ def _fresh_server():
     return importlib.import_module("server")
 
 
+class TestExtractTailMetaPrLink(unittest.TestCase):
+    def test_pr_link_event_sets_tail_pr_fields(self):
+        server = _fresh_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session.jsonl"
+            path.write_text(
+                '{"type":"pr-link",'
+                '"sessionId":"afcc907b-3ab5-44ac-9222-b42c1f1fe60e",'
+                '"prNumber":242,'
+                '"prUrl":"https://github.com/amirfish1/my-finance-app/pull/242",'
+                '"prRepository":"amirfish1/my-finance-app"}\n',
+                encoding="utf-8",
+            )
+
+            meta = server._extract_tail_meta(path)
+
+        self.assertEqual(meta["tail_pr_number"], 242)
+        self.assertEqual(
+            meta["tail_pr_url"],
+            "https://github.com/amirfish1/my-finance-app/pull/242",
+        )
+
+
 class TestFindConversationsOnMockFixture(unittest.TestCase):
     """find_conversations() should locate the fixture session and parse its
     signals (has_edit, pending_tool, last_event_type, session_state)."""
@@ -58,17 +81,6 @@ class TestFindConversationsOnMockFixture(unittest.TestCase):
         # Path.home() at import time to derive the projects root.
         resolved_home = Path(cls.tmp_home).resolve()
 
-        slug = "-" + str(cls.fake_repo).lstrip("/").replace("/", "-")
-        cls.projects_dir = resolved_home / ".claude" / "projects" / slug
-        cls.projects_dir.mkdir(parents=True)
-        cls.resolved_home = resolved_home
-
-        # Copy fixture under <session_id>.jsonl so find_session_cwd / scanners
-        # match by filename.
-        target = cls.projects_dir / f"{MOCK_SESSION_ID}.jsonl"
-        shutil.copy(FIXTURE, target)
-        cls.target_path = target
-
         # Tell server.py: "this is the repo I'm watching". That sets
         # REPO_ROOT, which derives CONVERSATIONS_DIR. Also override HOME so
         # PROJECTS_ROOT (Path.home()/".claude"/"projects") resolves into
@@ -80,14 +92,19 @@ class TestFindConversationsOnMockFixture(unittest.TestCase):
             "HOME": os.environ.get("HOME"),
         }
         os.environ["CCC_WATCH_REPO"] = str(cls.fake_repo)
-        os.environ["HOME"] = str(cls.resolved_home)
+        os.environ["HOME"] = str(resolved_home)
 
         cls.server = _fresh_server()
-        # Sanity: the server should now be looking at our staged dir.
-        assert cls.server.CONVERSATIONS_DIR == cls.projects_dir, (
-            f"server CONVERSATIONS_DIR={cls.server.CONVERSATIONS_DIR!r} "
-            f"!= staged {cls.projects_dir!r}"
-        )
+        cls.resolved_home = resolved_home
+        cls.projects_dir = cls.server.CONVERSATIONS_DIR
+        cls.projects_dir.mkdir(parents=True)
+
+        # Copy fixture under <session_id>.jsonl so find_session_cwd / scanners
+        # match by filename. Use the server-derived dir so the test follows
+        # Claude Code's current project-slug encoder.
+        target = cls.projects_dir / f"{MOCK_SESSION_ID}.jsonl"
+        shutil.copy(FIXTURE, target)
+        cls.target_path = target
 
     @classmethod
     def tearDownClass(cls):

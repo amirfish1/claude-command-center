@@ -1,0 +1,1 @@
+Tail-meta `has_commit` / `has_push` now detect the `git -C <path> commit/push` form (and other flag-prefixed `git` invocations like `git --no-pager commit` or `git -c key=val push`). Multi-worktree sessions no longer render as "uncommitted" after a real commit just because the command used the form CLAUDE.md mandates for shared-clone safety.

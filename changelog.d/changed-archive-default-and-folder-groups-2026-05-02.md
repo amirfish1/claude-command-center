@@ -1,0 +1,2 @@
+- "All repos" is now the default sidebar view; opt-out persists in localStorage so toggling off sticks across reloads.
+- Within the "In progress" section, conversations from the last 24 hours are grouped under a small folder chip header (freshest folder first), so you can scan what's hot in each repo without hopping. Cards older than 24 hours fall below a divider and continue as the existing flat chrono list with gap separators. Single-repo mode is unchanged.

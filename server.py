@@ -16,11 +16,13 @@ __version__ = "0.4.0"
 
 import ast
 import base64
+import fcntl
 import http.server
 import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -31,13 +33,20 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
 # The repository the command center is watching. Resolution priority:
 #   1. CCC_WATCH_REPO env var (explicit override; never persisted)
-#   2. ~/.claude/command-center/last-repo.txt (last picker selection)
-#   3. cwd (first-run default)
+#   2. cwd (server is bound to where it was started)
+# Multi-repo design (see docs/superpowers/specs/2026-04-30-multirepo-design.md):
+# `last-repo.txt` is no longer consulted on startup — each server is fixed to
+# its own repo. The file is still written/read by switch_repo_root() for the
+# legacy picker UI, but doesn't influence which repo a fresh server binds to.
+# Without this change, `cd /other/repo && python3 server.py` silently picked
+# up the previous active repo from last-repo.txt instead of cwd, defeating
+# the multi-server-per-repo workflow.
 # Can also be switched at runtime via switch_repo_root() — caches that depend on
 # REPO_ROOT (backlog, issue titles/state) get invalidated automatically.
 _LAST_REPO_FILE = Path.home() / ".claude" / "command-center" / "last-repo.txt"
@@ -96,6 +105,182 @@ def _categorize_file_target(target):
     # os.path.splitext handles trailing-dot / no-dot cleanly.
     _, ext = os.path.splitext(s)
     return FILE_EXT_TO_CATEGORY.get(ext.lower())
+
+
+_SESSION_LOAD_STATUS_LOCK = threading.Lock()
+_SESSION_LOAD_STATUS = {
+    "active": False,
+    "title": "Loading sessions",
+    "message": "Waiting for the next scan.",
+    "phase": "idle",
+    "started_at": 0,
+    "updated_at": 0,
+    "steps": {},
+    "order": [],
+}
+
+
+def _session_load_snapshot():
+    """Return the current /api/sessions load progress for the overlay."""
+    with _SESSION_LOAD_STATUS_LOCK:
+        order = list(_SESSION_LOAD_STATUS.get("order") or [])
+        steps_by_key = dict(_SESSION_LOAD_STATUS.get("steps") or {})
+        steps = [dict(steps_by_key[k]) for k in order if k in steps_by_key]
+        return {
+            "active": bool(_SESSION_LOAD_STATUS.get("active")),
+            "title": _SESSION_LOAD_STATUS.get("title") or "Loading sessions",
+            "message": _SESSION_LOAD_STATUS.get("message") or "",
+            "phase": _SESSION_LOAD_STATUS.get("phase") or "idle",
+            "started_at": _SESSION_LOAD_STATUS.get("started_at") or 0,
+            "updated_at": _SESSION_LOAD_STATUS.get("updated_at") or 0,
+            "steps": steps,
+        }
+
+
+def _session_load_begin():
+    now = time.time()
+    steps = {
+        "repo": {
+            "key": "repo",
+            "label": "Repo",
+            "state": "running",
+            "detail": str(REPO_ROOT),
+        },
+        "transcripts": {
+            "key": "transcripts",
+            "label": "Claude transcripts",
+            "state": "pending",
+            "detail": "Counting JSONL files.",
+        },
+        "sessions": {
+            "key": "sessions",
+            "label": "Interactive sessions",
+            "state": "pending",
+            "detail": "Waiting on transcript metadata.",
+        },
+        "agents": {
+            "key": "agents",
+            "label": "Pkood agents",
+            "state": "pending",
+            "detail": "Waiting.",
+        },
+        "github": {
+            "key": "github",
+            "label": "GitHub issues",
+            "state": "pending",
+            "detail": "Waiting.",
+        },
+        "issue_states": {
+            "key": "issue_states",
+            "label": "Issue states",
+            "state": "pending",
+            "detail": "Waiting.",
+        },
+        "todo": {
+            "key": "todo",
+            "label": "TODO.md",
+            "state": "pending",
+            "detail": "Waiting.",
+        },
+        "parking": {
+            "key": "parking",
+            "label": "PARKING_LOT.md",
+            "state": "pending",
+            "detail": "Waiting.",
+        },
+        "native_tasks": {
+            "key": "native_tasks",
+            "label": "Native tasks",
+            "state": "pending",
+            "detail": "Waiting.",
+        },
+        "cards": {
+            "key": "cards",
+            "label": "Cards",
+            "state": "pending",
+            "detail": "Waiting.",
+        },
+    }
+    with _SESSION_LOAD_STATUS_LOCK:
+        _SESSION_LOAD_STATUS.update({
+            "active": True,
+            "title": "Loading sessions",
+            "message": "Scanning sources by element.",
+            "phase": "running",
+            "started_at": now,
+            "updated_at": now,
+            "steps": steps,
+            "order": [
+                "repo", "transcripts", "sessions", "agents", "github",
+                "issue_states", "todo", "parking", "native_tasks", "cards",
+            ],
+        })
+
+
+_LOAD_MISSING = object()
+
+
+def _session_load_set_step(
+    key,
+    *,
+    label=None,
+    state=None,
+    detail=None,
+    count=_LOAD_MISSING,
+    total=_LOAD_MISSING,
+):
+    now = time.time()
+    with _SESSION_LOAD_STATUS_LOCK:
+        steps = _SESSION_LOAD_STATUS.setdefault("steps", {})
+        order = _SESSION_LOAD_STATUS.setdefault("order", [])
+        if key not in steps:
+            steps[key] = {"key": key, "label": label or key, "state": "pending", "detail": ""}
+            order.append(key)
+        step = steps[key]
+        if label is not None:
+            step["label"] = label
+        if state is not None:
+            step["state"] = state
+        if detail is not None:
+            step["detail"] = detail
+        if count is not _LOAD_MISSING:
+            step["count"] = count
+        if total is not _LOAD_MISSING:
+            step["total"] = total
+        _SESSION_LOAD_STATUS["updated_at"] = now
+
+
+def _session_load_complete(rows):
+    total = len(rows or [])
+    interactive = sum(1 for r in (rows or []) if r.get("source") == "interactive")
+    backlog = sum(1 for r in (rows or []) if r.get("source") == "backlog")
+    pkood = sum(1 for r in (rows or []) if r.get("source") == "pkood")
+    _session_load_set_step(
+        "cards",
+        state="done",
+        count=total,
+        detail=f"{total} total cards: {interactive} sessions, {pkood} agents, {backlog} backlog.",
+    )
+    with _SESSION_LOAD_STATUS_LOCK:
+        _SESSION_LOAD_STATUS.update({
+            "active": False,
+            "title": "Sessions loaded",
+            "message": f"{total} cards ready.",
+            "phase": "done",
+            "updated_at": time.time(),
+        })
+
+
+def _session_load_fail(err):
+    _session_load_set_step("cards", state="error", detail=str(err)[:160])
+    with _SESSION_LOAD_STATUS_LOCK:
+        _SESSION_LOAD_STATUS.update({
+            "active": False,
+            "title": "Session load failed",
+            "message": str(err)[:160],
+            "phase": "error",
+            "updated_at": time.time(),
+        })
 
 
 def _load_custom_repos():
@@ -222,22 +407,11 @@ def _native_pick_folder(prompt_text="Pick a repo folder for Claude Command Cente
     return {"ok": False, "error": stderr or f"osascript exited {r.returncode}"}
 
 
-def _load_persisted_repo():
-    """Read the persisted last-repo path written by switch_repo_root.
-    Returns a Path or None if missing/unreadable/no-longer-exists."""
-    try:
-        p = Path(_LAST_REPO_FILE.read_text().strip()).expanduser().resolve()
-        return p if p.is_dir() else None
-    except (OSError, ValueError):
-        return None
-
-
 _env_watch = os.environ.get("CCC_WATCH_REPO")
 if _env_watch:
     REPO_ROOT = Path(_env_watch).resolve()
 else:
-    persisted = _load_persisted_repo()
-    REPO_ROOT = persisted if persisted else Path.cwd().resolve()
+    REPO_ROOT = Path.cwd().resolve()
 LOG_DIR = REPO_ROOT / ".claude" / "logs"
 
 def _encode_project_slug(path):
@@ -299,6 +473,438 @@ CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
 # merge with origin/main introduced _candidate_conversation_dirs.
 def _conversation_dirs():
     return _candidate_conversation_dirs(REPO_ROOT)
+
+
+# Archive view delegates all per-session JSONL inspection to the
+# canonical _extract_tail_meta() (defined later in the file), which is
+# already mtime-cached and is the same source of truth /api/sessions
+# uses. That gives us has_edit / has_commit / has_push from tool-call
+# events, tail_pr_number / tail_pr_url from `gh pr create`,
+# last_assistant_text, pending_tool, custom_title, last_event_type —
+# all without a second pass. Earlier branches of this code ran git
+# status per cwd, which couldn't distinguish per-session history
+# (every session in the same clone got the same answer) and missed
+# has_push entirely.
+
+# PR state cache for the sidebar's "Ready to merge" bucket. Without this,
+# every session that ever ran `gh pr create` sticks in "Ready to merge"
+# forever — even after the PR is merged or closed. We cache the resolved
+# state ("OPEN"/"MERGED"/"CLOSED") per PR URL with a short TTL so the
+# bucket reflects reality without paying gh-network cost on every refresh.
+# Keyed by full PR URL because two sessions can refer to the same PR; the
+# cache is shared across them.
+_PR_STATE_CACHE = {}
+_PR_STATE_LOCK = threading.Lock()
+_PR_STATE_TTL = 300  # 5 minutes — short enough to catch a merge, long
+# enough that the dashboard's ~10s refresh cadence doesn't fan out to gh.
+
+
+def _get_pr_state(pr_url):
+    """Resolve a PR's state via `gh pr view`, with TTL cache.
+
+    Returns one of "OPEN" / "MERGED" / "CLOSED", or None if the lookup
+    failed (gh missing, unauthed, network down, PR not found). Callers
+    treat None as "still ready to merge" — we never hide a real PR
+    because gh hiccupped.
+    """
+    if not pr_url:
+        return None
+    now = time.time()
+    with _PR_STATE_LOCK:
+        cached = _PR_STATE_CACHE.get(pr_url)
+        if cached and (now - cached["at"]) < _PR_STATE_TTL:
+            return cached["state"]
+    state = None
+    try:
+        r = subprocess.run(
+            ["gh", "pr", "view", pr_url, "--json", "state", "-q", ".state"],
+            capture_output=True, text=True, timeout=4,
+        )
+        if r.returncode == 0:
+            s = (r.stdout or "").strip().upper()
+            if s in ("OPEN", "MERGED", "CLOSED"):
+                state = s
+    except (subprocess.SubprocessError, OSError):
+        state = None
+    with _PR_STATE_LOCK:
+        _PR_STATE_CACHE[pr_url] = {"state": state, "at": now}
+    return state
+
+
+def _prime_pr_states(pr_urls):
+    """Resolve PR states for a batch of URLs in parallel, populating the
+    cache so subsequent _get_pr_state() calls hit cache. Used by the
+    list builders to avoid serial gh-fan-out on cold refreshes (worst
+    case: cross-folder mode with dozens of unique PRs). No-op for URLs
+    already in cache and within TTL.
+    """
+    now = time.time()
+    needed = []
+    seen = set()
+    with _PR_STATE_LOCK:
+        for url in pr_urls:
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            cached = _PR_STATE_CACHE.get(url)
+            if not cached or (now - cached["at"]) >= _PR_STATE_TTL:
+                needed.append(url)
+    if not needed:
+        return
+    # Bounded pool — gh handles concurrent reads fine, but we don't want
+    # to fork 100 subprocesses if a user has been opening PRs all year.
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        list(ex.map(_get_pr_state, needed))
+
+
+def _archive_session_is_live(session_id):
+    """A session is "live" if any sidecar marker exists for it. Sidecars
+    are written by Claude Code's hooks and removed when sessions end, so
+    their presence is the canonical "agent is doing something" signal."""
+    if not session_id or not SIDECAR_STATE_DIR.is_dir():
+        return False
+    try:
+        for suffix in (".json", "_writes", "_in_flight.json", "_needs_approval.json"):
+            if (SIDECAR_STATE_DIR / f"{session_id}{suffix}").exists():
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def _decode_project_slug(slug):
+    """Best-effort reverse of _encode_project_slug. The encoding is lossy
+    (every non-alphanumeric becomes `-`), so a single slug can map to many
+    candidate paths; we pick the first one that exists on disk by walking
+    from `/` and absorbing as many consecutive `-`-separated parts into
+    each path component as needed to find an existing dir.
+
+    Returns a Path (existing) or None when no candidate resolves. Used by
+    find_all_conversations to give a clean folder label for slugs whose
+    repo has hyphens in the name (e.g. `my-finance-app`).
+    """
+    if not slug.startswith("-"):
+        return None
+    parts = slug[1:].split("-")
+
+    def search(prefix, remaining):
+        if not remaining:
+            return prefix if prefix.is_dir() else None
+        for k in range(1, len(remaining) + 1):
+            name = "-".join(remaining[:k])
+            candidate = prefix / name
+            if candidate.is_dir():
+                result = search(candidate, remaining[k:])
+                if result is not None:
+                    return result
+        return None
+
+    try:
+        return search(Path("/"), parts)
+    except (OSError, ValueError):
+        return None
+
+
+def find_all_conversations(limit_per_folder=None):
+    """Walk ~/.claude/projects/ for every subdir and return a flat list of
+    conversation metadata across every folder you've ever Claude-Code'd in.
+
+    Powers the multi-repo conversation archive: read-only browse of every
+    JSONL on disk, regardless of whether a CCC server is currently running
+    for that folder. Slow on cold scan (proportional to total JSONL count),
+    so callers should expect ~seconds latency the first time. No caching
+    layer in v1 — add later if it bites.
+
+    Each entry:
+        {session_id, jsonl_path, slug, folder_label, folder_path,
+         mtime, size, first_message, git_branch}
+
+    Folder resolution: known-repo paths from recent + custom files give a
+    real label; unknown slugs fall back to a best-effort decode (replace
+    `-` with `/` and verify) or just the raw slug.
+    """
+    projects_root = Path.home() / ".claude" / "projects"
+    if not projects_root.is_dir():
+        return []
+
+    # Build slug → repo_path map for label resolution.
+    known_by_slug = {}
+    try:
+        for repo in (_load_recent_repos() + _load_custom_repos()):
+            try:
+                known_by_slug[_encode_project_slug(repo)] = repo
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Global state files keyed by session_id alone — same source of truth
+    # the active-repo session list reads. Merging them in here lets the
+    # archive view show user renames and route archived sessions into the
+    # Archived bucket without a server-per-repo.
+    try:
+        name_overrides = _load_session_name_overrides()
+    except Exception:
+        name_overrides = {}
+    try:
+        archived_set = set(_load_archived_conversations())
+    except Exception:
+        archived_set = set()
+
+    out = []
+    seen_session_ids = set()
+    _now = time.time()
+
+    for project_dir in projects_root.iterdir():
+        if not project_dir.is_dir():
+            continue
+        slug = project_dir.name
+
+        repo_path = known_by_slug.get(slug)
+        if repo_path:
+            folder_label = Path(repo_path).name
+            folder_path = repo_path
+        else:
+            decoded = _decode_project_slug(slug)
+            if decoded:
+                folder_label = decoded.name or slug
+                folder_path = str(decoded)
+            else:
+                folder_label = slug
+                folder_path = slug
+
+        try:
+            jsonls = []
+            for f in project_dir.iterdir():
+                if f.is_file() and f.name.endswith(".jsonl"):
+                    try:
+                        jsonls.append((f, f.stat()))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+
+        jsonls.sort(key=lambda pair: pair[1].st_mtime, reverse=True)
+        if limit_per_folder:
+            jsonls = jsonls[:limit_per_folder]
+
+        for f, stat in jsonls:
+            session_id = f.stem
+            if session_id in seen_session_ids:
+                continue
+            seen_session_ids.add(session_id)
+
+            first_message = None
+            timestamp = None
+            git_branch = None
+            session_cwd = None
+            try:
+                with open(f, "r") as fh:
+                    for i, line in enumerate(fh):
+                        if i >= 20:
+                            break
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            ev = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not first_message and ev.get("type") == "user":
+                            msg = (ev.get("message") or {}).get("content")
+                            if isinstance(msg, str):
+                                first_message = msg.strip()[:200]
+                            elif isinstance(msg, list):
+                                for part in msg:
+                                    if isinstance(part, dict) and part.get("type") == "text":
+                                        first_message = (part.get("text") or "").strip()[:200]
+                                        break
+                        if not git_branch:
+                            git_branch = ev.get("gitBranch") or ev.get("git_branch")
+                        if not timestamp:
+                            timestamp = ev.get("timestamp")
+                        if not session_cwd:
+                            session_cwd = ev.get("cwd")
+                        if first_message and git_branch and timestamp and session_cwd:
+                            break
+            except (OSError, UnicodeDecodeError):
+                pass
+
+            # Tool-call inference — match what extract_session_workspace
+            # does for active sessions. The JSONL's first-event cwd /
+            # gitBranch reflect where the session was *launched*, but the
+            # user often `cd`s into a worktree partway through, so the
+            # branch chip would show "main" even when Claude has been
+            # editing in `feat/foo` for hours. _infer_effective_repo walks
+            # the session's tool-call paths and finds the dominant git
+            # repo; it's mtime-cached internally so the cost amortizes.
+            #
+            # Recency gate: cold sessions older than the pills window have
+            # static cwd/branch — the user can't have cd'd into a worktree
+            # since "now" if the JSONL hasn't been touched in days. Skipping
+            # inference there is the difference between a 1s and a 25s cold
+            # scan on a ~1k-session archive (each call shells out to git
+            # 1-4 times for rev-parse / branch / upstream / ahead-behind).
+            effective_cwd = session_cwd or folder_path or ""
+            effective_branch = git_branch
+            effective_kind = None
+            is_recent_for_inference = (
+                (_now - stat.st_mtime) < _ARCHIVE_PILLS_RECENT_WINDOW
+            )
+            try:
+                # Pass the already-stat'd mtime so the function can hit
+                # its cache without re-walking PROJECTS_ROOT for every
+                # session (otherwise 936 × 68 = ~63k stat calls per batch).
+                eff = _infer_effective_repo(
+                    session_id,
+                    literal_cwd=session_cwd or folder_path,
+                    jsonl_mtime=stat.st_mtime,
+                ) if is_recent_for_inference else None
+            except Exception:
+                eff = None
+            if eff and eff.get("top"):
+                effective_cwd = eff["top"]
+                if eff.get("branch"):
+                    effective_branch = eff["branch"]
+                effective_kind = eff.get("kind")  # 'worktree' / 'clone' / 'other'
+
+            # Worktree detection: prefer the inferred kind when available;
+            # fall back to path-shape heuristics on the resolved cwd. Path
+            # heuristics catch worktrees the user picked manually that
+            # don't match `_infer_effective_repo`'s "dominant repo" rule.
+            cwd_is_worktree = (
+                effective_kind == "worktree"
+                or "/.worktrees/" in effective_cwd
+                or "/.claude/worktrees/" in effective_cwd
+                or "-wt-" in Path(effective_cwd).name
+            )
+
+            display_name = name_overrides.get(session_id) or None
+
+            # Reuse _extract_tail_meta — same source of truth /api/sessions
+            # uses, mtime-cached. Pulls per-session signals from JSONL
+            # tool-use events: has_edit (Edit/Write/NotebookEdit), has_commit
+            # (`git commit` Bash), has_push (`git push` Bash), tail_pr_number
+            # / tail_pr_url (`gh pr create` URL). Replaces an earlier
+            # home-grown helper that ran git status against the cwd — that
+            # approach gave every session in the same clone the same answer
+            # and missed has_push entirely. tail_pr_url feeds the sidebar's
+            # Ready-to-merge filter via _get_pr_state.
+            try:
+                tail_meta = _extract_tail_meta(f) or {}
+            except Exception:
+                tail_meta = {}
+            has_edit = bool(tail_meta.get("has_edit"))
+            has_commit = bool(tail_meta.get("has_commit"))
+            has_push = bool(tail_meta.get("has_push"))
+            pr_number = tail_meta.get("tail_pr_number")
+            pr_url = tail_meta.get("tail_pr_url")
+            # worktree_dirty is a current-state signal (uncommitted edits
+            # right now), not a per-session one. Use the cached probe
+            # against the effective worktree, same as /api/sessions does.
+            worktree_dirty = False
+            try:
+                # Only probe last-meaningful-ts'd sessions to keep this
+                # cheap; old archive rows rarely need this state.
+                _last_ts = tail_meta.get("last_meaningful_ts") or stat.st_mtime
+                if (_now - _last_ts) < (3 * 86400) and effective_cwd:
+                    worktree_dirty = _worktree_dirty_cached(effective_cwd, _last_ts)
+            except Exception:
+                worktree_dirty = False
+            is_live = _archive_session_is_live(session_id)
+
+            # Sidecar overlay (Round 3): for live sessions, merge in the
+            # sidecar's snapshot of "what is the agent doing right now"
+            # — tool name, file, in-flight flag, needs-approval marker.
+            # Cheap (one or two file reads per live session) and unlocks
+            # the live-tool pill / sending pulse / needs-approval signal
+            # on archive rows for free, since the existing renderer reads
+            # these exact fields.
+            sidecar_fields = {
+                "sidecar_status": None,
+                "sidecar_has_writes": False,
+                "sidecar_tool": None,
+                "sidecar_file": None,
+                "sidecar_ts": 0,
+                "sidecar_in_flight": False,
+                "needs_approval": False,
+                "needs_approval_message": "",
+            }
+            if is_live:
+                _entry = {"session_id": session_id, "is_live": True}
+                try:
+                    _add_sidecar_fields(_entry)
+                    for k in sidecar_fields:
+                        if k in _entry:
+                            sidecar_fields[k] = _entry[k]
+                except Exception:
+                    pass
+
+            out.append({
+                "session_id": session_id,
+                "jsonl_path": str(f),
+                "slug": slug,
+                "folder_label": folder_label,
+                "folder_path": folder_path,
+                # Surface the inferred effective cwd / branch — these are
+                # what the renderer's branch chip + worktree leaf read,
+                # and they reflect where Claude actually edited (after
+                # any `cd` into a worktree), not the launch values.
+                "session_cwd": effective_cwd,
+                "session_cwd_is_worktree": cwd_is_worktree,
+                "mtime": stat.st_mtime,
+                "size": stat.st_size,
+                "first_message": first_message,
+                # Both keys: `branch`/`git_branch` is the JSONL's literal
+                # gitBranch (what the row defaults to when no inference);
+                # `effective_branch`/`effective_kind` carry the tool-call
+                # inference. The renderer prefers effective_branch and
+                # uses effective_kind === 'worktree' to decide the
+                # 🌿 leaf — without these the leaf never shows for
+                # archive rows whose session was launched in a clone but
+                # edited a sibling worktree.
+                "branch": effective_branch,
+                "git_branch": effective_branch,
+                "effective_branch": effective_branch,
+                "effective_kind": effective_kind,
+                "display_name": display_name,
+                "name_overridden": bool(display_name),
+                "archived": session_id in archived_set,
+                # State pills + PR# + live flag — sourced from _extract_tail_meta
+                # (per-session JSONL tool-use scan) plus a cached current-
+                # state probe for worktree_dirty.
+                "worktree_dirty": worktree_dirty,
+                "has_commit": has_commit,
+                "has_push": has_push,
+                "has_edit": has_edit,
+                "tail_pr_number": pr_number,
+                "tail_pr_url": pr_url,
+                # Resolved PR state ("OPEN" / "MERGED" / "CLOSED" / None).
+                # Filled in below via a parallel prime pass so we don't
+                # serially fan out to gh on cold-cache refreshes. None
+                # means gh failed and the row stays visible to be safe.
+                "pr_state": None,
+                "is_live": is_live,
+                # Last assistant text — passed through so anyone re-enabling
+                # the subtitle in archive can see it. Currently hidden via
+                # _hideAskHtml flag in the UI shaper.
+                "last_assistant_text": tail_meta.get("last_assistant_text") or "",
+                # Sidecar overlay — only meaningful when is_live; cold
+                # rows get safe defaults that suppress the live pill.
+                **sidecar_fields,
+            })
+
+    # Parallel-resolve PR states for every row that recorded a PR URL.
+    # Hits the in-process cache on warm refreshes; bounded thread pool
+    # keeps the cold path under ~half a second even for hundreds of PRs.
+    _prime_pr_states(r.get("tail_pr_url") for r in out)
+    for r in out:
+        url = r.get("tail_pr_url")
+        if url:
+            r["pr_state"] = _get_pr_state(url)
+    out.sort(key=lambda r: r["mtime"], reverse=True)
+    return out
+
 
 def load_known_repos():
     """Auto-detect projects for the picker by scanning $HOME.
@@ -1282,6 +1888,7 @@ def switch_repo_root(new_path):
     new_root = Path(new_path).expanduser().resolve()
     if not new_root.is_dir():
         raise ValueError(f"not a directory: {new_root}")
+    old_root = REPO_ROOT
     REPO_ROOT = new_root
     LOG_DIR = REPO_ROOT / ".claude" / "logs"
     _cc_project_slug = _encode_project_slug(REPO_ROOT)
@@ -1295,7 +1902,9 @@ def switch_repo_root(new_path):
     _issue_state_cache_ts = 0
     # Persist so the next server start defaults to this repo. Best-effort —
     # if we can't write the state file (full disk, permissions), the switch
-    # still works for this session; just doesn't survive a restart.
+    # still works for this session; just doesn't survive a restart. Note:
+    # multi-repo no longer reads last-repo.txt at startup, but the legacy
+    # picker modal still consults it, and the file is cheap to keep current.
     try:
         _LAST_REPO_FILE.parent.mkdir(parents=True, exist_ok=True)
         _LAST_REPO_FILE.write_text(str(REPO_ROOT) + "\n")
@@ -1303,6 +1912,15 @@ def switch_repo_root(new_path):
         print(f"  [repo-switch] Could not persist last-repo: {e}")
     # Record this switch in the recent list so the picker modal can surface it.
     _record_recent_repo(str(REPO_ROOT))
+    # Re-register in the multi-repo peer registry. Without this, the entry
+    # we wrote at startup still claims the old repo_path and the dropdown
+    # on a reload (or any peer's poll) would show stale state. Best-effort.
+    try:
+        if old_root != REPO_ROOT:
+            _unregister_self(old_root)
+        _register_self(REPO_ROOT, PORT, BIND_HOST)
+    except Exception as e:
+        print(f"  [repo-switch] Could not update registry: {e}")
     return REPO_ROOT
 # Tool's own assets live next to this file.
 CCC_ROOT = Path(__file__).resolve().parent
@@ -1330,6 +1948,10 @@ MORNING_ENABLED = (
 )
 
 PORT = int(os.environ.get("PORT", 8090))
+# Set in main() after _resolve_runtime_network. Module-level so functions
+# called at runtime (e.g. switch_repo_root → _register_self) can reach it
+# without threading the value through every call site.
+BIND_HOST = "127.0.0.1"
 # Optional title-prefix noise stripper. Comma-separated prefixes.
 # Empty by default; set `CCC_TITLE_STRIP=ACME,FOO` to strip `[ACME ...]` and `[FOO ...]` from titles.
 TITLE_STRIP_PREFIXES = [p for p in os.environ.get("CCC_TITLE_STRIP", "").split(",") if p]
@@ -1469,7 +2091,7 @@ SPAWNED_PIDS_FILE = COMMAND_CENTER_STATE_DIR / "spawned-pids.json"
 _conv_meta_cache = {}
 _conv_meta_cache_dirty = False
 _conv_meta_cache_lock = threading.Lock()
-_CONV_META_SCHEMA_VERSION = 2
+_CONV_META_SCHEMA_VERSION = 3
 _CONV_META_CACHE_FILE = (
     Path.home() / ".claude" / "command-center" / "conv_meta_cache.json"
 )
@@ -1649,6 +2271,16 @@ def _extract_tail_meta(path):
     _gh_url_re = re.compile(r'github\.com/[^/\s]+/[^/\s]+/issues/(\d{1,6})')
     _gh_pr_create_re = re.compile(r'\bgh\s+pr\s+create\b')
     _gh_pr_url_re = re.compile(r'github\.com/([^/\s]+/[^/\s]+)/pull/(\d{1,7})')
+    # Git subcommand detector — survives the `git -C <path>` /
+    # `git --git-dir=<x>` / `git -c key=val` flag prefixes that CLAUDE.md
+    # mandates for shared-clone multi-session work. Naive `"git commit"
+    # in cmd` substring checks miss every one of those forms, so a real
+    # commit on a sibling worktree never flips has_commit and the row's
+    # "committed" pill never lights up. Up to 8 flag tokens are tolerated
+    # before the subcommand; `-C <arg>` / `-c <arg>` consume their value.
+    _git_subcmd_re = re.compile(
+        r'\bgit\b(?:\s+(?:-[Cc]\s+\S+|--\S+|-[A-Za-z]\S*)){0,8}\s+(commit|push)\b'
+    )
     _pending_pr_ids = set()
     _pos = 0
     try:
@@ -1696,6 +2328,29 @@ def _extract_tail_meta(path):
                     meta["agent_name"] = ev.get("agentName") or meta["agent_name"]
                 elif t == "last-prompt":
                     meta["last_prompt"] = ev.get("lastPrompt") or meta["last_prompt"]
+                elif t == "pr-link":
+                    pr_url = ev.get("prUrl") or ev.get("pr_url") or ""
+                    mp = _gh_pr_url_re.search(pr_url)
+                    if mp:
+                        meta["tail_pr_number"] = int(mp.group(2))
+                        meta["tail_pr_url"] = (
+                            "https://github.com/" + mp.group(1)
+                            + "/pull/" + mp.group(2)
+                        )
+                    else:
+                        pr_number = ev.get("prNumber") or ev.get("pr_number")
+                        repo = ev.get("prRepository") or ev.get("pr_repository") or ""
+                        try:
+                            n = int(pr_number)
+                        except (TypeError, ValueError):
+                            n = None
+                        if n:
+                            meta["tail_pr_number"] = n
+                            if repo and "/" in repo:
+                                meta["tail_pr_url"] = (
+                                    "https://github.com/" + repo.strip("/")
+                                    + "/pull/" + str(n)
+                                )
                 # Session signals from tool calls
                 elif t == "assistant":
                     last_tool_name = None
@@ -1718,12 +2373,25 @@ def _extract_tail_meta(path):
                             meta["last_edit_pos"] = _pos
                         elif name == "Bash":
                             cmd = inp.get("command", "")
-                            if "git commit" in cmd:
-                                meta["has_commit"] = True
-                                meta["last_commit_pos"] = _pos
-                            if "git push" in cmd:
-                                meta["has_push"] = True
-                                meta["last_push_pos"] = _pos
+                            # Detect `git commit` / `git push` tool calls.
+                            # Walk shell segments so chained
+                            # `git commit … && git push …` registers both,
+                            # and trim each segment at the `-m`/`--message`
+                            # flag so a commit message body containing
+                            # the word "push" can't false-fire has_push
+                            # (and vice versa).
+                            for _seg in re.split(r'\s*(?:&&|\|\||\||;|\n)\s*', cmd):
+                                _seg_head = re.split(r'\s+(?:-m\b|--message\b)', _seg, maxsplit=1)[0]
+                                _m = _git_subcmd_re.search(_seg_head)
+                                if not _m:
+                                    continue
+                                _sub = _m.group(1)
+                                if _sub == "commit":
+                                    meta["has_commit"] = True
+                                    meta["last_commit_pos"] = _pos
+                                elif _sub == "push":
+                                    meta["has_push"] = True
+                                    meta["last_push_pos"] = _pos
                             # Drift indicator: any `cd <path>` or `git -C <path>`
                             # means the session may have moved across repos.
                             # Used by find_conversations() to skip the
@@ -3722,12 +4390,22 @@ def _parse_parking_lot_md():
     return items
 
 
-def find_backlog_items():
+def find_backlog_items(progress=None):
     """Return backlog cards from GitHub issues + TODO.md."""
     items = []
 
     # Source 1: GitHub Issues
-    for issue in _fetch_backlog_issues():
+    if progress:
+        progress("github", state="running", detail="Querying open and recently closed issues.")
+    backlog_issues = _fetch_backlog_issues()
+    if progress:
+        progress(
+            "github",
+            state="done",
+            count=len(backlog_issues),
+            detail=f"{len(backlog_issues)} GitHub issue(s) fetched.",
+        )
+    for issue in backlog_issues:
         number = issue.get("number", 0)
         title = issue.get("title", "")
         body = issue.get("body", "") or ""
@@ -3787,7 +4465,15 @@ def find_backlog_items():
         })
 
     # Source 2: TODO.md
-    for i, text in enumerate(_parse_todo_md()):
+    todo_items = _parse_todo_md()
+    if progress:
+        progress(
+            "todo",
+            state="done",
+            count=len(todo_items),
+            detail=f"{len(todo_items)} unchecked TODO item(s).",
+        )
+    for i, text in enumerate(todo_items):
         items.append({
             "id": f"backlog-todo-{i}",
             "session_id": f"backlog-todo-{i}",
@@ -3818,7 +4504,15 @@ def find_backlog_items():
         })
 
     # Source 3: PARKING_LOT.md — richer items (heading + body)
-    for i, it in enumerate(_parse_parking_lot_md()):
+    parking_items = _parse_parking_lot_md()
+    if progress:
+        progress(
+            "parking",
+            state="done",
+            count=len(parking_items),
+            detail=f"{len(parking_items)} parking-lot item(s).",
+        )
+    for i, it in enumerate(parking_items):
         title = it["title"]
         body = it["body"]
         items.append({
@@ -3854,7 +4548,15 @@ def find_backlog_items():
     # Only surfaces sessions that aren't already represented as a live/inactive
     # conversation — that filtering happens at the `/api/sessions` merge step,
     # so here we just emit candidate cards.
-    for nt in _load_native_tasks():
+    native_tasks = _load_native_tasks()
+    if progress:
+        progress(
+            "native_tasks",
+            state="done",
+            count=len(native_tasks),
+            detail=f"{len(native_tasks)} native task session(s).",
+        )
+    for nt in native_tasks:
         # Pad short subjects with the activeForm so the card body has signal.
         body_bits = [nt["title"]]
         if nt.get("description"):
@@ -4006,7 +4708,7 @@ _FIND_CONVS_INFLIGHT = 0
 _FIND_CONVS_INFLIGHT_MAX = 3
 
 
-def find_conversations():
+def find_conversations(progress=None):
     """Return list of conversation metadata dicts, newest first."""
     global _FIND_CONVS_INFLIGHT
     conversations = []
@@ -4037,6 +4739,14 @@ def find_conversations():
     # we don't drop historic sessions when claude-code's encoder changes.
     project_dirs = _candidate_conversation_dirs(REPO_ROOT)
     if not project_dirs:
+        if progress:
+            progress(
+                "transcripts",
+                state="done",
+                count=0,
+                total=0,
+                detail="No Claude Code project folders matched this repo.",
+            )
         _dec_inflight()
         return conversations
     name_overrides = _load_session_name_overrides()
@@ -4074,8 +4784,30 @@ def find_conversations():
                 continue
             seen_jsonl.add(f.name)
             jsonl_files.append(f)
+    if progress:
+        progress(
+            "repo",
+            state="done",
+            detail=f"{len(project_dirs)} transcript folder(s) for {REPO_ROOT.name}.",
+        )
+        progress(
+            "transcripts",
+            state="running",
+            count=0,
+            total=len(jsonl_files),
+            detail=f"Found {len(jsonl_files)} JSONL transcript file(s).",
+        )
 
-    for f in jsonl_files:
+    total_jsonl = len(jsonl_files)
+    for idx, f in enumerate(jsonl_files, start=1):
+        if progress and (idx == 1 or idx == total_jsonl or idx % 10 == 0):
+            progress(
+                "transcripts",
+                state="running",
+                count=idx,
+                total=total_jsonl,
+                detail=f"Reading transcript {idx} of {total_jsonl}.",
+            )
         try:
             stat = f.stat()
         except OSError:
@@ -4288,6 +5020,9 @@ def find_conversations():
             "tail_issue_number": tail_meta.get("tail_issue_number"),
             "tail_pr_number": tail_meta.get("tail_pr_number"),
             "tail_pr_url": tail_meta.get("tail_pr_url"),
+            # Resolved PR state — filled in below via a parallel prime
+            # pass. See find_all_conversations for the broader rationale.
+            "pr_state": None,
             "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
             "archived": sid in archived_set,
             "verified": sid in verified_set,
@@ -4296,6 +5031,37 @@ def find_conversations():
             "last_interacted": last_interactions.get(sid) or last_interactions.get(conv_id),
         })
 
+    if progress:
+        progress(
+            "transcripts",
+            state="done",
+            count=total_jsonl,
+            total=total_jsonl,
+            detail=f"{len(conversations)} session(s) from {total_jsonl} transcript file(s).",
+        )
+        progress(
+            "sessions",
+            state="running",
+            count=len(conversations),
+            detail=f"{len(conversations)} interactive session(s) found; resolving PR state.",
+        )
+
+    # Parallel-resolve PR states for rows with a recorded PR URL — same
+    # dance as find_all_conversations. The cache is shared across both
+    # builders, so cross-folder mode benefits from single-repo warmups
+    # (and vice versa).
+    _prime_pr_states(c.get("tail_pr_url") for c in conversations)
+    for c in conversations:
+        url = c.get("tail_pr_url")
+        if url:
+            c["pr_state"] = _get_pr_state(url)
+    if progress:
+        progress(
+            "sessions",
+            state="done",
+            count=len(conversations),
+            detail=f"{len(conversations)} interactive session card(s) ready.",
+        )
     # Primary sort: most recent activity first. Use whichever is later between
     # the user's last UI interaction and the session's last meaningful event,
     # so a card the user just typed into bubbles up immediately even before
@@ -4441,7 +5207,7 @@ def _add_sidecar_fields(entry):
     entry["needs_approval_message"] = notif.get("message", "") if notif else ""
 
 
-def find_all_sessions():
+def find_all_sessions(progress=None):
     """Return a unified list of sessions: interactive conversations + pkood
     agents + ~/.claude/tasks backlog cards.
 
@@ -4451,7 +5217,16 @@ def find_all_sessions():
     global _SESSION_ISSUES_CACHE
     _SESSION_ISSUES_CACHE = _load_session_issues()
     # Get conversations and tag them
-    conversations = find_conversations()
+    if progress:
+        progress("sessions", state="running", count=0, detail="Reading interactive sessions.")
+    conversations = find_conversations(progress=progress)
+    if progress:
+        progress(
+            "sessions",
+            state="running",
+            count=len(conversations),
+            detail=f"{len(conversations)} interactive session(s); checking live registry.",
+        )
     # Load session registry to mark which sessions have a running process
     registry = _load_session_registry()
     live_sids = set(registry.keys())
@@ -4473,7 +5248,16 @@ def find_all_sessions():
     # pty). We resolve the link in find_pkood_agents() via a cwd+timestamp
     # heuristic; here we absorb the jsonl card's signals into the pkood card
     # and drop the duplicate.
+    if progress:
+        progress("agents", state="running", detail="Checking pkood agents.")
     pkood_agents = find_pkood_agents()
+    if progress:
+        progress(
+            "agents",
+            state="done",
+            count=len(pkood_agents),
+            detail=f"{len(pkood_agents)} pkood agent(s) found.",
+        )
     # Only dedup live pkood agents. Dead ones leave their jsonl visible as
     # a regular interactive card so the user can still `claude --resume` the
     # underlying session — the pkood card alone can't be resumed.
@@ -4552,7 +5336,10 @@ def find_all_sessions():
     # Native-task cards key off session_id, not issue number — collect the
     # set of session_ids already represented so we don't double-up.
     existing_sids = {c.get("session_id") for c in conversations if c.get("session_id")}
-    for item in find_backlog_items():
+    if progress:
+        progress("cards", state="running", count=len(conversations), detail="Merging sessions with backlog cards.")
+    backlog_added = 0
+    for item in find_backlog_items(progress=progress):
         inum = item.get("issue_number", "")
         if inum and inum in active_issue_nums:
             continue  # Active session already covers this issue
@@ -4560,10 +5347,27 @@ def find_all_sessions():
                 and item.get("session_id") in existing_sids):
             continue  # The session is already on the board; don't dup
         conversations.append(item)
+        backlog_added += 1
+    if progress:
+        progress(
+            "cards",
+            state="running",
+            count=len(conversations),
+            detail=f"Added {backlog_added} backlog card(s); enriching issue state.",
+        )
 
     # Sidecar: clean up stale files, then enrich every entry
     _cleanup_stale_sidecars(live_sids)
+    if progress:
+        progress("issue_states", state="running", detail="Loading linked issue states.")
     issue_states = _fetch_issue_states()
+    if progress:
+        progress(
+            "issue_states",
+            state="done",
+            count=len(issue_states),
+            detail=f"{len(issue_states)} linked issue state(s) cached.",
+        )
     desktop_meta = _load_desktop_app_metadata()
     for c in conversations:
         _add_sidecar_fields(c)
@@ -4627,6 +5431,14 @@ def find_all_sessions():
                 ordered.append(c)
         conversations = ordered
 
+    if progress:
+        progress(
+            "cards",
+            state="done",
+            count=len(conversations),
+            detail=f"{len(conversations)} card(s) ready for the board.",
+        )
+
     # Auto-verify: sessions with has_push linked to closed GH issues get verified.
     # Runs inline (cheap — just reads cached issue states + verified list).
     try:
@@ -4638,15 +5450,33 @@ def find_all_sessions():
 
 
 def _resolve_conversation_path(conversation_id):
-    """Return the JSONL path for a session, looking through every slug
-    variant for the current REPO_ROOT. Falls back to the canonical
-    CONVERSATIONS_DIR path so error messages still point somewhere sensible
-    when the file genuinely doesn't exist."""
+    """Return the JSONL path for a session.
+
+    Resolution order:
+      1. Slugs under the current REPO_ROOT (modern + legacy encoders).
+      2. Global walk of ~/.claude/projects/*/ — needed for the multi-repo
+         archive view, where the user clicks a conversation from a folder
+         that isn't the active server's REPO_ROOT.
+      3. Canonical CONVERSATIONS_DIR path, so 404 messages still point
+         somewhere sensible when the file genuinely doesn't exist.
+    """
+    name = conversation_id + ".jsonl"
     for d in _conversation_dirs():
-        cand = d / (conversation_id + ".jsonl")
+        cand = d / name
         if cand.is_file():
             return cand
-    return CONVERSATIONS_DIR / (conversation_id + ".jsonl")
+    projects_root = Path.home() / ".claude" / "projects"
+    if projects_root.is_dir():
+        try:
+            for project_dir in projects_root.iterdir():
+                if not project_dir.is_dir():
+                    continue
+                cand = project_dir / name
+                if cand.is_file():
+                    return cand
+        except OSError:
+            pass
+    return CONVERSATIONS_DIR / name
 
 
 def parse_conversation(conversation_id, after_line=0):
@@ -7392,7 +8222,7 @@ def _remap_stale_path(path, literal_cwd, cd_targets):
 _EFFECTIVE_REPO_CACHE = {}
 
 
-def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None):
+def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None, jsonl_mtime=None):
     """From a session's tool-call file paths, find the dominant git repo.
 
     Returns dict with keys: top, count, total, branch, kind, ahead, behind
@@ -7405,22 +8235,27 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None):
 
     `exclude_top` lets callers say "I already know cwd resolves to repo X,
     only surface inference if a *different* repo dominates."
+
+    `jsonl_mtime` lets callers (e.g. find_all_conversations) pass the
+    mtime they already stat'd, skipping the PROJECTS_ROOT walk that
+    otherwise dominates cache-hit cost for batch users.
     """
     # Cache key: jsonl mtime makes the entry self-invalidate when new
     # tool calls land. literal_cwd / exclude_top affect the result so
     # they're part of the key.
-    jsonl_mtime = 0.0
-    if PROJECTS_ROOT.is_dir():
-        for pd in PROJECTS_ROOT.iterdir():
-            if not pd.is_dir():
-                continue
-            cand = pd / f"{session_id}.jsonl"
-            if cand.is_file():
-                try:
-                    jsonl_mtime = cand.stat().st_mtime
-                except OSError:
-                    jsonl_mtime = 0.0
-                break
+    if jsonl_mtime is None:
+        jsonl_mtime = 0.0
+        if PROJECTS_ROOT.is_dir():
+            for pd in PROJECTS_ROOT.iterdir():
+                if not pd.is_dir():
+                    continue
+                cand = pd / f"{session_id}.jsonl"
+                if cand.is_file():
+                    try:
+                        jsonl_mtime = cand.stat().st_mtime
+                    except OSError:
+                        jsonl_mtime = 0.0
+                    break
     cache_key = (session_id, jsonl_mtime, literal_cwd, exclude_top)
     if cache_key in _EFFECTIVE_REPO_CACHE:
         return _EFFECTIVE_REPO_CACHE[cache_key]
@@ -8405,27 +9240,52 @@ def _detach_session_from_strategy(goal_slug, strategy_id):
 
 
 def _kill_session_by_id(session_id):
-    """Best-effort: find the pid owning this session and SIGTERM it."""
+    """Best-effort: find ALL pids claiming this session and SIGTERM them.
+
+    Multiple PIDs can register the same sessionId — most often when Jump
+    spawns `claude --resume <sid>` while the original headless agent is
+    still alive — and we want to free the whole set, not just the first.
+    Each PID is verified to still be a claude process before we signal,
+    so a recycled PID can't end up taking out something unrelated.
+    """
     import signal
     sessions_dir = Path.home() / ".claude" / "sessions"
     if not sessions_dir.is_dir():
         return {"ok": False, "error": "no sessions dir"}
+    killed = []
+    errors = []
+    matched = 0
     for f in sessions_dir.glob("*.json"):
         try:
             data = json.loads(f.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        if data.get("session_id") != session_id:
+        # Claude writes the field as `sessionId` (camelCase). Older or
+        # third-party tooling may use snake_case — accept both so this
+        # function actually matches in practice (it didn't before).
+        if data.get("sessionId") != session_id and data.get("session_id") != session_id:
             continue
         pid = data.get("pid")
         if not pid:
             continue
+        matched += 1
+        if not _pid_is_engine_process(pid, "claude"):
+            # Stale sessions/<pid>.json — process is gone or the PID got
+            # recycled to something else. Nothing to signal safely.
+            continue
         try:
             os.kill(int(pid), signal.SIGTERM)
-            return {"ok": True, "action": "killed", "pid": pid}
+            killed.append(int(pid))
         except (OSError, ProcessLookupError) as e:
-            return {"ok": False, "error": str(e)}
-    return {"ok": False, "error": "no process found for session"}
+            errors.append({"pid": pid, "error": str(e)})
+    if matched == 0:
+        return {"ok": False, "error": "no process found for session"}
+    if not killed and not errors:
+        return {"ok": True, "action": "noop", "note": "session already dead"}
+    result = {"ok": bool(killed), "action": "killed", "pids": killed}
+    if errors:
+        result["errors"] = errors
+    return result
 
 
 def morning_move(payload):
@@ -8663,6 +9523,157 @@ def morning_launch(goal_slug, strategy_id, custom_message=None):
 
 
 # ---------------------------------------------------------------------------
+# In-UI terminal — one-shot subprocess runner with cwd tracking.
+#
+# SECURITY: this is the most powerful endpoint in CCC. /api/term/run executes
+# arbitrary shell as the user with no permission prompt — strictly more
+# capable than /api/inject-input (which goes through Claude). It is gated
+# only by _check_same_origin. Do NOT enable network bind without a trusted
+# network. See docs/superpowers/specs/2026-05-01-in-ui-terminal-design.md
+# and SECURITY.md.
+# ---------------------------------------------------------------------------
+
+_TERM_STATE = {
+    "cwd": None,        # Path; lazily set to REPO_ROOT on first access
+    "popen": None,      # Currently running subprocess.Popen, or None
+    "pgid": None,       # Process group id of the running subprocess
+}
+_TERM_LOCK = threading.Lock()
+
+
+def _term_cwd():
+    """Current terminal cwd, defaulting to REPO_ROOT."""
+    cwd = _TERM_STATE["cwd"]
+    if cwd is None or not Path(cwd).is_dir():
+        _TERM_STATE["cwd"] = REPO_ROOT
+        cwd = REPO_ROOT
+    return Path(cwd)
+
+
+def _term_rel():
+    """cwd as a path relative to REPO_ROOT, or "" if cwd == REPO_ROOT."""
+    try:
+        rel = str(_term_cwd().relative_to(REPO_ROOT))
+        return "" if rel == "." else rel
+    except ValueError:
+        return ""
+
+
+def _term_resolve_cwd_change(target):
+    """Resolve a `cd <target>` against the current cwd, clamped to REPO_ROOT.
+
+    Returns the new Path, or raises ValueError with a user-facing message.
+    Empty target → REPO_ROOT (we don't honour $HOME because escaping
+    REPO_ROOT defeats the path clamp).
+    """
+    if not target or target == "~":
+        return REPO_ROOT
+    if target == "-":
+        # `cd -` would need a previous-cwd memory; we don't keep one.
+        raise ValueError("cd - is not supported in the in-UI terminal")
+    base = _term_cwd()
+    raw = Path(target)
+    candidate = (raw if raw.is_absolute() else (base / raw)).resolve()
+    try:
+        candidate.relative_to(REPO_ROOT.resolve())
+    except ValueError:
+        raise ValueError(
+            f"refusing to cd outside REPO_ROOT ({REPO_ROOT}): {candidate}"
+        )
+    if not candidate.is_dir():
+        raise ValueError(f"not a directory: {candidate}")
+    return candidate
+
+
+def _term_split_leading_cd(cmd):
+    """If `cmd` begins with `cd <path>` (alone or followed by `&&`),
+    return (target, remainder). Otherwise (None, cmd).
+
+    Recognises:
+      cd foo
+      cd foo && rest
+      cd "foo bar" && rest
+      cd
+    Does NOT recognise `cd` embedded inside a complex line (`for d in
+    *; do cd $d; done`); those run as a normal subprocess.
+    """
+    stripped = cmd.lstrip()
+    if not stripped.startswith("cd"):
+        return None, cmd
+    after = stripped[2:]
+    if after and after[0] not in (" ", "\t", "&", ";"):
+        # `cdwhatever` — not a cd at all.
+        return None, cmd
+    after = after.lstrip()
+    if not after or after.startswith(("&&", ";")):
+        # `cd` with no args (optionally followed by && rest)
+        rest = after
+        if rest.startswith("&&"):
+            rest = rest[2:].lstrip()
+        elif rest.startswith(";"):
+            rest = rest[1:].lstrip()
+        return "", rest
+    # Use shlex to peel the first token off, respecting quotes.
+    try:
+        lex = shlex.shlex(after, posix=True)
+        lex.whitespace_split = True
+        lex.commenters = ""
+        target = next(lex, None)
+    except ValueError as e:
+        raise ValueError(f"could not parse cd target: {e}")
+    if target is None:
+        return "", ""
+    # Find where the target ends in the original string so we can keep
+    # the remainder verbatim (preserving quoting, &&, etc.).
+    consumed = lex.instream.tell() if hasattr(lex.instream, "tell") else None
+    if consumed is None:
+        # Fallback: re-find the target in the source.
+        idx = after.find(target) + len(target)
+    else:
+        idx = consumed
+    rest = after[idx:].lstrip()
+    if rest.startswith("&&"):
+        rest = rest[2:].lstrip()
+    elif rest.startswith(";"):
+        rest = rest[1:].lstrip()
+    elif rest:
+        # `cd foo bar` — extra args we don't understand. Treat as not a
+        # leading cd; let bash error on it.
+        return None, cmd
+    return target, rest
+
+
+def _term_kill_running():
+    """Kill the currently running terminal subprocess, if any. Returns True
+    if something was killed. Caller must hold _TERM_LOCK or accept races."""
+    popen = _TERM_STATE.get("popen")
+    pgid = _TERM_STATE.get("pgid")
+    if not popen or popen.poll() is not None:
+        return False
+    try:
+        if pgid:
+            os.killpg(pgid, signal.SIGTERM)
+        else:
+            popen.terminate()
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+    # Give it 2s to wind down; then SIGKILL the group.
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if popen.poll() is not None:
+            return True
+        time.sleep(0.05)
+    try:
+        if pgid:
+            os.killpg(pgid, signal.SIGKILL)
+        else:
+            popen.kill()
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    return True
+
+
+# ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
 
@@ -8705,6 +9716,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(compute_attention_items(include_all=include_all))
         elif path == "/api/config":
             self.send_json(get_app_config())
+        elif path == "/api/term/cwd":
+            cwd = _term_cwd()
+            try:
+                rel = str(cwd.relative_to(REPO_ROOT))
+            except ValueError:
+                rel = ""
+            self.send_json({
+                "cwd": str(cwd),
+                "repo_root": str(REPO_ROOT),
+                "rel": rel if rel != "." else "",
+                "running": (
+                    _TERM_STATE.get("popen") is not None
+                    and _TERM_STATE["popen"].poll() is None
+                ),
+            })
         elif path == "/api/issues":
             self.send_json(list_issues())
         elif path == "/api/vercel-deploy":
@@ -8717,12 +9743,51 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(get_issue_details(num))
         elif path == "/api/sessions/spawned":
             self.send_json(list_spawned_sessions())
+        elif re.match(r"^/api/sessions/spawned/\d+/log$", path):
+            try:
+                pid = int(path.split("/")[-2])
+            except ValueError:
+                self.send_json({"ok": False, "error": "bad pid"}, 400)
+            else:
+                entry = next((s for s in _spawned_sessions if s["pid"] == pid), None)
+                if not entry:
+                    self.send_json({"ok": False, "error": "no spawn entry for pid"}, 404)
+                else:
+                    log_path = entry.get("log")
+                    if not log_path or not os.path.exists(log_path):
+                        self.send_json({"ok": False, "error": "log file missing", "path": log_path}, 404)
+                    else:
+                        try:
+                            with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+                                text = fh.read()
+                        except OSError as e:
+                            self.send_json({"ok": False, "error": str(e)}, 500)
+                        else:
+                            poll = entry["proc"].poll()
+                            self.send_json({
+                                "ok": True,
+                                "pid": pid,
+                                "engine": entry.get("engine", "claude"),
+                                "log_path": log_path,
+                                "text": text,
+                                "running": poll is None,
+                                "exit_code": poll,
+                            })
         elif path == "/api/sessions/spawn-codex/availability":
             info = _resolve_codex_bin()
             info["model"] = os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
             self.send_json(info)
+        elif path == "/api/loading-status":
+            self.send_json(_session_load_snapshot())
         elif path == "/api/sessions":
-            self.send_json(find_all_sessions())
+            _session_load_begin()
+            try:
+                rows = find_all_sessions(progress=_session_load_set_step)
+                _session_load_complete(rows)
+            except Exception as exc:
+                _session_load_fail(exc)
+                raise
+            self.send_json(rows)
         elif path == "/api/conversations":
             convs = find_conversations() or []
             qs = urllib.parse.parse_qs(parsed.query)
@@ -9124,6 +10189,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "repos": repos,
                 "recent": _load_recent_repos(),
             })
+        elif path == "/api/registry":
+            # Multi-repo peer discovery: list every CCC server live on this
+            # machine. Stale entries (pid no longer alive) are pruned on read.
+            # The UI polls this to know which peers to fetch per-repo data
+            # from. Read-only; loopback trust applies.
+            self.send_json({"peers": _read_registry_pruned()})
+        elif path == "/api/conversations/all":
+            # Server-agnostic conversation archive: every JSONL across every
+            # folder under ~/.claude/projects/, tagged with folder + reverse
+            # chrono. Read-only browse, no peer registry consulted. The UI's
+            # "All repos" mode renders from this. Slow on cold scan; the
+            # caller is expected to show a loading state.
+            convs = find_all_conversations()
+            self.send_json({"conversations": convs, "count": len(convs)})
+        elif path == "/api/identity":
+            # This server's own identity card. Used by peers (and the UI on
+            # peers' behalf) to verify a registry entry's port still belongs
+            # to the expected repo, since registry entries can grow stale
+            # between writes and reads.
+            self.send_json({
+                "repo_path": str(REPO_ROOT),
+                "label": REPO_ROOT.name,
+                "port": PORT,
+                "pid": os.getpid(),
+                "version": __version__,
+            })
         elif re.match(r"^/api/morning/goals/[A-Za-z0-9_-]+$", path):
             slug = path.rsplit("/", 1)[-1]
             detail = morning.get_goal_detail(slug)
@@ -9142,7 +10233,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         check the Origin header. Browsers always set Origin on cross-origin
         requests but may omit it on same-origin (varies). We allow:
           - missing Origin (curl, same-origin form posts in some browsers)
-          - Origin matching localhost / 127.0.0.1 / ::1 on our PORT
+          - Origin matching localhost / 127.0.0.1 / ::1 on ANY port. The
+            multi-repo design (see docs/superpowers/specs/2026-04-30-
+            multirepo-design.md) runs sibling CCC servers on different
+            loopback ports and the browser UI on one needs to fetch from
+            the others. A malicious external site can't set a loopback
+            Origin header (browsers set it from the page's actual URL),
+            so the loopback wildcard doesn't widen the threat model — the
+            trust boundary is already "anything that can reach loopback".
           - Origin in the CCC_ALLOWED_ORIGIN env var (for trusted-network
             access via Tailscale / VPN — exact match against the env value)
         Anything else gets 403. Returns True if request is allowed.
@@ -9150,12 +10248,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         origin = (self.headers.get("Origin") or "").strip()
         if not origin:
             return True  # no Origin = curl / programmatic / same-origin form
-        for host in ("localhost", "127.0.0.1", "[::1]"):
-            for scheme in ("http", "https"):
-                if origin == f"{scheme}://{host}:{PORT}":
-                    return True
-                if origin == f"{scheme}://{host}":  # default port edge case
-                    return True
+        # Any port on loopback is OK — siblings serve other repos on their
+        # own ports and the UI fetches across them. `\[::1\]` because IPv6
+        # literals carry brackets in URL form.
+        if re.match(r"^https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$", origin):
+            return True
         if origin in ALLOWED_ORIGINS:
             return True
         self.send_json({"error": "cross-origin POST rejected", "origin": origin}, 403)
@@ -10014,11 +11111,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # Archiving retires the session — drop any stale Notification-hook
                 # marker so the dashboard doesn't keep classifying it as Waiting
                 # (which would pin the row to "In progress" and undo the move).
+                kill_result = None
                 if now_archived:
                     try:
                         (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
                     except (OSError, FileNotFoundError):
                         pass
+                    # Free the headless agent. Resume via Jump rebuilds full
+                    # context from the on-disk JSONL — keeping the process
+                    # alive past the user's "done" gesture only accumulates
+                    # MCP children. Backlog rows have no process; pkood is
+                    # uninstalled.
+                    if sid and not sid.startswith("backlog-") and not sid.startswith("pkood-"):
+                        kill_result = _kill_session_by_id(sid)
                 # If this card represents a GitHub issue (id `issue-N`),
                 # also close/reopen the issue on archive/unarchive.
                 issue_match = re.match(r"^issue-(\d+)$", conv_id)
@@ -10037,7 +11142,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         gh_result = {"action": action, "ok": False}
                 if gh_result is not None:
                     _bust_issue_state_cache()
-                self.send_json({"ok": True, "archived": now_archived, "github": gh_result})
+                self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/merge-pr$", path):
@@ -10599,6 +11704,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = {}
             sid = payload.get("session_id", "")
             self.send_json(open_session_in_claude_desktop(sid))
+        elif path == "/api/term/run":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            cmd = (payload.get("cmd") or "").strip()
+            if not cmd:
+                self.send_json({"error": "missing cmd"}, 400)
+                return
+            self._term_run_stream(cmd)
+        elif path == "/api/term/cancel":
+            with _TERM_LOCK:
+                killed = _term_kill_running()
+            self.send_json({"ok": killed})
         else:
             self.send_json({"error": "Not found"}, 404)
 
@@ -10685,6 +11806,146 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 time.sleep(0.25)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
+
+    def _term_send_event(self, event, payload):
+        """Write one SSE event to the wire. Returns False on broken pipe."""
+        try:
+            blob = json.dumps(payload, ensure_ascii=False)
+            self.wfile.write(f"event: {event}\ndata: {blob}\n\n".encode("utf-8"))
+            self.wfile.flush()
+            return True
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return False
+
+    def _term_run_stream(self, cmd):
+        """SSE: parse a leading `cd` if present, otherwise spawn `bash -c
+        <rest>` in the current cwd and stream its merged stdout/stderr.
+
+        One in-flight command at a time per server (single _TERM_STATE);
+        a second concurrent /api/term/run gets a synthetic error event.
+        Cancellation is via POST /api/term/cancel which kills the process
+        group.
+        """
+        # Parse leading `cd` chains. After this loop, `cmd` holds whatever
+        # remains to run as a subprocess (possibly empty if it was all cd).
+        try:
+            while True:
+                target, rest = _term_split_leading_cd(cmd)
+                if target is None:
+                    break
+                new_cwd = _term_resolve_cwd_change(target)
+                _TERM_STATE["cwd"] = new_cwd
+                cmd = rest
+                if not cmd:
+                    break
+        except ValueError as e:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            # `close` (not keep-alive) so the browser sees EOF as soon as we
+            # return — this is a one-shot stream, not a long-lived tail.
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            self._term_send_event("error", {"message": str(e)})
+            self._term_send_event("exit", {
+                "code": -1,
+                "cwd": str(_term_cwd()),
+                "rel": _term_rel(),
+            })
+            return
+
+        # Reject if a previous command is still running.
+        with _TERM_LOCK:
+            prev = _TERM_STATE.get("popen")
+            if prev is not None and prev.poll() is None:
+                self.send_response(409)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                try:
+                    self.wfile.write(json.dumps({"error": "already running"}).encode())
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+                return
+
+        # Open the SSE response. `close` (not keep-alive) so the browser
+        # sees EOF as soon as we return — this is a one-shot stream, not
+        # a long-lived tail like /api/conversations/<id>/stream.
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        # Pure-cd command (e.g. "cd morning"): no subprocess, just emit
+        # the new cwd and exit.
+        if not cmd.strip():
+            self._term_send_event("exit", {
+                "code": 0,
+                "cwd": str(_term_cwd()),
+                "rel": _term_rel(),
+            })
+            return
+
+        cwd = _term_cwd()
+        try:
+            popen = subprocess.Popen(
+                ["bash", "-c", cmd],
+                cwd=str(cwd),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                # Default buffering gives a BufferedReader whose .read1()
+                # returns whatever's available without waiting for a full
+                # buffer. bufsize=0 returns a raw FileIO with no .read1().
+            )
+        except (OSError, ValueError) as e:
+            self._term_send_event("error", {"message": f"spawn failed: {e}"})
+            self._term_send_event("exit", {
+                "code": -1,
+                "cwd": str(cwd),
+                "rel": _term_rel(),
+            })
+            return
+
+        with _TERM_LOCK:
+            _TERM_STATE["popen"] = popen
+            try:
+                _TERM_STATE["pgid"] = os.getpgid(popen.pid)
+            except OSError:
+                _TERM_STATE["pgid"] = None
+
+        try:
+            # read1() returns whatever's available without waiting for a
+            # full buffer — gives us streaming feel without manual
+            # select/poll plumbing.
+            while True:
+                chunk = popen.stdout.read1(4096)
+                if not chunk:
+                    break
+                text = chunk.decode("utf-8", errors="replace")
+                if not self._term_send_event("data", {"chunk": text}):
+                    # Client gone; kill the subprocess so it doesn't
+                    # keep running headless forever.
+                    with _TERM_LOCK:
+                        _term_kill_running()
+                    return
+            popen.wait()
+            self._term_send_event("exit", {
+                "code": popen.returncode,
+                "cwd": str(_term_cwd()),
+                "rel": _term_rel(),
+            })
+        finally:
+            with _TERM_LOCK:
+                if _TERM_STATE.get("popen") is popen:
+                    _TERM_STATE["popen"] = None
+                    _TERM_STATE["pgid"] = None
+            try:
+                popen.stdout.close()
+            except OSError:
+                pass
 
     def _stream_conversation(self, conversation_id, after_line):
         """SSE endpoint for real-time conversation tailing."""
@@ -11235,6 +12496,143 @@ def ensure_hooks_installed():
             tmp_path.unlink(missing_ok=True)
 
 
+# ---------------------------------------------------------------------------
+# Multi-repo peer registry
+#
+# Each running CCC server writes itself into ~/.claude/command-center/registry.json
+# on startup and removes itself on graceful shutdown. Stale entries (pid no
+# longer alive) are pruned by readers, so a force-killed server self-heals on
+# the next read. The registry is the source of truth for "which CCC servers
+# are live"; the UI uses it to discover peers and aggregate cross-repo data
+# in the browser. Concurrent writes from sibling servers are serialized via
+# fcntl.flock on the registry file itself.
+# ---------------------------------------------------------------------------
+
+REGISTRY_FILE = COMMAND_CENTER_STATE_DIR / "registry.json"
+
+
+def _is_pid_alive(pid):
+    """Return True if `pid` is a live process. Sends signal 0 (no-op) and
+    treats any OSError as 'not alive'."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _prune_registry_entries(entries):
+    """Drop entries whose pid is not alive. Pure function — no I/O."""
+    return [e for e in entries if isinstance(e, dict) and _is_pid_alive(e.get("pid"))]
+
+
+def _registry_locked_rmw(transform_fn):
+    """Read-modify-write on REGISTRY_FILE under fcntl.flock. Calls
+    `transform_fn(entries) -> entries` with the parsed list. Best-effort on
+    the lock — silent on platforms without flock so the call still functions
+    (with reduced safety against concurrent writers)."""
+    REGISTRY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    # mode "a+": create if missing, no truncate. seek(0) to read.
+    with open(REGISTRY_FILE, "a+") as f:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        except (OSError, ValueError):
+            pass
+        try:
+            f.seek(0)
+            raw = f.read() or "[]"
+            try:
+                entries = json.loads(raw)
+                if not isinstance(entries, list):
+                    entries = []
+            except json.JSONDecodeError:
+                entries = []
+            entries = transform_fn(entries)
+            f.seek(0)
+            f.truncate()
+            f.write(json.dumps(entries, indent=2) + "\n")
+        finally:
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except (OSError, ValueError):
+                pass
+
+
+def _register_self(repo_path, port, bind_host):
+    """Insert (or replace) this process's entry in the registry. Dedup is by
+    pid — each running process owns one entry. Same process re-registering
+    (e.g. after switch_repo_root) replaces its own row; different processes
+    never collide, even if they happen to share a repo_path. Silent on
+    I/O error — registry is a discovery convenience, not load-bearing."""
+    repo_str = str(repo_path)
+    self_pid = os.getpid()
+    payload = {
+        "repo_path": repo_str,
+        "label": Path(repo_str).name,
+        "port": int(port),
+        "bind_host": bind_host,
+        "pid": self_pid,
+        "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "version": __version__,
+    }
+
+    def replace(entries):
+        out = [e for e in entries if not (isinstance(e, dict) and e.get("pid") == self_pid)]
+        out.append(payload)
+        return out
+
+    try:
+        _registry_locked_rmw(replace)
+        print(f"  [registry] {REGISTRY_FILE} -> {repo_str} (pid {self_pid}, port {payload['port']})")
+    except OSError as e:
+        print(f"  [registry] could not register ({e})")
+
+
+def _unregister_self(repo_path=None):
+    """Remove this process's entry from the registry. Keyed by current pid,
+    not repo_path — switch_repo_root passes the old repo_path for context
+    only. Idempotent; silent on I/O error so it's safe to call from signal
+    handlers."""
+    if not REGISTRY_FILE.exists():
+        return
+    self_pid = os.getpid()
+
+    def remove(entries):
+        return [e for e in entries if not (isinstance(e, dict) and e.get("pid") == self_pid)]
+
+    try:
+        _registry_locked_rmw(remove)
+    except OSError:
+        pass
+
+
+def _read_registry_pruned():
+    """Return the registry contents with stale entries removed. Performs a
+    write-back of the pruned list so the file converges to truth on every
+    read — no separate reaper needed. Returns [] on any I/O error."""
+    if not REGISTRY_FILE.exists():
+        return []
+
+    pruned = []
+
+    def prune(entries):
+        nonlocal pruned
+        pruned = _prune_registry_entries(entries)
+        return pruned
+
+    try:
+        _registry_locked_rmw(prune)
+    except OSError:
+        return []
+    return pruned
+
+
 def write_port_file(bind_host):
     """Persist the listening URL to ~/.claude/command-center/port.txt so the
     ccc-orchestration skill (and any other scripted caller) can find this
@@ -11309,8 +12707,9 @@ def main():
     # `_resolve_runtime_network`.
     bind_host, resolved_origins, network_info = _resolve_runtime_network(PORT)
     ALLOWED_ORIGINS[:] = resolved_origins  # in-place: _check_same_origin reads the global list
-    global RUNTIME_NETWORK_INFO
+    global RUNTIME_NETWORK_INFO, BIND_HOST
     RUNTIME_NETWORK_INFO = network_info
+    BIND_HOST = bind_host
     server = ThreadedHTTPServer((bind_host, PORT), CommandCenterHandler)
     if bind_host not in ("127.0.0.1", "localhost", "::1"):
         print(f"⚠️  WARNING: binding to {bind_host} — server is reachable from the network.")
@@ -11321,6 +12720,17 @@ def main():
     if network_info["trust_tailnet"] and not network_info["tailnet"]["available"]:
         print("   trust_tailnet is on but `tailscale` CLI is not on PATH — install it or unset to silence.")
     write_port_file(bind_host)
+    _register_self(REPO_ROOT, PORT, bind_host)
+    # SIGTERM (systemd / `kill <pid>`) needs explicit cleanup; SIGINT (Ctrl+C)
+    # raises KeyboardInterrupt below and is handled there. Both paths remove
+    # this server's registry entry so peers don't see a stale ghost.
+    def _on_sigterm(signum, frame):
+        try:
+            _unregister_self(REPO_ROOT)
+        except Exception:
+            pass
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, _on_sigterm)
     display_host = "localhost" if bind_host in ("127.0.0.1", "::1") else bind_host
     print(f"Claude Command Center running at http://{display_host}:{PORT}")
     print(f"  Log dir:       {LOG_DIR}")
@@ -11334,6 +12744,10 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
+        try:
+            _unregister_self(REPO_ROOT)
+        except Exception:
+            pass
         server.server_close()
 
 

@@ -573,21 +573,7 @@
   }
   .conv-sticky-header .user-msg {
     font-size: 14px; color: var(--text); line-height: 1.4;
-    /* Hard cap at ~25% of viewport with internal scroll. Sibling-spawn
-     * prompts can be 50+ lines of preamble; without a cap they push the
-     * actual conversation off-screen. The cap composes with the existing
-     * 3.6em "collapsed" preview via :not(.is-resized) below. */
-    max-height: 25vh; overflow-y: auto;
     flex: 1 1 auto; min-height: 0;
-  }
-  /* Preview-mode (default, sticky NOT user-resized): keep the tight 3.6em
-   * peek so the conversation events below stay visible. User drags the
-   * resize handle → .is-resized → cap reverts to 25vh with scroll. */
-  .conv-sticky-header:not(.is-resized) .user-msg {
-    max-height: 3.6em; overflow: hidden;
-  }
-  .conv-sticky-header.is-resized .user-msg {
-    max-height: 25vh; overflow-y: auto;
   }
   .conv-sticky-header .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }
   .conv-sticky-header__resize-handle {
@@ -613,10 +599,11 @@
   .conv-sticky-header__resize-handle.is-dragging {
     background: rgba(88,166,255,0.08);
   }
-  /* Collapse/expand chevron — small tab anchored at the bottom-center
-     of the sticky header. Click toggles `.is-collapsed`, which hides the
-     content rows and shrinks the box to a thin strip. State persists in
-     localStorage so the user's pick survives page reloads. */
+  /* Expand chevron — small tab anchored at the bottom-center of the
+     sticky header. Click toggles `.is-expanded`, which grows the panel
+     from its default 170px to half the viewport height for a closer
+     read of the asks + activity. State is ephemeral (per-conversation,
+     resets on conv switch). */
   .conv-sticky-header__collapse {
     position: absolute; left: 50%; transform: translateX(-50%);
     bottom: -10px;
@@ -638,21 +625,10 @@
     background: #141b25;
   }
   .conv-sticky-header__collapse-icon { display: inline-block; line-height: 1; }
-  .conv-sticky-header.is-collapsed { padding-top: 6px; padding-bottom: 6px; }
-  .conv-sticky-header.is-collapsed .csh-row,
-  .conv-sticky-header.is-collapsed .tools-toggle,
-  .conv-sticky-header.is-collapsed .conv-sticky-header__resize-handle {
-    display: none;
-  }
-  .conv-sticky-header.is-collapsed::before {
-    content: 'header collapsed — click ▾ to expand';
-    display: block;
-    text-align: center;
-    font-size: 10px;
-    color: var(--text-muted);
-    opacity: 0.6;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+  /* When expanded, the unified panel grows to half the viewport height.
+     The fixed-height rule in `.csh-row` is overridden here. */
+  .conv-sticky-header.is-expanded .csh-row {
+    height: 50vh;
   }
   .conversations-view .event { margin-bottom: 12px; padding: 10px 14px; border-radius: 6px; border-left: 3px solid transparent; }
   /* Assistant rows — Claude-Desktop-style clean prose. No background fill,
@@ -714,52 +690,72 @@
   .conversations-view .tool-call-group:not(.collapsed) .tool-call-group-header .tcg-arrow { transform: rotate(90deg); }
   .conversations-view .tool-call-group.collapsed .tool-call-group-body { display: none; }
   .conversations-view .tool-call-group-body { padding: 4px 12px 10px; border-top: 1px solid var(--border); }
-  /* Sticky-header two-column layout — Ask | Activity. Each column gets
-     its own subtle panel background so the header reads as "metadata"
-     vs. the conversation prose below. */
+  /* Sticky-header unified panel — Ask | Activity inside a single bordered
+     box. Fixed height; each column scrolls independently if its content
+     overflows. Saves the inner padding/border that two side-by-side
+     panels used to spend. */
   .conv-sticky-header .csh-row {
-    display: flex; gap: 12px; align-items: stretch;
-    flex: 1 1 auto; min-height: 0;
-  }
-  .conv-sticky-header .csh-col {
+    display: flex; gap: 0; align-items: stretch;
+    flex: 0 0 auto;
+    height: 170px;
     background: #161c25;
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: 8px 12px;
+    overflow: hidden;
     box-sizing: border-box;
   }
-  .conv-sticky-header .csh-col-ask {
-    flex: 5 1 0; min-width: 0;
-    display: flex; flex-direction: column; gap: 8px;
-    overflow-y: auto;
+  .conv-sticky-header .csh-col {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 8px 12px;
+    box-sizing: border-box;
+    min-height: 0;
   }
-  /* Earlier-ask sub-block — appears under the original when scrolled past
-     a later user message. The two share .user-msg styling but each has
-     its own labelled box so it's obvious which message the user is
-     looking at right now. */
+  .conv-sticky-header .csh-col-ask {
+    flex: 5 1 0; min-width: 0; min-height: 0;
+    display: flex; flex-direction: column; gap: 0;
+    overflow: hidden;
+    border-right: 1px solid var(--border);
+  }
+  /* Both ask sub-blocks are permanent slots — original on top, earlier
+     on bottom. Each takes half the column height and scrolls internally
+     if its body overflows; labels stay pinned at the top of each slot. */
+  .conv-sticky-header .csh-ask-original,
   .conv-sticky-header .csh-ask-earlier {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex; flex-direction: column;
+  }
+  .conv-sticky-header .csh-ask-original > .label,
+  .conv-sticky-header .csh-ask-earlier > .label { flex: 0 0 auto; }
+  .conv-sticky-header .csh-ask-original > .user-msg,
+  .conv-sticky-header .csh-ask-earlier > .user-msg {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  }
+  /* Earlier-ask sub-block — separator + orange label so it reads as a
+     distinct slot from the original. The dashed separator only applies
+     when stacked inside .csh-col-ask; when promoted to the activity
+     column (no session activity to show) it sits flush like a peer
+     panel, no top divider. */
+  .conv-sticky-header .csh-col-ask > .csh-ask-earlier {
     border-top: 1px dashed var(--border);
     padding-top: 6px;
-    margin-top: 2px;
+    margin-top: 6px;
   }
   .conv-sticky-header .csh-ask-earlier .label { color: var(--orange); }
   .conv-sticky-header .csh-col-activity {
     flex: 5 1 0; min-width: 0; min-height: 0;
     display: flex; flex-direction: column;
-    padding: 0;  /* let session-timeline supply its own padding */
-    border: none; background: transparent;
+    padding: 8px 12px;
+    overflow-y: auto;
   }
   /* Original ask: first sentence at default size, rest small + grey,
-     always wraps (no horizontal scroll). Capped at ~25vh with internal
-     scroll — sibling-spawn prompts are 50+ lines and would otherwise
-     push the conversation events off-screen. */
+     always wraps (no horizontal scroll). The .csh-col-ask column is the
+     scroll container now (fixed-height panel above), so the user-msg
+     itself grows freely. */
   .conv-sticky-header .csh-col-ask .user-msg {
     white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
-    max-height: 25vh; overflow-y: auto;
-  }
-  .conv-sticky-header.is-resized .csh-col-ask .user-msg {
-    /* User-resized via the drag handle — honor their pick (none = let it
-     * grow to the height stamped on the sticky header itself). */
     max-height: none; overflow: visible;
   }
   .conv-sticky-header .csh-col-ask .ask-first,
@@ -828,6 +824,26 @@
     padding: 2px 7px; border-radius: 3px; font-weight: 600;
     color: var(--text-muted); background: rgba(139,148,158,0.06);
     cursor: help;
+  }
+  /* Model badge — shown next to the context/cost pills so you can tell
+   * which model produced the latest turn. The 1M sub-pill lights up
+   * when a turn provably exceeded 200k tokens (only possible on the 1M
+   * beta variant, since the model name doesn't carry the variant). */
+  .conv-input-context .wp-model-pill {
+    padding: 2px 7px; border-radius: 3px; font-weight: 600;
+    color: var(--text-muted); background: rgba(88,166,255,0.10);
+    cursor: help;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 10px;
+  }
+  .conv-input-context .wp-model-1m {
+    margin-left: 4px;
+    padding: 0 4px;
+    border-radius: 2px;
+    background: var(--accent, #58a6ff);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
   }
   .conv-input-context .wp-ahead { color: var(--green); }
   .conv-input-context .wp-behind { color: var(--orange); }
@@ -1037,8 +1053,32 @@
     opacity: 0.8;
     transition: opacity 0.4s ease-out;
   }
-  /* Diagnostic: render-time stamps so we can compare stdout-stream vs JSONL-tail
-     arrival order on screen. Temporary — remove once we hide the tail rows. */
+  /* Live dot — sits to the left of the per-row timestamp on .conv-item
+   * rows whose session is currently live (sidecar marker exists). Distinct
+   * from the live-tool pill in the title row; this just signals "this row
+   * is being actively polled, its state can change in real time" so the
+   * user knows where the freshness comes from. */
+  .conv-live-dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--accent, #58a6ff);
+    box-shadow: 0 0 0 0 rgba(88,166,255,0.55);
+    margin-right: 4px;
+    flex-shrink: 0;
+    vertical-align: middle;
+    animation: ccc-live-dot-pulse 2.4s ease-out infinite;
+  }
+  @keyframes ccc-live-dot-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(88,166,255,0.55); }
+    70%  { box-shadow: 0 0 0 6px rgba(88,166,255,0); }
+    100% { box-shadow: 0 0 0 0 rgba(88,166,255,0); }
+  }
+
+  /* Per-event timestamps prefixed to each conversation row. Sourced from
+     the JSONL event's own `ts` (when the message was actually written),
+     not the render time. `[S …]` marks events that arrived first via the
+     stdout stream; `[J …]` marks events read back from the JSONL tail. */
   .stream-block-text[data-render-ts]::before,
   .stream-block-tool[data-render-ts]::before,
   .stream-block-thinking[data-render-ts]::before {
@@ -1053,11 +1093,6 @@
     font-size: 10px; color: var(--text-muted); opacity: 0.75;
     margin-right: 6px; display: inline-block;
   }
-  /* Tool-only events get fused into a collapsed .tool-call-group, which hides
-     the per-event stamps. Surface the latest tool's arrival on the visible
-     group header so we can still see when tail tools landed. attr() in
-     content only reads the pseudo's own element, so the data attribute has
-     to live on .tool-call-group-header itself, not on the parent group. */
   .tool-call-group-header[data-render-ts]::before {
     content: '[J ' attr(data-render-ts) ']';
     font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
@@ -1073,10 +1108,21 @@
     margin-top: 0;
     flex: 1 1 auto; min-height: 0;
     display: flex; flex-direction: column;
-    overflow: hidden;
+    overflow: visible;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+  }
+  /* When the timeline has no events, drop it out of the flex flow so a
+     promoted Earlier-ask block sitting next to it gets the full column
+     height and renders top-aligned (instead of being pushed into the
+     bottom half by the empty timeline's `flex: 1 1 auto`). */
+  .conv-sticky-header .csh-col-activity .session-timeline:empty {
+    display: none;
   }
   .conv-sticky-header .csh-col-activity .session-timeline .stl-body {
-    overflow-y: auto; min-height: 0; flex: 1 1 auto;
+    min-height: 0; flex: 1 1 auto;
   }
   /* Session-activity timeline — chronological commit / push / PR strip
      in the right column of the sticky header. */
@@ -2582,6 +2628,183 @@
      race. (Without morning, topbar starts at left:0.) */
   body.has-side-nav .ccc-topbar { left: 52px; }
 
+  /* ── Multi-repo rail — left-edge icon column ──────────────────────────
+   * Persistent vertical strip with one circular icon per known repo.
+   * Running peers first (clicking navigates to that server's port);
+   * known-not-running repos below a divider (clicking switches this
+   * server's REPO_ROOT — the one-off peek flow). Active server gets the
+   * accent fill. The topbar dropdown still works alongside this; the
+   * rail is the primary fast-switch affordance. */
+  .ccc-repo-rail {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: 48px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    align-items: center;
+    padding: 8px 0; gap: 6px;
+    z-index: 99;  /* topbar is 100 — rail tucks under so the topbar
+                     spans full width above it (with our left: 48px shift) */
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+  body.has-repo-rail { padding-left: 48px; }
+  body.has-repo-rail .ccc-topbar { left: 48px; }
+  body.has-repo-rail.has-side-nav .ccc-topbar { left: 100px; }  /* both sidenavs */
+  .ccc-repo-rail .rail-btn {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-muted);
+    font-size: 12px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    text-transform: uppercase;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: background 0.1s ease, transform 0.1s ease, opacity 0.1s ease;
+    position: relative;
+  }
+  .ccc-repo-rail .rail-btn:hover {
+    background: var(--surface-2);
+    color: var(--text);
+    transform: scale(1.06);
+  }
+  .ccc-repo-rail .rail-btn.is-active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+    cursor: default;
+  }
+  .ccc-repo-rail .rail-btn.is-active:hover {
+    background: var(--accent); color: #fff;
+    transform: none;
+  }
+  .ccc-repo-rail .rail-btn.is-switchable {
+    opacity: 0.55;
+    border-style: dashed;
+  }
+  .ccc-repo-rail .rail-btn.is-switchable:hover { opacity: 1; }
+  .ccc-repo-rail .rail-divider {
+    width: 24px; height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+    flex-shrink: 0;
+  }
+
+  /* "All repos" toggle button active state. */
+  .conv-allrepos-toggle.is-active {
+    background: var(--accent) !important;
+    color: #fff !important;
+    border-color: var(--accent) !important;
+  }
+
+  /* Folder chip rendered inside .conv-title-row for archive entries (and
+   * later for any row that wants to surface its source folder). The hue is
+   * set inline via --chip-hue from a stable hash of the folder label, so
+   * the same folder always gets the same color. Translucent fill so it
+   * reads on both light and dark themes. */
+  .conv-folder-chip {
+    --chip-hue: 0;
+    flex-shrink: 0;
+    padding: 1px 7px;
+    border-radius: 9px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.4;
+    background: hsla(var(--chip-hue), 60%, 50%, 0.18);
+    color: hsl(var(--chip-hue), 55%, 65%);
+    border: 1px solid hsla(var(--chip-hue), 55%, 50%, 0.35);
+    max-width: 130px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conv-folder-chip.is-orphan {
+    opacity: 0.55;
+    font-style: italic;
+  }
+  /* Folder group header + divider used by the In Progress section in
+   * multi-repo mode: cards from the last 24h are grouped under a small
+   * folder chip header so "what's hot in chuck right now" reads as a
+   * cluster. Older cards drop below a divider and resume the flat chrono
+   * list with gap separators. */
+  .conv-folder-group-header {
+    --chip-hue: 0;
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .conv-folder-group-chip {
+    flex-shrink: 0;
+    padding: 2px 9px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    background: hsla(var(--chip-hue), 60%, 50%, 0.18);
+    color: hsl(var(--chip-hue), 55%, 65%);
+    border: 1px solid hsla(var(--chip-hue), 55%, 50%, 0.35);
+    max-width: 180px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conv-folder-group-chip.is-orphan { opacity: 0.55; font-style: italic; }
+  .conv-folder-group-count {
+    color: var(--text-muted);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .conv-folder-group-divider {
+    padding: 12px 12px 4px;
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-top: 1px solid var(--border);
+    margin-top: 6px;
+  }
+  /* In Progress section's by-project / by-time toggle. Lives inside the
+   * section header next to the count, only shown when there are folder
+   * chips (i.e. multi-repo mode). Each opt is a span (not a button) to
+   * avoid nested-button HTML; clicks are stopPropagation'd so they don't
+   * collapse the section. */
+  .conv-grouping-toggle {
+    display: inline-flex;
+    margin-left: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    line-height: 1.4;
+  }
+  .conv-grouping-toggle .grouping-opt {
+    padding: 1px 7px;
+    font-size: 10px;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .conv-grouping-toggle .grouping-opt:hover:not(.is-active) {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .conv-grouping-toggle .grouping-opt.is-active {
+    background: var(--accent);
+    color: #fff;
+  }
+  .archive-empty-state {
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
   /* ── Full-page loading overlay ──────────────────────────────────────────
    * Shown on initial load and during repo-switch. Covers everything so the
    * user sees a clear "we're working" signal instead of staring at an empty
@@ -2607,13 +2830,57 @@
   @keyframes ccc-spin { to { transform: rotate(360deg); } }
   .ccc-loading-label {
     color: var(--text-muted); font-size: 13px; letter-spacing: 0.3px;
-    text-align: center; max-width: 320px; line-height: 1.4;
+    text-align: center; max-width: 440px; line-height: 1.4;
   }
   .ccc-loading-label strong { color: var(--text); font-weight: 600; }
   .ccc-loading-detail {
     font-size: 11px; color: var(--text-muted); opacity: 0.6;
     margin-top: 2px;
   }
+  .ccc-loading-breakdown {
+    margin-top: 12px;
+    display: grid;
+    gap: 5px;
+    min-width: min(380px, calc(100vw - 48px));
+    text-align: left;
+  }
+  .ccc-loading-row {
+    display: grid;
+    grid-template-columns: 132px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .ccc-loading-row-label {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ccc-loading-row-detail {
+    min-width: 0;
+    opacity: 0.72;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ccc-loading-count {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    opacity: 0.82;
+  }
+  .ccc-loading-status {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+    background: var(--border);
+  }
+  .ccc-loading-row[data-state="running"] .ccc-loading-status { background: var(--accent); }
+  .ccc-loading-row[data-state="done"] .ccc-loading-status { background: var(--green); }
+  .ccc-loading-row[data-state="error"] .ccc-loading-status { background: var(--red); }
   .ccc-topbar-label {
     align-self: center;
     color: var(--text-muted); text-transform: uppercase;
@@ -2962,9 +3229,8 @@
       right: 4px !important;
     }
 
-    /* Give the "Original ask" sticky header more room to breathe */
-    .conv-sticky-header .user-msg { max-height: 9em !important; }
-    .conv-sticky-header.is-resized .user-msg { max-height: none !important; overflow: auto !important; }
+    /* The unified sticky panel handles its own scroll per column —
+       no per-message cap needed on mobile. */
 
     /* Floating reload button — bottom-right to avoid overlap with conv-panel X.
        (Safe-area padding keeps it above the home indicator.) */
@@ -3201,21 +3467,119 @@
   <div class="ccc-loading-overlay" id="cccLoadingOverlay">
     <div class="ccc-loading-spinner"></div>
     <div class="ccc-loading-label" id="cccLoadingLabel">
-      <strong>Loading sessions…</strong>
-      <div class="ccc-loading-detail">Scanning Claude Code transcripts and GitHub issues.</div>
+      <strong>Loading sessions&hellip;</strong>
+      <div class="ccc-loading-detail">Preparing source-by-source scan.</div>
+      <div class="ccc-loading-breakdown" id="cccLoadingBreakdown" aria-live="polite">
+        <div class="ccc-loading-row" data-state="running">
+          <span class="ccc-loading-row-label"><span class="ccc-loading-status"></span>Repo</span>
+          <span class="ccc-loading-row-detail">Identifying watched repo.</span>
+          <span class="ccc-loading-count"></span>
+        </div>
+        <div class="ccc-loading-row" data-state="pending">
+          <span class="ccc-loading-row-label"><span class="ccc-loading-status"></span>Claude transcripts</span>
+          <span class="ccc-loading-row-detail">Counting JSONL files.</span>
+          <span class="ccc-loading-count"></span>
+        </div>
+        <div class="ccc-loading-row" data-state="pending">
+          <span class="ccc-loading-row-label"><span class="ccc-loading-status"></span>GitHub issues</span>
+          <span class="ccc-loading-row-detail">Waiting.</span>
+          <span class="ccc-loading-count"></span>
+        </div>
+        <div class="ccc-loading-row" data-state="pending">
+          <span class="ccc-loading-row-label"><span class="ccc-loading-status"></span>Issue states</span>
+          <span class="ccc-loading-row-detail">Waiting.</span>
+          <span class="ccc-loading-count"></span>
+        </div>
+        <div class="ccc-loading-row" data-state="pending">
+          <span class="ccc-loading-row-label"><span class="ccc-loading-status"></span>Backlog files</span>
+          <span class="ccc-loading-row-detail">Waiting.</span>
+          <span class="ccc-loading-count"></span>
+        </div>
+      </div>
     </div>
   </div>
   <script>
+    function cccEscapeLoadingHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+    function cccDefaultLoadingSteps() {
+      return [
+        { key: 'repo', label: 'Repo', state: 'running', detail: 'Identifying watched repo.' },
+        { key: 'transcripts', label: 'Claude transcripts', state: 'pending', detail: 'Counting JSONL files.' },
+        { key: 'sessions', label: 'Interactive sessions', state: 'pending', detail: 'Waiting on transcript metadata.' },
+        { key: 'github', label: 'GitHub issues', state: 'pending', detail: 'Waiting.' },
+        { key: 'issue_states', label: 'Issue states', state: 'pending', detail: 'Waiting.' },
+        { key: 'todo', label: 'TODO.md', state: 'pending', detail: 'Waiting.' },
+        { key: 'parking', label: 'PARKING_LOT.md', state: 'pending', detail: 'Waiting.' },
+        { key: 'native_tasks', label: 'Native tasks', state: 'pending', detail: 'Waiting.' },
+      ];
+    }
+    function cccFormatLoadingCount(step) {
+      const hasCount = typeof step.count === 'number';
+      const hasTotal = typeof step.total === 'number';
+      if (hasCount && hasTotal) return step.count + '/' + step.total;
+      if (hasCount) return String(step.count);
+      return '';
+    }
+    function cccRenderLoadingStatus(status) {
+      const $label = document.getElementById('cccLoadingLabel');
+      if (!$label) return;
+      const title = window.cccLoadingTitleOverride || status.title || 'Loading sessions';
+      const message = status.message || 'Scanning sources by element.';
+      const steps = Array.isArray(status.steps) && status.steps.length ? status.steps : cccDefaultLoadingSteps();
+      const rows = steps.map((step) => {
+        const state = step.state || 'pending';
+        const count = cccFormatLoadingCount(step);
+        return '<div class="ccc-loading-row" data-state="' + cccEscapeLoadingHtml(state) + '">'
+          + '<span class="ccc-loading-row-label"><span class="ccc-loading-status"></span>'
+          + cccEscapeLoadingHtml(step.label || step.key || 'Source') + '</span>'
+          + '<span class="ccc-loading-row-detail">' + cccEscapeLoadingHtml(step.detail || '') + '</span>'
+          + '<span class="ccc-loading-count">' + cccEscapeLoadingHtml(count) + '</span>'
+          + '</div>';
+      }).join('');
+      $label.innerHTML =
+        '<strong>' + cccEscapeLoadingHtml(title) + '&hellip;</strong>' +
+        '<div class="ccc-loading-detail">' + cccEscapeLoadingHtml(message) + '</div>' +
+        '<div class="ccc-loading-breakdown" id="cccLoadingBreakdown" aria-live="polite">' + rows + '</div>';
+    }
+    window.cccSetLoadingStatus = function (title, message, steps) {
+      cccRenderLoadingStatus({ title, message, steps: steps || cccDefaultLoadingSteps() });
+    };
+    window.cccBeginLoadingStatusPolling = function () {
+      if (window.cccLoadingPollId) return;
+      const poll = async () => {
+        const $overlay = document.getElementById('cccLoadingOverlay');
+        if (!$overlay || $overlay.classList.contains('gone')) {
+          clearInterval(window.cccLoadingPollId);
+          window.cccLoadingPollId = null;
+          return;
+        }
+        try {
+          const res = await fetch('/api/loading-status', { cache: 'no-store' });
+          if (!res.ok) return;
+          const status = await res.json();
+          if (status && status.active && Array.isArray(status.steps)) {
+            cccRenderLoadingStatus(status);
+          }
+        } catch (_) {}
+      };
+      poll();
+      window.cccLoadingPollId = setInterval(poll, 450);
+    };
+    window.cccBeginLoadingStatusPolling();
     // If the user just switched repos, surface that in the label.
     (function () {
       try {
         const switching = sessionStorage.getItem('ccc-switching-to');
         if (switching) {
-          const $label = document.getElementById('cccLoadingLabel');
-          if ($label) {
-            $label.innerHTML =
-              '<strong>Switching to ' + switching.replace(/[<>&]/g, '') + '</strong>' +
-              '<div class="ccc-loading-detail">Re-scanning sessions and GitHub issues for the new repo.</div>';
+          window.cccLoadingTitleOverride = 'Switching to ' + switching.replace(/[<>&]/g, '');
+          if (window.cccSetLoadingStatus) {
+            window.cccSetLoadingStatus(window.cccLoadingTitleOverride, 'Preparing source-by-source scan for the new repo.');
           }
           sessionStorage.removeItem('ccc-switching-to');
         }
@@ -3223,16 +3587,43 @@
         // shows "Update complete, reconnecting…" instead of the default
         // "Loading sessions…" while the session scan runs.
         if (sessionStorage.getItem('ccc-updating')) {
-          const $label2 = document.getElementById('cccLoadingLabel');
-          if ($label2) {
-            $label2.innerHTML =
-              '<strong>Update complete, reconnecting&hellip;</strong>' +
-              '<div class="ccc-loading-detail">Rescanning sessions with the new version.</div>';
+          window.cccLoadingTitleOverride = 'Update complete, reconnecting';
+          if (window.cccSetLoadingStatus) {
+            window.cccSetLoadingStatus(window.cccLoadingTitleOverride, 'Rescanning sources with the new version.');
+          }
+        }
+        // Archive-default boot: the slow request on cold scan is
+        // /api/conversations/all (cross-folder JSONL walk + git ops),
+        // not /api/sessions. Keep the overlay honest about what we're
+        // actually waiting on so 10s of "Loading sessions…" doesn't
+        // mislead. Mirrors the localStorage key + default in the
+        // archive toggle below — repeating it here avoids loading the
+        // whole script just to label the overlay.
+        let _archiveDefault = true;
+        try {
+          const _v = localStorage.getItem('ccc-archive-mode');
+          if (_v !== null) _archiveDefault = (_v === '1');
+        } catch (_) {}
+        if (_archiveDefault
+            && !sessionStorage.getItem('ccc-switching-to')
+            && !sessionStorage.getItem('ccc-updating')) {
+          const $label3 = document.getElementById('cccLoadingLabel');
+          if ($label3) {
+            $label3.innerHTML =
+              '<strong>Loading conversations&hellip;</strong>' +
+              '<div class="ccc-loading-detail">Scanning Claude Code transcripts across every folder. Faster on subsequent loads.</div>';
           }
         }
       } catch (_) {}
     })();
   </script>
+
+  <!-- Multi-repo rail — vertical icon strip on the left edge. Populated by
+       renderRepoSidebar() from /api/registry + /api/repo/list. Empty in
+       single-repo deployments; the body.has-repo-rail class is toggled
+       by the renderer so the layout doesn't waste 48px when there's
+       nothing to show. -->
+  <aside id="ccRepoSidebar" class="ccc-repo-rail" role="navigation" aria-label="Repos"></aside>
 
   <!-- Layout-agnostic top bar — visible in BOTH list and kanban-split modes
        so the most-important controls (which repo we're watching + the
@@ -3249,6 +3640,7 @@
     </button>
     <button id="kptSummarizeAllBtn" class="topbar-btn" title="Use Claude haiku to generate concise titles for every card whose name hasn't been touched. Runs in the background, ~3 cards in parallel." aria-label="Summarize titles for all unnamed cards">&#10024; Titles</button>
     <button id="kptWorktreesBtn" class="topbar-btn" title="Show all worktrees of this repo, with an indicator for those that have uncommitted changes." aria-label="Show worktrees">&#127807; Worktrees</button>
+    <button id="termToggleBtn" class="topbar-btn" title="Open the in-UI terminal panel — run quick shell commands (git status, npm test, ./script.sh) without leaving the page. One-shot per command, no interactive TTY (no vim/top)." aria-label="Toggle terminal panel">&#9000; Terminal</button>
     <!-- View menu — collapses three rarely-changed toggles (Last 10h /
          Compact / GitHub only) into one disclosure popover. -->
     <div class="kpt-view-menu-wrap" style="position:relative;">
@@ -3278,6 +3670,7 @@
         <a class="sh-btn sh-btn-deploy" id="sidebarDeployPill" target="_blank" rel="noopener" title="Vercel deploy — loading…" aria-label="Vercel deploy status"><span class="deploy-dot" id="deployDot"></span><span class="deploy-label" id="deployStateLabel">Vercel</span></a>
         <button class="conv-compact-toggle sh-btn" id="convCompactToggle" title="Compact rows — keep each card to a single line" aria-label="Toggle compact rows"><span aria-hidden="true">&#8801;</span></button>
         <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Toggle Kanban board view" aria-label="Toggle Kanban board view"><span aria-hidden="true">&#9783;</span> Board</button>
+        <button class="conv-allrepos-toggle sh-btn" id="convAllReposToggle" title="All repos — browse conversations from every folder you've ever Claude-Code'd in. Read-only; no servers spawned." aria-label="Toggle all-repos archive">&#128194; All repos</button>
         <button class="conv-archive-toggle sh-btn" id="convArchiveToggle" title="Show archived">&#128230;</button>
         <button class="conv-sort-btn sh-btn" id="convSortBtn" title="Sort by latest response (ignores custom order)">&#8693;</button>
         <button class="conv-sort-btn sh-btn" id="convAlphaSortBtn" title="Sort alphabetically by title">A&#8595;</button>
@@ -3877,6 +4270,7 @@
   const $announceBtnConv = document.getElementById('announceBtnConv');
   const $pkoodKillBtn = document.getElementById('pkoodKillBtn');
   let pkoodTailPoller = null; // interval ID for polling pkood tail
+  let codexLogPoller = null; // interval ID for tailing a codex spawn log
   const $convRefreshBtn = document.getElementById('convRefreshBtn');
 
   function shellQuote(s) {
@@ -5337,7 +5731,7 @@
   // Pending spawn placeholders (optimistic UI) — keyed by pid.
   const pendingSpawns = new Map();
 
-  function insertPendingSpawnCard(pid, subject, sourceOrEngine) {
+  function insertPendingSpawnCard(pid, subject, sourceOrEngine, logPath) {
     if (!pid) return;
     const id = 'spawning-' + pid;
     // Backwards-compat: this used to take `usePkood: bool`. Accept
@@ -5360,6 +5754,10 @@
       modified: Date.now() / 1000, size: 0, branch: '',
       last_event_type: null, pending_tool: null, pending_file: null,
       name_overridden: false,
+      // Codex spawns are fire-and-watch: the log path lets the right pane
+      // render the run output via /api/sessions/spawned/<pid>/log since
+      // codex doesn't write to ~/.claude/projects.
+      codex_log_path: source === 'codex' ? (logPath || null) : null,
     };
     pendingSpawns.set(pid, card);
     conversationsData = [card, ...conversationsData];
@@ -5374,15 +5772,19 @@
     if (typeof selectConversation === 'function') {
       selectConversation(id);
     }
-    // Auto-cleanup after 30s regardless of refresh cadence
-    setTimeout(() => {
-      if (pendingSpawns.has(pid)) {
-        pendingSpawns.delete(pid);
-        delete columnOverrides[id];
-        conversationsData = conversationsData.filter(x => x.id !== id);
-        renderSidebar(filterConversations($convSearch.value));
-      }
-    }, 30000);
+    // Auto-cleanup after 30s regardless of refresh cadence — but NOT for
+    // codex, which has no JSONL surface to graduate to. Codex placeholders
+    // are the permanent UI for that run; the user archives them by hand.
+    if (source !== 'codex') {
+      setTimeout(() => {
+        if (pendingSpawns.has(pid)) {
+          pendingSpawns.delete(pid);
+          delete columnOverrides[id];
+          conversationsData = conversationsData.filter(x => x.id !== id);
+          renderSidebar(filterConversations($convSearch.value));
+        }
+      }, 30000);
+    }
   }
 
   // Hide the loading overlay once we've actually rendered a sessions response.
@@ -5398,6 +5800,20 @@
   // never leave the user staring at a spinner forever. 30s is generous given
   // the cache-warm scan can take ~10s on a big ~/.claude/projects dir.
   setTimeout(hideLoadingOverlay, 30000);
+
+  // First-sessions-loaded promise. Resolves when /api/sessions returns
+  // for the first time (or 30s safety timer fires). The archive boot
+  // kick (cross-folder JSONL walk + git ops, can be ~12s on a cold cache)
+  // awaits this so it doesn't compete for CPU with /api/sessions itself —
+  // running both in parallel was making the user stare at the wrong
+  // overlay copy for the duration of the slower request.
+  let _firstSessionsResolve;
+  const _firstSessionsLoaded = new Promise(res => { _firstSessionsResolve = res; });
+  function _markFirstSessionsLoaded() {
+    if (_firstSessionsResolve) { _firstSessionsResolve(); _firstSessionsResolve = null; }
+  }
+  // Same 30s ceiling as the overlay safety net.
+  setTimeout(_markFirstSessionsLoaded, 30000);
 
   async function loadConversationList() {
     try {
@@ -5507,6 +5923,7 @@
       renderSidebar(filterConversations($convSearch.value));
       loadAttentionList();  // piggy-back on the same refresh cycle
       hideLoadingOverlay();  // first render has happened — reveal the UI
+      _markFirstSessionsLoaded();  // unblock archive boot kick (see wireArchiveToggle)
       // Auto-restore the last-opened card on first load. Only fires when
       // the user hasn't already clicked something — refresh-after-refresh
       // shouldn't yank a card out from under an active selection.
@@ -5520,6 +5937,7 @@
     } catch (err) {
       $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Failed to load sessions: ' + escapeHtml(err.message) + '</div>';
       hideLoadingOverlay();  // even on error — don't leave the user stuck on a spinner
+      _markFirstSessionsLoaded();  // even on error — don't pin the archive load
     }
   }
 
@@ -5901,6 +6319,19 @@
   let _renameInProgress = false;
   function renderSidebar(convs) {
     if (_renameInProgress) return;
+    // Archive-mode guard: while "All repos" is on, the sidebar renders the
+    // cross-folder archive instead of the active repo's session list. Skip
+    // both kanban and list dispatch to keep the archive view from being
+    // clobbered by periodic refreshes. Toggle off to return.
+    if (typeof archiveMode !== 'undefined' && archiveMode) {
+      const $kanbanBoard = document.getElementById('kanbanBoard');
+      const $convList = document.getElementById('convList');
+      if ($kanbanBoard) $kanbanBoard.style.display = 'none';
+      if ($convList) $convList.style.display = '';
+      const $search = document.getElementById('convSearch');
+      try { renderArchiveList($search ? $search.value : ''); } catch (_) {}
+      return;
+    }
     // Preserve scroll across ALL re-renders (board + per-column + list)
     const scrolls = {};
     document.querySelectorAll('.kanban-board, .kanban-board-split, #convList').forEach(el => {
@@ -7607,7 +8038,12 @@
       // Ready to merge: a recorded PR number is the strong signal — it
       // means `gh pr create` ran successfully in this session. Pkood
       // rows are excluded (they don't open PRs the same way).
-      if (c.source !== 'pkood' && c.tail_pr_number) {
+      // pr_state ("OPEN" / "MERGED" / "CLOSED") comes from a TTL-cached
+      // `gh pr view` lookup on the server. Drop merged/closed so this
+      // bucket isn't a graveyard of completed work; treat null/'OPEN'
+      // as still ready (gh failures shouldn't hide real PRs).
+      const _prDone = c.pr_state === 'MERGED' || c.pr_state === 'CLOSED';
+      if (c.source !== 'pkood' && c.tail_pr_number && !_prDone) {
         _readyToMergeConvs.push(c);
         continue;
       }
@@ -7629,7 +8065,10 @@
       } else if (c.display_name && cleanFirst) {
         askHtml = '<div class="conv-last">' + escapeHtml(cleanFirst.slice(0, 100)) + '</div>';
       }
-      const ask = askHtml;
+      // _hideAskHtml is set by the archive renderer (#6) — subtitle is
+      // redundant with the title in cross-folder mode and the user has
+      // explicitly opted not to see it. Single-repo rows don't set it.
+      const ask = c._hideAskHtml ? '' : askHtml;
       // Branch pill: shows where this session's edits actually land.
       //   1. effective_branch (tool-call inference) wins when present.
       //   2. else session_cwd_is_worktree → c.branch in worktree style.
@@ -7745,12 +8184,6 @@
         ? '<button class="conv-merge-btn" data-role="merge" title="' + escapeHtml(_mergeTitle) + '">&#128256;</button>'
         : '';
 
-      // GH Issues / TODO / parking rows live in the GH Issues section and
-      // need two extra affordances vs. session rows: a "Start" pill that
-      // mirrors the kanban-start-btn (spawn a session for this issue), and
-      // a relabelled archive button — for backlog rows "archive" actually
-      // closes the GH issue "not planned", so the verb on the button
-      // matches the action.
       const isBacklogRow = c.source === 'backlog';
       let startBtn = '';
       let archiveBtn;
@@ -7763,10 +8196,28 @@
         archiveBtn = '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>';
       }
 
+      // Suppressed (_suppressFolderChip) when the row sits under a folder
+      // group header that already labels the folder — chip would be noise.
+      const folderChipHtml = (c.folder_label_chip && !c._suppressFolderChip)
+        ? '<span class="conv-folder-chip' + (c.folder_chip_orphan ? ' is-orphan' : '')
+            + '" style="--chip-hue:' + (c.folder_chip_hue | 0) + ';"'
+            + ' title="' + escapeHtml(c.folder_path || c.session_cwd || '') + '">'
+            + escapeHtml(c.folder_label_chip) + '</span>'
+        : '';
+
+      // Live dot — sits to the left of the timestamp when this session
+      // is actively being polled (sidecar marker exists). Helps the user
+      // see at a glance which rows can change in real time.
+      const liveDotHtml = c.is_live
+        ? '<span class="conv-live-dot" title="Live — actively polled"></span>'
+        : '';
+
       return '<div class="conv-item' + active + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
+          + liveDotHtml
           + '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
+          + folderChipHtml
           + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to rename">' + escapeHtml(title) + '</div>'
           + liveToolHtml
           + '<span class="conv-meta-inline">'
@@ -7784,7 +8235,25 @@
     };
     // Active list keeps the date-gap separators so morning/evening
     // boundaries stay visible while scanning.
-    const _activeRowsHtml = _sessionConvs.map((c, i, arr) => {
+    //
+    // In multi-repo (archive) mode — detected by the presence of a
+    // folder_label_chip on cards — the most-recent 24h get grouped by
+    // folder so you can scan "what's hot in chuck right now" without
+    // hopping repos. Older cards continue as a flat chrono list with
+    // gap separators (the existing single-repo behavior).
+    const _hasFolderChips = _sessionConvs.some(c => c.folder_label_chip);
+    // User-controlled grouping preference for the In Progress section.
+    // 'project' (default): group last-24h by folder. 'time': flat chrono
+    // list with gap separators. Only meaningful when there are folder
+    // chips (i.e. multi-repo / archive mode); the In Progress header's
+    // by-project / by-time toggle (only shown when _hasFolderChips) writes
+    // this key.
+    const _ipGrouping = (() => {
+      try { return localStorage.getItem('ccc-inprogress-grouping') || 'project'; }
+      catch (_) { return 'project'; }
+    })();
+    const _shouldGroupByFolder = _hasFolderChips && _ipGrouping === 'project';
+    const _flatRowsWithSeparators = (cards) => cards.map((c, i, arr) => {
       let separator = '';
       if (i > 0) {
         const newer = (arr[i - 1] && arr[i - 1].modified) || 0;
@@ -7799,6 +8268,50 @@
       }
       return separator + _renderRow(c);
     }).join('');
+
+    let _activeRowsHtml;
+    if (_shouldGroupByFolder) {
+      const _nowSec = Date.now() / 1000;
+      const _24hAgo = _nowSec - 24 * 3600;
+      const _recent = [];
+      const _older = [];
+      for (const c of _sessionConvs) {
+        if ((c.modified || 0) >= _24hAgo) _recent.push(c);
+        else _older.push(c);
+      }
+      // Group recent cards by folder; preserve folder order by the most
+      // recent card in each group (freshest folder appears first).
+      const _byFolder = new Map();
+      for (const c of _recent) {
+        const key = c.folder_label_chip || c.folder_path || '(unknown)';
+        if (!_byFolder.has(key)) _byFolder.set(key, []);
+        _byFolder.get(key).push(c);
+      }
+      const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
+        const aMax = a[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
+        const bMax = b[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
+        return bMax - aMax;
+      });
+      const _groupHtml = _folderEntries.map(([folder, cards]) => {
+        const hue = (cards[0].folder_chip_hue | 0);
+        const orphan = cards[0].folder_chip_orphan ? ' is-orphan' : '';
+        // Suppress per-row chip — the group header already labels the folder.
+        for (const c of cards) c._suppressFolderChip = true;
+        return '<div class="conv-folder-group-header" style="--chip-hue:' + hue + ';">'
+          + '<span class="conv-folder-group-chip' + orphan + '">' + escapeHtml(folder) + '</span>'
+          + '<span class="conv-folder-group-count">' + cards.length + '</span>'
+          + '</div>'
+          + _flatRowsWithSeparators(cards);
+      }).join('');
+      let _olderHtml = '';
+      if (_older.length) {
+        _olderHtml = '<div class="conv-folder-group-divider">Older than 24 h</div>'
+          + _flatRowsWithSeparators(_older);
+      }
+      _activeRowsHtml = _groupHtml + _olderHtml;
+    } else {
+      _activeRowsHtml = _flatRowsWithSeparators(_sessionConvs);
+    }
     // In progress section: every row that's not a backlog card or archived.
     // Mirrors the kanban "In progress" column (key: 'working' under the
     // hood — relabel only) so the two surfaces use the same vocabulary.
@@ -7808,12 +8321,23 @@
     if (_sessionConvs.length > 0) {
       const _ipCollapsed = localStorage.getItem('ccc-inprogress-collapsed') === '1';
       const _ipArrow = _ipCollapsed ? '▸' : '▾';
+      // by-project / by-time toggle, only when there are folder chips
+      // (otherwise grouping is meaningless). Inline spans so the click
+      // doesn't bubble to the section's collapse button (handler does
+      // ev.stopPropagation when wired below).
+      const _ipGroupingToggle = _hasFolderChips
+        ? '<span class="conv-grouping-toggle" data-role="grouping-toggle">'
+            + '<span class="grouping-opt' + (_ipGrouping === 'project' ? ' is-active' : '') + '" data-grouping="project">by project</span>'
+            + '<span class="grouping-opt' + (_ipGrouping === 'time' ? ' is-active' : '') + '" data-grouping="time">by time</span>'
+          + '</span>'
+        : '';
       _inProgressHtml =
         '<div class="conv-inprogress-section' + (_ipCollapsed ? ' collapsed' : '') + '" data-role="inprogress-section">'
         + '<button type="button" class="conv-inprogress-header" data-role="inprogress-toggle" aria-expanded="' + (!_ipCollapsed) + '">'
         +   '<span class="conv-inprogress-arrow">' + _ipArrow + '</span>'
         +   '<span class="conv-inprogress-label">In progress</span>'
         +   '<span class="conv-inprogress-count">' + _sessionConvs.length + '</span>'
+        +   _ipGroupingToggle
         + '</button>'
         + '<div class="conv-inprogress-list">' + _activeRowsHtml + '</div>'
         + '</div>';
@@ -7925,6 +8449,9 @@
     const $inProgressToggle = $convList.querySelector('[data-role="inprogress-toggle"]');
     if ($inProgressToggle) {
       $inProgressToggle.addEventListener('click', (ev) => {
+        // The grouping toggle (project / time) lives inside this header
+        // button — its own listener stops propagation, but be defensive.
+        if (ev.target.closest('[data-role="grouping-toggle"]')) return;
         ev.stopPropagation();
         const section = $inProgressToggle.closest('[data-role="inprogress-section"]');
         if (!section) return;
@@ -7933,6 +8460,27 @@
         const arrowEl = $inProgressToggle.querySelector('.conv-inprogress-arrow');
         if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         $inProgressToggle.setAttribute('aria-expanded', String(!wasCollapsed));
+      });
+    }
+    // Grouping toggle (by project / by time). Triggers a re-render via the
+    // same path the data came from: archive mode → renderArchiveList,
+    // single-repo mode → loadConversationList. (In single-repo mode the
+    // toggle isn't rendered anyway since folder chips are absent, but be
+    // safe.)
+    const $groupingToggle = $convList.querySelector('[data-role="grouping-toggle"]');
+    if ($groupingToggle) {
+      $groupingToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const opt = ev.target.closest('[data-grouping]');
+        if (!opt) return;
+        const value = opt.getAttribute('data-grouping');
+        try { localStorage.setItem('ccc-inprogress-grouping', value); } catch (_) {}
+        if (typeof archiveMode !== 'undefined' && archiveMode) {
+          const $search = document.getElementById('convSearch');
+          renderArchiveList($search ? $search.value : '');
+        } else if (typeof loadConversationList === 'function') {
+          loadConversationList();
+        }
       });
     }
     $convList.querySelectorAll('.conv-item').forEach(el => {
@@ -7991,6 +8539,13 @@
             if (c) {
               c.archived = data.archived;
               setOptimisticOverride(c.session_id, { archived: c.archived });
+            }
+            // Patch archiveData (Round 5 / #13) so the next archive
+            // re-render reflects the new archived state — same reason
+            // as the rename patch above.
+            if (typeof archiveData !== 'undefined' && Array.isArray(archiveData)) {
+              const ac = archiveData.find(x => x.session_id === sessionId);
+              if (ac) ac.archived = data.archived;
             }
             renderSidebar(filterConversations($convSearch.value));
             if (data.archived && nextSelectId) {
@@ -8401,6 +8956,18 @@
             // storage path (jsonl write-through vs. side-car fallback).
             c.name_overridden = !!newName;
           }
+          // Also patch archiveData so the next archive re-render (periodic
+          // poll or filter input) doesn't clobber the rename by rebuilding
+          // shaped rows from the stale archive cache. Without this, the
+          // user sees the rename appear briefly, then snap back to the
+          // first-message title on the next 10s tick.
+          if (typeof archiveData !== 'undefined' && Array.isArray(archiveData)) {
+            const ac = archiveData.find(x => x.session_id === item.dataset.sessionId);
+            if (ac) {
+              ac.display_name = newName || null;
+              ac.name_overridden = !!newName;
+            }
+          }
           // Brief toast on the item title
           const toast = document.createElement('div');
           toast.style.cssText = 'position:fixed;bottom:20px;left:20px;background:var(--surface);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:12px;color:var(--text);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
@@ -8670,6 +9237,7 @@
     // Stop any existing SSE stream or pollers
     stopConvStream();
     stopSpawnStream();
+    stopCodexLogPoller();
     mobileShowForCurrentMode();
     currentConversation = id;
     // Remember which card was last opened so we can re-open it on the
@@ -9137,6 +9705,20 @@
     _ffcWireCloseHandlers();
   }
 
+  // Parse a JSONL event's ISO timestamp ("ts" field, set server-side from
+  // the original event's `timestamp`) into the same HH:MM:SS.mmm format
+  // nowStamp() produces, but in the user's local timezone. Falls back to
+  // null when the input is missing or unparseable so callers can decide
+  // whether to use nowStamp() or hide the prefix entirely.
+  function eventStamp(isoTs) {
+    if (!isoTs) return null;
+    const d = new Date(isoTs);
+    if (isNaN(d.getTime())) return null;
+    const p2 = (n) => (n < 10 ? '0' + n : '' + n);
+    const p3 = (n) => (n < 10 ? '00' + n : n < 100 ? '0' + n : '' + n);
+    return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()) + '.' + p3(d.getMilliseconds());
+  }
+
   function setLiveBadgeVisible(visible) {
     const a = document.getElementById('liveBadgeConv');
     const b = document.getElementById('cpLiveBadge');
@@ -9331,6 +9913,104 @@
     }
   }
 
+  function stopCodexLogPoller() {
+    if (codexLogPoller) {
+      clearInterval(codexLogPoller);
+      codexLogPoller = null;
+    }
+  }
+
+  // Render a codex spawn log into the right pane. Codex `exec` is one-shot
+  // and writes JSON-lines to the spawn log; we don't have a JSONL/projects
+  // surface for it (yet — see the codex-spawn changelog), so this is the
+  // permanent UI for a codex run. Polls every 1.5s while the proc is still
+  // running, then locks to the final transcript.
+  async function loadCodexLog(card) {
+    if (!card || typeof card.spawn_pid !== 'number') {
+      // Pre-swap (toolbar Run): spawn_pid is still 'tmp-...'. Show a
+      // placeholder until the spawn POST returns and re-selects this card.
+      const $view = getConvView();
+      $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Spawning codex run…</div>';
+      return;
+    }
+    const $view = getConvView();
+    try {
+      const res = await fetch('/api/sessions/spawned/' + encodeURIComponent(card.spawn_pid) + '/log?_=' + Date.now());
+      const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
+      if (!data.ok) {
+        $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load codex log: ' + escapeHtml(data.error || ('HTTP ' + res.status)) + '</div>';
+        stopCodexLogPoller();
+        return;
+      }
+      const atBottom = $view.scrollHeight - $view.scrollTop - $view.clientHeight < 40;
+      $view.innerHTML = renderCodexLogHtml(data);
+      if (atBottom) $view.scrollTop = $view.scrollHeight;
+      // Process exited — stop polling. Final render already in place.
+      if (!data.running) stopCodexLogPoller();
+    } catch (err) {
+      // Transient — keep existing content; the next tick will retry.
+    }
+  }
+
+  // Build the right-pane HTML for a codex run from /api/sessions/spawned/<pid>/log.
+  function renderCodexLogHtml(data) {
+    const lines = (data.text || '').split('\n').filter(Boolean);
+    const messages = [];
+    let usage = null;
+    let threadId = '';
+    const stderrLines = [];
+    for (const line of lines) {
+      try {
+        const ev = JSON.parse(line);
+        if (ev.type === 'thread.started' && ev.thread_id) threadId = ev.thread_id;
+        else if (ev.type === 'item.completed' && ev.item) {
+          if (ev.item.type === 'agent_message' && ev.item.text) {
+            messages.push({ role: 'assistant', text: ev.item.text });
+          } else if (ev.item.type) {
+            // Tool calls / other items — render a compact summary line.
+            messages.push({ role: 'system', text: '[' + ev.item.type + ']' });
+          }
+        } else if (ev.type === 'turn.completed' && ev.usage) {
+          usage = ev.usage;
+        }
+      } catch (_) {
+        // Non-JSON line (codex CLI stderr leaks). Show in a small footer.
+        stderrLines.push(line);
+      }
+    }
+    const status = data.running
+      ? '<span class="codex-status running" style="color:var(--green);">running</span>'
+      : ('<span class="codex-status finished" style="color:var(--text-muted);">finished' + (data.exit_code != null ? ' (exit ' + data.exit_code + ')' : '') + '</span>');
+    const usageHtml = usage
+      ? ('<div class="codex-usage" style="margin-top:12px;padding:8px 10px;background:rgba(139,148,158,0.08);border-radius:6px;font-size:12px;color:var(--text-muted);font-family:var(--font-mono,monospace);">'
+        + 'in ' + (usage.input_tokens || 0)
+        + (usage.cached_input_tokens ? ' (' + usage.cached_input_tokens + ' cached)' : '')
+        + ' · out ' + (usage.output_tokens || 0)
+        + (usage.reasoning_output_tokens ? ' (' + usage.reasoning_output_tokens + ' reasoning)' : '')
+        + '</div>')
+      : '';
+    const msgsHtml = messages.length
+      ? messages.map(m => {
+          if (m.role === 'assistant') {
+            return '<div class="codex-msg assistant" style="margin-bottom:14px;padding:10px 12px;background:rgba(63,185,80,0.06);border-left:2px solid var(--green);border-radius:4px;white-space:pre-wrap;line-height:1.55;">' + escapeHtml(m.text) + '</div>';
+          }
+          return '<div class="codex-msg system" style="margin-bottom:6px;font-size:12px;color:var(--text-muted);font-family:var(--font-mono,monospace);">' + escapeHtml(m.text) + '</div>';
+        }).join('')
+      : '<div class="empty-state" style="height:auto;padding:24px;color:var(--text-muted);">codex is thinking…</div>';
+    const stderrHtml = stderrLines.length
+      ? ('<details style="margin-top:14px;font-size:12px;color:var(--text-muted);"><summary style="cursor:pointer;">codex stderr (' + stderrLines.length + ' line' + (stderrLines.length === 1 ? '' : 's') + ')</summary>'
+        + '<pre style="margin:8px 0 0;padding:8px;background:rgba(139,148,158,0.08);border-radius:4px;white-space:pre-wrap;font-family:var(--font-mono,monospace);">' + escapeHtml(stderrLines.join('\n')) + '</pre>'
+        + '</details>')
+      : '';
+    const headerHtml = '<div class="codex-header" style="display:flex;align-items:center;gap:10px;padding-bottom:10px;margin-bottom:14px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text-muted);">'
+      + '<span class="source-badge codex" style="background:rgba(63,185,80,0.2);color:var(--green);padding:2px 8px;border-radius:10px;font-weight:600;">codex</span>'
+      + status
+      + (threadId ? '<span style="font-family:var(--font-mono,monospace);">thread ' + escapeHtml(threadId.slice(0, 8)) + '…</span>' : '')
+      + '<span style="margin-left:auto;font-family:var(--font-mono,monospace);">pid ' + escapeHtml(String(data.pid)) + '</span>'
+      + '</div>';
+    return '<div class="codex-log" style="padding:16px 20px;">' + headerHtml + msgsHtml + usageHtml + stderrHtml + '</div>';
+  }
+
   async function fetchConversationEvents() {
     if (!currentConversation) return;
     const id = currentConversation;
@@ -9346,6 +10026,21 @@
         return;
       }
     }
+    // Codex placeholders never get a JSONL — they're tombstones for a
+    // one-shot `codex exec` run. Read the spawn log instead and poll
+    // until the proc exits.
+    if (id.startsWith('spawning-')) {
+      const c = (conversationsData || []).find(x => x.id === id);
+      if (c && c.source === 'codex') {
+        await loadCodexLog(c);
+        stopCodexLogPoller();
+        codexLogPoller = setInterval(() => {
+          if (currentConversation !== id) { stopCodexLogPoller(); return; }
+          loadCodexLog(c);
+        }, 1500);
+        return;
+      }
+    }
     try {
       const res = await fetch('/api/conversations/' + id + '?after=' + convLastLine);
       const data = await res.json();
@@ -9355,6 +10050,17 @@
       }
       renderConversationEvents(data.events);
       convLastLine = data.last_line;
+      // Re-fetch session usage whenever new events landed. Usage rollups
+      // arrive sporadically (in some session paths only the final
+      // assistant event of each turn carries the `usage` block — many
+      // delta events in between have none), so the initial selection-
+      // time fetch can come back empty and the user sees no context %
+      // until they reselect. Tying this to event arrival means the pill
+      // updates as soon as the next turn lands.
+      if (data.events && data.events.length > 0) {
+        const sid = (conversationsData.find(x => x.id === id) || {}).session_id || id;
+        fetchSessionUsage(sid);
+      }
     } catch (err) {
       if (convLastLine === 0) {
         $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load conversation: ' + escapeHtml(err.message) + '</div>';
@@ -9436,11 +10142,12 @@
       items[st.currentIdx].classList.remove('is-pinned-in-sticky');
     }
     if (idx <= 0) {
-      // No earlier ask in play — collapse the second block. The original
-      // sub-block is static HTML, so we never touch it.
+      // No earlier ask scrolled past — clear the slot entirely so
+      // `_updateStickyAskSlots` can collapse it and let the original
+      // ask take the full left column.
       st.currentIdx = 0;
-      if (st.earlierBox) st.earlierBox.style.display = 'none';
-      if (st.earlierFirst) st.earlierFirst.textContent = '';
+      if (st.earlierFirst) st.earlierFirst.innerHTML = '';
+      _updateStickyAskSlots();
       return;
     }
     const item = items[idx];
@@ -9454,14 +10161,48 @@
       _dynAskApply(0, items);
       return;
     }
-    // Both blocks visible: original stays put, earlier-block shows the
-    // most-recent user message that's scrolled behind the sticky. Hide
-    // the in-conv bubble for the pinned message so the user doesn't see
-    // the same text twice (sticky + bubble).
+    // Original stays put, earlier-block shows the most-recent user message
+    // that's scrolled behind the sticky. Hide the in-conv bubble for the
+    // pinned message so the user doesn't see the same text twice. The
+    // layout coordinator decides whether earlier sits stacked under
+    // original or moves into the (otherwise empty) activity column.
     st.currentIdx = idx;
     item.classList.add('is-pinned-in-sticky');
     if (st.earlierFirst) st.earlierFirst.innerHTML = linkifyPastedImages(escapeHtml(text));
-    if (st.earlierBox) st.earlierBox.style.display = '';
+    _updateStickyAskSlots();
+  }
+  // Coordinator: decides where the .csh-ask-earlier block lives based on
+  // whether (a) the earlier slot has any text and (b) the activity column
+  // has any timeline rows. Four cases:
+  //   - earlier empty + activity empty:  hide earlier, hide activity →
+  //                                      original takes the full panel.
+  //   - earlier empty + activity full:   hide earlier, show activity →
+  //                                      original takes full left column.
+  //   - earlier full  + activity full:   stack earlier under original
+  //                                      (default unified-panel layout).
+  //   - earlier full  + activity empty:  promote earlier into the activity
+  //                                      column, replacing the empty
+  //                                      timeline so we don't waste the
+  //                                      right half of the panel.
+  function _updateStickyAskSlots() {
+    const sticky = document.querySelector('.conv-sticky-header');
+    if (!sticky) return;
+    const askCol = sticky.querySelector('.csh-col-ask');
+    const actCol = sticky.querySelector('.csh-col-activity');
+    const earlier = sticky.querySelector('.csh-ask-earlier');
+    if (!askCol || !actCol || !earlier) return;
+    const earlierFirst = earlier.querySelector('[data-earlier-first]');
+    const earlierHasText = !!(earlierFirst && (earlierFirst.textContent || '').trim());
+    const timeline = actCol.querySelector('[data-timeline]');
+    const activityHasContent = !!(timeline && timeline.querySelector('.stl-row'));
+    earlier.style.display = earlierHasText ? '' : 'none';
+    if (earlierHasText && !activityHasContent) {
+      if (earlier.parentNode !== actCol) actCol.appendChild(earlier);
+      actCol.style.display = '';
+    } else {
+      if (earlier.parentNode !== askCol) askCol.appendChild(earlier);
+      actCol.style.display = activityHasContent ? '' : 'none';
+    }
   }
   function _dynAskUpdate() {
     const st = _dynamicAskState;
@@ -9839,7 +10580,12 @@
     if (uSlot) uSlot.innerHTML = '';
     if (!sid) return;
     try {
-      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/usage');
+      // cache-buster: usage rollups land sporadically in the JSONL, so the
+      // first fetch after selection often returns latest=0 and the browser
+      // would happily serve that zero response on every subsequent call.
+      // Forcing a fresh request each time is fine — the server-side
+      // computation is fast and uses no cache.
+      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/usage?_t=' + Date.now(), { cache: 'no-store' });
       const data = await res.json();
       if (_usageSessionId !== sid) return;
       _usageData = data;
@@ -9902,10 +10648,25 @@
         + 'list-price equivalent if metered against the API directly.';
       costPill = ' <span class="wp-cost-pill" title="' + escapeHtml(costTip) + '">' + fmt(cost) + '</span>';
     }
+    // Model pill — shown when we know the model. Strips the "claude-"
+    // prefix so it reads as `opus-4-7` / `sonnet-4-6`. Adds a `1M` suffix
+    // when the session is provably on the 1M-context variant (any turn
+    // exceeded 200k tokens — only possible on the 1M variant). The 1M
+    // beta is delivered via the anthropic-beta header, not the model
+    // name in the JSONL, so peak > 200k is the only honest signal.
+    let modelPill = '';
+    if (u.model) {
+      const isOneM = (peak > 200000) || u.model.toLowerCase().includes('[1m]');
+      const shortModel = u.model.replace(/^claude-/, '').replace(/\[1m\]/i, '').trim();
+      const modelTip = u.model + (isOneM ? '\n(1M context window — anthropic-beta: context-1m)' : '');
+      modelPill = ' <span class="wp-model-pill" title="' + escapeHtml(modelTip) + '">'
+        + escapeHtml(shortModel) + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
+        + '</span>';
+    }
     uSlot.innerHTML = '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
       + 'ctx ' + _formatTokens(latest) + ' / ' + _formatTokens(limit)
       + ' <span class="wp-usage-pct">(' + pct + '%)</span>'
-      + '</span>' + peakNote + costPill;
+      + '</span>' + peakNote + costPill + modelPill;
     slot.classList.add('visible');
     const pill = uSlot.querySelector('.wp-usage-clickable');
     if (pill) {
@@ -9945,15 +10706,16 @@
     if (!slot || !_timelineData) return;
     const evs = _timelineData.events || [];
     const total = _timelineData.total_turns || 0;
-    // Hide the entire right column when there are no events, so the
-    // "Original ask" body expands to fill the full sticky header width.
+    // Visibility of the right column is owned by `_updateStickyAskSlots`
+    // — when the timeline is empty AND the earlier-ask slot has content,
+    // earlier is promoted into this column instead of the column being
+    // hidden, so we can't unconditionally hide here.
     const col = slot.closest('.csh-col-activity');
     if (!evs.length) {
       slot.innerHTML = '';
-      if (col) col.style.display = 'none';
+      _updateStickyAskSlots();
       return;
     }
-    if (col) col.style.display = '';
     const iconFor = (k) => ({commit: '●', push: '↑', pr: '⊕'}[k] || '·');
     const labelFor = (e) => {
       if (e.kind === 'commit') {
@@ -9992,6 +10754,15 @@
     }
     html += '</div>';
     slot.innerHTML = html;
+    // Activity now has rows — make sure earlier-ask, if it was hosted in
+    // this column during an earlier empty-activity render, returns to its
+    // default home stacked under the original.
+    _updateStickyAskSlots();
+    // Pin the activity column to its bottom — newest events live at the
+    // tail of the list; if it overflows the fixed-height panel we want
+    // the user looking at the most recent commit/push/PR, not whatever
+    // happened on turn 1.
+    if (col) col.scrollTop = col.scrollHeight;
   }
 
   // Produce a human-readable summary for a single tool-only assistant event,
@@ -10042,7 +10813,10 @@
     for (const ev of events) {
       const div = document.createElement('div');
       div.className = 'event ' + ev.type;
-      div.dataset.renderTs = nowStamp();
+      // Use the event's own JSONL timestamp (when it was actually written)
+      // rather than render time; fall back to render time only when the
+      // event has no ts (synthetic / very old logs).
+      div.dataset.renderTs = eventStamp(ev.ts) || nowStamp();
       // Tag assistant rows with the source message_id so the streaming
       // bubble can detect "JSONL already won" and hand off cleanly.
       if (ev.type === 'assistant' && ev.message_id) {
@@ -10091,8 +10865,10 @@
           // overlay in this sticky header; it's now a real button in
           // convToolbar (see #announceBtnConv) so it stays in reach
           // without having to scroll up.
-          const stickyCollapsed = localStorage.getItem('cshCollapsed') === '1';
-          if (stickyCollapsed) sticky.classList.add('is-collapsed');
+          // Always start in the default (170px) state when entering a
+          // conversation. The chevron toggles to `.is-expanded` (50vh)
+          // and back; that state is ephemeral, scoped to this sticky DOM
+          // node, and resets every time the user switches conversations.
           sticky.innerHTML = resolveBtn + issueBtn
             + '<button class="tools-toggle" data-tools-toggle' + (hidden ? ' class="active"' : '') + ' title="Toggle tool-call visibility">'
             + (hidden ? 'Show tools' : 'Hide tools') + '</button>'
@@ -10110,7 +10886,7 @@
                       return h;
                     })()
             +     '</div>'
-            +     '<div class="csh-ask-earlier" style="display:none;" data-earlier-block>'
+            +     '<div class="csh-ask-earlier" data-earlier-block>'
             +       '<div class="label">Earlier ask</div>'
             +       '<div class="user-msg"><span class="earlier-first" data-earlier-first></span></div>'
             +     '</div>'
@@ -10120,23 +10896,23 @@
             +   '</div>'
             + '</div>'
             + '<button type="button" class="conv-sticky-header__collapse" data-csh-collapse '
-            +   'title="Collapse/expand the sticky header" aria-label="Collapse sticky header">'
-            +   '<span class="conv-sticky-header__collapse-icon">'
-            +     (stickyCollapsed ? '▾' : '▴')
-            +   '</span>'
+            +   'title="Expand to half-screen / shrink back" aria-label="Toggle expanded sticky panel">'
+            +   '<span class="conv-sticky-header__collapse-icon">▴</span>'
             + '</button>';
           $view.insertBefore(sticky, $view.firstChild);
-          // Wire the chevron toggle. State persists across reloads via
-          // localStorage so the user's preference sticks for every conv.
+          // Wire the chevron toggle. Two states:
+          //   default (170px) → click → expanded (50vh)
+          //   expanded (50vh) → click → default (170px)
+          // State is ephemeral; switching conversations rebuilds the
+          // sticky in the default state.
           const collapseBtn = sticky.querySelector('[data-csh-collapse]');
           if (collapseBtn) {
             collapseBtn.addEventListener('click', (e) => {
               e.stopPropagation();
-              const nowCollapsed = !sticky.classList.contains('is-collapsed');
-              sticky.classList.toggle('is-collapsed', nowCollapsed);
-              localStorage.setItem('cshCollapsed', nowCollapsed ? '1' : '0');
+              const nowExpanded = !sticky.classList.contains('is-expanded');
+              sticky.classList.toggle('is-expanded', nowExpanded);
               const icon = collapseBtn.querySelector('.conv-sticky-header__collapse-icon');
-              if (icon) icon.textContent = nowCollapsed ? '▾' : '▴';
+              if (icon) icon.textContent = nowExpanded ? '▾' : '▴';
             });
           }
           // Sticky auto-sizes to its current message — no resize handle, no
@@ -10162,6 +10938,10 @@
               $view.addEventListener('scroll', _dynAskSchedule, { passive: true });
             }
             _dynAskSchedule();  // settle initial state in case view mounts pre-scrolled
+            // Decide initial slot layout (earlier collapsed / activity hidden)
+            // before the timeline fetch lands; the timeline render will
+            // rerun the coordinator once events arrive.
+            _updateStickyAskSlots();
           }
           // Populate the timeline + workspace panels if the fetches already
           // landed; otherwise the fetch handlers will populate them.
@@ -10291,20 +11071,22 @@
           if (last && !last.querySelector('.tool-result-output')) {
             const out = document.createElement('pre');
             out.className = 'tool-result-output' + (ev.is_error ? ' is-error' : '');
-            // Diagnostic: stamp the actual moment the JSON output landed in
-            // the DOM. Surfaced as a bracketed prefix because the parent
-            // .event.tool_result row is display:none and a CSS ::before
-            // would never render.
-            out.dataset.renderTs = nowStamp();
-            out.textContent = '[J ' + out.dataset.renderTs + ']  ' + text;
+            // Stamp this output with the tool_result event's own ts (when
+            // the result actually landed in the JSONL), not render time.
+            // The parent .event.tool_result row is display:none, so the
+            // CSS ::before never renders — we bake the prefix into the
+            // <pre>'s text content instead.
+            const _toolTs = eventStamp(ev.ts) || nowStamp();
+            out.dataset.renderTs = _toolTs;
+            out.textContent = '[J ' + _toolTs + ']  ' + text;
             // Bump the group's header stamp too so it reflects the most
             // recent activity (tool_use OR tool_result), not just tool_use.
             // CSS ::before reads attr() from its own element, so the header
             // node needs the attribute set, not just the parent group.
             if (_currentToolGroup) {
-              _currentToolGroup.dataset.renderTs = out.dataset.renderTs;
+              _currentToolGroup.dataset.renderTs = _toolTs;
               const $h = _currentToolGroup.querySelector('.tool-call-group-header');
-              if ($h) $h.dataset.renderTs = out.dataset.renderTs;
+              if ($h) $h.dataset.renderTs = _toolTs;
             }
             last.appendChild(out);
           }
@@ -10320,7 +11102,7 @@
           // No open group, or another event closed it — start a new one.
           const grp = document.createElement('div');
           grp.className = 'tool-call-group collapsed';
-          const _grpTs = nowStamp();
+          const _grpTs = eventStamp(ev.ts) || nowStamp();
           grp.dataset.renderTs = _grpTs;
           grp.innerHTML =
               '<div class="tool-call-group-header" data-render-ts="' + _grpTs + '">'
@@ -10334,9 +11116,10 @@
           _currentToolCount = 0;
         }
         _currentToolGroup.querySelector('.tool-call-group-body').appendChild(div);
-        // Diagnostic: bump both stamps to the latest tool's arrival. The
-        // header's own data-render-ts is what the CSS ::before reads.
-        const _ts = nowStamp();
+        // Bump both stamps to this tool's own ts so the visible group
+        // header reflects when the latest tool actually ran. The header's
+        // own data-render-ts is what the CSS ::before reads.
+        const _ts = eventStamp(ev.ts) || nowStamp();
         _currentToolGroup.dataset.renderTs = _ts;
         _currentToolGroup.querySelector('.tool-call-group-header').dataset.renderTs = _ts;
         _currentToolCount += 1;
@@ -10790,6 +11573,395 @@
   const PICKER_SENTINEL = '__pick__';
   const $sbRepoPicker = document.getElementById('sbRepoPicker');
 
+  // ── Multi-repo: peer registry ────────────────────────────────────────────
+  // The dropdown is driven by /api/registry — one entry per live CCC server
+  // on this machine. Selecting a peer navigates to that server's URL; each
+  // CCC serves its own page and shows the same peer list, so the dropdown
+  // follows you across servers. /api/repo/switch is no longer used by the
+  // picker; legacy single-repo flows (modal, custom-repos.txt browser) still
+  // call loadRepoList() below.
+  let peerState = { peers: [], identity: null };
+
+  async function loadPeerRegistry() {
+    let peers = [];
+    let identity = null;
+    try {
+      const [r1, r2] = await Promise.all([
+        fetch('/api/registry'),
+        fetch('/api/identity'),
+      ]);
+      if (r1.ok) {
+        const d1 = await r1.json();
+        peers = Array.isArray(d1.peers) ? d1.peers : [];
+      }
+      if (r2.ok) identity = await r2.json();
+    } catch (_) { /* best-effort — picker is decorative on failure */ }
+    peerState = { peers, identity };
+    return peerState;
+  }
+
+  function isCurrentPeer(peer) {
+    if (!peer || !peerState.identity) return false;
+    return peer.port === peerState.identity.port &&
+           peer.repo_path === peerState.identity.repo_path;
+  }
+
+  // Sentinel prefix marks "switch this server's repo" options (not-running
+  // known repos). Distinguishing them from peer-navigation URLs lets the
+  // change handler route to the right code path.
+  const SWITCH_PREFIX = 'switch::';
+
+  function renderPeerPickerSelect() {
+    if (!$sbRepoPicker) return;
+    const { peers } = peerState;
+    $sbRepoPicker.innerHTML = '';
+
+    const here = window.location;
+    const peerPaths = new Set(peers.map(p => p.repo_path));
+
+    // Section 1: live peers. Selecting navigates to that server's port.
+    if (peers.length) {
+      const grpRunning = document.createElement('optgroup');
+      grpRunning.label = 'Running';
+      for (const peer of peers) {
+        const opt = document.createElement('option');
+        opt.value = `${here.protocol}//${here.hostname}:${peer.port}/`;
+        const isHere = isCurrentPeer(peer);
+        const suffix = isHere ? ' (this server)' : ` (:${peer.port})`;
+        opt.textContent = (peer.label || peer.repo_path) + suffix;
+        opt.title = peer.repo_path;
+        if (isHere) opt.selected = true;
+        grpRunning.appendChild(opt);
+      }
+      $sbRepoPicker.appendChild(grpRunning);
+    }
+
+    // Section 2: known repos that aren't currently peers. Selecting one
+    // POSTs /api/repo/switch on THIS server — the one-off "peek" flow.
+    // Drawn from /api/repo/list (loadRepoList populates repoListState).
+    const knownRepos = (repoListState && repoListState.repos) ? repoListState.repos : [];
+    const switchable = knownRepos.filter(r => !peerPaths.has(r.path));
+    if (switchable.length) {
+      const grpSwitch = document.createElement('optgroup');
+      grpSwitch.label = 'Switch this server to…';
+      for (const repo of switchable) {
+        const opt = document.createElement('option');
+        opt.value = SWITCH_PREFIX + repo.path;
+        opt.textContent = repo.label || repo.path;
+        opt.title = repo.path + '\n(switches this server\'s repo; no new process)';
+        grpSwitch.appendChild(opt);
+      }
+      $sbRepoPicker.appendChild(grpSwitch);
+    }
+
+    if (!peers.length && !switchable.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No repos found';
+      opt.disabled = true;
+      opt.selected = true;
+      $sbRepoPicker.appendChild(opt);
+    }
+
+    $sbRepoPicker.dataset.prev = $sbRepoPicker.value;
+  }
+
+  // ── Repo sidebar (vertical icon rail) ──────────────────────────────────
+  // Same data as the dropdown (peers + switchable repos), different
+  // presentation: persistent left strip with one circle per repo, click to
+  // navigate (peer) or switch this server (legacy). Hidden when nothing to
+  // show by toggling body.has-repo-rail; rail itself is always in the DOM.
+  function _railInitial(label, path) {
+    const src = String(label || path || '?').replace(/[^A-Za-z0-9]+/g, ' ').trim();
+    return src.charAt(0).toUpperCase() || '?';
+  }
+
+  function renderRepoSidebar() {
+    const $rail = document.getElementById('ccRepoSidebar');
+    if (!$rail) return;
+    const here = window.location;
+    const peers = (peerState && peerState.peers) || [];
+    const peerPaths = new Set(peers.map(p => p.repo_path));
+    const knownRepos = (repoListState && repoListState.repos) ? repoListState.repos : [];
+    const switchable = knownRepos.filter(r => !peerPaths.has(r.path));
+
+    $rail.innerHTML = '';
+
+    // Section 1: live peers.
+    for (const peer of peers) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      const isHere = isCurrentPeer(peer);
+      btn.className = 'rail-btn' + (isHere ? ' is-active' : '');
+      btn.textContent = _railInitial(peer.label, peer.repo_path);
+      btn.title = `${peer.label || peer.repo_path}\n${peer.repo_path}\nport :${peer.port}` +
+                  (isHere ? '\n(this server)' : '');
+      btn.dataset.path = peer.repo_path;
+      if (isHere) {
+        btn.setAttribute('aria-current', 'true');
+      } else {
+        const url = `${here.protocol}//${here.hostname}:${peer.port}/`;
+        btn.addEventListener('click', () => {
+          // Same overlay/treatment as the dropdown's navigate path.
+          const $overlay = document.getElementById('cccLoadingOverlay');
+          if ($overlay) {
+            $overlay.classList.remove('fade-out', 'gone');
+            const $label = document.getElementById('cccLoadingLabel');
+            if ($label) {
+              $label.innerHTML =
+                '<strong>Loading ' + String(peer.label || peer.repo_path).replace(/[<>&]/g, '') + '</strong>' +
+                '<div class="ccc-loading-detail">Switching to that server\'s page.</div>';
+            }
+          }
+          window.location.href = url;
+        });
+      }
+      $rail.appendChild(btn);
+    }
+
+    // Divider (only if both sections will have icons).
+    if (peers.length && switchable.length) {
+      const div = document.createElement('div');
+      div.className = 'rail-divider';
+      $rail.appendChild(div);
+    }
+
+    // Section 2: switchable known repos. Click → /api/repo/switch on this
+    // server (legacy one-off flow).
+    for (const repo of switchable) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'rail-btn is-switchable';
+      btn.textContent = _railInitial(repo.label, repo.path);
+      btn.title = `${repo.label || repo.path}\n${repo.path}\n(not running — click switches this server's repo)`;
+      btn.dataset.path = repo.path;
+      btn.addEventListener('click', () => {
+        switchToRepo(repo.path, repo.label || repo.path);
+      });
+      $rail.appendChild(btn);
+    }
+
+    // Toggle layout class only when there's something to show.
+    document.body.classList.toggle('has-repo-rail', peers.length + switchable.length > 0);
+  }
+
+  // ── All-repos archive mode ──────────────────────────────────────────────
+  // Read-only browse of every conversation across every folder under
+  // ~/.claude/projects/. Toggled by #convAllReposToggle in the sidebar
+  // header; while on, replaces the sidebar list with archive rows.
+  // Default is ON — most users want the cross-folder view first; opt out
+  // sticks via localStorage.
+  const _ARCHIVE_MODE_KEY = 'ccc-archive-mode';
+  let archiveMode = (() => {
+    try {
+      const v = localStorage.getItem(_ARCHIVE_MODE_KEY);
+      return v === null ? true : v === '1';
+    } catch (_) { return true; }
+  })();
+  let archiveData = [];
+
+  async function loadArchiveAll() {
+    try {
+      const r = await fetch('/api/conversations/all');
+      if (!r.ok) return [];
+      const d = await r.json();
+      return Array.isArray(d.conversations) ? d.conversations : [];
+    } catch (_) { return []; }
+  }
+
+  // Stable hue 0..359 from a string. Used to color folder chips so the
+  // same folder always gets the same color across renders.
+  function _hashHue(s) {
+    let h = 0;
+    const str = String(s || '');
+    for (let i = 0; i < str.length; i++) {
+      h = ((h << 5) - h) + str.charCodeAt(i);
+      h |= 0;
+    }
+    return Math.abs(h) % 360;
+  }
+
+  function renderArchiveList(filter) {
+    const $list = document.getElementById('convList');
+    if (!$list) return;
+    const q = (filter || '').trim().toLowerCase();
+    const rows = q ? archiveData.filter(c =>
+      ((c.first_message || '') + ' ' + (c.folder_label || '') + ' ' + (c.git_branch || ''))
+        .toLowerCase().includes(q)
+    ) : archiveData;
+
+    if (!archiveData.length) {
+      $list.innerHTML = '<div class="archive-empty-state">No conversations on disk.</div>';
+      return;
+    }
+    if (!rows.length) {
+      $list.innerHTML = '<div class="archive-empty-state">No conversations match your filter.</div>';
+      return;
+    }
+
+    // Shape archive entries to look like /api/sessions entries so the
+    // existing renderConversationList renders them with the regular row
+    // template — same font, time format, dividers, hover, click hooks.
+    // Cold archive defaults (is_live: false, no sidecar) keep the live-
+    // pill code paths quiet; when a peer server is later running for one
+    // of these folders, supercharging the row with live data is just a
+    // matter of merging the peer's session record into this shape.
+    const shaped = rows.map(c => {
+      const folderOrphan = (c.folder_path === c.slug);
+      return {
+        id: c.session_id,
+        session_id: c.session_id,
+        first_message: c.first_message,
+        // #1 rename overrides + #9 archived set come from server-side
+        // global state files (session-names.json / archived-conversations.json).
+        display_name: c.display_name || '',
+        name_overridden: !!c.name_overridden,
+        last_assistant_text: '',
+        modified: c.mtime,
+        last_interacted: c.mtime,
+        size: c.size || 0,
+        // Round 2: live flag + state pills, all derived server-side
+        // from sidecar / git status / JSONL events with mtime-based
+        // caching. Powers the blue live dot + uncommitted/committed/
+        // pushed/no-edits chips + PR #N + Ready-to-merge bucket.
+        is_live: !!c.is_live,
+        archived: !!c.archived,
+        worktree_dirty: !!c.worktree_dirty,
+        has_commit: !!c.has_commit,
+        has_push: !!c.has_push,
+        has_edit: !!c.has_edit,
+        tail_pr_number: c.tail_pr_number || null,
+        // Sidecar overlay (Round 3) — only meaningful for live rows.
+        // The renderer reads these directly to draw the live tool pill
+        // ("▶ Editing foo.ts"), sending pulse, and needs-approval signal.
+        sidecar_status: c.sidecar_status || null,
+        sidecar_tool: c.sidecar_tool || null,
+        sidecar_file: c.sidecar_file || null,
+        sidecar_ts: c.sidecar_ts || 0,
+        sidecar_in_flight: !!c.sidecar_in_flight,
+        sidecar_has_writes: !!c.sidecar_has_writes,
+        needs_approval: !!c.needs_approval,
+        needs_approval_message: c.needs_approval_message || '',
+        source: 'interactive',
+        session_cwd: c.session_cwd || c.folder_path,
+        session_cwd_exists: !folderOrphan,
+        // #4 worktree leaf — the renderer reads session_cwd_is_worktree.
+        session_cwd_is_worktree: !!c.session_cwd_is_worktree,
+        branch: c.git_branch || '',
+        // Tool-call-inferred effective branch + kind. The renderer reads
+        // these to decide the 🌿 worktree leaf and which branch label to
+        // show on the chip. Without them, archive rows whose session was
+        // launched in a clone but edited a sibling worktree would show
+        // the launch branch (e.g. "main") with no leaf, hiding where
+        // the actual work happened.
+        effective_branch: c.effective_branch || null,
+        effective_kind: c.effective_kind || null,
+        // #6 — hide the subtitle (last-assistant / first-message preview)
+        // in archive mode. The user doesn't read it cross-folder; redundant
+        // with the title and just doubles row height.
+        _hideAskHtml: true,
+        // Folder chip — special fields read by _renderRow.
+        folder_label_chip: c.folder_label,
+        folder_chip_hue: _hashHue(c.folder_label || c.slug),
+        folder_chip_orphan: folderOrphan,
+        folder_path: c.folder_path,
+      };
+    });
+
+    // Make sure the list is visible (kanban is hidden in setArchiveMode).
+    const $kanban = document.getElementById('kanbanBoard');
+    if ($kanban) $kanban.style.display = 'none';
+    $list.style.display = '';
+
+    // The click-to-currentSession bridge uses sessionIdByConv et al., which
+    // are normally populated inside loadConversationList() — a path archive
+    // mode bypasses. Without this, clicking an archive row passes undefined
+    // to setCurrentSession, currentSession.id stays null, and the input bar
+    // hides because hasSession is false. Populate the maps here so the
+    // existing right-pane code path works for archive entries.
+    for (const c of shaped) {
+      if (c.session_id) sessionIdByConv[c.id] = c.session_id;
+      if (c.session_cwd) sessionCwdByConv[c.id] = c.session_cwd;
+      sessionCwdExistsByConv[c.id] = !!c.session_cwd_exists;
+      sessionSourceByConv[c.id] = c.source || 'interactive';
+    }
+    // Also keep conversationsData in sync so downstream code (selection
+    // restore, etc.) sees a non-empty list while in archive mode. This
+    // gets reset on toggle-off via loadConversationList().
+    conversationsData = shaped;
+
+    renderConversationList(shaped);
+  }
+
+  async function setArchiveMode(on) {
+    archiveMode = !!on;
+    try { localStorage.setItem(_ARCHIVE_MODE_KEY, archiveMode ? '1' : '0'); } catch (_) {}
+    const $btn = document.getElementById('convAllReposToggle');
+    if ($btn) $btn.classList.toggle('is-active', archiveMode);
+    const $list = document.getElementById('convList');
+    const $kanban = document.getElementById('kanbanBoard');
+
+    if (archiveMode) {
+      // Hide kanban if it was visible; the archive renders into the same
+      // #convList slot. We don't toggle the existing convKanbanToggle's
+      // state — that's user-owned. Just visually hide the board so the
+      // archive list takes the full sidebar.
+      if ($kanban) $kanban.style.display = 'none';
+      if ($list) {
+        $list.style.display = '';
+        $list.innerHTML = '<div class="archive-empty-state">Loading archive…</div>';
+      }
+      archiveData = await loadArchiveAll();
+      // The user may have toggled off while loading — guard before render.
+      if (archiveMode) renderArchiveList(document.getElementById('convSearch')?.value || '');
+    } else {
+      // Restore: re-trigger the normal session-list load.
+      try { await loadConversationList(); } catch (_) {}
+    }
+  }
+
+  (function wireArchiveToggle() {
+    const $btn = document.getElementById('convAllReposToggle');
+    if ($btn) {
+      $btn.addEventListener('click', () => setArchiveMode(!archiveMode));
+      // Reflect initial active state before the boot kick fires below.
+      $btn.classList.toggle('is-active', archiveMode);
+    }
+    const $search = document.getElementById('convSearch');
+    if ($search) {
+      // Piggyback on existing search input — when in archive mode we
+      // re-render with the filter; when not, leave the existing list-
+      // filter logic alone (which is wired elsewhere via its own listener).
+      $search.addEventListener('input', () => {
+        if (archiveMode) renderArchiveList($search.value);
+      });
+    }
+    // Boot kick: if archive is the saved/default mode, wait for the
+    // first /api/sessions response before kicking the archive walk.
+    // Both endpoints share CPU/subprocess slots in the same Python
+    // process; running the slow one (cross-folder JSONL + git ops,
+    // ~12s on a cold cache) in parallel with /api/sessions made the
+    // overlay linger because /api/sessions itself was getting
+    // starved. Waiting until sessions returns means the active repo
+    // is interactive in <1s, then the archive populates the sidebar.
+    if (archiveMode) {
+      // Show the placeholder immediately so the sidebar isn't blank
+      // during the wait — the actual fetch fires after sessions land.
+      const $list = document.getElementById('convList');
+      const $kanban = document.getElementById('kanbanBoard');
+      if ($kanban) $kanban.style.display = 'none';
+      if ($list) {
+        $list.style.display = '';
+        $list.innerHTML = '<div class="archive-empty-state">Loading archive&hellip;</div>';
+      }
+      _firstSessionsLoaded.then(() => {
+        // The user may have toggled archive off during the wait.
+        if (archiveMode) setArchiveMode(true);
+      });
+    }
+  })();
+
+  // ── Legacy repo-list (used by the modal + custom-repos browser) ─────────
   // Shared state so the modal can reuse what the dropdown already fetched
   // and the dropdown can refresh itself after an add-via-modal.
   let repoListState = { repos: [], current: '', recent: [] };
@@ -10838,12 +12010,11 @@
     const $overlay = document.getElementById('cccLoadingOverlay');
     if ($overlay) {
       $overlay.classList.remove('fade-out', 'gone');
-      const $label = document.getElementById('cccLoadingLabel');
-      if ($label) {
-        $label.innerHTML =
-          '<strong>Switching to ' + String(targetLabel || targetPath).replace(/[<>&]/g, '') + '</strong>' +
-          '<div class="ccc-loading-detail">Re-scanning sessions and GitHub issues for the new repo.</div>';
+      window.cccLoadingTitleOverride = 'Switching to ' + String(targetLabel || targetPath).replace(/[<>&]/g, '');
+      if (window.cccSetLoadingStatus) {
+        window.cccSetLoadingStatus(window.cccLoadingTitleOverride, 'Preparing source-by-source scan for the new repo.');
       }
+      if (window.cccBeginLoadingStatusPolling) window.cccBeginLoadingStatusPolling();
     }
     // Hard cap on the switch POST — without this, a hung request pins the
     // user on the "Switching to…" overlay with no way out short of a hard
@@ -10880,23 +12051,76 @@
   }
 
   if ($sbRepoPicker) {
+    // Initial: load both the peer registry (running CCC servers) and the
+    // legacy repo list (all known repos, including not-running ones for the
+    // "switch this server to…" group). Render once both are in.
     (async () => {
       try {
-        await loadRepoList();
-        renderPickerSelect();
+        await Promise.all([loadPeerRegistry(), loadRepoList()]);
+        renderPeerPickerSelect();
+        renderRepoSidebar();
       } catch (e) { /* picker is best-effort — failure shouldn't break the page */ }
     })();
 
+    // Poll the registry every 10s so a sibling server starting after page
+    // load shows up without a manual refresh. Pause when the tab is hidden.
+    // The repo list is comparatively static — we only refresh it on visibility
+    // change, not on every 10s tick.
+    let _peerPollId = null;
+    const _peerStartPoll = () => {
+      if (_peerPollId) return;
+      _peerPollId = setInterval(async () => {
+        await loadPeerRegistry();
+        renderPeerPickerSelect();
+        renderRepoSidebar();
+      }, 10000);
+    };
+    const _peerStopPoll = () => {
+      if (!_peerPollId) return;
+      clearInterval(_peerPollId);
+      _peerPollId = null;
+    };
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        Promise.all([loadPeerRegistry(), loadRepoList()]).then(() => {
+          renderPeerPickerSelect();
+          renderRepoSidebar();
+        });
+        _peerStartPoll();
+      } else {
+        _peerStopPoll();
+      }
+    });
+    if (document.visibilityState === 'visible') _peerStartPoll();
+
     $sbRepoPicker.addEventListener('change', () => {
       const target = $sbRepoPicker.value;
-      if (target === PICKER_SENTINEL) {
-        // Don't actually switch — reset to prev and open the modal.
-        $sbRepoPicker.value = $sbRepoPicker.dataset.prev || repoListState.current;
-        openRepoPickerModal();
+      if (!target) return;
+      // SWITCH_PREFIX: legacy "switch this server's REPO_ROOT" path. Used
+      // when the user picks a known-but-not-running repo from the dropdown
+      // (the one-off peek flow).
+      if (target.startsWith(SWITCH_PREFIX)) {
+        const repoPath = target.slice(SWITCH_PREFIX.length);
+        const targetLabel = $sbRepoPicker.options[$sbRepoPicker.selectedIndex]?.textContent || repoPath;
+        switchToRepo(repoPath, targetLabel);
         return;
       }
-      const targetLabel = $sbRepoPicker.options[$sbRepoPicker.selectedIndex]?.textContent || target;
-      switchToRepo(target, targetLabel);
+      // Otherwise: navigation URL to a peer's port. Same-origin = no-op.
+      const here = window.location;
+      const sameOriginUrl = `${here.protocol}//${here.host}/`;
+      if (target === sameOriginUrl) return;
+      const $overlay = document.getElementById('cccLoadingOverlay');
+      if ($overlay) {
+        $overlay.classList.remove('fade-out', 'gone');
+        const $label = document.getElementById('cccLoadingLabel');
+        if ($label) {
+          const lbl = $sbRepoPicker.options[$sbRepoPicker.selectedIndex]?.textContent || target;
+          $label.innerHTML =
+            '<strong>Loading ' + String(lbl).replace(/[<>&]/g, '') + '</strong>' +
+            '<div class="ccc-loading-detail">Switching to that server\'s page.</div>';
+        }
+      }
+      window.location.href = target;
     });
 
     // Stash the current value so we can restore on failure.
@@ -11386,14 +12610,24 @@
             const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
             if (placeholder) {
               placeholder.spawn_pid = data.pid;
+              // Codex spawns are fire-and-watch; stash the log path so the
+              // right-pane renderer can fetch /api/sessions/spawned/<pid>/log.
+              if (engine === 'codex' && data.log) placeholder.codex_log_path = data.log;
               pendingSpawns.delete(tempPid);
               pendingSpawns.set(data.pid, placeholder);
             }
           }
           // Tight poll schedule so the real card replaces the placeholder fast.
+          // (No-op for codex — no real card materializes — but harmless.)
           setTimeout(refreshConversationList, 600);
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3000);
+          // If the user picked codex, refocus the right pane on the
+          // placeholder so renderCodexPlaceholder kicks in for the new pid
+          // (the auto-select fired when tempPid was still in play).
+          if (engine === 'codex' && typeof selectConversation === 'function') {
+            selectConversation('spawning-' + tempPid);
+          }
         } else {
           $kptRunBtn.textContent = data.error ? 'Failed' : 'Failed';
           // Spawn failed — drop the optimistic placeholder so the board doesn't
@@ -11682,8 +12916,20 @@
   // loadConversationList() so the merge logic (placeholder preservation,
   // display-name override carry-over, sticky columns) lives in one place —
   // divergence here was what caused new-session rows to flicker.
-  setInterval(() => {
+  setInterval(async () => {
     if (activeTab !== 'sessions') return;
+    // In archive mode, refresh /api/conversations/all and re-render —
+    // otherwise new sessions don't appear until the user toggles archive
+    // off and back on. Cheap because _extract_tail_meta is mtime-cached
+    // server-side; only changed JSONLs get re-scanned.
+    if (typeof archiveMode !== 'undefined' && archiveMode) {
+      try {
+        archiveData = await loadArchiveAll();
+        const $search = document.getElementById('convSearch');
+        renderArchiveList($search ? $search.value : '');
+      } catch (_) { /* best-effort */ }
+      return;
+    }
     loadConversationList();
   }, 10000);
 
@@ -12296,9 +13542,10 @@
     if ($kanbanBoardSplit) $kanbanBoardSplit.querySelectorAll('.kanban-card.active').forEach(el => el.classList.remove('active'));
     const $view = getConvView();
     if ($view) {
+      const engineLabel = ($kptEngineSelect && $kptEngineSelect.value === 'codex') ? 'Codex' : 'Claude';
       $view.innerHTML = '<div class="empty-state" style="height:auto;padding:48px 32px;flex-direction:column;gap:10px;text-align:center;">'
         + '<div style="font-size:16px;color:var(--text);">Start a new session</div>'
-        + '<div style="font-size:13px;color:var(--text-muted);max-width:480px;line-height:1.5;">Type a prompt below and press Enter to spawn a fresh Claude agent. The new session will appear in the sidebar.</div>'
+        + '<div style="font-size:13px;color:var(--text-muted);max-width:480px;line-height:1.5;">Type a prompt below and press Enter to spawn a fresh ' + engineLabel + ' agent. The new session will appear in the sidebar.</div>'
         + '</div>';
     }
     updateInputBar();
@@ -12368,6 +13615,7 @@
     }
     const subject = firstSentence(body);
     const prompt = body + SESSION_STATE_INSTRUCTION;
+    const engine = ($kptEngineSelect && $kptEngineSelect.value) || 'claude';
     if ($convSendBtn) $convSendBtn.disabled = true;
     const flashRed = () => {
       if (!$convInput) return;
@@ -12375,13 +13623,15 @@
       setTimeout(() => { $convInput.style.borderColor = ''; }, 1500);
     };
     try {
-      const res = await fetch('/api/sessions/spawn', {
+      const endpoint = engine === 'codex' ? '/api/sessions/spawn-codex'
+                                          : '/api/sessions/spawn';
+      const res = await fetch(endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ prompt, name: subject }),
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
-        insertPendingSpawnCard(data.pid, subject, false);
+        insertPendingSpawnCard(data.pid, subject, engine === 'codex' ? 'codex' : 'interactive', data.log);
         if ($convInput) $convInput.value = '';
         const $view = getConvView();
         if ($view) {
@@ -12636,6 +13886,472 @@
   loadConversationList();
   pollVercelDeploy();
   setInterval(pollVercelDeploy, 15000);
+})();
+</script>
+
+<!-- ── In-UI terminal panel ──────────────────────────────────────────────
+     A small one-shot terminal: type a command, hit Enter, output streams
+     in via SSE. `cd` is parsed server-side so the prompt's cwd survives
+     between commands. Cancel kills the whole process group. Not a real
+     PTY — no vim / top / interactive prompts. -->
+<style>
+  #termPanel {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 99;
+    height: 280px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: none;
+    flex-direction: column;
+    box-shadow: 0 -4px 16px rgba(0,0,0,0.35);
+    font-family: ui-monospace, "SF Mono", "Menlo", "Monaco", "Roboto Mono", monospace;
+    font-size: 12px;
+  }
+  body.has-side-nav #termPanel { left: 52px; }
+  /* Multirepo PR's left rail is 48px wide at z-index 99; tuck the panel
+     behind it on the left so the rail's repo dots stay clickable. */
+  body.has-repo-rail #termPanel { left: 48px; }
+  body.has-repo-rail.has-side-nav #termPanel { left: 100px; }
+  #termPanel.open { display: flex; }
+  #termPanel .term-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    background: var(--surface-2, #1c2128);
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+    flex-shrink: 0;
+  }
+  #termPanel .term-title {
+    font-weight: 600; color: var(--text); font-size: 11px;
+    letter-spacing: 0.3px;
+  }
+  #termPanel .term-cwd {
+    color: var(--text-muted); font-size: 11px; opacity: 0.85;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1;
+  }
+  #termPanel .term-cwd b { color: var(--accent); font-weight: 600; }
+  #termPanel .term-resize {
+    cursor: ns-resize; height: 4px; width: 100%;
+    position: absolute; top: -2px; left: 0;
+    background: transparent;
+  }
+  #termPanel .term-resize:hover { background: var(--accent); opacity: 0.4; }
+  #termPanel .term-actions { display: flex; gap: 4px; }
+  #termPanel .term-actions button {
+    padding: 2px 8px; font-size: 11px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    cursor: pointer;
+  }
+  #termPanel .term-actions button:hover { background: var(--surface-2); }
+  #termPanel .term-actions button.danger { color: #f85149; border-color: rgba(248,81,73,0.4); }
+  #termPanel .term-actions button[disabled] { opacity: 0.4; cursor: not-allowed; }
+  #termPanel .term-log {
+    flex: 1; min-height: 0; overflow-y: auto;
+    padding: 8px 10px;
+    background: var(--bg);
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.45;
+  }
+  #termPanel .term-log .term-cmd { color: var(--accent); font-weight: 600; }
+  #termPanel .term-log .term-err { color: #f85149; }
+  #termPanel .term-log .term-exit { color: var(--text-muted); opacity: 0.75; font-style: italic; }
+  #termPanel .term-input-row {
+    display: flex; align-items: center;
+    padding: 6px 10px;
+    background: var(--surface-2, #1c2128);
+    border-top: 1px solid var(--border);
+    gap: 8px;
+    flex-shrink: 0;
+    min-height: 32px;
+    box-sizing: border-box;
+  }
+  #termPanel .term-prompt {
+    color: var(--accent); font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 30ch;
+  }
+  #termPanel .term-prompt::after { content: ' $'; color: var(--text-muted); }
+  #termPanel .term-input {
+    flex: 1; min-width: 0;
+    background: transparent; border: none; outline: none;
+    color: var(--text); font-family: inherit; font-size: 12px;
+    line-height: 18px; padding: 0; margin: 0; height: 18px;
+  }
+  #termPanel .term-input:disabled { opacity: 0.5; }
+  #termPanel .term-busy {
+    width: 10px; height: 10px;
+    border: 2px solid rgba(88,166,255,0.25);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: ccc-spin 0.7s linear infinite;
+    display: none;
+  }
+  #termPanel.busy .term-busy { display: inline-block; }
+  /* ANSI SGR colors — minimal palette. */
+  #termPanel .ansi-30 { color: #6e7681; } #termPanel .ansi-31 { color: #f85149; }
+  #termPanel .ansi-32 { color: #56d364; } #termPanel .ansi-33 { color: #d29922; }
+  #termPanel .ansi-34 { color: #58a6ff; } #termPanel .ansi-35 { color: #bc8cff; }
+  #termPanel .ansi-36 { color: #76e3ea; } #termPanel .ansi-37 { color: #c9d1d9; }
+  #termPanel .ansi-90 { color: #484f58; } #termPanel .ansi-91 { color: #ff7b72; }
+  #termPanel .ansi-92 { color: #7ee787; } #termPanel .ansi-93 { color: #d2a8ff; }
+  #termPanel .ansi-94 { color: #79c0ff; } #termPanel .ansi-95 { color: #d2a8ff; }
+  #termPanel .ansi-96 { color: #a5d6ff; } #termPanel .ansi-97 { color: #f0f6fc; }
+  #termPanel .ansi-bold { font-weight: 700; }
+</style>
+
+<div id="termPanel" role="region" aria-label="Terminal panel">
+  <div class="term-resize" id="termResize" title="Drag to resize"></div>
+  <div class="term-header">
+    <span class="term-title">Terminal</span>
+    <span class="term-cwd" id="termCwdLabel" title="Current working directory (relative to repo root)">…</span>
+    <span class="term-busy" id="termBusy" aria-hidden="true"></span>
+    <div class="term-actions">
+      <button id="termCancelBtn" class="danger" disabled title="Cancel the running command (kills the process group)">Cancel</button>
+      <button id="termClearBtn" title="Clear the output log">Clear</button>
+      <button id="termCloseBtn" title="Hide the terminal panel">&times;</button>
+    </div>
+  </div>
+  <div class="term-log" id="termLog" tabindex="0"></div>
+  <div class="term-input-row">
+    <span class="term-prompt" id="termPrompt">repo</span>
+    <input type="text" class="term-input" id="termInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="run a command (no vim/top — use --yes for interactive scripts)">
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const $panel = document.getElementById('termPanel');
+  const $toggle = document.getElementById('termToggleBtn');
+  const $closeBtn = document.getElementById('termCloseBtn');
+  const $cancelBtn = document.getElementById('termCancelBtn');
+  const $clearBtn = document.getElementById('termClearBtn');
+  const $log = document.getElementById('termLog');
+  const $input = document.getElementById('termInput');
+  const $prompt = document.getElementById('termPrompt');
+  const $cwdLabel = document.getElementById('termCwdLabel');
+  const $resize = document.getElementById('termResize');
+  if (!$panel || !$toggle || !$input) return;
+
+  const HISTORY_KEY = 'ccc.term.history';
+  const PANEL_OPEN_KEY = 'ccc.term.open';
+  const PANEL_HEIGHT_KEY = 'ccc.term.height';
+  const MAX_LOG_LINES = 5000;
+  const MAX_HISTORY = 50;
+
+  let history = [];
+  try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (_) {}
+  if (!Array.isArray(history)) history = [];
+  let histIdx = history.length;          // pointer for up/down recall
+  let pendingDraft = '';                  // what the user was typing before recall
+
+  let evtSource = null;                   // active EventSource, if any
+  let abortCtrl = null;                   // for fetch-based POST + body stream
+  let running = false;
+
+  function setRunning(on) {
+    running = on;
+    $panel.classList.toggle('busy', on);
+    $cancelBtn.disabled = !on;
+    $input.disabled = on;
+    if (!on) requestAnimationFrame(() => $input.focus());
+  }
+
+  function persistOpen(open) {
+    try { localStorage.setItem(PANEL_OPEN_KEY, open ? '1' : '0'); } catch (_) {}
+  }
+
+  function openPanel() {
+    $panel.classList.add('open');
+    $toggle.classList.add('active');
+    persistOpen(true);
+    refreshCwd();
+    setTimeout(() => $input.focus(), 0);
+  }
+  function closePanel() {
+    $panel.classList.remove('open');
+    $toggle.classList.remove('active');
+    persistOpen(false);
+    if (running) cancelRunning();
+  }
+  $toggle.addEventListener('click', () => {
+    if ($panel.classList.contains('open')) closePanel(); else openPanel();
+  });
+  $closeBtn.addEventListener('click', closePanel);
+  $clearBtn.addEventListener('click', () => { $log.innerHTML = ''; });
+
+  // Restore panel state.
+  try {
+    if (localStorage.getItem(PANEL_OPEN_KEY) === '1') openPanel();
+    const h = parseInt(localStorage.getItem(PANEL_HEIGHT_KEY) || '0', 10);
+    if (h >= 120 && h <= 700) $panel.style.height = h + 'px';
+  } catch (_) {}
+
+  // Resize handle (drag the top edge).
+  let dragStartY = 0, dragStartH = 0;
+  $resize.addEventListener('mousedown', (e) => {
+    dragStartY = e.clientY;
+    dragStartH = $panel.getBoundingClientRect().height;
+    document.body.style.userSelect = 'none';
+    const onMove = (m) => {
+      const dy = dragStartY - m.clientY;
+      const next = Math.max(120, Math.min(700, dragStartH + dy));
+      $panel.style.height = next + 'px';
+    };
+    const onUp = () => {
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      try {
+        const h = Math.round($panel.getBoundingClientRect().height);
+        localStorage.setItem(PANEL_HEIGHT_KEY, String(h));
+      } catch (_) {}
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  function setCwdDisplay(cwd, rel) {
+    const shown = rel ? rel : '.';
+    $cwdLabel.innerHTML = 'cwd: <b></b>';
+    $cwdLabel.querySelector('b').textContent = shown;
+    $cwdLabel.title = cwd || shown;
+    // Prompt: last path segment, or 'repo' if at root.
+    let label = shown.split('/').filter(Boolean).pop() || 'repo';
+    if (label.length > 24) label = '…' + label.slice(-23);
+    $prompt.textContent = label;
+  }
+
+  async function refreshCwd() {
+    try {
+      const r = await fetch('/api/term/cwd');
+      if (!r.ok) return;
+      const j = await r.json();
+      setCwdDisplay(j.cwd, j.rel);
+    } catch (_) {}
+  }
+  refreshCwd();
+
+  // Tiny ANSI SGR parser — handles \x1b[<n>;<m>m. Strips other escape
+  // sequences (cursor moves, etc.) so they don't render as literal junk.
+  // Returns an array of { text, classes } segments.
+  function parseAnsi(input) {
+    const segs = [];
+    const re = /\x1b\[([0-9;]*)m|\x1b\[[0-9;?]*[A-Za-z]/g;
+    let last = 0, classes = [];
+    let m;
+    const flush = (end) => {
+      if (end > last) segs.push({ text: input.slice(last, end), classes: classes.slice() });
+    };
+    while ((m = re.exec(input)) !== null) {
+      flush(m.index);
+      last = re.lastIndex;
+      if (m[1] === undefined) continue; // non-SGR escape — drop
+      const codes = m[1].split(';').filter(s => s !== '').map(Number);
+      if (codes.length === 0) { classes = []; continue; }
+      for (const c of codes) {
+        if (c === 0) classes = [];
+        else if (c === 1) { if (!classes.includes('ansi-bold')) classes.push('ansi-bold'); }
+        else if ((c >= 30 && c <= 37) || (c >= 90 && c <= 97)) {
+          classes = classes.filter(x => !/^ansi-\d+$/.test(x));
+          classes.push('ansi-' + c);
+        }
+      }
+    }
+    flush(input.length);
+    return segs;
+  }
+
+  function appendOutput(text, kind) {
+    // Strip carriage returns that would otherwise render as artifacts.
+    text = text.replace(/\r(?!\n)/g, '');
+    const wrap = document.createElement('span');
+    if (kind) wrap.className = 'term-' + kind;
+    if (kind === 'cmd' || kind === 'exit' || kind === 'err') {
+      wrap.textContent = text;
+    } else {
+      for (const seg of parseAnsi(text)) {
+        if (seg.classes.length === 0) {
+          wrap.appendChild(document.createTextNode(seg.text));
+        } else {
+          const span = document.createElement('span');
+          span.className = seg.classes.join(' ');
+          span.textContent = seg.text;
+          wrap.appendChild(span);
+        }
+      }
+    }
+    $log.appendChild(wrap);
+    // Trim if log grew too large.
+    if ($log.childNodes.length > MAX_LOG_LINES) {
+      while ($log.childNodes.length > MAX_LOG_LINES) {
+        $log.removeChild($log.firstChild);
+      }
+    }
+    // Auto-scroll if the user is near the bottom.
+    const nearBottom = ($log.scrollHeight - $log.scrollTop - $log.clientHeight) < 80;
+    if (nearBottom) $log.scrollTop = $log.scrollHeight;
+  }
+
+  function pushHistory(cmd) {
+    if (!cmd) return;
+    if (history[history.length - 1] === cmd) return;
+    history.push(cmd);
+    while (history.length > MAX_HISTORY) history.shift();
+    histIdx = history.length;
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch (_) {}
+  }
+
+  async function runCommand(cmd) {
+    if (!cmd.trim()) return;
+    if (running) return;  // ignore Enter while running (per design)
+    appendOutput((($prompt.textContent || 'repo')) + ' $ ' + cmd + '\n', 'cmd');
+    pushHistory(cmd);
+    setRunning(true);
+
+    abortCtrl = new AbortController();
+    let resp;
+    try {
+      resp = await fetch('/api/term/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cmd }),
+        signal: abortCtrl.signal,
+      });
+    } catch (e) {
+      appendOutput('[connection failed: ' + (e && e.message || e) + ']\n', 'err');
+      setRunning(false);
+      return;
+    }
+    if (resp.status === 409) {
+      appendOutput('[server says another command is running]\n', 'err');
+      setRunning(false);
+      return;
+    }
+    if (!resp.ok || !resp.body) {
+      appendOutput('[server error ' + resp.status + ']\n', 'err');
+      setRunning(false);
+      return;
+    }
+
+    // Parse the SSE stream by hand — EventSource doesn't support POST.
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buf = '';
+    let sawExit = false;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        // Events end with \n\n.
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) !== -1) {
+          const raw = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          let evName = 'message', dataLines = [];
+          for (const line of raw.split('\n')) {
+            if (line.startsWith('event: ')) evName = line.slice(7).trim();
+            else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
+          }
+          const dataStr = dataLines.join('\n');
+          let payload = null;
+          if (dataStr) { try { payload = JSON.parse(dataStr); } catch (_) {} }
+          if (handleSseEvent(evName, payload)) sawExit = true;
+        }
+        if (sawExit) {
+          // Server sends `Connection: close`, but don't depend on socket
+          // close timing — once we've seen `exit`, we're done.
+          try { reader.cancel(); } catch (_) {}
+          break;
+        }
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        appendOutput('[stream error: ' + (e && e.message || e) + ']\n', 'err');
+      }
+    } finally {
+      setRunning(false);
+      abortCtrl = null;
+    }
+  }
+
+  // Returns true if this event is a terminal `exit`, signalling the
+  // reader loop to wind up regardless of socket-close timing.
+  function handleSseEvent(name, payload) {
+    if (!payload) return false;
+    if (name === 'data' && typeof payload.chunk === 'string') {
+      appendOutput(payload.chunk, null);
+      return false;
+    }
+    if (name === 'error' && payload.message) {
+      appendOutput('[' + payload.message + ']\n', 'err');
+      return false;
+    }
+    if (name === 'exit') {
+      const code = payload.code;
+      if (typeof code === 'number' && code !== 0) {
+        appendOutput('[exit ' + code + ']\n', 'exit');
+      }
+      if (typeof payload.cwd === 'string') {
+        setCwdDisplay(payload.cwd, payload.rel || '');
+      }
+      return true;
+    }
+    return false;
+  }
+
+  async function cancelRunning() {
+    if (!running) return;
+    try {
+      await fetch('/api/term/cancel', { method: 'POST' });
+    } catch (_) {}
+    appendOutput('^C\n', 'exit');
+    if (abortCtrl) { try { abortCtrl.abort(); } catch (_) {} }
+  }
+  $cancelBtn.addEventListener('click', cancelRunning);
+
+  $input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const cmd = $input.value;
+      $input.value = '';
+      pendingDraft = '';
+      runCommand(cmd);
+    } else if (e.key === 'ArrowUp') {
+      if (!history.length) return;
+      e.preventDefault();
+      if (histIdx === history.length) pendingDraft = $input.value;
+      histIdx = Math.max(0, histIdx - 1);
+      $input.value = history[histIdx] || '';
+      requestAnimationFrame(() => {
+        $input.setSelectionRange($input.value.length, $input.value.length);
+      });
+    } else if (e.key === 'ArrowDown') {
+      if (histIdx === history.length) return;
+      e.preventDefault();
+      histIdx = Math.min(history.length, histIdx + 1);
+      $input.value = histIdx === history.length ? pendingDraft : history[histIdx];
+    } else if (e.key === 'c' && (e.ctrlKey || e.metaKey)) {
+      // Let real copy through if there's a selection in the log; otherwise
+      // treat ctrl-c as cancel.
+      if (window.getSelection && String(window.getSelection())) return;
+      if (running) { e.preventDefault(); cancelRunning(); }
+    } else if (e.key === 'Escape') {
+      // Close panel on Escape (when input is empty).
+      if (!$input.value) { e.preventDefault(); closePanel(); }
+    }
+  });
+
+  // Global hotkey: Ctrl/Cmd+` to toggle panel.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '`' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if ($panel.classList.contains('open')) closePanel(); else openPanel();
+    }
+  });
 })();
 </script>
 </body>
