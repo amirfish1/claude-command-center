@@ -1958,6 +1958,16 @@ def _extract_tail_meta(path):
     _gh_url_re = re.compile(r'github\.com/[^/\s]+/[^/\s]+/issues/(\d{1,6})')
     _gh_pr_create_re = re.compile(r'\bgh\s+pr\s+create\b')
     _gh_pr_url_re = re.compile(r'github\.com/([^/\s]+/[^/\s]+)/pull/(\d{1,7})')
+    # Git subcommand detector — survives the `git -C <path>` /
+    # `git --git-dir=<x>` / `git -c key=val` flag prefixes that CLAUDE.md
+    # mandates for shared-clone multi-session work. Naive `"git commit"
+    # in cmd` substring checks miss every one of those forms, so a real
+    # commit on a sibling worktree never flips has_commit and the row's
+    # "committed" pill never lights up. Up to 8 flag tokens are tolerated
+    # before the subcommand; `-C <arg>` / `-c <arg>` consume their value.
+    _git_subcmd_re = re.compile(
+        r'\bgit\b(?:\s+(?:-[Cc]\s+\S+|--\S+|-[A-Za-z]\S*)){0,8}\s+(commit|push)\b'
+    )
     _pending_pr_ids = set()
     _pos = 0
     try:
@@ -2027,12 +2037,25 @@ def _extract_tail_meta(path):
                             meta["last_edit_pos"] = _pos
                         elif name == "Bash":
                             cmd = inp.get("command", "")
-                            if "git commit" in cmd:
-                                meta["has_commit"] = True
-                                meta["last_commit_pos"] = _pos
-                            if "git push" in cmd:
-                                meta["has_push"] = True
-                                meta["last_push_pos"] = _pos
+                            # Detect `git commit` / `git push` tool calls.
+                            # Walk shell segments so chained
+                            # `git commit … && git push …` registers both,
+                            # and trim each segment at the `-m`/`--message`
+                            # flag so a commit message body containing
+                            # the word "push" can't false-fire has_push
+                            # (and vice versa).
+                            for _seg in re.split(r'\s*(?:&&|\|\||\||;|\n)\s*', cmd):
+                                _seg_head = re.split(r'\s+(?:-m\b|--message\b)', _seg, maxsplit=1)[0]
+                                _m = _git_subcmd_re.search(_seg_head)
+                                if not _m:
+                                    continue
+                                _sub = _m.group(1)
+                                if _sub == "commit":
+                                    meta["has_commit"] = True
+                                    meta["last_commit_pos"] = _pos
+                                elif _sub == "push":
+                                    meta["has_push"] = True
+                                    meta["last_push_pos"] = _pos
                             # Drift indicator: any `cd <path>` or `git -C <path>`
                             # means the session may have moved across repos.
                             # Used by find_conversations() to skip the
