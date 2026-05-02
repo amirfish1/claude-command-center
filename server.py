@@ -556,7 +556,18 @@ def find_all_conversations(limit_per_folder=None):
                 "mtime": stat.st_mtime,
                 "size": stat.st_size,
                 "first_message": first_message,
+                # Both keys: `branch`/`git_branch` is the JSONL's literal
+                # gitBranch (what the row defaults to when no inference);
+                # `effective_branch`/`effective_kind` carry the tool-call
+                # inference. The renderer prefers effective_branch and
+                # uses effective_kind === 'worktree' to decide the
+                # 🌿 leaf — without these the leaf never shows for
+                # archive rows whose session was launched in a clone but
+                # edited a sibling worktree.
+                "branch": effective_branch,
                 "git_branch": effective_branch,
+                "effective_branch": effective_branch,
+                "effective_kind": effective_kind,
                 "display_name": display_name,
                 "name_overridden": bool(display_name),
                 "archived": session_id in archived_set,

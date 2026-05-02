@@ -8004,7 +8004,7 @@
           + '<span class="conv-folder-group-chip' + orphan + '">' + escapeHtml(folder) + '</span>'
           + '<span class="conv-folder-group-count">' + cards.length + '</span>'
           + '</div>'
-          + cards.map(_renderRow).join('');
+          + _flatRowsWithSeparators(cards);
       }).join('');
       let _olderHtml = '';
       if (_older.length) {
@@ -11166,6 +11166,14 @@
         // #4 worktree leaf — the renderer reads session_cwd_is_worktree.
         session_cwd_is_worktree: !!c.session_cwd_is_worktree,
         branch: c.git_branch || '',
+        // Tool-call-inferred effective branch + kind. The renderer reads
+        // these to decide the 🌿 worktree leaf and which branch label to
+        // show on the chip. Without them, archive rows whose session was
+        // launched in a clone but edited a sibling worktree would show
+        // the launch branch (e.g. "main") with no leaf, hiding where
+        // the actual work happened.
+        effective_branch: c.effective_branch || null,
+        effective_kind: c.effective_kind || null,
         // #6 — hide the subtitle (last-assistant / first-message preview)
         // in archive mode. The user doesn't read it cross-folder; redundant
         // with the title and just doubles row height.
