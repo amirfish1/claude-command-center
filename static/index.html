@@ -8863,6 +8863,10 @@
       try {
         const data = JSON.parse(ev.data);
         if (data.events && data.events.length > 0) {
+          // Invalidate the FFC cache so new file references picked up during
+          // this streaming turn are reflected in the pill count on the next
+          // ffcRefreshForCurrent() call (triggered by renderConversationEvents).
+          ffcInvalidate(currentConversation);
           renderConversationEvents(data.events);
           convLastLine = data.last_line;
         }
@@ -8900,6 +8904,78 @@
     const p2 = (n) => (n < 10 ? '0' + n : '' + n);
     const p3 = (n) => (n < 10 ? '00' + n : n < 100 ? '0' + n : '' + n);
     return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()) + '.' + p3(d.getMilliseconds());
+  }
+
+  // ----------------------------------------------------------------
+  // Files-from-conversation: per-conversation cache + pill rendering.
+  // The pill lives in .conv-sticky-header and only renders when the
+  // count is > 0. Click → openFfcModal (Task 8).
+  // ----------------------------------------------------------------
+  const _ffcCache = new Map(); // conversation_id -> {count, truncated, groups}
+
+  async function ffcFetch(convId) {
+    if (!convId || convId === '__new__' || convId.startsWith('backlog-') || convId.startsWith('pkood-')) {
+      return null;
+    }
+    if (_ffcCache.has(convId)) {
+      return _ffcCache.get(convId);
+    }
+    try {
+      const r = await fetch('/api/conversations/' + encodeURIComponent(convId) + '/files');
+      if (!r.ok) {
+        _ffcCache.set(convId, {count: 0, truncated: false, groups: {}});
+        return _ffcCache.get(convId);
+      }
+      const data = await r.json();
+      _ffcCache.set(convId, data);
+      return data;
+    } catch (e) {
+      // Network / parse failure — silent. Pill just stays hidden.
+      _ffcCache.set(convId, {count: 0, truncated: false, groups: {}});
+      return _ffcCache.get(convId);
+    }
+  }
+
+  function ffcInvalidate(convId) {
+    if (convId) _ffcCache.delete(convId);
+  }
+
+  function ffcEnsurePill(stickyEl, data) {
+    if (!stickyEl) return;
+    let pill = stickyEl.querySelector('.ffc-pill');
+    const hasFiles = data && data.count > 0;
+    if (!hasFiles) {
+      if (pill) pill.hidden = true;
+      return;
+    }
+    if (!pill) {
+      pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = 'ffc-pill';
+      pill.title = 'Files mentioned in this conversation';
+      pill.innerHTML = '📎 Files <span class="ffc-pill-count"></span>';
+      pill.addEventListener('click', () => {
+        const cur = currentConversation;
+        const cached = cur ? _ffcCache.get(cur) : null;
+        if (cached) openFfcModal(cached);
+      });
+      // Append to the sticky header. CSS sets margin-left so it sits
+      // next to whatever was already there.
+      stickyEl.appendChild(pill);
+    }
+    pill.hidden = false;
+    pill.querySelector('.ffc-pill-count').textContent = '(' + data.count + ')';
+  }
+
+  async function ffcRefreshForCurrent() {
+    const cur = currentConversation;
+    if (!cur) return;
+    const data = await ffcFetch(cur);
+    // The conversation may have switched while we were fetching. Bail
+    // if so — the new conversation's renderer will trigger its own.
+    if (currentConversation !== cur) return;
+    const sticky = document.querySelector('.conversations-view .conv-sticky-header');
+    ffcEnsurePill(sticky, data);
   }
 
   function setLiveBadgeVisible(visible) {
@@ -10153,6 +10229,10 @@
         $view.appendChild(_optimistic);
       }
     }
+    // Files-from-conversation pill: the sticky header may have just
+    // been created (above) or may already exist. Fire-and-forget; the
+    // pill stays hidden if the conversation has no qualifying files.
+    ffcRefreshForCurrent();
   }
 
   function filterConversations(q) {
