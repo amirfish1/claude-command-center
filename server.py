@@ -8893,6 +8893,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             status["needs_approval"] = bool(notif)
             status["needs_approval_message"] = notif.get("message", "") if notif else ""
             self.send_json(status)
+        elif re.match(r"^/api/conversations/[a-f0-9-]+/files$", path):
+            conv_id = path.rsplit("/", 2)[1]
+            payload = _extract_files_from_conversation(conv_id)
+            self.send_json(payload)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/stream$", path):
             conv_id = path.split("/")[-2]
             qs = urllib.parse.parse_qs(parsed.query)

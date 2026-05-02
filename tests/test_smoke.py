@@ -201,6 +201,18 @@ class TestServerImports(unittest.TestCase):
                 server._spawned_sessions.extend(orig_sessions)
 
 
+    def test_files_endpoint_route_registered(self):
+        """Smoke check: GET /api/conversations/<id>/files dispatcher
+        branch must be present in the do_GET source. Route registration
+        in this codebase is by literal regex string, so a substring grep
+        is the cheapest assertion."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+        src = pathlib.Path(server.__file__).read_text()
+        self.assertIn("/api/conversations/[a-f0-9-]+/files", src)
+
+
 class TestHealthcheck(unittest.TestCase):
     def test_healthcheck_returns_structured_result(self):
         """_run_healthcheck must always return a dict with 'checks' and
