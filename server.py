@@ -4678,6 +4678,168 @@ def parse_conversation(conversation_id, after_line=0):
     return {"events": events, "last_line": line_num}
 
 
+# Regex for files-from-conversation extraction. Two patterns: HTTP(S)
+# URLs, and absolute Unix paths anchored to whitespace/quote/paren so
+# we don't pull tokens out of the middle of code identifiers.
+_FFC_URL_RE = re.compile(r"https?://[^\s<>\"'`)\]]+")
+_FFC_PATH_RE = re.compile(r"(?:^|(?<=[\s\"'`(\[]))(/[^\s\"'`<>)\]]+)")
+_FFC_PATH_TRAIL_PUNCT = ".,;:!?)]}>'\""
+_FFC_MAX_ENTRIES = 500
+
+
+def _ffc_clean_match(s, is_url):
+    """Strip trailing punctuation that the regex pulled in. URLs lose
+    `).,;` etc. Paths the same. Returns the cleaned string or '' if
+    cleaning leaves nothing useful."""
+    if not s:
+        return ""
+    while s and s[-1] in _FFC_PATH_TRAIL_PUNCT:
+        s = s[:-1]
+    return s
+
+
+def _ffc_iter_targets(text):
+    """Yield (target, kind) for every URL/path mention in `text`.
+    Does NOT filter by extension — caller (the extractor) does that."""
+    if not isinstance(text, str) or not text:
+        return
+    for m in _FFC_URL_RE.finditer(text):
+        cleaned = _ffc_clean_match(m.group(0), is_url=True)
+        if cleaned:
+            yield (cleaned, "url")
+    for m in _FFC_PATH_RE.finditer(text):
+        cleaned = _ffc_clean_match(m.group(1), is_url=False)
+        if cleaned:
+            yield (cleaned, "path")
+
+
+def _ffc_flatten_strings(value):
+    """Walk a tool_use input dict yielding every nested string. Used
+    to scan entire `Bash{command: …}` / `Edit{old_string: …}` payloads,
+    not just the surface fields, so a path buried in a long bash
+    command is still caught."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _ffc_flatten_strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _ffc_flatten_strings(v)
+
+
+def _extract_files_from_conversation(conversation_id):
+    """Walk the JSONL once and return a grouped, de-duped, capped
+    payload of file-like artifacts mentioned anywhere in the
+    conversation — tool_use inputs, assistant/user text, tool_results.
+    Categorization is by extension whitelist (FILE_CATEGORIES);
+    everything else (code, scripts, unknown extensions) is dropped.
+    Returns {"count": int, "truncated": bool, "groups": {cat: [row…]}}.
+
+    Cheap to call: single linear pass, no I/O beyond the JSONL read.
+    """
+    filepath = _resolve_conversation_path(conversation_id)
+    seen = {}  # target -> {label, target, kind, category, first_line}
+    line_num = 0
+    truncated = False
+
+    def consider(target, kind, line):
+        nonlocal truncated
+        if not target or target in seen:
+            return
+        category = _categorize_file_target(target)
+        if not category:
+            return
+        if len(seen) >= _FFC_MAX_ENTRIES:
+            truncated = True
+            return
+        # Label: basename for paths, URL last-path-segment (or host) for URLs.
+        if kind == "url":
+            try:
+                parsed = urllib.parse.urlsplit(target)
+                tail = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+                label = tail or parsed.netloc or target
+            except ValueError:
+                label = target
+        else:
+            label = os.path.basename(target) or target
+        seen[target] = {
+            "label": label,
+            "target": target,
+            "kind": kind,
+            "category": category,
+            "first_line": line,
+        }
+
+    try:
+        with open(filepath, "r") as f:
+            for line in f:
+                line_num += 1
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                msg = ev.get("message")
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get("content")
+                if isinstance(content, str):
+                    for target, kind in _ffc_iter_targets(content):
+                        consider(target, kind, line_num)
+                    continue
+                if not isinstance(content, list):
+                    continue
+
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    btype = block.get("type")
+                    if btype == "text":
+                        for target, kind in _ffc_iter_targets(block.get("text", "")):
+                            consider(target, kind, line_num)
+                    elif btype == "tool_use":
+                        # Direct fields first (so file_path with an exotic
+                        # character the path-regex misses still lands).
+                        inp = block.get("input")
+                        if isinstance(inp, dict):
+                            for fld in ("file_path", "notebook_path", "path"):
+                                v = inp.get(fld)
+                                if isinstance(v, str) and v.startswith("/"):
+                                    consider(v, "path", line_num)
+                        # Then deep scan every nested string.
+                        for s in _ffc_flatten_strings(inp):
+                            for target, kind in _ffc_iter_targets(s):
+                                consider(target, kind, line_num)
+                    elif btype == "tool_result":
+                        rc = block.get("content")
+                        texts = []
+                        if isinstance(rc, str):
+                            texts.append(rc)
+                        elif isinstance(rc, list):
+                            for sub in rc:
+                                if isinstance(sub, dict) and sub.get("type") == "text":
+                                    texts.append(sub.get("text", ""))
+                        for t in texts:
+                            for target, kind in _ffc_iter_targets(t):
+                                consider(target, kind, line_num)
+    except FileNotFoundError:
+        return {"count": 0, "truncated": False, "groups": {}}
+
+    # Group + sort by first_line ascending within each category.
+    groups = {}
+    for row in seen.values():
+        cat = row.pop("category")
+        groups.setdefault(cat, []).append(row)
+    for rows in groups.values():
+        rows.sort(key=lambda r: r["first_line"])
+
+    return {"count": len(seen), "truncated": truncated, "groups": groups}
+
+
 def _parse_conversation_event(ev, line_num):
     """Parse a single conversation JSONL event."""
     ev_type = ev.get("type", "")
