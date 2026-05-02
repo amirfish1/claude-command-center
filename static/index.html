@@ -10849,6 +10849,23 @@
     if ($kanban) $kanban.style.display = 'none';
     $list.style.display = '';
 
+    // The click-to-currentSession bridge uses sessionIdByConv et al., which
+    // are normally populated inside loadConversationList() — a path archive
+    // mode bypasses. Without this, clicking an archive row passes undefined
+    // to setCurrentSession, currentSession.id stays null, and the input bar
+    // hides because hasSession is false. Populate the maps here so the
+    // existing right-pane code path works for archive entries.
+    for (const c of shaped) {
+      if (c.session_id) sessionIdByConv[c.id] = c.session_id;
+      if (c.session_cwd) sessionCwdByConv[c.id] = c.session_cwd;
+      sessionCwdExistsByConv[c.id] = !!c.session_cwd_exists;
+      sessionSourceByConv[c.id] = c.source || 'interactive';
+    }
+    // Also keep conversationsData in sync so downstream code (selection
+    // restore, etc.) sees a non-empty list while in archive mode. This
+    // gets reset on toggle-off via loadConversationList().
+    conversationsData = shaped;
+
     renderConversationList(shaped);
   }
 
