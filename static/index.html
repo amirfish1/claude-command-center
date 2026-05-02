@@ -12200,8 +12200,20 @@
   // loadConversationList() so the merge logic (placeholder preservation,
   // display-name override carry-over, sticky columns) lives in one place —
   // divergence here was what caused new-session rows to flicker.
-  setInterval(() => {
+  setInterval(async () => {
     if (activeTab !== 'sessions') return;
+    // In archive mode, refresh /api/conversations/all and re-render —
+    // otherwise new sessions don't appear until the user toggles archive
+    // off and back on. Cheap because _extract_tail_meta is mtime-cached
+    // server-side; only changed JSONLs get re-scanned.
+    if (typeof archiveMode !== 'undefined' && archiveMode) {
+      try {
+        archiveData = await loadArchiveAll();
+        const $search = document.getElementById('convSearch');
+        renderArchiveList($search ? $search.value : '');
+      } catch (_) { /* best-effort */ }
+      return;
+    }
     loadConversationList();
   }, 10000);
 
