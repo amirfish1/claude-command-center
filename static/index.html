@@ -1552,6 +1552,24 @@
   .conv-item.drop-below {
     box-shadow: inset 0 -2px 0 0 var(--accent);
   }
+  /* Drag-to-pin: highlight the destination folder group header while the
+     dragged row hovers over it. */
+  .conv-folder-group-header.drop-target {
+    background: rgba(88, 166, 255, 0.12);
+    box-shadow: inset 0 0 0 1px var(--accent);
+    border-radius: 4px;
+  }
+  /* Pin indicator on rows whose repo bucket the user overrode. The
+     button doubles as the unpin affordance. */
+  .conv-repo-pin {
+    background: transparent; border: none; cursor: pointer; padding: 0 2px;
+    font-size: 11px; line-height: 1; opacity: 0.85;
+    color: var(--text-muted);
+  }
+  .conv-repo-pin:hover { opacity: 1; color: var(--accent); }
+  .conv-item.is-repo-pinned .conv-folder-chip {
+    outline: 1px dashed var(--accent); outline-offset: 1px;
+  }
   .conv-item .drag-handle {
     display: none;
     position: absolute; left: 2px; top: 50%;
@@ -8112,12 +8130,19 @@
         ? '<span class="conv-live-dot" title="Live — actively polled"></span>'
         : '';
 
-      return '<div class="conv-item' + active + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
+      // Pin indicator — shown when the row's repo bucket has been
+      // overridden by the user. Click unpins via /api/repo/pin.
+      const pinnedHtml = c.pinned_repo
+        ? '<button class="conv-repo-pin" data-role="unpin-repo" title="Pinned to this repo. Click to reset to the session’s real repo.">&#128204;</button>'
+        : '';
+
+      return '<div class="conv-item' + active + (c.pinned_repo ? ' is-repo-pinned' : '') + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + liveDotHtml
           + '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
           + folderChipHtml
+          + pinnedHtml
           + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to rename">' + escapeHtml(title) + '</div>'
           + liveToolHtml
           + '<span class="conv-meta-inline">'
@@ -8197,7 +8222,13 @@
         const orphan = cards[0].folder_chip_orphan ? ' is-orphan' : '';
         // Suppress per-row chip — the group header already labels the folder.
         for (const c of cards) c._suppressFolderChip = true;
-        return '<div class="conv-folder-group-header" style="--chip-hue:' + hue + ';">'
+        // data-folder-path lets the drop handler know which repo to pin
+        // a dropped row to. Empty when the folder couldn't be resolved
+        // (orphan slug); drop is suppressed in that case.
+        const dropPath = cards[0].folder_path || '';
+        return '<div class="conv-folder-group-header" style="--chip-hue:' + hue + ';"'
+          + ' data-folder-path="' + escapeHtml(dropPath) + '"'
+          + ' data-folder-label="' + escapeHtml(folder) + '">'
           + '<span class="conv-folder-group-chip' + orphan + '">' + escapeHtml(folder) + '</span>'
           + '<span class="conv-folder-group-count">' + cards.length + '</span>'
           + '</div>'
@@ -8388,10 +8419,73 @@
         // Ignore clicks that started the inline editor, archive button,
         // or that landed on the title (which now triggers rename instead
         // of opening the conversation — the pencil's job moved here).
-        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
+        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
         selectConversation(el.dataset.id);
       });
       attachDragHandlers(el);
+    });
+    // Unpin-repo button on rows whose folder bucket the user pinned.
+    $convList.querySelectorAll('[data-role="unpin-repo"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const item = btn.closest('.conv-item');
+        const sid = item && item.dataset.sessionId;
+        if (!sid) return;
+        try {
+          await fetch('/api/repo/pin', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: sid, path: '' }),
+          });
+        } catch (_) { /* swallow — UI refresh below will surface failure */ }
+        if (typeof archiveMode !== 'undefined' && archiveMode) {
+          archiveData = await loadArchiveAll();
+          renderArchiveList(document.getElementById('convSearch')?.value || '');
+        } else if (typeof loadConversationList === 'function') {
+          loadConversationList();
+        }
+      });
+    });
+    // Drop targets — folder group headers in archive mode. Dropping a
+    // row onto a header pins that session to the header's repo so the
+    // row appears under it everywhere (single view + all-repos).
+    $convList.querySelectorAll('.conv-folder-group-header[data-folder-path]').forEach(hdr => {
+      const targetPath = hdr.getAttribute('data-folder-path');
+      if (!targetPath) return;
+      hdr.addEventListener('dragover', (ev) => {
+        if (!dragSourceId) return;
+        ev.preventDefault();
+        try { ev.dataTransfer.dropEffect = 'link'; } catch (_) {}
+        hdr.classList.add('drop-target');
+      });
+      hdr.addEventListener('dragleave', () => {
+        hdr.classList.remove('drop-target');
+      });
+      hdr.addEventListener('drop', async (ev) => {
+        ev.preventDefault();
+        hdr.classList.remove('drop-target');
+        const src = dragSourceId;
+        if (!src) return;
+        const card = conversationsData.find(c => c.id === src);
+        const sid = card && (card.session_id || card.id);
+        if (!sid) return;
+        // Don't pin to the bucket the row is already in.
+        if (card && card.folder_path === targetPath && !card.pinned_repo) return;
+        try {
+          await fetch('/api/repo/pin', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: sid, path: targetPath }),
+          });
+        } catch (_) { /* swallow */ }
+        if (typeof archiveMode !== 'undefined' && archiveMode) {
+          archiveData = await loadArchiveAll();
+          renderArchiveList(document.getElementById('convSearch')?.value || '');
+        } else if (typeof loadConversationList === 'function') {
+          loadConversationList();
+        }
+      });
     });
     // Click on the title element: select the row (open convo on the
     // right) AND start the inline rename. Replaces the dedicated pencil
@@ -8614,6 +8708,31 @@
       if (!src || src === dstId) return;
       const before = el.classList.contains('drop-above');
       el.classList.remove('drop-above', 'drop-below');
+      // Archive mode special-case: when src and dst belong to different
+      // folder buckets, treat the drop as a repo pin instead of a reorder.
+      // Lets the user grab a row from one repo group and drop it onto a
+      // row in another group, not just onto the group header.
+      if (typeof archiveMode !== 'undefined' && archiveMode) {
+        const srcCard = conversationsData.find(c => c.id === src);
+        const dstCard = conversationsData.find(c => c.id === dstId);
+        if (srcCard && dstCard && dstCard.folder_path
+            && srcCard.folder_path !== dstCard.folder_path) {
+          const sid = srcCard.session_id || srcCard.id;
+          try {
+            await fetch('/api/repo/pin', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ session_id: sid, path: dstCard.folder_path }),
+            });
+          } catch (_) { /* swallow */ }
+          archiveData = await loadArchiveAll();
+          renderArchiveList(document.getElementById('convSearch')?.value || '');
+          return;
+        }
+        // Same-bucket reorder in archive mode is meaningless (rows are
+        // mtime-sorted), so no-op rather than persist a bogus order.
+        return;
+      }
       // Reorder conversationsData: remove src, insert relative to dst
       const srcIdx = conversationsData.findIndex(c => c.id === src);
       if (srcIdx < 0) return;
@@ -11538,6 +11657,9 @@
         folder_chip_hue: _hashHue(c.folder_label || c.slug),
         folder_chip_orphan: folderOrphan,
         folder_path: c.folder_path,
+        // Pinned-to-this-repo flag — server overrides the row's folder
+        // bucket. Renderer adds a 📌 indicator + click-to-unpin handler.
+        pinned_repo: !!c.pinned_repo,
       };
     });
 

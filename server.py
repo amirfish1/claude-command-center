@@ -12,7 +12,7 @@ Usage:
     CCC_WATCH_REPO=~/dev/foo ./run.sh
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 import ast
 import base64
@@ -327,6 +327,33 @@ def _append_custom_repo(path_str):
     return str(p)
 
 
+# Visual-only override of which repo a session appears under in the all-repos
+# archive view. {session_id: repo_path}. Does not touch the JSONL transcript —
+# the session's recorded cwd is unchanged, only the row's grouping is moved.
+# Used when a session was launched in repo A but the work logically belongs
+# under repo B and the user wants the row to appear there for scanning.
+_REPO_PINS_FILE = Path.home() / ".claude" / "command-center" / "repo-pins.json"
+
+
+def _load_repo_pins():
+    try:
+        with open(_REPO_PINS_FILE) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items() if k and v}
+
+
+def _save_repo_pins(pins):
+    _REPO_PINS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _REPO_PINS_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(pins, f, indent=2, sort_keys=True)
+    tmp.replace(_REPO_PINS_FILE)
+
+
 def _native_pick_folder(prompt_text="Pick a repo folder for Claude Command Center"):
     """Open the OS-native folder chooser and return the selected absolute path.
 
@@ -610,6 +637,10 @@ def find_all_conversations(limit_per_folder=None):
         archived_set = set(_load_archived_conversations())
     except Exception:
         archived_set = set()
+    try:
+        repo_pins = _load_repo_pins()
+    except Exception:
+        repo_pins = {}
 
     out = []
     seen_session_ids = set()
@@ -739,6 +770,24 @@ def find_all_conversations(limit_per_folder=None):
                 or "-wt-" in Path(effective_cwd).name
             )
 
+            # Per-row folder bucket. A user pin moves the row to a different
+            # repo group without touching the transcript or fudging the
+            # underlying session_cwd / branch / pills (those still reflect
+            # reality). Pin is honored only when the target dir still
+            # exists; stale pins fall back to the natural repo.
+            row_folder_path = folder_path
+            row_folder_label = folder_label
+            pinned_repo = False
+            pin_target = repo_pins.get(session_id)
+            if pin_target and pin_target != folder_path:
+                try:
+                    if Path(pin_target).is_dir():
+                        row_folder_path = pin_target
+                        row_folder_label = Path(pin_target).name
+                        pinned_repo = True
+                except OSError:
+                    pass
+
             display_name = name_overrides.get(session_id) or None
 
             # Reuse _extract_tail_meta — same source of truth /api/sessions
@@ -804,8 +853,9 @@ def find_all_conversations(limit_per_folder=None):
                 "session_id": session_id,
                 "jsonl_path": str(f),
                 "slug": slug,
-                "folder_label": folder_label,
-                "folder_path": folder_path,
+                "folder_label": row_folder_label,
+                "folder_path": row_folder_path,
+                "pinned_repo": pinned_repo,
                 # Surface the inferred effective cwd / branch — these are
                 # what the renderer's branch chip + worktree leaf read,
                 # and they reflect where Claude actually edited (after
@@ -4698,7 +4748,17 @@ def find_conversations(progress=None):
     # the modern claude-code 2.x slug AND the legacy '/'-only slug, so
     # we don't drop historic sessions when claude-code's encoder changes.
     project_dirs = _candidate_conversation_dirs(REPO_ROOT)
-    if not project_dirs:
+    # Load pins early — even when the watched repo has no native slug dirs
+    # (fresh worktree, just-cloned repo), we still want sessions pinned to
+    # this repo to surface in the single-repo list.
+    try:
+        _repo_pins = _load_repo_pins()
+    except Exception:
+        _repo_pins = {}
+    _this_repo = str(REPO_ROOT)
+    pinned_in_sids = {sid for sid, p in _repo_pins.items() if p == _this_repo}
+    pinned_out_sids = {sid for sid, p in _repo_pins.items() if p and p != _this_repo}
+    if not project_dirs and not pinned_in_sids:
         if progress:
             progress(
                 "transcripts",
@@ -4758,6 +4818,23 @@ def find_conversations(progress=None):
             detail=f"Found {len(jsonl_files)} JSONL transcript file(s).",
         )
 
+    # Inject JSONLs for sessions pinned to this repo from other slug
+    # dirs — so the single-repo list shows them as if launched here.
+    if pinned_in_sids:
+        projects_root = Path.home() / ".claude" / "projects"
+        if projects_root.is_dir():
+            try:
+                for project_dir in projects_root.iterdir():
+                    if not project_dir.is_dir():
+                        continue
+                    for sid in pinned_in_sids:
+                        cand = project_dir / f"{sid}.jsonl"
+                        if cand.is_file() and cand.name not in seen_jsonl:
+                            seen_jsonl.add(cand.name)
+                            jsonl_files.append(cand)
+            except OSError:
+                pass
+
     total_jsonl = len(jsonl_files)
     for idx, f in enumerate(jsonl_files, start=1):
         if progress and (idx == 1 or idx == total_jsonl or idx % 10 == 0):
@@ -4771,6 +4848,13 @@ def find_conversations(progress=None):
         try:
             stat = f.stat()
         except OSError:
+            continue
+
+        # Skip sessions pinned to a different repo — they show up in the
+        # destination repo's list (and the all-repos view) instead.
+        # Cheap pre-check on the filename, which is `<session_id>.jsonl`.
+        _stem = f.stem
+        if _stem in pinned_out_sids:
             continue
 
         # Peek at first 20 lines to extract metadata
@@ -4986,6 +5070,10 @@ def find_conversations(progress=None):
             "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
             "archived": sid in archived_set,
             "verified": sid in verified_set,
+            # True when this row is showing here because the user pinned the
+            # session to REPO_ROOT (its underlying JSONL lives in another
+            # repo's slug dir). Lets the UI render a 📌 indicator + unpin.
+            "pinned_repo": sid in pinned_in_sids,
             # Last time the user interacted with this card via the UI.
             # None when they've never clicked/typed since this feature shipped.
             "last_interacted": last_interactions.get(sid) or last_interactions.get(conv_id),
@@ -10215,6 +10303,55 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": f"could not persist: {e}"}, 500)
                 return
             self.send_json({"ok": True, "path": resolved, "repos": load_known_repos()})
+            return
+        if path == "/api/repo/pin":
+            # Visual-only "this session belongs under repo X" override.
+            # Body: {session_id, path}. Empty/missing path clears the pin.
+            # Same allow-list as /api/repo/switch — we never accept an
+            # arbitrary path here, even though the pin doesn't hand the
+            # path to subprocess. Defence in depth: if a future caller
+            # uses pinned paths to drive cwd-sensitive code, the input
+            # was already constrained.
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            sid = (body.get("session_id") or "").strip()
+            target = (body.get("path") or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing 'session_id'"}, 400)
+                return
+            try:
+                pins = _load_repo_pins()
+            except Exception:
+                pins = {}
+            if not target:
+                pins.pop(sid, None)
+                pinned_to = None
+            else:
+                try:
+                    target_resolved = str(Path(target).expanduser().resolve())
+                except OSError as e:
+                    self.send_json({"ok": False, "error": f"bad path: {e}"}, 400)
+                    return
+                allowed = {r["path"] for r in load_known_repos()}
+                allowed.add(str(REPO_ROOT))
+                if target_resolved not in allowed:
+                    self.send_json({
+                        "ok": False,
+                        "error": "path not in allow-list (must appear in the repo picker)",
+                        "path": target_resolved,
+                    }, 403)
+                    return
+                pins[sid] = target_resolved
+                pinned_to = target_resolved
+            try:
+                _save_repo_pins(pins)
+            except OSError as e:
+                self.send_json({"ok": False, "error": f"save failed: {e}"}, 500)
+                return
+            self.send_json({"ok": True, "session_id": sid, "pinned_to": pinned_to})
             return
         if path == "/api/repo/switch":
             # Live-switch the watched repo. All REPO_ROOT-derived globals get
