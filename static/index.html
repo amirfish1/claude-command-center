@@ -7824,7 +7824,9 @@
         archiveBtn = '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>';
       }
 
-      const folderChipHtml = c.folder_label_chip
+      // Suppressed (_suppressFolderChip) when the row sits under a folder
+      // group header that already labels the folder — chip would be noise.
+      const folderChipHtml = (c.folder_label_chip && !c._suppressFolderChip)
         ? '<span class="conv-folder-chip' + (c.folder_chip_orphan ? ' is-orphan' : '')
             + '" style="--chip-hue:' + (c.folder_chip_hue | 0) + ';"'
             + ' title="' + escapeHtml(c.folder_path || c.session_cwd || '') + '">'
@@ -7902,6 +7904,8 @@
       const _groupHtml = _folderEntries.map(([folder, cards]) => {
         const hue = (cards[0].folder_chip_hue | 0);
         const orphan = cards[0].folder_chip_orphan ? ' is-orphan' : '';
+        // Suppress per-row chip — the group header already labels the folder.
+        for (const c of cards) c._suppressFolderChip = true;
         return '<div class="conv-folder-group-header" style="--chip-hue:' + hue + ';">'
           + '<span class="conv-folder-group-chip' + orphan + '">' + escapeHtml(folder) + '</span>'
           + '<span class="conv-folder-group-count">' + cards.length + '</span>'
