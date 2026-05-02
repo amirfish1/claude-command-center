@@ -584,6 +584,18 @@ def _prime_pr_states(pr_urls):
         list(ex.map(_get_pr_state, needed))
 
 
+def _bust_pr_state_cache(url=None):
+    """Force the next _get_pr_state() to re-query gh. If url is given, only
+    that URL's entry is dropped; otherwise the whole cache clears. Call after
+    a merge/close action so the badge updates immediately instead of waiting
+    out the TTL."""
+    with _PR_STATE_LOCK:
+        if url:
+            _PR_STATE_CACHE.pop(url, None)
+        else:
+            _PR_STATE_CACHE.clear()
+
+
 def _archive_session_is_live(session_id):
     """A session is "live" if any sidecar marker exists for it. Sidecars
     are written by Claude Code's hooks and removed when sessions end, so
@@ -4226,6 +4238,7 @@ def _bust_issue_state_cache():
     (close/reopen/label change) so the UI doesn't serve 5-minute-stale state."""
     global _issue_state_cache_ts
     _issue_state_cache_ts = 0
+
 
 # Backlog: full issue data (labels, body) for open issues
 _backlog_issues_cache = []
@@ -11409,8 +11422,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _save_archived_conversations(archived_set)
                     # PR merges typically close the linked issue (via
                     # "Closes #N" in the body); refresh the GH issues
-                    # section so it reflects that on next poll.
+                    # section so it reflects that on next poll. Also bust
+                    # the PR-state cache so the chip flips to MERGED on the
+                    # next /api/conversations poll instead of waiting out
+                    # the TTL.
                     _bust_issue_state_cache()
+                    _bust_pr_state_cache(target if target.startswith("http") else None)
                     self.send_json({
                         "ok": True,
                         "via": "gh",

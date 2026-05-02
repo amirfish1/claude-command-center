@@ -1463,6 +1463,9 @@
   .conv-signal.uncommitted {
     background: rgba(240,136,62,0.18); color: #F0883E;
   }
+  .conv-signal.pr-open    { background: rgba(57,210,192,0.15); color: var(--cyan); }
+  .conv-signal.pr-merged  { background: rgba(163,113,247,0.18); color: #c4a8ff; }
+  .conv-signal.pr-closed  { background: rgba(139,148,158,0.15); color: var(--text-muted); }
   .conv-signal.activity-working { background: rgba(251,202,4,0.15); color: #FBCA04; animation: pulse 2s infinite; }
   .conv-signal.activity-waiting { background: rgba(88,166,255,0.1); color: var(--accent); }
   .conv-signal.activity-idle { background: rgba(139,148,158,0.08); color: var(--text-muted); }
@@ -8176,8 +8179,24 @@
         if (c.pkood_is_stuck) signals += '<span class="conv-signal pkood-stuck">stuck</span>';
       } else if (isWorktree && c.worktree_dirty) {
         signals += '<span class="conv-signal uncommitted" title="git status: this worktree has uncommitted changes">uncommitted</span>';
-      } else if (isWorktree && c.tail_pr_number) {
-        signals += '<span class="conv-signal pushed" title="PR opened by this session">PR #' + c.tail_pr_number + '</span>';
+      } else if (c.tail_pr_number) {
+        // Any session with a PR: surface it instead of the generic
+        // committed/pushed chip — the PR is the actionable signal.
+        // State-aware styling: merged → purple ✓, open → cyan ↗, closed
+        // → muted ×. Falls back to neutral "pushed" if pr_state hasn't
+        // been resolved yet (gh fetch in flight, missing, or errored).
+        const ps = (c.pr_state || '').toUpperCase();
+        let prCls, prGlyph, prTitle;
+        if (ps === 'MERGED') {
+          prCls = 'pr-merged'; prGlyph = '✓ '; prTitle = 'PR merged';
+        } else if (ps === 'CLOSED') {
+          prCls = 'pr-closed'; prGlyph = '× '; prTitle = 'PR closed without merge';
+        } else if (ps === 'OPEN') {
+          prCls = 'pr-open';   prGlyph = '↗ '; prTitle = 'PR open';
+        } else {
+          prCls = 'pushed';    prGlyph = '';   prTitle = 'PR opened by this session';
+        }
+        signals += '<span class="conv-signal ' + prCls + '" title="' + prTitle + '">' + prGlyph + 'PR #' + c.tail_pr_number + '</span>';
       } else if (c.has_push) {
         signals += '<span class="conv-signal pushed">pushed</span>';
       } else if (c.has_commit) {
