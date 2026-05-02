@@ -3008,11 +3008,12 @@
     color: var(--text-muted); text-transform: uppercase;
     letter-spacing: 0.5px; font-weight: 600;
   }
-  .ccc-topbar #sbRepoPicker {
-    padding: 4px 6px; border-radius: 4px;
+  .sidebar-header-actions #sbRepoPicker {
+    padding: 3px 24px 3px 8px; border-radius: 4px;
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
-    font-size: 11px; outline: none; max-width: 220px;
+    font-size: 11px; outline: none; max-width: 220px; min-width: 0;
   }
+  .sidebar-header-actions #sbRepoPicker.repo-picker-hidden { display: none; }
   /* Generic action button in the layout-agnostic topbar (Titles, View …).
      Matches the size of the repo picker so the row reads as one strip. */
   .ccc-topbar .topbar-btn {
@@ -3034,9 +3035,8 @@
     background: var(--orange, #d29922);
     box-shadow: 0 0 0 1.5px var(--bg);
   }
-  /* Right-aligned action cluster on the sidebar's "Claude Command
-     Center" row — Board / archive / sort / refresh. Sits next to the
-     header label so the empty space to the right of the title gets used. */
+  /* Right-aligned action cluster on the sidebar's title row. Keep this
+     focused on navigation state: all-repos, repo picker, and board view. */
   .sidebar-header-actions {
     display: flex; align-items: center; gap: 4px;
     margin-left: auto; flex-wrap: wrap; row-gap: 4px;
@@ -3441,6 +3441,7 @@
     text-decoration: none;
   }
   .desktop-popover .pop-item:hover { background: var(--surface-2); }
+  .desktop-popover .pop-item.active { color: var(--accent); background: rgba(88,166,255,0.10); }
   .desktop-popover .pop-item .pop-check {
     width: 12px; color: var(--accent); font-weight: 700;
   }
@@ -3848,8 +3849,6 @@
        so the most-important controls (which repo we're watching + the
        setup banner) never disappear when the user toggles views. -->
   <div class="ccc-topbar" id="cccTopbar">
-    <span class="ccc-topbar-label">Repo</span>
-    <select id="sbRepoPicker" title="Repo this session is watching — switch to point at a different project. Live-switches without a server restart."></select>
     <button type="button" id="updPill" class="upd-pill" title="A new release is available on GitHub. Click to review and update.">
       <span class="upd-pill-dot"></span>
       <span id="updPillText">Update available</span>
@@ -3857,37 +3856,20 @@
     <button type="button" id="bugReportLink" class="bug-link" title="Report a bug or request a feature. Files a GitHub issue against amirfish1/claude-command-center.">
       &#9873; Report a bug
     </button>
-    <button id="kptSummarizeAllBtn" class="topbar-btn" title="Use Claude haiku to generate concise titles for every card whose name hasn't been touched. Runs in the background, ~3 cards in parallel." aria-label="Summarize titles for all unnamed cards">&#10024; Titles</button>
     <button id="kptWorktreesBtn" class="topbar-btn" title="Show all worktrees of this repo, with an indicator for those that have uncommitted changes." aria-label="Show worktrees">&#127807; Worktrees</button>
     <button id="statsBtn" class="topbar-btn" title="Usage stats — sessions, messages, tokens, streaks across every Claude Code transcript on this machine." aria-label="Show usage stats">&#128202; Stats</button>
     <button id="termToggleBtn" class="topbar-btn" title="Open the in-UI terminal panel — run quick shell commands (git status, npm test, ./script.sh) without leaving the page. One-shot per command, no interactive TTY (no vim/top)." aria-label="Toggle terminal panel">&#9000; Terminal</button>
-    <!-- View menu — collapses three rarely-changed toggles (Last 10h /
-         Compact / GitHub only) into one disclosure popover. -->
-    <div class="kpt-view-menu-wrap" style="position:relative;">
-      <button id="kptViewMenuBtn" class="topbar-btn" title="View options" aria-haspopup="true" aria-expanded="false">View &#9662;</button>
-      <div id="kptViewMenu" style="display:none;position:absolute;top:calc(100% + 4px);right:0;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px;min-width:160px;z-index:50;box-shadow:0 4px 16px rgba(0,0,0,0.4);flex-direction:column;gap:4px;">
-        <button id="kptRecentBtn" title="Show only sessions/issues touched in the last 10 hours" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Last 10h</button>
-        <button id="kptDescToggle" title="Compact mode — hide the description preview on cards" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">Compact</button>
-        <button id="kptGitOnlyToggle" title="Show only cards linked to a GitHub issue" style="text-align:left;padding:6px 10px;background:transparent;border:none;color:var(--text);font-size:12px;cursor:pointer;border-radius:4px;">GitHub only</button>
-        <label class="kpt-label" title="Spawn the new session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main" style="display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text);"><input type="checkbox" id="kptWorktreeToggle" style="margin:0;"> 🌿 worktree</label>
-      </div>
-    </div>
     <div id="setupBanner" class="ccc-setup-banner"></div>
   </div>
 
   <div class="sidebar">
     <div class="sidebar-header">
-      <span class="dot"></span>
       <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
       <div class="sidebar-header-actions">
         <a class="sh-btn sh-btn-deploy" id="sidebarDeployPill" target="_blank" rel="noopener" title="Vercel deploy — loading…" aria-label="Vercel deploy status"><span class="deploy-dot" id="deployDot"></span><span class="deploy-label" id="deployStateLabel">Vercel</span></a>
-        <button class="conv-compact-toggle sh-btn" id="convCompactToggle" title="Compact rows — keep each card to a single line" aria-label="Toggle compact rows"><span aria-hidden="true">&#8801;</span></button>
-        <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Toggle Kanban board view" aria-label="Toggle Kanban board view"><span aria-hidden="true">&#9783;</span> Board</button>
         <button class="conv-allrepos-toggle sh-btn" id="convAllReposToggle" title="All repos — browse conversations from every folder you've ever Claude-Code'd in. Read-only; no servers spawned." aria-label="Toggle all-repos archive">&#128194; All repos</button>
-        <button class="conv-archive-toggle sh-btn" id="convArchiveToggle" title="Show archived">&#128230;</button>
-        <button class="conv-sort-btn sh-btn" id="convSortBtn" title="Sort by latest response (ignores custom order)">&#8693;</button>
-        <button class="conv-sort-btn sh-btn" id="convAlphaSortBtn" title="Sort alphabetically by title">A&#8595;</button>
-        <button class="conv-refresh-btn sh-btn" id="convRefreshBtn" title="Refresh conversation list">&#8634;</button>
+        <select id="sbRepoPicker" title="Switch this sidebar back to a specific repo server. Hidden while All repos is active."></select>
+        <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Toggle Kanban board view" aria-label="Toggle Kanban board view"><span aria-hidden="true">&#9783;</span> Board</button>
       </div>
     </div>
 
@@ -3917,26 +3899,8 @@
       <div class="attention-list" id="attentionList"></div>
     </div>
 
-    <!-- Bottom-mounted appearance + settings strip, Claude-Desktop-style -->
+    <!-- Bottom-mounted settings strip, Claude-Desktop-style -->
     <div class="sidebar-footer">
-      <div style="position:relative;">
-        <button type="button" class="sidebar-footer-btn" id="appearanceBtn" title="Appearance" aria-label="Appearance" aria-haspopup="true" aria-expanded="false">
-          <!-- sun/moon glyph; rotates between sun (light) and moon (dark) via CSS -->
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-          </svg>
-        </button>
-        <div class="desktop-popover" id="appearancePopover" role="menu" aria-label="Appearance options" style="bottom:calc(100% + 6px);left:0;">
-          <div class="pop-section-label">Theme</div>
-          <button class="pop-item" type="button" data-theme="light" role="menuitemradio"><span class="pop-check" data-check-theme="light"></span><span>Light</span></button>
-          <button class="pop-item" type="button" data-theme="dark" role="menuitemradio"><span class="pop-check" data-check-theme="dark"></span><span>Dark</span></button>
-          <button class="pop-item" type="button" data-theme="system" role="menuitemradio"><span class="pop-check" data-check-theme="system"></span><span>Match system</span></button>
-          <div class="pop-divider"></div>
-          <div class="pop-section-label">Font</div>
-          <button class="pop-item" type="button" data-font="system" role="menuitemradio"><span class="pop-check" data-check-font="system"></span><span>System</span></button>
-          <button class="pop-item" type="button" data-font="mono" role="menuitemradio"><span class="pop-check" data-check-font="mono"></span><span>Mono</span></button>
-        </div>
-      </div>
       <div class="sidebar-footer-spacer"></div>
       <div style="position:relative;">
         <button type="button" class="sidebar-footer-btn" id="settingsBtn" title="Settings" aria-label="Settings" aria-haspopup="true" aria-expanded="false">
@@ -3946,6 +3910,23 @@
           </svg>
         </button>
         <div class="desktop-popover" id="settingsPopover" role="menu" aria-label="Settings menu" style="bottom:calc(100% + 6px);right:0;">
+          <div id="appearancePopover" role="group" aria-label="Appearance options">
+            <div class="pop-section-label">Theme</div>
+            <button class="pop-item" type="button" data-theme="light" role="menuitemradio"><span class="pop-check" data-check-theme="light"></span><span>Light</span></button>
+            <button class="pop-item" type="button" data-theme="dark" role="menuitemradio"><span class="pop-check" data-check-theme="dark"></span><span>Dark</span></button>
+            <button class="pop-item" type="button" data-theme="system" role="menuitemradio"><span class="pop-check" data-check-theme="system"></span><span>Match system</span></button>
+            <div class="pop-divider"></div>
+            <div class="pop-section-label">Font</div>
+            <button class="pop-item" type="button" data-font="system" role="menuitemradio"><span class="pop-check" data-check-font="system"></span><span>System</span></button>
+            <button class="pop-item" type="button" data-font="mono" role="menuitemradio"><span class="pop-check" data-check-font="mono"></span><span>Mono</span></button>
+          </div>
+          <div class="pop-divider"></div>
+          <div class="pop-section-label">View</div>
+          <button class="pop-item" id="kptRecentBtn" type="button" title="Show only sessions/issues touched in the last 10 hours"><span class="pop-icon">10h</span><span>Last 10h</span></button>
+          <button class="pop-item" id="kptDescToggle" type="button" title="Compact mode — hide the description preview on cards"><span class="pop-icon">&#8801;</span><span>Compact cards</span></button>
+          <button class="pop-item" id="kptGitOnlyToggle" type="button" title="Show only cards linked to a GitHub issue"><span class="pop-icon">#</span><span>GitHub only</span></button>
+          <label class="pop-item" title="Spawn the new session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main"><input type="checkbox" id="kptWorktreeToggle" style="margin:0;"><span>Spawn in worktree</span></label>
+          <div class="pop-divider"></div>
           <button class="pop-item" type="button" id="settingsCmdkBtn"><span class="pop-icon">⌘K</span><span>Search sessions</span></button>
           <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
           <a class="pop-item" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener"><span class="pop-icon">↗</span><span>View on GitHub</span></a>
@@ -12814,6 +12795,19 @@
     }
 
     $sbRepoPicker.dataset.prev = $sbRepoPicker.value;
+    updateRepoPickerVisibility();
+  }
+
+  function updateRepoPickerVisibility() {
+    if (!$sbRepoPicker) return;
+    let hidden = false;
+    try {
+      hidden = !!archiveMode;
+    } catch (_) {
+      try { hidden = localStorage.getItem('ccc-archive-mode') !== '0'; } catch (_) {}
+    }
+    $sbRepoPicker.classList.toggle('repo-picker-hidden', hidden);
+    $sbRepoPicker.setAttribute('aria-hidden', hidden ? 'true' : 'false');
   }
 
   // ── Repo sidebar (vertical icon rail) ──────────────────────────────────
@@ -13063,6 +13057,7 @@
     try { localStorage.setItem(_ARCHIVE_MODE_KEY, archiveMode ? '1' : '0'); } catch (_) {}
     const $btn = document.getElementById('convAllReposToggle');
     if ($btn) $btn.classList.toggle('is-active', archiveMode);
+    updateRepoPickerVisibility();
     const $list = document.getElementById('convList');
     const $kanban = document.getElementById('kanbanBoard');
 
@@ -13091,6 +13086,7 @@
       $btn.addEventListener('click', () => setArchiveMode(!archiveMode));
       // Reflect initial active state before the boot kick fires below.
       $btn.classList.toggle('is-active', archiveMode);
+      updateRepoPickerVisibility();
     }
     const $search = document.getElementById('convSearch');
     if ($search) {
@@ -13477,9 +13473,15 @@
       const d = await r.json();
       const checks = d.checks || [];
       const iconFor = (s) => s === 'ok' ? '✓' : (s === 'warn' ? '⚠' : '✗');
-      // Compact rendering — one row per check, fits on a single line in the
-      // top bar. Tooltip carries the hint when status isn't ok.
-      const rows = checks.map(c => {
+      // Multi-repo mode makes the watched-repo line noisy; only surface checks
+      // that need attention. Healthy dependency state can stay out of the way.
+      const visibleChecks = checks.filter(c => c.status !== 'ok');
+      if (!visibleChecks.length) {
+        $banner.innerHTML = '';
+        $banner.classList.remove('has-issues', 'is-ok');
+        return;
+      }
+      const rows = visibleChecks.map(c => {
         const tt = (c.hint && c.status !== 'ok') ? `${c.message} — ${c.hint}` : c.message;
         return `<span class="ccc-setup-row ${c.status}" title="${escapeHtml(tt)}">
           <span class="icon">${iconFor(c.status)}</span>
@@ -13487,8 +13489,8 @@
         </span>`;
       }).join('');
       $banner.innerHTML = `<div class="ccc-setup-banner-rows">${rows}</div>`;
-      $banner.classList.add(d.overall === 'ok' ? 'is-ok' : 'has-issues');
-      $banner.classList.add('has-issues');  // always display (informational, not just on errors)
+      $banner.classList.toggle('is-ok', d.overall === 'ok');
+      $banner.classList.add('has-issues');
     } catch (e) {
       // Healthcheck failed — keep banner hidden rather than showing a scary error.
       $banner.style.display = 'none';
