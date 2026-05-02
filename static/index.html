@@ -573,21 +573,7 @@
   }
   .conv-sticky-header .user-msg {
     font-size: 14px; color: var(--text); line-height: 1.4;
-    /* Hard cap at ~25% of viewport with internal scroll. Sibling-spawn
-     * prompts can be 50+ lines of preamble; without a cap they push the
-     * actual conversation off-screen. The cap composes with the existing
-     * 3.6em "collapsed" preview via :not(.is-resized) below. */
-    max-height: 25vh; overflow-y: auto;
     flex: 1 1 auto; min-height: 0;
-  }
-  /* Preview-mode (default, sticky NOT user-resized): keep the tight 3.6em
-   * peek so the conversation events below stay visible. User drags the
-   * resize handle → .is-resized → cap reverts to 25vh with scroll. */
-  .conv-sticky-header:not(.is-resized) .user-msg {
-    max-height: 3.6em; overflow: hidden;
-  }
-  .conv-sticky-header.is-resized .user-msg {
-    max-height: 25vh; overflow-y: auto;
   }
   .conv-sticky-header .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }
   .conv-sticky-header__resize-handle {
@@ -714,24 +700,33 @@
   .conversations-view .tool-call-group:not(.collapsed) .tool-call-group-header .tcg-arrow { transform: rotate(90deg); }
   .conversations-view .tool-call-group.collapsed .tool-call-group-body { display: none; }
   .conversations-view .tool-call-group-body { padding: 4px 12px 10px; border-top: 1px solid var(--border); }
-  /* Sticky-header two-column layout — Ask | Activity. Each column gets
-     its own subtle panel background so the header reads as "metadata"
-     vs. the conversation prose below. */
+  /* Sticky-header unified panel — Ask | Activity inside a single bordered
+     box. Fixed height; each column scrolls independently if its content
+     overflows. Saves the inner padding/border that two side-by-side
+     panels used to spend. */
   .conv-sticky-header .csh-row {
-    display: flex; gap: 12px; align-items: stretch;
-    flex: 1 1 auto; min-height: 0;
-  }
-  .conv-sticky-header .csh-col {
+    display: flex; gap: 0; align-items: stretch;
+    flex: 0 0 auto;
+    height: 140px;
     background: #161c25;
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: 8px 12px;
+    overflow: hidden;
     box-sizing: border-box;
   }
+  .conv-sticky-header .csh-col {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 8px 12px;
+    box-sizing: border-box;
+    min-height: 0;
+  }
   .conv-sticky-header .csh-col-ask {
-    flex: 5 1 0; min-width: 0;
+    flex: 5 1 0; min-width: 0; min-height: 0;
     display: flex; flex-direction: column; gap: 8px;
     overflow-y: auto;
+    border-right: 1px solid var(--border);
   }
   /* Earlier-ask sub-block — appears under the original when scrolled past
      a later user message. The two share .user-msg styling but each has
@@ -746,20 +741,15 @@
   .conv-sticky-header .csh-col-activity {
     flex: 5 1 0; min-width: 0; min-height: 0;
     display: flex; flex-direction: column;
-    padding: 0;  /* let session-timeline supply its own padding */
-    border: none; background: transparent;
+    padding: 8px 12px;
+    overflow-y: auto;
   }
   /* Original ask: first sentence at default size, rest small + grey,
-     always wraps (no horizontal scroll). Capped at ~25vh with internal
-     scroll — sibling-spawn prompts are 50+ lines and would otherwise
-     push the conversation events off-screen. */
+     always wraps (no horizontal scroll). The .csh-col-ask column is the
+     scroll container now (fixed-height panel above), so the user-msg
+     itself grows freely. */
   .conv-sticky-header .csh-col-ask .user-msg {
     white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
-    max-height: 25vh; overflow-y: auto;
-  }
-  .conv-sticky-header.is-resized .csh-col-ask .user-msg {
-    /* User-resized via the drag handle — honor their pick (none = let it
-     * grow to the height stamped on the sticky header itself). */
     max-height: none; overflow: visible;
   }
   .conv-sticky-header .csh-col-ask .ask-first,
@@ -1073,10 +1063,14 @@
     margin-top: 0;
     flex: 1 1 auto; min-height: 0;
     display: flex; flex-direction: column;
-    overflow: hidden;
+    overflow: visible;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
   }
   .conv-sticky-header .csh-col-activity .session-timeline .stl-body {
-    overflow-y: auto; min-height: 0; flex: 1 1 auto;
+    min-height: 0; flex: 1 1 auto;
   }
   /* Session-activity timeline — chronological commit / push / PR strip
      in the right column of the sticky header. */
@@ -2633,6 +2627,37 @@
     border-top: 1px solid var(--border);
     margin-top: 6px;
   }
+  /* In Progress section's by-project / by-time toggle. Lives inside the
+   * section header next to the count, only shown when there are folder
+   * chips (i.e. multi-repo mode). Each opt is a span (not a button) to
+   * avoid nested-button HTML; clicks are stopPropagation'd so they don't
+   * collapse the section. */
+  .conv-grouping-toggle {
+    display: inline-flex;
+    margin-left: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    line-height: 1.4;
+  }
+  .conv-grouping-toggle .grouping-opt {
+    padding: 1px 7px;
+    font-size: 10px;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .conv-grouping-toggle .grouping-opt:hover:not(.is-active) {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .conv-grouping-toggle .grouping-opt.is-active {
+    background: var(--accent);
+    color: #fff;
+  }
   .archive-empty-state {
     padding: 24px 16px;
     text-align: center;
@@ -3020,9 +3045,8 @@
       right: 4px !important;
     }
 
-    /* Give the "Original ask" sticky header more room to breathe */
-    .conv-sticky-header .user-msg { max-height: 9em !important; }
-    .conv-sticky-header.is-resized .user-msg { max-height: none !important; overflow: auto !important; }
+    /* The unified sticky panel handles its own scroll per column —
+       no per-message cap needed on mobile. */
 
     /* Floating reload button — bottom-right to avoid overlap with conv-panel X.
        (Safe-area padding keeps it above the home indicator.) */
@@ -7861,7 +7885,18 @@
     // folder so you can scan "what's hot in chuck right now" without
     // hopping repos. Older cards continue as a flat chrono list with
     // gap separators (the existing single-repo behavior).
-    const _shouldGroupByFolder = _sessionConvs.some(c => c.folder_label_chip);
+    const _hasFolderChips = _sessionConvs.some(c => c.folder_label_chip);
+    // User-controlled grouping preference for the In Progress section.
+    // 'project' (default): group last-24h by folder. 'time': flat chrono
+    // list with gap separators. Only meaningful when there are folder
+    // chips (i.e. multi-repo / archive mode); the In Progress header's
+    // by-project / by-time toggle (only shown when _hasFolderChips) writes
+    // this key.
+    const _ipGrouping = (() => {
+      try { return localStorage.getItem('ccc-inprogress-grouping') || 'project'; }
+      catch (_) { return 'project'; }
+    })();
+    const _shouldGroupByFolder = _hasFolderChips && _ipGrouping === 'project';
     const _flatRowsWithSeparators = (cards) => cards.map((c, i, arr) => {
       let separator = '';
       if (i > 0) {
@@ -7930,12 +7965,23 @@
     if (_sessionConvs.length > 0) {
       const _ipCollapsed = localStorage.getItem('ccc-inprogress-collapsed') === '1';
       const _ipArrow = _ipCollapsed ? '▸' : '▾';
+      // by-project / by-time toggle, only when there are folder chips
+      // (otherwise grouping is meaningless). Inline spans so the click
+      // doesn't bubble to the section's collapse button (handler does
+      // ev.stopPropagation when wired below).
+      const _ipGroupingToggle = _hasFolderChips
+        ? '<span class="conv-grouping-toggle" data-role="grouping-toggle">'
+            + '<span class="grouping-opt' + (_ipGrouping === 'project' ? ' is-active' : '') + '" data-grouping="project">by project</span>'
+            + '<span class="grouping-opt' + (_ipGrouping === 'time' ? ' is-active' : '') + '" data-grouping="time">by time</span>'
+          + '</span>'
+        : '';
       _inProgressHtml =
         '<div class="conv-inprogress-section' + (_ipCollapsed ? ' collapsed' : '') + '" data-role="inprogress-section">'
         + '<button type="button" class="conv-inprogress-header" data-role="inprogress-toggle" aria-expanded="' + (!_ipCollapsed) + '">'
         +   '<span class="conv-inprogress-arrow">' + _ipArrow + '</span>'
         +   '<span class="conv-inprogress-label">In progress</span>'
         +   '<span class="conv-inprogress-count">' + _sessionConvs.length + '</span>'
+        +   _ipGroupingToggle
         + '</button>'
         + '<div class="conv-inprogress-list">' + _activeRowsHtml + '</div>'
         + '</div>';
@@ -8047,6 +8093,9 @@
     const $inProgressToggle = $convList.querySelector('[data-role="inprogress-toggle"]');
     if ($inProgressToggle) {
       $inProgressToggle.addEventListener('click', (ev) => {
+        // The grouping toggle (project / time) lives inside this header
+        // button — its own listener stops propagation, but be defensive.
+        if (ev.target.closest('[data-role="grouping-toggle"]')) return;
         ev.stopPropagation();
         const section = $inProgressToggle.closest('[data-role="inprogress-section"]');
         if (!section) return;
@@ -8055,6 +8104,27 @@
         const arrowEl = $inProgressToggle.querySelector('.conv-inprogress-arrow');
         if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         $inProgressToggle.setAttribute('aria-expanded', String(!wasCollapsed));
+      });
+    }
+    // Grouping toggle (by project / by time). Triggers a re-render via the
+    // same path the data came from: archive mode → renderArchiveList,
+    // single-repo mode → loadConversationList. (In single-repo mode the
+    // toggle isn't rendered anyway since folder chips are absent, but be
+    // safe.)
+    const $groupingToggle = $convList.querySelector('[data-role="grouping-toggle"]');
+    if ($groupingToggle) {
+      $groupingToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const opt = ev.target.closest('[data-grouping]');
+        if (!opt) return;
+        const value = opt.getAttribute('data-grouping');
+        try { localStorage.setItem('ccc-inprogress-grouping', value); } catch (_) {}
+        if (typeof archiveMode !== 'undefined' && archiveMode) {
+          const $search = document.getElementById('convSearch');
+          renderArchiveList($search ? $search.value : '');
+        } else if (typeof loadConversationList === 'function') {
+          loadConversationList();
+        }
       });
     }
     $convList.querySelectorAll('.conv-item').forEach(el => {
