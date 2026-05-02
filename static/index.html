@@ -9415,6 +9415,17 @@
       }
       renderConversationEvents(data.events);
       convLastLine = data.last_line;
+      // Re-fetch session usage whenever new events landed. Usage rollups
+      // arrive sporadically (in some session paths only the final
+      // assistant event of each turn carries the `usage` block — many
+      // delta events in between have none), so the initial selection-
+      // time fetch can come back empty and the user sees no context %
+      // until they reselect. Tying this to event arrival means the pill
+      // updates as soon as the next turn lands.
+      if (data.events && data.events.length > 0) {
+        const sid = (conversationsData.find(x => x.id === id) || {}).session_id || id;
+        fetchSessionUsage(sid);
+      }
     } catch (err) {
       if (convLastLine === 0) {
         $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load conversation: ' + escapeHtml(err.message) + '</div>';
