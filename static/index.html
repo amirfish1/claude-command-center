@@ -2494,6 +2494,72 @@
      race. (Without morning, topbar starts at left:0.) */
   body.has-side-nav .ccc-topbar { left: 52px; }
 
+  /* ── Multi-repo rail — left-edge icon column ──────────────────────────
+   * Persistent vertical strip with one circular icon per known repo.
+   * Running peers first (clicking navigates to that server's port);
+   * known-not-running repos below a divider (clicking switches this
+   * server's REPO_ROOT — the one-off peek flow). Active server gets the
+   * accent fill. The topbar dropdown still works alongside this; the
+   * rail is the primary fast-switch affordance. */
+  .ccc-repo-rail {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: 48px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    align-items: center;
+    padding: 8px 0; gap: 6px;
+    z-index: 99;  /* topbar is 100 — rail tucks under so the topbar
+                     spans full width above it (with our left: 48px shift) */
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+  body.has-repo-rail { padding-left: 48px; }
+  body.has-repo-rail .ccc-topbar { left: 48px; }
+  body.has-repo-rail.has-side-nav .ccc-topbar { left: 100px; }  /* both sidenavs */
+  .ccc-repo-rail .rail-btn {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-muted);
+    font-size: 12px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    text-transform: uppercase;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: background 0.1s ease, transform 0.1s ease, opacity 0.1s ease;
+    position: relative;
+  }
+  .ccc-repo-rail .rail-btn:hover {
+    background: var(--surface-2);
+    color: var(--text);
+    transform: scale(1.06);
+  }
+  .ccc-repo-rail .rail-btn.is-active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+    cursor: default;
+  }
+  .ccc-repo-rail .rail-btn.is-active:hover {
+    background: var(--accent); color: #fff;
+    transform: none;
+  }
+  .ccc-repo-rail .rail-btn.is-switchable {
+    opacity: 0.55;
+    border-style: dashed;
+  }
+  .ccc-repo-rail .rail-btn.is-switchable:hover { opacity: 1; }
+  .ccc-repo-rail .rail-divider {
+    width: 24px; height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+    flex-shrink: 0;
+  }
+
   /* ── Full-page loading overlay ──────────────────────────────────────────
    * Shown on initial load and during repo-switch. Covers everything so the
    * user sees a clear "we're working" signal instead of staring at an empty
@@ -3145,6 +3211,13 @@
       } catch (_) {}
     })();
   </script>
+
+  <!-- Multi-repo rail — vertical icon strip on the left edge. Populated by
+       renderRepoSidebar() from /api/registry + /api/repo/list. Empty in
+       single-repo deployments; the body.has-repo-rail class is toggled
+       by the renderer so the layout doesn't waste 48px when there's
+       nothing to show. -->
+  <aside id="ccRepoSidebar" class="ccc-repo-rail" role="navigation" aria-label="Repos"></aside>
 
   <!-- Layout-agnostic top bar — visible in BOTH list and kanban-split modes
        so the most-important controls (which repo we're watching + the
@@ -10556,6 +10629,85 @@
     $sbRepoPicker.dataset.prev = $sbRepoPicker.value;
   }
 
+  // ── Repo sidebar (vertical icon rail) ──────────────────────────────────
+  // Same data as the dropdown (peers + switchable repos), different
+  // presentation: persistent left strip with one circle per repo, click to
+  // navigate (peer) or switch this server (legacy). Hidden when nothing to
+  // show by toggling body.has-repo-rail; rail itself is always in the DOM.
+  function _railInitial(label, path) {
+    const src = String(label || path || '?').replace(/[^A-Za-z0-9]+/g, ' ').trim();
+    return src.charAt(0).toUpperCase() || '?';
+  }
+
+  function renderRepoSidebar() {
+    const $rail = document.getElementById('ccRepoSidebar');
+    if (!$rail) return;
+    const here = window.location;
+    const peers = (peerState && peerState.peers) || [];
+    const peerPaths = new Set(peers.map(p => p.repo_path));
+    const knownRepos = (repoListState && repoListState.repos) ? repoListState.repos : [];
+    const switchable = knownRepos.filter(r => !peerPaths.has(r.path));
+
+    $rail.innerHTML = '';
+
+    // Section 1: live peers.
+    for (const peer of peers) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      const isHere = isCurrentPeer(peer);
+      btn.className = 'rail-btn' + (isHere ? ' is-active' : '');
+      btn.textContent = _railInitial(peer.label, peer.repo_path);
+      btn.title = `${peer.label || peer.repo_path}\n${peer.repo_path}\nport :${peer.port}` +
+                  (isHere ? '\n(this server)' : '');
+      btn.dataset.path = peer.repo_path;
+      if (isHere) {
+        btn.setAttribute('aria-current', 'true');
+      } else {
+        const url = `${here.protocol}//${here.hostname}:${peer.port}/`;
+        btn.addEventListener('click', () => {
+          // Same overlay/treatment as the dropdown's navigate path.
+          const $overlay = document.getElementById('cccLoadingOverlay');
+          if ($overlay) {
+            $overlay.classList.remove('fade-out', 'gone');
+            const $label = document.getElementById('cccLoadingLabel');
+            if ($label) {
+              $label.innerHTML =
+                '<strong>Loading ' + String(peer.label || peer.repo_path).replace(/[<>&]/g, '') + '</strong>' +
+                '<div class="ccc-loading-detail">Switching to that server\'s page.</div>';
+            }
+          }
+          window.location.href = url;
+        });
+      }
+      $rail.appendChild(btn);
+    }
+
+    // Divider (only if both sections will have icons).
+    if (peers.length && switchable.length) {
+      const div = document.createElement('div');
+      div.className = 'rail-divider';
+      $rail.appendChild(div);
+    }
+
+    // Section 2: switchable known repos. Click → /api/repo/switch on this
+    // server (legacy one-off flow).
+    for (const repo of switchable) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'rail-btn is-switchable';
+      btn.textContent = _railInitial(repo.label, repo.path);
+      btn.title = `${repo.label || repo.path}\n${repo.path}\n(not running — click switches this server's repo)`;
+      btn.dataset.path = repo.path;
+      btn.addEventListener('click', () => {
+        switchToRepo(repo.path, repo.label || repo.path);
+      });
+      $rail.appendChild(btn);
+    }
+
+    // Toggle layout class only when there's something to show.
+    document.body.classList.toggle('has-repo-rail', peers.length + switchable.length > 0);
+  }
+
   // ── Legacy repo-list (used by the modal + custom-repos browser) ─────────
   // Shared state so the modal can reuse what the dropdown already fetched
   // and the dropdown can refresh itself after an add-via-modal.
@@ -10654,6 +10806,7 @@
       try {
         await Promise.all([loadPeerRegistry(), loadRepoList()]);
         renderPeerPickerSelect();
+        renderRepoSidebar();
       } catch (e) { /* picker is best-effort — failure shouldn't break the page */ }
     })();
 
@@ -10667,6 +10820,7 @@
       _peerPollId = setInterval(async () => {
         await loadPeerRegistry();
         renderPeerPickerSelect();
+        renderRepoSidebar();
       }, 10000);
     };
     const _peerStopPoll = () => {
@@ -10676,7 +10830,10 @@
     };
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
-        Promise.all([loadPeerRegistry(), loadRepoList()]).then(renderPeerPickerSelect);
+        Promise.all([loadPeerRegistry(), loadRepoList()]).then(() => {
+          renderPeerPickerSelect();
+          renderRepoSidebar();
+        });
         _peerStartPoll();
       } else {
         _peerStopPoll();
