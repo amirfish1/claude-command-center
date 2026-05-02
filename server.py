@@ -562,9 +562,19 @@ def find_all_conversations(limit_per_folder=None):
             # editing in `feat/foo` for hours. _infer_effective_repo walks
             # the session's tool-call paths and finds the dominant git
             # repo; it's mtime-cached internally so the cost amortizes.
+            #
+            # Recency gate: cold sessions older than the pills window have
+            # static cwd/branch — the user can't have cd'd into a worktree
+            # since "now" if the JSONL hasn't been touched in days. Skipping
+            # inference there is the difference between a 1s and a 25s cold
+            # scan on a ~1k-session archive (each call shells out to git
+            # 1-4 times for rev-parse / branch / upstream / ahead-behind).
             effective_cwd = session_cwd or folder_path or ""
             effective_branch = git_branch
             effective_kind = None
+            is_recent_for_inference = (
+                (_now - stat.st_mtime) < _ARCHIVE_PILLS_RECENT_WINDOW
+            )
             try:
                 # Pass the already-stat'd mtime so the function can hit
                 # its cache without re-walking PROJECTS_ROOT for every
@@ -573,7 +583,7 @@ def find_all_conversations(limit_per_folder=None):
                     session_id,
                     literal_cwd=session_cwd or folder_path,
                     jsonl_mtime=stat.st_mtime,
-                )
+                ) if is_recent_for_inference else None
             except Exception:
                 eff = None
             if eff and eff.get("top"):

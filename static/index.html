@@ -3359,6 +3359,28 @@
               '<div class="ccc-loading-detail">Rescanning sessions with the new version.</div>';
           }
         }
+        // Archive-default boot: the slow request on cold scan is
+        // /api/conversations/all (cross-folder JSONL walk + git ops),
+        // not /api/sessions. Keep the overlay honest about what we're
+        // actually waiting on so 10s of "Loading sessions…" doesn't
+        // mislead. Mirrors the localStorage key + default in the
+        // archive toggle below — repeating it here avoids loading the
+        // whole script just to label the overlay.
+        let _archiveDefault = true;
+        try {
+          const _v = localStorage.getItem('ccc-archive-mode');
+          if (_v !== null) _archiveDefault = (_v === '1');
+        } catch (_) {}
+        if (_archiveDefault
+            && !sessionStorage.getItem('ccc-switching-to')
+            && !sessionStorage.getItem('ccc-updating')) {
+          const $label3 = document.getElementById('cccLoadingLabel');
+          if ($label3) {
+            $label3.innerHTML =
+              '<strong>Loading conversations&hellip;</strong>' +
+              '<div class="ccc-loading-detail">Scanning Claude Code transcripts across every folder. Faster on subsequent loads.</div>';
+          }
+        }
       } catch (_) {}
     })();
   </script>
@@ -5525,6 +5547,20 @@
   // the cache-warm scan can take ~10s on a big ~/.claude/projects dir.
   setTimeout(hideLoadingOverlay, 30000);
 
+  // First-sessions-loaded promise. Resolves when /api/sessions returns
+  // for the first time (or 30s safety timer fires). The archive boot
+  // kick (cross-folder JSONL walk + git ops, can be ~12s on a cold cache)
+  // awaits this so it doesn't compete for CPU with /api/sessions itself —
+  // running both in parallel was making the user stare at the wrong
+  // overlay copy for the duration of the slower request.
+  let _firstSessionsResolve;
+  const _firstSessionsLoaded = new Promise(res => { _firstSessionsResolve = res; });
+  function _markFirstSessionsLoaded() {
+    if (_firstSessionsResolve) { _firstSessionsResolve(); _firstSessionsResolve = null; }
+  }
+  // Same 30s ceiling as the overlay safety net.
+  setTimeout(_markFirstSessionsLoaded, 30000);
+
   async function loadConversationList() {
     try {
       const res = await fetch('/api/sessions');
@@ -5633,6 +5669,7 @@
       renderSidebar(filterConversations($convSearch.value));
       loadAttentionList();  // piggy-back on the same refresh cycle
       hideLoadingOverlay();  // first render has happened — reveal the UI
+      _markFirstSessionsLoaded();  // unblock archive boot kick (see wireArchiveToggle)
       // Auto-restore the last-opened card on first load. Only fires when
       // the user hasn't already clicked something — refresh-after-refresh
       // shouldn't yank a card out from under an active selection.
@@ -5646,6 +5683,7 @@
     } catch (err) {
       $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Failed to load sessions: ' + escapeHtml(err.message) + '</div>';
       hideLoadingOverlay();  // even on error — don't leave the user stuck on a spinner
+      _markFirstSessionsLoaded();  // even on error — don't pin the archive load
     }
   }
 
@@ -11246,11 +11284,28 @@
         if (archiveMode) renderArchiveList($search.value);
       });
     }
-    // Boot kick: if archive is the saved/default mode, load it after the DOM
-    // settles so we don't race with the initial loadConversationList.
+    // Boot kick: if archive is the saved/default mode, wait for the
+    // first /api/sessions response before kicking the archive walk.
+    // Both endpoints share CPU/subprocess slots in the same Python
+    // process; running the slow one (cross-folder JSONL + git ops,
+    // ~12s on a cold cache) in parallel with /api/sessions made the
+    // overlay linger because /api/sessions itself was getting
+    // starved. Waiting until sessions returns means the active repo
+    // is interactive in <1s, then the archive populates the sidebar.
     if (archiveMode) {
-      // Defer a tick so other initializers (peer registry, repo list) finish.
-      setTimeout(() => { setArchiveMode(true); }, 0);
+      // Show the placeholder immediately so the sidebar isn't blank
+      // during the wait — the actual fetch fires after sessions land.
+      const $list = document.getElementById('convList');
+      const $kanban = document.getElementById('kanbanBoard');
+      if ($kanban) $kanban.style.display = 'none';
+      if ($list) {
+        $list.style.display = '';
+        $list.innerHTML = '<div class="archive-empty-state">Loading archive&hellip;</div>';
+      }
+      _firstSessionsLoaded.then(() => {
+        // The user may have toggled archive off during the wait.
+        if (archiveMode) setArchiveMode(true);
+      });
     }
   })();
 
