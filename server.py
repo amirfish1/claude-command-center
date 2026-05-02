@@ -259,103 +259,15 @@ def _conversation_dirs():
     return _candidate_conversation_dirs(REPO_ROOT)
 
 
-# In-memory cache for archive-view git pill computation. Keyed by
-# session_id, valued by {mtime, pills, pr_number, computed_at}. The
-# cache is invalidated when the JSONL's mtime advances (a new event
-# was appended) — which is the only thing that can change git state
-# from CCC's perspective. Cold sessions stay cached forever for the
-# server's lifetime; rebuilds from scratch on restart. Bounded by
-# session count (~thousands max), so unbounded growth isn't a real
-# concern in practice.
-_ARCHIVE_PILLS_CACHE = {}
-_ARCHIVE_PILLS_LOCK = threading.Lock()
-# 3 days — only sessions modified within this window get a fresh git
-# computation on the cold scan. Older sessions return null pills and
-# render with no state chip; the user can manually refresh if they
-# need fresh state for an old row.
-_ARCHIVE_PILLS_RECENT_WINDOW = 3 * 86400
-
-
-def _archive_compute_session_pills(cwd):
-    """Run git ops in `cwd` and return {worktree_dirty, has_commit,
-    has_push, has_edit}. Returns None on any failure (missing dir,
-    non-repo, git error, timeout) — caller treats None as "no pill."""
-    try:
-        if not cwd or not Path(cwd).is_dir():
-            return None
-    except (OSError, ValueError):
-        return None
-    # uncommitted: working tree has any change.
-    try:
-        r = subprocess.run(
-            ["git", "-C", cwd, "status", "--porcelain"],
-            capture_output=True, text=True, timeout=2,
-        )
-        if r.returncode != 0:
-            return None
-        worktree_dirty = bool(r.stdout.strip())
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    # local commits not on any remote — this captures both "ahead of
-    # tracked upstream" and "branch with no upstream at all" cases.
-    try:
-        r = subprocess.run(
-            ["git", "-C", cwd, "rev-list", "--count", "HEAD", "--not", "--remotes"],
-            capture_output=True, text=True, timeout=2,
-        )
-        ahead = int((r.stdout.strip() or "0")) if r.returncode == 0 else 0
-    except (subprocess.TimeoutExpired, OSError, ValueError):
-        ahead = 0
-    has_commit = ahead > 0
-    # has_push is intentionally always False for archive entries: once a
-    # session pushes, the local commits no longer count as ahead-of-remote,
-    # and from the cwd we can't distinguish "this session pushed" from
-    # "this session did nothing." The renderer's pill chain falls through
-    # to PR#, "committed," or "uncommitted" instead — those are the
-    # actionable states.
-    # has_edit is True so the "no edits" pill never renders for archive
-    # rows: every session that left a JSONL on disk did *something*; the
-    # pill's purpose is to flag fresh sessions that haven't acted yet,
-    # which doesn't apply to historical archive data.
-    return {
-        "worktree_dirty": worktree_dirty,
-        "has_commit": has_commit,
-        "has_push": False,
-        "has_edit": True,
-    }
-
-
-def _archive_extract_pr_number(jsonl_path):
-    """Walk the JSONL for `gh pr create` tool_result events; return the
-    first PR number found, or None. Cheap: streams the file linewise and
-    bails on the first hit. Expected at most a handful of pr-create
-    events per session."""
-    pr_re = re.compile(r"github\.com/[^/]+/[^/]+/pull/(\d+)")
-    try:
-        with open(jsonl_path, "r") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                # Cheap pre-filter: skip lines without "pull/".
-                if "pull/" not in line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                # Tool result events carry the gh output text. Search the
-                # whole event JSON serialized as text — robust to whichever
-                # field carries the URL.
-                m = pr_re.search(line)
-                if m:
-                    try:
-                        return int(m.group(1))
-                    except ValueError:
-                        continue
-    except (OSError, UnicodeDecodeError):
-        pass
-    return None
+# Archive view delegates all per-session JSONL inspection to the
+# canonical _extract_tail_meta() (defined later in the file), which is
+# already mtime-cached and is the same source of truth /api/sessions
+# uses. That gives us has_edit / has_commit / has_push from tool-call
+# events, tail_pr_number from `gh pr create`, last_assistant_text,
+# pending_tool, custom_title, last_event_type — all without a second
+# pass. Earlier branches of this code ran git status per cwd, which
+# couldn't distinguish per-session history (every session in the same
+# clone got the same answer) and missed has_push entirely.
 
 
 def _archive_session_is_live(session_id):
@@ -371,29 +283,6 @@ def _archive_session_is_live(session_id):
     except OSError:
         pass
     return False
-
-
-def _archive_pills_for(session_id, jsonl_path, jsonl_mtime, session_cwd, mtime_now):
-    """Cached pills + PR number for an archive entry. Skips git ops for
-    sessions older than _ARCHIVE_PILLS_RECENT_WINDOW (PR# is still
-    extracted, since it's cheap and never changes once set)."""
-    with _ARCHIVE_PILLS_LOCK:
-        cached = _ARCHIVE_PILLS_CACHE.get(session_id)
-        if cached and cached.get("mtime") == jsonl_mtime:
-            return cached.get("pills"), cached.get("pr_number")
-
-    is_recent = (mtime_now - jsonl_mtime) < _ARCHIVE_PILLS_RECENT_WINDOW
-    pills = _archive_compute_session_pills(session_cwd) if (is_recent and session_cwd) else None
-    pr_number = _archive_extract_pr_number(jsonl_path)
-
-    with _ARCHIVE_PILLS_LOCK:
-        _ARCHIVE_PILLS_CACHE[session_id] = {
-            "mtime": jsonl_mtime,
-            "pills": pills,
-            "pr_number": pr_number,
-            "computed_at": time.time(),
-        }
-    return pills, pr_number
 
 
 def _decode_project_slug(slug):
@@ -595,15 +484,34 @@ def find_all_conversations(limit_per_folder=None):
 
             display_name = name_overrides.get(session_id) or None
 
-            # Pills + PR# (mtime-cached). Last 3 days only for git ops;
-            # PR# is always cheap-extracted from JSONL. Run pills against
-            # the inferred effective cwd so the uncommitted/committed
-            # state matches what Claude has actually been editing — same
-            # reason we override branch + worktree-detection above.
-            pills, pr_number = _archive_pills_for(
-                session_id, f, stat.st_mtime,
-                effective_cwd, _now,
-            )
+            # Reuse _extract_tail_meta — same source of truth /api/sessions
+            # uses, mtime-cached. Pulls per-session signals from JSONL
+            # tool-use events: has_edit (Edit/Write/NotebookEdit), has_commit
+            # (`git commit` Bash), has_push (`git push` Bash), tail_pr_number
+            # (`gh pr create` URL). Replaces an earlier home-grown helper
+            # that ran git status against the cwd — that approach gave
+            # every session in the same clone the same answer and missed
+            # has_push entirely.
+            try:
+                tail_meta = _extract_tail_meta(f) or {}
+            except Exception:
+                tail_meta = {}
+            has_edit = bool(tail_meta.get("has_edit"))
+            has_commit = bool(tail_meta.get("has_commit"))
+            has_push = bool(tail_meta.get("has_push"))
+            pr_number = tail_meta.get("tail_pr_number")
+            # worktree_dirty is a current-state signal (uncommitted edits
+            # right now), not a per-session one. Use the cached probe
+            # against the effective worktree, same as /api/sessions does.
+            worktree_dirty = False
+            try:
+                # Only probe last-meaningful-ts'd sessions to keep this
+                # cheap; old archive rows rarely need this state.
+                _last_ts = tail_meta.get("last_meaningful_ts") or stat.st_mtime
+                if (_now - _last_ts) < (3 * 86400) and effective_cwd:
+                    worktree_dirty = _worktree_dirty_cached(effective_cwd, _last_ts)
+            except Exception:
+                worktree_dirty = False
             is_live = _archive_session_is_live(session_id)
 
             # Sidecar overlay (Round 3): for live sessions, merge in the
@@ -652,13 +560,19 @@ def find_all_conversations(limit_per_folder=None):
                 "display_name": display_name,
                 "name_overridden": bool(display_name),
                 "archived": session_id in archived_set,
-                # Round 2: state pills + PR# + live flag.
-                "worktree_dirty": (pills or {}).get("worktree_dirty", False),
-                "has_commit": (pills or {}).get("has_commit", False),
-                "has_push": (pills or {}).get("has_push", False),
-                "has_edit": (pills or {}).get("has_edit", False),
+                # State pills + PR# + live flag — sourced from _extract_tail_meta
+                # (per-session JSONL tool-use scan) plus a cached current-
+                # state probe for worktree_dirty.
+                "worktree_dirty": worktree_dirty,
+                "has_commit": has_commit,
+                "has_push": has_push,
+                "has_edit": has_edit,
                 "tail_pr_number": pr_number,
                 "is_live": is_live,
+                # Last assistant text — passed through so anyone re-enabling
+                # the subtitle in archive can see it. Currently hidden via
+                # _hideAskHtml flag in the UI shaper.
+                "last_assistant_text": tail_meta.get("last_assistant_text") or "",
                 # Sidecar overlay — only meaningful when is_live; cold
                 # rows get safe defaults that suppress the live pill.
                 **sidecar_fields,
