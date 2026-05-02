@@ -25,6 +25,7 @@ import re
 import shlex
 import shutil
 import signal
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -956,6 +957,18 @@ def find_all_conversations(limit_per_folder=None):
                 # rows get safe defaults that suppress the live pill.
                 **sidecar_fields,
             })
+
+    # Add Codex threads to the archive too. They live in ~/.codex/state_*.sqlite
+    # instead of ~/.claude/projects, but the row shape below matches the archive
+    # renderer's existing Claude session rows.
+    try:
+        out.extend(find_codex_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+        ))
+    except Exception:
+        pass
 
     # Parallel-resolve PR states for every row that recorded a PR URL.
     # Hits the in-process cache on warm refreshes; bounded thread pool
@@ -2154,7 +2167,7 @@ SPAWNED_PIDS_FILE = COMMAND_CENTER_STATE_DIR / "spawned-pids.json"
 _conv_meta_cache = {}
 _conv_meta_cache_dirty = False
 _conv_meta_cache_lock = threading.Lock()
-_CONV_META_SCHEMA_VERSION = 3
+_CONV_META_SCHEMA_VERSION = 4
 _CONV_META_CACHE_FILE = (
     Path.home() / ".claude" / "command-center" / "conv_meta_cache.json"
 )
@@ -3431,6 +3444,40 @@ def find_live_claude_processes():
     return procs
 
 
+def find_live_codex_processes():
+    """Return running Codex CLI processes with pid, tty, cwd, terminal app, command."""
+    procs = []
+    try:
+        ps_out = subprocess.run(
+            ["ps", "-A", "-o", "pid=,tty=,comm=,args="],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return procs
+    for line in ps_out.stdout.splitlines():
+        parts = line.strip().split(None, 3)
+        if len(parts) < 3:
+            continue
+        pid_s, tty, comm = parts[:3]
+        args = parts[3] if len(parts) > 3 else ""
+        if comm.rsplit("/", 1)[-1] != "codex":
+            continue
+        try:
+            pid = int(pid_s)
+        except ValueError:
+            continue
+        cwd = _proc_cwd(pid)
+        term_app, _term_pid = _proc_ancestor_terminal(pid)
+        procs.append({
+            "pid": pid,
+            "tty": tty if tty != "??" else None,
+            "cwd": cwd,
+            "terminal_app": term_app,
+            "command": args,
+        })
+    return procs
+
+
 def _load_session_registry():
     """Read ~/.claude/sessions/*.json and return {session_id: {pid, cwd, ...}}.
 
@@ -3500,6 +3547,37 @@ def session_live_status(session_id, session_cwd):
         "match_count": 0,
     }
     if not session_id:
+        return result
+
+    if _is_codex_session(session_id):
+        path = _resolve_codex_rollout_path(session_id)
+        if path:
+            try:
+                result["recently_written"] = (time.time() - path.stat().st_mtime) < 300
+            except OSError:
+                pass
+        if not session_cwd:
+            session_cwd = find_session_cwd(session_id)
+        matches = []
+        for p in find_live_codex_processes():
+            cmd = p.get("command") or ""
+            if session_id in cmd or (session_cwd and p.get("cwd") == session_cwd):
+                matches.append(p)
+        result["match_count"] = len(matches)
+        if not matches:
+            return result
+        if len(matches) > 1:
+            exact = [p for p in matches if session_id in (p.get("command") or "")]
+            if len(exact) == 1:
+                matches = exact
+            else:
+                result["ambiguous"] = True
+                return result
+        match = matches[0]
+        result["pid"] = match["pid"]
+        result["tty"] = match.get("tty")
+        result["terminal_app"] = match.get("terminal_app")
+        result["live"] = True
         return result
 
     # Recency check on the .jsonl file (for the "is actively being used" signal)
@@ -3583,11 +3661,13 @@ def _shell_quote(s):
 
 def _build_resume_command(session_id, cwd, cwd_exists):
     """Same logic as the frontend buildResumeCommand — keep them in sync."""
+    is_codex = _is_codex_session(session_id)
+    resume_cmd = f"codex resume {session_id}" if is_codex else f"claude --resume {session_id}"
     if not cwd:
-        return f"claude --resume {session_id}"
+        return resume_cmd
     q_cwd = _shell_quote(cwd)
     if cwd_exists:
-        return f"cd {q_cwd} && claude --resume {session_id}"
+        return f"cd {q_cwd} && {resume_cmd}"
     # Worktree recreation fallback
     m = re.search(r"/\.claude/worktrees/(.+)$", cwd)
     if m:
@@ -3598,9 +3678,9 @@ def _build_resume_command(session_id, cwd, cwd_exists):
         return (
             f"(cd {q_repo} && git worktree add {q_cwd} {q_branch} 2>/dev/null "
             f"|| git worktree add {q_cwd} -b {q_branch} origin/main) "
-            f"&& cd {q_cwd} && claude --resume {session_id}"
+            f"&& cd {q_cwd} && {resume_cmd}"
         )
-    return f"cd {q_cwd} && claude --resume {session_id}"
+    return f"cd {q_cwd} && {resume_cmd}"
 
 
 # UUID-format check — Claude Desktop's deep-link handler validates the
@@ -3670,6 +3750,7 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None):
     if cwd is None:
         cwd = find_session_cwd(session_id)
     cwd_exists = bool(cwd and Path(cwd).is_dir())
+    is_codex = _is_codex_session(session_id)
     command = _build_resume_command(session_id, cwd, cwd_exists)
     target = terminal_app or _preferred_terminal_app()
 
@@ -3696,7 +3777,19 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None):
     rename_target = rename_target.replace('"', '').replace('\\', '').replace("'", "")[:60]
     color = _pick_color_for_session(rename_target)
     if target == "iTerm2":
-        script = f'''
+        if is_codex:
+            script = f'''
+            tell application "iTerm2"
+              activate
+              set newWin to (create window with default profile)
+              tell current session of newWin
+                write text "{cmd_lit}"
+              end tell
+            end tell
+            return "ok"
+            '''
+        else:
+            script = f'''
         tell application "iTerm2"
           activate
           set newWin to (create window with default profile)
@@ -3722,7 +3815,16 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None):
         # Terminal.app: explicitly create a new window, hold onto it, and keep
         # it frontmost across the keystrokes. `do script` returns a tab whose
         # window we can reference.
-        script = f'''
+        if is_codex:
+            script = f'''
+            tell application "Terminal"
+              activate
+              do script "{cmd_lit}"
+            end tell
+            return "ok"
+            '''
+        else:
+            script = f'''
         set winId to 0
         tell application "Terminal"
           activate
@@ -4173,6 +4275,19 @@ def find_session_cwd(session_id):
         return None
     if session_id in _session_cwd_cache:
         return _session_cwd_cache[session_id]
+    codex_row = _codex_thread_row(session_id)
+    if codex_row:
+        cwd = codex_row.get("cwd")
+        path = _codex_rollout_path_from_row(codex_row)
+        if path:
+            try:
+                tail = _extract_codex_tail_meta(path) or {}
+                cwd = tail.get("cwd") or cwd
+            except Exception:
+                pass
+        if cwd:
+            _session_cwd_cache[session_id] = cwd
+            return cwd
     if not PROJECTS_ROOT.is_dir():
         return None
 
@@ -5458,6 +5573,18 @@ def find_all_sessions(progress=None, include_old=True):
         if c["spawn_pid"]:
             c["engine"] = spawned_engine_by_pid.get(c["spawn_pid"], "claude")
 
+    if progress:
+        progress("codex", state="running", detail="Reading Codex threads.")
+    try:
+        conversations.extend(find_codex_conversations(
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+    except Exception as exc:
+        if progress:
+            progress("codex", state="error", detail=f"Codex thread scan failed: {exc}")
+
     # Add pkood agents — and merge in their linked claude-session card, if any.
     # Pkood spawns a claude process in a tmux pty, which produces a regular
     # ~/.claude/projects/*/*.jsonl file. Without dedup the kanban would show
@@ -5588,7 +5715,8 @@ def find_all_sessions(progress=None, include_old=True):
         )
     desktop_meta = _load_desktop_app_metadata()
     for c in conversations:
-        _add_sidecar_fields(c)
+        if c.get("source") != "codex":
+            _add_sidecar_fields(c)
         # Desktop-app metadata decoration: use human-friendly title if present,
         # and flag the session as having been touched by the desktop app.
         dm = desktop_meta.get(c.get("session_id"))
@@ -5697,9 +5825,19 @@ def _resolve_conversation_path(conversation_id):
     return CONVERSATIONS_DIR / name
 
 
+def _resolve_conversation_reader(conversation_id):
+    claude_path = _resolve_conversation_path(conversation_id)
+    if claude_path.is_file():
+        return claude_path, _parse_conversation_event
+    codex_path = _resolve_codex_rollout_path(conversation_id)
+    if codex_path and codex_path.is_file():
+        return codex_path, _parse_codex_event
+    return claude_path, _parse_conversation_event
+
+
 def parse_conversation(conversation_id, after_line=0):
     """Parse a conversation JSONL file into structured events."""
-    filepath = _resolve_conversation_path(conversation_id)
+    filepath, parser = _resolve_conversation_reader(conversation_id)
     events = []
     line_num = 0
 
@@ -5717,7 +5855,7 @@ def parse_conversation(conversation_id, after_line=0):
                 except json.JSONDecodeError:
                     continue
 
-                parsed = _parse_conversation_event(ev, line_num)
+                parsed = parser(ev, line_num)
                 if parsed:
                     events.append(parsed)
     except FileNotFoundError:
@@ -6078,6 +6216,8 @@ def _create_worktree_for_spawn(source_cwd, slug):
 # inside /Applications/Codex.app.
 
 CODEX_APP_BUNDLE_PATH = "/Applications/Codex.app/Contents/Resources/codex"
+CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
+CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 
 
 def _resolve_codex_bin():
@@ -6118,6 +6258,863 @@ def _resolve_codex_bin():
             "`npm i -g @openai/codex`, or set CCC_CODEX_BIN."
         ),
     }
+
+
+def _codex_state_db_candidates():
+    """Existing Codex state DB paths, newest known schema first."""
+    base = Path.home() / ".codex"
+    candidates = [CODEX_STATE_DB]
+    try:
+        if base.is_dir():
+            for p in sorted(base.glob("state*.sqlite"), key=lambda x: x.name, reverse=True):
+                if p not in candidates:
+                    candidates.append(p)
+    except OSError:
+        pass
+    return [p for p in candidates if p.is_file()]
+
+
+def _codex_fetch_threads(where="", params=(), limit=None):
+    """Read rows from Codex's local thread index without creating files.
+
+    Codex stores durable conversation metadata in ~/.codex/state_*.sqlite,
+    with each row pointing at a rollout JSONL. We open SQLite in read-only URI
+    mode so a dashboard scan cannot create a missing DB or mutate state.
+    """
+    for db in _codex_state_db_candidates():
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.25)
+            con.row_factory = sqlite3.Row
+        except sqlite3.Error:
+            continue
+        try:
+            cols = {
+                row["name"]
+                for row in con.execute("PRAGMA table_info(threads)").fetchall()
+            }
+            if not cols:
+                continue
+            wanted = [
+                "id", "rollout_path", "created_at", "updated_at",
+                "created_at_ms", "updated_at_ms", "source", "model_provider",
+                "cwd", "title", "tokens_used", "has_user_event", "archived",
+                "archived_at", "git_sha", "git_branch", "git_origin_url",
+                "cli_version", "first_user_message", "agent_nickname",
+                "agent_role", "memory_mode", "model", "reasoning_effort",
+            ]
+            selected = [c for c in wanted if c in cols]
+            if "id" not in selected:
+                return []
+            order_terms = []
+            if "updated_at_ms" in cols:
+                order_terms.append("updated_at_ms")
+            if "updated_at" in cols:
+                order_terms.append("updated_at * 1000")
+            if "created_at_ms" in cols:
+                order_terms.append("created_at_ms")
+            if "created_at" in cols:
+                order_terms.append("created_at * 1000")
+            order = f"COALESCE({', '.join(order_terms)}) DESC" if order_terms else "id DESC"
+            sql = f"SELECT {', '.join(selected)} FROM threads"
+            if where:
+                sql += f" WHERE {where}"
+            sql += f" ORDER BY {order}"
+            if limit:
+                sql += " LIMIT ?"
+                params = tuple(params) + (int(limit),)
+            rows = [dict(r) for r in con.execute(sql, tuple(params)).fetchall()]
+            return rows
+        except sqlite3.Error:
+            continue
+        finally:
+            try:
+                con.close()
+            except sqlite3.Error:
+                pass
+    return []
+
+
+def _codex_thread_row(thread_id):
+    if not thread_id:
+        return None
+    rows = _codex_fetch_threads("id = ?", (thread_id,), limit=1)
+    return rows[0] if rows else None
+
+
+def _codex_ts_seconds(row, prefix="updated"):
+    ms = row.get(f"{prefix}_at_ms")
+    if ms:
+        try:
+            return float(ms) / 1000.0
+        except (TypeError, ValueError):
+            pass
+    val = row.get(f"{prefix}_at")
+    if val:
+        try:
+            val = float(val)
+            return val / 1000.0 if val > 100000000000 else val
+        except (TypeError, ValueError):
+            pass
+    return 0.0
+
+
+def _codex_rollout_path_from_row(row):
+    if not row:
+        return None
+    raw = row.get("rollout_path") or ""
+    if raw:
+        p = Path(os.path.expanduser(raw))
+        if p.is_file():
+            return p
+    tid = row.get("id") or ""
+    if tid and CODEX_SESSIONS_ROOT.is_dir():
+        try:
+            matches = list(CODEX_SESSIONS_ROOT.glob(f"**/*{tid}*.jsonl"))
+        except OSError:
+            matches = []
+        if matches:
+            matches.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+            return matches[0]
+    return None
+
+
+def _resolve_codex_rollout_path(thread_id):
+    row = _codex_thread_row(thread_id)
+    return _codex_rollout_path_from_row(row)
+
+
+def _is_codex_session(session_id):
+    return bool(_codex_thread_row(session_id))
+
+
+def _codex_tool_name(name):
+    return (name or "").rsplit(".", 1)[-1]
+
+
+def _codex_args(raw):
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, ValueError):
+            return {}
+    return {}
+
+
+def _codex_tool_detail(name, args):
+    lname = _codex_tool_name(name)
+    if lname == "exec_command":
+        return args.get("cmd") or args.get("command") or ""
+    if lname == "write_stdin":
+        return args.get("chars") or args.get("session_id") or ""
+    for key in ("path", "file_path", "filename", "query", "pattern", "prompt", "message"):
+        val = args.get(key)
+        if isinstance(val, str) and val:
+            return val
+    return ""
+
+
+def _codex_tool_command(name, args):
+    lname = _codex_tool_name(name)
+    if lname == "exec_command":
+        cmd = args.get("cmd") or args.get("command") or ""
+        return cmd if isinstance(cmd, str) else ""
+    return ""
+
+
+def _codex_event_epoch(ev):
+    ts = ev.get("timestamp") or ""
+    payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+    ts = ts or payload.get("timestamp") or payload.get("started_at") or payload.get("completed_at") or ""
+    if not ts:
+        return 0.0
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _codex_event_timestamp(ev):
+    payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+    return ev.get("timestamp") or payload.get("timestamp") or payload.get("started_at") or ""
+
+
+def _codex_command_signals(cmd):
+    """Return edit/commit/push/pr/external-cd flags for a shell command."""
+    cmd = cmd or ""
+    head_segments = []
+    for seg in re.split(r"\s*(?:&&|\|\||\||;|\n)\s*", cmd):
+        head_segments.append(re.split(r"\s+(?:-m\b|--message\b)", seg, maxsplit=1)[0])
+    head = "\n".join(head_segments)
+    git_subcmd = re.compile(
+        r"\bgit\b(?:\s+(?:-[Cc]\s+\S+|--\S+|-[A-Za-z]\S*)){0,8}\s+(commit|push)\b"
+    )
+    subcommands = {m.group(1) for m in git_subcmd.finditer(head)}
+    edit_like = bool(re.search(
+        r"\b(apply_patch|tee|sed\s+-i|perl\s+-pi)\b|(?:^|[\s;&|])cat\s+>|write_text\s*\(",
+        cmd,
+    ))
+    return {
+        "edit": edit_like,
+        "commit": "commit" in subcommands,
+        "push": "push" in subcommands,
+        "pr": bool(re.search(r"\bgh\s+pr\s+create\b", head)),
+        "external_cd": bool(re.search(r"(^|[;&|]\s*)cd\s+[/~]|\bgit\s+-C\s+", cmd)),
+    }
+
+
+def _extract_codex_thread_id_from_log(log_path):
+    if not log_path:
+        return None
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line or not line.startswith("{"):
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") == "thread.started" and ev.get("thread_id"):
+                    return ev["thread_id"]
+    except OSError:
+        return None
+    return None
+
+
+def _codex_spawn_pid_by_thread_id():
+    out = {}
+    for s in _spawned_sessions:
+        if s.get("engine") != "codex":
+            continue
+        sid = s.get("resumed_sid") or _extract_codex_thread_id_from_log(s.get("log"))
+        if sid and sid not in out:
+            try:
+                alive = s["proc"].poll() is None
+            except Exception:
+                alive = False
+            out[sid] = {"pid": s.get("pid"), "alive": alive}
+    return out
+
+
+def _codex_cwd_matches_repo(cwd, repo_root, git_top_cache):
+    if not cwd:
+        return False
+    try:
+        p = Path(cwd).expanduser().resolve()
+        root = Path(repo_root).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        p = Path(str(cwd))
+        root = Path(str(repo_root))
+    try:
+        if p == root or root in p.parents:
+            return True
+    except RuntimeError:
+        pass
+    try:
+        return _git_toplevel_for_path(str(p), git_top_cache) == str(root)
+    except Exception:
+        return False
+
+
+def _extract_codex_tail_meta(path):
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return {}
+    cached = _conv_meta_cache.get(str(path))
+    if cached and cached.get("mtime") == mtime and cached.get("engine") == "codex":
+        return cached
+
+    meta = {
+        "engine": "codex",
+        "mtime": mtime,
+        "first_message": None,
+        "last_meaningful_ts": 0,
+        "last_prompt": None,
+        "last_assistant_text": None,
+        "last_event_type": None,
+        "pending_tool": None,
+        "pending_file": None,
+        "has_edit": False,
+        "has_commit": False,
+        "has_push": False,
+        "last_edit_pos": 0,
+        "last_commit_pos": 0,
+        "last_push_pos": 0,
+        "tail_pr_number": None,
+        "tail_pr_url": None,
+        "has_external_cd": False,
+        "cwd": None,
+        "model": None,
+    }
+    pr_url_re = re.compile(r"github\.com/([^/\s]+/[^/\s]+)/pull/(\d{1,7})")
+    pending_calls = {}
+    pos = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                pos += 1
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+                ts_epoch = _codex_event_epoch(ev)
+                ev_type = ev.get("type")
+                ptype = payload.get("type")
+                if ev_type in ("session_meta", "turn_context"):
+                    meta["cwd"] = payload.get("cwd") or meta["cwd"]
+                    meta["model"] = payload.get("model") or meta["model"]
+                    continue
+                if ev_type == "event_msg":
+                    if ptype == "user_message":
+                        text = (payload.get("message") or "").strip()
+                        if text:
+                            meta["first_message"] = meta["first_message"] or text
+                            meta["last_prompt"] = text
+                        meta["last_event_type"] = "user"
+                        meta["pending_tool"] = None
+                        meta["pending_file"] = None
+                        if ts_epoch:
+                            meta["last_meaningful_ts"] = ts_epoch
+                    elif ptype == "agent_message":
+                        text = (payload.get("message") or "").strip()
+                        if text:
+                            meta["last_assistant_text"] = text
+                        meta["last_event_type"] = "assistant"
+                        if ts_epoch:
+                            meta["last_meaningful_ts"] = ts_epoch
+                    elif ptype == "task_complete":
+                        meta["last_event_type"] = "result"
+                        meta["pending_tool"] = None
+                        meta["pending_file"] = None
+                        if ts_epoch:
+                            meta["last_meaningful_ts"] = ts_epoch
+                    continue
+                if ev_type != "response_item":
+                    continue
+                if ptype == "function_call":
+                    name = payload.get("name") or ""
+                    args = _codex_args(payload.get("arguments"))
+                    detail = _codex_tool_detail(name, args)
+                    call_id = payload.get("call_id") or ""
+                    meta["last_event_type"] = "assistant"
+                    meta["pending_tool"] = _codex_tool_name(name) or name
+                    meta["pending_file"] = (detail[:80] if isinstance(detail, str) else None)
+                    if _codex_tool_name(name) == "apply_patch":
+                        meta["has_edit"] = True
+                        meta["last_edit_pos"] = pos
+                    cmd = _codex_tool_command(name, args)
+                    if cmd:
+                        signals = _codex_command_signals(cmd)
+                        if signals["edit"]:
+                            meta["has_edit"] = True
+                            meta["last_edit_pos"] = pos
+                        if signals["commit"]:
+                            meta["has_commit"] = True
+                            meta["last_commit_pos"] = pos
+                        if signals["push"]:
+                            meta["has_push"] = True
+                            meta["last_push_pos"] = pos
+                        if signals["external_cd"]:
+                            meta["has_external_cd"] = True
+                        if call_id:
+                            pending_calls[call_id] = {"cmd": cmd, "pr": signals["pr"]}
+                    elif call_id:
+                        pending_calls[call_id] = {"cmd": "", "pr": False}
+                elif ptype == "function_call_output":
+                    call_id = payload.get("call_id") or ""
+                    call = pending_calls.pop(call_id, {})
+                    if call:
+                        meta["pending_tool"] = None
+                        meta["pending_file"] = None
+                    out = payload.get("output") or ""
+                    if call.get("pr") and isinstance(out, str):
+                        mp = pr_url_re.search(out)
+                        if mp:
+                            meta["tail_pr_number"] = int(mp.group(2))
+                            meta["tail_pr_url"] = (
+                                "https://github.com/" + mp.group(1) + "/pull/" + mp.group(2)
+                            )
+    except OSError:
+        return {}
+
+    if not meta.get("last_meaningful_ts"):
+        meta["last_meaningful_ts"] = mtime
+    with _conv_meta_cache_lock:
+        _conv_meta_cache[str(path)] = meta
+        global _conv_meta_cache_dirty
+        _conv_meta_cache_dirty = True
+    return meta
+
+
+def find_codex_conversations(include_old=True, repo_only=True, progress=None, limit=None):
+    rows = _codex_fetch_threads(limit=limit)
+    if not rows:
+        return []
+    try:
+        repo_pins = _load_repo_pins()
+    except Exception:
+        repo_pins = {}
+    try:
+        name_overrides = _load_session_name_overrides()
+    except Exception:
+        name_overrides = {}
+    try:
+        archived_set = set(_load_archived_conversations())
+    except Exception:
+        archived_set = set()
+    try:
+        verified_set = set(_load_verified_conversations())
+    except Exception:
+        verified_set = set()
+    try:
+        last_interactions = _load_last_interactions()
+    except Exception:
+        last_interactions = {}
+
+    cutoff = _session_scan_cutoff_ts(include_old)
+    max_rows = _session_scan_file_limit(include_old)
+    spawn_by_sid = _codex_spawn_pid_by_thread_id()
+    git_top_cache = {}
+    out = []
+    scanned = 0
+    for row in rows:
+        sid = row.get("id") or ""
+        if not sid:
+            continue
+        cwd = row.get("cwd") or ""
+        pinned = repo_pins.get(sid)
+        pinned_repo = False
+        if repo_only:
+            this_repo = str(REPO_ROOT)
+            if pinned and pinned != this_repo:
+                continue
+            if pinned == this_repo:
+                pinned_repo = True
+            elif not _codex_cwd_matches_repo(cwd, REPO_ROOT, git_top_cache):
+                continue
+        path = _codex_rollout_path_from_row(row)
+        if not path or not path.is_file():
+            continue
+        scanned += 1
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        tail = _extract_codex_tail_meta(path) or {}
+        cwd = tail.get("cwd") or cwd
+        modified = (
+            tail.get("last_meaningful_ts")
+            or _codex_ts_seconds(row, "updated")
+            or st.st_mtime
+        )
+        freshness = max(modified, last_interactions.get(sid) or 0)
+        if not include_old and sid not in spawn_by_sid and cutoff > 0 and freshness < cutoff:
+            continue
+        if not include_old and max_rows > 0 and len(out) >= max_rows:
+            continue
+        first_message = (
+            (row.get("first_user_message") or "").strip()
+            or (tail.get("first_message") or "").strip()
+            or ""
+        )
+        title = (row.get("title") or "").strip()
+        display_name = (
+            name_overrides.get(sid)
+            or (row.get("agent_nickname") or "").strip()
+            or title
+            or (first_message[:80] if first_message else None)
+        )
+        branch = row.get("git_branch") or ""
+        try:
+            cwd_exists = bool(cwd and Path(cwd).is_dir())
+        except OSError:
+            cwd_exists = False
+        folder_path = pinned or cwd or ""
+        folder_label = Path(folder_path).name if folder_path else "Codex"
+        spawn_info = spawn_by_sid.get(sid) or {}
+        spawn_pid = spawn_info.get("pid")
+        spawn_alive = bool(spawn_info.get("alive"))
+        out.append({
+            "id": sid,
+            "session_id": sid,
+            "source": "codex",
+            "engine": "codex",
+            "timestamp": "",
+            "branch": branch,
+            "git_branch": branch,
+            "first_message": first_message[:200],
+            "display_name": display_name,
+            "name_overridden": bool(name_overrides.get(sid)),
+            "last_prompt": (tail.get("last_prompt") or "")[:200],
+            "size": st.st_size,
+            "modified": modified,
+            "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)),
+            "mtime": modified,
+            "jsonl_path": str(path),
+            "folder_label": folder_label,
+            "folder_path": folder_path,
+            "session_cwd": cwd,
+            "session_cwd_exists": cwd_exists,
+            "session_cwd_is_worktree": bool(cwd and (Path(cwd) / ".git").is_file()),
+            "worktree_dirty": _worktree_dirty_cached(cwd, modified) if cwd else False,
+            "effective_branch": None,
+            "effective_kind": None,
+            "has_edit": tail.get("has_edit", False),
+            "has_commit": tail.get("has_commit", False),
+            "has_push": tail.get("has_push", False),
+            "last_edit_pos": tail.get("last_edit_pos", 0),
+            "last_commit_pos": tail.get("last_commit_pos", 0),
+            "last_push_pos": tail.get("last_push_pos", 0),
+            "last_event_type": tail.get("last_event_type"),
+            "pending_tool": tail.get("pending_tool"),
+            "pending_file": tail.get("pending_file"),
+            "last_assistant_text": tail.get("last_assistant_text"),
+            "tail_issue_number": None,
+            "tail_pr_number": tail.get("tail_pr_number"),
+            "tail_pr_url": tail.get("tail_pr_url"),
+            "pr_state": None,
+            "session_state": _parse_session_state(tail.get("last_assistant_text")),
+            "archived": sid in archived_set or bool(row.get("archived")),
+            "verified": sid in verified_set,
+            "pinned_repo": pinned_repo,
+            "last_interacted": last_interactions.get(sid),
+            "is_live": spawn_alive,
+            "spawn_pid": spawn_pid,
+            "sidecar_status": "active" if spawn_alive else None,
+            "sidecar_has_writes": False,
+            "sidecar_tool": tail.get("pending_tool"),
+            "sidecar_file": tail.get("pending_file"),
+            "sidecar_ts": modified if spawn_alive else 0,
+            "sidecar_in_flight": bool(spawn_alive and tail.get("pending_tool")),
+            "needs_approval": False,
+            "needs_approval_message": "",
+            "model": row.get("model") or tail.get("model") or "",
+            "reasoning_effort": row.get("reasoning_effort") or "",
+        })
+    _prime_pr_states(c.get("tail_pr_url") for c in out)
+    for c in out:
+        if c.get("tail_pr_url"):
+            c["pr_state"] = _get_pr_state(c["tail_pr_url"])
+    out.sort(key=lambda x: x.get("last_interacted") or x.get("modified") or 0, reverse=True)
+    if progress:
+        progress(
+            "codex",
+            state="done",
+            count=len(out),
+            total=scanned,
+            detail=f"{len(out)} Codex thread card(s) ready.",
+        )
+    return out
+
+
+def _parse_codex_event(ev, line_num):
+    ev_type = ev.get("type", "")
+    payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+    ptype = payload.get("type", "")
+    ts = _codex_event_timestamp(ev)
+    if ev_type == "event_msg":
+        if ptype == "user_message":
+            text = payload.get("message") or ""
+            images = []
+            if text or images:
+                return {"line": line_num, "ts": ts, "type": "user_text", "text": text, "images": images}
+        if ptype == "agent_message":
+            text = (payload.get("message") or "").strip()
+            if text:
+                return {
+                    "line": line_num,
+                    "ts": ts,
+                    "type": "assistant",
+                    "message_id": f"codex-{line_num}",
+                    "blocks": [{"kind": "text", "text": text}],
+                }
+        if ptype == "task_complete":
+            return {
+                "line": line_num,
+                "ts": ts,
+                "type": "result",
+                "cost_usd": "?",
+                "duration_ms": payload.get("duration_ms", "?"),
+            }
+        return None
+    if ev_type != "response_item":
+        return None
+    if ptype == "function_call":
+        name = payload.get("name") or "tool"
+        args = _codex_args(payload.get("arguments"))
+        detail = _codex_tool_detail(name, args)
+        if isinstance(detail, str) and len(detail) > 200:
+            detail = detail[:200] + "..."
+        return {
+            "line": line_num,
+            "ts": ts,
+            "type": "assistant",
+            "message_id": f"codex-tool-{line_num}",
+            "blocks": [{"kind": "tool_use", "name": _codex_tool_name(name), "detail": detail or ""}],
+        }
+    if ptype == "function_call_output":
+        output = payload.get("output") or ""
+        if len(output) > 800:
+            output = output[:800] + "\n..."
+        return {
+            "line": line_num,
+            "ts": ts,
+            "type": "tool_result",
+            "text": output,
+            "tool_use_id": payload.get("call_id", ""),
+            "is_error": False,
+        }
+    return None
+
+
+def _parse_codex_conversation(thread_id, after_line=0):
+    filepath = _resolve_codex_rollout_path(thread_id)
+    events = []
+    line_num = 0
+    if not filepath:
+        return {"events": [], "last_line": 0}
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line_num += 1
+                if line_num <= after_line:
+                    continue
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                parsed = _parse_codex_event(ev, line_num)
+                if parsed:
+                    events.append(parsed)
+    except FileNotFoundError:
+        pass
+    return {"events": events, "last_line": line_num}
+
+
+def resume_session_codex(session_id, text):
+    """Resume a dormant Codex thread with a new prompt via `codex exec resume`."""
+    resolved = _resolve_codex_bin()
+    if not resolved["available"]:
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    for s in _spawned_sessions:
+        if s.get("engine") == "codex" and s.get("resumed_sid") == session_id:
+            try:
+                if s["proc"].poll() is None:
+                    return {
+                        "ok": False,
+                        "error": "Codex is already running for this thread; wait for it to finish before sending another prompt.",
+                        "pid": s.get("pid"),
+                        "via": "codex-resume-busy",
+                    }
+            except Exception:
+                pass
+    row = _codex_thread_row(session_id) or {}
+    cwd = row.get("cwd") or find_session_cwd(session_id) or str(REPO_ROOT)
+    if not Path(cwd).is_dir():
+        cwd = str(REPO_ROOT)
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"resume-codex-{session_id[:8]}-{timestamp}.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / log_filename
+    model = os.environ.get("CCC_CODEX_MODEL") or row.get("model") or "gpt-5.5"
+    cmd = [
+        resolved["bin"], "exec", "resume",
+        "--json",
+        "--skip-git-repo-check",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--model", model,
+        session_id,
+        text,
+    ]
+    log_fh = open(log_path, "w")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            cwd=cwd,
+            start_new_session=True,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log_fh.close()
+        return {"ok": False, "error": str(e), "via": "codex-resume"}
+    entry = {
+        "pid": proc.pid,
+        "name": f"resume-codex-{session_id[:8]}",
+        "log": str(log_path),
+        "prompt": text[:200],
+        "started": timestamp,
+        "proc": proc,
+        "log_fh": log_fh,
+        "resumed_sid": session_id,
+        "fifo": None,
+        "stdin_fd": None,
+        "engine": "codex",
+    }
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid,
+        name=entry["name"],
+        log_path=log_path,
+        cwd=cwd,
+        spawned_at=timestamp,
+        command_summary=text[:200],
+        fifo=None,
+        engine="codex",
+    )
+    return {"ok": True, "pid": proc.pid, "log": str(log_path), "resumed": True, "via": "codex-resume"}
+
+
+def _extract_codex_usage(session_id):
+    empty = {
+        "latest_input_tokens": 0,
+        "peak_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_input_tokens": 0,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": 0,
+        "model": "",
+        "context_limit": 0,
+        "cost_usd": 0.0,
+        "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
+                               "cache_read": 0.0, "output": 0.0},
+    }
+    path = _resolve_codex_rollout_path(session_id)
+    row = _codex_thread_row(session_id) or {}
+    if not path:
+        return empty
+    latest = {}
+    peak = 0
+    context_limit = 0
+    model = row.get("model") or ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+                if ev.get("type") == "turn_context":
+                    model = payload.get("model") or model
+                if payload.get("type") != "token_count":
+                    continue
+                info = payload.get("info") or {}
+                context_limit = info.get("model_context_window") or context_limit
+                usage = info.get("total_token_usage") or info.get("last_token_usage") or {}
+                if not isinstance(usage, dict):
+                    continue
+                latest = usage
+                window = int(usage.get("input_tokens") or 0) + int(usage.get("cached_input_tokens") or 0)
+                peak = max(peak, window)
+    except OSError:
+        return empty
+    if not latest:
+        return empty
+    total_input = int(latest.get("input_tokens") or 0)
+    cache_read = int(latest.get("cached_input_tokens") or 0)
+    total_output = int(latest.get("output_tokens") or 0) + int(latest.get("reasoning_output_tokens") or 0)
+    return {
+        **empty,
+        "latest_input_tokens": total_input + cache_read,
+        "peak_input_tokens": peak,
+        "total_output_tokens": total_output,
+        "total_input_tokens": total_input,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": cache_read,
+        "model": model,
+        "context_limit": context_limit,
+        "cost_usd": 0.0,
+    }
+
+
+def _extract_codex_timeline(session_id):
+    path = _resolve_codex_rollout_path(session_id)
+    if not path:
+        return {"events": [], "total_turns": 0}
+    events = []
+    pending_by_id = {}
+    turn = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+                ts = _codex_event_timestamp(ev)
+                if ev.get("type") == "event_msg" and payload.get("type") == "agent_message":
+                    turn += 1
+                    continue
+                if ev.get("type") != "response_item":
+                    continue
+                if payload.get("type") == "function_call":
+                    name = payload.get("name") or ""
+                    args = _codex_args(payload.get("arguments"))
+                    cmd = _codex_tool_command(name, args)
+                    if not cmd:
+                        continue
+                    kind = None
+                    subject = ""
+                    if _TIMELINE_PR_CREATE_RE.search(cmd):
+                        kind = "pr"
+                        m = _TIMELINE_PR_TITLE_RE.search(cmd)
+                        if m:
+                            subject = m.group(1)
+                    elif _TIMELINE_PUSH_RE.search(cmd):
+                        kind = "push"
+                    elif _TIMELINE_COMMIT_RE.search(cmd):
+                        kind = "commit"
+                        m = _TIMELINE_COMMIT_MSG_RE.search(cmd)
+                        if m:
+                            subject = m.group(1)
+                    if not kind:
+                        continue
+                    events.append({
+                        "kind": kind,
+                        "turn": max(turn, 1),
+                        "ts": ts,
+                        "subject": subject,
+                        "success": None,
+                    })
+                    call_id = payload.get("call_id") or ""
+                    if call_id:
+                        pending_by_id[call_id] = len(events) - 1
+                elif payload.get("type") == "function_call_output":
+                    call_id = payload.get("call_id") or ""
+                    if call_id not in pending_by_id:
+                        continue
+                    idx = pending_by_id.pop(call_id)
+                    entry = events[idx]
+                    entry["success"] = True
+                    text = payload.get("output") or ""
+                    if entry["kind"] == "commit":
+                        m = _TIMELINE_COMMIT_RESULT_RE.search(text)
+                        if m:
+                            entry["sha"] = m.group(1)
+                            if not entry.get("subject"):
+                                entry["subject"] = m.group(2).strip()[:200]
+                    elif entry["kind"] == "pr":
+                        m = _TIMELINE_PR_NUMBER_FROM_URL_RE.search(text)
+                        if m:
+                            entry["pr_number"] = int(m.group(1))
+    except OSError:
+        return {"events": [], "total_turns": 0}
+    return {"events": events, "total_turns": turn}
 
 
 def spawn_session(prompt, name=None, cwd=None, worktree=False):
@@ -6257,7 +7254,6 @@ def spawn_session_codex(prompt, name=None, cwd=None):
     cmd = [
         bin_path, "exec",
         "--json",
-        "--ephemeral",
         "--skip-git-repo-check",
         "--dangerously-bypass-approvals-and-sandbox",
         "--model", model,
@@ -6485,6 +7481,8 @@ def _find_live_spawn_entry_for_session(session_id):
         if s.get("resumed_sid") == session_id:
             return s
         log = s.get("log")
+        if s.get("engine") == "codex" and _extract_codex_thread_id_from_log(log) == session_id:
+            return s
         if log and session_id in _log_session_ids(log):
             return s
     return None
@@ -6745,14 +7743,19 @@ def _reattach_spawned_orphans():
             dropped += 1
             continue
         # Step 3: try to backfill session_id from the log file if we don't
-        # have it yet. Claude logs only — Codex's JSONL event shape
-        # differs and ingestion is deferred to a later iteration.
+        # have it yet. Claude emits stream-json session headers; Codex emits a
+        # thread.started event in its --json stream.
         # Best-effort — failures don't block reattach.
         session_id = entry.get("session_id")
         log_path = entry.get("log")
         if engine == "claude" and not session_id and log_path:
             try:
                 session_id = extract_session_id(log_path)
+            except Exception:
+                session_id = None
+        elif engine == "codex" and not session_id and log_path:
+            try:
+                session_id = _extract_codex_thread_id_from_log(log_path)
             except Exception:
                 session_id = None
         # Looks legit — re-add to the in-memory map with a stub proc.
@@ -6839,6 +7842,8 @@ def _inject_text_into_session(session_id, text):
     """
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
+    if _is_codex_session(session_id):
+        return resume_session_codex(session_id, text)
     cwd = find_session_cwd(session_id)
     status = session_live_status(session_id, cwd)
     tty = status.get("tty")
@@ -8104,7 +9109,13 @@ def _resolve_spawn_log_for_session(session_id):
         log = s.get("log")
         if not log:
             continue
-        if session_id in _log_session_ids(log):
+        if s.get("resumed_sid") == session_id:
+            matches = True
+        elif s.get("engine") == "codex":
+            matches = _extract_codex_thread_id_from_log(log) == session_id
+        else:
+            matches = session_id in _log_session_ids(log)
+        if matches:
             try:
                 alive = s["proc"].poll() is None
             except Exception:
@@ -8121,8 +9132,11 @@ def _resolve_spawn_log_for_session(session_id):
             sids_in_log = None
             matches = recorded_sid == session_id
             if not matches:
-                sids_in_log = _log_session_ids(log)
-                matches = session_id in sids_in_log
+                if entry.get("engine") == "codex":
+                    matches = _extract_codex_thread_id_from_log(log) == session_id
+                else:
+                    sids_in_log = _log_session_ids(log)
+                    matches = session_id in sids_in_log
             if matches:
                 pid = entry.get("pid")
                 alive = bool(pid and _pid_alive(pid))
@@ -8984,6 +9998,8 @@ def extract_session_timeline(session_id):
     Returns: {events: [{kind, turn, ts, subject?, sha?, pr_number?, success}],
               total_turns}
     """
+    if _is_codex_session(session_id):
+        return _extract_codex_timeline(session_id)
     if not PROJECTS_ROOT.is_dir():
         return {"events": [], "total_turns": 0}
     jsonl = None
@@ -9157,6 +10173,8 @@ def extract_session_usage(session_id):
         "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
                                "cache_read": 0.0, "output": 0.0},
     }
+    if _is_codex_session(session_id):
+        return _extract_codex_usage(session_id)
     if not PROJECTS_ROOT.is_dir():
         return empty
     jsonl = None
@@ -12543,7 +13561,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
 
     def _stream_conversation(self, conversation_id, after_line):
         """SSE endpoint for real-time conversation tailing."""
-        filepath = _resolve_conversation_path(conversation_id)
+        filepath, parser = _resolve_conversation_reader(conversation_id)
         if not filepath.exists():
             self.send_json({"error": "Conversation not found"}, 404)
             return
@@ -12580,7 +13598,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 ev = json.loads(stripped)
                             except json.JSONDecodeError:
                                 continue
-                            parsed = _parse_conversation_event(ev, line_num)
+                            parsed = parser(ev, line_num)
                             if parsed:
                                 events.append(parsed)
                 except FileNotFoundError:

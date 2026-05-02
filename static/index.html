@@ -4581,7 +4581,8 @@
     if (!$announceBtnConv) return;
     const sid = currentSession.id;
     const isPkood = currentSession.source === 'pkood';
-    if (!sid || isPkood) {
+    const isCodex = currentSession.source === 'codex';
+    if (!sid || isPkood || isCodex) {
       $announceBtnConv.style.display = 'none';
       delete $announceBtnConv.dataset.sessionId;
       return;
@@ -4633,11 +4634,12 @@
     if (!$convOverflowMenu) return;
     const sid = currentSession && currentSession.id;
     const isPkood = currentSession && currentSession.source === 'pkood';
+    const isCodex = currentSession && currentSession.source === 'codex';
     const repos = (typeof repoListState !== 'undefined' && repoListState.repos) || [];
     const currentCwd = (currentSession && currentSession.cwd) || '';
     let html = '';
     html += '<div class="com-section-label">Move to repo</div>';
-    if (!sid || isPkood) {
+    if (!sid || isPkood || isCodex) {
       html += '<div class="com-item com-current">No movable session selected</div>';
     } else if (!repos.length) {
       html += '<div class="com-item com-current">No known repos. Add one in the Repo picker.</div>';
@@ -4713,9 +4715,10 @@
   function updateJumpButton() {
     const live = liveStatus.live;
     const sid = currentSession.id;
+    const isCodex = currentSession.source === 'codex';
     const canJump = live && liveStatus.tty && liveStatus.terminalApp;
     const canLaunch = !!sid && !canJump;  // only show Launch when Jump isn't available
-    const canOpenDesktop = !!sid;  // always available when a session is selected
+    const canOpenDesktop = !!sid && !isCodex;  // Claude Desktop links only handle Claude sessions
 
     // Jump buttons
     const activeJump = jumpButtonsForActiveTab();
@@ -4742,7 +4745,7 @@
       if (!btn) continue;
       if (canLaunch) {
         btn.style.display = 'inline-flex';
-        btn.title = 'Open a new Terminal window and run claude --resume';
+        btn.title = isCodex ? 'Open a new Terminal window and run codex resume' : 'Open a new Terminal window and run claude --resume';
         btn.querySelector('.jump-label').textContent = 'Launch in terminal';
       } else {
         btn.style.display = 'none';
@@ -5131,6 +5134,7 @@
   function updateInputBar() {
     if (!$convInputBar) return;
     const isPkood = currentSession.source === 'pkood';
+    const isCodex = currentSession.source === 'codex';
     const live = liveStatus.live && liveStatus.tty;
     const isConvTab = activeTab === 'sessions';
     const hasSession = !!currentSession.id;
@@ -5159,6 +5163,9 @@
       } else if (isPkood) {
         $convTtyLabel.textContent = 'pkood';
         $convInput.placeholder = 'Send to pkood agent...';
+      } else if (isCodex) {
+        $convTtyLabel.textContent = live ? (liveStatus.tty || 'codex') : 'codex';
+        $convInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
       } else if (live) {
         $convTtyLabel.textContent = liveStatus.tty;
         $convInput.placeholder = 'Send to terminal...';
@@ -6079,9 +6086,8 @@
       modified: Date.now() / 1000, size: 0, branch: '',
       last_event_type: null, pending_tool: null, pending_file: null,
       name_overridden: false,
-      // Codex spawns are fire-and-watch: the log path lets the right pane
-      // render the run output via /api/sessions/spawned/<pid>/log since
-      // codex doesn't write to ~/.claude/projects.
+      // Codex also gets a durable thread in ~/.codex; the log path is only
+      // a fallback while the thread row is materializing.
       codex_log_path: source === 'codex' ? (logPath || null) : null,
     };
     pendingSpawns.set(pid, card);
@@ -6097,9 +6103,9 @@
     if (typeof selectConversation === 'function') {
       selectConversation(id);
     }
-    // Auto-cleanup after 30s regardless of refresh cadence — but NOT for
-    // codex, which has no JSONL surface to graduate to. Codex placeholders
-    // are the permanent UI for that run; the user archives them by hand.
+    // Auto-cleanup after 30s for Claude placeholders. Codex placeholders
+    // stick around until the durable thread row appears, with the spawn log
+    // as a fallback if the CLI exits before creating a thread.
     if (source !== 'codex') {
       setTimeout(() => {
         if (pendingSpawns.has(pid)) {
@@ -6241,7 +6247,7 @@
         if ($cpSessionId) $cpSessionId.textContent = real.session_id || '';
         fetchConversationEvents();
         startConvStream();
-        if (real.session_id) startSpawnStream(real.session_id);
+        if (real.session_id && real.source !== 'codex') startSpawnStream(real.session_id);
         updateSplitInputBar();
         updateSplitToolbar();
       }
@@ -10204,7 +10210,7 @@
       // backend finds a CCC-spawned headless process for this session.
       // No-op for externally launched, IDE-launched, or pkood sessions.
       const sid = sessionIdByConv[id] || '';
-      if (sid) startSpawnStream(sid);
+      if (sid && source !== 'codex') startSpawnStream(sid);
     }
   }
 
@@ -10212,13 +10218,15 @@
   function updateSplitInputBar() {
     if (!$convPanelInput) return;
     const isPkood = currentSession.source === 'pkood';
+    const isCodex = currentSession.source === 'codex';
     const live = liveStatus.live && liveStatus.tty;
     const hasSession = !!currentSession.id;
     if (hasSession && kanbanView) {
       $convPanelInput.classList.add('visible');
-      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (liveStatus.tty || (live ? '' : 'offline'));
+      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (isCodex ? (liveStatus.tty || 'codex') : (liveStatus.tty || (live ? '' : 'offline')));
       if ($cpInput) {
         if (isPkood) $cpInput.placeholder = 'Send to pkood agent...';
+        else if (isCodex) $cpInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
         else if (live) $cpInput.placeholder = 'Send to terminal...';
         else $cpInput.placeholder = 'Send to terminal (offline)...';
       }
@@ -10238,6 +10246,7 @@
     const sid = currentSession.id;
     const live = liveStatus.live;
     const isPkood = currentSession.source === 'pkood';
+    const isCodex = currentSession.source === 'codex';
     // Jump / Launch are mutually exclusive: live-with-tty → Jump, else → Launch.
     // Showing both made it easy to accidentally spawn a duplicate terminal on
     // a session that already has one open.
@@ -10277,8 +10286,8 @@
         $cpLaunchBtn.innerHTML = '<span>&#43;</span> Launch';
       }
     };
-    // Desktop: always show when a session is selected (not for pkood)
-    $cpDesktopBtn.style.display = (sid && !isPkood) ? '' : 'none';
+    // Desktop: Claude Desktop deep links only handle Claude sessions.
+    $cpDesktopBtn.style.display = (sid && !isPkood && !isCodex) ? '' : 'none';
     $cpDesktopBtn.onclick = async () => {
       if (!sid) return;
       const origHTML = $cpDesktopBtn.innerHTML;
@@ -10827,11 +10836,9 @@
     }
   }
 
-  // Render a codex spawn log into the right pane. Codex `exec` is one-shot
-  // and writes JSON-lines to the spawn log; we don't have a JSONL/projects
-  // surface for it (yet — see the codex-spawn changelog), so this is the
-  // permanent UI for a codex run. Polls every 1.5s while the proc is still
-  // running, then locks to the final transcript.
+  // Render a codex spawn log into the right pane while the durable Codex
+  // thread row is still materializing. Once /api/sessions returns a real
+  // codex card, normal conversation rendering takes over.
   async function loadCodexLog(card) {
     if (!card || typeof card.spawn_pid !== 'number') {
       // Pre-swap (toolbar Run): spawn_pid is still 'tmp-...'. Show a
@@ -10946,9 +10953,8 @@
         return;
       }
     }
-    // Codex placeholders never get a JSONL — they're tombstones for a
-    // one-shot `codex exec` run. Read the spawn log instead and poll
-    // until the proc exits.
+    // Codex placeholders use the spawn log only until the real ~/.codex
+    // thread row appears in /api/sessions.
     if (id.startsWith('spawning-')) {
       const c = (conversationsData || []).find(x => x.id === id);
       if (c && c.source === 'codex') {
@@ -12977,7 +12983,7 @@
         sidecar_has_writes: !!c.sidecar_has_writes,
         needs_approval: !!c.needs_approval,
         needs_approval_message: c.needs_approval_message || '',
-        source: 'interactive',
+        source: c.source || 'interactive',
         session_cwd: c.session_cwd || c.folder_path,
         session_cwd_exists: !folderOrphan,
         // #4 worktree leaf — the renderer reads session_cwd_is_worktree.
@@ -13973,7 +13979,7 @@
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ agent_id: agentId, message: text }),
           });
-        } else if (currentSession.spawnPid) {
+        } else if (currentSession.spawnPid && currentSession.source !== 'codex') {
           // Headless session we spawned — push via stdin pipe
           res = await fetch('/api/sessions/spawned/' + currentSession.spawnPid + '/inject', {
             method: 'POST',

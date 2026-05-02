@@ -13,20 +13,24 @@ Pattern lifted from BloopAI/vibe-kanban's `qa_mock` executor: instead of
 mocking the runtime (`claude` itself), feed CCC a realistic-looking
 transcript and assert the parser surfaces it correctly.
 
-stdlib-only — `unittest`, no pytest, no mock libs.
+stdlib-only — `unittest` / `unittest.mock`, no pytest.
 """
 import importlib
+import json
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = Path(REPO_ROOT) / "tests" / "fixtures" / "mock_session.jsonl"
 MOCK_SESSION_ID = "00000000-mock-4000-8000-000000000001"
+CODEX_SESSION_ID = "11111111-1111-4111-8111-111111111111"
 
 sys.path.insert(0, REPO_ROOT)
 
@@ -178,6 +182,203 @@ class TestFindConversationsOnMockFixture(unittest.TestCase):
         self.assertEqual(card["last_event_type"], "result")
         self.assertIsNone(card["pending_tool"])
         self.assertIsNone(card["pending_file"])
+
+
+class TestCodexConversationAdapter(unittest.TestCase):
+    """Codex stores durable threads in ~/.codex/state_*.sqlite plus rollout
+    JSONL files. CCC should surface those rows like regular session cards."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp_home = tempfile.mkdtemp(prefix="ccc-codex-home-")
+        cls.fake_repo = (Path(cls.tmp_home) / "fake-repo").resolve()
+        cls.fake_repo.mkdir(parents=True)
+        resolved_home = Path(cls.tmp_home).resolve()
+        cls._prev_env = {
+            "CCC_WATCH_REPO": os.environ.get("CCC_WATCH_REPO"),
+            "HOME": os.environ.get("HOME"),
+        }
+        os.environ["CCC_WATCH_REPO"] = str(cls.fake_repo)
+        os.environ["HOME"] = str(resolved_home)
+
+        codex_dir = resolved_home / ".codex"
+        rollout_dir = codex_dir / "sessions" / "2026" / "05" / "02"
+        rollout_dir.mkdir(parents=True)
+        cls.rollout = rollout_dir / f"rollout-2026-05-02T00-00-00-{CODEX_SESSION_ID}.jsonl"
+        lines = [
+            {
+                "timestamp": "2026-05-02T00:00:00.000Z",
+                "type": "session_meta",
+                "payload": {
+                    "id": CODEX_SESSION_ID,
+                    "timestamp": "2026-05-02T00:00:00.000Z",
+                    "cwd": str(cls.fake_repo),
+                    "source": "exec",
+                    "model": "gpt-5.5",
+                },
+            },
+            {
+                "timestamp": "2026-05-02T00:00:01.000Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "please edit README.md",
+                    "images": [],
+                },
+            },
+            {
+                "timestamp": "2026-05-02T00:00:02.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "apply_patch",
+                    "arguments": "{}",
+                    "call_id": "call_patch",
+                },
+            },
+            {
+                "timestamp": "2026-05-02T00:00:03.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "call_patch",
+                    "output": "Success",
+                },
+            },
+            {
+                "timestamp": "2026-05-02T00:00:04.000Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "message": (
+                        "Done.\n\n<session-state>\n"
+                        "DID: Edited the readme.\n"
+                        "INSIGHT: Codex rollout parsed.\n"
+                        "NEXT_STEP_USER: Review it.\n"
+                        "</session-state>"
+                    ),
+                    "phase": "final_answer",
+                },
+            },
+            {
+                "timestamp": "2026-05-02T00:00:05.000Z",
+                "type": "event_msg",
+                "payload": {"type": "task_complete", "duration_ms": 1234},
+            },
+        ]
+        cls.rollout.write_text(
+            "\n".join(json.dumps(line) for line in lines) + "\n",
+            encoding="utf-8",
+        )
+
+        db_path = codex_dir / "state_5.sqlite"
+        con = sqlite3.connect(db_path)
+        try:
+            con.execute(
+                """
+                CREATE TABLE threads (
+                    id TEXT PRIMARY KEY,
+                    rollout_path TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    model_provider TEXT NOT NULL,
+                    cwd TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    sandbox_policy TEXT NOT NULL,
+                    approval_mode TEXT NOT NULL,
+                    tokens_used INTEGER NOT NULL DEFAULT 0,
+                    has_user_event INTEGER NOT NULL DEFAULT 0,
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    cli_version TEXT NOT NULL DEFAULT '',
+                    first_user_message TEXT NOT NULL DEFAULT '',
+                    model TEXT,
+                    reasoning_effort TEXT,
+                    git_branch TEXT
+                )
+                """
+            )
+            con.execute(
+                """
+                INSERT INTO threads (
+                    id, rollout_path, created_at, updated_at, source,
+                    model_provider, cwd, title, sandbox_policy, approval_mode,
+                    tokens_used, has_user_event, archived, cli_version,
+                    first_user_message, model, reasoning_effort, git_branch
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    CODEX_SESSION_ID,
+                    str(cls.rollout),
+                    1777680000,
+                    1777680005,
+                    "exec",
+                    "openai",
+                    str(cls.fake_repo),
+                    "Codex readme edit",
+                    "danger-full-access",
+                    "never",
+                    42,
+                    1,
+                    0,
+                    "0.test",
+                    "please edit README.md",
+                    "gpt-5.5",
+                    "medium",
+                    "main",
+                ),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        cls.server = _fresh_server()
+
+    @classmethod
+    def tearDownClass(cls):
+        for k, v in cls._prev_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        shutil.rmtree(cls.tmp_home, ignore_errors=True)
+
+    def test_codex_thread_is_discovered_as_session_card(self):
+        cards = self.server.find_codex_conversations()
+        card = next(c for c in cards if c["session_id"] == CODEX_SESSION_ID)
+        self.assertEqual(card["source"], "codex")
+        self.assertEqual(card["engine"], "codex")
+        self.assertEqual(card["display_name"], "Codex readme edit")
+        self.assertTrue(card["has_edit"])
+        self.assertEqual(card["last_event_type"], "result")
+        self.assertEqual(card["session_state"]["did"], "Edited the readme.")
+
+    def test_codex_rollout_parses_into_conversation_events(self):
+        parsed = self.server.parse_conversation(CODEX_SESSION_ID)
+        event_types = [ev["type"] for ev in parsed["events"]]
+        self.assertIn("user_text", event_types)
+        self.assertIn("assistant", event_types)
+        self.assertIn("tool_result", event_types)
+        self.assertIn("result", event_types)
+        assistant_texts = [
+            block["text"]
+            for ev in parsed["events"] if ev["type"] == "assistant"
+            for block in ev.get("blocks", []) if block.get("kind") == "text"
+        ]
+        self.assertTrue(any("Edited the readme" in text for text in assistant_texts))
+
+    def test_codex_injection_routes_to_codex_resume(self):
+        with mock.patch.object(
+            self.server,
+            "resume_session_codex",
+            return_value={"ok": True, "via": "codex-resume"},
+        ) as patched:
+            result = self.server._inject_text_into_session(CODEX_SESSION_ID, "follow up")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["via"], "codex-resume")
+        patched.assert_called_once_with(CODEX_SESSION_ID, "follow up")
 
 
 class TestAddSidecarFields(unittest.TestCase):
