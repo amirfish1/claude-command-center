@@ -1,0 +1,1 @@
+- Repo-switch POST (`/api/repo/switch`) now aborts after 10 s instead of hanging the loading overlay forever when the server is unresponsive. On timeout you get a toast ("Switch timed out after 10 s — server unresponsive") and the picker reverts.

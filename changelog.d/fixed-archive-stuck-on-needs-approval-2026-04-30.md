@@ -1,0 +1,1 @@
+- Archiving a row from the sidebar list now actually moves it to the Archived section even when the session has a pending Notification-hook approval marker. Previously the `needs_approval` flag pinned the row to "In progress" (via the Waiting kanban column) and only the archive icon flipped to ↩, making it look like archive had been undone.

@@ -1,0 +1,1 @@
+- Sessions spawned by the sibling-orchestrator skill ("You are a sibling Claude Code session…") now auto-title from the embedded `## Feature:` / `## Task:` / `## Goal:` heading instead of the boilerplate preamble. Sidebar rows, sticky header, and kanban cards all show e.g. "Feature: in-app bug reporting" instead of "you-are-a-sibling-claude-code-session-…".

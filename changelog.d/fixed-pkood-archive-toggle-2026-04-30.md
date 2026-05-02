@@ -1,0 +1,1 @@
+- Archive button on pkood agent cards now actually hides the card. The toggle was already persisting the ID to disk, but `find_pkood_agents()` returned `archived: False` regardless, so the card stayed in the active list. Pkood cards now consult the same archived set as claude sessions.

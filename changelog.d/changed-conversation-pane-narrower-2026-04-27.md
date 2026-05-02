@@ -1,0 +1,1 @@
+- Sidebar resizer now allows the conversation pane to shrink to ~200px (was capped at 40vw). Toolbar buttons wrap onto multiple rows as the pane narrows. The kanban-split conversation panel can also be dragged narrower (floor 40px), with the session UUID, font-size buttons, and live/desktop controls hiding via container queries as space tightens.

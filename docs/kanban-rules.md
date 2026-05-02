@@ -22,7 +22,16 @@ order:
 | `testing` | In Testing | Manually moved here. No automatic routing in or out |
 | `verified` | Verified | Marked done, or the linked GitHub issue closed as `COMPLETED` |
 | `archived` | Archived | Dismissed, or issue closed for any non-completed reason |
-| `inactive` | Inactive | Dead session that never used a tool — graveyard / resumable shelf |
+
+> **What changed (Inactive column → "no edits" chip).** The `Inactive` column is gone.
+> Sessions that used to land there (dead, no commits) now sit inside `Working`. A small
+> blue **"no edits"** chip — driven by `hasNoEdits(c)` — flags any session whose Claude
+> has never touched a file, regardless of whether the process is alive. Stale `inactive`
+> localStorage overrides drop on first render after upgrade.
+
+`hasNoEdits(c)` is intentionally simple: `!c.has_edit && !c.verified &&
+!c.archived && c.source !== 'backlog'`. Liveness, labels, and stage are
+deliberately ignored — the chip describes one thing only.
 
 > **What changed (planning → icebox refactor).** The old `planning` column conflated two
 > unrelated states: a transient "live but no tool fired yet" pre-window, and a long-lived
@@ -60,10 +69,9 @@ Rules are checked in this order; the first match wins:
 9. !live + 'coding' + last=assistant                    → review   (dormant w/ unsaved edits)
 10. label needs-attention                               → needs-attention
 11. label claude-in-progress                            → working
-12. !live + no sidecar                                  → inactive
-13. live + pkood (any state)                            → working
-14. live (any other)                                    → working
-15. fallback                                            → inactive
+12. live + pkood (any state)                            → working
+13. live (any other)                                    → working
+14. fallback                                            → working   (with Idle pill if isIdleSession)
 ```
 
 The `testing` column is **never** assigned by the classifier. The only way
@@ -148,7 +156,7 @@ No code "moves" the card here. The signals change and the next render of
 - `is_live` flips to false. Sidecar file remains.
 - Effect depends on stage:
   - has commits or edits + last was assistant → `review` (rules 8–9)
-  - nothing meaningful happened → `inactive` (rule 12)
+  - nothing meaningful happened → `working` (rule 14, card gets the Idle pill)
 
 ### Git commit / push lands
 - Detected by `sessionStage()` reading `git log` ([`server.py`](../server.py))

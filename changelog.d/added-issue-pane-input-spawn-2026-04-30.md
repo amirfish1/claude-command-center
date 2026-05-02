@@ -1,0 +1,1 @@
+- Bottom input bar now appears when viewing a backlog GitHub issue in the right pane. Typing a prompt and submitting spawns a session for that issue — equivalent to clicking "Edit & start" on the kanban card, with your text appended to the standard "Fix issue #N — TITLE / Run `gh issue view N`" preamble.

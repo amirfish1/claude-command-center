@@ -174,10 +174,9 @@
     { id: 'backlog',         x:  20, y:  40, label: 'backlog',         hint: 'open issues + TODO',           cls: 'intake' },
     { id: 'needs-attention', x: 220, y:  40, label: 'needs-attention', hint: 'label: needs-attention',       cls: 'intake' },
     { id: 'icebox',          x: 120, y: 220, label: 'icebox',          hint: 'parked — icebox label or drag', cls: 'intake' },
-    { id: 'working',         x: 370, y: 220, label: 'working',         hint: 'live session — Claude is running', cls: 'live' },
+    { id: 'working',         x: 370, y: 220, label: 'working',         hint: 'live session OR resumable idle', cls: 'live' },
     { id: 'review',          x: 620, y: 220, label: 'review',          hint: 'committed/pushed, dead',       cls: 'review' },
     { id: 'testing',         x: 870, y: 220, label: 'testing',         hint: 'manual only',                  cls: '' },
-    { id: 'inactive',        x:1100, y: 220, label: 'inactive',        hint: 'dormant fallback',             cls: '' },
     { id: 'verified',        x: 370, y: 450, label: 'verified',        hint: 'flag + GH closed COMPLETED',   cls: 'terminal' },
     { id: 'archived',        x: 620, y: 450, label: 'archived',        hint: 'flag + GH closed not-planned', cls: 'terminal' },
   ];
@@ -197,7 +196,6 @@
     // Working flows
     { from: 'working',         to: 'icebox',          kind: 'explicit', label: ['drag → icebox', 'or label icebox added'] },
     { from: 'working',         to: 'review',          kind: 'implicit', label: ['commit / push', '(after process exits)'] },
-    { from: 'working',         to: 'inactive',        kind: 'implicit', label: ['process exits, no tools used'] },
     { from: 'working',         to: 'archived',        kind: 'explicit', label: ['drag (rare)'] },
 
     // Icebox exit
@@ -212,7 +210,6 @@
     { from: 'testing',         to: 'verified',        kind: 'explicit', label: ['drag → verified'] },
 
     // Resurrections from terminal columns
-    { from: 'inactive',        to: 'working',         kind: 'implicit', label: ['resume + tool fires'] },
     { from: 'archived',        to: 'working',         kind: 'explicit', label: ['drag out → clears archived'] },
     { from: 'verified',        to: 'working',         kind: 'explicit', label: ['drag out → clears flag'] },
   ];
@@ -433,10 +430,9 @@
   <li>!live + edits + last=assistant → <b>review</b> (dormant w/ unsaved edits)</li>
   <li>label needs-attention → <b>needs-attention</b></li>
   <li>label claude-in-progress → <b>working</b></li>
-  <li>!live + no sidecar → <b>inactive</b></li>
   <li>Live + pkood (any state) → <b>working</b></li>
   <li>Live (any other) → <b>working</b></li>
-  <li>Fallback → <b>inactive</b></li>
+  <li>Fallback → <b>working</b> · render adds the blue <b>Idle</b> pill if <code>isIdleSession()</code></li>
 </ol>
 </div>
 
@@ -504,7 +500,7 @@
     </tr>
     <tr>
       <td><span class="pill implicit">process</span> Claude exits</td>
-      <td><code>is_live=false</code> · has commits/edits → <b>review</b> · else → <b>inactive</b></td>
+      <td><code>is_live=false</code> · has commits/edits → <b>review</b> · else → <b>working</b> with Idle pill</td>
       <td><code>ps -A</code> mismatch in /api/sessions</td>
     </tr>
     <tr>
@@ -534,7 +530,7 @@
     </tr>
     <tr>
       <td><span class="pill implicit">label</span> claude-in-progress (dead session)</td>
-      <td>inactive / review → <b>working</b> ("this is the active branch")</td>
+      <td>review (or idle) → <b>working</b> ("this is the active branch")</td>
       <td>/api/sessions enrich</td>
     </tr>
     <tr>

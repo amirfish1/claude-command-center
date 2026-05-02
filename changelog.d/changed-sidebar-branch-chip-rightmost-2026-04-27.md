@@ -1,0 +1,1 @@
+- Sidebar conversation rows now keep the branch chip (`main` or 🌿 worktree) flush right next to the archive button, so the branch is always the last thing on the line. Lifecycle chips (`committed` / `pushed`) move to the left of it instead of after it.

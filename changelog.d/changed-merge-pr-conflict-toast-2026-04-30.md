@@ -1,0 +1,1 @@
+- Sidebar Merge button shows a friendlier toast when `gh pr merge` fails on a conflicted PR. Was: `Merge failed: GraphQL: Pull Request has merge conflicts (mergePullRequest)`. Now: `Merge failed: PR has merge conflicts — resolve locally (rebase/merge main, push), then retry`. Raw `gh` stderr is still returned in the response (`data.stderr`) for debugging.

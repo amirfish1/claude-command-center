@@ -1,0 +1,1 @@
+- Sidebar list view has a new "Ready to merge" section between GH Issues and In progress: collapsible, green-tinted count badge, and contains every session whose work has landed in a recorded PR (`tail_pr_number`). Lifts merge-ready sessions out of "In progress" so the highest-leverage clicks aren't buried under live work.

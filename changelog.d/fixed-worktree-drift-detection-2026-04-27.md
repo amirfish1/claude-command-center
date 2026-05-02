@@ -1,0 +1,1 @@
+Detect when a session that launched in the shared clone has `cd`'d into a sibling worktree. The conv pane now surfaces the worktree's branch and ahead/behind counts via a deterministic `git worktree list` match against the session's `cd` / `git -C` targets, instead of being filtered out by the count heuristic.

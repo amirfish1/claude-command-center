@@ -1,0 +1,1 @@
+- Render `.claude/pasted-images/paste-*.{png,jpg,…}` paths as inline images in the "Original ask", "Earlier ask", and user-message panels instead of leaving them as bare filesystem paths. Backed by a new `/api/pasted-image` route, sandboxed to `~/**/.claude/pasted-images/`.

@@ -1,0 +1,1 @@
+- GH Issues rows in the sidebar list now have a green **Start** pill (spawns a session for the issue, same as the kanban "Start session" button) and the row's archive button is relabelled **Close** so it matches what actually happens — the GH issue is closed "not planned".

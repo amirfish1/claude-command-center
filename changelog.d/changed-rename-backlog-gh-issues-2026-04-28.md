@@ -1,0 +1,1 @@
+- Renamed the kanban "Backlog" category to "GH Issues" to make its source clearer. The internal column key (`backlog`) and saved column order are unchanged.

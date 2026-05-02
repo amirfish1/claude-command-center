@@ -1,0 +1,1 @@
+- Fixed: the optimistic "Sending…" pill now re-anchors to the bottom after the real user message lands, so the order reads "your message → Sending…" instead of the pill floating above what you just sent.

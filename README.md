@@ -42,16 +42,25 @@ Optional: [`gh`](https://cli.github.com/) for GitHub integration, `vercel` for d
 git clone https://github.com/amirfish1/claude-command-center
 cd claude-command-center
 
-# Point it at any repo you want to watch. Defaults to cwd.
+# Try it — runs in the foreground until Ctrl-C / terminal close
 CCC_WATCH_REPO=~/some/project ./run.sh
+
+# Keep it — install as a launchd agent that starts at login
+./run.sh --install-service
 ```
 
 Open [http://localhost:8090](http://localhost:8090).
 
-First launch copies two hook scripts into `~/.claude/command-center/hooks/` and
-registers them in `~/.claude/settings.json`. After that, every Claude Code
-session on your machine — terminal, headless, or dashboard-spawned —
-writes sidecar state the UI uses for the kanban.
+`--install-service` writes `~/Library/LaunchAgents/com.github.claude-command-center.plist`
+and bakes in whatever `PORT` / `CCC_*` env vars were set when you ran it.
+Re-run it to update config; remove with `./run.sh --uninstall-service`. Service
+logs go to `~/.claude/command-center/logs/service.{out,err}.log`.
+
+First launch (foreground or service) copies two hook scripts into
+`~/.claude/command-center/hooks/` and registers them in
+`~/.claude/settings.json`. After that, every Claude Code session on your
+machine — terminal, headless, or dashboard-spawned — writes sidecar state
+the UI uses for the kanban.
 
 ## Core concepts
 
@@ -98,6 +107,10 @@ writes sidecar state the UI uses for the kanban.
 - **Attach to existing sessions** — terminal `claude` processes show up
   automatically. Jump-to-terminal focuses them by TTY; rename/color the
   tab via Claude's own slash commands.
+- **Open in Claude Desktop** (macOS) — third destination button beside
+  Jump/Launch in the conversation toolbar; resumes the current CLI
+  session inside the Claude Desktop app via the `claude://resume` deep
+  link.
 - **Headless spawn with follow-up** — launch `claude -p` sessions from the
   dashboard and keep talking to them via an in-browser input bar (no
   terminal needed, stdin pipe stays open).

@@ -23,6 +23,9 @@ venv/
 /tmp/
 /scratch/
 
+# Git worktrees created by superpowers:using-git-worktrees skill
+.worktrees/
+
 # Build output (none today, but don't commit if any tooling is added later)
 /dist/
 /build/
@@ -32,6 +35,10 @@ venv/
 # images, locks, agent worktree scratch — none of it belongs in git.
 /.claude/
 *.log
+
+# Coordination file for parallel Claude Code sessions sharing this clone.
+# Local-only — see GROUP_CHAT.md itself for the convention.
+/GROUP_CHAT.md
 
 # Pre-publish workspace — audit reports, archive prep, etc.
 /oss-prep/
@@ -44,6 +51,9 @@ venv/
 # Local-only asset workspace (large videos, raw recordings, full-res screenshots)
 # Repo only ships compressed/optimized derivatives in docs/images/
 /_assets/
+
+# nanobanana MCP generated images — local experiments, not source.
+/nanobanana-output/
 
 # Don't accidentally commit large videos anywhere in the tree
 *.mp4

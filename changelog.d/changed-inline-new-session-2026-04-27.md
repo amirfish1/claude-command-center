@@ -1,0 +1,1 @@
+The sidebar **+ New session** button now opens an empty conversation pane on the right (with the input bar focused) instead of a full-screen modal. Type a prompt, press Enter, and the new session is spawned. The previous modal flow remains available from other entry points.

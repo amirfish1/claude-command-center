@@ -19,6 +19,13 @@ import os
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from _notify import notify
+except ImportError:
+    def notify(*_a, **_k):
+        pass
+
 LIVE_STATE_DIR = os.path.expanduser("~/.claude/command-center/live-state")
 
 
@@ -33,9 +40,10 @@ def main():
 
         os.makedirs(LIVE_STATE_DIR, exist_ok=True)
 
+        message = data.get("message", "")
         marker = {
             "session_id": session_id,
-            "message": data.get("message", ""),
+            "message": message,
             "type": data.get("type", ""),
             "started_at": time.time(),
         }
@@ -45,6 +53,15 @@ def main():
         with open(tmp, "w") as f:
             json.dump(marker, f)
         os.replace(tmp, path)
+
+        # macOS banner so the user knows Claude is blocked on a permission
+        # prompt even when CCC isn't focused. Falls through silently on
+        # non-macOS systems or when CCC_NOTIFY=0.
+        notify(
+            title="Claude needs your approval",
+            message=message or "Permission requested",
+            subtitle=session_id[:8],
+        )
 
     except Exception:
         pass

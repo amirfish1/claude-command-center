@@ -1,0 +1,1 @@
+- Fixed Board button text overlapping the archive button in the sidebar header — stale 28px width from the icon-only era was clamping the button width.

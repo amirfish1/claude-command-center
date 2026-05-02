@@ -1,0 +1,1 @@
+- "Original ask" sticky header is now capped at 25 % of the viewport with internal vertical scroll. Sibling-spawn prompts can run 50+ lines and were pushing the actual conversation events off-screen; the box now scrolls inside itself, and a manual drag of the resize handle still wins.

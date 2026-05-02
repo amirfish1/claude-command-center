@@ -1,0 +1,1 @@
+- Files from this conversation — header pill listing every image, PDF, doc, presentation, video, MD, and HTML mentioned in a session, openable in one click via macOS default app (local) or new browser tab (URLs).

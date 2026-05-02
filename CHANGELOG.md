@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Screenshots in the bug-report modal — an "Add screenshot" button opens
+  the macOS area-selector (`screencapture -i`) so the user draws a
+  rectangle over exactly what they want to share. The preview renders in
+  the modal with Retake / Remove controls. On submit the image is committed
+  to a dedicated `bug-screenshots` branch of `amirfish1/claude-command-center`
+  and embedded inline in the issue body via `raw.githubusercontent.com`. If
+  the push fails (typical for OSS users without write access), the image is
+  saved to `~/.claude/command-center/bug-screenshots/`, Finder pops to it,
+  and the issue body carries a drag-drop instruction so the user can attach
+  it manually. New endpoints: `POST /api/bug-report/capture`,
+  `POST /api/bug-report/reveal`. `POST /api/bug-report` now accepts an
+  optional `screenshot_b64` field.
 - **Sibling-worktree detection in the workspace strip.** Workspace pill now
   surfaces a `🌿 +N worktrees (X subagent · Y manual)` chip when the session's
   repo has worktrees besides the one it's editing in. Tooltip lists each
@@ -39,13 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.claude/command-center/last-interactions.json`, and the kanban now sorts by
   `max(last_interacted, modified)` so a card you just typed into bubbles to the
   top instantly even before Claude responds.
-- **Drag-to-split conversation pane.** Drag a conversation card from the
-  sidebar list (or a kanban column) onto the right edge or bottom edge
-  of the chat pane to open a second conversation alongside the current
-  one — vertical or horizontal split. Each pane has its own composer,
-  send button, and SSE stream. Click the `×` in a pane header to close
-  it; the survivor expands back to full width. Two-pane max; below
-  900px viewport the split collapses to single-pane.
+- **"Open in Claude Desktop" button** beside Jump/Launch in the
+  conversation toolbar (and the conversation-pane chrome). Resumes the
+  current session inside the Claude Desktop GUI app via the
+  `claude://resume?session=<uuid>` deep-link — the desktop app imports
+  the CLI session and navigates to it. macOS only for now (relies on
+  `open(1)`).
 
 ### Changed
 - **Renamed `Planning` column to `Icebox` and collapsed pre-tool live state into `Working`.**
@@ -223,6 +234,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   indicator. Now uses `100dvh` and `padding-bottom:
   env(safe-area-inset-bottom)` so the input stays visible above both,
   and resizes when the on-screen keyboard opens.
+
+## [0.1.4] - 2026-04-25
+
+### Fixed
+- Sessions spawned in repos whose path contains non-alphanumeric
+  characters (most commonly `+`, but also `.`, `_`, spaces) are now
+  visible on the kanban. Claude Code 2.x sanitises every non-alnum
+  character to `-` when naming its `~/.claude/projects/<slug>/`
+  subdir; CCC's encoder previously only replaced `/`, so a repo at
+  e.g. `~/Apps/BYM+Finie` had its sessions written under
+  `-Users-amirfish-Apps-BYM-Finie` while CCC scanned
+  `-Users-amirfish-Apps-BYM+Finie`. Symptom: clicking "Start session"
+  on a backlog card briefly showed a placeholder in Working, then
+  the placeholder vanished and the backlog card never cleared,
+  while the spawned `claude -p` kept running invisibly.
 
 ## [0.1.3] - 2026-04-24
 
