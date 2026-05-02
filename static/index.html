@@ -554,6 +554,107 @@
   }
   .issues-section-header:first-child { margin-top: 0; }
 
+  /* Conversation split layout */
+  .conv-split {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column; /* unsplit = single child fills the column */
+  }
+  .conv-split[data-orientation="vertical"] { flex-direction: row; }
+  .conv-split[data-orientation="horizontal"] { flex-direction: column; }
+  .conv-pane {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 0;
+    min-width: 0;
+    position: relative; /* drop overlay anchor */
+  }
+  .conv-pane-header {
+    display: none;            /* shown only when split is active */
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border, #2a2a2a);
+  }
+  .conv-split[data-orientation="vertical"] .conv-pane-header,
+  .conv-split[data-orientation="horizontal"] .conv-pane-header { display: flex; }
+  .conv-split[data-orientation="vertical"] .conv-pane.is-active,
+  .conv-split[data-orientation="horizontal"] .conv-pane.is-active {
+    box-shadow: inset 0 0 0 1px var(--accent, #4ea1ff);
+  }
+  .conv-pane-close {
+    background: none;
+    border: none;
+    color: var(--text-muted, #888);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  .conv-pane-close:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
+
+  .conv-split-divider {
+    flex: 0 0 4px;
+    background: var(--border, #2a2a2a);
+    cursor: col-resize;
+    transition: background 0.1s ease;
+  }
+  .conv-split-divider:hover { background: var(--accent, #4ea1ff); }
+  .conv-split[data-orientation="horizontal"] .conv-split-divider {
+    cursor: row-resize;
+  }
+
+  .conv-toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-overlay, rgba(20,20,24,0.95));
+    color: var(--text, #eee);
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 1000;
+  }
+  .conv-toast.visible { opacity: 1; }
+
+  .conv-pane-drop-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 50;
+    display: none;
+  }
+  .conv-pane-drop-overlay.active { display: block; }
+  .conv-pane-drop-overlay .drop-zone {
+    position: absolute;
+    pointer-events: auto;
+    border: 1px dashed var(--accent, #4ea1ff);
+    background: rgba(78, 161, 255, 0.06);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent, #4ea1ff);
+    font-size: 12px;
+    font-weight: 500;
+    transition: background 0.08s ease;
+  }
+  .conv-pane-drop-overlay .drop-zone.right  { right: 0; top: 0; bottom: 0; width: 22%; }
+  .conv-pane-drop-overlay .drop-zone.bottom { left: 0; right: 0; bottom: 0; height: 22%; }
+  .conv-pane-drop-overlay .drop-zone.over   { background: rgba(78, 161, 255, 0.18); }
+  /* Suppress overlay below 900px viewport (split is unsupported there). */
+  @media (max-width: 900px) {
+    .conv-pane-drop-overlay { display: none !important; }
+  }
+
   /* Conversations view */
   .conversations-view { flex: 1; overflow-y: auto; padding: 0 20px 16px; position: relative; }
   .conv-sticky-header {
@@ -3896,18 +3997,25 @@
     <div class="issues-view" id="issuesView" style="display:none;">
       <div class="empty-state" style="height:auto;padding:40px;">Loading issues...</div>
     </div>
-    <div class="conversations-view" id="conversationsView">
-      <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
-    </div>
-    <div class="conv-input-context" id="convInputContext">
-      <span class="wp-row" data-workspace></span>
-      <span class="wp-usage" data-usage></span>
-    </div>
-    <div class="conv-input-bar" id="convInputBar">
-      <input type="text" id="convInput" placeholder="Send to terminal..." autocomplete="off">
-      <button class="esc-btn" id="convEscBtn" title="Send Esc to terminal — cancels in-flight response (or kills a headless spawn)">Esc</button>
-      <button class="send-btn" id="convSendBtn" title="Send to terminal">&gt;</button>
-      <span class="tty-label" id="convTtyLabel"></span>
+    <div class="conv-split" id="convSplit" data-orientation="">
+      <div class="conv-pane" data-pane-id="p1">
+        <div class="conv-pane-header" data-role="pane-header">
+          <button class="conv-pane-close" data-role="pane-close" title="Close pane" aria-label="Close pane" style="display:none;">&times;</button>
+        </div>
+        <div class="conversations-view" id="conversationsView">
+          <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
+        </div>
+        <div class="conv-input-context" id="convInputContext">
+          <span class="wp-row" data-workspace></span>
+          <span class="wp-usage" data-usage></span>
+        </div>
+        <div class="conv-input-bar" id="convInputBar">
+          <input type="text" id="convInput" placeholder="Send to terminal..." autocomplete="off">
+          <button class="esc-btn" id="convEscBtn" title="Send Esc to terminal — cancels in-flight response (or kills a headless spawn)">Esc</button>
+          <button class="send-btn" id="convSendBtn" title="Send to terminal">&gt;</button>
+          <span class="tty-label" id="convTtyLabel"></span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -4396,8 +4504,7 @@
   let sessionCwdExistsByConv = {}; // {convId: bool}
   let sessionSourceByConv = {}; // {convId: 'interactive'|'pkood'|'task'}
   let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
-  // Currently-focused session and its live-process state
-  let currentSession = { id: null, cwd: null, cwdExists: false, source: null };
+  // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
   let liveStatus = { live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false };
   let liveStatusTimer = null;
   // Separate 1s tick that just re-renders the live-tool strip + inline
@@ -5066,8 +5173,19 @@
     }
   }
 
-  async function sendToTerminal() {
-    const text = ($convInput && $convInput.value || '').trim();
+  async function sendToTerminal(paneId) {
+    if (paneId) {
+      const idx = paneIndexByPaneId(paneId);
+      if (idx >= 0) splitState.activeIndex = idx;
+    }
+    // Look up the input and send-button scoped to the target pane.
+    // The static-HTML p1 element retains the global ids; cloned panes
+    // (built by buildPaneElement) had their ids stripped, so we have
+    // to query by class/tag scoped to the pane element.
+    const _paneEl = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
+    const $input = (_paneEl && _paneEl.querySelector('input[type="text"]')) || $convInput;
+    const $sendBtn = (_paneEl && _paneEl.querySelector('.send-btn')) || $convSendBtn;
+    const text = ($input && $input.value || '').trim();
     if (!text) return;
     // Backlog GH issue: typed text appended to the standard issue preamble,
     // then spawn a session — same outcome as clicking "Edit & start" on the
@@ -5082,10 +5200,10 @@
       return;
     }
     if (!currentSession.id) return;
-    $convSendBtn.disabled = true;
+    $sendBtn.disabled = true;
     const flashRed = () => {
-      $convInput.style.borderColor = 'var(--red)';
-      setTimeout(() => { $convInput.style.borderColor = ''; }, 1500);
+      $input.style.borderColor = 'var(--red)';
+      setTimeout(() => { $input.style.borderColor = ''; }, 1500);
     };
     try {
       let res;
@@ -5130,7 +5248,7 @@
           $view.scrollTop = $view.scrollHeight;
           _pendingSends.push({ text, element: pendingDiv });
         }
-        $convInput.value = '';
+        $input.value = '';
       } else {
         flashRed();
         const reason = data.error || ('HTTP ' + res.status);
@@ -5140,8 +5258,8 @@
       flashRed();
       showOpToast('Send failed: ' + (err.message || 'network error'), 'error');
     }
-    $convSendBtn.disabled = false;
-    $convInput.focus();
+    $sendBtn.disabled = false;
+    $input.focus();
   }
 
   async function sendEscToTerminal() {
@@ -5182,7 +5300,7 @@
   }
 
   if ($convEscBtn) $convEscBtn.addEventListener('click', sendEscToTerminal);
-  if ($convSendBtn) $convSendBtn.addEventListener('click', sendToTerminal);
+  if ($convSendBtn) $convSendBtn.addEventListener('click', () => sendToTerminal('p1'));
   if ($convInput) $convInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); sendToTerminal(); }
   });
@@ -5780,10 +5898,62 @@
   // ── Conversations ──
   let conversationsData = [];
   let conversationsLoaded = false;
-  let currentConversation = null;
+  // ── Split-pane state ──
+  // The conversation pane can show one or two conversations side-by-side
+  // (vertical) or stacked (horizontal). Per-pane state lives in
+  // splitState.panes[]; the *active* pane is the one keyboard/sidebar
+  // actions target. The old single-instance globals (currentConversation,
+  // convLastLine, convEventSource, _pendingSends, _firstUserMsgRendered)
+  // are kept as compatibility-shim getters/setters on `window` that proxy
+  // to splitState.panes[splitState.activeIndex].* so the thousands of
+  // existing references compile against the active pane unchanged.
+  // Only the renderer / SSE / composer entry points learn paneId.
+  function _newPaneState(id) {
+    return {
+      id: id,
+      conversationId: null,
+      lastLine: 0,
+      eventSource: null,
+      pendingSends: [],
+      firstUserMsgRendered: false,
+      currentToolGroup: null,
+      currentToolCount: 0,
+      currentSession: { id: null, cwd: null, cwdExists: false, source: null },
+    };
+  }
+  const splitState = {
+    orientation: null, // null | 'vertical' | 'horizontal'
+    panes: [_newPaneState('p1')],
+    activeIndex: 0,
+    ratio: 0.5,
+  };
+  function activePaneId() { return splitState.panes[splitState.activeIndex].id; }
+  function paneByPaneId(pid) { return splitState.panes.find(p => p.id === pid) || null; }
+  function paneIndexByPaneId(pid) {
+    for (let i = 0; i < splitState.panes.length; i++) if (splitState.panes[i].id === pid) return i;
+    return -1;
+  }
+
+  // Compatibility shim — read/write the active pane via the old global names.
+  // DO NOT remove without auditing every reference to currentConversation,
+  // convLastLine, convEventSource, _pendingSends, _firstUserMsgRendered.
+  Object.defineProperty(window, 'currentConversation', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].conversationId; },
+    set(v) { splitState.panes[splitState.activeIndex].conversationId = v; },
+  });
+  Object.defineProperty(window, 'convLastLine', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].lastLine; },
+    set(v) { splitState.panes[splitState.activeIndex].lastLine = v; },
+  });
+  Object.defineProperty(window, 'convEventSource', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].eventSource; },
+    set(v) { splitState.panes[splitState.activeIndex].eventSource = v; },
+  });
+
   let showArchived = false;  // false = show non-archived, true = show only archived
-  let convLastLine = 0;
-  let convEventSource = null;  // SSE connection for tailing live conversations
 
   // Track session_ids first observed *during* this page session (not on the
   // initial load — those aren't "new"). Powers the `.recently-born` glow that
@@ -9252,12 +9422,438 @@
     input.addEventListener('blur', () => commit(true));
   }
 
-  // Return the active conversation view element. The split-panel
-  // (`$convPanelView`) is no longer engaged from the user-facing toggle,
-  // so all conversation rendering goes into `.main`'s `$conversationsView`.
-  function getConvView() {
-    return $conversationsView;
+  // Return the active conversation view element for the active pane.
+  // For single-pane mode this is `$conversationsView` (the original element,
+  // re-parented into `.conv-pane[data-pane-id="p1"]` by Task 2). For split
+  // mode each pane has its own `.conversations-view` inside it; we look
+  // it up via the active pane's data-pane-id attribute.
+  function getConvViewForPane(pid) {
+    const pane = document.querySelector(`.conv-pane[data-pane-id="${pid}"]`);
+    return pane ? pane.querySelector('.conversations-view') : null;
   }
+  function getConvView() {
+    return getConvViewForPane(activePaneId()) || $conversationsView;
+  }
+  function getConvInputBarForPane(pid) {
+    const pane = document.querySelector(`.conv-pane[data-pane-id="${pid}"]`);
+    return pane ? pane.querySelector('.conv-input-bar') : null;
+  }
+
+  // Build a fresh `.conv-pane` element for paneId, cloning the chrome of
+  // pane "p1" so styling / wiring stays in lockstep. Called only when
+  // splitting from one pane to two.
+  function buildPaneElement(paneId) {
+    const tmpl = document.querySelector('.conv-pane[data-pane-id="p1"]');
+    const clone = tmpl.cloneNode(true);
+    clone.setAttribute('data-pane-id', paneId);
+    // Strip every id in the clone — HTML mandates id uniqueness, and any
+    // future code that does getElementById('convInput') etc. would resolve
+    // to p1's element, never the clone's. Task 6 will re-find the cloned
+    // chrome elements via class/tag selectors scoped to the clone.
+    clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+    // Replace the transcript with a Loading… empty state; the dropped
+    // conversation will be loaded by selectConversation(id, paneId)
+    // immediately after attach.
+    const view = clone.querySelector('.conversations-view');
+    if (view) {
+      view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading…</div>';
+    }
+    // Hide the cloned workspace/usage strip — the pill renderers key off
+    // the singular #convInputContext id (which only p1 keeps), so the
+    // strip in cloned panes would render as empty space. Hiding it keeps
+    // the pane chrome clean. Re-engaging per-pane workspace pills is a
+    // potential follow-up; not required for v1.
+    const ctxBar = clone.querySelector('.conv-input-context');
+    if (ctxBar) ctxBar.style.display = 'none';
+    // Reveal the close button (was inline display:none in p1's static HTML).
+    const closeBtn = clone.querySelector('[data-role="pane-close"]');
+    if (closeBtn) {
+      closeBtn.style.display = '';
+      closeBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closePane(paneId);
+      });
+    }
+    // Wire the cloned input bar to send into this specific pane.
+    const sendBtn = clone.querySelector('.send-btn');
+    const input = clone.querySelector('input[type="text"]');
+    if (sendBtn) {
+      sendBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        sendToTerminal(paneId);
+      });
+    }
+    if (input) {
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' && !ev.shiftKey) {
+          ev.preventDefault();
+          sendToTerminal(paneId);
+        }
+      });
+    }
+    return clone;
+  }
+
+  // Toggle the split layout between single, vertical, horizontal.
+  // Re-mounts panes inside `#convSplit` and updates orientation.
+  function renderSplitLayout() {
+    const $split = document.getElementById('convSplit');
+    if (!$split) return;
+    if (!splitState.orientation || splitState.panes.length < 2) {
+      $split.setAttribute('data-orientation', '');
+      // Drop any stray second pane elements (defensive — should already be 1).
+      const extras = $split.querySelectorAll('.conv-pane:not([data-pane-id="p1"])');
+      extras.forEach(n => n.remove());
+      // Hide close buttons in single mode.
+      $split.querySelectorAll('.conv-pane-close').forEach(b => b.style.display = 'none');
+      // Remove any stray divider in unsplit mode.
+      const oldDivider = $split.querySelector('.conv-split-divider');
+      if (oldDivider) oldDivider.remove();
+      return;
+    }
+    $split.setAttribute('data-orientation', splitState.orientation);
+    // Ensure both panes exist in the DOM in order.
+    splitState.panes.forEach((p, idx) => {
+      let el = $split.querySelector(`.conv-pane[data-pane-id="${p.id}"]`);
+      if (!el) {
+        el = buildPaneElement(p.id);
+        $split.appendChild(el);
+      }
+      el.querySelectorAll('.conv-pane-close').forEach(b => b.style.display = '');
+    });
+    // Ensure the divider exists between the two panes.
+    let divider = $split.querySelector('.conv-split-divider');
+    if (!divider) {
+      divider = document.createElement('div');
+      divider.className = 'conv-split-divider';
+      attachDividerDrag(divider);
+    }
+    // Reorder: panes[0], divider, panes[1].
+    const p0 = $split.querySelector(`.conv-pane[data-pane-id="${splitState.panes[0].id}"]`);
+    const p1 = $split.querySelector(`.conv-pane[data-pane-id="${splitState.panes[1].id}"]`);
+    $split.append(p0, divider, p1);
+    // Apply ratio.
+    p0.style.flex = `${splitState.ratio} 1 0`;
+    p1.style.flex = `${1 - splitState.ratio} 1 0`;
+    // Mark the active pane.
+    $split.querySelectorAll('.conv-pane').forEach(el => {
+      el.classList.toggle('is-active', el.getAttribute('data-pane-id') === activePaneId());
+    });
+    attachAllPaneDropZones();
+  }
+
+  function attachDividerDrag(divider) {
+    let dragging = false;
+    let startPos = 0;
+    let startRatio = 0.5;
+    let containerSize = 0;
+    let isVertical = true;
+
+    divider.addEventListener('pointerdown', (ev) => {
+      const $split = document.getElementById('convSplit');
+      if (!$split) return;
+      isVertical = $split.getAttribute('data-orientation') === 'vertical';
+      containerSize = isVertical ? $split.clientWidth : $split.clientHeight;
+      if (containerSize <= 0) return;
+      dragging = true;
+      startPos = isVertical ? ev.clientX : ev.clientY;
+      startRatio = splitState.ratio;
+      divider.setPointerCapture(ev.pointerId);
+      ev.preventDefault();
+    });
+    divider.addEventListener('pointermove', (ev) => {
+      if (!dragging) return;
+      const cur = isVertical ? ev.clientX : ev.clientY;
+      const delta = (cur - startPos) / containerSize;
+      let next = startRatio + delta;
+      next = Math.max(0.15, Math.min(0.85, next));
+      splitState.ratio = next;
+      const p0el = document.querySelector(`.conv-pane[data-pane-id="${splitState.panes[0].id}"]`);
+      const p1el = document.querySelector(`.conv-pane[data-pane-id="${splitState.panes[1].id}"]`);
+      if (p0el) p0el.style.flex = `${next} 1 0`;
+      if (p1el) p1el.style.flex = `${1 - next} 1 0`;
+    });
+    divider.addEventListener('pointerup', (ev) => {
+      dragging = false;
+      try { divider.releasePointerCapture(ev.pointerId); } catch (e) {}
+    });
+  }
+
+  // Returns true if the active drag carries a conversation card payload
+  // (sidebar conv-item or kanban-card). Some browsers restrict
+  // dataTransfer reads during dragenter/dragover; fall back to checking
+  // dataTransfer.types for the payload key set by the source handlers.
+  function dragHasConversationPayload(ev) {
+    const types = (ev.dataTransfer && ev.dataTransfer.types) || [];
+    return Array.from(types).some(t => t === 'text/plain');
+  }
+
+  // Read the conversation id out of the drop event. Both .conv-item drag
+  // and .kanban-card drag set 'text/plain' to a comma-joined id list; we
+  // take the first id. (Multi-select drag from kanban → split is not in
+  // scope; the first id is the lead card.)
+  function readConvIdFromDrop(ev) {
+    const raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
+    if (!raw) return null;
+    const first = String(raw).split(',')[0].trim();
+    return first || null;
+  }
+
+  function attachDropZones(paneEl) {
+    if (!paneEl || paneEl._dropZonesAttached) return;
+    paneEl._dropZonesAttached = true;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'conv-pane-drop-overlay';
+    overlay.innerHTML = `
+      <div class="drop-zone right"  data-zone="right">Open on the right</div>
+      <div class="drop-zone bottom" data-zone="bottom">Open on the bottom</div>
+    `;
+    paneEl.appendChild(overlay);
+
+    // Reject drops outright when a 2-pane split is already filled. The
+    // overlay never activates, the pane shows no drop affordance, and
+    // dragenter/over/leave/drop short-circuit to the pane's children.
+    function splitIsFull() {
+      return splitState.orientation && splitState.panes.length >= 2;
+    }
+    function viewportTooNarrow() {
+      return window.innerWidth < 900;
+    }
+
+    // dragenter fires on every child element entry; track depth so the
+    // overlay doesn't flicker when the cursor crosses internal nodes.
+    let depth = 0;
+
+    // `dragend` fires on the drag source after any outcome (drop, invalid
+    // drop, ESC cancel). It's the canonical "drag is over" signal — use
+    // it to reset depth defensively so an ESC-cancelled drag (which can
+    // leave unbalanced enters) doesn't desync the next drag's overlay.
+    window.addEventListener('dragend', () => {
+      depth = 0;
+      overlay.classList.remove('active');
+      overlay.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('over'));
+    });
+
+    paneEl.addEventListener('dragenter', (ev) => {
+      if (!dragHasConversationPayload(ev)) return;
+      if (splitIsFull() || viewportTooNarrow()) return;
+      depth += 1;
+      overlay.classList.add('active');
+      ev.preventDefault();
+    });
+    paneEl.addEventListener('dragleave', (ev) => {
+      if (depth === 0) return;
+      depth -= 1;
+      if (depth === 0) {
+        overlay.classList.remove('active');
+        overlay.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('over'));
+      }
+    });
+    paneEl.addEventListener('dragover', (ev) => {
+      if (!overlay.classList.contains('active')) return;
+      ev.preventDefault();          // required to enable drop
+      ev.dataTransfer.dropEffect = 'copy';
+    });
+
+    overlay.querySelectorAll('.drop-zone').forEach(zone => {
+      zone.addEventListener('dragenter', () => zone.classList.add('over'));
+      zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+      zone.addEventListener('dragover', (ev) => { ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; });
+      zone.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        depth = 0;
+        overlay.classList.remove('active');
+        zone.classList.remove('over');
+        const convId = readConvIdFromDrop(ev);
+        const targetPaneId = paneEl.getAttribute('data-pane-id');
+        const orientation = zone.getAttribute('data-zone') === 'right' ? 'vertical' : 'horizontal';
+        if (!convId) return;
+        // If split is already full, caller shouldn't have shown the overlay,
+        // but reject defensively.
+        if (splitState.orientation && splitState.panes.length >= 2) return;
+        // Same-conv guard: if convId is already open in any pane,
+        // show a toast instead of silently returning.
+        if (splitState.panes.some(p => p.conversationId === convId)) {
+          showConvToast('Conversation is already open');
+          return;
+        }
+        openConversationInPane(convId, targetPaneId, orientation);
+      });
+    });
+    // Also reset on drop outside any zone.
+    paneEl.addEventListener('drop', () => {
+      depth = 0;
+      overlay.classList.remove('active');
+      overlay.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('over'));
+    });
+  }
+
+  // Wire drop zones on every existing pane after each layout change.
+  function attachAllPaneDropZones() {
+    document.querySelectorAll('.conv-pane').forEach(attachDropZones);
+  }
+
+  // Click anywhere inside a pane to mark it active (drives composer
+  // routing via the shim, and the sidebar `.active` highlight).
+  document.addEventListener('click', (ev) => {
+    // Don't activate the pane on close-button clicks — the close handler
+    // is about to destroy the pane anyway, and activating it first causes
+    // a flicker (sidebar highlight briefly chases the doomed conv id).
+    if (ev.target && ev.target.closest && ev.target.closest('[data-role="pane-close"]')) return;
+    const pane = ev.target.closest && ev.target.closest('.conv-pane');
+    if (!pane) return;
+    const pid = pane.getAttribute('data-pane-id');
+    const idx = paneIndexByPaneId(pid);
+    if (idx < 0 || idx === splitState.activeIndex) return;
+    splitState.activeIndex = idx;
+    document.querySelectorAll('.conv-pane').forEach(el => {
+      el.classList.toggle('is-active', el.getAttribute('data-pane-id') === pid);
+    });
+    // Sidebar highlight follows the new active pane. Mirrors the inline
+    // toggle in selectConversation (~line 6906-6917) but reads the conv
+    // id from the active pane (via the shim) instead of taking a param.
+    const activeConvId = currentConversation;
+    if ($convList) {
+      $convList.querySelectorAll('.conv-item').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === activeConvId);
+      });
+    }
+    if ($kanbanBoard) {
+      $kanbanBoard.querySelectorAll('.kanban-card').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === activeConvId);
+      });
+    }
+    if ($kanbanBoardSplit) {
+      $kanbanBoardSplit.querySelectorAll('.kanban-card').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === activeConvId);
+      });
+    }
+  }, true);
+
+  // Open `convId` in a new pane, splitting the existing pane in the
+  // requested orientation. Used by the drop handler. No-op if the same
+  // conv is already open in the current pane (avoids a duplicate
+  // SSE stream and a confusing UX).
+  async function openConversationInPane(convId, targetPaneId, orientation) {
+    if (!convId) return;
+    if (splitState.orientation && splitState.panes.length >= 2) {
+      // Split is already full — caller should not have invoked us, but
+      // we guard anyway.
+      return;
+    }
+    if (splitState.panes.length === 1 && splitState.panes[0].conversationId === convId) {
+      // Same conversation as the only existing pane — no-op (visible
+      // tooltip handled by the caller's UX in Task 8).
+      return;
+    }
+    const newPane = _newPaneState('p2');
+    splitState.orientation = orientation;
+    splitState.panes.push(newPane);
+    renderSplitLayout();          // creates the DOM for p2
+    attachAllPaneDropZones();     // wire its drop overlay
+    // Make p2 active and load the conversation in it.
+    const newIdx = splitState.panes.length - 1;
+    splitState.activeIndex = newIdx;
+    await selectConversation(convId, newPane.id);
+  }
+
+  function closePane(paneId) {
+    if (splitState.panes.length < 2) return; // can't close the only pane
+    const idx = paneIndexByPaneId(paneId);
+    if (idx < 0) return;
+    const pane = splitState.panes[idx];
+    // Tear down SSE.
+    if (pane.eventSource) {
+      try { pane.eventSource.close(); } catch (e) {}
+      pane.eventSource = null;
+    }
+    // Remove the DOM element.
+    const el = document.querySelector(`.conv-pane[data-pane-id="${paneId}"]`);
+    if (el) el.remove();
+    // Splice state and collapse.
+    splitState.panes.splice(idx, 1);
+    splitState.orientation = null;
+    splitState.activeIndex = 0; // survivor is now the only pane
+    renderSplitLayout();
+    // Re-render sidebar highlight for the survivor pane (mirrors the
+    // click-pane-active handler's three-block pattern).
+    const activeConvId = currentConversation;
+    if ($convList) {
+      $convList.querySelectorAll('.conv-item').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === activeConvId);
+      });
+    }
+    if ($kanbanBoard) {
+      $kanbanBoard.querySelectorAll('.kanban-card').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === activeConvId);
+      });
+    }
+    if ($kanbanBoardSplit) {
+      $kanbanBoardSplit.querySelectorAll('.kanban-card').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === activeConvId);
+      });
+    }
+  }
+
+  // Show a 2-second floating message anchored to the bottom-center of the viewport.
+  // Used when a drop is rejected because the conv is already open.
+  let _convToastTimer = null;
+  function showConvToast(msg) {
+    let el = document.getElementById('convToast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'convToast';
+      el.className = 'conv-toast';
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.classList.add('visible');
+    if (_convToastTimer) clearTimeout(_convToastTimer);
+    _convToastTimer = setTimeout(() => el.classList.remove('visible'), 2000);
+  }
+
+  // Below ~900px the split layout doesn't fit. Collapse to single-pane
+  // (active pane wins). Tear down the inactive pane's SSE. When the
+  // viewport grows back, the user can re-split via drag.
+  function handleViewportResize() {
+    if (window.innerWidth >= 900) return;
+    if (!splitState.orientation || splitState.panes.length < 2) return;
+    const survivor = splitState.panes[splitState.activeIndex];
+    const losers = splitState.panes.filter((_, i) => i !== splitState.activeIndex);
+    losers.forEach(p => {
+      if (p.eventSource) { try { p.eventSource.close(); } catch (e) {} }
+      const el = document.querySelector(`.conv-pane[data-pane-id="${p.id}"]`);
+      if (el && p.id !== 'p1') el.remove();
+    });
+    if (survivor.id !== 'p1') {
+      // Move survivor into p1's slot (same logic as p1-close in Task 7).
+      // Use selectConversation to ensure proper state setup (Task 7 fix).
+      const survivorConvId = survivor.conversationId;
+      if (survivor.eventSource) { try { survivor.eventSource.close(); } catch (e) {} }
+      const survivorEl = document.querySelector(`.conv-pane[data-pane-id="${survivor.id}"]`);
+      if (survivorEl) survivorEl.remove();
+      if (splitState.panes[0].eventSource) {
+        try { splitState.panes[0].eventSource.close(); } catch (e) {}
+        splitState.panes[0].eventSource = null;
+      }
+      splitState.panes.splice(1);
+      splitState.orientation = null;
+      splitState.activeIndex = 0;
+      Object.assign(splitState.panes[0], _newPaneState('p1'));
+      renderSplitLayout();
+      if (survivorConvId) selectConversation(survivorConvId, 'p1');
+    } else {
+      // Survivor is already p1; just splice and re-render.
+      splitState.panes.splice(1);
+      splitState.orientation = null;
+      splitState.activeIndex = 0;
+      renderSplitLayout();
+    }
+  }
+  window.addEventListener('resize', handleViewportResize);
 
   const STICKY_HEADER_HEIGHT_KEY = 'ccc-sticky-header-height';
   const STICKY_HEADER_MIN_PX = 90;
@@ -9493,9 +10089,16 @@
     return html;
   }
 
-  async function selectConversation(id) {
+  async function selectConversation(id, paneId) {
+    paneId = paneId || activePaneId();
+    const paneIdx = paneIndexByPaneId(paneId);
+    const pane = paneByPaneId(paneId);
+    if (!pane) return;
+    // Make this pane active so the existing globals (which proxy through
+    // splitState.activeIndex) target the right pane while we run.
+    splitState.activeIndex = paneIdx;
     // Stop any existing SSE stream or pollers
-    stopConvStream();
+    stopConvStream(paneId);
     stopSpawnStream();
     stopCodexLogPoller();
     mobileShowForCurrentMode();
@@ -9583,8 +10186,8 @@
     } else {
       stopPkoodTailPoller();
       if ($pkoodKillBtn) $pkoodKillBtn.style.display = 'none';
-      await fetchConversationEvents();
-      startConvStream();
+      await fetchConversationEvents(paneId);
+      startConvStream(paneId);
       // Block-level streaming from the spawn log — only succeeds if the
       // backend finds a CCC-spawned headless process for this session.
       // No-op for externally launched, IDE-launched, or pkood sessions.
@@ -9694,31 +10297,63 @@
     $cpKillBtn.style.display = isPkood ? '' : 'none';
   }
 
-  function startConvStream() {
-    stopConvStream();
+  function startConvStream(paneId) {
+    if (paneId) {
+      const idx = paneIndexByPaneId(paneId);
+      if (idx >= 0) splitState.activeIndex = idx;
+    }
+    stopConvStream(paneId);
     if (!currentConversation) return;
-    const url = '/api/conversations/' + currentConversation + '/stream?after=' + convLastLine;
+    // Snapshot the pane and conv id at stream-start time so the SSE
+    // event-handler closures always target THIS pane's stream even if
+    // the user switches the active pane between SSE events.
+    const streamPaneId = activePaneId();
+    const streamConvId = currentConversation;
+    const url = '/api/conversations/' + streamConvId + '/stream?after=' + convLastLine;
     convEventSource = new EventSource(url);
     convEventSource.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data);
         if (data.events && data.events.length > 0) {
-          // Invalidate the FFC cache so new file references picked up during
-          // this streaming turn are reflected in the pill count on the next
-          // ffcRefreshForCurrent() call (triggered by renderConversationEvents).
-          ffcInvalidate(currentConversation);
-          renderConversationEvents(data.events);
-          convLastLine = data.last_line;
+          // Route into the pane that owns this stream, not the currently
+          // active pane (which may have shifted to the other pane).
+          const streamPane = paneByPaneId(streamPaneId);
+          // Stale-stream guard: bail out if the pane was closed OR if its
+          // conversation has changed since the stream started. Without this,
+          // a queued message from the old conversation can write into the
+          // new conversation's transcript when the user switches convs in
+          // the same pane.
+          if (!streamPane || streamPane.conversationId !== streamConvId) return;
+          const savedIdx = splitState.activeIndex;
+          splitState.activeIndex = paneIndexByPaneId(streamPaneId);
+          try {
+            // Invalidate the FFC cache so new file references picked up during
+            // this streaming turn are reflected in the pill count on the next
+            // ffcRefreshForCurrent() call (triggered by renderConversationEvents).
+            ffcInvalidate(currentConversation);
+            renderConversationEvents(data.events, streamPaneId);
+            convLastLine = data.last_line;
+          } finally {
+            // Always restore activeIndex, even if renderConversationEvents
+            // throws — otherwise the shim stays pointed at streamPaneId
+            // and corrupts every subsequent shim read until another action
+            // shifts it.
+            splitState.activeIndex = savedIdx;
+          }
         }
       } catch (err) {}
     };
     convEventSource.onerror = () => {
-      stopConvStream();
-      setTimeout(startConvStream, 2000);
+      stopConvStream(streamPaneId);
+      setTimeout(() => startConvStream(streamPaneId), 2000);
     };
   }
 
-  function stopConvStream() {
+  function stopConvStream(paneId) {
+    if (paneId) {
+      const idx = paneIndexByPaneId(paneId);
+      if (idx >= 0) splitState.activeIndex = idx;
+    }
     if (convEventSource) {
       convEventSource.close();
       convEventSource = null;
@@ -10271,10 +10906,15 @@
     return '<div class="codex-log" style="padding:16px 20px;">' + headerHtml + msgsHtml + usageHtml + stderrHtml + '</div>';
   }
 
-  async function fetchConversationEvents() {
+  async function fetchConversationEvents(paneId) {
+    if (paneId) {
+      const idx = paneIndexByPaneId(paneId);
+      if (idx >= 0) splitState.activeIndex = idx;
+    }
+    const fetchPaneId = activePaneId();
     if (!currentConversation) return;
     const id = currentConversation;
-    const $view = getConvView();
+    const $view = getConvViewForPane(fetchPaneId) || $conversationsView;
     // Backlog cards (open GH issues + TODO/PARKING/native-task) have no
     // session JSONL — /api/conversations/<id> returns 404. Render the
     // issue body directly from the card's already-loaded fields so the
@@ -10304,12 +10944,25 @@
     try {
       const res = await fetch('/api/conversations/' + id + '?after=' + convLastLine);
       const data = await res.json();
-      if (id !== currentConversation) return;
-      if (convLastLine === 0) {
-        $view.innerHTML = '';
+      // Guard: if the pane's conv id shifted (e.g. user navigated away
+      // while the fetch was in-flight), discard the stale response.
+      const currentPane = paneByPaneId(fetchPaneId);
+      if (!currentPane || currentPane.conversationId !== id) return;
+      // Re-anchor activeIndex to fetchPaneId — the user may have clicked
+      // another conv (in either pane) while this fetch was in-flight, shifting
+      // splitState.activeIndex away. Mirror the savedIdx/try/finally pattern
+      // used in startConvStream's onmessage handler.
+      const savedIdx = splitState.activeIndex;
+      splitState.activeIndex = paneIndexByPaneId(fetchPaneId);
+      try {
+        if (convLastLine === 0) {
+          $view.innerHTML = '';
+        }
+        renderConversationEvents(data.events, fetchPaneId);
+        convLastLine = data.last_line;
+      } finally {
+        splitState.activeIndex = savedIdx;
       }
-      renderConversationEvents(data.events);
-      convLastLine = data.last_line;
       // Re-fetch session usage whenever new events landed. Usage rollups
       // arrive sporadically (in some session paths only the final
       // assistant event of each turn carries the `usage` block — many
@@ -10327,6 +10980,12 @@
       }
     }
   }
+
+  Object.defineProperty(window, '_firstUserMsgRendered', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].firstUserMsgRendered; },
+    set(v) { splitState.panes[splitState.activeIndex].firstUserMsgRendered = v; },
+  });
 
   // Render a read-only detail panel for backlog cards (GH issues, TODO.md
   // entries, PARKING_LOT items, native-task summaries). No session events
@@ -10375,8 +11034,6 @@
       + '<div style="margin-top:18px;line-height:1.55;color:var(--text);">' + bodyHtml + '</div>'
       + '</div>';
   }
-
-  let _firstUserMsgRendered = false;
   // Sticky-header dynamic ask tracker. The .conv-sticky-header normally
   // shows the first user message ("Original ask"). As the user scrolls past
   // later user messages, this state machine swaps the sticky's body to
@@ -10507,13 +11164,32 @@
   // into one collapsed `.tool-call-group` with a "Ran N commands ▾" header,
   // matching Claude Desktop's chat pane. Reset whenever the conv view is
   // cleared (see _firstUserMsgRendered = false sites).
-  let _currentToolGroup = null;
-  let _currentToolCount = 0;
+  // NB: these are shim-routed per-pane (see Object.defineProperty below) —
+  // do NOT re-add `let` declarations here.
   // Optimistic pending sends: messages the user submitted via the input bar
   // that haven't yet appeared in the conversation jsonl. Each entry is
   // { text, element } — we strip pending styling (or remove the div) when
   // the real user_text event lands via the render loop.
-  let _pendingSends = [];
+  Object.defineProperty(window, '_pendingSends', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].pendingSends; },
+    set(v) { splitState.panes[splitState.activeIndex].pendingSends = v; },
+  });
+  Object.defineProperty(window, '_currentToolGroup', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].currentToolGroup; },
+    set(v) { splitState.panes[splitState.activeIndex].currentToolGroup = v; },
+  });
+  Object.defineProperty(window, '_currentToolCount', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].currentToolCount; },
+    set(v) { splitState.panes[splitState.activeIndex].currentToolCount = v; },
+  });
+  Object.defineProperty(window, 'currentSession', {
+    configurable: true,
+    get() { return splitState.panes[splitState.activeIndex].currentSession; },
+    set(v) { splitState.panes[splitState.activeIndex].currentSession = v; },
+  });
   const _normSend = (s) => (s || '').replace(/\s+/g, ' ').trim();
 
   // Render a TODO.md backlog card in the conv pane. No session exists yet —
@@ -11228,9 +11904,10 @@
     }
   }
 
-  function renderConversationEvents(events) {
+  function renderConversationEvents(events, paneId) {
     if (!Array.isArray(events)) return;  // defensive: backlog/unknown responses
-    const $view = getConvView();
+    paneId = paneId || activePaneId();
+    const $view = getConvViewForPane(paneId) || $conversationsView;
     // Stick-to-bottom only when the user is *already* near the bottom.
     // If they've scrolled up to read, leave the scroll position alone so
     // newly-streamed events don't yank them back down. 80px tolerance is
@@ -14313,6 +14990,48 @@
 
   // Init
   loadConversationList();
+  attachAllPaneDropZones();
+
+  // Wire the static p1 close button. Closing p1 when split is engaged:
+  // keep p2 alive, slide its conversation/state into p1's slot so the
+  // static-HTML element ids (#conversationsView, #convInputBar) stay live.
+  document.querySelectorAll('.conv-pane[data-pane-id="p1"] [data-role="pane-close"]').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      // Closing p1 while split is engaged: route the survivor's conv
+      // into p1's slot via selectConversation, which handles transcript
+      // clear, sticky header reset, workspace/usage pills, session id
+      // label, pkood tail polling, and localStorage sync. Manually
+      // transplanting state (and skipping selectConversation) leaves
+      // those surfaces stale.
+      if (splitState.panes.length < 2) return;
+      const survivor = splitState.panes.find(p => p.id !== 'p1');
+      if (!survivor) return;
+      const survivorConvId = survivor.conversationId;
+      // Tear down both panes' SSE before we mutate state.
+      if (survivor.eventSource) { try { survivor.eventSource.close(); } catch (e) {} }
+      if (splitState.panes[0].eventSource) {
+        try { splitState.panes[0].eventSource.close(); } catch (e) {}
+        splitState.panes[0].eventSource = null;
+      }
+      // Remove survivor's DOM (p1's static element stays put).
+      const survivorEl = document.querySelector(`.conv-pane[data-pane-id="${survivor.id}"]`);
+      if (survivorEl) survivorEl.remove();
+      // Collapse splitState back to single-pane mode and reset p1's
+      // per-pane data so selectConversation runs against a clean slate.
+      splitState.panes.splice(1);
+      splitState.orientation = null;
+      splitState.activeIndex = 0;
+      Object.assign(splitState.panes[0], _newPaneState('p1'));
+      renderSplitLayout();
+      // Open the survivor's conv in p1 — fully exercised code path
+      // that refreshes every UI surface (transcript, sticky header,
+      // workspace pills, session id, pkood polling, etc.).
+      if (survivorConvId) selectConversation(survivorConvId, 'p1');
+    });
+  });
+
   pollVercelDeploy();
   setInterval(pollVercelDeploy, 15000);
 })();
