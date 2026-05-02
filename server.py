@@ -58,6 +58,45 @@ _RECENT_REPOS_CAP = 10
 # scanned by find_conversations() and easy to gc on demand.
 _SCRATCH_DIR = Path.home() / ".claude" / "command-center" / "scratch"
 
+# Files-from-conversation: extension whitelist driving both the
+# /api/conversations/<id>/files extractor and the /api/reveal-file
+# opener's allow-list. Closed set by design — adding `.app` / `.sh` /
+# `.command` here would re-introduce the macOS-`open`-as-RCE risk that
+# /api/open's path sandbox prevents (see SECURITY.md). Keep this list
+# tight; the opener has no path-prefix clamp because this clamp does
+# the work.
+FILE_CATEGORIES = {
+    "images":        {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
+                      ".heic", ".bmp", ".tiff"},
+    "videos":        {".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v"},
+    "pdfs":          {".pdf"},
+    "docs":          {".docx", ".doc", ".odt", ".rtf", ".pages",
+                      ".xlsx", ".xls", ".csv", ".ods", ".numbers"},
+    "presentations": {".pptx", ".ppt", ".key", ".odp"},
+    "markdown":      {".md", ".mdx"},
+    "html":          {".html", ".htm"},
+}
+FILE_EXT_TO_CATEGORY = {
+    ext: cat for cat, exts in FILE_CATEGORIES.items() for ext in exts
+}
+
+
+def _categorize_file_target(target):
+    """Return the category name for `target` (a path or URL), or None
+    if its extension is not in the whitelist. Case-insensitive on the
+    extension. URLs lose any query string / fragment before the lookup
+    so `foo.pdf?token=…` still classifies as `pdfs`."""
+    if not target:
+        return None
+    s = target
+    # Strip URL query / fragment so foo.pdf?x=1 → foo.pdf
+    for sep in ("?", "#"):
+        if sep in s:
+            s = s.split(sep, 1)[0]
+    # os.path.splitext handles trailing-dot / no-dot cleanly.
+    _, ext = os.path.splitext(s)
+    return FILE_EXT_TO_CATEGORY.get(ext.lower())
+
 
 def _load_custom_repos():
     """Return the list of user-picked repo paths (absolute, deduped, existing dirs)."""
