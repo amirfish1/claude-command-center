@@ -8650,11 +8650,21 @@ def _detach_session_from_strategy(goal_slug, strategy_id):
 
 
 def _kill_session_by_id(session_id):
-    """Best-effort: find the pid owning this session and SIGTERM it."""
+    """Best-effort: find ALL pids claiming this session and SIGTERM them.
+
+    Multiple PIDs can register the same sessionId — most often when Jump
+    spawns `claude --resume <sid>` while the original headless agent is
+    still alive — and we want to free the whole set, not just the first.
+    Each PID is verified to still be a claude process before we signal,
+    so a recycled PID can't end up taking out something unrelated.
+    """
     import signal
     sessions_dir = Path.home() / ".claude" / "sessions"
     if not sessions_dir.is_dir():
         return {"ok": False, "error": "no sessions dir"}
+    killed = []
+    errors = []
+    matched = 0
     for f in sessions_dir.glob("*.json"):
         try:
             data = json.loads(f.read_text())
@@ -8668,12 +8678,24 @@ def _kill_session_by_id(session_id):
         pid = data.get("pid")
         if not pid:
             continue
+        matched += 1
+        if not _pid_is_engine_process(pid, "claude"):
+            # Stale sessions/<pid>.json — process is gone or the PID got
+            # recycled to something else. Nothing to signal safely.
+            continue
         try:
             os.kill(int(pid), signal.SIGTERM)
-            return {"ok": True, "action": "killed", "pid": pid}
+            killed.append(int(pid))
         except (OSError, ProcessLookupError) as e:
-            return {"ok": False, "error": str(e)}
-    return {"ok": False, "error": "no process found for session"}
+            errors.append({"pid": pid, "error": str(e)})
+    if matched == 0:
+        return {"ok": False, "error": "no process found for session"}
+    if not killed and not errors:
+        return {"ok": True, "action": "noop", "note": "session already dead"}
+    result = {"ok": bool(killed), "action": "killed", "pids": killed}
+    if errors:
+        result["errors"] = errors
+    return result
 
 
 def morning_move(payload):
