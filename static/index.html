@@ -2560,57 +2560,37 @@
     flex-shrink: 0;
   }
 
-  /* ── All-repos archive view ───────────────────────────────────────────
-   * Replaces the sidebar conversation list when toggled on. Each row is
-   * one conversation across every folder under ~/.claude/projects/, sorted
-   * reverse-chrono. Read-only in v1 — click does nothing yet. */
+  /* "All repos" toggle button active state. */
   .conv-allrepos-toggle.is-active {
     background: var(--accent) !important;
     color: #fff !important;
     border-color: var(--accent) !important;
   }
-  .archive-row {
-    display: flex; align-items: center; gap: 8px;
-    padding: 7px 12px;
-    border-bottom: 1px solid var(--border);
-    font-size: 12px;
-    cursor: default;
-    min-height: 32px;
-    box-sizing: border-box;
-  }
-  .archive-row:hover { background: var(--surface-2); }
-  .archive-folder-chip {
+
+  /* Folder chip rendered inside .conv-title-row for archive entries (and
+   * later for any row that wants to surface its source folder). The hue is
+   * set inline via --chip-hue from a stable hash of the folder label, so
+   * the same folder always gets the same color. Translucent fill so it
+   * reads on both light and dark themes. */
+  .conv-folder-chip {
+    --chip-hue: 0;
     flex-shrink: 0;
     padding: 1px 7px;
-    background: var(--surface-2);
-    color: var(--text-muted);
-    border-radius: 10px;
+    border-radius: 9px;
     font-size: 10px;
     font-weight: 600;
-    text-transform: lowercase;
-    max-width: 140px;
+    line-height: 1.4;
+    background: hsla(var(--chip-hue), 60%, 50%, 0.18);
+    color: hsl(var(--chip-hue), 55%, 65%);
+    border: 1px solid hsla(var(--chip-hue), 55%, 50%, 0.35);
+    max-width: 130px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .archive-folder-chip.is-orphan {
-    /* slug couldn't be resolved to an existing dir — visually muted */
+  .conv-folder-chip.is-orphan {
     opacity: 0.55;
     font-style: italic;
-  }
-  .archive-title {
-    flex: 1; min-width: 0;
-    color: var(--text);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .archive-title.is-empty {
-    color: var(--text-muted); font-style: italic;
-  }
-  .archive-time {
-    flex-shrink: 0;
-    color: var(--text-muted);
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
   }
   .archive-empty-state {
     padding: 24px 16px;
@@ -7601,17 +7581,6 @@
   }
 
   function renderConversationList(convs) {
-    // Archive-mode guard: when "All repos" is on, the sidebar list is owned
-    // by the archive renderer. Periodic refreshes (auto-poll, post-action
-    // reloads, etc.) still fire loadConversationList → renderConversationList,
-    // and without this guard they'd clobber the archive view back to the
-    // single-repo session list. Re-render archive with current filter and
-    // return; conversationsData stays fresh for when archive toggles off.
-    if (typeof archiveMode !== 'undefined' && archiveMode) {
-      const $search = document.getElementById('convSearch');
-      try { renderArchiveList($search ? $search.value : ''); } catch (_) {}
-      return;
-    }
     if (!convs.length) {
       $convList.innerHTML =
         '<div class="empty-state first-run" style="height:auto;padding:28px 20px;font-size:13px;flex-direction:column;gap:10px;align-items:flex-start;color:var(--text-muted);">'
@@ -7802,12 +7771,6 @@
         ? '<button class="conv-merge-btn" data-role="merge" title="' + escapeHtml(_mergeTitle) + '">&#128256;</button>'
         : '';
 
-      // GH Issues / TODO / parking rows live in the GH Issues section and
-      // need two extra affordances vs. session rows: a "Start" pill that
-      // mirrors the kanban-start-btn (spawn a session for this issue), and
-      // a relabelled archive button — for backlog rows "archive" actually
-      // closes the GH issue "not planned", so the verb on the button
-      // matches the action.
       const isBacklogRow = c.source === 'backlog';
       let startBtn = '';
       let archiveBtn;
@@ -7820,10 +7783,18 @@
         archiveBtn = '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>';
       }
 
+      const folderChipHtml = c.folder_label_chip
+        ? '<span class="conv-folder-chip' + (c.folder_chip_orphan ? ' is-orphan' : '')
+            + '" style="--chip-hue:' + (c.folder_chip_hue | 0) + ';"'
+            + ' title="' + escapeHtml(c.folder_path || c.session_cwd || '') + '">'
+            + escapeHtml(c.folder_label_chip) + '</span>'
+        : '';
+
       return '<div class="conv-item' + active + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
+          + folderChipHtml
           + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to rename">' + escapeHtml(title) + '</div>'
           + liveToolHtml
           + '<span class="conv-meta-inline">'
@@ -10809,21 +10780,16 @@
     } catch (_) { return []; }
   }
 
-  function _archiveFormatTime(epochSec) {
-    if (!epochSec) return '';
-    const d = new Date(epochSec * 1000);
-    const now = new Date();
-    const sameDay = d.toDateString() === now.toDateString();
-    if (sameDay) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    const sameYear = d.getFullYear() === now.getFullYear();
-    return d.toLocaleDateString([], sameYear
-      ? { month: 'short', day: 'numeric' }
-      : { month: 'short', day: 'numeric', year: '2-digit' });
-  }
-
-  function _archiveEscape(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Stable hue 0..359 from a string. Used to color folder chips so the
+  // same folder always gets the same color across renders.
+  function _hashHue(s) {
+    let h = 0;
+    const str = String(s || '');
+    for (let i = 0; i < str.length; i++) {
+      h = ((h << 5) - h) + str.charCodeAt(i);
+      h |= 0;
+    }
+    return Math.abs(h) % 360;
   }
 
   function renderArchiveList(filter) {
@@ -10835,38 +10801,55 @@
         .toLowerCase().includes(q)
     ) : archiveData;
 
+    if (!archiveData.length) {
+      $list.innerHTML = '<div class="archive-empty-state">No conversations on disk.</div>';
+      return;
+    }
     if (!rows.length) {
-      $list.innerHTML = '<div class="archive-empty-state">' +
-        (archiveData.length ? 'No conversations match your filter.' : 'No conversations on disk.') +
-        '</div>';
+      $list.innerHTML = '<div class="archive-empty-state">No conversations match your filter.</div>';
       return;
     }
 
-    const frag = document.createDocumentFragment();
-    for (const c of rows) {
-      const row = document.createElement('div');
-      row.className = 'archive-row';
-      row.dataset.sessionId = c.session_id;
-      row.dataset.folderPath = c.folder_path || c.slug;
-      // Folder chip is muted/italic when the slug couldn't be resolved to
-      // an existing directory — signals "this folder is gone or never
-      // resolved" so the user knows the label is approximate.
-      const chipOrphan = (c.folder_path === c.slug) ? ' is-orphan' : '';
-      const titleEmpty = c.first_message ? '' : ' is-empty';
-      row.innerHTML =
-        '<div class="archive-folder-chip' + chipOrphan + '" title="' +
-          _archiveEscape(c.folder_path || c.slug) + '">' +
-          _archiveEscape(c.folder_label || c.slug) +
-        '</div>' +
-        '<div class="archive-title' + titleEmpty + '" title="' +
-          _archiveEscape(c.first_message || '(no first message)') + '">' +
-          _archiveEscape(c.first_message || '(no first message)') +
-        '</div>' +
-        '<div class="archive-time">' + _archiveEscape(_archiveFormatTime(c.mtime)) + '</div>';
-      frag.appendChild(row);
-    }
-    $list.innerHTML = '';
-    $list.appendChild(frag);
+    // Shape archive entries to look like /api/sessions entries so the
+    // existing renderConversationList renders them with the regular row
+    // template — same font, time format, dividers, hover, click hooks.
+    // Cold archive defaults (is_live: false, no sidecar) keep the live-
+    // pill code paths quiet; when a peer server is later running for one
+    // of these folders, supercharging the row with live data is just a
+    // matter of merging the peer's session record into this shape.
+    const shaped = rows.map(c => {
+      const folderOrphan = (c.folder_path === c.slug);
+      return {
+        id: c.session_id,
+        session_id: c.session_id,
+        first_message: c.first_message,
+        display_name: '',
+        name_overridden: false,
+        last_assistant_text: '',
+        modified: c.mtime,
+        last_interacted: c.mtime,
+        size: c.size || 0,
+        is_live: false,
+        archived: false,
+        source: 'interactive',
+        session_cwd: c.folder_path,
+        session_cwd_exists: !folderOrphan,
+        session_cwd_is_worktree: false,
+        branch: c.git_branch || '',
+        // Folder chip — special fields read by _renderRow.
+        folder_label_chip: c.folder_label,
+        folder_chip_hue: _hashHue(c.folder_label || c.slug),
+        folder_chip_orphan: folderOrphan,
+        folder_path: c.folder_path,
+      };
+    });
+
+    // Make sure the list is visible (kanban is hidden in setArchiveMode).
+    const $kanban = document.getElementById('kanbanBoard');
+    if ($kanban) $kanban.style.display = 'none';
+    $list.style.display = '';
+
+    renderConversationList(shaped);
   }
 
   async function setArchiveMode(on) {
