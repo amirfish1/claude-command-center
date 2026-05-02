@@ -599,10 +599,11 @@
   .conv-sticky-header__resize-handle.is-dragging {
     background: rgba(88,166,255,0.08);
   }
-  /* Collapse/expand chevron — small tab anchored at the bottom-center
-     of the sticky header. Click toggles `.is-collapsed`, which hides the
-     content rows and shrinks the box to a thin strip. State persists in
-     localStorage so the user's pick survives page reloads. */
+  /* Expand chevron — small tab anchored at the bottom-center of the
+     sticky header. Click toggles `.is-expanded`, which grows the panel
+     from its default 170px to half the viewport height for a closer
+     read of the asks + activity. State is ephemeral (per-conversation,
+     resets on conv switch). */
   .conv-sticky-header__collapse {
     position: absolute; left: 50%; transform: translateX(-50%);
     bottom: -10px;
@@ -624,21 +625,10 @@
     background: #141b25;
   }
   .conv-sticky-header__collapse-icon { display: inline-block; line-height: 1; }
-  .conv-sticky-header.is-collapsed { padding-top: 6px; padding-bottom: 6px; }
-  .conv-sticky-header.is-collapsed .csh-row,
-  .conv-sticky-header.is-collapsed .tools-toggle,
-  .conv-sticky-header.is-collapsed .conv-sticky-header__resize-handle {
-    display: none;
-  }
-  .conv-sticky-header.is-collapsed::before {
-    content: 'header collapsed — click ▾ to expand';
-    display: block;
-    text-align: center;
-    font-size: 10px;
-    color: var(--text-muted);
-    opacity: 0.6;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+  /* When expanded, the unified panel grows to half the viewport height.
+     The fixed-height rule in `.csh-row` is overridden here. */
+  .conv-sticky-header.is-expanded .csh-row {
+    height: 50vh;
   }
   .conversations-view .event { margin-bottom: 12px; padding: 10px 14px; border-radius: 6px; border-left: 3px solid transparent; }
   /* Assistant rows — Claude-Desktop-style clean prose. No background fill,
@@ -707,7 +697,7 @@
   .conv-sticky-header .csh-row {
     display: flex; gap: 0; align-items: stretch;
     flex: 0 0 auto;
-    height: 140px;
+    height: 170px;
     background: #161c25;
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -724,20 +714,38 @@
   }
   .conv-sticky-header .csh-col-ask {
     flex: 5 1 0; min-width: 0; min-height: 0;
-    display: flex; flex-direction: column; gap: 8px;
-    overflow-y: auto;
+    display: flex; flex-direction: column; gap: 0;
+    overflow: hidden;
     border-right: 1px solid var(--border);
   }
-  /* Earlier-ask sub-block — appears under the original when scrolled past
-     a later user message. The two share .user-msg styling but each has
-     its own labelled box so it's obvious which message the user is
-     looking at right now. */
+  /* Both ask sub-blocks are permanent slots — original on top, earlier
+     on bottom. Each takes half the column height and scrolls internally
+     if its body overflows; labels stay pinned at the top of each slot. */
+  .conv-sticky-header .csh-ask-original,
+  .conv-sticky-header .csh-ask-earlier {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex; flex-direction: column;
+  }
+  .conv-sticky-header .csh-ask-original > .label,
+  .conv-sticky-header .csh-ask-earlier > .label { flex: 0 0 auto; }
+  .conv-sticky-header .csh-ask-original > .user-msg,
+  .conv-sticky-header .csh-ask-earlier > .user-msg {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  }
+  /* Earlier-ask sub-block — separator + orange label so it reads as a
+     distinct slot from the original. */
   .conv-sticky-header .csh-ask-earlier {
     border-top: 1px dashed var(--border);
     padding-top: 6px;
-    margin-top: 2px;
+    margin-top: 6px;
   }
   .conv-sticky-header .csh-ask-earlier .label { color: var(--orange); }
+  .conv-sticky-header .earlier-empty {
+    color: var(--text-muted);
+    opacity: 0.45;
+    font-size: 12px;
+  }
   .conv-sticky-header .csh-col-activity {
     flex: 5 1 0; min-width: 0; min-height: 0;
     display: flex; flex-direction: column;
@@ -1027,6 +1035,28 @@
     opacity: 0.8;
     transition: opacity 0.4s ease-out;
   }
+  /* Live dot — sits to the left of the per-row timestamp on .conv-item
+   * rows whose session is currently live (sidecar marker exists). Distinct
+   * from the live-tool pill in the title row; this just signals "this row
+   * is being actively polled, its state can change in real time" so the
+   * user knows where the freshness comes from. */
+  .conv-live-dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--accent, #58a6ff);
+    box-shadow: 0 0 0 0 rgba(88,166,255,0.55);
+    margin-right: 4px;
+    flex-shrink: 0;
+    vertical-align: middle;
+    animation: ccc-live-dot-pulse 2.4s ease-out infinite;
+  }
+  @keyframes ccc-live-dot-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(88,166,255,0.55); }
+    70%  { box-shadow: 0 0 0 6px rgba(88,166,255,0); }
+    100% { box-shadow: 0 0 0 0 rgba(88,166,255,0); }
+  }
+
   /* Per-event timestamps prefixed to each conversation row. Sourced from
      the JSONL event's own `ts` (when the message was actually written),
      not the render time. `[S …]` marks events that arrived first via the
@@ -7857,9 +7887,17 @@
             + escapeHtml(c.folder_label_chip) + '</span>'
         : '';
 
+      // Live dot — sits to the left of the timestamp when this session
+      // is actively being polled (sidecar marker exists). Helps the user
+      // see at a glance which rows can change in real time.
+      const liveDotHtml = c.is_live
+        ? '<span class="conv-live-dot" title="Live — actively polled"></span>'
+        : '';
+
       return '<div class="conv-item' + active + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
+          + liveDotHtml
           + '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
           + folderChipHtml
           + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to rename">' + escapeHtml(title) + '</div>'
@@ -9419,11 +9457,12 @@
       items[st.currentIdx].classList.remove('is-pinned-in-sticky');
     }
     if (idx <= 0) {
-      // No earlier ask in play — collapse the second block. The original
-      // sub-block is static HTML, so we never touch it.
+      // No earlier ask scrolled past — keep the slot rendered (the user
+      // wants a permanent place for the latest ask) but blank its body.
+      // The label stays so the slot reads as "reserved for the latest
+      // ask once you scroll past one."
       st.currentIdx = 0;
-      if (st.earlierBox) st.earlierBox.style.display = 'none';
-      if (st.earlierFirst) st.earlierFirst.textContent = '';
+      if (st.earlierFirst) st.earlierFirst.innerHTML = '<span class="earlier-empty">—</span>';
       return;
     }
     const item = items[idx];
@@ -9444,7 +9483,6 @@
     st.currentIdx = idx;
     item.classList.add('is-pinned-in-sticky');
     if (st.earlierFirst) st.earlierFirst.innerHTML = linkifyPastedImages(escapeHtml(text));
-    if (st.earlierBox) st.earlierBox.style.display = '';
   }
   function _dynAskUpdate() {
     const st = _dynamicAskState;
@@ -9975,6 +10013,11 @@
     }
     html += '</div>';
     slot.innerHTML = html;
+    // Pin the activity column to its bottom — newest events live at the
+    // tail of the list; if it overflows the fixed-height panel we want
+    // the user looking at the most recent commit/push/PR, not whatever
+    // happened on turn 1.
+    if (col) col.scrollTop = col.scrollHeight;
   }
 
   // Produce a human-readable summary for a single tool-only assistant event,
@@ -10077,8 +10120,10 @@
           // overlay in this sticky header; it's now a real button in
           // convToolbar (see #announceBtnConv) so it stays in reach
           // without having to scroll up.
-          const stickyCollapsed = localStorage.getItem('cshCollapsed') === '1';
-          if (stickyCollapsed) sticky.classList.add('is-collapsed');
+          // Always start in the default (170px) state when entering a
+          // conversation. The chevron toggles to `.is-expanded` (50vh)
+          // and back; that state is ephemeral, scoped to this sticky DOM
+          // node, and resets every time the user switches conversations.
           sticky.innerHTML = resolveBtn + issueBtn
             + '<button class="tools-toggle" data-tools-toggle' + (hidden ? ' class="active"' : '') + ' title="Toggle tool-call visibility">'
             + (hidden ? 'Show tools' : 'Hide tools') + '</button>'
@@ -10096,7 +10141,7 @@
                       return h;
                     })()
             +     '</div>'
-            +     '<div class="csh-ask-earlier" style="display:none;" data-earlier-block>'
+            +     '<div class="csh-ask-earlier" data-earlier-block>'
             +       '<div class="label">Earlier ask</div>'
             +       '<div class="user-msg"><span class="earlier-first" data-earlier-first></span></div>'
             +     '</div>'
@@ -10106,23 +10151,23 @@
             +   '</div>'
             + '</div>'
             + '<button type="button" class="conv-sticky-header__collapse" data-csh-collapse '
-            +   'title="Collapse/expand the sticky header" aria-label="Collapse sticky header">'
-            +   '<span class="conv-sticky-header__collapse-icon">'
-            +     (stickyCollapsed ? '▾' : '▴')
-            +   '</span>'
+            +   'title="Expand to half-screen / shrink back" aria-label="Toggle expanded sticky panel">'
+            +   '<span class="conv-sticky-header__collapse-icon">▴</span>'
             + '</button>';
           $view.insertBefore(sticky, $view.firstChild);
-          // Wire the chevron toggle. State persists across reloads via
-          // localStorage so the user's preference sticks for every conv.
+          // Wire the chevron toggle. Two states:
+          //   default (170px) → click → expanded (50vh)
+          //   expanded (50vh) → click → default (170px)
+          // State is ephemeral; switching conversations rebuilds the
+          // sticky in the default state.
           const collapseBtn = sticky.querySelector('[data-csh-collapse]');
           if (collapseBtn) {
             collapseBtn.addEventListener('click', (e) => {
               e.stopPropagation();
-              const nowCollapsed = !sticky.classList.contains('is-collapsed');
-              sticky.classList.toggle('is-collapsed', nowCollapsed);
-              localStorage.setItem('cshCollapsed', nowCollapsed ? '1' : '0');
+              const nowExpanded = !sticky.classList.contains('is-expanded');
+              sticky.classList.toggle('is-expanded', nowExpanded);
               const icon = collapseBtn.querySelector('.conv-sticky-header__collapse-icon');
-              if (icon) icon.textContent = nowCollapsed ? '▾' : '▴';
+              if (icon) icon.textContent = nowExpanded ? '▾' : '▴';
             });
           }
           // Sticky auto-sizes to its current message — no resize handle, no
@@ -11022,8 +11067,17 @@
         modified: c.mtime,
         last_interacted: c.mtime,
         size: c.size || 0,
-        is_live: false,
+        // Round 2: live flag + state pills, all derived server-side
+        // from sidecar / git status / JSONL events with mtime-based
+        // caching. Powers the blue live dot + uncommitted/committed/
+        // pushed/no-edits chips + PR #N + Ready-to-merge bucket.
+        is_live: !!c.is_live,
         archived: !!c.archived,
+        worktree_dirty: !!c.worktree_dirty,
+        has_commit: !!c.has_commit,
+        has_push: !!c.has_push,
+        has_edit: !!c.has_edit,
+        tail_pr_number: c.tail_pr_number || null,
         source: 'interactive',
         session_cwd: c.session_cwd || c.folder_path,
         session_cwd_exists: !folderOrphan,
