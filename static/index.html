@@ -8952,8 +8952,19 @@
       if (isBacklogRow) {
         const _issueAttr = escapeHtml(c.issue_number || '');
         const _titleAttr = escapeHtml(c.display_name || c.first_message || '');
-        startBtn = '<button class="conv-start-btn" data-role="start" data-issue="' + _issueAttr + '" data-title="' + _titleAttr + '" title="Spawn a session to work on this issue" aria-label="Start issue session">&#9654;</button>';
-        archiveBtn = '<button class="conv-archive-btn is-close" data-role="archive" title="Archive issue (close as not planned)" aria-label="Archive issue">&#128229;</button>';
+        // Cross-repo issues carry spawn_cwd so the spawn handler can target
+        // their repo (instead of the active server's REPO_ROOT). Empty for
+        // single-repo backlog cards — spawn falls through to the default.
+        const _spawnCwdAttr = escapeHtml(c.spawn_cwd || '');
+        startBtn = '<button class="conv-start-btn" data-role="start" data-issue="' + _issueAttr + '" data-title="' + _titleAttr + '" data-spawn-cwd="' + _spawnCwdAttr + '" title="Spawn a session to work on this issue" aria-label="Start issue session">&#9654;</button>';
+        // Cross-repo issue rows skip the archive button — the close-issue
+        // endpoint is REPO_ROOT-scoped and would fail for issues from
+        // other repos. Switch to that repo to manage its issues.
+        if (c.id && String(c.id).startsWith('xrepo-issue-')) {
+          archiveBtn = '';
+        } else {
+          archiveBtn = '<button class="conv-archive-btn is-close" data-role="archive" title="Archive issue (close as not planned)" aria-label="Archive issue">&#128229;</button>';
+        }
       } else {
         archiveBtn = '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>';
       }
@@ -9458,6 +9469,10 @@
         ev.stopPropagation();
         const issueNum = btn.dataset.issue;
         const rawTitle = btn.dataset.title;
+        // For cross-repo issues, spawnCwd points at the issue's repo so
+        // the new session lands in the right folder. Empty for single-
+        // repo issues — server defaults to its own REPO_ROOT.
+        const spawnCwd = btn.dataset.spawnCwd || '';
         const cleanTitle = (rawTitle || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
         const sessionName = issueNum
           ? ('issue-' + issueNum)
@@ -9475,10 +9490,12 @@
         insertPendingSpawnCard(tempPid, sessionName, false);
         (async () => {
           try {
+            const spawnBody = { prompt: prompt, name: sessionName };
+            if (spawnCwd) spawnBody.cwd = spawnCwd;
             const res = await fetch('/api/sessions/spawn', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ prompt: prompt, name: sessionName }),
+              body: JSON.stringify(spawnBody),
             });
             const data = await res.json().catch(() => ({}));
             if (data.ok && data.pid) {
@@ -9489,7 +9506,10 @@
                 pendingSpawns.set(data.pid, placeholder);
               }
             }
-            if (issueNum) {
+            // Skip the mark-in-progress label for cross-repo issues —
+            // that endpoint is REPO_ROOT-scoped and would label the wrong
+            // repo's issue. Single-repo flow still labels normally.
+            if (issueNum && !spawnCwd) {
               fetch('/api/issues/' + issueNum + '/mark-in-progress', { method: 'POST' }).catch(() => {});
             }
           } catch (_) {}
@@ -13210,10 +13230,75 @@
     });
   }
 
+  // Cross-repo issues → backlog-card-shaped rows. ID format
+  // `xrepo-issue-<repo-slug>-<number>` is intentionally distinct from the
+  // single-repo `backlog-issue-<N>` so the archive/rename endpoint regexes
+  // don't try to handle them — those operations remain repo-scoped (you
+  // can switch to that repo and use the regular flow). The Start button
+  // handler reads the row's `cwd` field to spawn into the right folder.
+  function _crossRepoIssueArchiveRows() {
+    if (!Array.isArray(crossRepoIssuesData) || !crossRepoIssuesData.length) return [];
+    return crossRepoIssuesData.map(issue => {
+      const repoPath = issue.repo_path || '';
+      const repoLabel = issue.repo_label || _pathLeaf(repoPath) || repoPath;
+      const slug = repoPath.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      const number = String(issue.number || '');
+      const id = `xrepo-issue-${slug}-${number}`;
+      const labels = (issue.labels || []).map(l => (l && l.name) || '').filter(Boolean);
+      const title = issue.title || '';
+      const createdAtStr = issue.createdAt || issue.updatedAt || '';
+      let createdTs = 0;
+      try { createdTs = createdAtStr ? new Date(createdAtStr).getTime() / 1000 : 0; } catch (_) {}
+      return {
+        id,
+        session_id: id,
+        display_name: `#${number}: ${title}`,
+        first_message: (issue.body || '').slice(0, 200),
+        name_overridden: false,
+        source: 'backlog',
+        backlog_type: 'github',
+        issue_number: number,
+        issue_labels: labels,
+        issue_created_at: createdAtStr,
+        issue_state: issue.state || 'OPEN',
+        issue_state_reason: issue.stateReason || null,
+        modified: createdTs,
+        size: 0,
+        branch: '',
+        is_live: false,
+        archived: false,
+        verified: false,
+        has_edit: false,
+        has_commit: false,
+        has_push: false,
+        last_event_type: null,
+        pending_tool: null,
+        pending_file: null,
+        sidecar_status: null,
+        sidecar_tool: null,
+        sidecar_file: null,
+        sidecar_has_writes: false,
+        sidecar_ts: 0,
+        // Folder chip — same fields the conversation rows use.
+        folder_path: repoPath,
+        folder_label: repoLabel,
+        slug: repoPath,
+        // Used by the Start handler to spawn into the right folder
+        // instead of the active server's REPO_ROOT.
+        spawn_cwd: repoPath,
+      };
+    });
+  }
+
   function _archiveRowsWithBacklog() {
     const rows = Array.isArray(archiveData) ? archiveData.slice() : [];
     const seen = new Set(rows.map(c => c && (c.session_id || c.id)).filter(Boolean));
-    for (const row of _currentRepoBacklogArchiveRows()) {
+    // Cross-repo issues take precedence over single-repo backlog injection
+    // — they cover the active repo's issues too, so dropping the single-
+    // repo version avoids duplicate rows when /api/issues/all responds.
+    const issueRows = _crossRepoIssueArchiveRows();
+    const sourceRows = issueRows.length ? issueRows : _currentRepoBacklogArchiveRows();
+    for (const row of sourceRows) {
       const key = row.session_id || row.id;
       if (key && seen.has(key)) continue;
       rows.push(row);
@@ -13493,12 +13578,34 @@
       return Array.isArray(d.conversations) ? d.conversations : [];
     } catch (_) { return []; }
   }
+
+  // Cross-repo open GH issues — populates the archive view's GH Issues
+  // section across every known repo. Each issue is transformed to a
+  // backlog-card-shaped row by _crossRepoIssueArchiveRows() so the
+  // existing classifier renders it under the same section as single-repo
+  // issues. Closed issues are filtered out client-side here to keep the
+  // section focused on actionable work.
+  let crossRepoIssuesData = [];
+  async function loadCrossRepoIssues() {
+    try {
+      const r = await fetch('/api/issues/all');
+      if (!r.ok) return [];
+      const d = await r.json();
+      const all = Array.isArray(d.issues) ? d.issues : [];
+      // Only OPEN issues in v1 — closed adds noise. The server returns
+      // both so the future "view recently completed" toggle has data.
+      return all.filter(i => (i.state || '').toUpperCase() === 'OPEN');
+    } catch (_) { return []; }
+  }
+
   async function refreshArchiveData() {
-    const [convs] = await Promise.all([
+    const [convs, issues] = await Promise.all([
       loadArchiveAll(),
+      loadCrossRepoIssues(),
       repoListState.repos.length ? Promise.resolve(null) : loadRepoList().catch(() => null),
     ]);
     archiveData = convs;
+    crossRepoIssuesData = issues || [];
     archiveLoaded = true;
     renderArchiveFolderFilter();
     renderRepoSidebar();
