@@ -646,6 +646,25 @@ def _decode_project_slug(slug):
         return None
 
 
+_GENERATED_HELPER_SESSION_PREFIXES = (
+    "Produce a concise 4-8 word title summarizing what the user is trying to do",
+    "Produce a concise 4-8 word title for the GitHub issue below",
+)
+
+
+def _is_generated_helper_session(first_message):
+    """Return True for CCC's own throwaway utility prompts."""
+    text = (first_message or "").lstrip()
+    if not text:
+        return False
+    if text.startswith(_GENERATED_HELPER_SESSION_PREFIXES):
+        return True
+    return (
+        text.startswith("Use the Read tool to open this image:")
+        and "Then output ONLY a single JSON line" in text[:500]
+    )
+
+
 def find_all_conversations(limit_per_folder=None):
     """Walk ~/.claude/projects/ for every subdir and return a flat list of
     conversation metadata across every folder you've ever Claude-Code'd in.
@@ -758,11 +777,11 @@ def find_all_conversations(limit_per_folder=None):
                         if not first_message and ev.get("type") == "user":
                             msg = (ev.get("message") or {}).get("content")
                             if isinstance(msg, str):
-                                first_message = msg.strip()[:200]
+                                first_message = msg.strip()
                             elif isinstance(msg, list):
                                 for part in msg:
                                     if isinstance(part, dict) and part.get("type") == "text":
-                                        first_message = (part.get("text") or "").strip()[:200]
+                                        first_message = (part.get("text") or "").strip()
                                         break
                         if not git_branch:
                             git_branch = ev.get("gitBranch") or ev.get("git_branch")
@@ -774,6 +793,9 @@ def find_all_conversations(limit_per_folder=None):
                             break
             except (OSError, UnicodeDecodeError):
                 pass
+
+            if _is_generated_helper_session(first_message):
+                continue
 
             # Tool-call inference — match what extract_session_workspace
             # does for active sessions. The JSONL's first-event cwd /
@@ -918,7 +940,7 @@ def find_all_conversations(limit_per_folder=None):
                 "session_cwd_is_worktree": cwd_is_worktree,
                 "mtime": stat.st_mtime,
                 "size": stat.st_size,
-                "first_message": first_message,
+                "first_message": first_message[:200] if first_message else None,
                 # Both keys: `branch`/`git_branch` is the JSONL's literal
                 # gitBranch (what the row defaults to when no inference);
                 # `effective_branch`/`effective_kind` carry the tool-call
@@ -5032,18 +5054,6 @@ def find_conversations(progress=None, include_old=True, live_sids=None):
     if live_sids is None and not include_old:
         live_sids = set(_load_session_registry().keys())
     live_sids = set(live_sids or [])
-    # Skip sessions created by our own `claude -p` title-summarizer calls.
-    # The summarizer prompts start with these exact prefixes (see
-    # summarize_session_title / the GitHub-issue title summarizer). Without
-    # this filter, every click of the ✨ Titles button creates a throwaway
-    # session that then pollutes the kanban with a "Produce a concise 4-8
-    # word title…" card. Match is on first_message prefix, which is resilient
-    # to user renames — the prompt text itself can't be overridden.
-    _TITLE_SUMMARIZER_PREFIXES = (
-        "Produce a concise 4-8 word title summarizing what the user is trying to do",
-        "Produce a concise 4-8 word title for the GitHub issue below",
-    )
-
     # If the same session_id (file name) appears in multiple candidate
     # dirs (unlikely — claude-code uses one slug per process — but
     # possible if a repo path was historically encoded both ways), the
@@ -5186,10 +5196,10 @@ def find_conversations(progress=None, include_old=True, live_sids=None):
             _t_head += time.perf_counter() - _t0
             _n_head += 1
 
-        # Drop throwaway title-summarizer sessions before spending any more work
-        # on them (tail scan, cwd lookup, etc.). first_message peek above already
-        # strips <command-name> wrappers, so a plain prefix compare is enough.
-        if first_message and first_message.lstrip().startswith(_TITLE_SUMMARIZER_PREFIXES):
+        # Drop generated helper sessions before spending any more work on
+        # them (tail scan, cwd lookup, etc.). first_message peek above already
+        # strips <command-name> wrappers, so prompt-shape matching is enough.
+        if _is_generated_helper_session(first_message):
             continue
 
         conv_id = f.name[:-6]  # remove .jsonl

@@ -42,6 +42,71 @@ def _fresh_server():
     return importlib.import_module("server")
 
 
+def _write_user_jsonl(path, session_id, content, cwd):
+    event = {
+        "type": "user",
+        "message": {"role": "user", "content": content},
+        "timestamp": "2026-05-02T00:00:00.000Z",
+        "cwd": str(cwd),
+        "sessionId": session_id,
+        "gitBranch": "main",
+    }
+    path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+
+
+class TestGeneratedHelperSessionFilter(unittest.TestCase):
+    def test_all_repos_hides_generated_helper_sessions(self):
+        tmp_home = tempfile.mkdtemp(prefix="ccc-all-repos-home-")
+        prev_home = os.environ.get("HOME")
+        try:
+            resolved_home = Path(tmp_home).resolve()
+            os.environ["HOME"] = str(resolved_home)
+            server = _fresh_server()
+
+            repo = resolved_home / "demo-repo"
+            repo.mkdir()
+            project_dir = resolved_home / ".claude" / "projects" / "-demo-repo"
+            project_dir.mkdir(parents=True)
+
+            real_sid = "00000000-0000-4000-8000-000000000001"
+            title_sid = "00000000-0000-4000-8000-000000000002"
+            image_sid = "00000000-0000-4000-8000-000000000003"
+            _write_user_jsonl(
+                project_dir / f"{real_sid}.jsonl",
+                real_sid,
+                "please update the clients report",
+                repo,
+            )
+            _write_user_jsonl(
+                project_dir / f"{title_sid}.jsonl",
+                title_sid,
+                "Produce a concise 4-8 word title summarizing what the user is trying to do below.",
+                repo,
+            )
+            _write_user_jsonl(
+                project_dir / f"{image_sid}.jsonl",
+                image_sid,
+                "Use the Read tool to open this image: '/Users/test/Downloads/example.png'. "
+                "Then output ONLY a single JSON line, no other text",
+                repo,
+            )
+
+            rows = server.find_all_conversations()
+            sids = {r["session_id"] for r in rows}
+
+            self.assertIn(real_sid, sids)
+            self.assertNotIn(title_sid, sids)
+            self.assertNotIn(image_sid, sids)
+        finally:
+            if prev_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = prev_home
+            for mod in ("server", "morning", "morning_store"):
+                sys.modules.pop(mod, None)
+            shutil.rmtree(tmp_home, ignore_errors=True)
+
+
 class TestExtractTailMetaPrLink(unittest.TestCase):
     def test_pr_link_event_sets_tail_pr_fields(self):
         server = _fresh_server()
