@@ -13526,7 +13526,10 @@
       ? archiveRows
       : archiveRows.filter(c => _archiveFolderValue(c) === archiveFolderFilter);
     const rows = q ? byFolder.filter(c =>
-      ((c.display_name || '') + ' ' + (c.first_message || '') + ' ' + (c.folder_label || '') + ' ' + (c.git_branch || '') + ' ' + (c.branch || ''))
+      // session_id + id let users paste a session UUID into the search box
+      // and find the conversation directly — useful when CCC tooling, logs
+      // or external scripts surface a UUID without a title.
+      ((c.display_name || '') + ' ' + (c.first_message || '') + ' ' + (c.folder_label || '') + ' ' + (c.git_branch || '') + ' ' + (c.branch || '') + ' ' + (c.session_id || '') + ' ' + (c.id || ''))
         .toLowerCase().includes(q)
     ) : byFolder;
 
