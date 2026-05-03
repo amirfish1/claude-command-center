@@ -1,0 +1,1 @@
+- Archive search input now matches against the session UUID, so you can paste a `session_id` (e.g. `9858e87d-73bd-419f-9e8b-5d89eb9db9a1`) and find the conversation directly. Useful when CCC tooling, logs, or external scripts surface a UUID without a title.
