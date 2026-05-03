@@ -997,6 +997,42 @@
   .conv-input-context .wp-behind { color: var(--orange); }
   .conv-input-context .wp-even { color: var(--text-muted); opacity: 0.6; }
   .conv-input-context .wp-cotenants { color: var(--red); margin-left: auto; font-weight: 500; }
+
+  /* Spawn cwd picker — appears in the context strip ONLY when in
+   * new-session mode (currentConversation === '__new__'). Replaces the
+   * passive workspace pill the strip shows for an existing session.
+   * Without this, the user can't tell where the new session will land,
+   * and the spawn API silently uses the server's REPO_ROOT regardless
+   * of the All-repos folder filter. */
+  .conv-input-context .spawn-cwd-row {
+    display: none;
+    align-items: center; gap: 6px;
+    font-size: 12px;
+  }
+  .conv-input-context.is-new-session .spawn-cwd-row { display: inline-flex; }
+  /* Hide the regular workspace + usage pills in new-session mode —
+     they reflect a live session's state and have nothing to say about
+     a not-yet-spawned session. The strip stays visible because the
+     spawn-cwd-row needs to render. */
+  .conv-input-context.is-new-session .wp-row,
+  .conv-input-context.is-new-session .wp-usage { display: none; }
+  .conv-input-context .spawn-cwd-row .spawn-cwd-label {
+    color: var(--text-muted); text-transform: uppercase;
+    font-size: 10px; letter-spacing: 0.05em; font-weight: 600;
+  }
+  .conv-input-context .spawn-cwd-row select.spawn-cwd-picker {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    cursor: pointer;
+    max-width: 360px;
+  }
+  .conv-input-context .spawn-cwd-row select.spawn-cwd-picker:hover { border-color: var(--accent); }
+  .conv-input-context .spawn-cwd-row select.spawn-cwd-picker:focus { outline: none; border-color: var(--accent); }
   .conv-input-context .wp-path {
     margin-left: auto;
     font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
@@ -4149,6 +4185,18 @@
         </div>
         <div class="conv-input-context" id="convInputContext">
           <span class="wp-row" data-workspace></span>
+          <!-- New-session-only cwd picker. Visibility controlled by
+               .is-new-session on the context strip; populated by
+               populateSpawnCwdPicker(); read by spawnFromInlineInput()
+               so the spawn lands in the user-chosen folder instead of
+               the server's REPO_ROOT. -->
+          <span class="spawn-cwd-row">
+            <span class="spawn-cwd-label">cwd</span>
+            <select id="spawnCwdPicker" class="spawn-cwd-picker"
+                    title="Folder the new session will be spawned in"
+                    aria-label="Folder for new session">
+            </select>
+          </span>
           <span class="wp-usage" data-usage></span>
         </div>
         <div class="conv-input-bar" id="convInputBar">
@@ -5315,6 +5363,13 @@
       source: source,
       spawnPid: spawnPid || null,
     };
+    // Leaving new-session mode (sid set) drops the .is-new-session class
+    // so the spawn-cwd picker hides and the workspace pill returns. The
+    // class is set in enterNewSessionMode(); this is the symmetric clear.
+    if (sid) {
+      const _cic = document.getElementById('convInputContext');
+      if (_cic) _cic.classList.remove('is-new-session');
+    }
     if ($convSessionId) {
       $convSessionId.textContent = sid || '';
       $convSessionId.onclick = () => {
@@ -15362,6 +15417,85 @@
     $sidebarNewBtn.addEventListener('click', () => enterNewSessionMode());
   }
 
+  // ── Spawn cwd picker (new-session mode) ──────────────────────────────
+  // Populates a folder dropdown above the input box so the user picks
+  // where the new session will land. Without this the spawn API just
+  // uses the server's REPO_ROOT, which is invisible from the All-repos
+  // view's UI and causes new sessions to land in the wrong folder.
+  const SPAWN_CWD_KEY = 'ccc-spawn-cwd';
+
+  function populateSpawnCwdPicker() {
+    const sel = document.getElementById('spawnCwdPicker');
+    if (!sel) return;
+
+    // Source list: known repos (recent ∪ pinned). Reuse the dropdown's
+    // own option-builder for label disambiguation but strip the "All"
+    // sentinel — spawning needs an exact folder.
+    let options = [];
+    try {
+      options = (typeof _archiveFolderOptions === 'function')
+        ? _archiveFolderOptions()
+        : [];
+    } catch (_) {}
+    if (!options.length && repoListState && Array.isArray(repoListState.repos)) {
+      options = repoListState.repos.map(r => ({
+        value: r.path, path: r.path, label: r.label || r.path,
+      }));
+    }
+    // Deduplicate by path — folder filter and repoListState can overlap.
+    const seen = new Set();
+    options = options.filter(o => {
+      const key = o.value || o.path;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    // Default selection priority:
+    //   1. User's last spawn cwd (localStorage)
+    //   2. Active folder filter, if it's a specific folder (not "All")
+    //   3. repoListState.current (server's REPO_ROOT)
+    //   4. First option
+    let saved = '';
+    try { saved = localStorage.getItem(SPAWN_CWD_KEY) || ''; } catch (_) {}
+    let defaultPath = saved;
+    if (!defaultPath || !options.some(o => (o.value || o.path) === defaultPath)) {
+      const filterVal = (typeof archiveFolderFilter !== 'undefined' && typeof ARCHIVE_FOLDER_ALL !== 'undefined' && archiveFolderFilter !== ARCHIVE_FOLDER_ALL)
+        ? archiveFolderFilter : '';
+      defaultPath = filterVal
+        || (repoListState && repoListState.current)
+        || (options[0] && (options[0].value || options[0].path))
+        || '';
+    }
+
+    const prevValue = sel.value;
+    sel.innerHTML = '';
+    for (const opt of options) {
+      const o = document.createElement('option');
+      o.value = opt.value || opt.path;
+      o.textContent = opt.label || opt.value || opt.path;
+      o.title = opt.path || o.value;
+      sel.appendChild(o);
+    }
+    if (prevValue && options.some(o => (o.value || o.path) === prevValue)) {
+      sel.value = prevValue;
+    } else if (defaultPath && options.some(o => (o.value || o.path) === defaultPath)) {
+      sel.value = defaultPath;
+    }
+  }
+
+  // Persist the user's choice the moment they change it.
+  document.addEventListener('change', (ev) => {
+    if (ev.target && ev.target.id === 'spawnCwdPicker') {
+      try { localStorage.setItem(SPAWN_CWD_KEY, ev.target.value || ''); } catch (_) {}
+    }
+  });
+
+  function getSpawnCwd() {
+    const sel = document.getElementById('spawnCwdPicker');
+    return (sel && sel.value) || '';
+  }
+
   function enterNewSessionMode() {
     if (typeof stopConvStream === 'function') stopConvStream();
     if (typeof stopSpawnStream === 'function') stopSpawnStream();
@@ -15385,6 +15519,16 @@
         + '</div>';
     }
     updateInputBar();
+    // Populate the spawn-cwd picker and toggle the context strip into
+    // new-session mode so the picker is visible and the workspace pill
+    // is hidden (the workspace pill described an existing session — it
+    // has no meaning before spawn).
+    populateSpawnCwdPicker();
+    const _cic = document.getElementById('convInputContext');
+    if (_cic) {
+      _cic.classList.add('is-new-session');
+      _cic.classList.add('visible');
+    }
     if (typeof mobileShowForCurrentMode === 'function') mobileShowForCurrentMode();
     setTimeout(() => { if ($convInput) { $convInput.value = ''; $convInput.focus(); } }, 30);
   }
@@ -15461,9 +15605,16 @@
     try {
       const endpoint = engine === 'codex' ? '/api/sessions/spawn-codex'
                                           : '/api/sessions/spawn';
+      // Read the spawn-cwd picker so the new session lands in the
+      // user-chosen folder. Empty string falls back to the server's
+      // REPO_ROOT (existing behavior, used when picker hasn't rendered
+      // yet — e.g. during early page load before known repos load).
+      const spawnCwd = (typeof getSpawnCwd === 'function') ? getSpawnCwd() : '';
+      const spawnBody = { prompt, name: subject };
+      if (spawnCwd) spawnBody.cwd = spawnCwd;
       const res = await fetch(endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ prompt, name: subject }),
+        body: JSON.stringify(spawnBody),
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
