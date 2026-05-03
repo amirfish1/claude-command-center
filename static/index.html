@@ -571,6 +571,9 @@
     min-width: 0;
     position: relative; /* drop overlay anchor */
   }
+  .conv-pane.is-codex-session {
+    box-shadow: inset 4px 0 0 rgba(88, 166, 255, 0.72);
+  }
   .conv-pane-header {
     display: none;            /* shown only when split is active */
     flex: 0 0 auto;
@@ -584,6 +587,12 @@
   .conv-split[data-orientation="vertical"] .conv-pane.is-active,
   .conv-split[data-orientation="horizontal"] .conv-pane.is-active {
     box-shadow: inset 0 0 0 1px var(--accent, #4ea1ff);
+  }
+  .conv-split[data-orientation="vertical"] .conv-pane.is-active.is-codex-session,
+  .conv-split[data-orientation="horizontal"] .conv-pane.is-active.is-codex-session {
+    box-shadow:
+      inset 0 0 0 1px rgba(88, 166, 255, 0.72),
+      inset 4px 0 0 rgba(88, 166, 255, 0.88);
   }
   .conv-pane-close {
     background: none;
@@ -1329,6 +1338,16 @@
   }
   .conv-item:hover { background: var(--surface-2); }
   .conv-item.active { background: var(--surface-2); border-left-color: var(--purple); }
+  .conv-item.is-codex {
+    background: rgba(31, 111, 235, 0.10);
+    border-left-color: rgba(88, 166, 255, 0.55);
+  }
+  .conv-item.is-codex:hover { background: rgba(31, 111, 235, 0.16); }
+  .conv-item.is-codex.active {
+    background: rgba(31, 111, 235, 0.22);
+    border-left-color: #58a6ff;
+    box-shadow: inset 0 0 0 1px rgba(88, 166, 255, 0.20);
+  }
   .conv-item .conv-title-row {
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   }
@@ -1582,7 +1601,7 @@
    * same row. */
   .conv-signal.gh-link { background: rgba(139,148,158,0.12); color: var(--text-muted); font-weight: 600; }
   .conv-item .source-badge.pkood { background: rgba(210,153,34,0.2); color: var(--orange); }
-  .conv-item .source-badge.codex { background: rgba(63,185,80,0.2); color: var(--green); }
+  .conv-item .source-badge.codex { background: rgba(88,166,255,0.18); color: #79c0ff; }
   .pkood-tail-output {
     white-space: pre-wrap; word-break: break-word; font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
     font-size: 13px; line-height: 1.5; padding: 16px 20px; color: var(--text);
@@ -8452,9 +8471,10 @@
             + '</span>';
         }
       }
+      const isCodexRow = c.source === 'codex' || c.engine === 'codex';
       let sourceBadge = '';
       if (c.source === 'pkood') sourceBadge = '<span class="source-badge pkood">pkood</span>';
-      else if (c.source === 'codex' || c.engine === 'codex') sourceBadge = '<span class="source-badge codex">codex</span>';
+      else if (isCodexRow) sourceBadge = '<span class="source-badge codex">codex</span>';
       // Prefer "last interacted" (the user's last UI action) over "last
       // event" (which includes Claude's autonomous responses) so the row
       // time mirrors the user's mental model: when did *I* last touch this?
@@ -8570,7 +8590,7 @@
         ? '<button class="conv-repo-pin" data-role="unpin-repo" title="Pinned to this repo. Click to reset to the session’s real repo.">&#128204;</button>'
         : '';
 
-      return '<div class="conv-item' + active + (c.pinned_repo ? ' is-repo-pinned' : '') + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
+      return '<div class="conv-item' + active + (isCodexRow ? ' is-codex' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + liveDotHtml
@@ -10171,6 +10191,8 @@
       };
     }
     const source = sessionSourceByConv[id] || 'interactive';
+    const paneEl = document.querySelector(`.conv-pane[data-pane-id="${paneId}"]`);
+    if (paneEl) paneEl.classList.toggle('is-codex-session', source === 'codex');
     setCurrentSession(
       source,
       sessionIdByConv[id],
