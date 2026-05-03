@@ -1,0 +1,1 @@
+- Changed conversation title clicks so inactive titles select the conversation first and only a second click starts rename.

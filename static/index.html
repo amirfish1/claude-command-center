@@ -7543,7 +7543,7 @@
         if (issueBadge) {
           html += '<div class="kanban-card-badges">' + issueBadge + '</div>';
         }
-        html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open &amp; rename">' + titleHtml + '</div>';
+        html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open; click again to rename">' + titleHtml + '</div>';
         if (descHtml) {
           html += '<div class="kanban-card-desc">' + descHtml + '</div>';
         }
@@ -7753,16 +7753,19 @@
         selectedCardIds.clear();
       });
     });
-    // Rename action
-    // Title click: select conversation AND open edit mode
+    // Rename action. Title clicks are two-step: inactive card titles open
+    // the conversation first; clicking the active title again starts rename.
     targetEl.querySelectorAll('[data-action="edit-title"]').forEach(el => {
       el.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const card = el.closest('.kanban-card');
-        // 1. Select the conversation (open in right panel)
+        if (!card) return;
+        const alreadyActive = card.classList.contains('active') || currentConversation === card.dataset.id;
         if (!convPanelOpen && $cpCloseBtn) $cpCloseBtn.click();
-        selectConversation(card.dataset.id);
-        // 2. Trigger the edit flow
+        if (!alreadyActive) {
+          selectConversation(card.dataset.id);
+          return;
+        }
         const editBtn = card.querySelector('[data-action="edit"]');
         if (editBtn) editBtn.click();
       });
@@ -8620,7 +8623,7 @@
           + '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
           + folderChipHtml
           + pinnedHtml
-          + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to rename">' + escapeHtml(title) + '</div>'
+          + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to open; click again to rename">' + escapeHtml(title) + '</div>'
           + liveToolHtml
           + '<span class="conv-meta-inline">'
           +   '<span>' + formatSize(c.size) + '</span>'
@@ -9010,14 +9013,18 @@
         }
       });
     });
-    // Click on the title element: select the row (open convo on the
-    // right) AND start the inline rename. Replaces the dedicated pencil
-    // button — the title is now a dual-purpose target.
+    // Click on the title element: inactive row titles open the
+    // conversation; clicking the already-active title starts inline rename.
     $convList.querySelectorAll('[data-role="title"]').forEach(el => {
       el.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const item = el.closest('.conv-item');
-        if (item && item.dataset.id) selectConversation(item.dataset.id);
+        if (!item || !item.dataset.id) return;
+        const alreadyActive = item.classList.contains('active') || currentConversation === item.dataset.id;
+        if (!alreadyActive) {
+          selectConversation(item.dataset.id);
+          return;
+        }
         startInlineRename(item);
       });
     });
