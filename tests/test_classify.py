@@ -411,6 +411,53 @@ class TestCodexConversationAdapter(unittest.TestCase):
         patched.assert_called_once_with(CODEX_SESSION_ID, "follow up")
 
 
+class TestCodexActivityFields(unittest.TestCase):
+    """Codex rows synthesize Claude-like live activity chips from rollouts."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = _fresh_server()
+
+    def test_pending_tool_maps_to_active_tool_chip(self):
+        fields = self.server._codex_activity_fields_from_tail({
+            "pending_tool": "apply_patch",
+            "pending_file": "README.md",
+            "last_meaningful_ts": 1700000000,
+            "last_event_type": "assistant",
+        }, live=True)
+        self.assertEqual(fields["sidecar_status"], "active")
+        self.assertEqual(fields["sidecar_tool"], "apply_patch")
+        self.assertEqual(fields["sidecar_file"], "README.md")
+        self.assertEqual(fields["sidecar_ts"], 1700000000)
+        self.assertTrue(fields["sidecar_in_flight"])
+
+    def test_live_mid_turn_without_tool_maps_to_thinking_chip(self):
+        fields = self.server._codex_activity_fields_from_tail({
+            "pending_tool": None,
+            "last_meaningful_ts": 1700000001,
+            "last_event_type": "user",
+        }, live=True)
+        self.assertEqual(fields["sidecar_status"], "active")
+        self.assertEqual(fields["sidecar_tool"], "Thinking")
+        self.assertIsNone(fields["sidecar_file"])
+        self.assertEqual(fields["sidecar_ts"], 1700000001)
+        self.assertTrue(fields["sidecar_in_flight"])
+
+    def test_completed_or_dormant_codex_has_no_activity_chip(self):
+        completed = self.server._codex_activity_fields_from_tail({
+            "last_meaningful_ts": 1700000002,
+            "last_event_type": "result",
+        }, live=True)
+        dormant = self.server._codex_activity_fields_from_tail({
+            "pending_tool": "apply_patch",
+            "last_event_type": "assistant",
+        }, live=False)
+        self.assertIsNone(completed["sidecar_tool"])
+        self.assertFalse(completed["sidecar_in_flight"])
+        self.assertIsNone(dormant["sidecar_tool"])
+        self.assertFalse(dormant["sidecar_in_flight"])
+
+
 class TestAddSidecarFields(unittest.TestCase):
     """_add_sidecar_fields() merges PreToolUse/PostToolUse hook output into
     a session card. The kanban relies on these fields (sidecar_status,

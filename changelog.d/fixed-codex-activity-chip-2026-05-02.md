@@ -1,0 +1,1 @@
+- Show Codex thinking and active-tool activity in conversation list rows using the same live chip treatment as Claude sessions.

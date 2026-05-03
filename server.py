@@ -6652,6 +6652,8 @@ def _extract_codex_tail_meta(path):
                     detail = _codex_tool_detail(name, args)
                     call_id = payload.get("call_id") or ""
                     meta["last_event_type"] = "assistant"
+                    if ts_epoch:
+                        meta["last_meaningful_ts"] = ts_epoch
                     meta["pending_tool"] = _codex_tool_name(name) or name
                     meta["pending_file"] = (detail[:80] if isinstance(detail, str) else None)
                     if _codex_tool_name(name) == "apply_patch":
@@ -6681,6 +6683,9 @@ def _extract_codex_tail_meta(path):
                     if call:
                         meta["pending_tool"] = None
                         meta["pending_file"] = None
+                    meta["last_event_type"] = "assistant"
+                    if ts_epoch:
+                        meta["last_meaningful_ts"] = ts_epoch
                     out = payload.get("output") or ""
                     if call.get("pr") and isinstance(out, str):
                         mp = pr_url_re.search(out)
@@ -6689,6 +6694,10 @@ def _extract_codex_tail_meta(path):
                             meta["tail_pr_url"] = (
                                 "https://github.com/" + mp.group(1) + "/pull/" + mp.group(2)
                             )
+                else:
+                    meta["last_event_type"] = "assistant"
+                    if ts_epoch:
+                        meta["last_meaningful_ts"] = ts_epoch
     except OSError:
         return {}
 
@@ -6699,6 +6708,48 @@ def _extract_codex_tail_meta(path):
         global _conv_meta_cache_dirty
         _conv_meta_cache_dirty = True
     return meta
+
+
+def _codex_activity_fields_from_tail(tail, live):
+    """Map Codex rollout tail state into the sidecar-shaped UI fields.
+
+    Claude sessions get this from command-center hooks. Codex does not run
+    those hooks, so live rows synthesize equivalent activity from the rollout:
+    an unfinished tool call names the tool; otherwise a mid-turn user/assistant
+    tail shows as generic thinking.
+    """
+    fields = {
+        "sidecar_status": None,
+        "sidecar_has_writes": False,
+        "sidecar_tool": None,
+        "sidecar_file": None,
+        "sidecar_ts": 0,
+        "sidecar_in_flight": False,
+    }
+    if not live or not tail:
+        return fields
+
+    ts = tail.get("last_meaningful_ts") or 0
+    pending_tool = tail.get("pending_tool")
+    if pending_tool:
+        fields.update({
+            "sidecar_status": "active",
+            "sidecar_tool": pending_tool,
+            "sidecar_file": tail.get("pending_file"),
+            "sidecar_ts": ts,
+            "sidecar_in_flight": True,
+        })
+        return fields
+
+    if tail.get("last_event_type") in ("user", "assistant"):
+        fields.update({
+            "sidecar_status": "active",
+            "sidecar_tool": "Thinking",
+            "sidecar_file": None,
+            "sidecar_ts": ts,
+            "sidecar_in_flight": True,
+        })
+    return fields
 
 
 def find_codex_conversations(include_old=True, repo_only=True, progress=None, limit=None):
@@ -6789,6 +6840,7 @@ def find_codex_conversations(include_old=True, repo_only=True, progress=None, li
         spawn_info = spawn_by_sid.get(sid) or {}
         spawn_pid = spawn_info.get("pid")
         spawn_alive = bool(spawn_info.get("alive"))
+        codex_activity = _codex_activity_fields_from_tail(tail, spawn_alive)
         out.append({
             "id": sid,
             "session_id": sid,
@@ -6835,12 +6887,7 @@ def find_codex_conversations(include_old=True, repo_only=True, progress=None, li
             "last_interacted": last_interactions.get(sid),
             "is_live": spawn_alive,
             "spawn_pid": spawn_pid,
-            "sidecar_status": "active" if spawn_alive else None,
-            "sidecar_has_writes": False,
-            "sidecar_tool": tail.get("pending_tool"),
-            "sidecar_file": tail.get("pending_file"),
-            "sidecar_ts": modified if spawn_alive else 0,
-            "sidecar_in_flight": bool(spawn_alive and tail.get("pending_tool")),
+            **codex_activity,
             "needs_approval": False,
             "needs_approval_message": "",
             "model": row.get("model") or tail.get("model") or "",
@@ -11572,27 +11619,33 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # in-flight marker (currently running) over the PostToolUse
             # sidecar (most-recently completed). The detail pane uses these
             # to render an in-progress strip without polling /api/sessions.
-            sc = _read_sidecar_state(sid) if sid else None
-            inflight = _read_in_flight_state(sid) if sid else None
-            notif = _read_notification_state(sid) if sid else None
-            if inflight:
-                status["sidecar_tool"] = inflight.get("tool")
-                status["sidecar_file"] = inflight.get("file")
-                status["sidecar_status"] = "active"
-                status["sidecar_ts"] = inflight.get("started_at", 0)
-                status["sidecar_in_flight"] = True
-            elif sc:
-                status["sidecar_tool"] = sc.get("tool")
-                status["sidecar_file"] = sc.get("file")
-                status["sidecar_status"] = sc.get("status")
-                status["sidecar_ts"] = sc.get("timestamp", 0)
-                status["sidecar_in_flight"] = False
+            is_codex_status = _is_codex_session(sid) if sid else False
+            notif = None if is_codex_status else (_read_notification_state(sid) if sid else None)
+            if is_codex_status:
+                path = _resolve_codex_rollout_path(sid)
+                tail = _extract_codex_tail_meta(path) if path else {}
+                status.update(_codex_activity_fields_from_tail(tail, status.get("live")))
             else:
-                status["sidecar_tool"] = None
-                status["sidecar_file"] = None
-                status["sidecar_status"] = None
-                status["sidecar_ts"] = 0
-                status["sidecar_in_flight"] = False
+                sc = _read_sidecar_state(sid) if sid else None
+                inflight = _read_in_flight_state(sid) if sid else None
+                if inflight:
+                    status["sidecar_tool"] = inflight.get("tool")
+                    status["sidecar_file"] = inflight.get("file")
+                    status["sidecar_status"] = "active"
+                    status["sidecar_ts"] = inflight.get("started_at", 0)
+                    status["sidecar_in_flight"] = True
+                elif sc:
+                    status["sidecar_tool"] = sc.get("tool")
+                    status["sidecar_file"] = sc.get("file")
+                    status["sidecar_status"] = sc.get("status")
+                    status["sidecar_ts"] = sc.get("timestamp", 0)
+                    status["sidecar_in_flight"] = False
+                else:
+                    status["sidecar_tool"] = None
+                    status["sidecar_file"] = None
+                    status["sidecar_status"] = None
+                    status["sidecar_ts"] = 0
+                    status["sidecar_in_flight"] = False
             status["needs_approval"] = bool(notif)
             status["needs_approval_message"] = notif.get("message", "") if notif else ""
             self.send_json(status)
