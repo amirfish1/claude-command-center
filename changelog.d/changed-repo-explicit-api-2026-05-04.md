@@ -1,0 +1,1 @@
+- Breaking: Repo-scoped API calls now require an explicit repo path, session-derived context, or an all-repos aggregate endpoint; the old server repo-switch flow now returns a deprecation error instead of mutating process state, and `CCC_WATCH_REPO` is no longer used.

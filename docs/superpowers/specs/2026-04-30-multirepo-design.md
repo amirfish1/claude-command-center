@@ -7,7 +7,7 @@
 
 ## Goal
 
-CCC today is a single-repo app with a switcher: one server, one `REPO_ROOT`, `/api/repo/switch` reassigns globals. To see another repo's state you must switch.
+CCC today is a single-repo app with a switcher: one server, one `repo_path`, `/api/repo/switch` reassigns globals. To see another repo's state you must switch.
 
 The target is genuinely multi-repo: every known repo has its data continuously available; the UI shows one or many repos at once; "switching" stops being a server reconfiguration.
 
@@ -21,7 +21,7 @@ The target is genuinely multi-repo: every known repo has its data continuously a
 
 ## Architecture: peer registry (option 3b)
 
-Each repo runs its own `python3 server.py`, on its own port. `REPO_ROOT` is fixed per server. Servers self-register in `~/.claude/command-center/registry.json`:
+Each repo runs its own `python3 server.py`, on its own port. `repo_path` is fixed per server. Servers self-register in `~/.claude/command-center/registry.json`:
 
 ```json
 [
@@ -78,12 +78,12 @@ The `CCC_ALLOWED_ORIGIN` env var (for trusted-network access via Tailscale/VPN) 
 - `GET /api/identity` — returns this server's `{repo_path, label, port, pid}`. Tiny endpoint used during peer discovery to verify a port still belongs to the expected repo (registry entries can grow stale between writes and reads).
 
 ### Unchanged
-- `/api/sessions`, `/api/board`, `/api/conversations`, `/api/attention`, etc. — each server answers for its own `REPO_ROOT`. The UI calls them on each peer's port.
+- `/api/sessions`, `/api/board`, `/api/conversations`, `/api/attention`, etc. — each server answers for its own `repo_path`. The UI calls them on each peer's port.
 - All existing per-session endpoints (spawn, inject, archive, etc.).
 
 ### Deprecated (still works)
-- `POST /api/repo/switch` — kept as a no-op when the target is already this server's `REPO_ROOT`; otherwise returns a 410 Gone with a hint to start a CCC server in the target directory. Eventually removed in a future major.
-- `GET /api/repo/list` — kept; returns the legacy single-server view (this server's `REPO_ROOT` + the home-scan list). UI migrates to `/api/registry`.
+- `POST /api/repo/switch` — kept as a no-op when the target is already this server's `repo_path`; otherwise returns a 410 Gone with a hint to start a CCC server in the target directory. Eventually removed in a future major.
+- `GET /api/repo/list` — kept; returns the legacy single-server view (this server's `repo_path` + the home-scan list). UI migrates to `/api/registry`.
 
 ### Removed (none in v1)
 
@@ -104,7 +104,7 @@ The existing topbar repo picker is replaced by a peer-list selector. "Switch rep
 
 Today's user has one server. After upgrading:
 
-1. They run `git pull` and restart their CCC. The new server, on startup, writes its registry entry, picks a (possibly random) free port, continues serving its `REPO_ROOT` like before.
+1. They run `git pull` and restart their CCC. The new server, on startup, writes its registry entry, picks a (possibly random) free port, continues serving its `repo_path` like before.
 2. Single-server UX is unchanged: the browser shows one repo because the registry has one entry.
 3. To go multi-repo: `cd /other/repo && python3 server.py` (or `./run.sh` from that repo's clone). The second server starts, registers itself, picks its own port. Both servers appear in the registry. The browser UI on either auto-discovers the other and shows both.
 
@@ -146,7 +146,7 @@ All locked above. The spec stands as the agreement.
 ## Reading list (for future-me / a reviewer)
 
 - `server.py:38–143` — existing repo-list helpers (`_load_recent_repos`, `_load_custom_repos`, `_load_persisted_repo`).
-- `server.py:1228–1267` — `switch_repo_root()`, the function this design retires.
+- `server.py:1228–1267` — `legacy repo-switch helper`, the function this design retires.
 - `server.py:1355` — `SIDECAR_STATE_DIR`. Confirms hooks pipeline is already global / multi-repo-ready.
 - `server.py:8536` — `_check_same_origin()`, where the loopback-wildcard loosening lands.
 - `SECURITY.md` — full security posture; this design changes the same-origin section.

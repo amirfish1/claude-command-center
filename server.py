@@ -7,12 +7,11 @@ GitHub-issue-driven fixes inline, and (optionally) drive the Morning
 view for goals/tactical-item triage.
 
 Usage:
-    ./run.sh                 # starts on port 8090, watches $PWD
+    ./run.sh                 # starts on port 8090
     PORT=9000 ./run.sh       # custom port
-    CCC_WATCH_REPO=~/dev/foo ./run.sh
 """
 
-__version__ = "0.6.0"
+__version__ = "1.0.0"
 
 import ast
 import base64
@@ -38,35 +37,24 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# The repository the command center is watching. Resolution priority:
-#   1. CCC_WATCH_REPO env var (explicit override; never persisted)
-#   2. cwd (server is bound to where it was started)
-# Multi-repo design (see docs/superpowers/specs/2026-04-30-multirepo-design.md):
-# `last-repo.txt` is no longer consulted on startup — each server is fixed to
-# its own repo. The file is still written/read by switch_repo_root() for the
-# legacy picker UI, but doesn't influence which repo a fresh server binds to.
-# Without this change, `cd /other/repo && python3 server.py` silently picked
-# up the previous active repo from last-repo.txt instead of cwd, defeating
-# the multi-server-per-repo workflow.
-# Can also be switched at runtime via switch_repo_root() — caches that depend on
-# REPO_ROOT (backlog, issue titles/state) get invalidated automatically.
-_LAST_REPO_FILE = Path.home() / ".claude" / "command-center" / "last-repo.txt"
+# Tool's own assets live next to this file. Repos are never process-global:
+# every repo-scoped request must carry a concrete repo path, cwd, or session id.
+CCC_ROOT = Path(__file__).resolve().parent
+COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
+PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 # User-picked repos that live outside the $HOME scan (e.g. ~/dev/foo, /workspaces/bar).
 # One absolute path per line. Written by /api/repo/add, read by load_known_repos.
-_CUSTOM_REPOS_FILE = Path.home() / ".claude" / "command-center" / "custom-repos.txt"
-# Recently-switched repos (most recent first). Written by switch_repo_root,
-# read by load_known_repos so the dropdown/modal can surface them at the top.
-_RECENT_REPOS_FILE = Path.home() / ".claude" / "command-center" / "recent-repos.txt"
+_CUSTOM_REPOS_FILE = COMMAND_CENTER_STATE_DIR / "custom-repos.txt"
+# Recently-used repos (most recent first). Written when a concrete repo path is
+# used so the dropdown/modal can surface them at the top.
+_RECENT_REPOS_FILE = COMMAND_CENTER_STATE_DIR / "recent-repos.txt"
 _RECENT_REPOS_CAP = 10
 # Stable scratch cwd for short-lived background `claude -p` calls (title
 # summarizers, morning braindump, etc.). Without this, those calls
-# inherit the server's REPO_ROOT and Claude Code writes their throwaway
-# session JSONLs into the user's project conversation store, polluting
-# /api/conversations and inflating disk usage on every ✨ Titles click.
-# Pinning cwd here makes the slug land in
-# ~/.claude/projects/-Users-…-claude-command-center-scratch/ — never
-# scanned by find_conversations() and easy to gc on demand.
-_SCRATCH_DIR = Path.home() / ".claude" / "command-center" / "scratch"
+# could run in whichever directory launched the server and pollute an unrelated
+# project conversation store. Pinning cwd here makes those JSONLs easy to avoid
+# in repo-specific scans and easy to garbage-collect on demand.
+_SCRATCH_DIR = COMMAND_CENTER_STATE_DIR / "scratch"
 
 # Files-from-conversation: extension whitelist driving both the
 # /api/conversations/<id>/files extractor and the /api/reveal-file
@@ -138,14 +126,14 @@ def _session_load_snapshot():
         }
 
 
-def _session_load_begin():
+def _session_load_begin(repo_path=None):
     now = time.time()
     steps = {
         "repo": {
             "key": "repo",
             "label": "Repo",
             "state": "running",
-            "detail": str(REPO_ROOT),
+            "detail": str(repo_path or "explicit repo required"),
         },
         "transcripts": {
             "key": "transcripts",
@@ -309,7 +297,7 @@ def _load_custom_repos():
 
 
 def _load_recent_repos():
-    """Return recently-switched repo paths, most-recent first (deduped, existing dirs only)."""
+    """Return recently-used repo paths, most-recent first (deduped, existing dirs only)."""
     try:
         raw = _RECENT_REPOS_FILE.read_text()
     except OSError:
@@ -435,13 +423,6 @@ def _native_pick_folder(prompt_text="Pick a repo folder for Claude Command Cente
     return {"ok": False, "error": stderr or f"osascript exited {r.returncode}"}
 
 
-_env_watch = os.environ.get("CCC_WATCH_REPO")
-if _env_watch:
-    REPO_ROOT = Path(_env_watch).resolve()
-else:
-    REPO_ROOT = Path.cwd().resolve()
-LOG_DIR = REPO_ROOT / ".claude" / "logs"
-
 def _encode_project_slug(path):
     """Encode an absolute filesystem path the way claude-code does when
     naming subdirs under ~/.claude/projects/.
@@ -461,7 +442,7 @@ def _legacy_project_slug(path):
     """Pre-2.x claude-code only replaced '/' with '-' — leaving '+',
     '.', '_', and spaces intact. We still need to surface conversations
     that historic claude-code versions wrote into those dirs, so the
-    scan covers both the modern and legacy slugs for a given REPO_ROOT.
+    scan covers both the modern and legacy slugs for a given repo path.
     """
     return "-" + str(path).lstrip("/").replace("/", "-")
 
@@ -481,26 +462,223 @@ def _candidate_conversation_dirs(path):
             candidates.append(d)
     return candidates
 
-def _resolve_conversation_path(conversation_id):
-    """Find <conversation_id>.jsonl across every candidate project dir
-    for the current REPO_ROOT (modern + legacy slug)."""
+class RepoContextError(ValueError):
+    """Structured error for repo-explicit API validation."""
+
+    def __init__(self, code, message, *, status=400, path=None):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+        self.path = path
+
+    def as_payload(self):
+        out = {"ok": False, "error": self.code, "code": self.code, "message": str(self)}
+        if self.path:
+            out["path"] = self.path
+        return out
+
+
+def _repo_error_payload(code, message, *, path=None):
+    out = {"ok": False, "error": code, "code": code, "message": message}
+    if path:
+        out["path"] = path
+    return out
+
+
+def repo_log_dir(repo_path):
+    return Path(repo_path).expanduser().resolve() / ".claude" / "logs"
+
+
+def repo_conversation_dirs(repo_path):
+    return _candidate_conversation_dirs(Path(repo_path).expanduser().resolve())
+
+
+def _conversation_dirs(repo_path=None):
+    """Compatibility wrapper for repo-specific transcript folders.
+
+    Callers that need all sessions should walk PROJECTS_ROOT instead of relying
+    on a hidden process repo.
+    """
+    if not repo_path:
+        return []
+    return repo_conversation_dirs(repo_path)
+
+
+def _canonical_conversation_path(repo_path, conversation_id):
     name = conversation_id + ".jsonl"
-    for d in _candidate_conversation_dirs(REPO_ROOT):
-        p = d / name
-        if p.is_file():
-            return p
-    # Fall back to the canonical dir even if it doesn't exist — callers
-    # check existence and produce a 404 with a recognizable path.
-    return CONVERSATIONS_DIR / name
-
-_cc_project_slug = _encode_project_slug(REPO_ROOT)
-CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
+    slug = _encode_project_slug(Path(repo_path).expanduser().resolve())
+    return PROJECTS_ROOT / slug / name
 
 
-# Backwards-compat alias for code that called the older helper before the
-# merge with origin/main introduced _candidate_conversation_dirs.
-def _conversation_dirs():
-    return _candidate_conversation_dirs(REPO_ROOT)
+def _discover_repo_paths_from_projects():
+    """Best-effort repo paths inferred from Claude project-folder slugs."""
+    out = []
+    decoder = globals().get("_decode_project_slug")
+    if not decoder or not PROJECTS_ROOT.is_dir():
+        return out
+    try:
+        for project_dir in PROJECTS_ROOT.iterdir():
+            if not project_dir.is_dir():
+                continue
+            try:
+                decoded = decoder(project_dir.name)
+            except Exception:
+                decoded = None
+            if decoded and decoded.is_dir():
+                out.append(str(decoded.resolve()))
+    except OSError:
+        pass
+    return out
+
+
+def _known_repo_paths():
+    paths = []
+    try:
+        for r in load_known_repos():
+            p = r.get("path")
+            if p:
+                paths.append(str(Path(p).expanduser().resolve()))
+    except Exception:
+        pass
+    try:
+        paths.extend(_load_recent_repos())
+        paths.extend(_load_custom_repos())
+        paths.extend(_discover_repo_paths_from_projects())
+    except Exception:
+        pass
+    seen = set()
+    out = []
+    for p in paths:
+        try:
+            s = str(Path(p).expanduser().resolve())
+        except (OSError, ValueError, RuntimeError):
+            continue
+        if s not in seen and Path(s).is_dir():
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _git_toplevel_for_existing_dir(path):
+    try:
+        p = Path(path).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if not p.is_dir():
+        return None
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(p), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return str(Path(r.stdout.strip()).resolve())
+    except (subprocess.SubprocessError, OSError):
+        pass
+    return None
+
+
+def resolve_repo_path(value):
+    """Validate and canonicalize one concrete repo path.
+
+    The sentinel "ALL" is intentionally rejected here. Aggregate scope belongs
+    to aggregate endpoints, not to the repo_path field.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        raise RepoContextError("repo_required", "repo_path is required")
+    if raw.upper() == "ALL":
+        raise RepoContextError("invalid_repo_path", "repo_path must be one real path, not ALL", path=raw)
+    try:
+        p = Path(raw).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError) as e:
+        raise RepoContextError("invalid_repo_path", f"could not resolve repo_path: {e}", path=raw)
+    if not p.is_dir():
+        raise RepoContextError("invalid_repo_path", f"repo_path is not a directory: {p}", path=str(p))
+
+    known = set(_known_repo_paths())
+    s = str(p)
+    git_marker = p / ".git"
+    looks_like_repo = git_marker.exists() or (p / ".claude").is_dir()
+    if s not in known and not looks_like_repo:
+        raise RepoContextError(
+            "repo_not_allowed",
+            "repo_path is not known; add it through /api/repo/add first",
+            path=s,
+            status=403,
+        )
+    _record_recent_repo(s)
+    return s
+
+
+def _resolve_cwd_context(value):
+    raw = str(value or "").strip()
+    if not raw:
+        raise RepoContextError("repo_required", "cwd or repo_path is required")
+    try:
+        cwd = Path(raw).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError) as e:
+        raise RepoContextError("invalid_cwd", f"could not resolve cwd: {e}", path=raw)
+    if not cwd.is_dir():
+        raise RepoContextError("invalid_cwd", f"cwd is not a directory: {cwd}", path=str(cwd))
+    repo_top = _git_toplevel_for_existing_dir(cwd) or str(cwd)
+    return {"repo_path": resolve_repo_path(repo_top), "cwd": str(cwd)}
+
+
+def repo_from_session(session_id):
+    sid = str(session_id or "").strip()
+    if not sid:
+        raise RepoContextError("repo_required", "session_id is required to derive repo context")
+    cwd = None
+    try:
+        cwd = find_session_cwd(sid)
+    except Exception:
+        cwd = None
+    if not cwd:
+        row_fn = globals().get("_codex_thread_row")
+        if row_fn:
+            try:
+                row = row_fn(sid) or {}
+                cwd = row.get("cwd")
+            except Exception:
+                cwd = None
+    if not cwd:
+        raise RepoContextError("repo_required", f"could not derive repo context for session {sid}")
+    return _resolve_cwd_context(cwd)
+
+
+def require_repo_context(payload=None, query=None, *, allow_session=True):
+    """Return {repo_path, cwd} or raise RepoContextError."""
+    payload = payload if isinstance(payload, dict) else {}
+    query = query if isinstance(query, dict) else {}
+
+    def pick(name):
+        val = payload.get(name)
+        if val not in (None, ""):
+            return val
+        qv = query.get(name)
+        if isinstance(qv, list):
+            qv = qv[0] if qv else None
+        return qv
+
+    repo_raw = pick("repo_path") or pick("repo")
+    cwd_raw = pick("cwd")
+    sid_raw = pick("session_id")
+    if repo_raw:
+        repo = resolve_repo_path(repo_raw)
+        cwd = str(Path(cwd_raw).expanduser().resolve()) if cwd_raw else repo
+        if cwd_raw:
+            cwd_ctx = _resolve_cwd_context(cwd_raw)
+            # The cwd may be a worktree whose git toplevel differs from the
+            # explicit repo path. That is valid for spawn/resume style calls;
+            # keep both concrete values visible to callers.
+            cwd = cwd_ctx["cwd"]
+        return {"repo_path": repo, "cwd": cwd}
+    if cwd_raw:
+        return _resolve_cwd_context(cwd_raw)
+    if allow_session and sid_raw:
+        return repo_from_session(sid_raw)
+    raise RepoContextError("repo_required", "repo_path is required for this endpoint")
 
 
 # Archive view delegates all per-session JSONL inspection to the
@@ -1041,7 +1219,7 @@ def load_known_repos():
         else:
             label = name
         repos.append({"path": custom_path, "label": label})
-    # Re-order: recently-switched repos first (in recency order), then the rest
+    # Re-order: recently-used repos first (in recency order), then the rest
     # in the original alphabetical order. The picker modal uses this ordering
     # to group a "Recent" section above the long list.
     recent = _load_recent_repos()
@@ -1900,59 +2078,22 @@ def _run_healthcheck():
                 "hint": "Check `gh` install. Run `gh auth status` manually for details.",
             })
 
-    # ── REPO_ROOT state ───────────────────────────────────────────────
-    repo_check = {"id": "watched_repo", "label": "Watched repo"}
-    if not REPO_ROOT.is_dir():
-        repo_check.update({
-            "status": "error",
-            "message": f"REPO_ROOT does not exist: {REPO_ROOT}",
-            "hint": "Pick a different repo from the picker, or restart with CCC_WATCH_REPO=/path/to/repo.",
-        })
-    else:
-        is_git = (REPO_ROOT / ".git").is_dir()
-        # Try to extract the GH owner/repo from the local git remote so the
-        # banner can show "(GH: amirfish1/my-finance-app)" — confirms the
-        # local-folder ↔ GH-repo link visually.
-        gh_slug = None
-        if is_git:
-            try:
-                r = subprocess.run(
-                    ["git", "remote", "get-url", "origin"],
-                    capture_output=True, text=True, timeout=3, cwd=str(REPO_ROOT),
-                )
-                if r.returncode == 0:
-                    url = (r.stdout or "").strip()
-                    # Match git@github.com:owner/repo.git or https://github.com/owner/repo(.git)
-                    m = re.search(r"github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?$", url)
-                    if m:
-                        gh_slug = f"{m.group(1)}/{m.group(2)}"
-            except (subprocess.SubprocessError, OSError):
-                pass
-        # Quick issue count probe (cached fetch — non-blocking).
-        issue_count = None
-        if gh_path:
-            cached = _backlog_issues_cache or []
-            issue_count = sum(1 for i in cached if (i.get("state") or "").upper() == "OPEN")
-        msg = f"{REPO_ROOT.name}"
-        if gh_slug:
-            msg += f"  (GH: {gh_slug})"
-        if issue_count is not None and gh_slug:
-            msg += f"  · {issue_count} open issue{'s' if issue_count != 1 else ''}"
-        if not is_git:
-            repo_check.update({
-                "status": "warn",
-                "message": f"{msg} (no .git/ — issue board disabled for this repo)",
-                "hint": "Switch to a git repo using the picker, or `git init` here.",
-            })
-        elif not gh_slug and gh_path:
-            repo_check.update({
-                "status": "warn",
-                "message": f"{msg} (no GitHub remote)",
-                "hint": "Add a GitHub remote: `git remote add origin git@github.com:owner/repo.git`",
-            })
-        else:
-            repo_check.update({"status": "ok", "message": msg})
-    out["checks"].append(repo_check)
+    # ── Repo list state ───────────────────────────────────────────────
+    try:
+        repo_count = len(load_known_repos())
+    except Exception:
+        repo_count = 0
+    out["checks"].append({
+        "id": "repo_list",
+        "label": "Known repos",
+        "status": "ok" if repo_count else "warn",
+        "message": (
+            f"{repo_count} repo{'s' if repo_count != 1 else ''} available"
+            if repo_count else
+            "No repo folders discovered yet"
+        ),
+        "hint": None if repo_count else "Add a repo from the repo picker.",
+    })
 
     # Overall summary: worst status wins.
     statuses = [c["status"] for c in out["checks"]]
@@ -1965,63 +2106,6 @@ def _run_healthcheck():
     return out
 
 
-def switch_repo_root(new_path):
-    """Switch the watched repo at runtime.
-
-    Reassigns REPO_ROOT and all derived module globals (LOG_DIR,
-    CONVERSATIONS_DIR, _cc_project_slug). Existing functions read these at call
-    time, so they pick up the new value automatically. Also invalidates every
-    cache that holds repo-specific data so the next request re-queries fresh.
-
-    The cache vars (_backlog_issues_cache, etc.) are declared further down in
-    the module — by the time switch_repo_root is *called* at runtime they
-    always exist, so the `global` declarations below are safe.
-
-    Raises ValueError when new_path is not an existing directory.
-    """
-    global REPO_ROOT, LOG_DIR, CONVERSATIONS_DIR, _cc_project_slug
-    global _backlog_issues_cache, _backlog_issues_cache_ts
-    global _issue_titles_cache, _issue_titles_cache_ts
-    global _issue_state_cache, _issue_state_cache_ts
-    new_root = Path(new_path).expanduser().resolve()
-    if not new_root.is_dir():
-        raise ValueError(f"not a directory: {new_root}")
-    old_root = REPO_ROOT
-    REPO_ROOT = new_root
-    LOG_DIR = REPO_ROOT / ".claude" / "logs"
-    _cc_project_slug = _encode_project_slug(REPO_ROOT)
-    CONVERSATIONS_DIR = Path.home() / ".claude" / "projects" / _cc_project_slug
-    # Invalidate every repo-scoped cache.
-    _backlog_issues_cache = []
-    _backlog_issues_cache_ts = 0
-    _issue_titles_cache = {}
-    _issue_titles_cache_ts = 0
-    _issue_state_cache = {}
-    _issue_state_cache_ts = 0
-    # Persist so the next server start defaults to this repo. Best-effort —
-    # if we can't write the state file (full disk, permissions), the switch
-    # still works for this session; just doesn't survive a restart. Note:
-    # multi-repo no longer reads last-repo.txt at startup, but the legacy
-    # picker modal still consults it, and the file is cheap to keep current.
-    try:
-        _LAST_REPO_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _LAST_REPO_FILE.write_text(str(REPO_ROOT) + "\n")
-    except OSError as e:
-        print(f"  [repo-switch] Could not persist last-repo: {e}")
-    # Record this switch in the recent list so the picker modal can surface it.
-    _record_recent_repo(str(REPO_ROOT))
-    # Re-register in the multi-repo peer registry. Without this, the entry
-    # we wrote at startup still claims the old repo_path and the dropdown
-    # on a reload (or any peer's poll) would show stale state. Best-effort.
-    try:
-        if old_root != REPO_ROOT:
-            _unregister_self(old_root)
-        _register_self(REPO_ROOT, PORT, BIND_HOST)
-    except Exception as e:
-        print(f"  [repo-switch] Could not update registry: {e}")
-    return REPO_ROOT
-# Tool's own assets live next to this file.
-CCC_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = CCC_ROOT / "static"
 MORNING_STATIC_DIR = STATIC_DIR / "morning"
 
@@ -2047,8 +2131,8 @@ MORNING_ENABLED = (
 
 PORT = int(os.environ.get("PORT", 8090))
 # Set in main() after _resolve_runtime_network. Module-level so functions
-# called at runtime (e.g. switch_repo_root → _register_self) can reach it
-# without threading the value through every call site.
+# called at runtime can reach it without threading the value through every
+# call site.
 BIND_HOST = "127.0.0.1"
 # Optional title-prefix noise stripper. Comma-separated prefixes.
 # Empty by default; set `CCC_TITLE_STRIP=ACME,FOO` to strip `[ACME ...]` and `[FOO ...]` from titles.
@@ -2152,9 +2236,7 @@ def extract_session_id(path):
 _session_cwd_cache = {}
 _session_cwd_cache_mtime = 0
 
-PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 SESSIONS_REGISTRY = Path.home() / ".claude" / "sessions"  # per-pid {sessionId, cwd, ...}
-COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
 # Backwards-compat alias — older code / forks may import the previous name.
 LOG_VIEWER_STATE_DIR = COMMAND_CENTER_STATE_DIR
 SESSION_NAMES_FILE = COMMAND_CENTER_STATE_DIR / "session-names.json"  # side-car overrides
@@ -2873,13 +2955,15 @@ def _detect_issue_number_for_session(conv):
     return None
 
 
-def _latest_commit_sha(cwd=None):
-    """Return the latest commit SHA (short) from the given cwd or REPO_ROOT."""
+def _latest_commit_sha(cwd):
+    """Return the latest commit SHA (short) from the given cwd."""
+    if not cwd:
+        return ""
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, timeout=5,
-            cwd=str(cwd) if cwd else str(REPO_ROOT),
+            cwd=str(cwd),
         )
         if out.returncode == 0:
             return out.stdout.strip()
@@ -2924,6 +3008,14 @@ def create_github_issue_for_session(conv):
     Returns {ok, issue_number, issue_url} or {ok: False, error}.
     """
     sid = conv.get("session_id")
+    cwd = conv.get("session_cwd") or conv.get("cwd")
+    if not cwd and sid:
+        try:
+            cwd = repo_from_session(sid)["cwd"]
+        except RepoContextError as e:
+            return e.as_payload()
+    if not cwd:
+        return _repo_error_payload("repo_required", "session_id or cwd is required to create an issue")
     title = conv.get("display_name") or conv.get("first_message", "")[:80] or "Untitled session"
     # Clean the title: strip dashes, truncate
     display_title = title.replace("-", " ").strip()[:120]
@@ -2943,7 +3035,7 @@ def create_github_issue_for_session(conv):
     try:
         out = subprocess.run(
             ["gh", "issue", "create", "--title", display_title, "--body", body],
-            capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=15, cwd=str(cwd),
         )
         if out.returncode != 0:
             return {"ok": False, "error": (out.stderr or "gh issue create failed").strip()}
@@ -2953,9 +3045,7 @@ def create_github_issue_for_session(conv):
         issue_num = m.group(1) if m else ""
         if issue_num and sid:
             _save_session_issue(sid, issue_num)
-        # Invalidate backlog cache so this issue doesn't show as backlog
-        global _backlog_issues_cache_ts
-        _backlog_issues_cache_ts = 0
+        _bust_backlog_issue_cache(_git_toplevel_for_existing_dir(cwd) or cwd)
         return {"ok": True, "issue_number": issue_num, "issue_url": url}
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         return {"ok": False, "error": str(e)}
@@ -2963,7 +3053,14 @@ def create_github_issue_for_session(conv):
 
 def close_github_issue_with_commit(issue_number, conv):
     """Close a GitHub issue and add a comment referencing the latest commit."""
-    cwd = conv.get("session_cwd") or str(REPO_ROOT)
+    cwd = conv.get("session_cwd") or conv.get("cwd")
+    if not cwd and conv.get("session_id"):
+        try:
+            cwd = repo_from_session(conv["session_id"])["cwd"]
+        except RepoContextError:
+            cwd = None
+    if not cwd:
+        return False
     sha = _latest_commit_sha(cwd)
     name = conv.get("display_name") or conv.get("session_id", "")
     comment = f"Verified via session viewer ({name})"
@@ -2972,14 +3069,14 @@ def close_github_issue_with_commit(issue_number, conv):
     try:
         subprocess.run(
             ["gh", "issue", "comment", str(issue_number), "--body", comment],
-            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=10, cwd=str(cwd),
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     try:
         out = subprocess.run(
             ["gh", "issue", "close", str(issue_number)],
-            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=10, cwd=str(cwd),
         )
         ok = out.returncode == 0
         if ok:
@@ -2989,7 +3086,7 @@ def close_github_issue_with_commit(issue_number, conv):
                 _globals = globals()
                 fn = _globals.get("remove_in_progress_label")
                 if fn:
-                    fn(issue_number)
+                    fn(issue_number, repo_path=_git_toplevel_for_existing_dir(cwd) or cwd)
             except Exception:
                 pass
             _bust_issue_state_cache()
@@ -3224,15 +3321,16 @@ def _save_issue_title_override(issue_number, title):
         print(f"  [issue-title] Could not persist {issue_number}: {e}")
 
 
-def summarize_issue_title(issue_number):
+def summarize_issue_title(issue_number, repo_path):
     """Fetch a GitHub issue's title + body, ask claude haiku for a concise
     title, persist the result. Returns {ok, title, error?}."""
+    repo_path = resolve_repo_path(repo_path)
     result = {"ok": False, "issue_number": str(issue_number)}
     try:
         r = subprocess.run(
             ["gh", "issue", "view", str(issue_number),
              "--json", "title,body"],
-            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=10, cwd=str(repo_path),
         )
     except (subprocess.SubprocessError, OSError) as e:
         result["error"] = f"gh failed: {e}"
@@ -3261,7 +3359,7 @@ def summarize_issue_title(issue_number):
         proc = subprocess.run(
             ["claude", "-p", "--model", "claude-haiku-4-5-20251001", instruction],
             capture_output=True, text=True, timeout=45,
-            cwd=str(_SCRATCH_DIR),  # keep throwaway JSONLs out of REPO_ROOT
+            cwd=str(_SCRATCH_DIR),  # keep throwaway JSONLs out of repo scans
         )
     except FileNotFoundError:
         result["error"] = "claude CLI not in PATH"
@@ -3313,7 +3411,7 @@ def summarize_session_title(session_id):
             capture_output=True,
             text=True,
             timeout=45,
-            cwd=str(_SCRATCH_DIR),  # keep throwaway JSONLs out of REPO_ROOT
+            cwd=str(_SCRATCH_DIR),  # keep throwaway JSONLs out of repo project dirs
         )
     except FileNotFoundError:
         result["error"] = "claude CLI not in PATH"
@@ -3702,8 +3800,8 @@ def _build_resume_command(session_id, cwd, cwd_exists):
     m = re.search(r"/\.claude/worktrees/(.+)$", cwd)
     if m:
         branch = m.group(1)
-        repo_root = cwd.split("/.claude/worktrees/")[0]
-        q_repo = _shell_quote(repo_root)
+        repo_base = cwd.split("/.claude/worktrees/")[0]
+        q_repo = _shell_quote(repo_base)
         q_branch = _shell_quote(branch)
         return (
             f"(cd {q_repo} && git worktree add {q_cwd} {q_branch} 2>/dev/null "
@@ -3739,11 +3837,15 @@ def open_session_in_claude_desktop(session_id):
     if sys.platform != "darwin":
         return {"ok": False, "error": "Claude Desktop deep-link is macOS-only"}
     url = f"claude://resume?session={session_id}"
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        log_path = LOG_DIR / f"desktop-{session_id[:8]}.log"
+        ctx = repo_from_session(session_id)
+        log_dir = repo_log_dir(ctx["repo_path"])
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"desktop-{session_id[:8]}.log"
         lf = open(log_path, "w")
         subprocess.Popen(["open", url], stdout=lf, stderr=lf)
+    except RepoContextError as e:
+        return e.as_payload()
     except (FileNotFoundError, OSError) as e:
         print(f"open_session_in_claude_desktop: {e!r}", file=sys.stderr, flush=True)
         return {"ok": False, "error": "could not launch Claude Desktop", "url": url}
@@ -3767,11 +3869,15 @@ def open_session_in_codex_desktop(session_id, cwd=None):
     if cwd:
         params["cwd"] = cwd
     url = "codex://resume?" + urllib.parse.urlencode(params)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        log_path = LOG_DIR / f"codex-desktop-{session_id[:8]}.log"
+        ctx = repo_from_session(session_id)
+        log_dir = repo_log_dir(ctx["repo_path"])
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"codex-desktop-{session_id[:8]}.log"
         lf = open(log_path, "w")
         subprocess.Popen(["open", url], stdout=lf, stderr=lf)
+    except RepoContextError as e:
+        return e.as_payload()
     except (FileNotFoundError, OSError) as e:
         print(f"open_session_in_codex_desktop: {e!r}", file=sys.stderr, flush=True)
         return {"ok": False, "error": "could not launch Codex", "url": url}
@@ -3807,6 +3913,12 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None):
         pass  # fall through to the normal launch path
     if cwd is None:
         cwd = find_session_cwd(session_id)
+    try:
+        ctx = repo_from_session(session_id)
+    except RepoContextError as e:
+        return e.as_payload()
+    if not cwd:
+        cwd = ctx["cwd"]
     cwd_exists = bool(cwd and Path(cwd).is_dir())
     is_codex = _is_codex_session(session_id)
     command = _build_resume_command(session_id, cwd, cwd_exists)
@@ -3822,7 +3934,7 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None):
     # Look up display_name from conversations, fall back to session name or ID prefix.
     rename_target = None
     try:
-        convs = find_all_sessions() or []
+        convs = find_all_sessions(ctx["repo_path"]) or []
         for c in convs:
             if c.get("session_id") == session_id:
                 rename_target = c.get("display_name") or c.get("name")
@@ -3912,7 +4024,9 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None):
 
     # Run the osascript in the background (captures stderr to a log for debugging).
     try:
-        log_path = LOG_DIR / f"jump-{(session_id or 'x')[:8]}.log"
+        log_dir = repo_log_dir(ctx["repo_path"])
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"jump-{(session_id or 'x')[:8]}.log"
         lf = open(log_path, "w")
         subprocess.Popen(["osascript", "-e", script], stdout=lf, stderr=lf)
     except (FileNotFoundError, OSError) as e:
@@ -4409,12 +4523,10 @@ def find_session_cwd(session_id):
     return None
 
 
-_issue_titles_cache = {}
-_issue_titles_cache_ts = 0
+_issue_titles_cache = {}  # repo_path -> {"ts": float, "data": dict}
 
-# Per-issue state map: {number_str: {'state': 'OPEN'|'CLOSED', 'labels': [..], 'title': ..}}
+# Per-repo issue state map: repo_path -> {"ts": float, "data": {number_str: ...}}
 _issue_state_cache = {}
-_issue_state_cache_ts = 0
 
 
 _desktop_meta_cache = {}
@@ -4467,20 +4579,22 @@ def _load_desktop_app_metadata():
     return out
 
 
-def _fetch_issue_states():
+def _fetch_issue_states(repo_path):
     """Bulk-fetch state+labels+title for all issues. Cached 5 min."""
-    global _issue_state_cache, _issue_state_cache_ts
-    if time.time() - _issue_state_cache_ts < 60 and _issue_state_cache:
-        return _issue_state_cache
+    repo_path = resolve_repo_path(repo_path)
+    cached = _issue_state_cache.get(repo_path) or {}
+    if time.time() - cached.get("ts", 0) < 60 and cached.get("data"):
+        return cached["data"]
+    data = cached.get("data") or {}
     try:
         out = subprocess.run(
             ["gh", "issue", "list", "--state", "all", "--limit", "500",
              "--json", "number,title,state,labels"],
-            capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=15, cwd=str(repo_path),
         )
         if out.returncode == 0:
             issues = json.loads(out.stdout)
-            _issue_state_cache = {
+            data = {
                 str(i["number"]): {
                     "state": i.get("state") or "OPEN",
                     "labels": [l.get("name", "") for l in (i.get("labels") or [])],
@@ -4488,45 +4602,51 @@ def _fetch_issue_states():
                 }
                 for i in issues
             }
-            _issue_state_cache_ts = time.time()
+            _issue_state_cache[repo_path] = {"ts": time.time(), "data": data}
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass
-    return _issue_state_cache
+    return data
 
 
-def _bust_issue_state_cache():
+def _bust_issue_state_cache(repo_path=None):
     """Force next _fetch_issue_states() to re-query gh. Call after any mutation
     (close/reopen/label change) so the UI doesn't serve 5-minute-stale state."""
-    global _issue_state_cache_ts
-    _issue_state_cache_ts = 0
+    if repo_path:
+        try:
+            _issue_state_cache.pop(resolve_repo_path(repo_path), None)
+        except RepoContextError:
+            pass
+    else:
+        _issue_state_cache.clear()
 
 
 # Backlog: full issue data (labels, body) for open issues
-_backlog_issues_cache = []
-_backlog_issues_cache_ts = 0
+_backlog_issues_cache = {}  # repo_path -> {"ts": float, "data": list}
 
 
-def _fetch_issue_titles():
+def _fetch_issue_titles(repo_path):
     """Bulk-fetch GitHub issue titles. Cached for 5 minutes."""
-    global _issue_titles_cache, _issue_titles_cache_ts
-    if time.time() - _issue_titles_cache_ts < 300 and _issue_titles_cache:
-        return _issue_titles_cache
+    repo_path = resolve_repo_path(repo_path)
+    cached = _issue_titles_cache.get(repo_path) or {}
+    if time.time() - cached.get("ts", 0) < 300 and cached.get("data"):
+        return cached["data"]
+    data = cached.get("data") or {}
     try:
         out = subprocess.run(
             ["gh", "issue", "list", "--state", "all", "--limit", "200",
              "--json", "number,title"],
-            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=10, cwd=str(repo_path),
         )
         if out.returncode == 0:
             issues = json.loads(out.stdout)
-            _issue_titles_cache = {
+            data = {
                 str(i["number"]): _strip_title_prefix(i["title"])
                 for i in issues
             }
-            _issue_titles_cache_ts = time.time()
+            _issue_titles_cache[repo_path] = {"ts": time.time(), "data": data}
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass
-    return _issue_titles_cache
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -4666,20 +4786,31 @@ def fetch_cross_repo_issues():
     return {"issues": out, "errors": errors, "fetched_at": time.time()}
 
 
-def _fetch_backlog_issues():
+def _bust_backlog_issue_cache(repo_path=None):
+    if repo_path:
+        try:
+            _backlog_issues_cache.pop(resolve_repo_path(repo_path), None)
+        except RepoContextError:
+            pass
+    else:
+        _backlog_issues_cache.clear()
+
+
+def _fetch_backlog_issues(repo_path):
     """Fetch open + recently-closed GitHub issues with labels and body.
     Cached 5 minutes. Closed issues get a `state_reason` field so the UI
     can route them (completed -> Verified, not planned -> Archived).
     """
-    global _backlog_issues_cache, _backlog_issues_cache_ts
-    if time.time() - _backlog_issues_cache_ts < 300 and _backlog_issues_cache is not None:
-        return _backlog_issues_cache
+    repo_path = resolve_repo_path(repo_path)
+    cached = _backlog_issues_cache.get(repo_path) or {}
+    if time.time() - cached.get("ts", 0) < 300 and cached.get("data") is not None:
+        return cached.get("data") or []
     merged = []
     try:
         open_out = subprocess.run(
             ["gh", "issue", "list", "--state", "open", "--limit", "100",
              "--json", "number,title,labels,body,createdAt,updatedAt,state,stateReason"],
-            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=10, cwd=str(repo_path),
         )
         if open_out.returncode == 0:
             merged.extend(json.loads(open_out.stdout))
@@ -4689,21 +4820,19 @@ def _fetch_backlog_issues():
         closed_out = subprocess.run(
             ["gh", "issue", "list", "--state", "closed", "--limit", "60",
              "--json", "number,title,labels,body,createdAt,updatedAt,closedAt,state,stateReason"],
-            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=10, cwd=str(repo_path),
         )
         if closed_out.returncode == 0:
             merged.extend(json.loads(closed_out.stdout))
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass
-    if merged:
-        _backlog_issues_cache = merged
-        _backlog_issues_cache_ts = time.time()
-    return _backlog_issues_cache or []
+    _backlog_issues_cache[repo_path] = {"ts": time.time(), "data": merged}
+    return merged
 
 
-def _parse_todo_md():
+def _parse_todo_md(repo_path):
     """Parse TODO.md for unchecked items (- [ ] lines)."""
-    todo_path = REPO_ROOT / "TODO.md"
+    todo_path = Path(repo_path) / "TODO.md"
     items = []
     try:
         with open(todo_path, "r") as f:
@@ -4815,11 +4944,12 @@ def _load_native_tasks():
     return records
 
 
-def _parse_parking_lot_md():
+def _parse_parking_lot_md(repo_path):
     """Parse PARKING_LOT.md for `## heading` items; body = text until the next
     heading or `---` separator. Returns [{title, body}] in file order."""
     # Case-insensitive filename match for the two common spellings
-    candidates = [REPO_ROOT / "PARKING_LOT.md", REPO_ROOT / "parking-lot.md", REPO_ROOT / "parking_lot.md"]
+    repo = Path(repo_path)
+    candidates = [repo / "PARKING_LOT.md", repo / "parking-lot.md", repo / "parking_lot.md"]
     path = next((p for p in candidates if p.is_file()), None)
     if not path:
         return []
@@ -4851,14 +4981,15 @@ def _parse_parking_lot_md():
     return items
 
 
-def find_backlog_items(progress=None):
+def find_backlog_items(repo_path, progress=None):
     """Return backlog cards from GitHub issues + TODO.md."""
+    repo_path = resolve_repo_path(repo_path)
     items = []
 
     # Source 1: GitHub Issues
     if progress:
         progress("github", state="running", detail="Querying open and recently closed issues.")
-    backlog_issues = _fetch_backlog_issues()
+    backlog_issues = _fetch_backlog_issues(repo_path)
     if progress:
         progress(
             "github",
@@ -4926,7 +5057,7 @@ def find_backlog_items(progress=None):
         })
 
     # Source 2: TODO.md
-    todo_items = _parse_todo_md()
+    todo_items = _parse_todo_md(repo_path)
     if progress:
         progress(
             "todo",
@@ -4965,7 +5096,7 @@ def find_backlog_items(progress=None):
         })
 
     # Source 3: PARKING_LOT.md — richer items (heading + body)
-    parking_items = _parse_parking_lot_md()
+    parking_items = _parse_parking_lot_md(repo_path)
     if progress:
         progress(
             "parking",
@@ -5169,8 +5300,10 @@ _FIND_CONVS_INFLIGHT = 0
 _FIND_CONVS_INFLIGHT_MAX = 3
 
 
-def find_conversations(progress=None, include_old=True, live_sids=None):
+def find_conversations(repo_path, progress=None, include_old=True, live_sids=None):
     """Return list of conversation metadata dicts, newest first."""
+    repo_path = resolve_repo_path(repo_path)
+    repo = Path(repo_path)
     global _FIND_CONVS_INFLIGHT
     conversations = []
     # Concurrency guard: count this call into _FIND_CONVS_INFLIGHT and
@@ -5195,10 +5328,10 @@ def find_conversations(progress=None, include_old=True, live_sids=None):
     _t_top = 0.0; _n_top = 0; _n_top_misses = 0
     _t_eff = 0.0; _n_eff = 0; _n_eff_misses = 0
     _t_head = 0.0; _n_head = 0
-    # Scan every project dir whose slug encodes back to REPO_ROOT — both
+    # Scan every project dir whose slug encodes back to this repo — both
     # the modern claude-code 2.x slug AND the legacy '/'-only slug, so
     # we don't drop historic sessions when claude-code's encoder changes.
-    project_dirs = _candidate_conversation_dirs(REPO_ROOT)
+    project_dirs = _candidate_conversation_dirs(repo)
     # Load pins early — even when the watched repo has no native slug dirs
     # (fresh worktree, just-cloned repo), we still want sessions pinned to
     # this repo to surface in the single-repo list.
@@ -5206,7 +5339,7 @@ def find_conversations(progress=None, include_old=True, live_sids=None):
         _repo_pins = _load_repo_pins()
     except Exception:
         _repo_pins = {}
-    _this_repo = str(REPO_ROOT)
+    _this_repo = repo_path
     pinned_in_sids = {sid for sid, p in _repo_pins.items() if p == _this_repo}
     pinned_out_sids = {sid for sid, p in _repo_pins.items() if p and p != _this_repo}
     if not project_dirs and not pinned_in_sids:
@@ -5275,7 +5408,7 @@ def find_conversations(progress=None, include_old=True, live_sids=None):
         progress(
             "repo",
             state="done",
-            detail=f"{len(project_dirs)} transcript folder(s) for {REPO_ROOT.name}.",
+                detail=f"{len(project_dirs)} transcript folder(s) for {repo.name}.",
         )
         detail = f"Found {jsonl_total_before_filter} JSONL transcript file(s)."
         if not include_old and len(jsonl_files) != jsonl_total_before_filter:
@@ -5437,13 +5570,13 @@ def find_conversations(progress=None, include_old=True, live_sids=None):
             #     pile-up drains.
             # (2) no-drift hint — the session never issued `cd <path>` or
             #     `git -C <path>` AND its cwd already resolves to the
-            #     active REPO_ROOT, so there is nothing for inference to
+            #     requested repo, so there is nothing for inference to
             #     find. Set in _extract_tail_meta during its existing walk.
             _eff_module_hit = any(k[0] == sid for k in _EFFECTIVE_REPO_CACHE)
             _no_drift_possible = (
                 not tail_meta.get("has_external_cd")
                 and cwd_top
-                and cwd_top == str(REPO_ROOT)
+                and cwd_top == repo_path
             )
             if _skip_inference and not _eff_module_hit:
                 _n_eff_skipped_concurrency += 1
@@ -5537,7 +5670,7 @@ def find_conversations(progress=None, include_old=True, live_sids=None):
             "archived": sid in archived_set,
             "verified": sid in verified_set,
             # True when this row is showing here because the user pinned the
-            # session to REPO_ROOT (its underlying JSONL lives in another
+            # session to this repo (its underlying JSONL lives in another
             # repo's slug dir). Lets the UI render a 📌 indicator + unpin.
             "pinned_repo": sid in pinned_in_sids,
             # Last time the user interacted with this card via the UI.
@@ -5721,13 +5854,14 @@ def _add_sidecar_fields(entry):
     entry["needs_approval_message"] = notif.get("message", "") if notif else ""
 
 
-def find_all_sessions(progress=None, include_old=True):
+def find_all_sessions(repo_path, progress=None, include_old=True):
     """Return a unified list of sessions: interactive conversations + pkood
     agents + ~/.claude/tasks backlog cards.
 
     Each entry has a 'source' field: 'interactive' | 'pkood' | 'task'.
     Sources are merged, custom-ordered, and sorted by mtime.
     """
+    repo_path = resolve_repo_path(repo_path)
     global _SESSION_ISSUES_CACHE
     _SESSION_ISSUES_CACHE = _load_session_issues()
     registry = _load_session_registry()
@@ -5736,6 +5870,7 @@ def find_all_sessions(progress=None, include_old=True):
     if progress:
         progress("sessions", state="running", count=0, detail="Reading interactive sessions.")
     conversations = find_conversations(
+        repo_path,
         progress=progress,
         include_old=include_old,
         live_sids=live_sids,
@@ -5761,6 +5896,7 @@ def find_all_sessions(progress=None, include_old=True):
         progress("codex", state="running", detail="Reading Codex threads.")
     try:
         conversations.extend(find_codex_conversations(
+            repo_path=repo_path,
             include_old=include_old,
             repo_only=True,
             progress=progress,
@@ -5868,7 +6004,7 @@ def find_all_sessions(progress=None, include_old=True):
     if progress:
         progress("cards", state="running", count=len(conversations), detail="Merging sessions with backlog cards.")
     backlog_added = 0
-    for item in find_backlog_items(progress=progress):
+    for item in find_backlog_items(repo_path, progress=progress):
         inum = item.get("issue_number", "")
         if inum and inum in active_issue_nums:
             continue  # Active session already covers this issue
@@ -5889,7 +6025,7 @@ def find_all_sessions(progress=None, include_old=True):
     _cleanup_stale_sidecars(live_sids)
     if progress:
         progress("issue_states", state="running", detail="Loading linked issue states.")
-    issue_states = _fetch_issue_states()
+    issue_states = _fetch_issue_states(repo_path)
     if progress:
         progress(
             "issue_states",
@@ -5923,7 +6059,7 @@ def find_all_sessions(progress=None, include_old=True):
             c["linked_issue"] = _detect_issue_number_for_session(c)
             # If linked to a real issue, enrich display_name with the issue title
             if c.get("linked_issue"):
-                titles = _fetch_issue_titles()
+                titles = _fetch_issue_titles(repo_path)
                 title = titles.get(c["linked_issue"])
                 if title:
                     raw_name = (c.get("display_name") or "").strip().lower()
@@ -5978,33 +6114,30 @@ def find_all_sessions(progress=None, include_old=True):
     # Auto-verify: sessions with has_push linked to closed GH issues get verified.
     # Runs inline (cheap — just reads cached issue states + verified list).
     try:
-        auto_verify_closed_issues()
+        auto_verify_closed_issues(repo_path)
     except Exception:
         pass
 
     return conversations
 
 
-def _resolve_conversation_path(conversation_id):
+def _resolve_conversation_path(conversation_id, repo_path=None):
     """Return the JSONL path for a session.
 
     Resolution order:
-      1. Slugs under the current REPO_ROOT (modern + legacy encoders).
-      2. Global walk of ~/.claude/projects/*/ — needed for the multi-repo
-         archive view, where the user clicks a conversation from a folder
-         that isn't the active server's REPO_ROOT.
-      3. Canonical CONVERSATIONS_DIR path, so 404 messages still point
-         somewhere sensible when the file genuinely doesn't exist.
+      1. Slugs for the supplied repo path, when present.
+      2. Global walk of ~/.claude/projects/*/ for session-derived calls.
+      3. A canonical repo path when supplied, otherwise a harmless missing path.
     """
     name = conversation_id + ".jsonl"
-    for d in _conversation_dirs():
-        cand = d / name
-        if cand.is_file():
-            return cand
-    projects_root = Path.home() / ".claude" / "projects"
-    if projects_root.is_dir():
+    if repo_path:
+        for d in _conversation_dirs(repo_path):
+            cand = d / name
+            if cand.is_file():
+                return cand
+    if PROJECTS_ROOT.is_dir():
         try:
-            for project_dir in projects_root.iterdir():
+            for project_dir in PROJECTS_ROOT.iterdir():
                 if not project_dir.is_dir():
                     continue
                 cand = project_dir / name
@@ -6012,11 +6145,13 @@ def _resolve_conversation_path(conversation_id):
                     return cand
         except OSError:
             pass
-    return CONVERSATIONS_DIR / name
+    if repo_path:
+        return _canonical_conversation_path(repo_path, conversation_id)
+    return PROJECTS_ROOT / "_missing" / name
 
 
-def _resolve_conversation_reader(conversation_id):
-    claude_path = _resolve_conversation_path(conversation_id)
+def _resolve_conversation_reader(conversation_id, repo_path=None):
+    claude_path = _resolve_conversation_path(conversation_id, repo_path=repo_path)
     if claude_path.is_file():
         return claude_path, _parse_conversation_event
     codex_path = _resolve_codex_rollout_path(conversation_id)
@@ -6025,9 +6160,9 @@ def _resolve_conversation_reader(conversation_id):
     return claude_path, _parse_conversation_event
 
 
-def parse_conversation(conversation_id, after_line=0):
+def parse_conversation(conversation_id, after_line=0, repo_path=None):
     """Parse a conversation JSONL file into structured events."""
-    filepath, parser = _resolve_conversation_reader(conversation_id)
+    filepath, parser = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
     events = []
     line_num = 0
     is_codex = parser is _parse_codex_event
@@ -6736,15 +6871,15 @@ def _codex_spawn_pid_by_thread_id():
     return out
 
 
-def _codex_cwd_matches_repo(cwd, repo_root, git_top_cache):
+def _codex_cwd_matches_repo(cwd, repo_path, git_top_cache):
     if not cwd:
         return False
     try:
         p = Path(cwd).expanduser().resolve()
-        root = Path(repo_root).expanduser().resolve()
+        root = Path(repo_path).expanduser().resolve()
     except (OSError, RuntimeError, ValueError):
         p = Path(str(cwd))
-        root = Path(str(repo_root))
+        root = Path(str(repo_path))
     try:
         if p == root or root in p.parents:
             return True
@@ -6948,10 +7083,13 @@ def _codex_activity_fields_from_tail(tail, live):
     return fields
 
 
-def find_codex_conversations(include_old=True, repo_only=True, progress=None, limit=None):
+def find_codex_conversations(repo_path=None, include_old=True, repo_only=True, progress=None, limit=None):
     rows = _codex_fetch_threads(limit=limit)
     if not rows:
         return []
+    if repo_only:
+        repo_path = resolve_repo_path(repo_path)
+        repo_path_obj = Path(repo_path)
     try:
         repo_pins = _load_repo_pins()
     except Exception:
@@ -6987,12 +7125,11 @@ def find_codex_conversations(include_old=True, repo_only=True, progress=None, li
         pinned = repo_pins.get(sid)
         pinned_repo = False
         if repo_only:
-            this_repo = str(REPO_ROOT)
-            if pinned and pinned != this_repo:
+            if pinned and pinned != repo_path:
                 continue
-            if pinned == this_repo:
+            if pinned == repo_path:
                 pinned_repo = True
-            elif not _codex_cwd_matches_repo(cwd, REPO_ROOT, git_top_cache):
+            elif not _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
                 continue
         path = _codex_rollout_path_from_row(row)
         if not path or not path.is_file():
@@ -7250,13 +7387,17 @@ def resume_session_codex(session_id, text):
             except Exception:
                 pass
     row = _codex_thread_row(session_id) or {}
-    cwd = row.get("cwd") or find_session_cwd(session_id) or str(REPO_ROOT)
-    if not Path(cwd).is_dir():
-        cwd = str(REPO_ROOT)
+    cwd = row.get("cwd") or find_session_cwd(session_id)
+    if not cwd or not Path(cwd).is_dir():
+        try:
+            cwd = repo_from_session(session_id)["cwd"]
+        except RepoContextError as e:
+            return e.as_payload()
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"resume-codex-{session_id[:8]}-{timestamp}.log"
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / log_filename
+    log_dir = repo_log_dir(_git_toplevel_for_existing_dir(cwd) or cwd)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
     model = os.environ.get("CCC_CODEX_MODEL") or row.get("model") or "gpt-5.5"
     cmd = [
         resolved["bin"], "exec", "resume",
@@ -7446,17 +7587,19 @@ def _extract_codex_timeline(session_id):
     return {"events": events, "total_turns": turn}
 
 
-def spawn_session(prompt, name=None, cwd=None, worktree=False):
+def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False):
     """Spawn a headless Claude Code session and return tracking info.
 
-    If `cwd` is provided, the spawned subprocess runs there; otherwise it
-    inherits CCC's REPO_ROOT (backwards-compatible default).
+    The spawned subprocess requires an explicit cwd or repo_path.
 
-    If `worktree=True`, create a fresh git worktree off `cwd` (or
-    REPO_ROOT) on a `feat/<slug>` branch and run the spawned session
-    there. The worktree path + branch are returned in the response under
+    If `worktree=True`, create a fresh git worktree off the launch cwd on a
+    `feat/<slug>` branch and run the spawned session there. The worktree path
+    + branch are returned in the response under
     `worktree_path` / `worktree_branch` so the UI can show them.
     """
+    ctx = require_repo_context({"cwd": cwd, "repo_path": repo_path}, allow_session=False)
+    spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
     # Always slugify — name may come from firstSentence(body) and contain
     # filesystem-hostile chars like quotes, colons, slashes.
     session_name = _slugify(name or prompt)
@@ -7464,8 +7607,9 @@ def spawn_session(prompt, name=None, cwd=None, worktree=False):
         session_name = "unnamed"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-{session_name}-{timestamp}.log"
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / log_filename
+    log_dir = repo_log_dir(repo_for_logs)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
 
     cmd = [
         "claude", "-p", "--verbose",
@@ -7476,7 +7620,6 @@ def spawn_session(prompt, name=None, cwd=None, worktree=False):
         "--name", session_name,
     ]
 
-    spawn_cwd = cwd if cwd else str(REPO_ROOT)
     worktree_path = None
     worktree_branch = None
     if worktree:
@@ -7544,7 +7687,7 @@ def spawn_session(prompt, name=None, cwd=None, worktree=False):
     return resp
 
 
-def spawn_session_codex(prompt, name=None, cwd=None):
+def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None):
     """Spawn a headless Codex CLI run and return tracking info.
 
     Mirrors `spawn_session` but invokes the Codex CLI's `exec`
@@ -7555,10 +7698,8 @@ def spawn_session_codex(prompt, name=None, cwd=None):
 
     Tested against codex-cli 0.125.0-alpha.3.
 
-    If `cwd` is provided, the spawned subprocess runs there AND the
-    Codex `--cd` flag is set so the agent's workspace root matches
-    the launch directory. Otherwise we inherit CCC's REPO_ROOT
-    (backwards-compatible default).
+    The spawned subprocess requires an explicit cwd or repo_path. Codex `--cd`
+    is set so the agent's workspace root matches that concrete directory.
 
     Returns the same shape as spawn_session:
       {ok: True,  pid, name, log}                       — success
@@ -7568,16 +7709,17 @@ def spawn_session_codex(prompt, name=None, cwd=None):
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
     bin_path = resolved["bin"]
+    ctx = require_repo_context({"cwd": cwd, "repo_path": repo_path}, allow_session=False)
+    spawn_cwd = ctx["cwd"]
 
     session_name = _slugify(name or prompt)
     if not session_name:
         session_name = "unnamed"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-codex-{session_name}-{timestamp}.log"
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / log_filename
-
-    spawn_cwd = cwd if cwd else str(REPO_ROOT)
+    log_dir = repo_log_dir(ctx["repo_path"])
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
     model = os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
 
     cmd = [
@@ -7828,11 +7970,16 @@ def resume_session_headless(session_id, text):
             ok = _write_stream_json_user_message(s, text)
             return {"ok": ok, "pid": s["pid"], "resumed": True, "reused": True}
 
-    cwd = find_session_cwd(session_id) or str(REPO_ROOT)
+    try:
+        ctx = repo_from_session(session_id)
+    except RepoContextError as e:
+        return e.as_payload()
+    cwd = ctx["cwd"]
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"resume-{session_id[:8]}-{timestamp}.log"
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / log_filename
+    log_dir = repo_log_dir(ctx["repo_path"])
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
 
     cmd = [
         "claude", "-p", "--verbose",
@@ -8148,7 +8295,7 @@ def list_spawned_sessions():
         if poll is not None:
             finished_pids.append(s["pid"])
             # Subprocess died — close our FIFO writer fd and unlink the
-            # node so we don't leak FIFO files in LOG_DIR. The on-disk
+            # node so we don't leak FIFO files in the log dir. The on-disk
             # log itself stays for forensics.
             _cleanup_finished_entry(s)
     if finished_pids:
@@ -8707,12 +8854,17 @@ def find_pkood_agents():
     return agents
 
 
-def pkood_spawn(prompt, agent_id=None, target_dir=None):
+def pkood_spawn(prompt, agent_id=None, target_dir=None, repo_path=None):
     """Spawn a pkood agent. Returns {ok, agent_id} or {ok: False, error}."""
     if not agent_id:
         agent_id = _slugify(prompt, max_len=30) or "agent"
+    target_dir = target_dir or repo_path
     if not target_dir:
-        target_dir = str(REPO_ROOT)
+        return {"ok": False, "error": "repo_path or target_dir is required"}
+    try:
+        target_dir = _resolve_cwd_context(target_dir)["cwd"]
+    except RepoContextError as e:
+        return e.as_payload()
     cmd = [PKOOD_BIN, "spawn", "--name", agent_id, "--dir", target_dir, prompt]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -8771,12 +8923,13 @@ def pkood_tail(agent_id):
 # GitHub issues
 # ---------------------------------------------------------------------------
 
-def _gh(*args, timeout=10):
+def _gh(repo_path, *args, timeout=10):
     """Run a gh CLI command and return parsed JSON or None."""
+    repo_path = resolve_repo_path(repo_path)
     try:
         result = subprocess.run(
             ["gh"] + list(args),
-            capture_output=True, text=True, timeout=timeout, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=timeout, cwd=str(repo_path),
         )
         if result.returncode == 0 and result.stdout.strip():
             return json.loads(result.stdout)
@@ -8785,10 +8938,12 @@ def _gh(*args, timeout=10):
     return None
 
 
-def list_issues():
+def list_issues(repo_path):
     """Return open issues + recently closed issues (last 24h)."""
+    repo_path = resolve_repo_path(repo_path)
     # Open issues
     open_issues = _gh(
+        repo_path,
         "issue", "list", "--state", "open", "--limit", "50",
         "--json", "number,title,labels,createdAt,updatedAt,state",
     ) or []
@@ -8797,6 +8952,7 @@ def list_issues():
     from datetime import datetime, timedelta, timezone
     since = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     closed_issues = _gh(
+        repo_path,
         "issue", "list", "--state", "closed", "--limit", "20",
         "--search", f"closed:>{since[:10]}",
         "--json", "number,title,labels,createdAt,updatedAt,closedAt,state",
@@ -8833,12 +8989,13 @@ def list_issues():
     return all_issues
 
 
-def add_claude_fix_label(issue_number):
+def add_claude_fix_label(issue_number, repo_path):
     """Add 'claude-fix' label to an issue."""
+    repo_path = resolve_repo_path(repo_path)
     try:
         result = subprocess.run(
             ["gh", "issue", "edit", str(issue_number), "--add-label", "claude-fix"],
-            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=10, cwd=str(repo_path),
         )
         if result.returncode == 0:
             return {"ok": True}
@@ -8847,13 +9004,14 @@ def add_claude_fix_label(issue_number):
         return {"error": str(e)}
 
 
-def spawn_issue_fix(issue_number):
+def spawn_issue_fix(issue_number, repo_path):
     """Spawn a headless Claude session to fix an issue directly (no worktree)."""
+    repo_path = resolve_repo_path(repo_path)
     issue_number = str(issue_number)
     try:
         result = subprocess.run(
             ["gh", "issue", "view", issue_number, "--json", "title,body"],
-            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=10, cwd=str(repo_path),
         )
         if result.returncode != 0:
             return {"error": f"Failed to fetch issue #{issue_number}: {result.stderr.strip()}"}
@@ -8866,7 +9024,7 @@ def spawn_issue_fix(issue_number):
     # Mark as in-progress
     subprocess.run(
         ["gh", "issue", "edit", issue_number, "--add-label", "claude-in-progress", "--remove-label", "claude-fix"],
-        capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+        capture_output=True, text=True, timeout=10, cwd=str(repo_path),
     )
 
     prompt = f"""You are fixing GitHub issue #{issue_number}.
@@ -8886,8 +9044,9 @@ Instructions:
     session_name = f"issue-{issue_number}"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-issue-{issue_number}-{timestamp}.log"
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / log_filename
+    log_dir = repo_log_dir(repo_path)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
 
     cmd = [
         "claude", "-p", "--verbose",
@@ -8909,7 +9068,7 @@ Instructions:
         cmd,
         stdout=log_fh,
         stderr=subprocess.STDOUT,
-        cwd=str(REPO_ROOT),
+        cwd=str(repo_path),
         start_new_session=True,
     )
 
@@ -8927,7 +9086,7 @@ Instructions:
         pid=proc.pid,
         name=session_name,
         log_path=log_path,
-        cwd=str(REPO_ROOT),
+        cwd=str(repo_path),
         spawned_at=timestamp,
         command_summary=prompt[:200],
     )
@@ -8938,12 +9097,11 @@ Instructions:
 _VERCEL_PROJECT_ENV = os.environ.get("VERCEL_PROJECT", "")
 
 
-def _detect_vercel_project():
-    """Read REPO_ROOT/.vercel/project.json (created by `vercel link`) and
+def _detect_vercel_project(repo_path):
+    """Read <repo>/.vercel/project.json (created by `vercel link`) and
     return its `projectName`. Returns "" when the file is absent or
-    malformed. Resolved per-request so it follows the active repo when the
-    user switches via the sidebar repo picker."""
-    candidate = REPO_ROOT / ".vercel" / "project.json"
+    malformed."""
+    candidate = Path(repo_path) / ".vercel" / "project.json"
     try:
         with open(candidate, "r") as f:
             data = json.load(f)
@@ -8953,25 +9111,26 @@ def _detect_vercel_project():
         return ""
 
 
-def _resolve_vercel_project():
+def _resolve_vercel_project(repo_path=None):
     """env > .vercel/project.json > "". Env still wins so CI overrides keep
     working; the autodetect is just a friendlier default for the common case
     of a `vercel link`-ed local checkout."""
-    return _VERCEL_PROJECT_ENV or _detect_vercel_project()
+    return _VERCEL_PROJECT_ENV or (_detect_vercel_project(repo_path) if repo_path else "")
 
 
-def vercel_deploy_status():
+def vercel_deploy_status(repo_path):
     """Return latest production deployment status from Vercel CLI.
 
     No-op when no project name is resolvable — Vercel integration is opt-in.
     """
-    project = _resolve_vercel_project()
+    repo_path = resolve_repo_path(repo_path)
+    project = _resolve_vercel_project(repo_path)
     if not project:
         return {"error": "VERCEL_PROJECT not configured (no env, no .vercel/project.json)", "disabled": True}
     try:
         result = subprocess.run(
             ["vercel", "ls", project, "--environment", "production", "-F", "json"],
-            capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=15, cwd=str(repo_path),
         )
         if result.returncode != 0:
             return {"error": result.stderr.strip() or "vercel ls failed"}
@@ -9019,16 +9178,17 @@ def _save_fix_deploy_spawned(data):
     os.replace(tmp, FIX_DEPLOY_SPAWNED_FILE)
 
 
-def vercel_deploy_status_with_autofix():
+def vercel_deploy_status_with_autofix(repo_path):
     """Return deploy status; auto-spawn /fix-deploy session on new ERROR."""
-    status = vercel_deploy_status()
+    repo_path = resolve_repo_path(repo_path)
+    status = vercel_deploy_status(repo_path)
     if status.get("state") == "ERROR":
         sha = status.get("commit_sha") or ""
         if sha:
             spawned = _load_fix_deploy_spawned()
             if sha not in spawned:
                 try:
-                    info = spawn_session("/fix-deploy", name=f"fix-deploy-{sha}")
+                    info = spawn_session("/fix-deploy", name=f"fix-deploy-{sha}", repo_path=repo_path)
                     spawned[sha] = {
                         "pid": info.get("pid"),
                         "name": info.get("name"),
@@ -9044,13 +9204,14 @@ def vercel_deploy_status_with_autofix():
     return status
 
 
-def auto_verify_closed_issues():
+def auto_verify_closed_issues(repo_path):
     """For any session with has_push + linked to a CLOSED GitHub issue,
     auto-set verified=True if not already. Returns what was changed."""
+    repo_path = resolve_repo_path(repo_path)
     verified_list = _load_verified_conversations()
     verified_set = set(verified_list)
-    issue_states = _fetch_issue_states()
-    convs = find_conversations() or []
+    issue_states = _fetch_issue_states(repo_path)
+    convs = find_conversations(repo_path) or []
     newly_verified = []
 
     for c in convs:
@@ -9090,16 +9251,16 @@ def auto_verify_closed_issues():
         verified_set.add(sid)
         newly_verified.append({"session_id": sid, "issue": inum, "display_name": (c.get("display_name") or "")[:80]})
         # Also strip in-progress label
-        remove_in_progress_label(inum)
+        remove_in_progress_label(inum, repo_path=repo_path)
 
     if newly_verified:
         _save_verified_conversations(verified_list)
-        _bust_issue_state_cache()
+        _bust_issue_state_cache(repo_path)
 
     return {"ok": True, "newly_verified": newly_verified, "count": len(newly_verified)}
 
 
-def backfill_in_progress_labels():
+def backfill_in_progress_labels(repo_path):
     """Scan current conversations; for each session whose display_name looks like
     'issue-N' and isn't verified/archived, mark its linked issue as in-progress.
     Skips issues that are already closed on GitHub.
@@ -9107,9 +9268,10 @@ def backfill_in_progress_labels():
     marked = []
     skipped = []
     errors = []
-    convs = find_conversations() or []
+    repo_path = resolve_repo_path(repo_path)
+    convs = find_conversations(repo_path) or []
     # Collect currently-open issue numbers to avoid marking closed issues.
-    open_issues = _fetch_backlog_issues() or []
+    open_issues = _fetch_backlog_issues(repo_path) or []
     open_set = {str(i.get("number")) for i in open_issues}
 
     seen = set()
@@ -9129,7 +9291,7 @@ def backfill_in_progress_labels():
         if issue_num not in open_set:
             skipped.append({"issue": issue_num, "reason": "not open"})
             continue
-        r = mark_issue_in_progress(issue_num)
+        r = mark_issue_in_progress(issue_num, repo_path=repo_path)
         if r.get("ok"):
             marked.append(issue_num)
         else:
@@ -9137,7 +9299,7 @@ def backfill_in_progress_labels():
     return {"ok": True, "marked": marked, "skipped": skipped, "errors": errors}
 
 
-def mark_issue_in_progress(issue_number, force_reopen=False):
+def mark_issue_in_progress(issue_number, repo_path, force_reopen=False):
     """Signal to GitHub that work is starting on an issue:
     - reopens the issue if closed as NOT_PLANNED (never if COMPLETED)
     - adds 'claude-in-progress' label
@@ -9148,14 +9310,14 @@ def mark_issue_in_progress(issue_number, force_reopen=False):
     work (see 2026-04-18 #126 incident: UI showed 5-min-stale OPEN; drag→Working
     called mark_issue_in_progress which unconditionally reopened the issue).
     """
-    global _backlog_issues_cache_ts, _issue_state_cache_ts
+    repo_path = resolve_repo_path(repo_path)
     result = {"ok": False, "issue_number": str(issue_number)}
     # Reopen only when safe
     try:
         st_out = subprocess.run(
             ["gh", "issue", "view", str(issue_number),
              "--json", "state,stateReason"],
-            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=10, cwd=str(repo_path),
         )
         if st_out.returncode == 0:
             st_data = json.loads(st_out.stdout)
@@ -9168,7 +9330,7 @@ def mark_issue_in_progress(issue_number, force_reopen=False):
                     return result
                 subprocess.run(
                     ["gh", "issue", "reopen", str(issue_number)],
-                    capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+                    capture_output=True, text=True, timeout=10, cwd=str(repo_path),
                 )
                 result["reopened"] = True
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
@@ -9179,12 +9341,12 @@ def mark_issue_in_progress(issue_number, force_reopen=False):
              "--add-label", "claude-in-progress",
              "--remove-label", "icebox",
              "--add-assignee", "@me"],
-            capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=15, cwd=str(repo_path),
         )
         if out.returncode == 0:
             result["ok"] = True
-            _backlog_issues_cache_ts = 0
-            _issue_state_cache_ts = 0
+            _bust_backlog_issue_cache(repo_path)
+            _bust_issue_state_cache(repo_path)
         else:
             result["error"] = (out.stderr or out.stdout or "").strip()[:300]
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
@@ -9192,7 +9354,7 @@ def mark_issue_in_progress(issue_number, force_reopen=False):
     return result
 
 
-def mark_issue_icebox(issue_number):
+def mark_issue_icebox(issue_number, repo_path):
     """Signal that an issue is parked in the Icebox column:
     - adds the `icebox` label
     - removes `claude-in-progress` since the issue is parked, not being worked
@@ -9200,19 +9362,19 @@ def mark_issue_icebox(issue_number):
     Mirror of mark_issue_in_progress: each operation adds its own label and
     strips the other so the GitHub state always matches a single column.
     """
-    global _backlog_issues_cache_ts, _issue_state_cache_ts
+    repo_path = resolve_repo_path(repo_path)
     result = {"ok": False, "issue_number": str(issue_number)}
     try:
         out = subprocess.run(
             ["gh", "issue", "edit", str(issue_number),
              "--add-label", "icebox",
              "--remove-label", "claude-in-progress"],
-            capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=15, cwd=str(repo_path),
         )
         if out.returncode == 0:
             result["ok"] = True
-            _backlog_issues_cache_ts = 0
-            _issue_state_cache_ts = 0
+            _bust_backlog_issue_cache(repo_path)
+            _bust_issue_state_cache(repo_path)
         else:
             result["error"] = (out.stderr or out.stdout or "").strip()[:300]
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
@@ -9220,29 +9382,29 @@ def mark_issue_icebox(issue_number):
     return result
 
 
-def remove_in_progress_label(issue_number):
+def remove_in_progress_label(issue_number, repo_path):
     """Strip the claude-in-progress label (ignore if absent)."""
-    global _backlog_issues_cache_ts, _issue_state_cache_ts
+    repo_path = resolve_repo_path(repo_path)
     try:
         subprocess.run(
             ["gh", "issue", "edit", str(issue_number),
              "--remove-label", "claude-in-progress"],
-            capture_output=True, text=True, timeout=10, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, timeout=10, cwd=str(repo_path),
         )
-        _backlog_issues_cache_ts = 0
-        _bust_issue_state_cache()
+        _bust_backlog_issue_cache(repo_path)
+        _bust_issue_state_cache(repo_path)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
 
-def close_issue(issue_number, reason, duplicate_of=None):
+def close_issue(issue_number, reason, duplicate_of=None, repo_path=None):
     """Close a GitHub issue with the given reason.
 
     reason ∈ {'completed', 'not planned', 'duplicate'}
     For 'duplicate', we close with reason='not planned' and add a comment
     "Duplicate of #N" (GitHub doesn't have a native 'duplicate' close reason).
     """
-    global _backlog_issues_cache_ts
+    repo_path = resolve_repo_path(repo_path)
     reason = (reason or "").strip().lower()
     result = {"ok": False}
     try:
@@ -9254,24 +9416,24 @@ def close_issue(issue_number, reason, duplicate_of=None):
             comment = f"Duplicate of #{dup}"
             subprocess.run(
                 ["gh", "issue", "comment", str(issue_number), "--body", comment],
-                check=True, capture_output=True, text=True, cwd=str(REPO_ROOT),
+                check=True, capture_output=True, text=True, cwd=str(repo_path),
             )
             subprocess.run(
                 ["gh", "issue", "close", str(issue_number), "--reason", "not planned"],
-                check=True, capture_output=True, text=True, cwd=str(REPO_ROOT),
+                check=True, capture_output=True, text=True, cwd=str(repo_path),
             )
-            remove_in_progress_label(issue_number)
-            _backlog_issues_cache_ts = 0
+            remove_in_progress_label(issue_number, repo_path=repo_path)
+            _bust_backlog_issue_cache(repo_path)
             result["ok"] = True
             result["comment"] = comment
             return result
         elif reason in ("completed", "not planned"):
             subprocess.run(
                 ["gh", "issue", "close", str(issue_number), "--reason", reason],
-                check=True, capture_output=True, text=True, cwd=str(REPO_ROOT),
+                check=True, capture_output=True, text=True, cwd=str(repo_path),
             )
-            remove_in_progress_label(issue_number)
-            _backlog_issues_cache_ts = 0
+            remove_in_progress_label(issue_number, repo_path=repo_path)
+            _bust_backlog_issue_cache(repo_path)
             result["ok"] = True
             return result
         else:
@@ -9282,9 +9444,10 @@ def close_issue(issue_number, reason, duplicate_of=None):
         return result
 
 
-def get_issue_details(issue_number):
+def get_issue_details(issue_number, repo_path):
     """Return the full GitHub issue (title, body, labels, comments, URL)."""
     data = _gh(
+        repo_path,
         "issue", "view", str(issue_number),
         "--json", "title,body,labels,comments,url,author,state,createdAt,updatedAt",
     )
@@ -9293,16 +9456,17 @@ def get_issue_details(issue_number):
     return {"ok": True, "issue": data}
 
 
-def get_issue_summary(issue_number):
+def get_issue_summary(issue_number, repo_path):
     """Get Claude's summary comment from a closed issue."""
     comments = _gh(
+        repo_path,
         "issue", "view", str(issue_number),
         "--json", "comments",
         "--jq", ".comments",
     )
     if not comments:
         # Try without jq
-        data = _gh("issue", "view", str(issue_number), "--json", "comments,body")
+        data = _gh(repo_path, "issue", "view", str(issue_number), "--json", "comments,body")
         comments = (data or {}).get("comments", [])
 
     # Find Claude's closing comment (contains "Fixed and merged" or "Claude Code")
@@ -9561,8 +9725,7 @@ def parse_conversation_by_sid(session_id, after_line=0):
     """Like parse_conversation() but searches every project dir for the sid.
 
     Morning-spawned sessions can land in any ~/.claude/projects/<slug>/
-    depending on spawn cwd, so the CONVERSATIONS_DIR-anchored function
-    misses them.
+    depending on spawn cwd, so repo-specific lookup misses them.
     """
     if not PROJECTS_ROOT.is_dir():
         return {"events": [], "last_line": 0}
@@ -10051,7 +10214,7 @@ def _worktree_dirty_cached(path, event_ts):
     return dirty
 
 
-def list_repo_worktrees(repo_top=None):
+def list_repo_worktrees(repo_top):
     """Return all worktrees for a repo with a `dirty` flag (uncommitted
     changes). Powers the topbar's "open worktrees" modal.
 
@@ -10060,7 +10223,7 @@ def list_repo_worktrees(repo_top=None):
     the response includes `orphan_prs` for open PRs whose branch has no
     local worktree.
     """
-    repo_top = repo_top or str(REPO_ROOT)
+    repo_top = resolve_repo_path(repo_top)
     wts = _list_worktrees(repo_top)
     dirty_n = 0
     agent_n = 0
@@ -11232,7 +11395,7 @@ def morning_braindump(text):
         r = subprocess.run(
             ["claude", "-p", "--model", "haiku"],
             input=prompt, capture_output=True, text=True, timeout=60,
-            cwd=str(_SCRATCH_DIR),  # keep throwaway JSONLs out of REPO_ROOT
+            cwd=str(_SCRATCH_DIR),  # keep throwaway JSONLs out of repo project dirs
         )
     except (subprocess.SubprocessError, OSError) as e:
         return {"ok": False, "error": f"claude -p failed: {e}"}
@@ -11650,52 +11813,53 @@ def morning_launch(goal_slug, strategy_id, custom_message=None):
 # and SECURITY.md.
 # ---------------------------------------------------------------------------
 
-_TERM_STATE = {
-    "cwd": None,        # Path; lazily set to REPO_ROOT on first access
-    "popen": None,      # Currently running subprocess.Popen, or None
-    "pgid": None,       # Process group id of the running subprocess
-}
+_TERM_STATES = {}  # repo_path -> {cwd, popen, pgid}
 _TERM_LOCK = threading.Lock()
 
 
-def _term_cwd():
-    """Current terminal cwd, defaulting to REPO_ROOT."""
-    cwd = _TERM_STATE["cwd"]
+def _term_state(repo_path):
+    repo_path = resolve_repo_path(repo_path)
+    return _TERM_STATES.setdefault(repo_path, {"cwd": Path(repo_path), "popen": None, "pgid": None})
+
+
+def _term_cwd(repo_path):
+    """Current terminal cwd for one concrete repo."""
+    state = _term_state(repo_path)
+    cwd = state["cwd"]
     if cwd is None or not Path(cwd).is_dir():
-        _TERM_STATE["cwd"] = REPO_ROOT
-        cwd = REPO_ROOT
+        state["cwd"] = Path(repo_path)
+        cwd = Path(repo_path)
     return Path(cwd)
 
 
-def _term_rel():
-    """cwd as a path relative to REPO_ROOT, or "" if cwd == REPO_ROOT."""
+def _term_rel(repo_path):
+    """cwd as a path relative to repo_path, or "" if cwd == repo_path."""
     try:
-        rel = str(_term_cwd().relative_to(REPO_ROOT))
+        rel = str(_term_cwd(repo_path).relative_to(Path(repo_path)))
         return "" if rel == "." else rel
     except ValueError:
         return ""
 
 
-def _term_resolve_cwd_change(target):
-    """Resolve a `cd <target>` against the current cwd, clamped to REPO_ROOT.
+def _term_resolve_cwd_change(repo_path, target):
+    """Resolve a `cd <target>` against the current cwd, clamped to repo_path.
 
     Returns the new Path, or raises ValueError with a user-facing message.
-    Empty target → REPO_ROOT (we don't honour $HOME because escaping
-    REPO_ROOT defeats the path clamp).
+    Empty target resets to repo_path.
     """
     if not target or target == "~":
-        return REPO_ROOT
+        return Path(repo_path)
     if target == "-":
         # `cd -` would need a previous-cwd memory; we don't keep one.
         raise ValueError("cd - is not supported in the in-UI terminal")
-    base = _term_cwd()
+    base = _term_cwd(repo_path)
     raw = Path(target)
     candidate = (raw if raw.is_absolute() else (base / raw)).resolve()
     try:
-        candidate.relative_to(REPO_ROOT.resolve())
+        candidate.relative_to(Path(repo_path).resolve())
     except ValueError:
         raise ValueError(
-            f"refusing to cd outside REPO_ROOT ({REPO_ROOT}): {candidate}"
+            f"refusing to cd outside repo ({repo_path}): {candidate}"
         )
     if not candidate.is_dir():
         raise ValueError(f"not a directory: {candidate}")
@@ -11760,11 +11924,11 @@ def _term_split_leading_cd(cmd):
     return target, rest
 
 
-def _term_kill_running():
+def _term_kill_running(state):
     """Kill the currently running terminal subprocess, if any. Returns True
     if something was killed. Caller must hold _TERM_LOCK or accept races."""
-    popen = _TERM_STATE.get("popen")
-    pgid = _TERM_STATE.get("pgid")
+    popen = state.get("popen")
+    pgid = state.get("pgid")
     if not popen or popen.poll() is not None:
         return False
     try:
@@ -11830,34 +11994,60 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/attention":
             qs = urllib.parse.parse_qs(parsed.query)
             include_all = qs.get("all", ["0"])[0] in ("1", "true")
-            self.send_json(compute_attention_items(include_all=include_all))
+            try:
+                ctx = require_repo_context(query=qs, allow_session=False)
+                self.send_json(compute_attention_items(ctx["repo_path"], include_all=include_all))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif path == "/api/config":
             self.send_json(get_app_config())
         elif path == "/api/term/cwd":
-            cwd = _term_cwd()
             try:
-                rel = str(cwd.relative_to(REPO_ROOT))
-            except ValueError:
-                rel = ""
-            self.send_json({
-                "cwd": str(cwd),
-                "repo_root": str(REPO_ROOT),
-                "rel": rel if rel != "." else "",
-                "running": (
-                    _TERM_STATE.get("popen") is not None
-                    and _TERM_STATE["popen"].poll() is None
-                ),
-            })
+                qs = urllib.parse.parse_qs(parsed.query)
+                ctx = require_repo_context(query=qs, allow_session=False)
+                state = _term_state(ctx["repo_path"])
+                cwd = _term_cwd(ctx["repo_path"])
+                self.send_json({
+                    "cwd": str(cwd),
+                    "repo_path": ctx["repo_path"],
+                    "rel": _term_rel(ctx["repo_path"]),
+                    "running": (
+                        state.get("popen") is not None
+                        and state["popen"].poll() is None
+                    ),
+                })
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif path == "/api/issues":
-            self.send_json(list_issues())
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                ctx = require_repo_context(query=qs, allow_session=False)
+                self.send_json(list_issues(ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif path == "/api/vercel-deploy":
-            self.send_json(vercel_deploy_status_with_autofix())
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                ctx = require_repo_context(query=qs, allow_session=False)
+                self.send_json(vercel_deploy_status_with_autofix(ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif re.match(r"^/api/issues/\d+/summary$", path):
             num = path.split("/")[3]
-            self.send_json(get_issue_summary(num))
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                ctx = require_repo_context(query=qs, allow_session=False)
+                self.send_json(get_issue_summary(num, ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif re.match(r"^/api/issues/\d+/details$", path):
             num = path.split("/")[3]
-            self.send_json(get_issue_details(num))
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                ctx = require_repo_context(query=qs, allow_session=False)
+                self.send_json(get_issue_details(num, ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif path == "/api/stats":
             # Aggregated usage stats across every transcript under
             # ~/.claude/projects. ?range=7d|30d|all (default 30d).
@@ -11911,9 +12101,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/sessions":
             qs = urllib.parse.parse_qs(parsed.query)
             include_old = qs.get("include_old", ["0"])[0] in ("1", "true")
-            _session_load_begin()
+            try:
+                ctx = require_repo_context(query=qs, allow_session=False)
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+                return
+            _session_load_begin(ctx["repo_path"])
             try:
                 rows = find_all_sessions(
+                    ctx["repo_path"],
                     progress=_session_load_set_step,
                     include_old=include_old,
                 )
@@ -11924,8 +12120,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             _save_conv_meta_cache()
             self.send_json(rows)
         elif path == "/api/conversations":
-            convs = find_conversations() or []
             qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                ctx = require_repo_context(query=qs, allow_session=False)
+                convs = find_conversations(ctx["repo_path"]) or []
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+                return
             include_morning = qs.get("include_morning", ["0"])[0] in ("1", "true")
             if not include_morning:
                 morning_sids = _morning_session_ids()
@@ -11953,10 +12154,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(convs)
         elif path == "/api/morning/sessions":
             # Morning-spawned sessions may live in ANY project slug under
-            # ~/.claude/projects/ (spawn cwd determines the slug), not only
-            # the project CCC is watching. find_conversations() only scans
-            # CONVERSATIONS_DIR — too narrow. Scan all project dirs for the
-            # specific session_ids we care about.
+            # ~/.claude/projects/ (spawn cwd determines the slug). Scan all
+            # project dirs for the specific session_ids we care about.
             morning_sids = _morning_session_ids()
             registry = _load_session_registry() if PROJECTS_ROOT.is_dir() else {}
             out = []
@@ -12117,7 +12316,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "log": str(log_path) if log_path else None,
             })
         elif path == "/api/repo/worktrees":
-            self.send_json(list_repo_worktrees())
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                ctx = require_repo_context(query=qs, allow_session=False)
+                self.send_json(list_repo_worktrees(ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif re.match(r"^/api/session/[a-f0-9-]+/spawn-stream$", path):
             sid = path.split("/")[-2]
             self._stream_spawn_deltas(sid)
@@ -12141,7 +12345,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # "Original ask" / "Earlier ask" / user-message panels.
             #
             # Sandbox: path must (a) live under the user's home directory,
-            # (b) sit in a `.claude/pasted-images/` directory, (c) have an
+            # (b) sit in an approved pasted-images directory, (c) have an
             # allowed image extension. No path traversal can escape (a).
             qs = urllib.parse.parse_qs(parsed.query)
             raw = (qs.get("path", [""])[0] or "").strip()
@@ -12161,8 +12365,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 self.send_json({"error": "forbidden"}, 403)
                 return
-            parts = resolved.parts
-            if len(parts) < 3 or parts[-2] != "pasted-images" or parts[-3] != ".claude":
+            in_legacy_paste_dir = (
+                len(resolved.parts) >= 3
+                and resolved.parts[-2] == "pasted-images"
+                and resolved.parts[-3] == ".claude"
+            )
+            try:
+                resolved.relative_to((COMMAND_CENTER_STATE_DIR / "pasted-images").resolve())
+                in_state_paste_dir = True
+            except ValueError:
+                in_state_paste_dir = False
+            if not (in_legacy_paste_dir or in_state_paste_dir):
                 self.send_json({"error": "forbidden"}, 403)
                 return
             if not resolved.is_file():
@@ -12339,17 +12552,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "tailnet": tailnet,
             })
         elif path == "/api/repo/list":
-            # List of repos the picker offers + the one currently active.
+            # List of repos the picker offers. There is no server-active repo.
             repos = load_known_repos()
-            current = str(REPO_ROOT)
-            # Make sure the current repo is always in the list, even if it's not
-            # in the morning watched_repos config.
-            if not any(r["path"] == current for r in repos):
-                repos.append({"path": current, "label": Path(current).name})
-            # recent[] is the subset of repos ordered by last-switched; the
+            # recent[] is the subset of repos ordered by last use; the
             # client uses it to surface a "Recent" group in the picker modal.
             self.send_json({
-                "current": current,
+                "current": None,
                 "repos": repos,
                 "recent": _load_recent_repos(),
             })
@@ -12378,13 +12586,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             payload = fetch_cross_repo_issues()
             self.send_json(payload)
         elif path == "/api/identity":
-            # This server's own identity card. Used by peers (and the UI on
-            # peers' behalf) to verify a registry entry's port still belongs
-            # to the expected repo, since registry entries can grow stale
-            # between writes and reads.
+            # This server's own identity card. Repo identity is request-level.
             self.send_json({
-                "repo_path": str(REPO_ROOT),
-                "label": REPO_ROOT.name,
+                "label": CCC_ROOT.name,
+                "install_path": str(CCC_ROOT),
                 "port": PORT,
                 "pid": os.getpid(),
                 "version": __version__,
@@ -12573,10 +12778,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/api/repo/add":
             # Persist a user-picked repo path so it appears in the picker and
-            # passes the /api/repo/switch allow-list. Intended for folders
-            # outside $HOME or nested beneath its top level, which the auto-scan
-            # in load_known_repos() can't find. The caller normally follows up
-            # with /api/repo/switch to actually activate the new repo.
+            # can be used by repo-scoped APIs. Intended for folders outside
+            # $HOME or nested beneath its top level, which the auto-scan in
+            # load_known_repos() can't find.
             length = int(self.headers.get("Content-Length", "0"))
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
@@ -12599,11 +12803,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/repo/pin":
             # Visual-only "this session belongs under repo X" override.
             # Body: {session_id, path}. Empty/missing path clears the pin.
-            # Same allow-list as /api/repo/switch — we never accept an
-            # arbitrary path here, even though the pin doesn't hand the
-            # path to subprocess. Defence in depth: if a future caller
-            # uses pinned paths to drive cwd-sensitive code, the input
-            # was already constrained.
+            # Same repo validation as repo-scoped endpoints — we never accept
+            # an arbitrary path here, even though the pin is visual-only.
             length = int(self.headers.get("Content-Length", "0"))
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
@@ -12623,18 +12824,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 pinned_to = None
             else:
                 try:
-                    target_resolved = str(Path(target).expanduser().resolve())
-                except OSError as e:
-                    self.send_json({"ok": False, "error": f"bad path: {e}"}, 400)
-                    return
-                allowed = {r["path"] for r in load_known_repos()}
-                allowed.add(str(REPO_ROOT))
-                if target_resolved not in allowed:
-                    self.send_json({
-                        "ok": False,
-                        "error": "path not in allow-list (must appear in the repo picker)",
-                        "path": target_resolved,
-                    }, 403)
+                    target_resolved = resolve_repo_path(target)
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
                     return
                 pins[sid] = target_resolved
                 pinned_to = target_resolved
@@ -12646,14 +12838,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({"ok": True, "session_id": sid, "pinned_to": pinned_to})
             return
         if path == "/api/repo/switch":
-            # Live-switch the watched repo. All REPO_ROOT-derived globals get
-            # reassigned and every repo-scoped cache is invalidated. The next
-            # /api/conversations call will rescan the new repo from scratch.
-            #
-            # SECURITY: target must be in the picker's allow-list. Without
-            # this, a CSRF could repoint REPO_ROOT at /etc and the next gh /
-            # subprocess call would run cwd=/etc — at minimum noisy errors,
-            # potentially worse depending on what code reads from REPO_ROOT.
+            # Deprecated compatibility shim. CCC no longer has server-global
+            # repo switching; callers must pass repo_path to repo-scoped APIs.
             length = int(self.headers.get("Content-Length", "0"))
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
@@ -12664,24 +12850,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing 'path'"}, 400)
                 return
             try:
-                target_resolved = str(Path(target).expanduser().resolve())
-            except OSError as e:
-                self.send_json({"ok": False, "error": f"bad path: {e}"}, 400)
+                target_resolved = resolve_repo_path(target)
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
                 return
-            allowed = {r["path"] for r in load_known_repos()}
-            allowed.add(str(REPO_ROOT))  # current repo is always allowed
-            if target_resolved not in allowed:
-                self.send_json({
-                    "ok": False,
-                    "error": "path not in allow-list (must appear in the repo picker)",
-                    "path": target_resolved,
-                }, 403)
-                return
-            try:
-                new_root = switch_repo_root(target_resolved)
-                self.send_json({"ok": True, "current": str(new_root)})
-            except ValueError as e:
-                self.send_json({"ok": False, "error": str(e)}, 400)
+            self.send_json({
+                "ok": False,
+                "error": "repo_switch_removed",
+                "code": "repo_switch_removed",
+                "message": "CCC no longer switches server repo state; pass repo_path to repo-scoped APIs.",
+                "repo_path": target_resolved,
+            }, 410)
             return
         if path == "/api/morning/ingest/run":
             # Fire-and-forget: spawn the Apple Notes ingester in the background.
@@ -12692,7 +12871,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not script.is_file():
                 self.send_json({"ok": False, "error": "ingester not found"}, 500)
             else:
-                log_path = LOG_DIR / f"ingest-{int(time.time())}.log"
+                log_dir = COMMAND_CENTER_STATE_DIR / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_path = log_dir / f"ingest-{int(time.time())}.log"
                 try:
                     lf = open(log_path, "w")
                     subprocess.Popen(
@@ -12914,8 +13095,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg",
                 }
                 ext = ext_map.get(ctype.split(";")[0].strip().lower(), "png")
-                repo = os.environ.get("CCC_WATCH_REPO") or os.getcwd()
-                img_dir = os.path.join(repo, ".claude", "pasted-images")
+                img_dir = str(COMMAND_CENTER_STATE_DIR / "pasted-images")
                 os.makedirs(img_dir, exist_ok=True)
                 fname = f"paste-{int(time.time()*1000)}.{ext}"
                 fpath = os.path.join(img_dir, fname)
@@ -12927,9 +13107,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/reveal-file":
             # SECURITY: macOS `open` will execute apps and scripts. Unlike
-            # /api/open (which clamps targets to REPO_ROOT/LOG_DIR), we
-            # accept any path — but only if its extension is in
-            # FILE_EXT_TO_CATEGORY. The whitelist excludes .app, .sh,
+            # /api/open, this launches the file directly, so it clamps to the
+            # repo/session context AND requires an allowlisted extension.
+            # The whitelist excludes .app, .sh,
             # .command, .py, etc., so subprocess.Popen(["open", path])
             # cannot trigger code execution. Adding executable types to
             # FILE_CATEGORIES would re-introduce the RCE risk.
@@ -12946,11 +13126,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "path must be absolute"}, 400)
             else:
                 ext = os.path.splitext(target)[1].lower()
+                try:
+                    ctx = require_repo_context(payload, allow_session=True)
+                    rp = Path(target).resolve(strict=False)
+                    allowed_roots = [Path(ctx["repo_path"]).resolve(), repo_log_dir(ctx["repo_path"]).resolve()]
+                    in_sandbox = any(rp == root or root in rp.parents for root in allowed_roots)
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
+                    return
+                except OSError:
+                    in_sandbox = False
                 if ext not in FILE_EXT_TO_CATEGORY:
                     self.send_json(
                         {"ok": False, "error": "extension not allowed", "ext": ext},
                         403,
                     )
+                elif not in_sandbox:
+                    self.send_json({"ok": False, "error": "path outside repo/session sandbox", "path": target}, 403)
                 elif not os.path.exists(target):
                     self.send_json({"ok": False, "error": "not found", "path": target}, 404)
                 else:
@@ -12963,8 +13155,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/open":
             # SECURITY: macOS `open` will execute scripts/apps. We MUST clamp
             # the target to a known-safe sandbox or this is RCE-as-a-feature.
-            # Accept only paths that resolve under REPO_ROOT or LOG_DIR — i.e.
-            # files the user is already viewing in this dashboard.
+            # Accept only paths that resolve under the request's concrete repo
+            # or that repo's log dir.
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
@@ -12975,20 +13167,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not target:
                 self.send_json({"ok": False, "error": "missing path"}, 400)
             else:
-                # Build candidate list: absolute path as-is, or relative to REPO_ROOT.
-                candidates = []
-                if os.path.isabs(target):
-                    candidates.append(target)
-                else:
-                    candidates.append(str(REPO_ROOT / target))
+                try:
+                    ctx = require_repo_context(payload, allow_session=True)
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
+                    return
+                # Build candidate list: absolute path as-is, or relative to repo_path.
+                candidates = [target] if os.path.isabs(target) else [str(Path(ctx["repo_path"]) / target)]
                 resolved = next((p for p in candidates if os.path.exists(p)), None)
                 if not resolved:
                     self.send_json({"ok": False, "error": "not found", "tried": candidates}, 404)
                 else:
-                    # Sandbox check: resolved path must live under REPO_ROOT or LOG_DIR.
+                    # Sandbox check: resolved path must live under repo or repo log dir.
                     try:
                         rp = Path(resolved).resolve(strict=False)
-                        allowed_roots = [REPO_ROOT.resolve(), LOG_DIR.resolve()]
+                        allowed_roots = [Path(ctx["repo_path"]).resolve(), repo_log_dir(ctx["repo_path"]).resolve()]
                         in_sandbox = any(
                             str(rp).startswith(str(root) + os.sep) or rp == root
                             for root in allowed_roots
@@ -12998,7 +13191,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     if not in_sandbox:
                         self.send_json({
                             "ok": False,
-                            "error": "path outside sandbox (REPO_ROOT / LOG_DIR)",
+                            "error": "path outside repo/session sandbox",
                             "path": resolved,
                         }, 403)
                     else:
@@ -13061,8 +13254,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         prompt,
                         name=name,
                         cwd=str(cwd_resolved) if cwd_resolved else None,
+                        repo_path=payload.get("repo_path"),
                         worktree=worktree_flag,
                     ))
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/sessions/spawn-codex":
@@ -13106,7 +13302,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
             else:
                 try:
-                    result = spawn_session_codex(prompt, name=name, cwd=str(cwd_resolved) if cwd_resolved else None)
+                    result = spawn_session_codex(
+                        prompt,
+                        name=name,
+                        cwd=str(cwd_resolved) if cwd_resolved else None,
+                        repo_path=payload.get("repo_path"),
+                    )
                     # Resolver-side failures (binary not found, CCC_CODEX_BIN
                     # misconfigured) carry a stable `"code": "codex_unavailable"`
                     # so the frontend can render an install hint without
@@ -13115,6 +13316,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         self.send_json(result, 503)
                     else:
                         self.send_json(result)
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/sessions/spawned/\d+/inject$", path):
@@ -13144,23 +13347,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
-            target = (payload.get("repo_root") or "").strip()
+            target = (payload.get("repo_path") or "").strip()
             if not target:
-                self.send_json({"ok": False, "error": "missing repo_root"})
+                self.send_json({"ok": False, "error": "missing repo_path"})
                 return
             try:
-                target_path = Path(target).expanduser().resolve()
-            except (OSError, RuntimeError) as e:
-                self.send_json({"ok": False, "error": f"bad path: {e}"})
-                return
-            if not target_path.is_dir():
-                self.send_json({"ok": False, "error": f"target dir does not exist: {target_path}"})
-                return
-            # Allow-list: target must be a known repo (same set the picker
-            # uses). Prevents arbitrary-path moves from a malicious page.
-            allowed = {Path(r["path"]).resolve() for r in load_known_repos()}
-            if target_path not in allowed:
-                self.send_json({"ok": False, "error": f"target not in known repos: {target_path}"})
+                target_path = Path(resolve_repo_path(target))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
                 return
             # Locate the session JSONL across every project dir under
             # ~/.claude/projects/. Both the modern and legacy slug
@@ -13201,11 +13395,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({"ok": True, "moved": True, "from": str(src), "to": str(dest)})
         elif re.match(r"^/api/issues/\d+/add-label$", path):
             num = path.split("/")[3]
-            self.send_json(add_claude_fix_label(num))
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                ctx = require_repo_context(payload, allow_session=False)
+                self.send_json(add_claude_fix_label(num, ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif re.match(r"^/api/issues/\d+/spawn$", path):
             num = path.split("/")[3]
             try:
-                self.send_json(spawn_issue_fix(num))
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                ctx = require_repo_context(payload, allow_session=False)
+                self.send_json(spawn_issue_fix(num, ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/conversations/order":
@@ -13223,14 +13428,38 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/issues/\d+/mark-icebox$", path):
             num = re.findall(r"\d+", path)[-1]
-            self.send_json(mark_issue_icebox(num))
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                ctx = require_repo_context(payload, allow_session=False)
+                self.send_json(mark_issue_icebox(num, ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif re.match(r"^/api/issues/\d+/mark-in-progress$", path):
             num = path.split("/")[3]
-            self.send_json(mark_issue_in_progress(num))
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                ctx = require_repo_context(payload, allow_session=False)
+                self.send_json(mark_issue_in_progress(num, ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif path == "/api/issues/auto-verify":
-            self.send_json(auto_verify_closed_issues())
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                ctx = require_repo_context(payload, allow_session=False)
+                self.send_json(auto_verify_closed_issues(ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif path == "/api/issues/backfill-in-progress":
-            self.send_json(backfill_in_progress_labels())
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                ctx = require_repo_context(payload, allow_session=False)
+                self.send_json(backfill_in_progress_labels(ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif re.match(r"^/api/issues/\d+/close$", path):
             num = path.split("/")[3]
             length = int(self.headers.get("Content-Length", "0"))
@@ -13241,17 +13470,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = {}
             reason = payload.get("reason") or "completed"
             duplicate_of = payload.get("duplicate_of")
-            self.send_json(close_issue(num, reason, duplicate_of))
+            try:
+                ctx = require_repo_context(payload, allow_session=False)
+                self.send_json(close_issue(num, reason, duplicate_of, repo_path=ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif re.match(r"^/api/issues/\d+/summarize-title$", path):
             num = path.split("/")[3]
             try:
                 # Bust the backlog cache so the next /api/sessions render
                 # picks up the new title without waiting for the 5-min TTL.
-                _bust_issue_state_cache()
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                ctx = require_repo_context(payload, allow_session=False)
+                _bust_issue_state_cache(ctx["repo_path"])
                 global _issue_titles_overrides_cache
                 _issue_titles_overrides_cache = None
-                result = summarize_issue_title(num)
+                result = summarize_issue_title(num, ctx["repo_path"])
                 self.send_json(result)
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/summarize$", path):
@@ -13297,17 +13535,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if backlog_match:
                 issue_num = backlog_match.group(1)
                 try:
+                    ctx = require_repo_context(payload, allow_session=False)
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
+                    return
+                try:
                     gh_out = subprocess.run(
                         ["gh", "issue", "close", issue_num,
                          "--reason", "not planned",
                          "--comment", "Archived via Claude Command Center (not planned)"],
                         capture_output=True, text=True, timeout=10,
-                        cwd=str(REPO_ROOT),
+                        cwd=ctx["repo_path"],
                     )
-                    global _backlog_issues_cache_ts, _issue_titles_cache_ts
-                    _backlog_issues_cache_ts = 0
-                    _issue_titles_cache_ts = 0
-                    _bust_issue_state_cache()
+                    _bust_backlog_issue_cache(ctx["repo_path"])
+                    _issue_titles_cache.pop(ctx["repo_path"], None)
+                    _bust_issue_state_cache(ctx["repo_path"])
                     self.send_json({
                         "ok": gh_out.returncode == 0,
                         "archived": True,
@@ -13355,16 +13597,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     issue_num = issue_match.group(1)
                     action = "close" if now_archived else "reopen"
                     try:
+                        ctx = repo_from_session(sid)
                         gh_out = subprocess.run(
                             ["gh", "issue", action, issue_num],
                             capture_output=True, text=True, timeout=10,
-                            cwd=str(REPO_ROOT),
+                            cwd=ctx["cwd"],
                         )
                         gh_result = {"action": action, "ok": gh_out.returncode == 0}
-                    except (subprocess.TimeoutExpired, FileNotFoundError):
+                    except (RepoContextError, subprocess.TimeoutExpired, FileNotFoundError):
                         gh_result = {"action": action, "ok": False}
                 if gh_result is not None:
-                    _bust_issue_state_cache()
+                    try:
+                        _bust_issue_state_cache(repo_from_session(sid)["repo_path"])
+                    except RepoContextError:
+                        _bust_issue_state_cache()
                 self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -13418,7 +13664,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # merged → done → archive. Idempotent: re-clicking is a no-op
             # archive (sid is already in archived_set).
             try:
-                state_cwd = session_cwd or str(REPO_ROOT)
+                ctx = repo_from_session(sid)
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+                return
+            try:
+                state_cwd = session_cwd or ctx["cwd"]
                 state_out = subprocess.run(
                     ["gh", "pr", "view", target, "--json", "state"],
                     capture_output=True, text=True, timeout=10, cwd=state_cwd,
@@ -13433,7 +13684,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             archived_set.append(sid)
                             _save_archived_conversations(archived_set)
                             archived_now = True
-                        _bust_issue_state_cache()
+                        _bust_issue_state_cache(ctx["repo_path"])
                         self.send_json({
                             "ok": True,
                             "via": "already-merged",
@@ -13470,7 +13721,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 })
                 return
 
-            cwd = session_cwd or str(REPO_ROOT)
+            cwd = session_cwd or ctx["cwd"]
             try:
                 # Intentionally no --delete-branch: when the head branch is
                 # checked out in a worktree (the common case here), gh tries
@@ -13499,7 +13750,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # the PR-state cache so the chip flips to MERGED on the
                     # next /api/conversations poll instead of waiting out
                     # the TTL.
-                    _bust_issue_state_cache()
+                    _bust_issue_state_cache(ctx["repo_path"])
                     _bust_pr_state_cache(target if target.startswith("http") else None)
                     self.send_json({
                         "ok": True,
@@ -13566,7 +13817,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
 
             # Find the worktree currently on this branch. Prefer the
             # session's cwd when it's still on the head branch; otherwise
-            # scan REPO_ROOT's worktrees by branch name.
+            # scan the session repo's worktrees by branch name.
+            try:
+                ctx = repo_from_session(sid)
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+                return
             session_cwd = find_session_cwd(sid)
             work_path = None
             if session_cwd and os.path.isdir(session_cwd):
@@ -13580,7 +13836,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 except (subprocess.SubprocessError, FileNotFoundError):
                     pass
             if not work_path:
-                for wt in _list_worktrees(str(REPO_ROOT)):
+                for wt in _list_worktrees(ctx["repo_path"]):
                     if wt.get("branch") == branch:
                         work_path = wt.get("path")
                         break
@@ -13682,7 +13938,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if sid and sid not in archived_set:
                 archived_set.append(sid)
                 _save_archived_conversations(archived_set)
-            _bust_issue_state_cache()
+            _bust_issue_state_cache(ctx["repo_path"])
             self.send_json({
                 "ok": True,
                 "via": "gh-rebase",
@@ -13756,9 +14012,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             issue_num = str(tail)
                     if issue_num:
                         # Build a minimal conv dict for helper
+                        try:
+                            ctx = repo_from_session(sid)
+                            session_cwd = payload.get("cwd") or ctx["cwd"]
+                        except RepoContextError:
+                            session_cwd = payload.get("cwd")
                         conv_info = {
                             "session_id": sid,
-                            "session_cwd": payload.get("cwd") or str(REPO_ROOT),
+                            "session_cwd": session_cwd,
                             "display_name": payload.get("display_name", ""),
                         }
                         ok = close_github_issue_with_commit(issue_num, conv_info)
@@ -13781,6 +14042,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "first_message": payload.get("first_message", ""),
                 "last_prompt": payload.get("last_prompt", ""),
                 "branch": payload.get("branch", ""),
+                "session_cwd": payload.get("cwd", ""),
             }
             self.send_json(create_github_issue_for_session(conv))
         elif re.match(r"^/api/conversations/[a-zA-Z0-9-]+/link-issue$", path):
@@ -13813,6 +14075,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     prompt,
                     agent_id=payload.get("id"),
                     target_dir=payload.get("target_dir"),
+                    repo_path=payload.get("repo_path"),
                 ))
         elif path == "/api/pkood/inject":
             length = int(self.headers.get("Content-Length", "0"))
@@ -13952,10 +14215,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not cmd:
                 self.send_json({"error": "missing cmd"}, 400)
                 return
-            self._term_run_stream(cmd)
+            try:
+                ctx = require_repo_context(payload, allow_session=False)
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+                return
+            self._term_run_stream(ctx["repo_path"], cmd)
         elif path == "/api/term/cancel":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            try:
+                ctx = require_repo_context(payload, allow_session=False)
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+                return
             with _TERM_LOCK:
-                killed = _term_kill_running()
+                killed = _term_kill_running(_term_state(ctx["repo_path"]))
             self.send_json({"ok": killed})
         else:
             self.send_json({"error": "Not found"}, 404)
@@ -14054,7 +14333,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             return False
 
-    def _term_run_stream(self, cmd):
+    def _term_run_stream(self, repo_path, cmd):
         """SSE: parse a leading `cd` if present, otherwise spawn `bash -c
         <rest>` in the current cwd and stream its merged stdout/stderr.
 
@@ -14063,6 +14342,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         Cancellation is via POST /api/term/cancel which kills the process
         group.
         """
+        repo_path = resolve_repo_path(repo_path)
+        state = _term_state(repo_path)
         # Parse leading `cd` chains. After this loop, `cmd` holds whatever
         # remains to run as a subprocess (possibly empty if it was all cd).
         try:
@@ -14070,8 +14351,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 target, rest = _term_split_leading_cd(cmd)
                 if target is None:
                     break
-                new_cwd = _term_resolve_cwd_change(target)
-                _TERM_STATE["cwd"] = new_cwd
+                new_cwd = _term_resolve_cwd_change(repo_path, target)
+                state["cwd"] = new_cwd
                 cmd = rest
                 if not cmd:
                     break
@@ -14087,14 +14368,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self._term_send_event("error", {"message": str(e)})
             self._term_send_event("exit", {
                 "code": -1,
-                "cwd": str(_term_cwd()),
-                "rel": _term_rel(),
+                "cwd": str(_term_cwd(repo_path)),
+                "rel": _term_rel(repo_path),
             })
             return
 
         # Reject if a previous command is still running.
         with _TERM_LOCK:
-            prev = _TERM_STATE.get("popen")
+            prev = state.get("popen")
             if prev is not None and prev.poll() is None:
                 self.send_response(409)
                 self.send_header("Content-Type", "application/json")
@@ -14120,12 +14401,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if not cmd.strip():
             self._term_send_event("exit", {
                 "code": 0,
-                "cwd": str(_term_cwd()),
-                "rel": _term_rel(),
+                "cwd": str(_term_cwd(repo_path)),
+                "rel": _term_rel(repo_path),
             })
             return
 
-        cwd = _term_cwd()
+        cwd = _term_cwd(repo_path)
         try:
             popen = subprocess.Popen(
                 ["bash", "-c", cmd],
@@ -14142,16 +14423,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self._term_send_event("exit", {
                 "code": -1,
                 "cwd": str(cwd),
-                "rel": _term_rel(),
+                "rel": _term_rel(repo_path),
             })
             return
 
         with _TERM_LOCK:
-            _TERM_STATE["popen"] = popen
+            state["popen"] = popen
             try:
-                _TERM_STATE["pgid"] = os.getpgid(popen.pid)
+                state["pgid"] = os.getpgid(popen.pid)
             except OSError:
-                _TERM_STATE["pgid"] = None
+                state["pgid"] = None
 
         try:
             # read1() returns whatever's available without waiting for a
@@ -14166,19 +14447,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # Client gone; kill the subprocess so it doesn't
                     # keep running headless forever.
                     with _TERM_LOCK:
-                        _term_kill_running()
+                        _term_kill_running(state)
                     return
             popen.wait()
             self._term_send_event("exit", {
                 "code": popen.returncode,
-                "cwd": str(_term_cwd()),
-                "rel": _term_rel(),
+                "cwd": str(_term_cwd(repo_path)),
+                "rel": _term_rel(repo_path),
             })
         finally:
             with _TERM_LOCK:
-                if _TERM_STATE.get("popen") is popen:
-                    _TERM_STATE["popen"] = None
-                    _TERM_STATE["pgid"] = None
+                if state.get("popen") is popen:
+                    state["popen"] = None
+                    state["pgid"] = None
             try:
                 popen.stdout.close()
             except OSError:
@@ -14269,9 +14550,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             pass  # Client disconnected
 
     def send_html(self, content):
-        # Inject repo name for GitHub links
-        repo = self._get_repo()
-        content = content.replace('<body>', f'<body data-repo="{repo}">', 1)
+        # There is no server-wide repo. Keep the attribute for older JS paths,
+        # but make it explicitly empty so callers must use row/filter context.
+        content = content.replace('<body>', '<body data-repo="">', 1)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         # Never cache the single-page app. The server re-reads index.html on every
@@ -14280,17 +14561,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(content.encode())
-
-    @staticmethod
-    def _get_repo():
-        try:
-            r = subprocess.run(
-                ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-                capture_output=True, text=True, timeout=5, cwd=str(REPO_ROOT),
-            )
-            return r.stdout.strip() if r.returncode == 0 else ""
-        except Exception:
-            return ""
 
     def send_json(self, data, status=200):
         self.send_response(status)
@@ -14324,7 +14594,8 @@ def _warm_cache():
     """Pre-warm the conversation metadata cache in a background thread."""
     try:
         t0 = time.time()
-        find_all_sessions(include_old=False)
+        for repo in _known_repo_paths()[:3]:
+            find_all_sessions(repo, include_old=False)
         _save_conv_meta_cache()
         print(f"  Cache warmed in {time.time() - t0:.1f}s ({len(_conv_meta_cache)} files)")
     except Exception as e:
@@ -14506,7 +14777,7 @@ def _classify_attention(c):
     return None
 
 
-def compute_attention_items(include_all=False):
+def compute_attention_items(repo_path, include_all=False):
     """Rank-and-cap list of cards that need user attention.
 
     Default mode: 8 total, max 3 backlog, `uncommitted_edits` older than 7
@@ -14514,8 +14785,9 @@ def compute_attention_items(include_all=False):
     the user can see the full pool via a "See all" affordance.
     Sort: priority ASC, then most recent activity first.
     """
+    repo_path = resolve_repo_path(repo_path)
     try:
-        convs = find_all_sessions() or []
+        convs = find_all_sessions(repo_path) or []
     except Exception:
         convs = []
     now = time.time()
@@ -14573,23 +14845,12 @@ def get_app_config():
     if _app_config_cache and time.time() - _app_config_cache_ts < 30:
         return _app_config_cache
     import shutil
-    # Detect GitHub repo via gh
-    repo_slug = ""
-    try:
-        out = subprocess.run(
-            ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
-            capture_output=True, text=True, timeout=5, cwd=str(REPO_ROOT),
-        )
-        if out.returncode == 0:
-            repo_slug = (out.stdout or "").strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
     config = {
         "app_name": "Claude Command Center",
         "title_strip": TITLE_STRIP_PREFIXES,
-        "repo": repo_slug,
-        "vercel_enabled": bool(_resolve_vercel_project()),
-        "vercel_project": _resolve_vercel_project(),
+        "repo": "",
+        "vercel_enabled": bool(_VERCEL_PROJECT_ENV),
+        "vercel_project": _VERCEL_PROJECT_ENV,
         "pkood_enabled": bool(shutil.which("pkood")),
         "gh_enabled": bool(shutil.which("gh")),
         "orgs": [label for label, _ in ORG_PATTERNS],
@@ -14820,17 +15081,16 @@ def _registry_locked_rmw(transform_fn):
                 pass
 
 
-def _register_self(repo_path, port, bind_host):
-    """Insert (or replace) this process's entry in the registry. Dedup is by
-    pid — each running process owns one entry. Same process re-registering
-    (e.g. after switch_repo_root) replaces its own row; different processes
-    never collide, even if they happen to share a repo_path. Silent on
-    I/O error — registry is a discovery convenience, not load-bearing."""
-    repo_str = str(repo_path)
+def _register_self(port, bind_host):
+    """Insert (or replace) this process's entry in the registry.
+
+    Dedup is by pid: each running process owns one entry. The registry
+    describes this CCC server process, not an active repo.
+    """
     self_pid = os.getpid()
     payload = {
-        "repo_path": repo_str,
-        "label": Path(repo_str).name,
+        "label": CCC_ROOT.name,
+        "install_path": str(CCC_ROOT),
         "port": int(port),
         "bind_host": bind_host,
         "pid": self_pid,
@@ -14845,16 +15105,16 @@ def _register_self(repo_path, port, bind_host):
 
     try:
         _registry_locked_rmw(replace)
-        print(f"  [registry] {REGISTRY_FILE} -> {repo_str} (pid {self_pid}, port {payload['port']})")
+        print(f"  [registry] {REGISTRY_FILE} -> pid {self_pid}, port {payload['port']}")
     except OSError as e:
         print(f"  [registry] could not register ({e})")
 
 
-def _unregister_self(repo_path=None):
-    """Remove this process's entry from the registry. Keyed by current pid,
-    not repo_path — switch_repo_root passes the old repo_path for context
-    only. Idempotent; silent on I/O error so it's safe to call from signal
-    handlers."""
+def _unregister_self():
+    """Remove this process's registry entry by current pid.
+
+    Idempotent; silent on I/O error so it's safe to call from signal handlers.
+    """
     if not REGISTRY_FILE.exists():
         return
     self_pid = os.getpid()
@@ -14976,21 +15236,21 @@ def main():
     if network_info["trust_tailnet"] and not network_info["tailnet"]["available"]:
         print("   trust_tailnet is on but `tailscale` CLI is not on PATH — install it or unset to silence.")
     write_port_file(bind_host)
-    _register_self(REPO_ROOT, PORT, bind_host)
+    _register_self(PORT, bind_host)
     # SIGTERM (systemd / `kill <pid>`) needs explicit cleanup; SIGINT (Ctrl+C)
     # raises KeyboardInterrupt below and is handled there. Both paths remove
     # this server's registry entry so peers don't see a stale ghost.
     def _on_sigterm(signum, frame):
         try:
-            _unregister_self(REPO_ROOT)
+            _unregister_self()
         except Exception:
             pass
         sys.exit(0)
     signal.signal(signal.SIGTERM, _on_sigterm)
     display_host = "localhost" if bind_host in ("127.0.0.1", "::1") else bind_host
     print(f"Claude Command Center running at http://{display_host}:{PORT}")
-    print(f"  Log dir:       {LOG_DIR}")
-    print(f"  Conversations: {CONVERSATIONS_DIR}/*.jsonl")
+    print(f"  State dir:     {COMMAND_CENTER_STATE_DIR}")
+    print(f"  Projects dir:  {PROJECTS_ROOT}")
     print(f"  Press Ctrl+C to stop")
     # Warm the metadata cache in the background so the first /api/sessions
     # request returns instantly instead of taking ~3s.
@@ -15001,7 +15261,7 @@ def main():
     except KeyboardInterrupt:
         print("\nStopped.")
         try:
-            _unregister_self(REPO_ROOT)
+            _unregister_self()
         except Exception:
             pass
         server.server_close()

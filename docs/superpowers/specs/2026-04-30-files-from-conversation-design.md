@@ -184,7 +184,7 @@ handles them. No server roundtrip.
 - It defaults to `open -R` (Finder reveal) and only launches with an
   explicit `launch: true` flag. The user's mental model here is
   "click → it opens", not "click → Finder shows me where it is".
-- Its sandbox clamp rejects every path outside `REPO_ROOT` and
+- Its sandbox clamp rejects every path outside `repo_path` and
   `LOG_DIR`. The most interesting files in a conversation —
   screenshots in `~/Downloads`, PDFs in `~/Desktop`, anything pasted
   from outside the repo — would silently 403.

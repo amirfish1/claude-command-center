@@ -48,13 +48,14 @@ git clone https://github.com/amirfish1/claude-command-center
 cd claude-command-center
 
 # Try it — runs in the foreground until Ctrl-C / terminal close
-CCC_WATCH_REPO=~/some/project ./run.sh
+./run.sh
 
 # Keep it — install as a launchd agent that starts at login
 ./run.sh --install-service
 ```
 
-Open [http://localhost:8090](http://localhost:8090).
+Open [http://localhost:8090](http://localhost:8090), then pick a repo from
+the repo dropdown before starting repo-scoped actions.
 
 `--install-service` writes `~/Library/LaunchAgents/com.github.claude-command-center.plist`
 and bakes in whatever `PORT` / `CCC_*` env vars were set when you ran it.
@@ -178,7 +179,6 @@ For more depth: [`docs/architecture.md`](docs/architecture.md),
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `CCC_WATCH_REPO` | `$PWD` | Repository the UI watches (cwd for spawns, `gh` calls, project slug lookup) |
 | `PORT` | `8090` | HTTP port |
 | `CCC_BIND_HOST` | `127.0.0.1` | Interface to bind. Set to `0.0.0.0` to expose on the LAN — **no auth, see [`SECURITY.md`](SECURITY.md)** |
 | `CCC_ALLOWED_ORIGIN` | *(empty)* | Comma-separated origins (e.g. `http://my-mac.tailnet.ts.net:8090`) added to the same-origin POST allowlist. Use with `CCC_BIND_HOST=0.0.0.0` to reach the UI from another device on a trusted network (Tailscale / VPN) — **no auth, see [`SECURITY.md`](SECURITY.md)** |

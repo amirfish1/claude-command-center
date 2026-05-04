@@ -236,7 +236,7 @@ def spawn_session_codex(prompt, name=None, cwd=None):
 
     If `cwd` is provided, the spawned subprocess runs there AND the
     Codex `--cd` flag is set so the agent's workspace root matches
-    the launch directory. Otherwise we inherit CCC's REPO_ROOT
+    the launch directory. Otherwise we inherit CCC's repo_path
     (backwards-compatible default).
 
     Returns the same shape as spawn_session:
@@ -256,7 +256,7 @@ def spawn_session_codex(prompt, name=None, cwd=None):
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / log_filename
 
-    spawn_cwd = cwd if cwd else str(REPO_ROOT)
+    spawn_cwd = cwd if cwd else str(repo_path)
     model = os.environ.get("CCC_CODEX_MODEL", "gpt-5.5-codex")
 
     cmd = [

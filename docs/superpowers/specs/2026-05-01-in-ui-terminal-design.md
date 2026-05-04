@@ -59,7 +59,7 @@ Single in-flight command per browser session. The SSE response itself is the
 Three new endpoints, all gated by the existing `_check_same_origin` check:
 
 - **`POST /api/term/run`** — request body `{cmd: str, cwd: str}`. Validates
-  `cwd` is inside `REPO_ROOT` (reuses the same clamp as `/api/open`). Spawns
+  `cwd` is inside `repo_path` (reuses the same clamp as `/api/open`). Spawns
   `bash -c <cmd>` via `subprocess.Popen` with `start_new_session=True` so we
   can later kill the whole process group. Stdout and stderr are merged
   (`stderr=STDOUT`) — one stream is simpler to render and matches what the
@@ -71,7 +71,7 @@ Three new endpoints, all gated by the existing `_check_same_origin` check:
   process group of the in-flight command via `os.killpg(pgid, SIGTERM)`,
   then `SIGKILL` after a 2s grace period if still alive.
 - **`GET /api/term/cwd`** — returns the server-side cwd for this session
-  (used on first load to seed the UI). Defaults to `REPO_ROOT`.
+  (used on first load to seed the UI). Defaults to `repo_path`.
 
 A small per-session state dict keyed by a `term_token` cookie:
 
@@ -81,7 +81,7 @@ TERM_SESSIONS = {}  # token -> {"cwd": Path, "popen": Popen | None, "pgid": int 
 
 The token is set by the server on first `/api/term/cwd` hit if the cookie is
 missing. Sessions are pruned after 1h of inactivity. If the server restarts,
-the UI silently re-initializes — the cwd resets to `REPO_ROOT`.
+the UI silently re-initializes — the cwd resets to `repo_path`.
 
 ### `cd` handling
 
@@ -89,7 +89,7 @@ Before spawning, the server parses the command for a leading `cd` (with
 shlex). Three cases:
 
 1. **`cd <path>` alone** — resolve path relative to current `cwd`, validate
-   it exists and is inside `REPO_ROOT` (same clamp as `/api/open`), update
+   it exists and is inside `repo_path` (same clamp as `/api/open`), update
    `TERM_SESSIONS[token]["cwd"]`, send a synthetic `exit` event with
    `code: 0` and the new cwd. No subprocess spawned.
 2. **`cd <path> && <rest>`** — split, update cwd, run `<rest>` in the new
@@ -99,7 +99,7 @@ shlex). Three cases:
    propagate back to `TERM_SESSIONS`. This is documented as a known limit;
    the typical "navigate then run" pattern is covered by case 2.
 
-Plain `cd` with no args resets cwd to `REPO_ROOT` (not `$HOME` — `$HOME`
+Plain `cd` with no args resets cwd to `repo_path` (not `$HOME` — `$HOME`
 would break the path-clamp invariant).
 
 ### Client: terminal panel in `static/index.html`
@@ -120,7 +120,7 @@ Inside the panel:
 - **Cancel button** — visible only while a command is running. Sends
   `POST /api/term/cancel`. Output log shows `^C` and the exit event.
 - **Current-cwd display** — derived from server state, updated on every
-  `exit` event. If the server returns a cwd outside `REPO_ROOT` (shouldn't
+  `exit` event. If the server returns a cwd outside `repo_path` (shouldn't
   happen, but belt-and-braces), client clamps display to `<repo>/`.
 
 JavaScript flow per command:
@@ -152,12 +152,12 @@ existing protections apply, plus extra hardening:
    *louder* warning at startup mentioning the terminal endpoint
    specifically. The terminal still works — same as inject-input does
    today — but the warning is bumped to make the trade-off visible.
-3. **Path clamp** on `cd`: any cwd update must resolve under `REPO_ROOT`.
+3. **Path clamp** on `cd`: any cwd update must resolve under `repo_path`.
    Guards against `cd /` → `rm -rf` from a tricked session, since the
    subsequent command would still have to be issued.
 4. **No persistent state across server restarts** — `TERM_SESSIONS` is in
    memory only. Worst case after a restart: the UI shows an old cwd until
-   the next command, which the server snaps back to `REPO_ROOT`.
+   the next command, which the server snaps back to `repo_path`.
 5. **Cancellation kills the process group**, not just the parent. A script
    that spawned children (`make -j`, `./run.sh` that backgrounds a server)
    takes the whole tree down.
@@ -171,7 +171,7 @@ without trusted-network."
 - **Spawn fails** (`bash` missing, weird OS) → `error` event, no `exit`.
 - **Command exits non-zero** → still `exit` event, with the code. UI shows
   `[exit 1]` etc. in red.
-- **`cd` to a path that doesn't exist or escapes `REPO_ROOT`** → `error`
+- **`cd` to a path that doesn't exist or escapes `repo_path`** → `error`
   event explaining why. cwd unchanged.
 - **Cancel with no running command** → 409 with `{"error": "not running"}`.
   UI no-ops.

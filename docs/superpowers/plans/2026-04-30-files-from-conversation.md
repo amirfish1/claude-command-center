@@ -626,7 +626,7 @@ Find the existing `/api/open` POST branch at `server.py:9244`. Insert **above** 
 ```python
         elif path == "/api/reveal-file":
             # SECURITY: macOS `open` will execute apps and scripts. Unlike
-            # /api/open (which clamps targets to REPO_ROOT/LOG_DIR), we
+            # /api/open (which clamps targets to repo_path/LOG_DIR), we
             # accept any path — but only if its extension is in
             # FILE_EXT_TO_CATEGORY. The whitelist excludes .app, .sh,
             # .command, .py, etc., so subprocess.Popen(["open", path])

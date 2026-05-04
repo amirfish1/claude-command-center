@@ -1,7 +1,7 @@
 **In-UI terminal panel.** A new ⌨ Terminal button on the topbar opens a
 small one-shot terminal at the bottom of the page — type a command, hit
 Enter, output streams back. `cd` is parsed server-side so the prompt's
-cwd survives between commands; the path is clamped to `REPO_ROOT` so
+cwd survives between commands; the path is clamped to the selected repo so
 `cd /etc` is rejected. Cancel kills the whole process group, so a
 runaway `make -j` or `./deploy.sh` doesn't leave orphans behind.
 Up/down arrows recall the last 50 commands. Hotkey: Cmd/Ctrl+`.

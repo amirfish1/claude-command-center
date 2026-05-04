@@ -27,12 +27,12 @@ from pathlib import Path
 from unittest import mock
 
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIXTURE = Path(REPO_ROOT) / "tests" / "fixtures" / "mock_session.jsonl"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FIXTURE = Path(PROJECT_ROOT) / "tests" / "fixtures" / "mock_session.jsonl"
 MOCK_SESSION_ID = "00000000-mock-4000-8000-000000000001"
 CODEX_SESSION_ID = "11111111-1111-4111-8111-111111111111"
 
-sys.path.insert(0, REPO_ROOT)
+sys.path.insert(0, PROJECT_ROOT)
 
 
 def _fresh_server():
@@ -171,35 +171,33 @@ class TestFindConversationsOnMockFixture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # Stage the fixture inside a temp ~/.claude/projects/<slug>/ tree.
-        # CCC computes CONVERSATIONS_DIR from REPO_ROOT (CCC_WATCH_REPO env)
-        # at import time: slug = "-" + REPO_ROOT.lstrip("/").replace("/","-").
         cls.tmp_home = tempfile.mkdtemp(prefix="ccc-mock-home-")
         # Resolve up front: on macOS /var/folders is a symlink to
         # /private/var/folders, and server.py runs Path(...).resolve() on
-        # CCC_WATCH_REPO. If we computed the slug from the unresolved path
-        # we'd point at the wrong projects dir.
+        # incoming repo paths. If we computed the slug from the unresolved
+        # path we'd point at the wrong projects dir.
         cls.fake_repo = (Path(cls.tmp_home) / "fake-repo").resolve()
         cls.fake_repo.mkdir(parents=True)
+        (cls.fake_repo / ".git").mkdir()
         # HOME also has to resolve for the same reason — server.py reads
         # Path.home() at import time to derive the projects root.
         resolved_home = Path(cls.tmp_home).resolve()
 
-        # Tell server.py: "this is the repo I'm watching". That sets
-        # REPO_ROOT, which derives CONVERSATIONS_DIR. Also override HOME so
-        # PROJECTS_ROOT (Path.home()/".claude"/"projects") resolves into
-        # our tmp tree, AND so all the *FILE side-car paths
+        # Override HOME so PROJECTS_ROOT (Path.home()/".claude"/"projects")
+        # resolves into our tmp tree, AND so all the *FILE side-car paths
         # (SESSION_NAMES_FILE etc.) point at empty defaults instead of the
         # real user's command-center state — no test pollution.
         cls._prev_env = {
-            "CCC_WATCH_REPO": os.environ.get("CCC_WATCH_REPO"),
             "HOME": os.environ.get("HOME"),
         }
-        os.environ["CCC_WATCH_REPO"] = str(cls.fake_repo)
         os.environ["HOME"] = str(resolved_home)
 
         cls.server = _fresh_server()
         cls.resolved_home = resolved_home
-        cls.projects_dir = cls.server.CONVERSATIONS_DIR
+        cls.projects_dir = cls.server._canonical_conversation_path(
+            str(cls.fake_repo),
+            MOCK_SESSION_ID,
+        ).parent
         cls.projects_dir.mkdir(parents=True)
 
         # Copy fixture under <session_id>.jsonl so find_session_cwd / scanners
@@ -226,14 +224,14 @@ class TestFindConversationsOnMockFixture(unittest.TestCase):
 
     def test_fixture_is_discovered(self):
         """find_conversations() must surface the mock fixture as a card."""
-        convs = self.server.find_conversations()
+        convs = self.server.find_conversations(str(self.fake_repo))
         sids = [c["session_id"] for c in convs]
         self.assertIn(MOCK_SESSION_ID, sids,
                       f"mock session not found among {sids!r}")
 
     def test_fixture_metadata_extracted(self):
         """Custom-title, first-message, and branch must round-trip."""
-        convs = self.server.find_conversations()
+        convs = self.server.find_conversations(str(self.fake_repo))
         card = next(c for c in convs if c["session_id"] == MOCK_SESSION_ID)
         self.assertEqual(card["display_name"], "mock-session-classifier-coverage")
         self.assertEqual(card["branch"], "main")
@@ -242,7 +240,7 @@ class TestFindConversationsOnMockFixture(unittest.TestCase):
     def test_fixture_has_edit_signal(self):
         """The Edit tool_use must light up has_edit — the kanban uses this
         to push the card past Planning into Working."""
-        convs = self.server.find_conversations()
+        convs = self.server.find_conversations(str(self.fake_repo))
         card = next(c for c in convs if c["session_id"] == MOCK_SESSION_ID)
         self.assertTrue(card["has_edit"],
                         "has_edit should be True after an Edit tool_use")
@@ -253,7 +251,7 @@ class TestFindConversationsOnMockFixture(unittest.TestCase):
     def test_fixture_session_state_parsed(self):
         """The trailing <session-state> block in the last assistant turn
         must round-trip through _parse_session_state."""
-        convs = self.server.find_conversations()
+        convs = self.server.find_conversations(str(self.fake_repo))
         card = next(c for c in convs if c["session_id"] == MOCK_SESSION_ID)
         st = card["session_state"]
         self.assertIsNotNone(st, "session_state must parse out of fixture")
@@ -266,7 +264,7 @@ class TestFindConversationsOnMockFixture(unittest.TestCase):
         `result` event, which on the kanban routes to Working (live) or
         Verified (after the user marks it done). The Python signals that
         drive that decision must all be present."""
-        convs = self.server.find_conversations()
+        convs = self.server.find_conversations(str(self.fake_repo))
         card = next(c for c in convs if c["session_id"] == MOCK_SESSION_ID)
         # has_edit alone is enough for the JS classifier to leave Planning;
         # combined with a session-state outcome, the card is "Verified-ready".
@@ -292,14 +290,13 @@ class TestCodexConversationAdapter(unittest.TestCase):
         cls.tmp_home = tempfile.mkdtemp(prefix="ccc-codex-home-")
         cls.fake_repo = (Path(cls.tmp_home) / "fake-repo").resolve()
         cls.fake_repo.mkdir(parents=True)
+        (cls.fake_repo / ".git").mkdir()
         cls.fake_worktree = (Path(cls.tmp_home) / "fake-repo-wt-codex").resolve()
         cls.fake_worktree.mkdir(parents=True)
         resolved_home = Path(cls.tmp_home).resolve()
         cls._prev_env = {
-            "CCC_WATCH_REPO": os.environ.get("CCC_WATCH_REPO"),
             "HOME": os.environ.get("HOME"),
         }
-        os.environ["CCC_WATCH_REPO"] = str(cls.fake_repo)
         os.environ["HOME"] = str(resolved_home)
 
         codex_dir = resolved_home / ".codex"
@@ -474,7 +471,7 @@ class TestCodexConversationAdapter(unittest.TestCase):
         shutil.rmtree(cls.tmp_home, ignore_errors=True)
 
     def test_codex_thread_is_discovered_as_session_card(self):
-        cards = self.server.find_codex_conversations()
+        cards = self.server.find_codex_conversations(str(self.fake_repo))
         card = next(c for c in cards if c["session_id"] == CODEX_SESSION_ID)
         self.assertEqual(card["source"], "codex")
         self.assertEqual(card["engine"], "codex")

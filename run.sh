@@ -1,18 +1,8 @@
 #!/usr/bin/env bash
 # Claude Command Center launcher.
 #
-# Watched repo resolution (highest priority first):
-#   1. CCC_WATCH_REPO env var if set explicitly
-#   2. $PWD if you cd'd into a project before launching (the common case)
-#   3. ~/.claude/command-center/last-repo.txt — the last picker selection
-#
-# Rule (2) is skipped when launched from the CCC install dir itself, because
-# being in the source tree is "system" cwd, not a target — that case defers
-# to the persisted selection so restarting CCC keeps the repo you were on.
-#
 # Usage:
-#   ./run.sh                       # watch $PWD (or persisted), port 8090
-#   CCC_WATCH_REPO=~/dev/foo ./run.sh
+#   ./run.sh                       # port 8090
 #   PORT=9000 ./run.sh
 #   CCC_BIND_HOST=0.0.0.0 ./run.sh # advanced: expose on LAN (no auth — see SECURITY.md)
 #   CCC_BIND_HOST=0.0.0.0 \
@@ -23,7 +13,6 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-LAST_REPO_FILE="$HOME/.claude/command-center/last-repo.txt"
 PLIST_LABEL="com.github.claude-command-center"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 SERVICE_LOG_DIR="$HOME/.claude/command-center/logs"
@@ -39,7 +28,7 @@ write_plist() {
   local env_block=""
   env_block+="    <key>PATH</key>"$'\n'
   env_block+="    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>"$'\n'
-  for var in PORT CCC_WATCH_REPO CCC_BIND_HOST CCC_ALLOWED_ORIGIN CCC_TRUST_TAILNET CCC_TITLE_STRIP CCC_ORG_PATTERNS VERCEL_PROJECT CCC_SKIP_SKILL_INSTALL; do
+  for var in PORT CCC_BIND_HOST CCC_ALLOWED_ORIGIN CCC_TRUST_TAILNET CCC_TITLE_STRIP CCC_ORG_PATTERNS VERCEL_PROJECT CCC_SKIP_SKILL_INSTALL; do
     local val="${!var:-}"
     if [ -n "$val" ]; then
       val="${val//&/&amp;}"; val="${val//</&lt;}"; val="${val//>/&gt;}"
@@ -152,36 +141,21 @@ Usage: ./run.sh [OPTION]
   --uninstall-service  Remove the launchd agent
   --help, -h           Show this help
 
-Env vars (PORT, CCC_WATCH_REPO, CCC_BIND_HOST, CCC_ALLOWED_ORIGIN, etc.)
+Env vars (PORT, CCC_BIND_HOST, CCC_ALLOWED_ORIGIN, etc.)
 set when running --install-service are baked into the agent's environment.
 EOF
     exit 0
     ;;
 esac
 
-if [ -z "${CCC_WATCH_REPO:-}" ]; then
-  if [ "$PWD" = "$HERE" ] && [ -f "$LAST_REPO_FILE" ]; then
-    # Launched from the CCC source tree with a persisted picker selection —
-    # let server.py read last-repo.txt instead of forcing $PWD (which would
-    # repoint at CCC itself and stomp the user's last-active repo).
-    DISPLAY_REPO="$(cat "$LAST_REPO_FILE")"
-  else
-    export CCC_WATCH_REPO="$PWD"
-    DISPLAY_REPO="$PWD"
-  fi
-else
-  DISPLAY_REPO="$CCC_WATCH_REPO"
-fi
-
 export PORT="${PORT:-8090}"
 # CCC_BIND_HOST is intentionally NOT defaulted here. server.py resolves
 # the bind across env, ~/.claude/command-center/network.json, and a built-in
 # 127.0.0.1 default — exporting a value here would clobber the JSON layer.
 
-mkdir -p "$DISPLAY_REPO/.claude/logs"
+mkdir -p "$SERVICE_LOG_DIR"
 
 echo "→ Command Center"
-echo "  watching : $DISPLAY_REPO"
 echo "  port     : $PORT"
 echo "  bind     : ${CCC_BIND_HOST:-(default 127.0.0.1, or from network.json)}"
 echo "  url      : http://localhost:$PORT"

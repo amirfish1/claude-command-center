@@ -7,16 +7,21 @@ import importlib
 import json
 import os
 import pathlib
+import shutil
 import stat
 import sys
 import tempfile
+import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import unittest
 from unittest import mock
 
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, REPO_ROOT)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
 
 
 class TestServerImports(unittest.TestCase):
@@ -78,6 +83,107 @@ class TestServerImports(unittest.TestCase):
             self.assertFalse(server.MORNING_ENABLED,
                              "MORNING_ENABLED must be False when plugin missing")
 
+
+class TestRepoContextHelpers(unittest.TestCase):
+    def setUp(self):
+        self.tmp_home = tempfile.mkdtemp(prefix="ccc-repo-context-home-")
+        self._prev_home = os.environ.get("HOME")
+        os.environ["HOME"] = str(pathlib.Path(self.tmp_home).resolve())
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        self.server = importlib.import_module("server")
+        self.repo = pathlib.Path(self.tmp_home, "demo-repo").resolve()
+        self.repo.mkdir()
+        (self.repo / ".git").mkdir()
+
+    def tearDown(self):
+        if self._prev_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self._prev_home
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        shutil.rmtree(self.tmp_home, ignore_errors=True)
+
+    def test_valid_repo_path_is_accepted(self):
+        self.assertEqual(self.server.resolve_repo_path(str(self.repo)), str(self.repo))
+
+    def test_unknown_repo_path_is_rejected(self):
+        unknown = pathlib.Path(self.tmp_home, "not-a-repo").resolve()
+        unknown.mkdir()
+        with self.assertRaises(self.server.RepoContextError) as ctx:
+            self.server.resolve_repo_path(str(unknown))
+        self.assertEqual(ctx.exception.code, "repo_not_allowed")
+
+    def test_all_is_not_a_repo_path(self):
+        with self.assertRaises(self.server.RepoContextError) as ctx:
+            self.server.resolve_repo_path("ALL")
+        self.assertEqual(ctx.exception.code, "invalid_repo_path")
+
+    def test_ambiguous_context_returns_repo_required(self):
+        with self.assertRaises(self.server.RepoContextError) as ctx:
+            self.server.require_repo_context({}, {}, allow_session=False)
+        self.assertEqual(ctx.exception.code, "repo_required")
+
+    def test_session_id_resolves_repo_context(self):
+        sid = "00000000-0000-4000-8000-000000000099"
+        transcript = self.server._canonical_conversation_path(str(self.repo), sid)
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(
+            json.dumps({
+                "type": "user",
+                "timestamp": "2026-05-04T00:00:00.000Z",
+                "cwd": str(self.repo),
+                "sessionId": sid,
+                "message": {"role": "user", "content": "hello"},
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        ctx = self.server.repo_from_session(sid)
+        self.assertEqual(ctx["repo_path"], str(self.repo))
+        self.assertEqual(ctx["cwd"], str(self.repo))
+
+    def test_repo_required_endpoint_and_switch_compatibility(self):
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as missing:
+                urllib.request.urlopen(base + "/api/term/cwd", timeout=5)
+            self.assertEqual(missing.exception.code, 400)
+            missing_body = missing.exception.read().decode("utf-8")
+            missing.exception.close()
+            self.assertIn("repo_required", missing_body)
+
+            with urllib.request.urlopen(
+                base + "/api/term/cwd?repo_path=" + urllib.parse.quote(str(self.repo)),
+                timeout=5,
+            ) as res:
+                self.assertEqual(res.status, 200)
+                self.assertIn(str(self.repo), res.read().decode("utf-8"))
+
+            req = urllib.request.Request(
+                base + "/api/repo/switch",
+                data=json.dumps({"path": str(self.repo)}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(urllib.error.HTTPError) as gone:
+                urllib.request.urlopen(req, timeout=5)
+            self.assertEqual(gone.exception.code, 410)
+            gone_body = gone.exception.read().decode("utf-8")
+            gone.exception.close()
+            self.assertIn("repo_switch_removed", gone_body)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
     def test_resolve_codex_bin_prefers_env_override(self):
         """`_resolve_codex_bin` must honour CCC_CODEX_BIN when it points
         at an executable file. Verifies the precedence head — env var
@@ -121,15 +227,14 @@ class TestServerImports(unittest.TestCase):
 
     def test_spawn_session_codex_exists(self):
         """`spawn_session_codex` must exist alongside `spawn_session`
-        with the same (prompt, name=None, cwd=None) signature so the
-        new endpoint can call it the same way."""
+        and accept explicit cwd/repo context."""
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
         self.assertTrue(hasattr(server, "spawn_session_codex"))
         import inspect
         sig = inspect.signature(server.spawn_session_codex)
-        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd"])
+        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path"])
 
     def test_record_spawn_to_registry_persists_engine(self):
         """The on-disk spawn registry must round-trip an `engine` field

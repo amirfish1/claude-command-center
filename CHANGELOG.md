@@ -424,7 +424,7 @@ Initial public release.
 - `127.0.0.1` bind by default. `CCC_BIND_HOST=0.0.0.0` requires opt-in and
   prints a startup warning.
 - Same-origin POST check (Origin header) on every state-changing request.
-- `/api/open` clamped to paths under `REPO_ROOT` / `LOG_DIR`. Default action
+- `/api/open` clamped to paths under repo/log roots. Default action
   is `open -R` (Reveal in Finder), not launch.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.

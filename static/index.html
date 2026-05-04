@@ -1002,9 +1002,8 @@
   /* Spawn cwd picker — appears in the context strip ONLY when in
    * new-session mode (currentConversation === '__new__'). Replaces the
    * passive workspace pill the strip shows for an existing session.
-   * Without this, the user can't tell where the new session will land,
-   * and the spawn API silently uses the server's REPO_ROOT regardless
-   * of the All-repos folder filter. */
+   * Without this, the user can't tell where the new session will land
+   * from the All-repos folder filter. */
   .conv-input-context .spawn-cwd-row {
     display: none;
     align-items: center; gap: 6px;
@@ -2962,10 +2961,8 @@
 
   /* ── Multi-repo rail — left-edge icon column ──────────────────────────
    * Persistent vertical strip with one circular icon per known repo.
-   * Running peers first (clicking navigates to that server's port);
-   * known-not-running repos below a divider (clicking switches this
-   * server's REPO_ROOT — the one-off peek flow). Active server gets the
-   * accent fill. The topbar dropdown still works alongside this; the
+   * The rail filters this UI to a concrete repo; it does not mutate server
+   * process state. The topbar dropdown still works alongside this; the
    * rail is the primary fast-switch affordance. */
   .ccc-repo-rail {
     position: fixed; top: 0; left: 0; bottom: 0;
@@ -3230,6 +3227,10 @@
     padding: 3px 24px 3px 8px; border-radius: 4px;
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
     font-size: 11px; outline: none; max-width: 220px; min-width: 0;
+  }
+  .sidebar-header-actions #convFolderFilter.needs-repo-attention {
+    border-color: var(--red);
+    box-shadow: 0 0 0 2px rgba(248,81,73,0.18);
   }
   /* Generic action button in the layout-agnostic topbar (Titles, View …).
      Matches the size of the repo picker so the row reads as one strip. */
@@ -4344,8 +4345,7 @@
           <!-- New-session-only cwd picker. Visibility controlled by
                .is-new-session on the context strip; populated by
                populateSpawnCwdPicker(); read by spawnFromInlineInput()
-               so the spawn lands in the user-chosen folder instead of
-               the server's REPO_ROOT. -->
+               so the spawn lands in the user-chosen folder. -->
           <span class="spawn-cwd-row">
             <span class="spawn-cwd-label">cwd</span>
             <select id="spawnCwdPicker" class="spawn-cwd-picker"
@@ -4920,9 +4920,98 @@
     document.querySelectorAll('.pkood-toggle-label').forEach(el => {
       if (!APP_CONFIG.pkood_enabled) el.style.display = 'none';
     });
-    if (APP_CONFIG.repo) document.body.dataset.repo = APP_CONFIG.repo;
   }
   loadAppConfig();
+
+  // ── Repo selection state ──
+  // The repo dropdown is a local archive filter, not a server-side switch.
+  // Keep this block early: worktrees, Vercel, terminal, and issue actions
+  // can all run during startup and need a concrete selected repo when scoped.
+  const ARCHIVE_FOLDER_ALL = '__all__';
+  const ARCHIVE_FOLDER_FILTER_KEY = 'ccc-archive-folder-filter';
+  const $convFolderFilter = document.getElementById('convFolderFilter');
+  let repoListState = { repos: [], current: '', recent: [] };
+  let archiveFolderFilter = (() => {
+    try { return localStorage.getItem(ARCHIVE_FOLDER_FILTER_KEY) || ARCHIVE_FOLDER_ALL; }
+    catch (_) { return ARCHIVE_FOLDER_ALL; }
+  })();
+
+  function _pathLeaf(path) {
+    const parts = String(path || '').split('/').filter(Boolean);
+    return parts[parts.length - 1] || String(path || '');
+  }
+
+  function selectedRepoPath() {
+    return archiveFolderFilter && archiveFolderFilter !== ARCHIVE_FOLDER_ALL
+      ? archiveFolderFilter
+      : '';
+  }
+
+  function selectedRepoLabel() {
+    const repoPath = selectedRepoPath();
+    if (!repoPath) return '';
+    const match = (repoListState.repos || []).find(repo => repo.path === repoPath);
+    return (match && (match.label || match.path)) || _pathLeaf(repoPath) || repoPath;
+  }
+
+  function requireSelectedRepo(actionLabel) {
+    const repoPath = selectedRepoPath();
+    if (repoPath) return repoPath;
+    showOpToast((actionLabel || 'This action') + ' needs a concrete repo. Pick one from the repo dropdown first.', 'error');
+    if ($convFolderFilter) {
+      try { $convFolderFilter.focus(); } catch (_) {}
+      $convFolderFilter.classList.add('needs-repo-attention');
+      setTimeout(() => { $convFolderFilter.classList.remove('needs-repo-attention'); }, 1600);
+    }
+    return '';
+  }
+
+  function repoUrl(path, repoPath, extraParams) {
+    const concrete = repoPath || selectedRepoPath();
+    if (!concrete) return '';
+    const u = new URL(path, window.location.href);
+    u.searchParams.set('repo_path', concrete);
+    if (extraParams) {
+      for (const [k, v] of Object.entries(extraParams)) {
+        if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, v);
+      }
+    }
+    return u.pathname + u.search;
+  }
+
+  function withRepoPath(body, repoPath) {
+    const concrete = repoPath || selectedRepoPath();
+    const out = Object.assign({}, body || {});
+    if (concrete) out.repo_path = concrete;
+    return out;
+  }
+
+  function rowRepoPath(row) {
+    return (row && (row.repo_path || row.folder_path || row.spawn_cwd)) || '';
+  }
+
+  function repoPathForIssueNumber(issueNum) {
+    const num = String(issueNum || '');
+    const row = conversationsData.find(c =>
+      c && c.source === 'backlog' && String(c.issue_number || '') === num
+    );
+    return rowRepoPath(row) || selectedRepoPath();
+  }
+
+  function _pathParentLeaf(path) {
+    const parts = String(path || '').split('/').filter(Boolean);
+    return parts.length > 1 ? parts[parts.length - 2] : '';
+  }
+
+  Object.assign(window, {
+    selectedRepoPath,
+    selectedRepoLabel,
+    requireSelectedRepo,
+    repoUrl,
+    withRepoPath,
+    rowRepoPath,
+    repoPathForIssueNumber,
+  });
 
   let sessionIdByConv = {}; // {convId: sessionId}
   let sessionCwdByConv = {}; // {convId: originalCwd}
@@ -5202,7 +5291,7 @@
           const res = await fetch('/api/sessions/' + encodeURIComponent(sidNow) + '/move', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ repo_root: target }),
+            body: JSON.stringify({ repo_path: target }),
           });
           const data = await res.json();
           if (data.ok) {
@@ -5730,7 +5819,8 @@
     // the input bar spawns a session equivalent to clicking "Edit & start"
     // on the kanban card, with the typed text appended to the standard
     // issue-context preamble.
-    const isBacklogIssue = (currentConversation || '').startsWith('backlog-issue-');
+    const currentBacklogRow = conversationsData.find(x => x.id === currentConversation && x.source === 'backlog');
+    const isBacklogIssue = !!currentBacklogRow || (currentConversation || '').startsWith('backlog-issue-');
     // Show the bar for any selected session — /api/inject-input routes to
     // live-TTY keystroke injection when the session is alive and falls back
     // to headless `claude --resume` when dormant, so the user can always
@@ -5741,12 +5831,16 @@
     if (isConvTab && (hasSession || isNewSession || isBacklogIssue)) {
       $convInputBar.classList.add('visible');
       if (isBacklogIssue) {
-        const n = currentConversation.replace('backlog-issue-', '');
+        const n = (currentBacklogRow && currentBacklogRow.issue_number) || currentConversation.replace('backlog-issue-', '');
         $convTtyLabel.textContent = '#' + n;
         $convInput.placeholder = 'Add edit instructions; submit to start session for issue #' + n + '…';
       } else if (isNewSession) {
         $convTtyLabel.textContent = 'new';
-        $convInput.placeholder = 'Type a prompt to start a new session…';
+        const cwdForPrompt = (typeof getSpawnCwd === 'function' && getSpawnCwd()) || selectedRepoPath();
+        const repoLabel = selectedRepoLabel() || _pathLeaf(cwdForPrompt);
+        $convInput.placeholder = repoLabel
+          ? 'Type a prompt to start a new session in ' + repoLabel + '…'
+          : 'Pick a folder before starting a new session…';
       } else if (isPkood) {
         $convTtyLabel.textContent = 'pkood';
         $convInput.placeholder = 'Send to pkood agent...';
@@ -5796,7 +5890,8 @@
     // Backlog GH issue: typed text appended to the standard issue preamble,
     // then spawn a session — same outcome as clicking "Edit & start" on the
     // GH card and hitting Launch in the modal.
-    if ((currentConversation || '').startsWith('backlog-issue-')) {
+    if ((currentConversation || '').startsWith('backlog-issue-') ||
+        conversationsData.some(x => x.id === currentConversation && x.source === 'backlog')) {
       await spawnFromBacklogIssue(text);
       return;
     }
@@ -6351,7 +6446,7 @@
       const res = await fetch('/api/open', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ path: p }),
+        body: JSON.stringify({ path: p, session_id: currentSession && currentSession.id }),
       });
       const data = await res.json().catch(() => ({}));
       if (!data.ok) {
@@ -6770,8 +6865,20 @@
 
   async function loadConversationList() {
     try {
-      const res = await fetch('/api/sessions');
+      const repoPath = selectedRepoPath();
+      if (!repoPath) {
+        currentRepoBacklogData = [];
+        conversationsLoaded = true;
+        _convInitialLoadDone = true;
+        loadAttentionList();
+        hideLoadingOverlay();
+        _markFirstSessionsLoaded();
+        if (archiveMode) renderArchiveList($convSearch.value);
+        return;
+      }
+      const res = await fetch(repoUrl('/api/sessions', repoPath));
       const fresh = await res.json();
+      if (!res.ok) throw new Error((fresh && fresh.error) || ('HTTP ' + res.status));
       currentRepoBacklogData = Array.isArray(fresh)
         ? fresh.filter(c => c && c.source === 'backlog').map(c => Object.assign({}, c))
         : [];
@@ -6876,7 +6983,11 @@
         updateSplitInputBar();
         updateSplitToolbar();
       }
-      renderSidebar(filterConversations($convSearch.value));
+      if (archiveMode) {
+        if (archiveLoaded) renderArchiveList($convSearch.value);
+      } else {
+        renderSidebar(filterConversations($convSearch.value));
+      }
       loadAttentionList();  // piggy-back on the same refresh cycle
       hideLoadingOverlay();  // first render has happened — reveal the UI
       _markFirstSessionsLoaded();  // unblock archive boot kick (see wireArchiveMode)
@@ -6904,8 +7015,15 @@
     const $count = document.getElementById('attentionCount');
     const $seeAll = document.getElementById('attentionSeeAllBtn');
     if (!$list) return;
+    const repoPath = selectedRepoPath();
+    if (!repoPath) {
+      if ($count) $count.textContent = '';
+      if ($seeAll) $seeAll.textContent = 'See all';
+      $list.innerHTML = '<div class="attention-empty">Pick a repo to see items that need attention.</div>';
+      return;
+    }
     try {
-      const url = _nyaShowAll ? '/api/attention?all=1' : '/api/attention';
+      const url = repoUrl('/api/attention', repoPath, _nyaShowAll ? { all: '1' } : null);
       const res = await fetch(url);
       const data = await res.json();
       const items = (data && data.items) || [];
@@ -7043,7 +7161,8 @@
           if (!sid) return;
           if (sid.startsWith('backlog-issue-')) {
             const n = sid.replace('backlog-issue-', '');
-            renderIssueInConvPane(n);
+            const row = conversationsData.find(x => x.id === sid);
+            renderIssueInConvPane(n, rowRepoPath(row), sid);
           } else {
             const c = conversationsData.find(x => (x.session_id === sid) || (x.id === sid));
             selectConversation(c ? c.id : sid);
@@ -7276,7 +7395,7 @@
   function renderSidebar(convs) {
     if (_renameInProgress) return;
     // Archive-mode guard: while "All repos" is on, the sidebar renders the
-    // cross-folder archive instead of the active repo's session list. Skip
+    // cross-folder archive instead of one concrete repo's session list. Skip
     // both kanban and list dispatch to keep the archive view from being
     // clobbered by periodic refreshes. Toggle off to return.
     if (typeof archiveMode !== 'undefined' && archiveMode) {
@@ -7569,7 +7688,11 @@
       if (issueNum) {
         // Icebox → `icebox` label ("parked, not active"); Working → `claude-in-progress`.
         const endpoint = targetCol === 'icebox' ? 'mark-icebox' : 'mark-in-progress';
-        fetch('/api/issues/' + issueNum + '/' + endpoint, { method: 'POST' })
+        fetch('/api/issues/' + issueNum + '/' + endpoint, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(withRepoPath({}, rowRepoPath(c) || repoPathForIssueNumber(issueNum))),
+        })
           .then(() => setTimeout(refreshConversationList, 800))
           .catch(() => {});
       }
@@ -8276,7 +8399,8 @@
         // Backlog GitHub issue cards: render full issue in the conv pane
         if (card.classList.contains('backlog-card') && card.dataset.id.startsWith('backlog-issue-')) {
           const issueNum = card.dataset.id.replace('backlog-issue-', '');
-          renderIssueInConvPane(issueNum);
+          const row = conversationsData.find(x => x.id === card.dataset.id);
+          renderIssueInConvPane(issueNum, rowRepoPath(row), card.dataset.id);
           return;
         }
         // Backlog TODO.md / PARKING_LOT.md cards: no conversation yet — show the text.
@@ -8358,12 +8482,9 @@
         ev.stopPropagation();
         const issueNum = btn.dataset.issue;
         if (!issueNum) return;
-        const repo = document.body.dataset.repo || APP_CONFIG.repo;
-        if (!repo) {
-          btn.title = 'No GitHub repo detected (run inside a repo with `gh` set up)';
-          return;
-        }
-        window.open('https://github.com/' + repo + '/issues/' + issueNum, '_blank');
+        const card = btn.closest('.kanban-card');
+        const row = card ? conversationsData.find(x => x.id === card.dataset.id) : null;
+        renderIssueInConvPane(issueNum, rowRepoPath(row) || repoPathForIssueNumber(issueNum));
       });
     });
     // Create new GitHub issue for this session
@@ -8779,10 +8900,12 @@
         // GH issue titles truncate around ~94 chars, so always tell Claude to
         // read the full issue. Keep the short title as a hint.
         // (No SESSION_STATE_INSTRUCTION here — submitNewSessionModal appends it.)
+        const card = btn.closest('.kanban-card');
+        const conv = card ? conversationsData.find(x => x.id === card.dataset.id) : null;
         const body = issueNum
           ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
           : cleanTitle;
-        openNewSessionModal(body);
+        openNewSessionModal(body, rowRepoPath(conv));
       });
     });
     // ── Per-card AI-summarize a GH backlog card ──
@@ -8791,6 +8914,9 @@
         ev.stopPropagation();
         const issueNum = btn.dataset.issue;
         if (!issueNum) return;
+        const card = btn.closest('.kanban-card');
+        const conv = card ? conversationsData.find(x => x.id === card.dataset.id) : null;
+        const repoPath = rowRepoPath(conv) || repoPathForIssueNumber(issueNum);
         const orig = btn.textContent;
         btn.disabled = true;
         btn.textContent = '…';
@@ -8798,6 +8924,7 @@
           const r = await fetch('/api/issues/' + encodeURIComponent(issueNum) + '/summarize-title', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(withRepoPath({}, repoPath)),
           });
           const d = await r.json();
           if (!d.ok) throw new Error(d.error || 'summarize failed');
@@ -8841,6 +8968,9 @@
         ev.stopPropagation();
         const issueNum = btn.dataset.issue;
         const title = btn.dataset.title;
+        const card = btn.closest('.kanban-card');
+        const conv = card ? conversationsData.find(x => x.id === card.dataset.id) : null;
+        const repoPath = rowRepoPath(conv) || repoPathForIssueNumber(issueNum);
         // Clean title for use as session name: strip #N: prefix, strip [bracket] tags, clean chars
         let cleanTitle = (title || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
         const sessionName = issueNum ? ('issue-' + issueNum) : cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
@@ -8859,7 +8989,6 @@
         // DOM so the user sees the animation. _spawningKeys already guards
         // against duplicate taps; the server filter (active_issue_nums) hides
         // the backlog item once the real session shows up.
-        const card = btn.closest('.kanban-card');
         if (card) card.classList.add('spawning');
         // Optimistically insert a pending-spawn card in Working using a temp id.
         // The real card replaces it once the spawn_pid matches (see loadConversationList).
@@ -8871,7 +9000,7 @@
           const res = await fetch('/api/sessions/spawn', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ prompt: prompt, name: sessionName }),
+            body: JSON.stringify(withRepoPath({ prompt: prompt, name: sessionName }, repoPath)),
           });
           const data = await res.json().catch(() => ({}));
           if (data.ok && data.pid) {
@@ -8884,7 +9013,11 @@
           }
           // Fire-and-forget: signal to GitHub that this issue is being worked on
           if (issueNum) {
-            fetch('/api/issues/' + issueNum + '/mark-in-progress', { method: 'POST' }).catch(() => {});
+            fetch('/api/issues/' + issueNum + '/mark-in-progress', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(withRepoPath({}, repoPath)),
+            }).catch(() => {});
           }
         } catch (_) {}
         setTimeout(function() { refreshConversationList(); }, 800);
@@ -9197,14 +9330,12 @@
       if (isBacklogRow) {
         const _issueAttr = escapeHtml(c.issue_number || '');
         const _titleAttr = escapeHtml(c.display_name || c.first_message || '');
-        // Cross-repo issues carry spawn_cwd so the spawn handler can target
-        // their repo (instead of the active server's REPO_ROOT). Empty for
-        // single-repo backlog cards — spawn falls through to the default.
-        const _spawnCwdAttr = escapeHtml(c.spawn_cwd || '');
+        // Issue rows carry their concrete repo so the spawn handler can target
+        // the right folder without relying on server state.
+        const _spawnCwdAttr = escapeHtml(c.spawn_cwd || c.folder_path || '');
         startBtn = '<button class="conv-start-btn" data-role="start" data-issue="' + _issueAttr + '" data-title="' + _titleAttr + '" data-spawn-cwd="' + _spawnCwdAttr + '" title="Spawn a session to work on this issue" aria-label="Start issue session">&#9654;</button>';
-        // Cross-repo issue rows skip the archive button — the close-issue
-        // endpoint is REPO_ROOT-scoped and would fail for issues from
-        // other repos. Switch to that repo to manage its issues.
+        // Cross-repo issue rows skip the archive button in All mode; a
+        // concrete repo filter can manage issues with the row repo context.
         if (c.id && String(c.id).startsWith('xrepo-issue-')) {
           archiveBtn = '';
         } else {
@@ -9247,7 +9378,8 @@
       // claude-index FTS5 backend in addition to / instead of the local
       // session-list filter. Badge renders as a sibling of `.conv-title`
       // so the rename flow that reads the title's textContent doesn't
-      // scoop the badge text into the edit box.
+      // scoop the badge text into the edit box; the snippet previews why
+      // the row matched.
       const historyBadgeHtml = c._historyMatch
         ? '<span class="conv-history-badge" title="Matched in conversation history (claude-index)">history</span>'
         : '';
@@ -9729,9 +9861,8 @@
         ev.stopPropagation();
         const issueNum = btn.dataset.issue;
         const rawTitle = btn.dataset.title;
-        // For cross-repo issues, spawnCwd points at the issue's repo so
-        // the new session lands in the right folder. Empty for single-
-        // repo issues — server defaults to its own REPO_ROOT.
+        // spawnCwd points at the issue's concrete repo so the new session
+        // lands in the right folder.
         const spawnCwd = btn.dataset.spawnCwd || '';
         const cleanTitle = (rawTitle || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
         const sessionName = issueNum
@@ -9751,7 +9882,10 @@
         (async () => {
           try {
             const spawnBody = { prompt: prompt, name: sessionName };
-            if (spawnCwd) spawnBody.cwd = spawnCwd;
+            if (spawnCwd) {
+              spawnBody.cwd = spawnCwd;
+              spawnBody.repo_path = spawnCwd;
+            }
             const res = await fetch('/api/sessions/spawn', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
@@ -9766,11 +9900,12 @@
                 pendingSpawns.set(data.pid, placeholder);
               }
             }
-            // Skip the mark-in-progress label for cross-repo issues —
-            // that endpoint is REPO_ROOT-scoped and would label the wrong
-            // repo's issue. Single-repo flow still labels normally.
-            if (issueNum && !spawnCwd) {
-              fetch('/api/issues/' + issueNum + '/mark-in-progress', { method: 'POST' }).catch(() => {});
+            if (issueNum && spawnCwd) {
+              fetch('/api/issues/' + issueNum + '/mark-in-progress', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ repo_path: spawnCwd }),
+              }).catch(() => {});
             }
           } catch (_) {}
           setTimeout(refreshConversationList, 800);
@@ -10096,7 +10231,13 @@
   async function refreshConversationList() {
     if ($convRefreshBtn) $convRefreshBtn.classList.add('spinning');
     conversationsLoaded = false;
-    await loadConversationList();
+    if (typeof archiveMode !== 'undefined' && archiveMode) {
+      await refreshArchiveData();
+      renderArchiveList($convSearch ? $convSearch.value : '');
+      if (selectedRepoPath()) await loadConversationList();
+    } else {
+      await loadConversationList();
+    }
     setTimeout(() => {
       if ($convRefreshBtn) $convRefreshBtn.classList.remove('spinning');
     }, 400);
@@ -10698,17 +10839,22 @@
     handle.title = 'Drag to resize · double-click to reset';
   }
 
-  async function renderIssueInConvPane(issueNum) {
+  async function renderIssueInConvPane(issueNum, repoPath, rowId) {
     const $view = getConvView();
     stopConvStream();
-    currentConversation = 'backlog-issue-' + issueNum;
+    const concreteRepo = repoPath || repoPathForIssueNumber(issueNum);
+    currentConversation = rowId || 'backlog-issue-' + issueNum;
     // Drop any prior session so the bottom input bar routes to "spawn for
     // this issue" rather than injecting into the previously-viewed session.
     setCurrentSession(null, null, null, false, null);
     updateInputBar();
     $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading issue #' + issueNum + '...</div>';
+    if (!concreteRepo) {
+      $view.innerHTML = '<div class="empty-state" style="padding:40px;color:var(--red);">Pick a repo to load issue #' + escapeHtml(String(issueNum)) + '.</div>';
+      return;
+    }
     try {
-      const res = await fetch('/api/issues/' + issueNum + '/details');
+      const res = await fetch(repoUrl('/api/issues/' + issueNum + '/details', concreteRepo));
       const data = await res.json();
       if (!data.ok) {
         $view.innerHTML = '<div class="empty-state" style="padding:40px;color:var(--red);">Failed to load issue #' + issueNum + ': ' + escapeHtml(data.error || 'unknown') + '</div>';
@@ -10719,7 +10865,8 @@
       // patch the in-memory card and re-render so it routes to the right column
       // (verified/archived) without waiting for the 5-min server cache to expire.
       try {
-        const card = conversationsData.find(x => x.id === 'backlog-issue-' + issueNum);
+        const card = conversationsData.find(x => x.id === currentConversation)
+          || conversationsData.find(x => x.id === 'backlog-issue-' + issueNum);
         if (card) {
           const freshState = (issue.state || '').toUpperCase();
           const freshReason = (issue.stateReason || '').toUpperCase();
@@ -10770,13 +10917,13 @@
       html += '</div>';
       $view.innerHTML = html;
       $view.scrollTop = 0;
-      wireIssueCloseButtons($view, issueNum);
+      wireIssueCloseButtons($view, issueNum, concreteRepo);
     } catch (e) {
       $view.innerHTML = '<div class="empty-state" style="padding:40px;color:var(--red);">Failed to load issue: ' + escapeHtml(String(e && e.message || e)) + '</div>';
     }
   }
 
-  function wireIssueCloseButtons($view, issueNum) {
+  function wireIssueCloseButtons($view, issueNum, repoPath) {
     const container = $view.querySelector('#issueCloseActions');
     if (!container) return;
     const status = container.querySelector('[data-close-status]');
@@ -10798,7 +10945,7 @@
           const res = await fetch('/api/issues/' + issueNum + '/close', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(body),
+            body: JSON.stringify(withRepoPath(body, repoPath)),
           });
           const data = await res.json();
           if (data.ok) {
@@ -10821,9 +10968,9 @@
             // Navigate to next backlog issue (or re-render current in closed state)
             setTimeout(() => {
               if (nextIssueNum) {
-                renderIssueInConvPane(nextIssueNum);
+                renderIssueInConvPane(nextIssueNum, repoPath);
               } else {
-                renderIssueInConvPane(issueNum);
+                renderIssueInConvPane(issueNum, repoPath, currentConversation);
               }
             }, 800);
           } else {
@@ -10883,10 +11030,15 @@
     _currentToolGroup = null;
     _currentToolCount = 0;
     _pendingSends = [];  // drop any optimistic sends from the previous conv
+    const selectedRow = conversationsData.find(x => x.id === id) || null;
+    if (selectedRow && selectedRow.source === 'backlog' && selectedRow.issue_number) {
+      await renderIssueInConvPane(selectedRow.issue_number, rowRepoPath(selectedRow), selectedRow.id);
+      return;
+    }
     // Kick off the session-activity-timeline fetch in parallel — render
     // happens after sticky header lands (or this fetch returns, whichever
     // is later, via renderSessionTimelineIntoSticky).
-    const timelineSid = (conversationsData.find(x => x.id === id) || {}).session_id || id;
+    const timelineSid = (selectedRow || {}).session_id || id;
     fetchSessionTimeline(timelineSid);
     fetchSessionWorkspace(timelineSid);
     fetchSessionUsage(timelineSid);
@@ -11233,7 +11385,7 @@
           const r = await fetch('/api/reveal-file', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({path: row.target}),
+            body: JSON.stringify({path: row.target, session_id: currentSession && currentSession.id}),
           });
           if (!r.ok) {
             const j = await r.json().catch(() => ({error: 'open failed'}));
@@ -12172,6 +12324,8 @@
   // state is fresh; the per-worktree `git status` calls there have a 2s
   // timeout each so a hung worktree can't block the modal.
   async function openRepoWorktreesModal() {
+    const repoPath = requireSelectedRepo('Worktrees');
+    if (!repoPath) return;
     _renderWorktreesModal({
       worktrees: [],
       summaryItems: ['<span style="opacity:0.7;">loading…</span>'],
@@ -12179,7 +12333,7 @@
     });
     let data;
     try {
-      const res = await fetch('/api/repo/worktrees');
+      const res = await fetch(repoUrl('/api/repo/worktrees', repoPath));
       data = await res.json();
     } catch (_) { return; }
     const wts = (data && data.worktrees) || [];
@@ -12240,8 +12394,14 @@
   async function refreshWorktreesBadge() {
     const $btn = document.getElementById('kptWorktreesBtn');
     if (!$btn) return;
+    const repoPath = selectedRepoPath();
+    if (!repoPath) {
+      $btn.classList.remove('has-agent-worktrees');
+      $btn.title = 'Pick a repo to show worktrees.';
+      return;
+    }
     try {
-      const res = await fetch('/api/repo/worktrees');
+      const res = await fetch(repoUrl('/api/repo/worktrees', repoPath));
       const data = await res.json();
       const agentN = (data && data.agent_count) || 0;
       $btn.classList.toggle('has-agent-worktrees', agentN > 0);
@@ -12848,11 +13008,9 @@
               e.stopPropagation();
               const n = issueLinkBtn.dataset.issue;
               if (e.metaKey || e.ctrlKey || e.shiftKey) {
-                const repo = document.body.dataset.repo || APP_CONFIG.repo;
-                if (repo) window.open('https://github.com/' + repo + '/issues/' + n, '_blank');
-                else renderIssueInConvPane(n);
+                renderIssueInConvPane(n, repoPathForIssueNumber(n));
               } else {
-                renderIssueInConvPane(n);
+                renderIssueInConvPane(n, repoPathForIssueNumber(n));
               }
             });
           }
@@ -13195,7 +13353,7 @@
     // The "Broaden outside of repo" toggle (when wired) will flip this.
     const params = new URLSearchParams({ q, limit: '50', since: '90d' });
     if (!_historyState.broaden) {
-      const cwd = (window.repoListState && repoListState.current && repoListState.current.cwd) || '';
+      const cwd = (typeof selectedRepoPath === 'function' && selectedRepoPath()) || '';
       if (cwd) params.set('cwd', cwd);
     }
     return fetch('/api/search-history?' + params.toString())
@@ -13253,8 +13411,14 @@
     // exists as a visible UI element. Issues now surface as kanban cards
     // with an inline "Fix" button instead of a dedicated panel.
     if (!$issuesView) return;
+    const repoPath = selectedRepoPath();
+    if (!repoPath) {
+      issuesData = [];
+      renderIssues(issuesData);
+      return;
+    }
     try {
-      const res = await fetch('/api/issues');
+      const res = await fetch(repoUrl('/api/issues', repoPath));
       issuesData = await res.json();
       renderIssues(issuesData);
     } catch (err) {
@@ -13314,17 +13478,12 @@
     });
     $issuesView.querySelectorAll('.issue-num').forEach(el => {
       el.addEventListener('click', () => {
-        window.open('https://github.com/' + getRepo() + '/issues/' + el.dataset.num, '_blank');
+        renderIssueInConvPane(el.dataset.num, selectedRepoPath());
       });
     });
     $issuesView.querySelectorAll('.summary-toggle').forEach(btn => {
       btn.addEventListener('click', () => toggleSummary(btn.dataset.num));
     });
-  }
-
-  function getRepo() {
-    // Will be set from server, fallback
-    return document.body.dataset.repo || '';
   }
 
   function renderIssueRow(issue) {
@@ -13362,7 +13521,12 @@
     btn.disabled = true;
     btn.textContent = 'Adding...';
     try {
-      const res = await fetch('/api/issues/' + num + '/add-label', { method: 'POST' });
+      const repoPath = repoPathForIssueNumber(num);
+      const res = await fetch('/api/issues/' + num + '/add-label', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(withRepoPath({}, repoPath)),
+      });
       const data = await res.json();
       if (data.ok) {
         btn.textContent = 'Queued';
@@ -13383,7 +13547,12 @@
     btn.disabled = true;
     btn.textContent = 'Spawning...';
     try {
-      const res = await fetch('/api/issues/' + num + '/spawn', { method: 'POST' });
+      const repoPath = repoPathForIssueNumber(num);
+      const res = await fetch('/api/issues/' + num + '/spawn', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(withRepoPath({}, repoPath)),
+      });
       const data = await res.json();
       if (data.ok) {
         btn.textContent = 'Running';
@@ -13410,7 +13579,10 @@
     el.textContent = 'Loading...';
     el.classList.add('visible');
     try {
-      const res = await fetch('/api/issues/' + num + '/summary');
+      const repoPath = repoPathForIssueNumber(num);
+      const url = repoUrl('/api/issues/' + num + '/summary', repoPath);
+      if (!url) throw new Error('repo required');
+      const res = await fetch(url);
       const data = await res.json();
       el.textContent = data.summary || 'No Claude summary found on this issue.';
     } catch {
@@ -13451,8 +13623,19 @@
   }
 
   async function pollVercelDeploy() {
+    const repoPath = selectedRepoPath();
+    if (!repoPath) {
+      setDeployPill({
+        dotClass: '',
+        label: 'Vercel',
+        title: 'Pick a repo to check Vercel deploy status.',
+        href: '',
+      });
+      _vercelDeployUrl = '';
+      return;
+    }
     try {
-      const res = await fetch('/api/vercel-deploy');
+      const res = await fetch(repoUrl('/api/vercel-deploy', repoPath));
       const d = await res.json();
       if (d.disabled) {
         // No .vercel/project.json (and no $VERCEL_PROJECT env override).
@@ -13591,33 +13774,12 @@
   }
 
   // ── Archive folder filter ──
-  // The sidebar now defaults to the cross-folder archive. This select is a
-  // local predicate over archiveData, not a server-side repo switch.
-  const ARCHIVE_FOLDER_ALL = '__all__';
-  const ARCHIVE_FOLDER_FILTER_KEY = 'ccc-archive-folder-filter';
-  const $convFolderFilter = document.getElementById('convFolderFilter');
-  let repoListState = { repos: [], current: '', recent: [] };
-  let archiveFolderFilter = (() => {
-    try { return localStorage.getItem(ARCHIVE_FOLDER_FILTER_KEY) || ARCHIVE_FOLDER_ALL; }
-    catch (_) { return ARCHIVE_FOLDER_ALL; }
-  })();
-
-  function _pathLeaf(path) {
-    const parts = String(path || '').split('/').filter(Boolean);
-    return parts[parts.length - 1] || String(path || '');
-  }
-
-  function _pathParentLeaf(path) {
-    const parts = String(path || '').split('/').filter(Boolean);
-    return parts.length > 1 ? parts[parts.length - 2] : '';
-  }
-
   function _archiveFolderValue(c) {
     return String((c && (c.folder_path || c.folder_label || c.slug)) || '');
   }
 
   function _currentRepoArchiveFolder() {
-    const current = (repoListState && repoListState.current) || '';
+    const current = selectedRepoPath();
     if (current) {
       const match = (repoListState.repos || []).find(repo => repo.path === current);
       return {
@@ -13698,8 +13860,7 @@
         folder_path: repoPath,
         folder_label: repoLabel,
         slug: repoPath,
-        // Used by the Start handler to spawn into the right folder
-        // instead of the active server's REPO_ROOT.
+        // Used by the Start handler to spawn into the right folder.
         spawn_cwd: repoPath,
       };
     });
@@ -13709,7 +13870,7 @@
     const rows = Array.isArray(archiveData) ? archiveData.slice() : [];
     const seen = new Set(rows.map(c => c && (c.session_id || c.id)).filter(Boolean));
     // Cross-repo issues take precedence over single-repo backlog injection
-    // — they cover the active repo's issues too, so dropping the single-
+    // — they cover the selected repo's issues too, so dropping the single-
     // repo version avoids duplicate rows when /api/issues/all responds.
     const issueRows = _crossRepoIssueArchiveRows();
     const sourceRows = issueRows.length ? issueRows : _currentRepoBacklogArchiveRows();
@@ -13794,9 +13955,13 @@
     try { localStorage.setItem(ARCHIVE_FOLDER_FILTER_KEY, archiveFolderFilter); } catch (_) {}
     renderArchiveFolderFilter();
     renderRepoSidebar();
+    updateRepoPickerVisibility();
     if (opts.render !== false) {
       renderArchiveList(document.getElementById('convSearch')?.value || '');
     }
+    loadAttentionList();
+    refreshWorktreesBadge();
+    pollVercelDeploy();
   }
 
   // ── Sidebar repo picker ──
@@ -13807,12 +13972,9 @@
   const $sbRepoPicker = document.getElementById('sbRepoPicker');
 
   // ── Multi-repo: peer registry ────────────────────────────────────────────
-  // The dropdown is driven by /api/registry — one entry per live CCC server
-  // on this machine. Selecting a peer navigates to that server's URL; each
-  // CCC serves its own page and shows the same peer list, so the dropdown
-  // follows you across servers. /api/repo/switch is no longer used by the
-  // picker; legacy single-repo flows (modal, custom-repos.txt browser) still
-  // call loadRepoList() below.
+  // The dropdown is a local filter: All or one concrete repo path. The peer
+  // registry still powers discoverability elsewhere, but selecting a repo no
+  // longer mutates server state or navigates away.
   let peerState = { peers: [], identity: null };
 
   async function loadPeerRegistry() {
@@ -13833,17 +13995,6 @@
     return peerState;
   }
 
-  function isCurrentPeer(peer) {
-    if (!peer || !peerState.identity) return false;
-    return peer.port === peerState.identity.port &&
-           peer.repo_path === peerState.identity.repo_path;
-  }
-
-  // Sentinel prefix marks "switch this server's repo" options (not-running
-  // known repos). Distinguishing them from peer-navigation URLs lets the
-  // change handler route to the right code path.
-  const SWITCH_PREFIX = 'switch::';
-
   function _appendAllReposPickerOption() {
     if (!$sbRepoPicker) return;
     const opt = document.createElement('option');
@@ -13857,7 +14008,7 @@
   function _syncRepoPickerSelection() {
     if (!$sbRepoPicker) return;
     $sbRepoPicker.setAttribute('aria-hidden', 'false');
-    const desired = archiveMode ? ALL_REPOS_SENTINEL : ($sbRepoPicker.dataset.repoValue || '');
+    const desired = selectedRepoPath() || ALL_REPOS_SENTINEL;
     if (desired && Array.from($sbRepoPicker.options).some(opt => opt.value === desired)) {
       $sbRepoPicker.value = desired;
     }
@@ -13876,57 +14027,24 @@
 
   function renderPeerPickerSelect() {
     if (!$sbRepoPicker) return;
-    const { peers } = peerState;
     $sbRepoPicker.innerHTML = '';
-
-    const here = window.location;
-    const peerPaths = new Set(peers.map(p => p.repo_path));
     _appendAllReposPickerOption();
 
-    // Section 1: live peers. Selecting navigates to that server's port.
-    if (peers.length) {
-      const grpRunning = document.createElement('optgroup');
-      grpRunning.label = 'Running';
-      for (const peer of peers) {
-        const opt = document.createElement('option');
-        opt.value = `${here.protocol}//${here.hostname}:${peer.port}/`;
-        const isHere = isCurrentPeer(peer);
-        const suffix = isHere ? ' (this server)' : ` (:${peer.port})`;
-        opt.textContent = (peer.label || peer.repo_path) + suffix;
-        opt.title = peer.repo_path;
-        if (isHere) {
-          opt.dataset.repoValue = opt.value;
-          $sbRepoPicker.dataset.repoValue = opt.value;
-          if (!archiveMode) opt.selected = true;
-        }
-        grpRunning.appendChild(opt);
-      }
-      $sbRepoPicker.appendChild(grpRunning);
-    }
-
-    // Section 2: known repos that aren't currently peers. Selecting one
-    // POSTs /api/repo/switch on THIS server — the one-off "peek" flow.
-    // Drawn from /api/repo/list (loadRepoList populates repoListState).
     const knownRepos = (repoListState && repoListState.repos) ? repoListState.repos : [];
-    const switchable = knownRepos.filter(r => !peerPaths.has(r.path));
-    if (switchable.length) {
-      const grpSwitch = document.createElement('optgroup');
-      grpSwitch.label = 'Switch this server to…';
-      for (const repo of switchable) {
+    if (knownRepos.length) {
+      const grpRepos = document.createElement('optgroup');
+      grpRepos.label = 'Repos';
+      for (const repo of knownRepos) {
         const opt = document.createElement('option');
-        opt.value = SWITCH_PREFIX + repo.path;
+        opt.value = repo.path;
         opt.textContent = repo.label || repo.path;
-        opt.title = repo.path + '\n(switches this server\'s repo; no new process)';
-        if (repo.path === repoListState.current) {
-          $sbRepoPicker.dataset.repoValue = opt.value;
-          if (!archiveMode) opt.selected = true;
-        }
-        grpSwitch.appendChild(opt);
+        opt.title = repo.path;
+        grpRepos.appendChild(opt);
       }
-      $sbRepoPicker.appendChild(grpSwitch);
+      $sbRepoPicker.appendChild(grpRepos);
     }
 
-    if (!peers.length && !switchable.length) {
+    if (!knownRepos.length) {
       const opt = document.createElement('option');
       opt.value = '';
       opt.textContent = 'No repos found';
@@ -14216,6 +14334,10 @@
           const hit = _historyState.map.get(sid);
           s._historyMatch = true;
           s._historySnippet = hit.snippet;
+          // Archive mode normally hides the ask preview to keep rows
+          // single-line; re-enable it for matched rows so the snippet
+          // line has somewhere to render.
+          s._hideAskHtml = true;
         }
       }
     }
@@ -14296,7 +14418,7 @@
     // process; running the slow one (cross-folder JSONL + git ops,
     // ~12s on a cold cache) in parallel with /api/sessions made the
     // overlay linger because /api/sessions itself was getting
-    // starved. Waiting until sessions returns means the active repo
+    // starved. Waiting until sessions returns means the selected repo
     // is interactive in <1s, then the archive populates the sidebar.
     if (archiveMode) {
       // Show the placeholder immediately so the sidebar isn't blank
@@ -14331,18 +14453,14 @@
 
   function renderPickerSelect() {
     if (!$sbRepoPicker) return;
-    const { repos, current } = repoListState;
+    const { repos } = repoListState;
     $sbRepoPicker.innerHTML = '';
     _appendAllReposPickerOption();
     for (const repo of repos) {
       const opt = document.createElement('option');
-      opt.value = SWITCH_PREFIX + repo.path;
+      opt.value = repo.path;
       opt.textContent = repo.label || repo.path;
       opt.title = repo.path;
-      if (repo.path === current) {
-        $sbRepoPicker.dataset.repoValue = opt.value;
-        if (!archiveMode) opt.selected = true;
-      }
       $sbRepoPicker.appendChild(opt);
     }
     // Sentinel option — selecting it opens the modal instead of switching.
@@ -14358,52 +14476,12 @@
     _syncRepoPickerSelection();
   }
 
-  // Shared switcher used by both the dropdown change handler and the modal.
-  // Performs the POST, shows the loading overlay, reloads on success.
+  // Shared repo-picker handler used by both the dropdown and the modal.
+  // It only changes local UI filter state; the server has no active repo.
   async function switchToRepo(targetPath, targetLabel) {
     if (!targetPath) return;
-    if ($sbRepoPicker) $sbRepoPicker.disabled = true;
-    const $overlay = document.getElementById('cccLoadingOverlay');
-    if ($overlay) {
-      $overlay.classList.remove('fade-out', 'gone');
-      window.cccLoadingTitleOverride = 'Switching to ' + String(targetLabel || targetPath).replace(/[<>&]/g, '');
-      if (window.cccSetLoadingStatus) {
-        window.cccSetLoadingStatus(window.cccLoadingTitleOverride, 'Preparing source-by-source scan for the new repo.');
-      }
-      if (window.cccBeginLoadingStatusPolling) window.cccBeginLoadingStatusPolling();
-    }
-    // Hard cap on the switch POST — without this, a hung request pins the
-    // user on the "Switching to…" overlay with no way out short of a hard
-    // reload. The endpoint itself just reassigns globals + invalidates
-    // caches, so it should return in well under a second; 10s is generous.
-    const _switchAbort = new AbortController();
-    const _switchTimer = setTimeout(() => _switchAbort.abort(), 10000);
-    try {
-      try { sessionStorage.setItem('ccc-switching-to', targetLabel || targetPath); } catch (_) {}
-      const r = await fetch('/api/repo/switch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: targetPath }),
-        signal: _switchAbort.signal,
-      });
-      const d = await r.json();
-      if (!d.ok) throw new Error(d.error || 'switch failed');
-      location.reload();
-    } catch (e) {
-      try { sessionStorage.removeItem('ccc-switching-to'); } catch (_) {}
-      if ($overlay) $overlay.classList.add('fade-out', 'gone');
-      const msg = (e && e.name === 'AbortError')
-        ? 'Switch timed out after 10s — server unresponsive. Try again or restart the server.'
-        : 'Failed to switch repo: ' + (e.message || e);
-      showOpToast(msg, 'error');
-      // Restore dropdown selection on failure.
-      if ($sbRepoPicker && $sbRepoPicker.dataset.prev) {
-        $sbRepoPicker.value = $sbRepoPicker.dataset.prev;
-      }
-    } finally {
-      clearTimeout(_switchTimer);
-      if ($sbRepoPicker) $sbRepoPicker.disabled = false;
-    }
+    setArchiveFolderFilter(targetPath);
+    showOpToast('Filtered to ' + (targetLabel || _pathLeaf(targetPath) || targetPath));
   }
 
   if ($sbRepoPicker) {
@@ -14457,40 +14535,12 @@
         await setArchiveMode(true);
         return;
       }
-      // SWITCH_PREFIX: legacy "switch this server's REPO_ROOT" path. Used
-      // when the user picks a known-but-not-running repo from the dropdown
-      // (the one-off peek flow).
-      if (target.startsWith(SWITCH_PREFIX)) {
-        const repoPath = target.slice(SWITCH_PREFIX.length);
-        const targetLabel = selectedLabel || repoPath;
-        if (repoPath === repoListState.current) {
-          await setArchiveMode(false);
-          return;
-        }
-        await setArchiveMode(false, { reloadCurrent: false });
-        switchToRepo(repoPath, targetLabel);
+      if (target === PICKER_SENTINEL) {
+        await openRepoPickerModal();
+        _syncRepoPickerSelection();
         return;
       }
-      // Otherwise: navigation URL to a peer's port. Same-origin = no-op.
-      const here = window.location;
-      const sameOriginUrl = `${here.protocol}//${here.host}/`;
-      if (target === sameOriginUrl) {
-        if (archiveMode) await setArchiveMode(false);
-        return;
-      }
-      await setArchiveMode(false, { reloadCurrent: false });
-      const $overlay = document.getElementById('cccLoadingOverlay');
-      if ($overlay) {
-        $overlay.classList.remove('fade-out', 'gone');
-        const $label = document.getElementById('cccLoadingLabel');
-        if ($label) {
-          const lbl = selectedLabel || target;
-          $label.innerHTML =
-            '<strong>Loading ' + String(lbl).replace(/[<>&]/g, '') + '</strong>' +
-            '<div class="ccc-loading-detail">Switching to that server\'s page.</div>';
-        }
-      }
-      window.location.href = _withArchiveModeOverride(target, false);
+      setArchiveFolderFilter(target);
     });
 
     // Stash the current value so we can restore on failure.
@@ -14540,7 +14590,7 @@
       if (repo.path === current) {
         const badge = document.createElement('span');
         badge.className = 'rpm-item-current';
-        badge.textContent = 'current';
+        badge.textContent = 'selected';
         label.appendChild(badge);
       }
       const path = document.createElement('div');
@@ -14558,7 +14608,8 @@
   }
 
   function renderRpmLists() {
-    const { repos, current, recent } = repoListState;
+    const { repos, recent } = repoListState;
+    const current = selectedRepoPath();
     const recentSet = new Set(recent || []);
     const byPath = {};
     for (const r of repos) byPath[r.path] = r;
@@ -14586,8 +14637,7 @@
   async function openRepoPickerModal() {
     if (!$rpm) return;
     rpmClearError();
-    // Refresh from server so the modal reflects any recent switches from
-    // other tabs / command-line changes since the dropdown was populated.
+    // Refresh from server so the modal reflects any repos added elsewhere.
     try { await loadRepoList(); } catch (_) { /* use stale state */ }
     renderRpmLists();
     $rpm.classList.add('open');
@@ -14619,8 +14669,7 @@
         const d = await r.json();
         if (d.cancelled) return;  // user clicked Cancel — no-op
         if (!d.ok) { rpmShowError(d.error || 'Could not open folder picker.'); return; }
-        // Persist the new path so it appears in the picker and passes the
-        // switch allow-list, then trigger the switch.
+        // Persist the new path so it appears in the picker, then filter to it.
         const addRes = await fetch('/api/repo/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -14925,10 +14974,12 @@
           const url = isGhBacklog
             ? '/api/issues/' + encodeURIComponent(c.issue_number) + '/summarize-title'
             : '/api/conversations/' + encodeURIComponent(c.session_id) + '/summarize';
+          const body = isGhBacklog ? withRepoPath({}, rowRepoPath(c)) : {};
           try {
             const r = await fetch(url, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
             });
             const d = await r.json();
             if (d.ok) done++; else failed++;
@@ -14955,6 +15006,8 @@
       if (!prompt) return;
       const isPkoodPrefix = prompt.startsWith('pkood:');
       const engine = isPkoodPrefix ? 'pkood' : getSpawnEngine();
+      const repoPath = requireSelectedRepo('New session');
+      if (!repoPath) return;
       const $kptWorktreeToggle = document.getElementById('kptWorktreeToggle');
       const useWorktree = !!($kptWorktreeToggle && $kptWorktreeToggle.checked);
       if (isPkoodPrefix) prompt = prompt.slice(6).trim();
@@ -14979,8 +15032,8 @@
                        : '/api/sessions/spawn';
         // pkood and codex don't support the worktree flag — drop it for those.
         const body = engine === 'claude'
-          ? { prompt, worktree: useWorktree }
-          : { prompt };
+          ? { prompt, repo_path: repoPath, worktree: useWorktree }
+          : { prompt, repo_path: repoPath };
         const res = await fetch(endpoint, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -15051,10 +15104,13 @@
   if ($nsmEngineSelect) {
     $nsmEngineSelect.addEventListener('change', () => setSpawnEngine($nsmEngineSelect.value));
   }
-  function openNewSessionModal(body = '') {
+  function openNewSessionModal(body = '', repoPath = '') {
     if (!$nsm) return;
+    const targetRepoPath = repoPath || selectedRepoPath() || requireSelectedRepo('New session');
+    if (!targetRepoPath) return;
     _clearNsmError();
     $nsmBody.value = body || '';
+    $nsm.dataset.repoPath = targetRepoPath;
     // Sync from shared state so the modal opens on the same engine the
     // user just picked from any other selector.
     if ($nsmEngineSelect) $nsmEngineSelect.value = getSpawnEngine();
@@ -15080,6 +15136,8 @@
     const effectiveSubject = firstSentence(body);
     const prompt = body + SESSION_STATE_INSTRUCTION;
     const engine = ($nsmEngineSelect && $nsmEngineSelect.value) || 'claude';
+    const repoPath = ($nsm && $nsm.dataset.repoPath) || requireSelectedRepo('New session');
+    if (!repoPath) return;
     const $nsmWorktree = document.getElementById('nsmWorktree');
     const useWorktree = !!($nsmWorktree && $nsmWorktree.checked);
     $nsmSubmit.disabled = true;
@@ -15088,8 +15146,8 @@
       const endpoint = engine === 'codex' ? '/api/sessions/spawn-codex'
                                           : '/api/sessions/spawn';
       const body = engine === 'codex'
-        ? { prompt, name: effectiveSubject }
-        : { prompt, name: effectiveSubject, worktree: useWorktree };
+        ? { prompt, name: effectiveSubject, repo_path: repoPath }
+        : { prompt, name: effectiveSubject, repo_path: repoPath, worktree: useWorktree };
       const res = await fetch(endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(body),
@@ -15918,9 +15976,8 @@
 
   // ── Spawn cwd picker (new-session mode) ──────────────────────────────
   // Populates a folder dropdown above the input box so the user picks
-  // where the new session will land. Without this the spawn API just
-  // uses the server's REPO_ROOT, which is invisible from the All-repos
-  // view's UI and causes new sessions to land in the wrong folder.
+  // exactly where the new session will land. This is the explicit repo
+  // context for All-repos mode.
   const SPAWN_CWD_KEY = 'ccc-spawn-cwd';
 
   function populateSpawnCwdPicker() {
@@ -15953,8 +16010,7 @@
     // Default selection priority:
     //   1. User's last spawn cwd (localStorage)
     //   2. Active folder filter, if it's a specific folder (not "All")
-    //   3. repoListState.current (server's REPO_ROOT)
-    //   4. First option
+    //   3. First known repo option
     let saved = '';
     try { saved = localStorage.getItem(SPAWN_CWD_KEY) || ''; } catch (_) {}
     let defaultPath = saved;
@@ -15962,7 +16018,6 @@
       const filterVal = (typeof archiveFolderFilter !== 'undefined' && typeof ARCHIVE_FOLDER_ALL !== 'undefined' && archiveFolderFilter !== ARCHIVE_FOLDER_ALL)
         ? archiveFolderFilter : '';
       defaultPath = filterVal
-        || (repoListState && repoListState.current)
         || (options[0] && (options[0].value || options[0].path))
         || '';
     }
@@ -16009,20 +16064,22 @@
     if ($convList) $convList.querySelectorAll('.conv-item.active').forEach(el => el.classList.remove('active'));
     if ($kanbanBoard) $kanbanBoard.querySelectorAll('.kanban-card.active').forEach(el => el.classList.remove('active'));
     if ($kanbanBoardSplit) $kanbanBoardSplit.querySelectorAll('.kanban-card.active').forEach(el => el.classList.remove('active'));
+    populateSpawnCwdPicker();
+    const spawnCwd = getSpawnCwd();
     const $view = getConvView();
     if ($view) {
       const engineLabel = getSpawnEngine() === 'codex' ? 'Codex' : 'Claude';
+      const repoLabel = selectedRepoLabel() || _pathLeaf(spawnCwd) || spawnCwd || 'pick a folder below';
       $view.innerHTML = '<div class="empty-state" style="height:auto;padding:48px 32px;flex-direction:column;gap:10px;text-align:center;">'
         + '<div style="font-size:16px;color:var(--text);">Start a new session</div>'
+        + '<div style="font-size:12px;color:var(--text-muted);">Repo: <span style="color:var(--text);">' + escapeHtml(repoLabel) + '</span></div>'
         + '<div style="font-size:13px;color:var(--text-muted);max-width:480px;line-height:1.5;">Type a prompt below and press Enter to spawn a fresh ' + engineLabel + ' agent. The new session will appear in the sidebar.</div>'
         + '</div>';
     }
     updateInputBar();
-    // Populate the spawn-cwd picker and toggle the context strip into
-    // new-session mode so the picker is visible and the workspace pill
-    // is hidden (the workspace pill described an existing session — it
-    // has no meaning before spawn).
-    populateSpawnCwdPicker();
+    // Toggle the context strip into new-session mode so the picker is
+    // visible and the workspace pill is hidden (the workspace pill
+    // describes an existing session and has no meaning before spawn).
     const _cic = document.getElementById('convInputContext');
     if (_cic) {
       _cic.classList.add('is-new-session');
@@ -16037,9 +16094,11 @@
   // preamble ("Fix issue #N — TITLE\n\nRun `gh issue view N` …") and
   // appends whatever the user typed as their edit instructions.
   async function spawnFromBacklogIssue(userText) {
-    const issueNum = (currentConversation || '').replace('backlog-issue-', '');
+    const row = conversationsData.find(x => x.id === currentConversation) || {};
+    const issueNum = row.issue_number || (currentConversation || '').replace('backlog-issue-', '');
     if (!issueNum) return;
-    const conv = conversationsData.find(x => x.id === 'backlog-issue-' + issueNum) || {};
+    const conv = row.issue_number ? row : (conversationsData.find(x => x.id === 'backlog-issue-' + issueNum) || {});
+    const repoPath = rowRepoPath(conv) || repoPathForIssueNumber(issueNum);
     const title = conv.display_name || conv.first_message || '';
     const cleanTitle = (title || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
     const preamble = 'Fix issue #' + issueNum + ' — ' + cleanTitle
@@ -16056,14 +16115,18 @@
     try {
       const res = await fetch('/api/sessions/spawn', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ prompt, name: subject }),
+        body: JSON.stringify(withRepoPath({ prompt, name: subject, cwd: repoPath || undefined }, repoPath)),
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
         insertPendingSpawnCard(data.pid, subject, false);
         if ($convInput) $convInput.value = '';
         // Mirror kanban-start-btn: tell GitHub the issue is being worked on.
-        fetch('/api/issues/' + issueNum + '/mark-in-progress', { method: 'POST' }).catch(() => {});
+        fetch('/api/issues/' + issueNum + '/mark-in-progress', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(withRepoPath({}, repoPath)),
+        }).catch(() => {});
         const $view = getConvView();
         if ($view) {
           $view.innerHTML = '<div class="empty-state" style="height:auto;padding:48px 32px;flex-direction:column;gap:10px;text-align:center;">'
@@ -16095,6 +16158,17 @@
     const subject = firstSentence(body);
     const prompt = body + SESSION_STATE_INSTRUCTION;
     const engine = getSpawnEngine();
+    const spawnCwd = (typeof getSpawnCwd === 'function') ? getSpawnCwd() : '';
+    const repoPath = spawnCwd || selectedRepoPath();
+    if (!repoPath) {
+      showOpToast('New session needs a folder. Pick one from the cwd dropdown first.', 'error');
+      populateSpawnCwdPicker();
+      const sel = document.getElementById('spawnCwdPicker');
+      if (sel) {
+        try { sel.focus(); } catch (_) {}
+      }
+      return;
+    }
     if ($convSendBtn) $convSendBtn.disabled = true;
     const flashRed = () => {
       if (!$convInput) return;
@@ -16104,13 +16178,7 @@
     try {
       const endpoint = engine === 'codex' ? '/api/sessions/spawn-codex'
                                           : '/api/sessions/spawn';
-      // Read the spawn-cwd picker so the new session lands in the
-      // user-chosen folder. Empty string falls back to the server's
-      // REPO_ROOT (existing behavior, used when picker hasn't rendered
-      // yet — e.g. during early page load before known repos load).
-      const spawnCwd = (typeof getSpawnCwd === 'function') ? getSpawnCwd() : '';
-      const spawnBody = { prompt, name: subject };
-      if (spawnCwd) spawnBody.cwd = spawnCwd;
+      const spawnBody = { prompt, name: subject, repo_path: repoPath, cwd: repoPath };
       const res = await fetch(endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(spawnBody),
@@ -16653,8 +16721,13 @@
   }
 
   async function refreshCwd() {
+    const repoPath = selectedRepoPath();
+    if (!repoPath) {
+      setCwdDisplay('', 'Pick a repo');
+      return;
+    }
     try {
-      const r = await fetch('/api/term/cwd');
+      const r = await fetch(repoUrl('/api/term/cwd', repoPath));
       if (!r.ok) return;
       const j = await r.json();
       setCwdDisplay(j.cwd, j.rel);
@@ -16735,6 +16808,8 @@
   async function runCommand(cmd) {
     if (!cmd.trim()) return;
     if (running) return;  // ignore Enter while running (per design)
+    const repoPath = requireSelectedRepo('Terminal');
+    if (!repoPath) return;
     appendOutput((($prompt.textContent || 'repo')) + ' $ ' + cmd + '\n', 'cmd');
     pushHistory(cmd);
     setRunning(true);
@@ -16745,7 +16820,7 @@
       resp = await fetch('/api/term/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cmd }),
+        body: JSON.stringify({ cmd, repo_path: repoPath }),
         signal: abortCtrl.signal,
       });
     } catch (e) {
@@ -16833,8 +16908,13 @@
 
   async function cancelRunning() {
     if (!running) return;
+    const repoPath = selectedRepoPath();
     try {
-      await fetch('/api/term/cancel', { method: 'POST' });
+      await fetch('/api/term/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(withRepoPath({}, repoPath)),
+      });
     } catch (_) {}
     appendOutput('^C\n', 'exit');
     if (abortCtrl) { try { abortCtrl.abort(); } catch (_) {} }
@@ -16910,15 +16990,15 @@
   // one-off fetch if it hasn't loaded yet.
   async function currentRepoCwd() {
     try {
-      if (typeof repoListState !== 'undefined' && repoListState && repoListState.current) {
-        return repoListState.current;
+      if (typeof selectedRepoPath === 'function' && selectedRepoPath()) {
+        return selectedRepoPath();
       }
     } catch (e) { /* fall through */ }
     try {
       const r = await fetch('/api/repo/list');
       if (!r.ok) return '';
       const j = await r.json();
-      return (j && j.current) || '';
+      return '';
     } catch (e) { return ''; }
   }
 

@@ -40,7 +40,7 @@ Two places to bump in lockstep:
 - `pyproject.toml` — `version = "X.Y.Z"`
 - `server.py` — `__version__ = "X.Y.Z"`
 
-Patch for bug fixes. Minor for new features. Major for breaking `/api/*` contracts or breaking CLI flags (`run.sh` / env vars like `CCC_WATCH_REPO`).
+Patch for bug fixes. Minor for new features. Major for breaking `/api/*` contracts or breaking CLI flags (`run.sh` / env vars).
 
 Tag as `vX.Y.Z`. `gh release create` with release notes copied from the CHANGELOG section.
 
@@ -58,7 +58,7 @@ Tag as `vX.Y.Z`. `gh release create` with release notes copied from the CHANGELO
 Read `SECURITY.md` before changing anything about network binding, origin checks, or path validation. Summary:
 - Default bind is `127.0.0.1`. `CCC_BIND_HOST=0.0.0.0` requires opt-in + prints a warning.
 - Same-origin check on every POST (`_check_same_origin`).
-- `/api/open` clamps paths to `REPO_ROOT` / `LOG_DIR`.
+- `/api/open` clamps paths to explicit repo/session context and command-center log directories.
 
 ## Conventions
 

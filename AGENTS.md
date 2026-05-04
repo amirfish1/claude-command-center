@@ -40,7 +40,7 @@ Two places to bump in lockstep:
 - `pyproject.toml` — `version = "X.Y.Z"`
 - `server.py` — `__version__ = "X.Y.Z"`
 
-Patch for bug fixes. Minor for new features. Major for breaking `/api/*` contracts or breaking CLI flags (`run.sh` / env vars like `CCC_WATCH_REPO`).
+Patch for bug fixes. Minor for new features. Major for breaking `/api/*` contracts or breaking CLI flags (`run.sh` / env vars).
 
 Tag as `vX.Y.Z`. `gh release create` with release notes copied from the CHANGELOG section.
 
@@ -51,14 +51,15 @@ Tag as `vX.Y.Z`. `gh release create` with release notes copied from the CHANGELO
 - Adding a field to a response is fine.
 - Adding a new endpoint is fine.
 - Renaming a field, removing a field, or changing a response shape is a **breaking change** — major version bump, and update SECURITY.md / README.md.
-- `/api/repo/switch` has an allow-list for CSRF defence. Don't loosen without re-reading the comment at the call site.
+- `/api/repo/switch` is a deprecated compatibility endpoint that returns 410.
+  Repo-scoped APIs must receive an explicit `repo_path`.
 
 ## Security posture
 
 Read `SECURITY.md` before changing anything about network binding, origin checks, or path validation. Summary:
 - Default bind is `127.0.0.1`. `CCC_BIND_HOST=0.0.0.0` requires opt-in + prints a warning.
 - Same-origin check on every POST (`_check_same_origin`).
-- `/api/open` clamps paths to `REPO_ROOT` / `LOG_DIR`.
+- `/api/open` clamps paths to the explicit repo/session context and command-center log directories.
 
 ## Conventions
 
