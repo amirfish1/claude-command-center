@@ -24,6 +24,19 @@ The server writes Claude Code hook configuration into `~/.claude/settings.json`
 on first run, and copies hook scripts to `~/.claude/command-center/hooks/`. If
 something goes wrong there, the server logs what it did at startup.
 
+## Contributor License Agreement
+
+Before your first pull request can be merged, you'll need to sign a short
+Contributor License Agreement. The CLA bot will comment with instructions
+the first time you open a PR — it's a one-line comment, takes 30 seconds,
+and you only do it once.
+
+The full agreement is in [`CLA.md`](./CLA.md) — adapted from the standard
+Apache Individual CLA. The short version: you keep your copyright, but
+grant the project a perpetual license to use, modify, sublicense, and
+relicense your contribution. This keeps the project's licensing future
+flexible.
+
 ## Proposing a change
 
 1. Open an issue first if the change is larger than a bug fix or one-screen

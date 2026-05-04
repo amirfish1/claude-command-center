@@ -11,6 +11,11 @@ task to fix things.
 
 ![Claude Command Center demo](docs/images/demo.gif)
 
+> **If you install it, I'd love to hear how.** Drop a ⭐, open an issue with
+> what worked or what broke, or just say hi. This is a one-person project
+> built around a specific workflow — outside feedback is the only way I know
+> how widely it lands. — [@amirfish1](https://github.com/amirfish1)
+
 ## Why this exists
 
 Most Claude Code orchestration tools are opinionated wrappers. They want to
