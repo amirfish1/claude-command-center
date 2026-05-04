@@ -964,6 +964,7 @@
   }
   .conv-input-context .wp-usage-pill.wp-usage-warm { color: var(--orange); background: rgba(210,153,34,0.12); }
   .conv-input-context .wp-usage-pill.wp-usage-hot  { color: var(--red);    background: rgba(248,81,73,0.14); }
+  .conv-input-context .wp-usage-pill.wp-usage-missing { color: var(--text-muted); background: rgba(139,148,158,0.10); }
   .conv-input-context .wp-usage-clickable { cursor: pointer; user-select: none; }
   .conv-input-context .wp-usage-clickable:hover { filter: brightness(1.2); }
   .conv-input-context .wp-usage-pct { opacity: 0.7; font-weight: 400; }
@@ -1414,6 +1415,29 @@
   }
   .conv-item:hover { background: var(--surface-2); }
   .conv-item.active { background: var(--surface-2); border-left-color: var(--purple); }
+  .conv-item.is-history-match { border-left-color: rgba(120, 168, 255, 0.5); }
+  .conv-history-badge {
+    display: inline-block; margin-left: 6px; padding: 1px 5px;
+    font-size: 9px; font-weight: 500; line-height: 1.4;
+    color: rgba(120, 168, 255, 0.95);
+    background: rgba(120, 168, 255, 0.12);
+    border: 1px solid rgba(120, 168, 255, 0.35);
+    border-radius: 3px; text-transform: uppercase; letter-spacing: 0.04em;
+    vertical-align: middle;
+  }
+  .conv-history-snippet {
+    margin: 2px 0 4px 14px; padding: 4px 8px;
+    font-size: 11px; line-height: 1.4;
+    color: var(--muted); background: rgba(255,255,255,0.025);
+    border-left: 2px solid rgba(120, 168, 255, 0.25);
+    border-radius: 0 4px 4px 0;
+    white-space: pre-wrap; word-break: break-word;
+    overflow: hidden; max-height: 3.5em;
+  }
+  .conv-history-snippet mark {
+    background: rgba(255, 213, 100, 0.3); color: var(--text);
+    padding: 0 2px; border-radius: 2px;
+  }
   .conv-item .conv-title-row {
     display: flex;
     min-width: 0;
@@ -3839,6 +3863,137 @@
     background: rgba(96, 137, 230, 0.85);
   }
   .stats-models-row .pct { color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* ======================================================================
+     History search — right-side drawer + click-through detail pane.
+     Read-only window onto ~/.claude-index/index.db. Class prefix: .hsd-
+     ====================================================================== */
+  .hsd-overlay {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0, 0, 0, 0.42);
+    display: flex; justify-content: flex-end;
+    opacity: 0; pointer-events: none;
+    transition: opacity 160ms ease;
+  }
+  .hsd-overlay[data-open="1"] { opacity: 1; pointer-events: auto; }
+  .hsd-overlay[hidden] { display: none !important; }
+
+  .hsd-drawer {
+    width: min(820px, 96vw); height: 100vh;
+    background: var(--bg, #0f1115);
+    color: var(--text, #e6e6e6);
+    border-left: 1px solid var(--border, #2a2d33);
+    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.45);
+    display: flex; flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 220ms cubic-bezier(.2,.7,.2,1);
+  }
+  .hsd-overlay[data-open="1"] .hsd-drawer { transform: translateX(0); }
+
+  .hsd-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border, #2a2d33);
+  }
+  .hsd-header h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  .hsd-close {
+    background: transparent; color: var(--text-muted, #9aa0aa);
+    border: none; font-size: 22px; cursor: pointer; line-height: 1;
+    padding: 4px 8px;
+  }
+  .hsd-close:hover { color: var(--text, #fff); }
+
+  .hsd-controls { padding: 12px 18px 8px; }
+  .hsd-input {
+    width: 100%; padding: 9px 12px; box-sizing: border-box;
+    background: var(--surface, #1a1d23); color: var(--text, #e6e6e6);
+    border: 1px solid var(--border, #2a2d33); border-radius: 6px;
+    font-size: 14px;
+  }
+  .hsd-input:focus { outline: none; border-color: var(--accent, #4ea1ff); }
+  .hsd-filters {
+    display: flex; align-items: center; gap: 12px; margin-top: 8px;
+    font-size: 12px; color: var(--text-muted, #9aa0aa);
+  }
+  .hsd-since {
+    background: var(--surface, #1a1d23); color: var(--text, #e6e6e6);
+    border: 1px solid var(--border, #2a2d33); border-radius: 4px;
+    padding: 4px 6px; font-size: 12px;
+  }
+  .hsd-repo-only { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .hsd-status { min-height: 16px; font-size: 11px; color: var(--text-muted, #9aa0aa); margin-top: 4px; }
+  .hsd-status.is-error { color: #e07a7a; }
+
+  .hsd-body {
+    flex: 1; min-height: 0;
+    display: grid; grid-template-columns: minmax(280px, 42%) 1fr;
+    gap: 1px; background: var(--border, #2a2d33);
+  }
+  .hsd-results {
+    margin: 0; padding: 0; list-style: none;
+    background: var(--bg, #0f1115);
+    overflow-y: auto;
+  }
+  .hsd-result {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border, #2a2d33);
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .hsd-result:hover { background: var(--surface, #1a1d23); }
+  .hsd-result.is-selected { background: var(--surface-2, #20232a); border-left: 2px solid var(--accent, #4ea1ff); padding-left: 12px; }
+  .hsd-result-meta {
+    display: flex; gap: 10px; font-size: 11px; color: var(--text-muted, #9aa0aa);
+    margin-bottom: 4px; align-items: baseline;
+  }
+  .hsd-result-meta .role { font-weight: 600; color: var(--text, #e6e6e6); }
+  .hsd-result-meta .ts { font-variant-numeric: tabular-nums; }
+  .hsd-result-cwd {
+    font-size: 11px; color: var(--text-muted, #9aa0aa);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    direction: rtl; text-align: left;
+  }
+  .hsd-result-snippet {
+    font-size: 12px; line-height: 1.45; margin-top: 4px;
+    color: var(--text, #e6e6e6);
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .hsd-result-snippet mark {
+    background: rgba(255, 209, 102, 0.32); color: inherit;
+    padding: 0 2px; border-radius: 2px;
+  }
+
+  .hsd-detail {
+    background: var(--bg, #0f1115);
+    overflow-y: auto;
+    padding: 14px 18px;
+    font-size: 13px; line-height: 1.5;
+  }
+  .hsd-detail-empty {
+    color: var(--text-muted, #9aa0aa); font-style: italic; margin-top: 12px;
+  }
+  .hsd-detail-meta {
+    display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px;
+    font-size: 11px; color: var(--text-muted, #9aa0aa);
+    padding-bottom: 10px; margin-bottom: 10px;
+    border-bottom: 1px solid var(--border, #2a2d33);
+  }
+  .hsd-detail-meta dt { color: var(--text-muted, #9aa0aa); }
+  .hsd-detail-meta dd { margin: 0; color: var(--text, #e6e6e6); word-break: break-all; }
+  .hsd-detail-content {
+    white-space: pre-wrap; word-break: break-word;
+    font-family: inherit;
+  }
+
+  .hsd-empty-state {
+    padding: 30px 18px; text-align: center;
+    color: var(--text-muted, #9aa0aa); font-size: 13px;
+  }
+
+  @media (max-width: 720px) {
+    .hsd-body { grid-template-columns: 1fr; grid-template-rows: 50% 50%; }
+  }
 </style>
 <!-- Optional Morning side-nav. Loaded conditionally based on the feature
      flag so installs without the morning plugin don't get a 404 in the
@@ -4065,6 +4220,7 @@
     <button id="kptWorktreesBtn" class="topbar-btn" title="Show all worktrees of this repo, with an indicator for those that have uncommitted changes." aria-label="Show worktrees">&#127807; Worktrees</button>
     <button id="statsBtn" class="topbar-btn" title="Usage stats — sessions, messages, tokens, streaks across every Claude Code transcript on this machine." aria-label="Show usage stats">&#128202; Stats</button>
     <button id="termToggleBtn" class="topbar-btn" title="Open the in-UI terminal panel — run quick shell commands (git status, npm test, ./script.sh) without leaving the page. One-shot per command, no interactive TTY (no vim/top)." aria-label="Toggle terminal panel">&#9000; Terminal</button>
+    <button id="historyBtn" class="topbar-btn" title="Search past Claude Code conversations across every project on this Mac (powered by the local claude-index). Shortcut: /" aria-label="Search past conversations">&#128269; History</button>
     <div id="setupBanner" class="ccc-setup-banner"></div>
   </div>
 
@@ -4183,7 +4339,7 @@
         <div class="conversations-view" id="conversationsView">
           <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
         </div>
-        <div class="conv-input-context" id="convInputContext">
+        <div class="conv-input-context" id="convInputContext" data-role="input-context">
           <span class="wp-row" data-workspace></span>
           <!-- New-session-only cwd picker. Visibility controlled by
                .is-new-session on the context strip; populated by
@@ -4542,6 +4698,40 @@
         <div class="stats-loading">Loading…</div>
       </div>
     </div>
+  </div>
+
+  <!-- History search — right-side drawer over a backdrop.
+       Read-only window onto ~/.claude-index/index.db (see /api/search-history). -->
+  <div id="hsdOverlay" class="hsd-overlay" role="dialog" aria-modal="true" aria-labelledby="hsdTitle" hidden>
+    <aside class="hsd-drawer" aria-label="History search">
+      <header class="hsd-header">
+        <h2 id="hsdTitle">&#128269; History search</h2>
+        <button type="button" id="hsdCloseBtn" class="hsd-close" aria-label="Close">&times;</button>
+      </header>
+      <div class="hsd-controls">
+        <input type="search" id="hsdInput" class="hsd-input"
+               placeholder="Search past Claude Code conversations…" autocomplete="off"
+               spellcheck="false" />
+        <div class="hsd-filters">
+          <select id="hsdSince" class="hsd-since" aria-label="Time window">
+            <option value="">All time</option>
+            <option value="1d">Today</option>
+            <option value="7d" selected>Past 7 days</option>
+            <option value="30d">Past 30 days</option>
+          </select>
+          <label class="hsd-repo-only">
+            <input type="checkbox" id="hsdRepoOnly"> This repo only
+          </label>
+        </div>
+        <div class="hsd-status" id="hsdStatus" aria-live="polite"></div>
+      </div>
+      <div class="hsd-body">
+        <ul class="hsd-results" id="hsdResults" role="listbox" tabindex="0"></ul>
+        <article class="hsd-detail" id="hsdDetail">
+          <div class="hsd-detail-empty">Click a result to view the full message.</div>
+        </article>
+      </div>
+    </aside>
   </div>
 
 <script>
@@ -9007,8 +9197,19 @@
       if (isBacklogRow) {
         const _issueAttr = escapeHtml(c.issue_number || '');
         const _titleAttr = escapeHtml(c.display_name || c.first_message || '');
-        startBtn = '<button class="conv-start-btn" data-role="start" data-issue="' + _issueAttr + '" data-title="' + _titleAttr + '" title="Spawn a session to work on this issue" aria-label="Start issue session">&#9654;</button>';
-        archiveBtn = '<button class="conv-archive-btn is-close" data-role="archive" title="Archive issue (close as not planned)" aria-label="Archive issue">&#128229;</button>';
+        // Cross-repo issues carry spawn_cwd so the spawn handler can target
+        // their repo (instead of the active server's REPO_ROOT). Empty for
+        // single-repo backlog cards — spawn falls through to the default.
+        const _spawnCwdAttr = escapeHtml(c.spawn_cwd || '');
+        startBtn = '<button class="conv-start-btn" data-role="start" data-issue="' + _issueAttr + '" data-title="' + _titleAttr + '" data-spawn-cwd="' + _spawnCwdAttr + '" title="Spawn a session to work on this issue" aria-label="Start issue session">&#9654;</button>';
+        // Cross-repo issue rows skip the archive button — the close-issue
+        // endpoint is REPO_ROOT-scoped and would fail for issues from
+        // other repos. Switch to that repo to manage its issues.
+        if (c.id && String(c.id).startsWith('xrepo-issue-')) {
+          archiveBtn = '';
+        } else {
+          archiveBtn = '<button class="conv-archive-btn is-close" data-role="archive" title="Archive issue (close as not planned)" aria-label="Archive issue">&#128229;</button>';
+        }
       } else {
         archiveBtn = '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>';
       }
@@ -9041,7 +9242,20 @@
         ? '<button class="conv-repo-pin" data-role="unpin-repo" title="Pinned to this repo. Click to reset to the session’s real repo.">&#128204;</button>'
         : '';
 
-      return '<div class="conv-item' + active + (isCodexRow ? ' is-codex' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
+      // History-search match indicators. `_historySnippet` (with HTML <mark>
+      // already embedded) is set when this session was matched by the
+      // claude-index FTS5 backend in addition to / instead of the local
+      // session-list filter. Badge renders as a sibling of `.conv-title`
+      // so the rename flow that reads the title's textContent doesn't
+      // scoop the badge text into the edit box.
+      const historyBadgeHtml = c._historyMatch
+        ? '<span class="conv-history-badge" title="Matched in conversation history (claude-index)">history</span>'
+        : '';
+      const historySnippetHtml = c._historySnippet
+        ? '<div class="conv-history-snippet">' + c._historySnippet + '</div>'
+        : '';
+
+      return '<div class="conv-item' + active + (isCodexRow ? ' is-codex' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + '<div class="conv-main-row">'
@@ -9049,6 +9263,7 @@
             + '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
             + folderChipHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to open; click again to rename">' + escapeHtml(title) + '</div>'
+            + historyBadgeHtml
             + pinnedHtml
             + '<span class="conv-row-meta">'
             +   liveToolHtml
@@ -9061,6 +9276,7 @@
           + '</div>'
         + '</div>'
         + ask
+        + historySnippetHtml
       + '</div>';
     };
     // Active list keeps the date-gap separators so morning/evening
@@ -9513,6 +9729,10 @@
         ev.stopPropagation();
         const issueNum = btn.dataset.issue;
         const rawTitle = btn.dataset.title;
+        // For cross-repo issues, spawnCwd points at the issue's repo so
+        // the new session lands in the right folder. Empty for single-
+        // repo issues — server defaults to its own REPO_ROOT.
+        const spawnCwd = btn.dataset.spawnCwd || '';
         const cleanTitle = (rawTitle || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
         const sessionName = issueNum
           ? ('issue-' + issueNum)
@@ -9530,10 +9750,12 @@
         insertPendingSpawnCard(tempPid, sessionName, false);
         (async () => {
           try {
+            const spawnBody = { prompt: prompt, name: sessionName };
+            if (spawnCwd) spawnBody.cwd = spawnCwd;
             const res = await fetch('/api/sessions/spawn', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ prompt: prompt, name: sessionName }),
+              body: JSON.stringify(spawnBody),
             });
             const data = await res.json().catch(() => ({}));
             if (data.ok && data.pid) {
@@ -9544,7 +9766,10 @@
                 pendingSpawns.set(data.pid, placeholder);
               }
             }
-            if (issueNum) {
+            // Skip the mark-in-progress label for cross-repo issues —
+            // that endpoint is REPO_ROOT-scoped and would label the wrong
+            // repo's issue. Single-repo flow still labels normally.
+            if (issueNum && !spawnCwd) {
               fetch('/api/issues/' + issueNum + '/mark-in-progress', { method: 'POST' }).catch(() => {});
             }
           } catch (_) {}
@@ -11741,12 +11966,17 @@
   // behind counts, and whether other sessions are sharing the same cwd.
   let _workspaceSessionId = null;
   let _workspaceData = null;
+  function getInputContextSlot() {
+    // Conversation transcripts can contain literal CCC HTML snippets with
+    // ids like `convInputContext`; scope to pane chrome, not message content.
+    return document.querySelector('#convSplit > .conv-pane[data-pane-id="p1"] > .conv-input-context[data-role="input-context"]');
+  }
   async function fetchSessionWorkspace(sid) {
     _workspaceSessionId = sid;
     _workspaceData = null;
     // Clear the strip immediately so a stale workspace from the previous
     // session doesn't flash before the new fetch lands.
-    const slot = document.getElementById('convInputContext');
+    const slot = getInputContextSlot();
     const wsSlot = slot && slot.querySelector('[data-workspace]');
     if (wsSlot) wsSlot.innerHTML = '';
     if (slot) slot.classList.remove('visible');
@@ -11764,7 +11994,7 @@
     // Target the input-context strip above the conv input bar; matches
     // Claude Desktop's pattern of "branch · base · diff · PR" right where
     // you type. Single row, no third column.
-    const slot = document.getElementById('convInputContext');
+    const slot = getInputContextSlot();
     const wsSlot = slot && slot.querySelector('[data-workspace]');
     if (!slot || !wsSlot || !_workspaceData) return;
     const w = _workspaceData;
@@ -11979,7 +12209,7 @@
   // Delegated click on the input-context strip — survives re-renders
   // of [data-workspace] without rebinding.
   (function () {
-    const slot = document.getElementById('convInputContext');
+    const slot = getInputContextSlot();
     if (!slot) return;
     slot.addEventListener('click', function (ev) {
       const btn = ev.target && ev.target.closest && ev.target.closest('[data-action="open-worktrees"]');
@@ -12198,7 +12428,7 @@
   async function fetchSessionUsage(sid) {
     _usageSessionId = sid;
     _usageData = null;
-    const slot = document.getElementById('convInputContext');
+    const slot = getInputContextSlot();
     const uSlot = slot && slot.querySelector('[data-usage]');
     if (uSlot) uSlot.innerHTML = '';
     if (!sid) return;
@@ -12229,18 +12459,42 @@
   }
 
   function renderSessionUsageIntoStrip() {
-    const slot = document.getElementById('convInputContext');
+    const slot = getInputContextSlot();
     const uSlot = slot && slot.querySelector('[data-usage]');
     if (!slot || !uSlot) return;
     const u = _usageData || {};
     const latest = u.latest_input_tokens || 0;
     const peak = u.peak_input_tokens || 0;
+    // Model pill — shown when we know the model. Strips the "claude-"
+    // prefix so it reads as `opus-4-7` / `sonnet-4-6`. Adds a `1M` suffix
+    // when the session is provably on the 1M-context variant (any turn
+    // exceeded 200k tokens — only possible on the 1M variant). The 1M
+    // beta is delivered via the anthropic-beta header, not the model
+    // name in the JSONL, so peak > 200k is the only honest signal.
+    let modelPill = '';
+    if (u.model) {
+      const isOneM = (peak > 200000) || u.model.toLowerCase().includes('[1m]');
+      const shortModel = u.model.replace(/^claude-/, '').replace(/\[1m\]/i, '').trim();
+      const modelTip = u.model + (isOneM ? '\n(1M context window - anthropic-beta: context-1m)' : '');
+      modelPill = ' <span class="wp-model-pill" title="' + escapeHtml(modelTip) + '">'
+        + escapeHtml(shortModel) + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
+        + '</span>';
+    }
     // Click-toggle override: if you're on the 1M variant the server's
     // 200k default is wrong; one click flips and persists.
     const override = _getCtxLimitOverride();
     const limit = override || u.context_limit || 200000;
     if (!latest && !peak) {
-      uSlot.innerHTML = '';
+      if (!modelPill) {
+        uSlot.innerHTML = '';
+        return;
+      }
+      const title = 'No token usage samples were found for this session.\n'
+        + 'Model: ' + u.model;
+      uSlot.innerHTML = '<span class="wp-usage-pill wp-usage-missing" title="' + escapeHtml(title) + '">'
+        + 'ctx unavailable'
+        + '</span>' + modelPill;
+      slot.classList.add('visible');
       return;
     }
     const pct = Math.round((latest / limit) * 100);
@@ -12270,21 +12524,6 @@
         + 'Subscription users (Claude Pro/Max) pay flat — this is the\n'
         + 'list-price equivalent if metered against the API directly.';
       costPill = ' <span class="wp-cost-pill" title="' + escapeHtml(costTip) + '">' + fmt(cost) + '</span>';
-    }
-    // Model pill — shown when we know the model. Strips the "claude-"
-    // prefix so it reads as `opus-4-7` / `sonnet-4-6`. Adds a `1M` suffix
-    // when the session is provably on the 1M-context variant (any turn
-    // exceeded 200k tokens — only possible on the 1M variant). The 1M
-    // beta is delivered via the anthropic-beta header, not the model
-    // name in the JSONL, so peak > 200k is the only honest signal.
-    let modelPill = '';
-    if (u.model) {
-      const isOneM = (peak > 200000) || u.model.toLowerCase().includes('[1m]');
-      const shortModel = u.model.replace(/^claude-/, '').replace(/\[1m\]/i, '').trim();
-      const modelTip = u.model + (isOneM ? '\n(1M context window — anthropic-beta: context-1m)' : '');
-      modelPill = ' <span class="wp-model-pill" title="' + escapeHtml(modelTip) + '">'
-        + escapeHtml(shortModel) + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
-        + '</span>';
     }
     uSlot.innerHTML = '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
       + 'ctx ' + _formatTokens(latest) + ' / ' + _formatTokens(limit)
@@ -12856,12 +13095,153 @@
         || (c.branch || '').toLowerCase().includes(q)
         || (c.source || '').toLowerCase().includes(q);
     });
-    return applyConvSort(filtered);
+    const sorted = applyConvSort(filtered);
+    return _decorateWithHistoryMatches(sorted, q);
+  }
+
+  // ── History-search augmentation ──────────────────────────────────────
+  // The session-list filter above only sees sessions already loaded into
+  // conversationsData. The local claude-index FTS5 store covers every
+  // conversation on this Mac, including ones not currently loaded. We
+  // keep the two paths independent: the existing filter is unchanged,
+  // and history matches are OR-unioned in via decorations + synthetic
+  // rows below. If the index is missing or the request fails, the local
+  // filter still works as today (zero degradation).
+  //
+  // _historyState.map: session_id → { snippet, ts, cwd, type }
+  // _historyState.query: the query the map was built for; stale queries
+  //                       are ignored to avoid showing decorations from a
+  //                       previous keystroke after the user has typed more.
+  const _historyState = { query: '', map: new Map(), broaden: false };
+  let _historyFetchSeq = 0;
+  let _historyFetchTimer = null;
+
+  // Strip <mark> tags so we can use snippet text as a synthetic title
+  // without leaking HTML through escapeHtml later.
+  function _stripHistoryHtml(s) {
+    return (s || '').replace(/<mark>/g, '').replace(/<\/mark>/g, '').replace(/…/g, '');
+  }
+
+  function _decorateWithHistoryMatches(localSorted, qLower) {
+    // Empty query or stale state → strip any leftover decorations and bail.
+    if (!qLower || _historyState.query !== qLower) {
+      for (const c of localSorted) {
+        if (c._historyMatch) {
+          c._historyMatch = false;
+          c._historySnippet = '';
+        }
+      }
+      return localSorted;
+    }
+    const map = _historyState.map;
+    if (!map.size) return localSorted;
+    // Decorate locally-known sessions that also matched in history.
+    const seen = new Set();
+    for (const c of localSorted) {
+      const sid = c.session_id || c.id;
+      if (sid && map.has(sid)) {
+        const hit = map.get(sid);
+        c._historyMatch = true;
+        c._historySnippet = hit.snippet;
+        seen.add(sid);
+      } else if (c._historyMatch) {
+        // Was decorated for a previous query; clear.
+        c._historyMatch = false;
+        c._historySnippet = '';
+      }
+    }
+    // Append synthetic rows for sessions that the local filter doesn't
+    // know about. Minimal fields: enough for the row renderer to fall
+    // back gracefully. Click handler opens by data-session-id, which
+    // CCC's session-loader knows how to resolve.
+    const synthetic = [];
+    for (const [sid, hit] of map.entries()) {
+      if (seen.has(sid)) continue;
+      const titleSrc = _stripHistoryHtml(hit.snippet).trim();
+      synthetic.push({
+        id: sid,
+        session_id: sid,
+        display_name: titleSrc.slice(0, 80) || ('Session ' + sid.slice(0, 8)),
+        first_message: '',
+        last_prompt: '',
+        branch: '',
+        source: 'history',
+        cwd: hit.cwd || '',
+        session_cwd: hit.cwd || '',
+        modified: (hit.ts || 0) * 1000,
+        size: 0,
+        archived: false,
+        _historyMatch: true,
+        _historySnippet: hit.snippet,
+        _historyOnly: true,
+      });
+    }
+    // History-only rows trail the local matches. Within themselves they
+    // keep history-search BM25 order (already sorted by score in the
+    // server response, so insertion order suffices).
+    return localSorted.concat(synthetic);
+  }
+
+  function _fetchHistoryAugment(query) {
+    const q = (query || '').trim();
+    const qLower = q.toLowerCase();
+    const seq = ++_historyFetchSeq;
+    if (!q) {
+      _historyState.query = '';
+      _historyState.map = new Map();
+      return Promise.resolve();
+    }
+    // Default scope = current repo, mirroring the rest of the list view.
+    // The "Broaden outside of repo" toggle (when wired) will flip this.
+    const params = new URLSearchParams({ q, limit: '50', since: '90d' });
+    if (!_historyState.broaden) {
+      const cwd = (window.repoListState && repoListState.current && repoListState.current.cwd) || '';
+      if (cwd) params.set('cwd', cwd);
+    }
+    return fetch('/api/search-history?' + params.toString())
+      .then(r => r.ok ? r.json() : { results: [] })
+      .catch(() => ({ results: [] }))
+      .then(data => {
+        // Drop stale responses — newer keystroke already in flight.
+        if (seq !== _historyFetchSeq) return;
+        const results = (data && data.results) || [];
+        const bySession = new Map();
+        for (const r of results) {
+          const sid = r.session_id;
+          if (!sid) continue;
+          // First hit per session wins (FTS5 returns BM25-sorted, so the
+          // best snippet is naturally first).
+          if (!bySession.has(sid)) {
+            bySession.set(sid, {
+              snippet: r.snippet || '',
+              ts: r.ts_unix || 0,
+              cwd: r.cwd || '',
+              type: r.type || '',
+            });
+          }
+        }
+        _historyState.query = qLower;
+        _historyState.map = bySession;
+      });
   }
 
   // Conversation search filter
   $convSearch.addEventListener('input', () => {
+    // Re-render immediately with the local filter — instant response,
+    // no waiting on the network.
     renderSidebar(filterConversations($convSearch.value));
+    // Debounced history fetch; on completion, re-render with augmentation.
+    if (_historyFetchTimer) clearTimeout(_historyFetchTimer);
+    const q = $convSearch.value;
+    _historyFetchTimer = setTimeout(() => {
+      _fetchHistoryAugment(q).then(() => {
+        // Only re-render if the input still holds this query — user may
+        // have already typed more, in which case a newer fetch is queued.
+        if ($convSearch.value === q) {
+          renderSidebar(filterConversations($convSearch.value));
+        }
+      });
+    }, 180);
   });
 
   // ── Issues dashboard ──
@@ -13265,10 +13645,75 @@
     });
   }
 
+  // Cross-repo issues → backlog-card-shaped rows. ID format
+  // `xrepo-issue-<repo-slug>-<number>` is intentionally distinct from the
+  // single-repo `backlog-issue-<N>` so the archive/rename endpoint regexes
+  // don't try to handle them — those operations remain repo-scoped (you
+  // can switch to that repo and use the regular flow). The Start button
+  // handler reads the row's `cwd` field to spawn into the right folder.
+  function _crossRepoIssueArchiveRows() {
+    if (!Array.isArray(crossRepoIssuesData) || !crossRepoIssuesData.length) return [];
+    return crossRepoIssuesData.map(issue => {
+      const repoPath = issue.repo_path || '';
+      const repoLabel = issue.repo_label || _pathLeaf(repoPath) || repoPath;
+      const slug = repoPath.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      const number = String(issue.number || '');
+      const id = `xrepo-issue-${slug}-${number}`;
+      const labels = (issue.labels || []).map(l => (l && l.name) || '').filter(Boolean);
+      const title = issue.title || '';
+      const createdAtStr = issue.createdAt || issue.updatedAt || '';
+      let createdTs = 0;
+      try { createdTs = createdAtStr ? new Date(createdAtStr).getTime() / 1000 : 0; } catch (_) {}
+      return {
+        id,
+        session_id: id,
+        display_name: `#${number}: ${title}`,
+        first_message: (issue.body || '').slice(0, 200),
+        name_overridden: false,
+        source: 'backlog',
+        backlog_type: 'github',
+        issue_number: number,
+        issue_labels: labels,
+        issue_created_at: createdAtStr,
+        issue_state: issue.state || 'OPEN',
+        issue_state_reason: issue.stateReason || null,
+        modified: createdTs,
+        size: 0,
+        branch: '',
+        is_live: false,
+        archived: false,
+        verified: false,
+        has_edit: false,
+        has_commit: false,
+        has_push: false,
+        last_event_type: null,
+        pending_tool: null,
+        pending_file: null,
+        sidecar_status: null,
+        sidecar_tool: null,
+        sidecar_file: null,
+        sidecar_has_writes: false,
+        sidecar_ts: 0,
+        // Folder chip — same fields the conversation rows use.
+        folder_path: repoPath,
+        folder_label: repoLabel,
+        slug: repoPath,
+        // Used by the Start handler to spawn into the right folder
+        // instead of the active server's REPO_ROOT.
+        spawn_cwd: repoPath,
+      };
+    });
+  }
+
   function _archiveRowsWithBacklog() {
     const rows = Array.isArray(archiveData) ? archiveData.slice() : [];
     const seen = new Set(rows.map(c => c && (c.session_id || c.id)).filter(Boolean));
-    for (const row of _currentRepoBacklogArchiveRows()) {
+    // Cross-repo issues take precedence over single-repo backlog injection
+    // — they cover the active repo's issues too, so dropping the single-
+    // repo version avoids duplicate rows when /api/issues/all responds.
+    const issueRows = _crossRepoIssueArchiveRows();
+    const sourceRows = issueRows.length ? issueRows : _currentRepoBacklogArchiveRows();
+    for (const row of sourceRows) {
       const key = row.session_id || row.id;
       if (key && seen.has(key)) continue;
       rows.push(row);
@@ -13548,12 +13993,34 @@
       return Array.isArray(d.conversations) ? d.conversations : [];
     } catch (_) { return []; }
   }
+
+  // Cross-repo open GH issues — populates the archive view's GH Issues
+  // section across every known repo. Each issue is transformed to a
+  // backlog-card-shaped row by _crossRepoIssueArchiveRows() so the
+  // existing classifier renders it under the same section as single-repo
+  // issues. Closed issues are filtered out client-side here to keep the
+  // section focused on actionable work.
+  let crossRepoIssuesData = [];
+  async function loadCrossRepoIssues() {
+    try {
+      const r = await fetch('/api/issues/all');
+      if (!r.ok) return [];
+      const d = await r.json();
+      const all = Array.isArray(d.issues) ? d.issues : [];
+      // Only OPEN issues in v1 — closed adds noise. The server returns
+      // both so the future "view recently completed" toggle has data.
+      return all.filter(i => (i.state || '').toUpperCase() === 'OPEN');
+    } catch (_) { return []; }
+  }
+
   async function refreshArchiveData() {
-    const [convs] = await Promise.all([
+    const [convs, issues] = await Promise.all([
       loadArchiveAll(),
+      loadCrossRepoIssues(),
       repoListState.repos.length ? Promise.resolve(null) : loadRepoList().catch(() => null),
     ]);
     archiveData = convs;
+    crossRepoIssuesData = issues || [];
     archiveLoaded = true;
     renderArchiveFolderFilter();
     renderRepoSidebar();
@@ -13580,13 +14047,30 @@
     const byFolder = archiveFolderFilter === ARCHIVE_FOLDER_ALL
       ? archiveRows
       : archiveRows.filter(c => _archiveFolderValue(c) === archiveFolderFilter);
-    const rows = q ? byFolder.filter(c =>
+    let rows = q ? byFolder.filter(c =>
       // session_id + id let users paste a session UUID into the search box
       // and find the conversation directly — useful when CCC tooling, logs
       // or external scripts surface a UUID without a title.
       ((c.display_name || '') + ' ' + (c.first_message || '') + ' ' + (c.folder_label || '') + ' ' + (c.git_branch || '') + ' ' + (c.branch || '') + ' ' + (c.session_id || '') + ' ' + (c.id || ''))
         .toLowerCase().includes(q)
     ) : byFolder;
+
+    // OR-union with history-search results. The local substring filter
+    // above only sees title/branch/folder text; the indexer covers full
+    // message content. If a session in the archive matched the indexer
+    // for this same query, include it here even if the substring filter
+    // rejected it. Decorations (badge + snippet) are applied below in the
+    // post-shape pass. Synthetic rows for sessions outside archiveRows
+    // are handled in non-archive list mode only for now.
+    if (q && _historyState.query === q && _historyState.map.size) {
+      const seen = new Set(rows.map(c => c.session_id || c.id));
+      const extra = [];
+      for (const c of byFolder) {
+        const sid = c.session_id || c.id;
+        if (!seen.has(sid) && _historyState.map.has(sid)) extra.push(c);
+      }
+      if (extra.length) rows = rows.concat(extra);
+    }
 
     if (!archiveLoaded && !archiveRows.length) {
       $list.innerHTML = '<div class="archive-empty-state">Loading archive&hellip;</div>';
@@ -13720,6 +14204,21 @@
         pinned_repo: !!c.pinned_repo,
       };
     });
+
+    // History-augmentation: badge + snippet for archive entries that the
+    // indexer matched for this same query. The conv-item template reads
+    // c._historyMatch / c._historySnippet. Skipped when state is stale
+    // (debounced fetch hasn't completed for this keystroke yet).
+    if (q && _historyState.query === q && _historyState.map.size) {
+      for (const s of shaped) {
+        const sid = s.session_id || s.id;
+        if (sid && _historyState.map.has(sid)) {
+          const hit = _historyState.map.get(sid);
+          s._historyMatch = true;
+          s._historySnippet = hit.snippet;
+        }
+      }
+    }
 
     // Make sure the list is visible (kanban is hidden in setArchiveMode).
     const $kanban = document.getElementById('kanbanBoard');
@@ -16380,6 +16879,244 @@
       e.preventDefault();
       if ($panel.classList.contains('open')) closePanel(); else openPanel();
     }
+  });
+})();
+</script>
+
+<script>
+// ============================================================================
+// History search — search past Claude Code conversations from inside CCC.
+// Read-only window onto ~/.claude-index/index.db via /api/search-history and
+// /api/history-message. Self-contained; no dependencies on other CCC modules.
+// ============================================================================
+(function () {
+  const $overlay = document.getElementById('hsdOverlay');
+  if (!$overlay) return;  // markup not present — feature disabled in this build
+  const $btn      = document.getElementById('historyBtn');
+  const $closeBtn = document.getElementById('hsdCloseBtn');
+  const $input    = document.getElementById('hsdInput');
+  const $since    = document.getElementById('hsdSince');
+  const $repoOnly = document.getElementById('hsdRepoOnly');
+  const $status   = document.getElementById('hsdStatus');
+  const $results  = document.getElementById('hsdResults');
+  const $detail   = document.getElementById('hsdDetail');
+
+  let _searchSeq = 0;     // monotonic — guards against out-of-order responses
+  let _debounceT = null;
+  let _selectedUuid = null;
+
+  // Resolve the current repo for the "this repo only" filter. Prefer the
+  // global repoListState the rest of the UI maintains; fall back to a
+  // one-off fetch if it hasn't loaded yet.
+  async function currentRepoCwd() {
+    try {
+      if (typeof repoListState !== 'undefined' && repoListState && repoListState.current) {
+        return repoListState.current;
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      const r = await fetch('/api/repo/list');
+      if (!r.ok) return '';
+      const j = await r.json();
+      return (j && j.current) || '';
+    } catch (e) { return ''; }
+  }
+
+  function setStatus(text, isError) {
+    $status.textContent = text || '';
+    $status.classList.toggle('is-error', !!isError);
+  }
+
+  function fmtTs(iso) {
+    if (!iso) return '';
+    // 2026-04-30T17:03:29.123Z → 2026-04-30 17:03
+    return String(iso).slice(0, 16).replace('T', ' ');
+  }
+
+  function shortCwd(cwd) {
+    if (!cwd) return '';
+    return cwd.replace(/^\/Users\/[^/]+/, '~');
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // Snippet contains literal <mark>...</mark> tags from FTS5; render them.
+  // Everything outside the marks is escaped so user content can't inject.
+  function renderSnippet(snippet) {
+    const s = String(snippet == null ? '' : snippet);
+    const parts = s.split(/(<mark>|<\/mark>)/g);
+    let out = '';
+    let inMark = false;
+    for (const part of parts) {
+      if (part === '<mark>') { out += '<mark>'; inMark = true; }
+      else if (part === '</mark>') { out += '</mark>'; inMark = false; }
+      else { out += escapeHtml(part); }
+    }
+    return out;
+  }
+
+  function renderResults(results) {
+    if (!results || !results.length) {
+      $results.innerHTML = '<li class="hsd-empty-state">No matches.</li>';
+      return;
+    }
+    const html = results.map(r => {
+      const ts = fmtTs(r.timestamp);
+      const role = escapeHtml(r.type || '');
+      const cwd = shortCwd(r.cwd || '');
+      const snippet = renderSnippet(r.snippet);
+      const uuid = escapeHtml(r.uuid || '');
+      return `
+        <li class="hsd-result" data-uuid="${uuid}">
+          <div class="hsd-result-meta">
+            <span class="role">${role}</span>
+            <span class="ts">${escapeHtml(ts)}</span>
+          </div>
+          <div class="hsd-result-cwd" title="${escapeHtml(r.cwd || '')}">${escapeHtml(cwd)}</div>
+          <div class="hsd-result-snippet">${snippet}</div>
+        </li>`;
+    }).join('');
+    $results.innerHTML = html;
+  }
+
+  function renderDetail(msg) {
+    if (!msg) {
+      $detail.innerHTML = '<div class="hsd-detail-empty">Click a result to view the full message.</div>';
+      return;
+    }
+    const meta = [
+      ['Time', fmtTs(msg.timestamp)],
+      ['Type', msg.type || ''],
+      ['Role', msg.role || ''],
+      ['Session', msg.session_id || ''],
+      ['CWD', msg.cwd || ''],
+      ['Branch', msg.git_branch || '-'],
+      ['Model', msg.model || ''],
+    ];
+    const metaHtml = meta.map(([k, v]) =>
+      `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`
+    ).join('');
+    $detail.innerHTML = `
+      <dl class="hsd-detail-meta">${metaHtml}</dl>
+      <pre class="hsd-detail-content">${escapeHtml(msg.content || '')}</pre>
+    `;
+  }
+
+  async function runSearch() {
+    const q = $input.value.trim();
+    if (!q) {
+      $results.innerHTML = '';
+      setStatus('');
+      return;
+    }
+    const seq = ++_searchSeq;
+    setStatus('Searching…');
+
+    const params = new URLSearchParams({ q, limit: '50' });
+    const since = $since.value;
+    if (since) params.set('since', since);
+    if ($repoOnly.checked) {
+      const cwd = await currentRepoCwd();
+      if (cwd) params.set('cwd', cwd);
+    }
+
+    let json;
+    try {
+      const r = await fetch('/api/search-history?' + params.toString());
+      json = await r.json();
+    } catch (e) {
+      if (seq !== _searchSeq) return;
+      setStatus('Network error — see console.', true);
+      console.error(e);
+      return;
+    }
+    if (seq !== _searchSeq) return;  // newer query already in flight
+
+    if (json.error) {
+      setStatus(json.error, true);
+      $results.innerHTML = '';
+      return;
+    }
+    const n = (json.results || []).length;
+    setStatus(n ? `${n} result${n === 1 ? '' : 's'}` : 'No matches');
+    renderResults(json.results || []);
+  }
+
+  function debouncedSearch() {
+    if (_debounceT) clearTimeout(_debounceT);
+    _debounceT = setTimeout(runSearch, 220);
+  }
+
+  async function loadDetail(uuid) {
+    if (!uuid) return;
+    _selectedUuid = uuid;
+    // Highlight the selected row.
+    Array.from($results.querySelectorAll('.hsd-result')).forEach(el => {
+      el.classList.toggle('is-selected', el.getAttribute('data-uuid') === uuid);
+    });
+    $detail.innerHTML = '<div class="hsd-detail-empty">Loading…</div>';
+    let msg = null;
+    try {
+      const r = await fetch('/api/history-message?uuid=' + encodeURIComponent(uuid));
+      if (r.ok) msg = await r.json();
+    } catch (e) { console.error(e); }
+    renderDetail(msg);
+  }
+
+  function openDrawer() {
+    $overlay.hidden = false;
+    // Force reflow then mark open so the CSS transition runs.
+    void $overlay.offsetHeight;
+    $overlay.dataset.open = '1';
+    setTimeout(() => $input.focus(), 50);
+    if (!$input.value) {
+      // Empty drawer — show hint, no fetch.
+      $results.innerHTML = '<li class="hsd-empty-state">Type to search past Claude Code conversations.</li>';
+      $detail.innerHTML = '<div class="hsd-detail-empty">Click a result to view the full message.</div>';
+    }
+  }
+
+  function closeDrawer() {
+    delete $overlay.dataset.open;
+    setTimeout(() => { $overlay.hidden = true; }, 220);
+  }
+
+  // ----- wiring -----
+  if ($btn) $btn.addEventListener('click', openDrawer);
+  $closeBtn.addEventListener('click', closeDrawer);
+
+  // Click backdrop (but not the drawer itself) to close.
+  $overlay.addEventListener('click', (e) => {
+    if (e.target === $overlay) closeDrawer();
+  });
+
+  $input.addEventListener('input', debouncedSearch);
+  $input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); runSearch(); }
+    if (e.key === 'Escape') { e.preventDefault(); closeDrawer(); }
+  });
+  $since.addEventListener('change', runSearch);
+  $repoOnly.addEventListener('change', runSearch);
+
+  $results.addEventListener('click', (e) => {
+    const li = e.target.closest('.hsd-result');
+    if (li) loadDetail(li.getAttribute('data-uuid'));
+  });
+
+  // Global '/' shortcut to open the drawer (unless typing in another input).
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== '/') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const tag = (e.target && e.target.tagName) || '';
+    const editable = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
+                     (e.target && e.target.isContentEditable);
+    if (editable) return;
+    e.preventDefault();
+    openDrawer();
   });
 })();
 </script>

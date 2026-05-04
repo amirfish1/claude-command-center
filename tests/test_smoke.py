@@ -282,6 +282,71 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("old-cold", stems)
         self.assertTrue(meta["limited"])
 
+    def test_session_usage_falls_back_to_diagnostic_context_sample(self):
+        """Newer Claude transcripts can omit `message.usage` while still
+        carrying a diagnostic context-size hint. The footer should use that
+        instead of showing no context data at all."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        sid = "11111111-2222-3333-4444-555555555555"
+        event = {
+            "type": "assistant",
+            "sessionId": sid,
+            "isSidechain": False,
+            "message": {
+                "model": "claude-opus-4-7",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "ok"}],
+                "diagnostics": {
+                    "cache_miss_reason": {
+                        "type": "tools_changed",
+                        "cache_missed_input_tokens": 57261,
+                    },
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            project = root / "-tmp-project"
+            project.mkdir()
+            (project / f"{sid}.jsonl").write_text(json.dumps(event) + "\n")
+            orig_root = server.PROJECTS_ROOT
+            server.PROJECTS_ROOT = root
+            try:
+                with mock.patch.object(server, "_is_codex_session", return_value=False), \
+                     mock.patch.object(server, "_load_desktop_app_metadata", return_value={}):
+                    usage = server.extract_session_usage(sid)
+            finally:
+                server.PROJECTS_ROOT = orig_root
+
+        self.assertEqual(usage["latest_input_tokens"], 57261)
+        self.assertEqual(usage["peak_input_tokens"], 57261)
+        self.assertEqual(usage["model"], "claude-opus-4-7")
+
+    def test_tail_meta_extracts_assistant_model(self):
+        """Conversation rows should carry the model even before the usage
+        endpoint finishes, so the footer has a stable fallback."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        event = {
+            "type": "assistant",
+            "timestamp": "2026-05-03T12:00:00.000Z",
+            "message": {
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "done"}],
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "s.jsonl"
+            path.write_text(json.dumps(event) + "\n")
+            meta = server._extract_tail_meta(path)
+
+        self.assertEqual(meta["model"], "claude-sonnet-4-6")
+
 
 class TestHealthcheck(unittest.TestCase):
     def test_healthcheck_returns_structured_result(self):

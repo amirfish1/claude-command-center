@@ -1,0 +1,1 @@
+- Keep the conversation footer's model visible when an older session has no token usage samples, showing context as unavailable instead of hiding the usage area.

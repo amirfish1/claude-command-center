@@ -12,7 +12,7 @@ Usage:
     CCC_WATCH_REPO=~/dev/foo ./run.sh
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 import ast
 import base64
@@ -646,6 +646,25 @@ def _decode_project_slug(slug):
         return None
 
 
+_GENERATED_HELPER_SESSION_PREFIXES = (
+    "Produce a concise 4-8 word title summarizing what the user is trying to do",
+    "Produce a concise 4-8 word title for the GitHub issue below",
+)
+
+
+def _is_generated_helper_session(first_message):
+    """Return True for CCC's own throwaway utility prompts."""
+    text = (first_message or "").lstrip()
+    if not text:
+        return False
+    if text.startswith(_GENERATED_HELPER_SESSION_PREFIXES):
+        return True
+    return (
+        text.startswith("Use the Read tool to open this image:")
+        and "Then output ONLY a single JSON line" in text[:500]
+    )
+
+
 def find_all_conversations(limit_per_folder=None):
     """Walk ~/.claude/projects/ for every subdir and return a flat list of
     conversation metadata across every folder you've ever Claude-Code'd in.
@@ -758,11 +777,11 @@ def find_all_conversations(limit_per_folder=None):
                         if not first_message and ev.get("type") == "user":
                             msg = (ev.get("message") or {}).get("content")
                             if isinstance(msg, str):
-                                first_message = msg.strip()[:200]
+                                first_message = msg.strip()
                             elif isinstance(msg, list):
                                 for part in msg:
                                     if isinstance(part, dict) and part.get("type") == "text":
-                                        first_message = (part.get("text") or "").strip()[:200]
+                                        first_message = (part.get("text") or "").strip()
                                         break
                         if not git_branch:
                             git_branch = ev.get("gitBranch") or ev.get("git_branch")
@@ -774,6 +793,9 @@ def find_all_conversations(limit_per_folder=None):
                             break
             except (OSError, UnicodeDecodeError):
                 pass
+
+            if _is_generated_helper_session(first_message):
+                continue
 
             # Tool-call inference — match what extract_session_workspace
             # does for active sessions. The JSONL's first-event cwd /
@@ -918,7 +940,7 @@ def find_all_conversations(limit_per_folder=None):
                 "session_cwd_is_worktree": cwd_is_worktree,
                 "mtime": stat.st_mtime,
                 "size": stat.st_size,
-                "first_message": first_message,
+                "first_message": first_message[:200] if first_message else None,
                 # Both keys: `branch`/`git_branch` is the JSONL's literal
                 # gitBranch (what the row defaults to when no inference);
                 # `effective_branch`/`effective_kind` carry the tool-call
@@ -2167,7 +2189,8 @@ SPAWNED_PIDS_FILE = COMMAND_CENTER_STATE_DIR / "spawned-pids.json"
 _conv_meta_cache = {}
 _conv_meta_cache_dirty = False
 _conv_meta_cache_lock = threading.Lock()
-_CONV_META_SCHEMA_VERSION = 5
+_CONV_META_SCHEMA_VERSION = 6
+_CONV_META_COMPAT_SCHEMA_VERSIONS = {5, 6}
 _CONV_META_CACHE_FILE = (
     Path.home() / ".claude" / "command-center" / "conv_meta_cache.json"
 )
@@ -2189,7 +2212,7 @@ def _load_conv_meta_cache():
         return
     if not isinstance(data, dict):
         return
-    if data.get("schema_version") != _CONV_META_SCHEMA_VERSION:
+    if data.get("schema_version") not in _CONV_META_COMPAT_SCHEMA_VERSIONS:
         return
     entries = data.get("entries")
     if not isinstance(entries, dict):
@@ -2411,6 +2434,7 @@ def _extract_tail_meta(path):
         "pending_tool": None,     # tool awaiting approval (last assistant had tool_use, no result yet)
         "pending_file": None,     # file path from pending tool
         "last_assistant_text": None,  # last text block from an assistant message (the "outcome")
+        "model": None,
         # Issue number detected from Bash/commit content — covers sessions where the
         # issue wasn't in the spawn prompt (e.g. Claude ran `gh issue create` mid-session).
         "tail_issue_number": None,
@@ -2516,15 +2540,21 @@ def _extract_tail_meta(path):
                                 )
                 # Session signals from tool calls
                 elif t == "assistant":
+                    msg = _safe_parse_message(ev.get("message", {}))
+                    if msg.get("model"):
+                        meta["model"] = msg.get("model")
+                    content = msg.get("content", [])
+                    if not isinstance(content, list):
+                        content = []
                     last_tool_name = None
                     last_tool_file = None
                     # Capture last text block from this assistant turn as the "outcome"
-                    for block in ev.get("message", {}).get("content", []):
+                    for block in content:
                         if block.get("type") == "text":
                             txt = (block.get("text") or "").strip()
                             if txt:
                                 meta["last_assistant_text"] = txt
-                    for block in ev.get("message", {}).get("content", []):
+                    for block in content:
                         if block.get("type") != "tool_use":
                             continue
                         name = block.get("name", "")
@@ -5197,18 +5227,6 @@ def find_conversations(progress=None, include_old=True, live_sids=None):
     if live_sids is None and not include_old:
         live_sids = set(_load_session_registry().keys())
     live_sids = set(live_sids or [])
-    # Skip sessions created by our own `claude -p` title-summarizer calls.
-    # The summarizer prompts start with these exact prefixes (see
-    # summarize_session_title / the GitHub-issue title summarizer). Without
-    # this filter, every click of the ✨ Titles button creates a throwaway
-    # session that then pollutes the kanban with a "Produce a concise 4-8
-    # word title…" card. Match is on first_message prefix, which is resilient
-    # to user renames — the prompt text itself can't be overridden.
-    _TITLE_SUMMARIZER_PREFIXES = (
-        "Produce a concise 4-8 word title summarizing what the user is trying to do",
-        "Produce a concise 4-8 word title for the GitHub issue below",
-    )
-
     # If the same session_id (file name) appears in multiple candidate
     # dirs (unlikely — claude-code uses one slug per process — but
     # possible if a repo path was historically encoded both ways), the
@@ -5351,10 +5369,10 @@ def find_conversations(progress=None, include_old=True, live_sids=None):
             _t_head += time.perf_counter() - _t0
             _n_head += 1
 
-        # Drop throwaway title-summarizer sessions before spending any more work
-        # on them (tail scan, cwd lookup, etc.). first_message peek above already
-        # strips <command-name> wrappers, so a plain prefix compare is enough.
-        if first_message and first_message.lstrip().startswith(_TITLE_SUMMARIZER_PREFIXES):
+        # Drop generated helper sessions before spending any more work on
+        # them (tail scan, cwd lookup, etc.). first_message peek above already
+        # strips <command-name> wrappers, so prompt-shape matching is enough.
+        if _is_generated_helper_session(first_message):
             continue
 
         conv_id = f.name[:-6]  # remove .jsonl
@@ -5515,6 +5533,7 @@ def find_conversations(progress=None, include_old=True, live_sids=None):
             # pass. See find_all_conversations for the broader rationale.
             "pr_state": None,
             "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
+            "model": tail_meta.get("model"),
             "archived": sid in archived_set,
             "verified": sid in verified_set,
             # True when this row is showing here because the user pinned the
@@ -5887,6 +5906,12 @@ def find_all_sessions(progress=None, include_old=True):
         dm = desktop_meta.get(c.get("session_id"))
         if dm:
             c["desktop_app"] = True
+            if dm.get("model") and not c.get("model"):
+                c["model"] = dm["model"]
+            if dm.get("cwd") and not c.get("session_cwd"):
+                c["session_cwd"] = dm["cwd"]
+                c["session_cwd_exists"] = Path(dm["cwd"]).is_dir()
+                c["session_cwd_is_worktree"] = bool((Path(dm["cwd"]) / ".git").is_file())
             if dm.get("title") and not c.get("name_overridden"):
                 # Only replace auto-slug / CLI-generated names; never overwrite a user rename.
                 raw_name = (c.get("display_name") or "").strip()
@@ -10450,6 +10475,41 @@ def _rates_for_model(model):
     return list(_FALLBACK_RATES)
 
 
+def _diagnostic_context_tokens(diagnostics):
+    """Best-effort context-size hint from newer Claude Code diagnostics.
+
+    Some recent Claude transcripts omit the normal `message.usage` object
+    entirely but still record how many input tokens missed the prompt cache.
+    That value is not billable-usage data, but it is a useful lower-bound
+    context sample for the footer instead of rendering a blank/unknown row.
+    """
+    if not isinstance(diagnostics, dict):
+        return 0
+
+    candidates = []
+    miss = diagnostics.get("cache_miss_reason")
+    if isinstance(miss, dict):
+        candidates.append(miss.get("cache_missed_input_tokens"))
+
+    for key in (
+        "context_tokens",
+        "input_tokens",
+        "prompt_tokens",
+        "cache_missed_input_tokens",
+    ):
+        candidates.append(diagnostics.get(key))
+
+    best = 0
+    for value in candidates:
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            best = max(best, value)
+        elif isinstance(value, str) and value.isdigit():
+            best = max(best, int(value))
+    return best
+
+
 def extract_session_usage(session_id):
     """Walk a session's JSONL transcript and return token-usage stats.
 
@@ -10479,8 +10539,9 @@ def extract_session_usage(session_id):
     }
     if _is_codex_session(session_id):
         return _extract_codex_usage(session_id)
+    desktop_meta = _load_desktop_app_metadata().get(session_id) or {}
     if not PROJECTS_ROOT.is_dir():
-        return empty
+        return {**empty, "model": desktop_meta.get("model") or ""}
     jsonl = None
     for pd in PROJECTS_ROOT.iterdir():
         if not pd.is_dir():
@@ -10490,7 +10551,7 @@ def extract_session_usage(session_id):
             jsonl = cand
             break
     if not jsonl:
-        return empty
+        return {**empty, "model": desktop_meta.get("model") or ""}
 
     latest = 0
     peak = 0
@@ -10498,7 +10559,9 @@ def extract_session_usage(session_id):
     total_cw = 0
     total_cr = 0
     total_out = 0
-    model = ""
+    model = desktop_meta.get("model") or ""
+    diagnostic_latest = 0
+    diagnostic_peak = 0
     try:
         with open(jsonl, "r") as f:
             for line in f:
@@ -10516,6 +10579,12 @@ def extract_session_usage(session_id):
                 msg = _safe_parse_message(ev.get("message", {}))
                 if msg.get("model"):
                     model = msg.get("model")
+                diag_window = _diagnostic_context_tokens(
+                    msg.get("diagnostics") or ev.get("diagnostics")
+                )
+                if diag_window:
+                    diagnostic_latest = diag_window
+                    diagnostic_peak = max(diagnostic_peak, diag_window)
                 u = msg.get("usage") or {}
                 if not isinstance(u, dict):
                     continue
@@ -10537,7 +10606,12 @@ def extract_session_usage(session_id):
                 if isinstance(tout, int):
                     total_out += tout
     except OSError:
-        return empty
+        return {**empty, "model": model}
+
+    if not latest and diagnostic_latest:
+        latest = diagnostic_latest
+    if not peak and diagnostic_peak:
+        peak = diagnostic_peak
 
     # Best-effort context limit. Claude Code's 1M-context variant uses a
     # `[1m]` suffix in some surfaces, but the JSONL strips it ("claude-
@@ -10574,6 +10648,204 @@ def extract_session_usage(session_id):
             "output": round(cost_out, 4),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Conversation history search — read-only window onto the separate `claude-index`
+# tool. CCC never writes to ~/.claude-index/index.db; the FTS5 mirror there has
+# triggers that keep itself in sync, and an accidental write here would corrupt
+# them. We open with `mode=ro` so even a stray INSERT raises.
+# ---------------------------------------------------------------------------
+
+_HISTORY_INDEX_PATH = Path.home() / ".claude-index" / "index.db"
+_history_conn = None
+_history_conn_lock = threading.Lock()
+
+# What counts as "user composed an FTS5 query, leave it alone": quoted
+# phrases, explicit boolean keywords, parens, prefix-star. NOT '-', '+',
+# '^', ':' on their own — those routinely show up in identifiers /
+# filenames the user wants to search literally (e.g. `archive-filter-1d33`,
+# `feat/foo-bar`, `user@example.com`).
+_HISTORY_FTS_OPERATOR_RE = re.compile(r'["()*]|\b(?:AND|OR|NOT|NEAR)\b', re.IGNORECASE)
+_HISTORY_FTS_TOKEN_RE = re.compile(r"[\w']+", re.UNICODE)
+
+
+def _rewrite_history_query(q):
+    """Bare multi-word queries → OR-form so a single missing word doesn't
+    zero out FTS5's implicit-AND. Tokens are quoted so embedded punctuation
+    (e.g. '-' inside an identifier) can't be mis-parsed as an operator.
+
+    Mirrors rewrite_query() in claude-index — kept inline so CCC has no
+    runtime dependency on that package.
+    """
+    q = (q or "").strip()
+    if not q or _HISTORY_FTS_OPERATOR_RE.search(q):
+        return q
+    tokens = _HISTORY_FTS_TOKEN_RE.findall(q)
+    if not tokens:
+        return q
+    if len(tokens) == 1:
+        return tokens[0]
+    return " OR ".join(f'"{t}"' for t in tokens)
+
+
+# Patterns that crowd out useful preview text in FTS5 snippets. The cleaner
+# below strips them before the snippet hits the UI.
+#  - `[tool_use:NAME]` markers introduced by the indexer for assistant tool calls
+#  - line-number prefixes from Read-tool / cat -n output: `1031\t...` and `1049- ...`
+#  - markdown-table separator rows (`| --- | --- |`) that dominate changelog hits
+_HISTORY_SNIPPET_TOOL_USE_RE = re.compile(r'\[tool_use:[^\]]+\]\s*')
+_HISTORY_SNIPPET_LINENUM_RE = re.compile(r'\b\d{1,6}(?:\t|-(?=\s))')
+_HISTORY_SNIPPET_TABLE_SEP_RE = re.compile(r'\|?\s*-{3,}(?:\s*\|\s*-{3,})+\s*\|?')
+_HISTORY_SNIPPET_WS_RE = re.compile(r'[ \t]{2,}')
+
+
+def _clean_history_snippet(snippet):
+    """Strip noise from an FTS5-returned snippet so the preview shows real text
+    instead of tool-call boilerplate or cat-n line numbers.
+
+    `<mark>` highlight tags survive — none of the patterns we strip can contain
+    them. If cleaning empties the snippet (rare: a result that was *only* noise),
+    return the original so the UI still has something to show.
+    """
+    if not snippet:
+        return snippet
+    s = _HISTORY_SNIPPET_TOOL_USE_RE.sub('', snippet)
+    s = _HISTORY_SNIPPET_LINENUM_RE.sub(' ', s)
+    s = _HISTORY_SNIPPET_TABLE_SEP_RE.sub(' ', s)
+    s = _HISTORY_SNIPPET_WS_RE.sub(' ', s)
+    s = s.strip()
+    return s if s else snippet
+
+
+def _history_since_threshold(since):
+    """Parse '7d', '24h', '30m', '2w' into a unix-timestamp threshold.
+    Returns None for empty / 'all' / unparseable input — caller treats
+    that as "no time filter".
+    """
+    if not since:
+        return None
+    s = since.strip().lower()
+    if s in ("all", "any", "0"):
+        return None
+    now = time.time()
+    try:
+        if s.endswith("d"):
+            return now - int(s[:-1]) * 86400
+        if s.endswith("h"):
+            return now - int(s[:-1]) * 3600
+        if s.endswith("m"):
+            return now - int(s[:-1]) * 60
+        if s.endswith("w"):
+            return now - int(s[:-1]) * 7 * 86400
+    except ValueError:
+        pass
+    return None
+
+
+def _open_history_index():
+    """Return a cached read-only sqlite3.Connection to the claude-index
+    store, or None if the index file doesn't exist yet (user never ran
+    the indexer).
+
+    `mode=ro` enforces read-only at the URI level so even a stray
+    INSERT here would raise instead of silently mutating the file.
+    `check_same_thread=False` is safe because http.server's threading
+    mixin runs handlers across worker threads, and FTS5 reads don't
+    require per-thread connections.
+    """
+    global _history_conn
+    if _history_conn is not None:
+        return _history_conn
+    with _history_conn_lock:
+        if _history_conn is not None:
+            return _history_conn
+        if not _HISTORY_INDEX_PATH.is_file():
+            return None
+        uri = f"file:{_HISTORY_INDEX_PATH}?mode=ro"
+        try:
+            conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+        except sqlite3.OperationalError:
+            return None
+        conn.row_factory = sqlite3.Row
+        _history_conn = conn
+        return conn
+
+
+def search_conversation_history(query, limit=20, cwd_like=None, since=None):
+    """BM25-ranked FTS5 search over the indexed conversation history.
+
+    Returns a dict {results: [...]} on success, or
+    {error: str, results: []} when the index is missing or a query is
+    rejected by FTS5 (malformed operator usage, etc.).
+    """
+    conn = _open_history_index()
+    if conn is None:
+        return {
+            "error": (
+                "Conversation index not found at ~/.claude-index/index.db. "
+                "Install and run the claude-index tool to build it."
+            ),
+            "results": [],
+        }
+    fts_query = _rewrite_history_query(query)
+    if not fts_query:
+        return {"results": []}
+    where = ["messages_fts MATCH ?"]
+    params = [fts_query]
+    if cwd_like:
+        where.append("m.cwd LIKE ?")
+        params.append(f"%{cwd_like}%")
+    threshold = _history_since_threshold(since)
+    if threshold is not None:
+        where.append("m.ts_unix >= ?")
+        params.append(threshold)
+    try:
+        limit = max(1, min(int(limit), 100))
+    except (TypeError, ValueError):
+        limit = 20
+    sql = f"""
+        SELECT m.uuid, m.session_id, m.type, m.cwd, m.git_branch,
+               m.timestamp, m.ts_unix,
+               snippet(messages_fts, 0, '<mark>', '</mark>', '…', 12) AS snippet,
+               bm25(messages_fts) AS score
+        FROM messages_fts
+        JOIN messages m ON m.id = messages_fts.rowid
+        WHERE {' AND '.join(where)}
+        ORDER BY score
+        LIMIT ?
+    """
+    params.append(limit)
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError as e:
+        # FTS5 rejects malformed queries (unbalanced quotes, dangling
+        # operators, etc.) with OperationalError. Surface as an empty
+        # result + error string so the UI can show "syntax error" rather
+        # than a 500.
+        return {"error": f"search failed: {e}", "results": []}
+    results = [dict(r) for r in rows]
+    for r in results:
+        if r.get("snippet"):
+            r["snippet"] = _clean_history_snippet(r["snippet"])
+    return {"results": results}
+
+
+def get_history_message(uuid):
+    """Fetch a single message by uuid from the conversation index, or
+    None if not found. Used by the click-through panel."""
+    if not uuid:
+        return None
+    conn = _open_history_index()
+    if conn is None:
+        return None
+    row = conn.execute(
+        "SELECT uuid, session_id, type, role, cwd, project_dir, git_branch, "
+        "timestamp, ts_unix, model, source_file, source_line, content "
+        "FROM messages WHERE uuid = ?",
+        (uuid,),
+    ).fetchone()
+    return dict(row) if row else None
 
 
 # ---------------------------------------------------------------------------
@@ -12012,6 +12284,29 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(_run_healthcheck())
         elif path == "/api/version":
             self.send_json({"version": __version__})
+        elif path == "/api/search-history":
+            # Read-only window onto ~/.claude-index/index.db built by the
+            # separate claude-index tool. Returns BM25-ranked matches with
+            # <mark>-highlighted snippets. q empty → empty result.
+            qs = urllib.parse.parse_qs(parsed.query)
+            q = (qs.get("q", [""])[0] or "").strip()
+            if not q:
+                self.send_json({"results": []})
+            else:
+                cwd_like = (qs.get("cwd", [""])[0] or "").strip() or None
+                since = (qs.get("since", [""])[0] or "").strip() or None
+                limit_raw = (qs.get("limit", ["20"])[0] or "20").strip()
+                self.send_json(search_conversation_history(
+                    q, limit=limit_raw, cwd_like=cwd_like, since=since,
+                ))
+        elif path == "/api/history-message":
+            qs = urllib.parse.parse_qs(parsed.query)
+            uuid = (qs.get("uuid", [""])[0] or "").strip()
+            msg = get_history_message(uuid)
+            if msg is None:
+                self.send_json({"error": "not found"}, 404)
+            else:
+                self.send_json(msg)
         elif path == "/api/version/check":
             # Is the local install behind the latest GitHub release? Used by
             # the in-app "Update available" pill. Cached 6h in memory so we

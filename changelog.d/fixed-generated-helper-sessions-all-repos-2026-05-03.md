@@ -1,0 +1,1 @@
+- All repos mode now hides CCC-generated helper sessions such as title summarizer prompts and one-off image-read JSON extractors. The active repo list and cross-repo archive now share the same generated-helper filter, so these utility JSONLs no longer appear as normal work rows.
