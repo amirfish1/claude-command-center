@@ -339,6 +339,63 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("FILE_EXT_TO_CATEGORY", nearby,
                       "extension clamp missing near /api/reveal-file route")
 
+    def test_open_target_resolves_relative_session_cwd_markdown(self):
+        """Inline transcript links should resolve from the selected session cwd."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / ".git").mkdir()
+            session_cwd = root / "session"
+            (session_cwd / ".claude").mkdir(parents=True)
+            checkpoint = session_cwd / ".claude" / "team-checkpoint.md"
+            checkpoint.write_text("# checkpoint\n")
+
+            with mock.patch.object(server, "find_session_cwd", return_value=str(session_cwd)):
+                result = server._resolve_open_target(
+                    ".claude/team-checkpoint.md",
+                    session_id="11111111-2222-3333-4444-555555555555",
+                    cwd=str(session_cwd),
+                    repo_path=str(repo),
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(pathlib.Path(result["path"]), checkpoint.resolve())
+        self.assertFalse(result["core_sandbox"])
+        self.assertTrue(result["session_sandbox"])
+
+    def test_open_target_blocks_executable_session_cwd_files(self):
+        """Session-cwd fallback must not turn /api/open into script launch/reveal."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / ".git").mkdir()
+            session_cwd = root / "session"
+            (session_cwd / ".claude").mkdir(parents=True)
+            script = session_cwd / "run.sh"
+            script.write_text("#!/bin/sh\nexit 0\n")
+
+            with mock.patch.object(server, "find_session_cwd", return_value=str(session_cwd)):
+                result = server._resolve_open_target(
+                    "run.sh",
+                    session_id="11111111-2222-3333-4444-555555555555",
+                    cwd=str(session_cwd),
+                    repo_path=str(repo),
+                )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], 403)
+        self.assertIn("extension not allowed", result["error"])
+
     def test_files_endpoint_route_registered(self):
         """Smoke check: GET /api/conversations/<id>/files dispatcher
         branch must be present in the do_GET source. Route registration

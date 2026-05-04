@@ -122,9 +122,9 @@
 
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-  /* Vercel deploy status — compact pill that lives in the sidebar header
-     actions cluster. The "not configured" / state details live in the
-     pill's title attribute (hover tooltip) so the sidebar stays clean. */
+  /* Vercel deploy status — compact pill in the global topbar. The "not
+     configured" / state details live in the pill's title attribute (hover
+     tooltip) so the conversation sidebar stays focused on conversations. */
   .deploy-dot {
     width: 6px; height: 6px; border-radius: 50%;
     background: var(--text-muted); display: inline-block;
@@ -132,14 +132,14 @@
   .deploy-dot.ready { background: var(--green); }
   .deploy-dot.error { background: var(--red); }
   .deploy-dot.building { background: #FBCA04; animation: pulse 2s infinite; }
-  .sidebar-header-actions .sh-btn-deploy {
+  .sh-btn-deploy {
     display: inline-flex; align-items: center; gap: 5px;
     text-decoration: none;
   }
-  .sidebar-header-actions .sh-btn-deploy .deploy-label {
+  .sh-btn-deploy .deploy-label {
     font-size: 11px; color: var(--text-muted);
   }
-  .sidebar-header-actions .sh-btn-deploy:hover .deploy-label { color: var(--text); }
+  .sh-btn-deploy:hover .deploy-label { color: var(--text); }
 
   .log-item {
     padding: 10px 12px; border-radius: 6px; cursor: pointer;
@@ -449,9 +449,9 @@
   .assistant-text a { color: var(--accent); }
 
   /* Fenced code blocks (```lang ... ```). Rounded container with a tiny
-     header strip for language label + copy button; <pre> scrolls horizontally
-     when a line is too long to wrap. Token colors pulled from the GitHub
-     dark palette so highlights read well on the dark CCC surface. */
+     header strip for language label + copy button. Long lines wrap inside
+     the transcript so code blocks do not become a second horizontal scroll
+     surface while the user is trying to scroll the conversation. */
   .cb-wrap {
     margin: 8px 0; border-radius: 8px; overflow: hidden;
     background: #0b1016; border: 1px solid var(--border);
@@ -475,10 +475,11 @@
   .cb-copy:hover { opacity: 1; color: var(--text); border-color: var(--text-muted); }
   .cb-copy.copied { color: var(--green); border-color: rgba(63,185,80,0.5); opacity: 1; }
   pre.cb {
-    margin: 0; padding: 12px 14px; overflow-x: auto;
+    margin: 0; padding: 12px 14px; overflow-x: hidden;
     font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
     font-size: 13px; line-height: 1.5; color: var(--text);
-    white-space: pre; tab-size: 2;
+    white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+    tab-size: 2;
   }
   pre.cb code { background: transparent; padding: 0; font: inherit; color: inherit; }
   .tok-comment  { color: #768390; font-style: italic; }
@@ -1373,7 +1374,8 @@
     font-size: 12px;
     color: var(--text-muted);
     white-space: pre-wrap;
-    overflow-x: auto;
+    overflow-x: hidden;
+    overflow-wrap: anywhere;
     max-height: 200px;
     overflow-y: auto;
   }
@@ -1472,20 +1474,39 @@
     word-break: keep-all;
   }
   .conv-item .conv-row-meta {
-    display: inline-flex;
+    display: grid;
+    grid-template-columns: 64px 96px 74px 12px;
     align-items: center;
-    gap: 4px;
+    column-gap: 4px;
+    justify-content: end;
     flex: 0 0 auto;
     min-width: 0;
   }
   .conv-item .conv-meta-inline {
     font-size: 10px; color: var(--text-muted);
-    display: inline-flex; align-items: center; gap: 4px;
+    display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px;
     flex: 0 0 auto;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
   }
+  .conv-item .conv-status-slot,
+  .conv-item .conv-branch-slot,
+  .conv-item .conv-engine-slot {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .conv-item .conv-status-slot { justify-content: flex-start; }
+  .conv-item .conv-branch-slot { justify-content: flex-start; }
+  .conv-item .conv-engine-slot { justify-content: center; }
+  .conv-item .conv-status-slot:empty,
+  .conv-item .conv-branch-slot:empty,
+  .conv-item .conv-engine-slot:empty { display: none; }
+  .conv-item .conv-status-slot .conv-live-tool { max-width: 100%; }
   .conv-item .conv-meta-inline .sep,
   .conv-item .conv-meta-inline .source-badge { display: none; }
   .conv-item .conv-meta-inline .sep { opacity: 0.4; }
@@ -1554,6 +1575,32 @@
   .compact-rows .conv-item .conv-last { display: none; }
   .compact-rows .conv-item .conv-title-row {
     gap: 0;
+  }
+  .conv-folder-group .conv-item.is-grouped-row {
+    padding-top: 1px;
+    padding-bottom: 1px;
+    border-radius: 4px;
+  }
+  .conv-folder-group .conv-item.is-grouped-row .conv-title {
+    flex: 0 1 auto;
+    line-height: 1.15;
+  }
+  .conv-folder-group .conv-item.is-grouped-row .conv-main-row {
+    gap: 3px;
+  }
+  .conv-folder-group .conv-item.is-grouped-row .conv-row-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 6px;
+  }
+  .conv-folder-group .conv-item.is-grouped-row .conv-meta-inline {
+    min-width: auto;
+  }
+  .conv-folder-group .conv-item.is-grouped-row .conv-status-slot,
+  .conv-folder-group .conv-item.is-grouped-row .conv-branch-slot,
+  .conv-folder-group .conv-item.is-grouped-row .conv-engine-slot {
+    flex: 0 0 auto;
   }
   .conv-item .conv-title.untitled {
     font-weight: 500; color: var(--text-muted); font-style: italic;
@@ -3055,14 +3102,32 @@
    * list with gap separators. */
   .conv-folder-group-header {
     --chip-hue: 0;
-    display: flex; align-items: center; gap: 8px;
-    justify-content: flex-start;
-    padding: 8px 12px 4px;
+    --conv-dot-col: 9px;
+    --conv-time-col: 43px;
+    display: grid;
+    grid-template-columns: var(--conv-dot-col) var(--conv-time-col) auto auto minmax(0, 1fr);
+    column-gap: 3px;
+    align-items: center;
+    padding: 5px 10px 2px;
     font-size: 11px;
     color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 4px;
+    border-left: 3px solid transparent;
+    user-select: none;
+  }
+  .conv-folder-group-header:hover { background: rgba(139,148,158,0.08); color: var(--text); }
+  .conv-folder-group-arrow {
+    grid-column: 1;
+    width: var(--conv-dot-col);
+    text-align: center;
+    font-size: 10px;
+    opacity: 0.7;
   }
   .conv-folder-group-chip {
-    flex-shrink: 0;
+    grid-column: 3;
+    justify-self: start;
+    min-width: 0;
     padding: 2px 9px;
     border-radius: 10px;
     font-size: 11px;
@@ -3078,15 +3143,18 @@
   .conv-folder-group-chip.is-orphan { opacity: 0.55; font-style: italic; }
   .conv-folder-group + .conv-folder-group {
     border-top: 1px solid var(--border);
-    margin-top: 8px;
-    padding-top: 6px;
+    margin-top: 5px;
+    padding-top: 3px;
   }
   .conv-folder-group-count {
-    flex-shrink: 0;
+    grid-column: 4;
+    justify-self: start;
     color: var(--text-muted);
     font-size: 10px;
     font-variant-numeric: tabular-nums;
   }
+  #convList .conv-folder-group.collapsed > .conv-item,
+  #convList .conv-folder-group.collapsed > .conv-gap-separator { display: none; }
   .conv-folder-group-divider {
     padding: 12px 12px 4px;
     font-size: 10px;
@@ -3127,13 +3195,15 @@
     background: var(--accent);
     color: #fff;
   }
-  .conv-inprogress-tools {
+  .conv-inprogress-tools,
+  .conv-ghissues-tools {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     margin-left: auto;
   }
-  .conv-inprogress-tools .conv-grouping-toggle { margin-left: 0; }
+  .conv-inprogress-tools .conv-grouping-toggle,
+  .conv-ghissues-tools .conv-grouping-toggle { margin-left: 0; }
   .archive-empty-state {
     padding: 24px 16px;
     text-align: center;
@@ -3235,10 +3305,12 @@
   /* Generic action button in the layout-agnostic topbar (Titles, View …).
      Matches the size of the repo picker so the row reads as one strip. */
   .ccc-topbar .topbar-btn {
+    display: inline-flex; align-items: center; gap: 5px;
     padding: 4px 8px; border-radius: 4px;
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
     font-size: 11px; cursor: pointer; white-space: nowrap;
     line-height: 1.4;
+    text-decoration: none;
   }
   .ccc-topbar .topbar-btn:hover { background: var(--surface-2); }
   .ccc-topbar .topbar-btn.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
@@ -3267,6 +3339,7 @@
   }
   .sidebar-header-actions .sh-btn:hover { background: var(--surface-2); color: var(--text); }
   .sidebar-header-actions .sh-btn.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
+  #convList .conv-ghissues-tools + .conv-ghissues-count { margin-left: 0; }
   .ccc-setup-banner {
     flex: 1; display: none; align-items: center;
     padding: 0 10px; border-left: 1px solid var(--border);
@@ -3596,8 +3669,8 @@
 
   /* Prominent "+ New session" button — sits in the slot the Vercel
      deploy panel used to occupy (just below the sidebar header). The
-     deploy indicator moved up into the header actions cluster as a
-     compact pill, freeing this slot for the primary CTA. */
+     deploy indicator now lives in the global topbar, freeing this slot
+     for the primary CTA. */
   .new-session-panel {
     border-bottom: 1px solid var(--border);
     padding: 10px 12px;
@@ -4221,7 +4294,7 @@
     <button id="kptWorktreesBtn" class="topbar-btn" title="Show all worktrees of this repo, with an indicator for those that have uncommitted changes." aria-label="Show worktrees">&#127807; Worktrees</button>
     <button id="statsBtn" class="topbar-btn" title="Usage stats — sessions, messages, tokens, streaks across every Claude Code transcript on this machine." aria-label="Show usage stats">&#128202; Stats</button>
     <button id="termToggleBtn" class="topbar-btn" title="Open the in-UI terminal panel — run quick shell commands (git status, npm test, ./script.sh) without leaving the page. One-shot per command, no interactive TTY (no vim/top)." aria-label="Toggle terminal panel">&#9000; Terminal</button>
-    <button id="historyBtn" class="topbar-btn" title="Search past Claude Code conversations across every project on this Mac (powered by the local claude-index). Shortcut: /" aria-label="Search past conversations">&#128269; History</button>
+    <a class="topbar-btn sh-btn-deploy" id="deployPill" target="_blank" rel="noopener" title="Vercel deploy — loading…" aria-label="Vercel deploy status"><span class="deploy-dot" id="deployDot"></span><span class="deploy-label" id="deployStateLabel">Vercel</span></a>
     <div id="setupBanner" class="ccc-setup-banner"></div>
   </div>
 
@@ -4229,8 +4302,8 @@
     <div class="sidebar-header">
       <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
       <div class="sidebar-header-actions">
-        <a class="sh-btn sh-btn-deploy" id="sidebarDeployPill" target="_blank" rel="noopener" title="Vercel deploy — loading…" aria-label="Vercel deploy status"><span class="deploy-dot" id="deployDot"></span><span class="deploy-label" id="deployStateLabel">Vercel</span></a>
         <select id="convFolderFilter" title="Filter conversations by folder"></select>
+        <button id="historyBtn" class="sh-btn" title="Search past Claude Code conversations across every project on this Mac (powered by the local claude-index). Shortcut: /" aria-label="Search past conversations">&#128269; History</button>
         <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Toggle Kanban board view" aria-label="Toggle Kanban board view"><span aria-hidden="true">&#9783;</span> Board</button>
       </div>
     </div>
@@ -5526,13 +5599,45 @@
   // lands (via clearOptimisticAgentIndicator) or after the 60s safety
   // timeout. Each entry: { ts, timer }.
   const _sendingSessions = new Map();
+  const _optimisticSessionTouches = new Map();
   const _SENDING_TIMEOUT_MS = 60000;
+  function _sessionRowMatches(c, sid) {
+    if (!c || !sid) return false;
+    return (c.session_id === sid) || (c.id === sid);
+  }
+  function _applyOptimisticTouchToRow(c, sid, ts) {
+    if (!_sessionRowMatches(c, sid)) return false;
+    const t = Number(ts) || Math.floor(Date.now() / 1000);
+    c.last_interacted = Math.max(Number(c.last_interacted || 0), t);
+    c.modified = Math.max(Number(c.modified || 0), t);
+    if ('mtime' in c) c.mtime = Math.max(Number(c.mtime || 0), t);
+    return true;
+  }
+  function _applyOptimisticTouches(rows) {
+    if (!Array.isArray(rows) || !_optimisticSessionTouches.size) return rows;
+    for (const c of rows) {
+      const sid = (c && (c.session_id || c.id)) || '';
+      const ts = _optimisticSessionTouches.get(sid);
+      if (ts) _applyOptimisticTouchToRow(c, sid, ts);
+    }
+    return rows;
+  }
+  function touchSessionOptimistically(sid) {
+    if (!sid) return;
+    const ts = Math.floor(Date.now() / 1000);
+    _optimisticSessionTouches.set(sid, ts);
+    for (const rows of [conversationsData, archiveData]) {
+      if (!Array.isArray(rows)) continue;
+      for (const c of rows) _applyOptimisticTouchToRow(c, sid, ts);
+    }
+  }
   function markSessionSending(sid) {
     if (!sid) return;
     const existing = _sendingSessions.get(sid);
     if (existing && existing.timer) clearTimeout(existing.timer);
     const timer = setTimeout(() => clearSessionSending(sid), _SENDING_TIMEOUT_MS);
     _sendingSessions.set(sid, { ts: Date.now(), timer });
+    touchSessionOptimistically(sid);
     if (typeof renderSidebar === 'function' && typeof filterConversations === 'function' && typeof $convSearch !== 'undefined' && $convSearch) {
       renderSidebar(filterConversations($convSearch.value));
     }
@@ -5634,13 +5739,14 @@
 
   const $convSessionId = document.getElementById('convSessionId');
 
-  function setCurrentSession(source, sid, cwd, cwdExists, spawnPid) {
+  function setCurrentSession(source, sid, cwd, cwdExists, spawnPid, repoPath) {
     currentSession = {
       id: sid || null,
       cwd: cwd || null,
       cwdExists: !!cwdExists,
       source: source,
       spawnPid: spawnPid || null,
+      repoPath: repoPath || null,
     };
     // Leaving new-session mode (sid set) drops the .is-new-session class
     // so the spawn-cwd picker hides and the workspace pill returns. The
@@ -6329,14 +6435,14 @@
       if (/^https?:\/\//i.test(url)) {
         return '<a href="' + url + '" target="_blank" rel="noopener">' + text + '</a>';
       }
-      return '<a href="#" class="path-link" data-path="' + url + '">' + text + '</a>';
+      return '<a role="button" tabindex="0" class="path-link" data-path="' + url + '">' + text + '</a>';
     });
     // Bare http(s) URLs
     s = s.replace(/(^|[\s(])((?:https?:\/\/)[^\s<>"')]+)/g,
       (m, pre, url) => pre + '<a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>');
     // Bare file paths (relative like docs/foo/bar.md or absolute /Users/...)
     s = s.replace(/(^|[\s(])((?:\/|(?:[\w.\-]+\/)+)[\w.\-/]+\.(?:md|ts|tsx|js|jsx|py|json|yaml|yml|css|html|sql|prisma|sh))\b/g,
-      (m, pre, p) => pre + '<a href="#" class="path-link" data-path="' + p + '">' + p + '</a>');
+      (m, pre, p) => pre + '<a role="button" tabindex="0" class="path-link" data-path="' + p + '">' + p + '</a>');
     return s;
   }
 
@@ -6344,7 +6450,7 @@
     if (/^https?:\/\//i.test(p)) {
       return '<a href="' + p + '" target="_blank" rel="noopener">' + p + '</a>';
     }
-    return '<a href="#" class="path-link" data-path="' + p + '">' + p + '</a>';
+    return '<a role="button" tabindex="0" class="path-link" data-path="' + p + '">' + p + '</a>';
   }
 
   // Copy button on fenced code blocks. Reads plain text from the <code>
@@ -6417,6 +6523,17 @@
     const cleanLast = last.split(/[?#]/)[0];
     return !/\.[a-zA-Z0-9]{1,8}$/.test(cleanLast);
   }
+  function _pathLinkSessionContext(el) {
+    try {
+      const paneEl = el && el.closest ? el.closest('.conv-pane[data-pane-id]') : null;
+      const pid = paneEl ? paneEl.getAttribute('data-pane-id') : '';
+      if (pid && typeof paneByPaneId === 'function') {
+        const pane = paneByPaneId(pid);
+        if (pane && pane.currentSession) return pane.currentSession;
+      }
+    } catch (_) {}
+    try { return currentSession || {}; } catch (_) { return {}; }
+  }
   document.addEventListener('click', async (ev) => {
     const a = ev.target.closest('a.path-link');
     if (!a) return;
@@ -6443,10 +6560,15 @@
     }
     a.style.opacity = '0.5';
     try {
+      const ctx = _pathLinkSessionContext(a);
+      const payload = { path: p };
+      if (ctx && ctx.id) payload.session_id = ctx.id;
+      if (ctx && ctx.cwd) payload.cwd = ctx.cwd;
+      if (ctx && (ctx.repoPath || ctx.repo_path)) payload.repo_path = ctx.repoPath || ctx.repo_path;
       const res = await fetch('/api/open', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ path: p, session_id: currentSession && currentSession.id }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => ({}));
       if (!data.ok) {
@@ -6458,6 +6580,13 @@
     } finally {
       setTimeout(() => { a.style.opacity = ''; }, 600);
     }
+  });
+  document.addEventListener('keydown', (ev) => {
+    const a = ev.target.closest && ev.target.closest('a.path-link[role="button"]');
+    if (!a) return;
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    ev.preventDefault();
+    a.click();
   });
 
   // ── Tabs ──
@@ -6654,7 +6783,7 @@
       firstUserMsgRendered: false,
       currentToolGroup: null,
       currentToolCount: 0,
-      currentSession: { id: null, cwd: null, cwdExists: false, source: null },
+      currentSession: { id: null, cwd: null, cwdExists: false, source: null, repoPath: null },
     };
   }
   const splitState = {
@@ -6966,7 +7095,8 @@
           real.session_id,
           real.session_cwd,
           real.session_cwd_exists,
-          real.spawn_pid
+          real.spawn_pid,
+          rowRepoPath(real) || selectedRepoPath()
         );
         // Reset the per-conv tail cursor so fetchConversationEvents pulls the
         // real JSONL from the start. Tool-grouping state must reset too —
@@ -9031,6 +9161,7 @@
 
   // Shared helper: inject text to a session via API
   async function injectToSession(sessionId, text, feedbackEl, clearInput) {
+    markSessionSending(sessionId);
     try {
       const res = await fetch('/api/inject-input', {
         method: 'POST',
@@ -9041,12 +9172,9 @@
       if (data.ok) {
         // Optimistic: bump local last_interacted so the card jumps to the top
         // and the "Last interacted just now" line appears without a refresh.
-        const c = conversationsData.find(x => (x.session_id || x.id) === sessionId);
-        if (c) {
-          c.last_interacted = Date.now() / 1000;
-          if (typeof renderSidebar === 'function' && typeof filterConversations === 'function' && typeof $convSearch !== 'undefined') {
-            renderSidebar(filterConversations($convSearch.value));
-          }
+        touchSessionOptimistically(sessionId);
+        if (typeof renderSidebar === 'function' && typeof filterConversations === 'function' && typeof $convSearch !== 'undefined') {
+          renderSidebar(filterConversations($convSearch.value));
         }
         if (clearInput) {
           const orig = clearInput.placeholder;
@@ -9064,9 +9192,11 @@
           setTimeout(() => { feedbackEl.textContent = orig; feedbackEl.style.color = ''; }, 1200);
         }
       } else {
+        clearSessionSending(sessionId);
         showInjectError(clearInput, feedbackEl, data.error || 'failed');
       }
     } catch (e) {
+      clearSessionSending(sessionId);
       showInjectError(clearInput, feedbackEl, String(e && e.message || e));
     }
   }
@@ -9082,6 +9212,7 @@
   }
 
   function renderConversationList(convs) {
+    _applyOptimisticTouches(convs);
     if (!convs.length) {
       $convList.innerHTML =
         '<div class="empty-state first-run" style="height:auto;padding:28px 20px;font-size:13px;flex-direction:column;gap:10px;align-items:flex-start;color:var(--text-muted);">'
@@ -9146,6 +9277,7 @@
       _sessionConvs.push(c);
     }
     const _renderRow = (c, opts = {}) => {
+      const isBacklogRow = c.source === 'backlog';
       const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
       let rawTitle = c.display_name || (cleanFirst ? firstSentenceOf(cleanFirst, 60) : '(untitled)');
       if (c.backlog_type === 'github' || c.issue_number || c.linked_issue) {
@@ -9166,8 +9298,10 @@
       }
       // _hideAskHtml is set by the archive renderer (#6) — subtitle is
       // redundant with the title in cross-folder mode and the user has
-      // explicitly opted not to see it. Single-repo rows don't set it.
-      const ask = c._hideAskHtml ? '' : askHtml;
+      // explicitly opted not to see it. Backlog cards also stay one-line:
+      // their first_message is usually the full GH issue body, which makes
+      // the sidebar repeat the title/content preview on every issue row.
+      const ask = (isBacklogRow || c._hideAskHtml) ? '' : askHtml;
       // Branch pill: shows where this session's edits actually land.
       //   1. effective_branch (tool-call inference) wins when present.
       //   2. else session_cwd_is_worktree → c.branch in worktree style.
@@ -9258,12 +9392,21 @@
         signals += '<span class="conv-signal gh-link" title="Linked to GitHub issue #' + escapeHtml(String(_linkedNum)) + '">#' + escapeHtml(String(_linkedNum)) + '</span>';
       }
       const _activityAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
+      const _rowActivityTs = c.sidecar_ts || c.last_interacted || c.modified || 0;
+      const _rowActivityAge = _rowActivityTs ? Math.max(0, Math.floor(Date.now() / 1000 - _rowActivityTs)) : 9999;
       const _midTurn = c.last_event_type === 'assistant' || (isCodexRow && c.last_event_type === 'user');
       const _isActiveSidecar = c.is_live && c.sidecar_status === 'active';
       const _knownActivityTool = c.sidecar_tool || c.pending_tool || '';
       const _hasLivePendingTool = c.is_live && !!c.pending_tool;
+      const _codexHasOpenTool = isCodexRow && !c.sidecar_status && !!c.pending_tool;
+      const _codexOpenTurn = isCodexRow
+        && !c.sidecar_status
+        && (_codexHasOpenTool
+          || (!!(c.last_event_type === 'user' || c.last_event_type === 'assistant')
+            && _rowActivityAge < (30 * 60)));
       const _isWip = !!c.gh_in_progress || !!c.pending_spawn
         || _hasLivePendingTool
+        || _codexOpenTurn
         || (_isActiveSidecar && (_activityAge < 300 || _midTurn || !c.sidecar_ts));
       if (_isWip && !liveToolHtml) {
         const wipTitle = _knownActivityTool
@@ -9271,7 +9414,7 @@
           : (c.gh_in_progress
               ? 'Linked GitHub issue is marked in progress'
               : (isCodexRow ? 'Codex is working' : 'Agent is working'));
-        const wipLabel = _knownActivityTool || 'WIP';
+        const wipLabel = _codexOpenTurn ? 'WIP' : (_knownActivityTool || 'WIP');
         signals += '<span class="conv-signal activity-working" title="' + escapeHtml(wipTitle) + '">' + escapeHtml(wipLabel) + '</span>';
       }
       if (c.source === 'pkood') {
@@ -9324,7 +9467,6 @@
         ? '<button class="conv-merge-btn" data-role="merge" title="' + escapeHtml(_mergeTitle) + '">&#128256;</button>'
         : '';
 
-      const isBacklogRow = c.source === 'backlog';
       let startBtn = '';
       let archiveBtn;
       if (isBacklogRow) {
@@ -9350,6 +9492,14 @@
           + '<span>' + formatSize(c.size) + '</span>'
           + (sourceBadge ? '<span class="sep">&middot;</span>' + sourceBadge : '')
           + '</span>';
+      const rowMetaHtml = (rowSizeHtml || liveToolHtml || signals || branch || engineIcon)
+        ? '<span class="conv-row-meta">'
+          + (rowSizeHtml || '<span class="conv-meta-inline"></span>')
+          + '<span class="conv-status-slot">' + liveToolHtml + signals + '</span>'
+          + '<span class="conv-branch-slot">' + branch + '</span>'
+          + '<span class="conv-engine-slot">' + engineIcon + '</span>'
+          + '</span>'
+        : '';
 
       // Suppressed when the row sits under a folder
       // group header that already labels the folder — chip would be noise.
@@ -9387,7 +9537,8 @@
         ? '<div class="conv-history-snippet">' + c._historySnippet + '</div>'
         : '';
 
-      return '<div class="conv-item' + active + (isCodexRow ? ' is-codex' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
+      const groupedRowClass = opts.suppressFolderChip ? ' is-grouped-row' : '';
+      return '<div class="conv-item' + active + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + '<div class="conv-main-row">'
@@ -9397,13 +9548,7 @@
             + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to open; click again to rename">' + escapeHtml(title) + '</div>'
             + historyBadgeHtml
             + pinnedHtml
-            + '<span class="conv-row-meta">'
-            +   liveToolHtml
-            +   rowSizeHtml
-            +   signals
-            +   branch
-            +   engineIcon
-            + '</span>'
+            + rowMetaHtml
             + '<span class="conv-row-actions">' + mergeBtn + startBtn + archiveBtn + '</span>'
           + '</div>'
         + '</div>'
@@ -9464,6 +9609,23 @@
       }
       return separator + _renderRow(c, opts);
     }).join('');
+    const _folderGroupStorageKey = (section, key) =>
+      'ccc-folder-group-collapsed:' + section + ':' + String(key || '').slice(0, 180);
+    const _isFolderGroupCollapsed = (section, key) => {
+      try { return localStorage.getItem(_folderGroupStorageKey(section, key)) === '1'; }
+      catch (_) { return false; }
+    };
+    const _folderGroupHeaderHtml = (section, folder, count, hue, orphan, collapseKey, extraAttrs = '') => {
+      const collapsed = _isFolderGroupCollapsed(section, collapseKey);
+      return '<div class="conv-folder-group-header" style="--chip-hue:' + hue + ';"'
+        + ' role="button" tabindex="0" data-role="folder-group-toggle"'
+        + ' data-collapse-key="' + escapeHtml(_folderGroupStorageKey(section, collapseKey)) + '"'
+        + ' aria-expanded="' + (!collapsed) + '"' + extraAttrs + '>'
+        + '<span class="conv-folder-group-arrow">' + (collapsed ? '▸' : '▾') + '</span>'
+        + '<span class="conv-folder-group-chip' + orphan + '">' + escapeHtml(folder) + '</span>'
+        + '<span class="conv-folder-group-count">' + count + '</span>'
+        + '</div>';
+    };
 
     let _activeRowsHtml;
     if (_shouldGroupByFolder) {
@@ -9487,14 +9649,13 @@
         // a dropped row to. Empty when the folder couldn't be resolved
         // (orphan slug); drop is suppressed in that case.
         const dropPath = cards[0].folder_path || '';
-        return '<div class="conv-folder-group">'
-          + '<div class="conv-folder-group-header" style="--chip-hue:' + hue + ';"'
-          + ' data-folder-path="' + escapeHtml(dropPath) + '"'
-          + ' data-folder-label="' + escapeHtml(folder) + '">'
-          + '<span class="conv-folder-group-chip' + orphan + '">' + escapeHtml(folder) + '</span>'
-          + '<span class="conv-folder-group-count">' + cards.length + '</span>'
-          + '</div>'
-          + _flatRowsWithSeparators(cards, { suppressFolderChip: true })
+        const collapseKey = dropPath || folder;
+        const collapsed = _isFolderGroupCollapsed('inprogress', collapseKey);
+        const headerAttrs = ' data-folder-path="' + escapeHtml(dropPath) + '"'
+          + ' data-folder-label="' + escapeHtml(folder) + '"';
+        return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
+          + _folderGroupHeaderHtml('inprogress', folder, cards.length, hue, orphan, collapseKey, headerAttrs)
+          + cards.map(c => _renderRow(c, { suppressFolderChip: true })).join('')
           + '</div>';
       }).join('');
       _activeRowsHtml = _isSpecificFolderFilter
@@ -9577,12 +9738,53 @@
     if (_ghIssueConvs.length > 0) {
       const _ghCollapsed = localStorage.getItem('ccc-ghissues-collapsed') === '1';
       const _ghArrow = _ghCollapsed ? '▸' : '▾';
-      const _ghRows = _ghIssueConvs.map(c => _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter })).join('');
+      const _ghHasFolderChips = _ghIssueConvs.some(c => c.folder_label_chip);
+      const _ghGrouping = (() => {
+        try { return localStorage.getItem('ccc-ghissues-grouping') || 'project'; }
+        catch (_) { return 'project'; }
+      })();
+      const _ghShouldGroupByFolder = _ghHasFolderChips && _ghGrouping !== 'time' && !_isSpecificFolderFilter;
+      let _ghRows;
+      if (_ghShouldGroupByFolder) {
+        const _byFolder = new Map();
+        for (const c of _ghIssueConvs) {
+          const key = c.folder_label_chip || c.folder_path || '(unknown)';
+          if (!_byFolder.has(key)) _byFolder.set(key, []);
+          _byFolder.get(key).push(c);
+        }
+        const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
+          const aMax = a[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
+          const bMax = b[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
+          return bMax - aMax;
+        });
+        _ghRows = _folderEntries.map(([folder, cards]) => {
+          const hue = (cards[0].folder_chip_hue | 0);
+          const orphan = cards[0].folder_chip_orphan ? ' is-orphan' : '';
+          const collapseKey = cards[0].folder_path || folder;
+          const collapsed = _isFolderGroupCollapsed('ghissues', collapseKey);
+          return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
+            + _folderGroupHeaderHtml('ghissues', folder, cards.length, hue, orphan, collapseKey)
+            + cards.map(c => _renderRow(c, { suppressFolderChip: true })).join('')
+            + '</div>';
+        }).join('');
+      } else {
+        _ghRows = _flatRowsWithSeparators(_ghIssueConvs, { suppressFolderChip: _isSpecificFolderFilter });
+      }
+      const _ghGroupingToggle = _ghHasFolderChips
+        ? '<span class="conv-grouping-toggle" data-role="ghissues-grouping-toggle">'
+            + '<span class="grouping-opt' + (_ghGrouping !== 'time' ? ' is-active' : '') + '" data-grouping="project">by project</span>'
+            + '<span class="grouping-opt' + (_ghGrouping === 'time' ? ' is-active' : '') + '" data-grouping="time">by time</span>'
+          + '</span>'
+        : '';
+      const _ghTools = _ghGroupingToggle
+        ? '<span class="conv-ghissues-tools">' + _ghGroupingToggle + '</span>'
+        : '';
       _ghIssuesHtml =
         '<div class="conv-ghissues-section' + (_ghCollapsed ? ' collapsed' : '') + '" data-role="ghissues-section">'
         + '<button type="button" class="conv-ghissues-header" data-role="ghissues-toggle" aria-expanded="' + (!_ghCollapsed) + '">'
         +   '<span class="conv-ghissues-arrow">' + _ghArrow + '</span>'
         +   '<span class="conv-ghissues-label">GH Issues</span>'
+        +   _ghTools
         +   '<span class="conv-ghissues-count">' + _ghIssueConvs.length + '</span>'
         + '</button>'
         + '<div class="conv-ghissues-list">' + _ghRows + '</div>'
@@ -9629,6 +9831,7 @@
     const $ghIssuesToggle = $convList.querySelector('[data-role="ghissues-toggle"]');
     if ($ghIssuesToggle) {
       $ghIssuesToggle.addEventListener('click', (ev) => {
+        if (ev.target.closest('[data-role="ghissues-grouping-toggle"]')) return;
         ev.stopPropagation();
         const section = $ghIssuesToggle.closest('[data-role="ghissues-section"]');
         if (!section) return;
@@ -9637,6 +9840,22 @@
         const arrowEl = $ghIssuesToggle.querySelector('.conv-ghissues-arrow');
         if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         $ghIssuesToggle.setAttribute('aria-expanded', String(!wasCollapsed));
+      });
+    }
+    const $ghGroupingToggle = $convList.querySelector('[data-role="ghissues-grouping-toggle"]');
+    if ($ghGroupingToggle) {
+      $ghGroupingToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const opt = ev.target.closest('[data-grouping]');
+        if (!opt) return;
+        const value = opt.getAttribute('data-grouping') === 'time' ? 'time' : 'project';
+        try { localStorage.setItem('ccc-ghissues-grouping', value); } catch (_) {}
+        if (typeof archiveMode !== 'undefined' && archiveMode) {
+          const $search = document.getElementById('convSearch');
+          renderArchiveList($search ? $search.value : '');
+        } else if (typeof loadConversationList === 'function') {
+          loadConversationList();
+        }
       });
     }
     // Toggle handler for the Ready to merge section header.
@@ -9708,6 +9927,27 @@
         }
       });
     }
+    $convList.querySelectorAll('[data-role="folder-group-toggle"]').forEach(hdr => {
+      const toggleFolderGroup = (ev) => {
+        ev.stopPropagation();
+        const group = hdr.closest('.conv-folder-group');
+        if (!group) return;
+        const wasCollapsed = group.classList.toggle('collapsed');
+        const key = hdr.getAttribute('data-collapse-key') || '';
+        if (key) {
+          try { localStorage.setItem(key, wasCollapsed ? '1' : '0'); } catch (_) {}
+        }
+        const arrowEl = hdr.querySelector('.conv-folder-group-arrow');
+        if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
+        hdr.setAttribute('aria-expanded', String(!wasCollapsed));
+      };
+      hdr.addEventListener('click', toggleFolderGroup);
+      hdr.addEventListener('keydown', (ev) => {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        ev.preventDefault();
+        toggleFolderGroup(ev);
+      });
+    });
     $convList.querySelectorAll('.conv-item').forEach(el => {
       el.addEventListener('click', (ev) => {
         // Ignore clicks that started the inline editor, archive button,
@@ -11011,6 +11251,8 @@
     const paneIdx = paneIndexByPaneId(paneId);
     const pane = paneByPaneId(paneId);
     if (!pane) return;
+    const selectedConv = (conversationsData || []).find(x => x.id === id) || {};
+    const source = sessionSourceByConv[id] || selectedConv.source || 'interactive';
     // Make this pane active so the existing globals (which proxy through
     // splitState.activeIndex) target the right pane while we run.
     splitState.activeIndex = paneIdx;
@@ -11038,10 +11280,12 @@
     // Kick off the session-activity-timeline fetch in parallel — render
     // happens after sticky header lands (or this fetch returns, whichever
     // is later, via renderSessionTimelineIntoSticky).
-    const timelineSid = (selectedRow || {}).session_id || id;
-    fetchSessionTimeline(timelineSid);
-    fetchSessionWorkspace(timelineSid);
-    fetchSessionUsage(timelineSid);
+    if (source !== 'backlog') {
+      const timelineSid = (selectedRow || selectedConv || {}).session_id || id;
+      fetchSessionTimeline(timelineSid);
+      fetchSessionWorkspace(timelineSid);
+      fetchSessionUsage(timelineSid);
+    }
     const $view = getConvView();
     $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading...</div>';
     // Update active state in sidebar (list view)
@@ -11069,16 +11313,20 @@
         });
       };
     }
-    const source = sessionSourceByConv[id] || 'interactive';
     const paneEl = document.querySelector(`.conv-pane[data-pane-id="${paneId}"]`);
     if (paneEl) paneEl.classList.toggle('is-codex-session', source === 'codex');
-    setCurrentSession(
-      source,
-      sessionIdByConv[id],
-      sessionCwdByConv[id],
-      sessionCwdExistsByConv[id],
-      sessionSpawnPidByConv[id]
-    );
+    if (source === 'backlog') {
+      setCurrentSession(null, null, null, false, null);
+    } else {
+      setCurrentSession(
+        source,
+        sessionIdByConv[id],
+        sessionCwdByConv[id],
+        sessionCwdExistsByConv[id],
+        sessionSpawnPidByConv[id],
+        rowRepoPath(selectedConv) || selectedRepoPath()
+      );
+    }
     // Update split panel input bar visibility
     updateSplitInputBar();
     // Update split panel toolbar buttons
@@ -11111,12 +11359,12 @@
       stopPkoodTailPoller();
       if ($pkoodKillBtn) $pkoodKillBtn.style.display = 'none';
       await fetchConversationEvents(paneId);
-      startConvStream(paneId);
+      if (source !== 'backlog') startConvStream(paneId);
       // Block-level streaming from the spawn log — only succeeds if the
       // backend finds a CCC-spawned headless process for this session.
       // No-op for externally launched, IDE-launched, or pkood sessions.
       const sid = sessionIdByConv[id] || '';
-      if (sid && source !== 'codex') startSpawnStream(sid);
+      if (sid && source !== 'codex' && source !== 'backlog') startSpawnStream(sid);
     }
   }
 
@@ -11816,8 +12064,9 @@
     // session JSONL — /api/conversations/<id> returns 404. Render the
     // issue body directly from the card's already-loaded fields so the
     // detail pane isn't a permanent "Loading…".
-    if (id.startsWith('backlog-')) {
-      const c = (conversationsData || []).find(x => x.id === id);
+    const backlogCard = (conversationsData || []).find(x => x.id === id && x.source === 'backlog');
+    if (backlogCard || id.startsWith('backlog-')) {
+      const c = backlogCard || (conversationsData || []).find(x => x.id === id);
       if (c) {
         $view.innerHTML = _renderBacklogDetail(c);
         return;
@@ -11905,11 +12154,15 @@
     }
     let issueLink = '';
     if (c.issue_number) {
-      // gh CLI gives us nameWithOwner via /api/config; the link is best-effort
-      // — falling back to a relative #<n> if we don't have a repo slug yet.
-      const repo = (window._cccConfig && window._cccConfig.repo) || '';
-      if (repo) {
-        issueLink = '<a href="https://github.com/' + escapeHtml(repo) + '/issues/' + escapeHtml(String(c.issue_number)) + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-size:12px;margin-left:auto;">View on GitHub ↗</a>';
+      if (c.issue_url) {
+        issueLink = '<a href="' + escapeHtml(c.issue_url) + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-size:12px;margin-left:auto;">View on GitHub ↗</a>';
+      } else {
+        // Single-repo backlog cards still rely on the active repo slug
+        // from /api/config. Cross-repo cards carry issue_url directly.
+        const repo = (window._cccConfig && window._cccConfig.repo) || '';
+        if (repo) {
+          issueLink = '<a href="https://github.com/' + escapeHtml(repo) + '/issues/' + escapeHtml(String(c.issue_number)) + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-size:12px;margin-left:auto;">View on GitHub ↗</a>';
+        }
       }
     }
     const created = c.issue_created_at
@@ -13600,7 +13853,7 @@
 
   // ── Vercel deploy status ──
   const $deployDot = document.getElementById('deployDot');
-  const $deployPill = document.getElementById('sidebarDeployPill');
+  const $deployPill = document.getElementById('deployPill');
   const $deployLabel = document.getElementById('deployStateLabel');
   // Latest production deploy URL — stashed so the inline-code path-link
   // handler can open URL-shaped paths (`/api/foo/bar`) on the right
@@ -13830,11 +14083,12 @@
         id,
         session_id: id,
         display_name: `#${number}: ${title}`,
-        first_message: (issue.body || '').slice(0, 200),
+        first_message: issue.body || '',
         name_overridden: false,
         source: 'backlog',
         backlog_type: 'github',
         issue_number: number,
+        issue_url: issue.url || '',
         issue_labels: labels,
         issue_created_at: createdAtStr,
         issue_state: issue.state || 'OPEN',
@@ -14292,6 +14546,9 @@
         sidecar_ts: c.sidecar_ts || 0,
         sidecar_in_flight: !!c.sidecar_in_flight,
         sidecar_has_writes: !!c.sidecar_has_writes,
+        pending_tool: c.pending_tool || null,
+        pending_file: c.pending_file || null,
+        last_event_type: c.last_event_type || null,
         needs_approval: !!c.needs_approval,
         needs_approval_message: c.needs_approval_message || '',
         source: c.source || 'interactive',
@@ -14362,9 +14619,9 @@
     // Also keep conversationsData in sync so downstream code (selection
     // restore, etc.) sees a non-empty list while in archive mode. This
     // gets reset on toggle-off via loadConversationList().
-    conversationsData = shaped;
+    conversationsData = applyConvSort(_applyOptimisticTouches(shaped));
 
-    renderConversationList(shaped);
+    renderConversationList(conversationsData);
   }
 
   async function setArchiveMode(on, opts = {}) {
@@ -15295,6 +15552,8 @@
             pendingDiv.innerHTML = '<span class="label">User</span>'
               + '<div class="user-msg">' + escapeHtml(text) + '</div>';
             $view.appendChild(pendingDiv);
+            showOptimisticAgentIndicator($view);
+            if (currentSession.id) markSessionSending(currentSession.id);
             $view.scrollTop = $view.scrollHeight;
             _pendingSends.push({ text, element: pendingDiv });
           }

@@ -11,7 +11,7 @@ Usage:
     PORT=9000 ./run.sh       # custom port
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 import ast
 import base64
@@ -94,6 +94,123 @@ def _categorize_file_target(target):
     # os.path.splitext handles trailing-dot / no-dot cleanly.
     _, ext = os.path.splitext(s)
     return FILE_EXT_TO_CATEGORY.get(ext.lower())
+
+
+def _path_is_within(child, parent):
+    try:
+        child_p = Path(child).expanduser().resolve(strict=False)
+        parent_p = Path(parent).expanduser().resolve(strict=False)
+    except (OSError, RuntimeError):
+        return False
+    return child_p == parent_p or parent_p in child_p.parents
+
+
+def _open_target_path(target):
+    """Normalize a transcript path token before resolving it on disk."""
+    s = str(target or "").strip()
+    for sep in ("?", "#"):
+        if sep in s:
+            s = s.split(sep, 1)[0]
+    # Common chat references use file.md:12 or file.md:12:4. Finder cannot
+    # jump to a line, so reveal the file itself.
+    m = re.match(r"^(.+\.[A-Za-z0-9]{1,12})(?::\d+(?::\d+)?)$", s)
+    if m:
+        s = m.group(1)
+    return s
+
+
+def _resolve_open_target(target, *, session_id=None, cwd=None, repo_path=None):
+    """Resolve /api/open targets without widening the macOS-open sandbox.
+
+    Historical behavior allowed only the active repo/log dir. Inline
+    transcript links often point at files relative to the session cwd. Those
+    cwd-relative files are allowed only as Finder reveals and only for the
+    same whitelisted file extensions used by /api/reveal-file.
+    """
+    target = _open_target_path(target)
+    if not target:
+        return {"ok": False, "error": "missing path", "status": 400}
+
+    session_roots = []
+
+    def add_session_root(root):
+        if not root:
+            return
+        try:
+            rp = Path(root).expanduser().resolve(strict=False)
+        except (OSError, RuntimeError):
+            return
+        if rp.is_dir() and all(rp != existing for existing in session_roots):
+            session_roots.append(rp)
+
+    try:
+        ctx = require_repo_context(
+            {"session_id": session_id, "cwd": cwd, "repo_path": repo_path},
+            allow_session=True,
+        )
+    except RepoContextError as e:
+        return e.as_payload() | {"status": e.status}
+
+    repo_root = Path(ctx["repo_path"]).expanduser().resolve(strict=False)
+    log_root = repo_log_dir(ctx["repo_path"]).resolve(strict=False)
+    add_session_root(ctx.get("cwd"))
+    found_cwd = find_session_cwd(session_id) if session_id else None
+    add_session_root(found_cwd)
+    # Prefer the server-derived cwd for known sessions. The client-provided cwd
+    # covers spawned / external rows that do not have a Claude JSONL lookup.
+    if cwd and (not found_cwd or (_path_is_within(found_cwd, cwd) and _path_is_within(cwd, found_cwd))):
+        add_session_root(cwd)
+    elif cwd and not session_id:
+        add_session_root(cwd)
+
+    candidates = []
+    if os.path.isabs(target):
+        candidates.append(Path(target).expanduser())
+    else:
+        for root in session_roots:
+            candidates.append(root / target)
+        candidates.append(repo_root / target)
+
+    resolved = None
+    tried = []
+    for candidate in candidates:
+        tried.append(str(candidate))
+        if candidate.exists():
+            try:
+                resolved = candidate.resolve(strict=False)
+            except (OSError, RuntimeError):
+                resolved = candidate
+            break
+
+    if not resolved:
+        return {"ok": False, "error": "not found", "tried": tried, "status": 404}
+
+    core_sandbox = _path_is_within(resolved, repo_root) or _path_is_within(resolved, log_root)
+    session_sandbox = any(_path_is_within(resolved, root) for root in session_roots)
+    if not core_sandbox and not session_sandbox:
+        return {
+            "ok": False,
+            "error": "path outside repo/session sandbox",
+            "path": str(resolved),
+            "status": 403,
+        }
+    if not core_sandbox and not _categorize_file_target(str(resolved)):
+        ext = os.path.splitext(str(resolved))[1].lower()
+        return {
+            "ok": False,
+            "error": "extension not allowed outside repo/log dir",
+            "ext": ext,
+            "path": str(resolved),
+            "status": 403,
+        }
+
+    return {
+        "ok": True,
+        "path": str(resolved),
+        "core_sandbox": core_sandbox,
+        "session_sandbox": session_sandbox,
+        "tried": tried,
+    }
 
 
 _SESSION_LOAD_STATUS_LOCK = threading.Lock()
@@ -4688,7 +4805,7 @@ def _fetch_one_repo_issues(repo_path):
             try:
                 open_out = subprocess.run(
                     ["gh", "issue", "list", "--state", "open", "--limit", "100",
-                     "--json", "number,title,labels,body,createdAt,updatedAt,state,stateReason"],
+                     "--json", "number,title,labels,body,createdAt,updatedAt,state,stateReason,url"],
                     capture_output=True, text=True, timeout=10, cwd=str(repo_path),
                 )
                 if open_out.returncode == 0:
@@ -4710,7 +4827,7 @@ def _fetch_one_repo_issues(repo_path):
                 try:
                     closed_out = subprocess.run(
                         ["gh", "issue", "list", "--state", "closed", "--limit", "60",
-                         "--json", "number,title,labels,body,createdAt,updatedAt,closedAt,state,stateReason"],
+                         "--json", "number,title,labels,body,createdAt,updatedAt,closedAt,state,stateReason,url"],
                         capture_output=True, text=True, timeout=10, cwd=str(repo_path),
                     )
                     if closed_out.returncode == 0:
@@ -6787,9 +6904,53 @@ def _codex_event_timestamp(ev):
 def _codex_command_signals(cmd):
     """Return edit/commit/push/pr/external-cd flags for a shell command."""
     cmd = cmd or ""
+    worktree_path = None
+    worktree_branch = None
     head_segments = []
     for seg in re.split(r"\s*(?:&&|\|\||\||;|\n)\s*", cmd):
         head_segments.append(re.split(r"\s+(?:-m\b|--message\b)", seg, maxsplit=1)[0])
+        try:
+            toks = shlex.split(seg)
+        except ValueError:
+            toks = seg.split()
+        for i, tok in enumerate(toks):
+            if tok != "git":
+                continue
+            j = i + 1
+            while j < len(toks):
+                opt = toks[j]
+                if opt in ("-C", "-c", "--git-dir", "--work-tree") and j + 1 < len(toks):
+                    j += 2
+                    continue
+                if opt.startswith("-"):
+                    j += 1
+                    continue
+                break
+            if j + 1 >= len(toks) or toks[j:j + 2] != ["worktree", "add"]:
+                continue
+            branch = None
+            path = None
+            k = j + 2
+            while k < len(toks):
+                part = toks[k]
+                if part in ("-b", "-B") and k + 1 < len(toks):
+                    branch = toks[k + 1]
+                    k += 2
+                    continue
+                if part in ("--reason", "--lock") and k + 1 < len(toks):
+                    k += 2
+                    continue
+                if part == "--":
+                    k += 1
+                    continue
+                if part.startswith("-"):
+                    k += 1
+                    continue
+                path = part
+                break
+            if path and (path.startswith("/") or path.startswith("~")):
+                worktree_path = os.path.expanduser(path)
+                worktree_branch = branch or worktree_branch
     head = "\n".join(head_segments)
     git_subcmd = re.compile(
         r"\bgit\b(?:\s+(?:-[Cc]\s+\S+|--\S+|-[A-Za-z]\S*)){0,8}\s+(commit|push)\b"
@@ -6805,6 +6966,8 @@ def _codex_command_signals(cmd):
         "push": "push" in subcommands,
         "pr": bool(re.search(r"\bgh\s+pr\s+create\b", head)),
         "external_cd": bool(re.search(r"(^|[;&|]\s*)cd\s+[/~]|\bgit\s+-C\s+", cmd)),
+        "worktree_path": worktree_path,
+        "worktree_branch": worktree_branch,
     }
 
 
@@ -7004,6 +7167,10 @@ def _extract_codex_tail_meta(path):
                             meta["last_push_pos"] = pos
                         if signals["external_cd"]:
                             meta["has_external_cd"] = True
+                        if signals.get("worktree_path"):
+                            meta["tail_worktree_path"] = signals["worktree_path"]
+                        if signals.get("worktree_branch"):
+                            meta["tail_branch"] = signals["worktree_branch"]
                         if call_id:
                             pending_calls[call_id] = {"cmd": cmd, "pr": signals["pr"]}
                     elif call_id:
@@ -13153,57 +13320,42 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except Exception as e:
                         self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/open":
-            # SECURITY: macOS `open` will execute scripts/apps. We MUST clamp
-            # the target to a known-safe sandbox or this is RCE-as-a-feature.
-            # Accept only paths that resolve under the request's concrete repo
-            # or that repo's log dir.
+            # SECURITY: macOS `open` can execute scripts/apps. Keep launch
+            # behavior clamped to the concrete repo/log dir. Session-cwd transcript
+            # links are allowed only as Finder reveals and only for the same
+            # safe document/media extensions accepted by /api/reveal-file.
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
-            target = (payload.get("path") or "").strip()
-            if not target:
-                self.send_json({"ok": False, "error": "missing path"}, 400)
+            if not isinstance(payload, dict):
+                payload = {}
+            result = _resolve_open_target(
+                payload.get("path"),
+                session_id=str(payload.get("session_id") or "").strip(),
+                cwd=str(payload.get("cwd") or "").strip(),
+                repo_path=str(payload.get("repo_path") or "").strip(),
+            )
+            status = int(result.pop("status", 200))
+            if not result.get("ok"):
+                self.send_json(result, status)
+            elif payload.get("launch") and not result.get("core_sandbox"):
+                self.send_json({
+                    "ok": False,
+                    "error": "launch is only allowed under the repo/log dir",
+                    "path": result.get("path"),
+                }, 403)
             else:
                 try:
-                    ctx = require_repo_context(payload, allow_session=True)
-                except RepoContextError as e:
-                    self.send_json(e.as_payload(), e.status)
-                    return
-                # Build candidate list: absolute path as-is, or relative to repo_path.
-                candidates = [target] if os.path.isabs(target) else [str(Path(ctx["repo_path"]) / target)]
-                resolved = next((p for p in candidates if os.path.exists(p)), None)
-                if not resolved:
-                    self.send_json({"ok": False, "error": "not found", "tried": candidates}, 404)
-                else:
-                    # Sandbox check: resolved path must live under repo or repo log dir.
-                    try:
-                        rp = Path(resolved).resolve(strict=False)
-                        allowed_roots = [Path(ctx["repo_path"]).resolve(), repo_log_dir(ctx["repo_path"]).resolve()]
-                        in_sandbox = any(
-                            str(rp).startswith(str(root) + os.sep) or rp == root
-                            for root in allowed_roots
-                        )
-                    except OSError:
-                        in_sandbox = False
-                    if not in_sandbox:
-                        self.send_json({
-                            "ok": False,
-                            "error": "path outside repo/session sandbox",
-                            "path": resolved,
-                        }, 403)
-                    else:
-                        try:
-                            # `open -R` reveals in Finder rather than launching —
-                            # safer default. Add a `launch: true` body field if
-                            # callers ever need launch behaviour back.
-                            cmd = ["open", "-R", str(rp)] if not payload.get("launch") else ["open", str(rp)]
-                            subprocess.Popen(cmd)
-                            self.send_json({"ok": True, "path": str(rp)})
-                        except Exception as e:
-                            self.send_json({"ok": False, "error": str(e)}, 500)
+                    rp = Path(result["path"])
+                    # `open -R` reveals in Finder rather than launching.
+                    cmd = ["open", "-R", str(rp)] if not payload.get("launch") else ["open", str(rp)]
+                    subprocess.Popen(cmd)
+                    self.send_json({"ok": True, "path": str(rp)})
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/sessions/spawn":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

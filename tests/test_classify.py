@@ -163,6 +163,36 @@ class TestExtractCodexTailMetaSummary(unittest.TestCase):
         self.assertEqual(meta["tail_branch"], "feat/codex-parity")
         self.assertEqual(meta["tail_worktree_path"], str(worktree))
 
+    def test_git_worktree_add_sets_branch_and_worktree_fields(self):
+        server = _fresh_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            worktree = Path(tmp) / "demo-repo-wt-row-state"
+            path = Path(tmp) / "rollout.jsonl"
+            path.write_text(
+                json.dumps({
+                    "timestamp": "2026-05-02T12:00:00Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "exec_command",
+                        "arguments": json.dumps({
+                            "cmd": (
+                                "git worktree add -b "
+                                f"feat/row-state {worktree} main"
+                            ),
+                        }),
+                        "call_id": "call_worktree",
+                    },
+                }) + "\n",
+                encoding="utf-8",
+            )
+
+            meta = server._extract_codex_tail_meta(path)
+
+        self.assertEqual(meta["tail_branch"], "feat/row-state")
+        self.assertEqual(meta["tail_worktree_path"], str(worktree))
+        self.assertEqual(meta["pending_tool"], "exec_command")
+
 
 class TestFindConversationsOnMockFixture(unittest.TestCase):
     """find_conversations() should locate the fixture session and parse its
