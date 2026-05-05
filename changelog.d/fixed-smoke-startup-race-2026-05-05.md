@@ -1,0 +1,1 @@
+- CI: smoke step now polls `/api/version` for readiness instead of a fixed 3s sleep, eliminating connection-refused flakes on slow runners.
