@@ -12387,10 +12387,24 @@ def extract_session_usage(session_id):
 
 # ---------------------------------------------------------------------------
 # Conversation history search — read-only window onto the separate `claude-index`
-# tool. CCC never writes to ~/.claude-index/index.db; the FTS5 mirror there has
-# triggers that keep itself in sync, and an accidental write here would corrupt
-# them. We open with `mode=ro` so even a stray INSERT raises.
+# tool. CCC drives the indexer in-process via the bundled _history_index
+# package; the on-disk file lives at ~/.claude-index/index.db so a parallel
+# standalone claude-index install can coexist on the same data.
 # ---------------------------------------------------------------------------
+
+# Vendored indexer (see _history_index/). Lazy-imported per-call where
+# semantic search is requested so a fresh CCC install without
+# sqlite-vec / Ollama still loads the rest of the server cleanly.
+try:
+    from _history_index import db as _hi_db
+    from _history_index import search as _hi_search
+    from _history_index.manager import indexer as _hi_indexer
+    _HI_AVAILABLE = True
+except Exception:
+    _HI_AVAILABLE = False
+    _hi_db = None  # type: ignore
+    _hi_search = None  # type: ignore
+    _hi_indexer = None  # type: ignore
 
 _HISTORY_INDEX_PATH = Path.home() / ".claude-index" / "index.db"
 _history_conn = None
@@ -12503,12 +12517,29 @@ def _open_history_index():
         except sqlite3.OperationalError:
             return None
         conn.row_factory = sqlite3.Row
+        # Best-effort load of sqlite-vec on this read-only handle so semantic
+        # search can use it. Silent no-op if the extension isn't installed —
+        # the read path then degrades to BM25 only, which is the correct
+        # behavior for users without semantic set up.
+        if _hi_db is not None:
+            try:
+                _hi_db._try_load_vec(conn)
+            except Exception:
+                pass
         _history_conn = conn
         return conn
 
 
-def search_conversation_history(query, limit=20, cwd_like=None, since=None):
-    """BM25-ranked FTS5 search over the indexed conversation history.
+def search_conversation_history(query, limit=20, cwd_like=None, since=None, semantic=False):
+    """Search the indexed conversation history.
+
+    semantic=False (default): BM25 over FTS5 with auto OR-rewrite. Results
+        get _source='bm25'.
+    semantic=True: hybrid retrieval via the vendored _history_index.search —
+        top-K BM25 ∪ top-K vec, fused via Reciprocal Rank Fusion. Each result
+        is tagged _source ∈ {'bm25', 'vec', 'fused'} so the UI can
+        differentiate ('history' vs 'semantic history' badge). Falls back
+        to BM25 transparently if sqlite-vec or Ollama is unavailable.
 
     Returns a dict {results: [...]} on success, or
     {error: str, results: []} when the index is missing or a query is
@@ -12519,10 +12550,43 @@ def search_conversation_history(query, limit=20, cwd_like=None, since=None):
         return {
             "error": (
                 "Conversation index not found at ~/.claude-index/index.db. "
-                "Install and run the claude-index tool to build it."
+                "Click the History toggle to build it."
             ),
             "results": [],
         }
+    try:
+        limit = max(1, min(int(limit), 100))
+    except (TypeError, ValueError):
+        limit = 20
+
+    # Semantic path — delegate to the vendored search, which handles RRF +
+    # _source tagging + graceful BM25 fallback when vec/Ollama is missing.
+    if semantic and _hi_search is not None:
+        try:
+            rows = _hi_search.search(
+                conn,
+                query,
+                limit=limit,
+                cwd_like=cwd_like,
+                since=since,
+                semantic=True,
+            )
+        except sqlite3.OperationalError as e:
+            return {"error": f"search failed: {e}", "results": []}
+        results = []
+        for row in rows:
+            d = dict(row) if not isinstance(row, dict) else row
+            # The vendored BM25 wraps highlights in «» (claude-index CLI
+            # convention); CCC's UI expects <mark>. Translate.
+            sn = d.get("snippet") or ""
+            sn = sn.replace("«", "<mark>").replace("»", "</mark>")
+            if sn:
+                sn = _clean_history_snippet(sn)
+            d["snippet"] = sn
+            results.append(d)
+        return {"results": results}
+
+    # Lexical path — CCC's existing BM25 SQL with the snippet cleaner.
     fts_query = _rewrite_history_query(query)
     if not fts_query:
         return {"results": []}
@@ -12535,10 +12599,6 @@ def search_conversation_history(query, limit=20, cwd_like=None, since=None):
     if threshold is not None:
         where.append("m.ts_unix >= ?")
         params.append(threshold)
-    try:
-        limit = max(1, min(int(limit), 100))
-    except (TypeError, ValueError):
-        limit = 20
     sql = f"""
         SELECT m.uuid, m.session_id, m.type, m.cwd, m.git_branch,
                m.timestamp, m.ts_unix,
@@ -12563,6 +12623,7 @@ def search_conversation_history(query, limit=20, cwd_like=None, since=None):
     for r in results:
         if r.get("snippet"):
             r["snippet"] = _clean_history_snippet(r["snippet"])
+        r["_source"] = "bm25"
     return {"results": results}
 
 
@@ -14159,9 +14220,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/version":
             self.send_json({"version": __version__})
         elif path == "/api/search-history":
-            # Read-only window onto ~/.claude-index/index.db built by the
-            # separate claude-index tool. Returns BM25-ranked matches with
-            # <mark>-highlighted snippets. q empty → empty result.
+            # Read window onto ~/.claude-index/index.db, populated by the
+            # bundled _history_index indexer. Returns BM25-ranked matches
+            # with <mark>-highlighted snippets, plus a per-result _source
+            # tag (bm25 | vec | fused) for the UI badge.
+            #
+            # semantic=1 turns on hybrid retrieval (BM25 ∪ vec, fused via
+            # RRF). Falls back to BM25 when sqlite-vec / Ollama is missing.
             qs = urllib.parse.parse_qs(parsed.query)
             q = (qs.get("q", [""])[0] or "").strip()
             if not q:
@@ -14170,9 +14235,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 cwd_like = (qs.get("cwd", [""])[0] or "").strip() or None
                 since = (qs.get("since", [""])[0] or "").strip() or None
                 limit_raw = (qs.get("limit", ["20"])[0] or "20").strip()
+                semantic_raw = (qs.get("semantic", ["0"])[0] or "0").strip().lower()
+                semantic = semantic_raw in ("1", "true", "yes", "on")
                 self.send_json(search_conversation_history(
                     q, limit=limit_raw, cwd_like=cwd_like, since=since,
+                    semantic=semantic,
                 ))
+        elif path == "/api/history/status":
+            # Lay-of-the-land for the topbar pill: is the index file there,
+            # is an ingest currently running, what's the freshness of the
+            # latest indexed message, do we have semantic embeddings?
+            if _hi_indexer is None:
+                self.send_json({
+                    "exists": False,
+                    "indexing": False,
+                    "embedding": False,
+                    "message_count": 0,
+                    "latest_message_unix": None,
+                    "semantic": {"available": False},
+                    "available": False,  # bundled indexer didn't import
+                })
+            else:
+                st = _hi_indexer.status()
+                st["available"] = True
+                self.send_json(st)
         elif path == "/api/history-message":
             qs = urllib.parse.parse_qs(parsed.query)
             uuid = (qs.get("uuid", [""])[0] or "").strip()
@@ -14315,6 +14401,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # and auto_verify_closed_issues can fire immediately.
             _bust_issue_state_cache()
             self.send_json({"ok": True})
+            return
+        if path == "/api/history/setup" or path == "/api/history/ingest":
+            # First-click OOBE: kick a background ingest of all known JSONL
+            # transcripts. /api/history/setup is called from the OOBE prompt;
+            # /api/history/ingest is the same operation as a manual re-trigger.
+            # Both are no-ops while one is already running. Drops the cached
+            # read connection so the next search picks up the freshly created
+            # index file instead of a stale "missing" sentinel.
+            global _history_conn
+            if _hi_indexer is None:
+                self.send_json({"error": "bundled indexer unavailable"}, 500)
+                return
+            started = _hi_indexer.start_ingest(with_embed=True)
+            with _history_conn_lock:
+                if _history_conn is not None:
+                    try:
+                        _history_conn.close()
+                    except Exception:
+                        pass
+                    _history_conn = None
+            self.send_json({
+                "ok": True,
+                "started": started,
+                "already_running": not started,
+            })
             return
         if path == "/api/network-config":
             # SECURITY: localhost-only — even if the user has allowlisted a

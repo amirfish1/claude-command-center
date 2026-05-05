@@ -1456,6 +1456,55 @@
     background: rgba(255, 213, 100, 0.3); color: var(--text);
     padding: 0 2px; border-radius: 2px;
   }
+  /* Semantic match — slightly different hue + label to make it visible
+     when results came via the vector path (vs lexical BM25). */
+  .conv-history-badge.is-semantic {
+    color: rgba(180, 140, 255, 0.95);
+    background: rgba(180, 140, 255, 0.14);
+    border-color: rgba(180, 140, 255, 0.40);
+  }
+  .conv-item.is-history-match.is-semantic-match {
+    border-left-color: rgba(180, 140, 255, 0.55);
+  }
+  /* Topbar history-index status pill. */
+  .hi-status-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    cursor: pointer; user-select: none;
+  }
+  .hi-status-pill .hi-pill-icon { opacity: 0.85; }
+  .hi-status-pill .hi-pill-sem { color: rgba(180,140,255,0.9); font-size: 10px; }
+  .hi-status-pill.is-indexing .hi-pill-icon { animation: hi-spin 1.4s linear infinite; }
+  .hi-status-pill.is-stale { color: rgba(255, 180, 100, 0.95); }
+  @keyframes hi-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  /* OOBE prompt — inline ribbon under convSearch the first time the user
+     types a query while no index exists. Single CTA, dismissible. */
+  .hi-oobe {
+    margin: 6px 0; padding: 8px 10px;
+    font-size: 11px; line-height: 1.45;
+    color: var(--text);
+    background: rgba(120, 168, 255, 0.08);
+    border: 1px solid rgba(120, 168, 255, 0.25);
+    border-radius: 6px;
+  }
+  .hi-oobe .hi-oobe-title {
+    font-weight: 600; margin-bottom: 4px;
+  }
+  .hi-oobe .hi-oobe-actions {
+    display: flex; gap: 6px; margin-top: 6px;
+  }
+  .hi-oobe button {
+    padding: 4px 10px; font-size: 11px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text); cursor: pointer;
+  }
+  .hi-oobe button.primary {
+    background: rgba(120, 168, 255, 0.18);
+    border-color: rgba(120, 168, 255, 0.45);
+  }
+  .hi-oobe button:hover { filter: brightness(1.15); }
   .conv-item .conv-title-row {
     display: flex;
     min-width: 0;
@@ -4436,6 +4485,15 @@
     <button id="statsBtn" class="topbar-btn" title="Usage stats — sessions, messages, tokens, streaks across every Claude Code transcript on this machine." aria-label="Show usage stats">&#128202; Stats</button>
     <button id="termToggleBtn" class="topbar-btn" title="Open the in-UI terminal panel — run quick shell commands (git status, npm test, ./script.sh) without leaving the page. One-shot per command, no interactive TTY (no vim/top)." aria-label="Toggle terminal panel">&#9000; Terminal</button>
     <a class="topbar-btn sh-btn-deploy" id="deployPill" target="_blank" rel="noopener" title="Vercel deploy — loading…" aria-label="Vercel deploy status"><span class="deploy-dot" id="deployDot"></span><span class="deploy-label" id="deployStateLabel">Vercel</span></a>
+    <!-- History-index status pill. Three signals: indexing-in-progress (spinner),
+         freshness (timestamp of latest indexed message), and semantic state
+         (whether embeddings exist + how fresh). Click to manually trigger an
+         ingest. Hidden until /api/history/status returns. -->
+    <div id="historyStatusPill" class="topbar-btn hi-status-pill" style="display:none;" title="" role="button" tabindex="0">
+      <span class="hi-pill-icon" id="hiPillIcon">&#128218;</span>
+      <span class="hi-pill-label" id="hiPillLabel">History</span>
+      <span class="hi-pill-sem" id="hiPillSem" style="display:none;" title="Semantic embeddings present">&#10024;</span>
+    </div>
     <div id="setupBanner" class="ccc-setup-banner"></div>
   </div>
 
@@ -9870,8 +9928,12 @@
       // so the rename flow that reads the title's textContent doesn't
       // scoop the badge text into the edit box; the snippet previews why
       // the row matched.
+      // Differentiate semantic vs lexical hits: "semantic history" badge
+      // (purple) appears when this row matched via the vector path (vec or
+      // fused). "history" (blue) for lexical-only.
+      const _historyIsSemantic = c._historySource === 'vec' || c._historySource === 'fused';
       const historyBadgeHtml = c._historyMatch
-        ? '<span class="conv-history-badge" title="Matched in conversation history (claude-index)">history</span>'
+        ? '<span class="conv-history-badge' + (_historyIsSemantic ? ' is-semantic' : '') + '" title="Matched in conversation history' + (_historyIsSemantic ? ' (semantic)' : '') + '">' + (_historyIsSemantic ? 'semantic history' : 'history') + '</span>'
         : '';
       const historySnippetHtml = c._historySnippet
         ? '<div class="conv-history-snippet">' + c._historySnippet + '</div>'
@@ -9879,7 +9941,7 @@
 
       const groupedRowClass = opts.suppressFolderChip ? ' is-grouped-row' : '';
       const rowRepoAttr = escapeAttr(rowRepoPath(c) || '');
-      return '<div class="conv-item' + active + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + '<div class="conv-main-row">'
@@ -14043,6 +14105,7 @@
         if (c._historyMatch) {
           c._historyMatch = false;
           c._historySnippet = '';
+          c._historySource = '';
         }
       }
       return localSorted;
@@ -14057,11 +14120,13 @@
         const hit = map.get(sid);
         c._historyMatch = true;
         c._historySnippet = hit.snippet;
+        c._historySource = hit.source || 'bm25';
         seen.add(sid);
       } else if (c._historyMatch) {
         // Was decorated for a previous query; clear.
         c._historyMatch = false;
         c._historySnippet = '';
+        c._historySource = '';
       }
     }
     // Append synthetic rows for sessions that the local filter doesn't
@@ -14087,6 +14152,7 @@
         archived: false,
         _historyMatch: true,
         _historySnippet: hit.snippet,
+        _historySource: hit.source || 'bm25',
         _historyOnly: true,
       });
     }
@@ -14112,6 +14178,12 @@
       const cwd = (typeof selectedRepoPath === 'function' && selectedRepoPath()) || '';
       if (cwd) params.set('cwd', cwd);
     }
+    // Auto-enable semantic when the local index has embeddings — the user
+    // explicitly asked: "use semantic if it's installed." Status is fetched
+    // and cached at startup; we just read the flag here.
+    if (window._historyIndexStatus && window._historyIndexStatus.semantic && window._historyIndexStatus.semantic.available) {
+      params.set('semantic', '1');
+    }
     return fetch('/api/search-history?' + params.toString())
       .then(r => r.ok ? r.json() : { results: [] })
       .catch(() => ({ results: [] }))
@@ -14123,14 +14195,16 @@
         for (const r of results) {
           const sid = r.session_id;
           if (!sid) continue;
-          // First hit per session wins (FTS5 returns BM25-sorted, so the
-          // best snippet is naturally first).
+          // First hit per session wins. Server returns RRF-sorted when
+          // semantic is on, BM25-sorted when off. Either way, first hit
+          // is the best per session.
           if (!bySession.has(sid)) {
             bySession.set(sid, {
               snippet: r.snippet || '',
               ts: r.ts_unix || 0,
               cwd: r.cwd || '',
               type: r.type || '',
+              source: r._source || 'bm25',
             });
           }
         }
@@ -14144,6 +14218,163 @@
     const hasValue = Boolean($convSearch.value);
     $convSearchClear.closest('.search-wrap')?.classList.toggle('has-value', hasValue);
   }
+
+  // ── History-index topbar status + OOBE prompt ─────────────────────────
+  // Polls /api/history/status. Shows:
+  //   - spinner when an ingest pass is in flight
+  //   - freshness ("12m ago") of the most-recently-indexed message
+  //   - a sparkle (✨) when semantic embeddings exist, with a separate
+  //     freshness for the embedding stream
+  // Click → kicks a manual /api/history/setup so the user can force a
+  // refresh without waiting for the next scheduled pass.
+  window._historyIndexStatus = null;
+  let _hiPollTimer = null;
+  let _hiOobePromptDismissed = false;
+
+  function _hiFmtRel(unix) {
+    if (!unix) return 'never';
+    const diffSec = Math.max(0, (Date.now() / 1000) - unix);
+    if (diffSec < 60) return 'just now';
+    if (diffSec < 3600) return Math.floor(diffSec / 60) + 'm ago';
+    if (diffSec < 86400) return Math.floor(diffSec / 3600) + 'h ago';
+    return Math.floor(diffSec / 86400) + 'd ago';
+  }
+
+  function _hiRenderPill(st) {
+    const $pill = document.getElementById('historyStatusPill');
+    if (!$pill) return;
+    if (!st || !st.available) {
+      $pill.style.display = 'none';
+      return;
+    }
+    $pill.style.display = '';
+    const $label = document.getElementById('hiPillLabel');
+    const $icon = document.getElementById('hiPillIcon');
+    const $sem = document.getElementById('hiPillSem');
+    $pill.classList.toggle('is-indexing', !!(st.indexing || st.embedding));
+    let label = 'History';
+    let title = '';
+    if (!st.exists) {
+      label = 'No index';
+      title = 'No history index yet. Click to build one — runs in the background.';
+    } else if (st.indexing) {
+      label = 'Indexing…';
+      title = 'Indexing in progress: scanning JSONL transcripts for new messages.';
+    } else if (st.embedding) {
+      const p = st.embed_progress || {};
+      label = 'Embedding ' + (p.done || 0) + '/' + (p.total || '?');
+      title = 'Computing semantic embeddings via Ollama.';
+    } else {
+      const fresh = _hiFmtRel(st.latest_message_unix);
+      label = 'History · ' + fresh;
+      const stale = st.latest_message_unix && (Date.now() / 1000 - st.latest_message_unix > 86400);
+      $pill.classList.toggle('is-stale', !!stale);
+      title = 'History index: ' + (st.message_count || 0) + ' messages.\n'
+            + 'Latest indexed message: ' + fresh + '.\n'
+            + 'Click to re-run an ingest now.';
+    }
+    if (st.semantic && st.semantic.available) {
+      $sem.style.display = '';
+      const semFresh = _hiFmtRel(st.semantic.latest_embed_unix);
+      const semMsgFresh = _hiFmtRel(st.semantic.latest_embedded_message_unix);
+      title += '\n\nSemantic embeddings: ' + (st.semantic.embedded_count || 0) + ' messages.\n'
+             + 'Last embedding run: ' + semFresh + '.\n'
+             + 'Freshest embedded message: ' + semMsgFresh + '.';
+    } else {
+      $sem.style.display = 'none';
+    }
+    $label.textContent = label;
+    $pill.title = title;
+  }
+
+  async function _hiRefreshStatus() {
+    try {
+      const r = await fetch('/api/history/status');
+      if (!r.ok) return;
+      const st = await r.json();
+      window._historyIndexStatus = st;
+      _hiRenderPill(st);
+    } catch (_) {}
+  }
+
+  function _hiStartPolling() {
+    _hiRefreshStatus();
+    if (_hiPollTimer) clearInterval(_hiPollTimer);
+    // 8s during indexing, 60s otherwise — adaptive interval set after each tick.
+    _hiPollTimer = setInterval(() => {
+      const st = window._historyIndexStatus;
+      const fast = st && (st.indexing || st.embedding);
+      _hiRefreshStatus();
+      // Re-arm with appropriate cadence.
+      if ((fast && _hiPollTimer.__cadence !== 'fast')
+          || (!fast && _hiPollTimer.__cadence !== 'slow')) {
+        clearInterval(_hiPollTimer);
+        _hiPollTimer = setInterval(() => _hiRefreshStatus(), fast ? 4000 : 60000);
+        _hiPollTimer.__cadence = fast ? 'fast' : 'slow';
+      }
+    }, 8000);
+    _hiPollTimer.__cadence = 'slow';
+  }
+
+  async function _hiTriggerSetup() {
+    try {
+      const r = await fetch('/api/history/setup', { method: 'POST' });
+      if (!r.ok) return false;
+      _hiRefreshStatus();
+      return true;
+    } catch (_) { return false; }
+  }
+
+  // OOBE: when the user types a query and the index doesn't exist yet,
+  // surface a one-time prompt under the search input. Dismissing it sets
+  // a session-only flag so it doesn't reappear during this CCC session.
+  function _hiMaybeShowOobe() {
+    const st = window._historyIndexStatus;
+    if (!st || st.exists || st.indexing || _hiOobePromptDismissed) return;
+    if (document.getElementById('hiOobePrompt')) return;
+    // Anchor the prompt under convSearch's wrapper so it scrolls with the
+    // sidebar and is visually adjacent to the input the user just typed in.
+    const $wrap = document.querySelector('.search-wrap') || $convSearch?.parentElement;
+    if (!$wrap) return;
+    const $oobe = document.createElement('div');
+    $oobe.id = 'hiOobePrompt';
+    $oobe.className = 'hi-oobe';
+    $oobe.innerHTML =
+      '<div class="hi-oobe-title">&#128218; Build a history index?</div>'
+      + '<div>Indexes every Claude Code &amp; Codex conversation on this Mac so search can find them. Runs locally; ~1.5 GB on disk after a few months.</div>'
+      + '<div class="hi-oobe-actions">'
+      +   '<button type="button" class="primary" data-role="hi-enable">Enable</button>'
+      +   '<button type="button" data-role="hi-dismiss">Not now</button>'
+      + '</div>';
+    $wrap.parentElement.insertBefore($oobe, $wrap.nextSibling);
+    $oobe.querySelector('[data-role="hi-enable"]').addEventListener('click', async () => {
+      $oobe.querySelector('[data-role="hi-enable"]').textContent = 'Starting…';
+      const ok = await _hiTriggerSetup();
+      if (ok) {
+        $oobe.innerHTML = '<div class="hi-oobe-title">&#128218; Indexing started</div>'
+          + '<div>This may take a few minutes for the first run. Watch the topbar pill for progress.</div>';
+        setTimeout(() => $oobe.remove(), 6000);
+      } else {
+        $oobe.querySelector('[data-role="hi-enable"]').textContent = 'Failed — retry';
+      }
+    });
+    $oobe.querySelector('[data-role="hi-dismiss"]').addEventListener('click', () => {
+      _hiOobePromptDismissed = true;
+      $oobe.remove();
+    });
+  }
+
+  // Wire pill click + start polling once on first JS load.
+  document.addEventListener('DOMContentLoaded', () => {
+    const $pill = document.getElementById('historyStatusPill');
+    if ($pill) {
+      $pill.addEventListener('click', () => _hiTriggerSetup());
+      $pill.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _hiTriggerSetup(); }
+      });
+    }
+    _hiStartPolling();
+  });
 
   updateConversationSearchClear();
 
@@ -14163,6 +14394,11 @@
     // Re-render immediately with the local filter — instant response,
     // no waiting on the network.
     renderSidebar(filterConversations($convSearch.value));
+    // OOBE: first-time search with no index → offer to build one. Only
+    // fires when the user actually typed something (not on focus / clear).
+    if ($convSearch.value.trim().length >= 2) {
+      _hiMaybeShowOobe();
+    }
     // Debounced history fetch; on completion, re-render with augmentation.
     if (_historyFetchTimer) clearTimeout(_historyFetchTimer);
     const q = $convSearch.value;
@@ -15128,8 +15364,9 @@
 
     // History-augmentation: badge + snippet for archive entries that the
     // indexer matched for this same query. The conv-item template reads
-    // c._historyMatch / c._historySnippet. Skipped when state is stale
-    // (debounced fetch hasn't completed for this keystroke yet).
+    // c._historyMatch / c._historySnippet / c._historySource. Skipped
+    // when state is stale (debounced fetch hasn't completed for this
+    // keystroke yet).
     if (q && _historyState.query === q && _historyState.map.size) {
       for (const s of shaped) {
         const sid = s.session_id || s.id;
@@ -15137,6 +15374,7 @@
           const hit = _historyState.map.get(sid);
           s._historyMatch = true;
           s._historySnippet = hit.snippet;
+          s._historySource = hit.source || 'bm25';
           // Archive mode normally hides the ask preview to keep rows
           // single-line; re-enable it for matched rows so the snippet
           // line has somewhere to render.
