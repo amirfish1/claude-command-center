@@ -13962,6 +13962,42 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-store, must-revalidate")
                 self.end_headers()
                 self.wfile.write(body)
+        elif path.startswith("/static/"):
+            # General static handler for the main app's split-out CSS/JS
+            # (app.css, app.js). Mirrors the morning handler's traversal
+            # guard. Restricted to .css/.js so it can't double-serve
+            # index.html (which is rendered via "/" with re-read on every
+            # request) or expose anything else under static/.
+            rel = path[len("/static/"):]
+            if not (rel.endswith(".css") or rel.endswith(".js")):
+                self.send_json({"error": f"not found: {path}"}, 404)
+                return
+            target = STATIC_DIR / rel
+            try:
+                resolved = target.resolve(strict=False)
+                base = STATIC_DIR.resolve()
+            except OSError as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            try:
+                resolved.relative_to(base)
+            except ValueError:
+                self.send_json({"error": f"not found: {path}"}, 404)
+                return
+            if not resolved.is_file():
+                self.send_json({"error": f"not found: {path}"}, 404)
+                return
+            try:
+                body = resolved.read_bytes()
+            except OSError as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            ct = "application/javascript" if rel.endswith(".js") else "text/css"
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/morning":
             try:
                 self.send_html((MORNING_STATIC_DIR / "index.html").read_text())

@@ -63,7 +63,7 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 ## Conventions
 
 - `server.py` is stdlib-only on purpose — no pip dependencies at runtime. Don't import `requests`, `pydantic`, `fastapi`, etc. `urllib` + `http.server` + `json` cover it.
-- `static/index.html` is a single-file app by design (no bundler, no npm). Inline CSS/JS is expected. Don't split it into modules without a strong reason.
+- `static/index.html` ships its bulk CSS/JS as `static/app.css` and `static/app.js` — plain `<link>` / `<script src>`, no bundler, no npm. Small bootstrap blocks stay inline where ordering matters: the FOIT theme guard, the feature-flag loader for the Morning side-nav, the loading-overlay status renderer, and the in-UI terminal / history-search panels. New large surfaces should go in their own `.css` / `.js` files served via the `/static/` handler — don't grow `index.html` past its current ~1.5k lines.
 - `hooks/` scripts run inside Claude Code's hook pipeline — they must exit fast and never prompt.
 - The Morning view (`morning.py`, `morning_store.py`, `static/morning/`) is a **gitignored opt-in plugin** for one user's workflow. Don't reference it in the README or treat it as part of the core.
 
