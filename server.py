@@ -1336,6 +1336,18 @@ def find_all_conversations(limit_per_folder=None):
     except Exception:
         pass
 
+    # Add Gemini sessions to the archive too. They live in ~/.gemini/tmp/
+    # and have their own JSON format, but find_gemini_conversations returns
+    # rows compatible with the archive renderer.
+    try:
+        out.extend(find_gemini_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+        ))
+    except Exception:
+        pass
+
     # Parallel-resolve PR states for every row that recorded a PR URL.
     # Hits the in-process cache on warm refreshes; bounded thread pool
     # keeps the cold path under ~half a second even for hundreds of PRs.
@@ -8333,6 +8345,14 @@ def _extract_gemini_tail_meta(path):
             detail = _gemini_tool_detail(call)
             meta["pending_tool"] = name
             meta["pending_file"] = detail[:80] if isinstance(detail, str) else None
+
+            # Detect session signals (edit/commit/push) from Gemini tools.
+            # Built-in tools like write_file/replace are edits; shell-based
+            # tools are parsed via _codex_command_signals.
+            if name in ("write_file", "replace", "patch", "edit_file"):
+                meta["has_edit"] = True
+                meta["last_edit_pos"] = pos
+
             cmd = _gemini_tool_command(call)
             if cmd:
                 signals = _codex_command_signals(cmd)
@@ -11225,7 +11245,7 @@ def _normalize_spawn_event(ev):
         summary = params.get("description") or params.get("command") or ""
         return {
             "type": "assistant_block",
-            "message_id": ev.get("tool_id") or "gemini-tool",
+            "message_id": "gemini-stream",
             "blocks": [{
                 "type": "tool_use",
                 "name": ev.get("tool_name") or "tool",
