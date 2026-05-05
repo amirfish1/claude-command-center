@@ -105,6 +105,10 @@ the UI uses for the kanban.
 
 - **Kanban** across every session, with drag-drop between columns,
   rubber-band multi-select, and per-column tinting.
+- **Split conversations** — drag any sidebar session onto the right or
+  bottom edge of the open conversation to view two transcripts
+  side-by-side, each with its own input bar. Closes back to single-pane
+  with a click; collapses automatically below 900px.
 - **GitHub integration** — start a session from an issue with one click
   (auto-adds `claude-in-progress` label + self-assigns). Verify closes the
   issue with a commit-SHA comment. Drag to Archived closes as "not
