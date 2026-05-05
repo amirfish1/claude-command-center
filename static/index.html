@@ -1017,6 +1017,17 @@
     font-size: 12px;
   }
   .conv-input-context.is-new-session .spawn-cwd-row { display: inline-flex; }
+  /* Worktree toggle, sibling to spawn-cwd-row. Same visibility gating: only
+     shown when the strip is in new-session mode. Matches the 🌿 toggle in
+     the kanban-toolbar new-session modal so both spawn paths look the same. */
+  .conv-input-context .spawn-worktree-row {
+    display: none;
+    align-items: center; gap: 4px;
+    font-size: 12px; color: var(--text);
+    cursor: pointer; user-select: none;
+  }
+  .conv-input-context.is-new-session .spawn-worktree-row { display: inline-flex; }
+  .conv-input-context .spawn-worktree-row input[type="checkbox"] { margin: 0; cursor: pointer; }
   /* Hide the regular workspace + usage pills in new-session mode —
      they reflect a live session's state and have nothing to say about
      a not-yet-spawned session. The strip stays visible because the
@@ -4557,6 +4568,9 @@
                     aria-label="Folder for new session">
             </select>
           </span>
+          <label class="spawn-worktree-row" title="Spawn the session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main.">
+            <input type="checkbox" id="inlineWorktreeToggle"> 🌿 worktree
+          </label>
           <span class="wp-usage" data-usage></span>
         </div>
         <div class="conv-input-bar" id="convInputBar">
@@ -16986,7 +17000,11 @@
       const endpoint = engine === 'codex' ? '/api/sessions/spawn-codex'
                      : engine === 'gemini' ? '/api/sessions/spawn-gemini'
                      : '/api/sessions/spawn';
-      const spawnBody = { prompt, name: subject, repo_path: repoPath, cwd: repoPath };
+      const $inlineWorktree = document.getElementById('inlineWorktreeToggle');
+      const useWorktree = !!($inlineWorktree && $inlineWorktree.checked);
+      const spawnBody = engine === 'codex'
+        ? { prompt, name: subject, repo_path: repoPath, cwd: repoPath }
+        : { prompt, name: subject, repo_path: repoPath, cwd: repoPath, worktree: useWorktree };
       const res = await fetch(endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(spawnBody),
