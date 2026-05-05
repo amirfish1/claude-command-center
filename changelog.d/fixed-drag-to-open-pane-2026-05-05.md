@@ -1,0 +1,1 @@
+- Drag-to-open-another-conv-pane now actually opens the pane. The overlay's `dropEffect = 'copy'` did not match the drag source's `effectAllowed = 'move'`, so the browser cancelled every drop silently. Aligned the drop overlay to `'move'`.

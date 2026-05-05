@@ -11231,13 +11231,16 @@
     paneEl.addEventListener('dragover', (ev) => {
       if (!overlay.classList.contains('active')) return;
       ev.preventDefault();          // required to enable drop
-      ev.dataTransfer.dropEffect = 'copy';
+      // Must match the source's effectAllowed ('move' on conv-item and
+      // kanban-card dragstart). A mismatch causes the browser to cancel
+      // the drop silently — `drop` never fires.
+      ev.dataTransfer.dropEffect = 'move';
     });
 
     overlay.querySelectorAll('.drop-zone').forEach(zone => {
       zone.addEventListener('dragenter', () => zone.classList.add('over'));
       zone.addEventListener('dragleave', () => zone.classList.remove('over'));
-      zone.addEventListener('dragover', (ev) => { ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; });
+      zone.addEventListener('dragover', (ev) => { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; });
       zone.addEventListener('drop', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
