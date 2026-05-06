@@ -11,7 +11,7 @@ Usage:
     PORT=9000 ./run.sh       # custom port
 """
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 import ast
 import base64
@@ -34,7 +34,7 @@ import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Tool's own assets live next to this file. Repos are never process-global:
@@ -506,6 +506,94 @@ def _save_repo_pins(pins):
     with open(tmp, "w") as f:
         json.dump(pins, f, indent=2, sort_keys=True)
     tmp.replace(_REPO_PINS_FILE)
+
+
+def _load_session_overrides():
+    """Return {session_id: {model, context_1m, engine, set_at}} or {}."""
+    try:
+        with open(SESSION_OVERRIDES_FILE) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_session_overrides(overrides):
+    SESSION_OVERRIDES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SESSION_OVERRIDES_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(overrides, f, indent=2, sort_keys=True)
+    tmp.replace(SESSION_OVERRIDES_FILE)
+
+
+def _get_session_override(session_id):
+    if not session_id:
+        return None
+    entry = _load_session_overrides().get(session_id)
+    if not isinstance(entry, dict):
+        return None
+    return entry
+
+
+def _set_session_override(session_id, model, context_1m, engine):
+    overrides = _load_session_overrides()
+    overrides[session_id] = {
+        "model": str(model),
+        "context_1m": bool(context_1m),
+        "engine": str(engine or "claude"),
+        "set_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    _save_session_overrides(overrides)
+
+
+def _clear_session_override(session_id):
+    overrides = _load_session_overrides()
+    if session_id in overrides:
+        del overrides[session_id]
+        _save_session_overrides(overrides)
+
+
+def _short_model_alias(model):
+    """Turn `claude-sonnet-4-6` / `claude-sonnet-4-6[1m]` / `sonnet` into the
+    alias form `/model` accepts: drop the `claude-` prefix and any `[1m]`
+    suffix the caller may have included. Non-Claude model strings pass
+    through unchanged (callers shouldn't be invoking this for them, but
+    being permissive is cheap)."""
+    if not model:
+        return ""
+    alias = model.strip()
+    if alias.lower().startswith("claude-"):
+        alias = alias[len("claude-"):]
+    # Strip any trailing `[1m]`/`[1M]` — the slash command adds it back when
+    # context_1m is true, and we don't want a double suffix.
+    for tail in ("[1m]", "[1M]"):
+        if alias.endswith(tail):
+            alias = alias[: -len(tail)]
+    return alias.strip()
+
+
+def _build_slash_model_command(model, context_1m):
+    """Compose the `/model <alias>[1m]` text injected into a live Claude
+    session. Returns an empty string if model is missing — caller should
+    treat that as a no-op."""
+    alias = _short_model_alias(model)
+    if not alias:
+        return ""
+    if context_1m:
+        return f"/model {alias}[1m]"
+    return f"/model {alias}"
+
+
+def _detect_session_engine(session_id):
+    """Best-effort: codex/gemini are detected by their per-engine session
+    stores; everything else is treated as `claude`."""
+    if not session_id:
+        return "claude"
+    if _is_codex_session(session_id):
+        return "codex"
+    if _is_gemini_session(session_id):
+        return "gemini"
+    return "claude"
 
 
 def _native_pick_folder(prompt_text="Pick a repo folder for Claude Command Center"):
@@ -2437,6 +2525,16 @@ NETWORK_CONFIG_FILE = COMMAND_CENTER_STATE_DIR / "network.json"
 # _reattach_spawned_orphans() for the boot-time sweep. Schema is a list of
 # {pid, session_id, cwd, spawned_at, name, log, command_summary}.
 SPAWNED_PIDS_FILE = COMMAND_CENTER_STATE_DIR / "spawned-pids.json"
+
+# Per-session model + context override. Set by the click-to-switch picker
+# in the session card (see /api/session/<sid>/model). Schema:
+#   { "<session_id>": {"model": "...", "context_1m": bool,
+#                       "engine": "claude|codex|gemini",
+#                       "set_at": "ISO-8601"} }
+# Sticky: stays until the user changes it again or hits "Reset to default".
+# Read by resume_session_{headless,codex,gemini} so a queued change actually
+# lands on the next ask.
+SESSION_OVERRIDES_FILE = COMMAND_CENTER_STATE_DIR / "session-overrides.json"
 
 # {path: {mtime, custom_title, last_prompt, agent_name, ...}}
 # Persistent across restarts via _CONV_META_CACHE_FILE — without it, every
@@ -7889,7 +7987,11 @@ def resume_session_codex(session_id, text):
     log_dir = repo_log_dir(_git_toplevel_for_existing_dir(cwd) or cwd)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
-    model = os.environ.get("CCC_CODEX_MODEL") or row.get("model") or "gpt-5.5"
+    # Per-session override (set via the click-to-switch picker) wins over
+    # the env-var default and the previous run's recorded model.
+    override = _get_session_override(session_id)
+    override_model = (override or {}).get("model") if override else None
+    model = override_model or os.environ.get("CCC_CODEX_MODEL") or row.get("model") or "gpt-5.5"
     cmd = [
         resolved["bin"], "exec", "resume",
         "--json",
@@ -7984,7 +8086,7 @@ def _extract_codex_usage(session_id):
     except OSError:
         return empty
     if not latest:
-        return empty
+        return {**empty, "override": _get_session_override(session_id)}
     total_input = int(latest.get("input_tokens") or 0)
     cache_read = int(latest.get("cached_input_tokens") or 0)
     total_output = int(latest.get("output_tokens") or 0) + int(latest.get("reasoning_output_tokens") or 0)
@@ -7999,6 +8101,7 @@ def _extract_codex_usage(session_id):
         "model": model,
         "context_limit": context_limit,
         "cost_usd": 0.0,
+        "override": _get_session_override(session_id),
     }
 
 
@@ -8818,6 +8921,7 @@ def _extract_gemini_usage(session_id):
         "total_input_tokens": total_in,
         "total_cache_read_tokens": total_cached,
         "model": model,
+        "override": _get_session_override(session_id),
     }
 
 
@@ -8904,7 +9008,13 @@ def resume_session_gemini(session_id, text):
     log_path = log_dir / log_filename
     cmd = [resolved["bin"], "--approval-mode", os.environ.get("CCC_GEMINI_APPROVAL_MODE", "yolo"),
            "--output-format", "stream-json", "--resume", session_id]
-    model = os.environ.get("CCC_GEMINI_MODEL")
+    # Per-session override (set via the click-to-switch picker) wins over
+    # the env-var default. Without an override, fall back to env-var or
+    # let the CLI pick its own default.
+    override = _get_session_override(session_id)
+    model = (override or {}).get("model") if override else None
+    if not model:
+        model = os.environ.get("CCC_GEMINI_MODEL")
     if model:
         cmd.extend(["--model", model])
     cmd.extend(["-p", text])
@@ -9414,6 +9524,16 @@ def resume_session_headless(session_id, text):
         "--output-format", "stream-json",
         "--dangerously-skip-permissions",
     ]
+    # Per-session override (set via the click-to-switch picker). Resume
+    # would otherwise inherit the previously-recorded model. The `[1m]`
+    # suffix flips the 1M-context variant when supported.
+    override = _get_session_override(session_id)
+    if override and override.get("model"):
+        alias = _short_model_alias(override["model"])
+        if override.get("context_1m"):
+            alias += "[1m]"
+        if alias:
+            cmd.extend(["--model", alias])
 
     log_fh = open(log_path, "w")
     fifo_path, child_stdin_fd = _make_stdin_fifo(log_path)
@@ -9771,6 +9891,72 @@ def _inject_text_into_session(session_id, text):
             return {"ok": ok, "pid": spawn["pid"], "via": "spawn-fifo"}
         return resume_session_headless(session_id, text)
     return inject_input_via_keystroke(tty, term_app or "Terminal", text)
+
+
+def _set_session_model(session_id, model, context_1m):
+    """Apply a model+context choice to a session.
+
+    Live Claude (TTY or spawned) gets a real `/model <alias>[1m]` slash
+    command injected into the running process. Codex, Gemini, and dormant
+    Claude have no runtime-switch mechanism, so the choice is persisted to
+    the session-overrides sidecar and applied on the next resume.
+
+    Always writes the override regardless — that way a refresh shows the
+    new value even when the inject succeeded, and the next resume picks
+    it up if the live session ends before the user asks again.
+
+    Returns:
+        {"ok": True, "applied": "live"|"queued", "model": ..., "context_1m": ...,
+         "engine": ...}
+    """
+    if not session_id or not model:
+        return {"ok": False, "error": "missing session_id or model"}
+    engine = _detect_session_engine(session_id)
+    _set_session_override(session_id, model, context_1m, engine)
+    payload = {
+        "ok": True,
+        "model": model,
+        "context_1m": bool(context_1m),
+        "engine": engine,
+    }
+    if engine != "claude":
+        # Codex/Gemini: no live-inject path. The next resume_session_<eng>
+        # call reads the override and passes --model to the CLI.
+        payload["applied"] = "queued"
+        return payload
+    # Claude: try to inject /model X[1m] into a live TTY or spawn. If
+    # there is no live process, fall through to queued — the next resume
+    # picks the override up via cmd args.
+    cwd = find_session_cwd(session_id)
+    status = session_live_status(session_id, cwd) or {}
+    tty = status.get("tty")
+    has_tty = bool(tty) and tty != "??"
+    spawn = _find_live_spawn_entry_for_session(session_id) if not has_tty else None
+    if not (status.get("live") and has_tty) and spawn is None:
+        payload["applied"] = "queued"
+        return payload
+    slash = _build_slash_model_command(model, context_1m)
+    if not slash:
+        payload["applied"] = "queued"
+        return payload
+    if has_tty and status.get("live"):
+        result = inject_input_via_keystroke(tty, status.get("terminal_app") or "Terminal", slash)
+        if result.get("ok"):
+            payload["applied"] = "live"
+            payload["via"] = "tty-keystroke"
+            return payload
+        payload["applied"] = "queued"
+        payload["inject_error"] = result.get("error")
+        return payload
+    if spawn is not None:
+        ok = _write_stream_json_user_message(spawn, slash)
+        payload["applied"] = "live" if ok else "queued"
+        payload["via"] = "spawn-fifo"
+        if not ok:
+            payload["inject_error"] = "FIFO write failed"
+        return payload
+    payload["applied"] = "queued"
+    return payload
 
 
 def _interrupt_session(session_id):
@@ -12363,14 +12549,21 @@ def extract_session_usage(session_id):
         "total_cache_read_tokens": 0,
         "model": "",
         "context_limit": 0,
+        "compact_count": 0,
+        "engine": "claude",
+        "override": _get_session_override(session_id),
         "cost_usd": 0.0,
         "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
                                "cache_read": 0.0, "output": 0.0},
     }
     if _is_codex_session(session_id):
-        return _extract_codex_usage(session_id)
+        result = _extract_codex_usage(session_id)
+        result.setdefault("engine", "codex")
+        return result
     if _is_gemini_session(session_id):
-        return _extract_gemini_usage(session_id)
+        result = _extract_gemini_usage(session_id)
+        result.setdefault("engine", "gemini")
+        return result
     desktop_meta = _load_desktop_app_metadata().get(session_id) or {}
     if not PROJECTS_ROOT.is_dir():
         return {**empty, "model": desktop_meta.get("model") or ""}
@@ -12394,6 +12587,12 @@ def extract_session_usage(session_id):
     model = desktop_meta.get("model") or ""
     diagnostic_latest = 0
     diagnostic_peak = 0
+    # `/compact` (manual or auto) emits a `{type: system, subtype: compact_boundary}`
+    # event. Pre-compact assistant turns no longer contribute to the live
+    # context window, so reset both latest and peak whenever we cross a
+    # boundary — the displayed numbers reflect only the post-most-recent-
+    # compact segment, which matches what the user sees in the TUI.
+    compact_count = 0
     try:
         with open(jsonl, "r") as f:
             for line in f:
@@ -12403,6 +12602,13 @@ def extract_session_usage(session_id):
                 try:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if ev.get("type") == "system" and ev.get("subtype") == "compact_boundary":
+                    latest = 0
+                    peak = 0
+                    diagnostic_latest = 0
+                    diagnostic_peak = 0
+                    compact_count += 1
                     continue
                 if ev.get("type") != "assistant":
                     continue
@@ -12463,6 +12669,7 @@ def extract_session_usage(session_id):
     cost_out = total_out * rate_out / 1_000_000
     cost_total = cost_in + cost_cw + cost_cr + cost_out
 
+    override = _get_session_override(session_id)
     return {
         "latest_input_tokens": latest,
         "peak_input_tokens": peak,
@@ -12472,6 +12679,9 @@ def extract_session_usage(session_id):
         "total_cache_read_tokens": total_cr,
         "model": model,
         "context_limit": limit,
+        "compact_count": compact_count,
+        "engine": "claude",
+        "override": override,
         "cost_usd": round(cost_total, 4),
         "cost_breakdown_usd": {
             "input": round(cost_in, 4),
@@ -16029,6 +16239,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # whether the keystroke injection itself ends up succeeding.
                 _record_interaction(sid)
                 self.send_json(_inject_text_into_session(sid, text))
+        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/model/clear$", path):
+            sid = path.split("/")[3]
+            _clear_session_override(sid)
+            _record_interaction(sid)
+            self.send_json({"ok": True, "session_id": sid, "cleared": True})
+        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/model$", path):
+            sid = path.split("/")[3]
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            model = (payload.get("model") or "").strip()
+            context_1m = bool(payload.get("context_1m", False))
+            if not model:
+                self.send_json({"ok": False, "error": "model is required"}, 400)
+            else:
+                _record_interaction(sid)
+                self.send_json(_set_session_model(sid, model, context_1m))
         elif path == "/api/inject-esc":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -17101,33 +17331,34 @@ def write_port_file(bind_host):
     return url
 
 
-def install_orchestration_skill():
-    """Install (or refresh) the ccc-orchestration skill into
-    ~/.claude/skills/ccc-orchestration/SKILL.md so any Claude Code session
-    on this machine can discover the CCC HTTP API. Idempotent — only
-    writes when the source differs from the destination. Skipped entirely
-    when CCC_SKIP_SKILL_INSTALL=1."""
+def _install_skill(name: str):
+    """Install (or refresh) a bundled skill into ~/.claude/skills/<name>/SKILL.md.
+    Idempotent — only writes when the source differs from the destination."""
     import shutil
-    if os.environ.get("CCC_SKIP_SKILL_INSTALL", "").strip().lower() in ("1", "true", "yes", "on"):
-        print("  [skill] install skipped (CCC_SKIP_SKILL_INSTALL=1)")
-        return
-    src = CCC_ROOT / "skills" / "ccc-orchestration.md"
+    src = CCC_ROOT / "skills" / f"{name}.md"
     if not src.exists():
-        # Source skill not bundled with this checkout (very minimal install /
-        # broken package). Stay silent rather than spamming a stack trace.
-        print(f"  [skill] source not found at {src}; skipping install")
+        print(f"  [skill] source not found at {src}; skipping")
         return
-    dst_dir = Path.home() / ".claude" / "skills" / "ccc-orchestration"
+    dst_dir = Path.home() / ".claude" / "skills" / name
     dst = dst_dir / "SKILL.md"
     try:
         dst_dir.mkdir(parents=True, exist_ok=True)
         if dst.exists() and dst.read_bytes() == src.read_bytes():
-            print(f"  [skill] ccc-orchestration already up to date at {dst}")
+            print(f"  [skill] {name} already up to date")
             return
         shutil.copy2(src, dst)
-        print(f"  [skill] installed ccc-orchestration -> {dst}")
+        print(f"  [skill] installed {name} -> {dst}")
     except OSError as e:
-        print(f"  [skill] could not install ccc-orchestration ({e})")
+        print(f"  [skill] could not install {name} ({e})")
+
+
+def install_orchestration_skill():
+    """Install all bundled CCC skills. Skipped when CCC_SKIP_SKILL_INSTALL=1."""
+    if os.environ.get("CCC_SKIP_SKILL_INSTALL", "").strip().lower() in ("1", "true", "yes", "on"):
+        print("  [skill] install skipped (CCC_SKIP_SKILL_INSTALL=1)")
+        return
+    _install_skill("ccc-orchestration")
+    _install_skill("group-chat")
 
 
 def main():
@@ -17194,6 +17425,9 @@ def main():
     # whose JSONL has been quiet for >24h. Catches abandoned-but-not-archived
     # sessions and forgotten cron agents that the archive-time kill misses.
     threading.Thread(target=_idle_reaper_loop, daemon=True).start()
+    # Chuck iMessage monitor: polls chat.db every 2 minutes, injects new
+    # messages from +17035592946 into the CHUCK session via inject-input.
+    threading.Thread(target=_chuck_imessage_poller, daemon=True).start()
     print()
     try:
         server.serve_forever()
@@ -17204,6 +17438,119 @@ def main():
         except Exception:
             pass
         server.server_close()
+
+
+# ── Chuck iMessage Poller ─────────────────────────────────────────────────────
+_CHUCK_PHONE = "+17035592946"
+_CHUCK_SESSION_ID = "b1216dcf-99b2-48bf-85af-cb0ecea4f1ca"
+_CHUCK_LAST_SEEN_FILE = Path("/tmp/chuck-loop-last-seen.txt")
+_IMESSAGE_DB = Path.home() / "Library" / "Messages" / "chat.db"
+_CHUCK_POLL_INTERVAL = 120  # seconds
+_APPLE_EPOCH_OFFSET = 978307200  # seconds between Unix epoch and Apple epoch (2001-01-01)
+
+
+def _chuck_read_last_seen() -> int:
+    try:
+        return int(_CHUCK_LAST_SEEN_FILE.read_text().strip())
+    except Exception:
+        return int(time.time()) - 3600
+
+
+def _chuck_write_last_seen(ts: int) -> None:
+    try:
+        _CHUCK_LAST_SEEN_FILE.write_text(str(ts))
+    except Exception:
+        pass
+
+
+def _chuck_fetch_new_messages(since_unix: int):
+    """Return list of (unix_ts, is_from_me, text) tuples newer than since_unix."""
+    if not _IMESSAGE_DB.exists():
+        return []
+    apple_ns = (since_unix - _APPLE_EPOCH_OFFSET) * 1_000_000_000
+    try:
+        conn = sqlite3.connect(str(_IMESSAGE_DB), check_same_thread=False, timeout=5)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT m.date / 1000000000 + ? AS unix_ts,
+                   m.is_from_me,
+                   m.text
+            FROM message m
+            JOIN handle h ON m.handle_id = h.rowid
+            WHERE h.id = ?
+              AND m.date > ?
+              AND m.text IS NOT NULL
+            ORDER BY m.date ASC
+            """,
+            (_APPLE_EPOCH_OFFSET, _CHUCK_PHONE, apple_ns),
+        )
+        rows = cur.fetchall()
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+
+def _chuck_inject(text: str) -> None:
+    """Inject text into the CHUCK session via the local CCC inject-input API."""
+    try:
+        payload = json.dumps({"session_id": _CHUCK_SESSION_ID, "text": text}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{PORT}/api/inject-input",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10)
+    except Exception:
+        pass
+
+
+def _chuck_is_quiet_hours() -> bool:
+    """Return True between 10pm and 7am US/Eastern."""
+    try:
+        import subprocess as _sp
+        result = _sp.run(
+            ["python3", "-c",
+             "from datetime import datetime; import zoneinfo; "
+             "h=datetime.now(zoneinfo.ZoneInfo('America/New_York')).hour; "
+             "print('1' if h>=22 or h<7 else '0')"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip() == "1"
+    except Exception:
+        return False
+
+
+def _chuck_imessage_poller() -> None:
+    """Background daemon thread: poll chat.db, inject new Chuck messages into CHUCK session."""
+    # Stagger startup so the server is fully bound before first inject attempt.
+    time.sleep(15)
+    while True:
+        try:
+            if not _chuck_is_quiet_hours():
+                last_seen = _chuck_read_last_seen()
+                rows = _chuck_fetch_new_messages(last_seen)
+                if rows:
+                    chuck_msgs = [(ts, txt) for ts, is_from_me, txt in rows if not is_from_me]
+                    if chuck_msgs:
+                        lines = []
+                        for ts, txt in chuck_msgs:
+                            dt = datetime.fromtimestamp(ts).strftime("%H:%M")
+                            lines.append(f"[{dt}] CHUCK: {txt}")
+                        inject_text = (
+                            "[chuck-loop] New message(s) from Chuck:\n\n"
+                            + "\n".join(lines)
+                            + "\n\nReview and decide how to proceed per the loop rules."
+                        )
+                        _chuck_inject(inject_text)
+                    # Bump last-seen to the newest message timestamp regardless of direction.
+                    newest_ts = max(ts for ts, _, _ in rows)
+                    _chuck_write_last_seen(newest_ts + 1)
+        except Exception:
+            pass
+        time.sleep(_CHUCK_POLL_INTERVAL)
 
 
 if __name__ == "__main__":

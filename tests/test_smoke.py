@@ -632,6 +632,133 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(meta["model"], "claude-sonnet-4-6")
 
 
+class TestModelPicker(unittest.TestCase):
+    def test_short_model_alias_strips_claude_prefix_and_1m_suffix(self):
+        """`/model` slash command takes the alias form, not the full id —
+        the helper has to round-trip both shapes consistently."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+        self.assertEqual(server._short_model_alias("claude-sonnet-4-6"), "sonnet-4-6")
+        self.assertEqual(server._short_model_alias("claude-sonnet-4-6[1m]"), "sonnet-4-6")
+        self.assertEqual(server._short_model_alias("opus-4-7"), "opus-4-7")
+        self.assertEqual(server._short_model_alias("sonnet"), "sonnet")
+        self.assertEqual(server._short_model_alias(""), "")
+        self.assertEqual(server._short_model_alias(None), "")
+
+    def test_build_slash_model_command_appends_1m_suffix_when_requested(self):
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+        self.assertEqual(server._build_slash_model_command("opus-4-7", False), "/model opus-4-7")
+        self.assertEqual(server._build_slash_model_command("opus-4-7", True), "/model opus-4-7[1m]")
+        self.assertEqual(server._build_slash_model_command("claude-sonnet-4-6", True), "/model sonnet-4-6[1m]")
+        self.assertEqual(server._build_slash_model_command("", True), "")
+
+    def test_session_override_roundtrip_through_sidecar(self):
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "session-overrides.json"
+            orig = server.SESSION_OVERRIDES_FILE
+            server.SESSION_OVERRIDES_FILE = path
+            try:
+                self.assertIsNone(server._get_session_override("sid-1"))
+                server._set_session_override("sid-1", "claude-sonnet-4-6", True, "claude")
+                got = server._get_session_override("sid-1")
+                self.assertEqual(got["model"], "claude-sonnet-4-6")
+                self.assertTrue(got["context_1m"])
+                self.assertEqual(got["engine"], "claude")
+                server._clear_session_override("sid-1")
+                self.assertIsNone(server._get_session_override("sid-1"))
+            finally:
+                server.SESSION_OVERRIDES_FILE = orig
+
+    def test_session_model_route_registered_and_check_same_origin_gates_post(self):
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+        src = pathlib.Path(server.__file__).read_text()
+        # Routes registered
+        self.assertIn("/api/session/[a-zA-Z0-9-]+/model", src)
+        self.assertIn("/api/session/[a-zA-Z0-9-]+/model/clear", src)
+        # do_POST gates everything through _check_same_origin first
+        post_idx = src.find("def do_POST")
+        self.assertGreater(post_idx, 0)
+        self.assertIn("_check_same_origin", src[post_idx:post_idx + 200])
+
+    def test_extract_session_usage_resets_at_compact_boundary(self):
+        """`/compact` emits a `compact_boundary` system event; assistant
+        turns before that boundary no longer contribute to the live
+        context window. The pre-fix behavior accumulated peak across
+        the whole file, overstating usage."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+        sid = "11111111-2222-3333-4444-666666666666"
+        big_turn = {
+            "type": "assistant",
+            "sessionId": sid,
+            "isSidechain": False,
+            "message": {
+                "model": "claude-opus-4-7",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "before compact"}],
+                "usage": {
+                    "input_tokens": 80_000,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 100_000,
+                    "output_tokens": 500,
+                },
+            },
+        }
+        boundary = {
+            "type": "system",
+            "subtype": "compact_boundary",
+            "compactMetadata": {"trigger": "manual", "preTokens": 180_500},
+        }
+        small_turn = {
+            "type": "assistant",
+            "sessionId": sid,
+            "isSidechain": False,
+            "message": {
+                "model": "claude-opus-4-7",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "after compact"}],
+                "usage": {
+                    "input_tokens": 1_200,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 9_000,
+                    "output_tokens": 80,
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            project = root / "-tmp-project-compact"
+            project.mkdir()
+            (project / f"{sid}.jsonl").write_text(
+                json.dumps(big_turn) + "\n"
+                + json.dumps(boundary) + "\n"
+                + json.dumps(small_turn) + "\n"
+            )
+            orig_root = server.PROJECTS_ROOT
+            server.PROJECTS_ROOT = root
+            try:
+                with mock.patch.object(server, "_is_codex_session", return_value=False), \
+                     mock.patch.object(server, "_is_gemini_session", return_value=False), \
+                     mock.patch.object(server, "_load_desktop_app_metadata", return_value={}):
+                    usage = server.extract_session_usage(sid)
+            finally:
+                server.PROJECTS_ROOT = orig_root
+        # latest = post-compact small turn's window
+        self.assertEqual(usage["latest_input_tokens"], 1_200 + 9_000)
+        # peak resets at the boundary, so it's the post-compact peak — NOT the big pre-compact value
+        self.assertEqual(usage["peak_input_tokens"], 1_200 + 9_000)
+        self.assertEqual(usage["compact_count"], 1)
+
+
 class TestHealthcheck(unittest.TestCase):
     def test_healthcheck_returns_structured_result(self):
         """_run_healthcheck must always return a dict with 'checks' and

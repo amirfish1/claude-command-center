@@ -988,10 +988,12 @@
   .conv-input-context .wp-model-pill {
     padding: 2px 7px; border-radius: 3px; font-weight: 600;
     color: var(--text-muted); background: rgba(88,166,255,0.10);
-    cursor: help;
+    cursor: pointer;
     font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
     font-size: 10px;
+    border: none;
   }
+  .conv-input-context .wp-model-pill:hover { background: rgba(88,166,255,0.18); }
   .conv-input-context .wp-model-1m {
     margin-left: 4px;
     padding: 0 4px;
@@ -1001,6 +1003,85 @@
     font-size: 9px;
     font-weight: 700;
   }
+  /* "→ next" chip — shown when an override is queued (Codex/Gemini, or
+     dormant Claude). The override applies on the next ask/resume. */
+  .conv-input-context .wp-model-pending {
+    margin-left: 4px;
+    padding: 0 4px;
+    border-radius: 2px;
+    background: rgba(218,165,32,0.18);
+    color: #d6a13b;
+    font-size: 9px;
+    font-weight: 700;
+  }
+  /* Model picker popover — anchored under the wp-model-pill button. */
+  .model-picker-pop {
+    position: fixed; z-index: 9000;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px;
+    min-width: 240px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    display: none; flex-direction: column; gap: 2px;
+    font-size: 13px;
+  }
+  .model-picker-pop.open { display: flex; }
+  .model-picker-pop .mp-header {
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-muted);
+    padding: 4px 6px;
+  }
+  .model-picker-pop .mp-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 4px;
+    background: transparent; border: none; color: var(--text);
+    cursor: pointer; text-align: left; font-family: inherit; font-size: 13px;
+    width: 100%;
+  }
+  .model-picker-pop .mp-row:hover { background: var(--surface-2); }
+  .model-picker-pop .mp-row.active {
+    color: var(--accent); background: rgba(88,166,255,0.10); font-weight: 600;
+  }
+  .model-picker-pop .mp-1m-toggle {
+    margin-left: auto; font-size: 10px;
+    padding: 1px 6px; border-radius: 3px;
+    background: rgba(88,166,255,0.10); color: var(--text-muted);
+    cursor: pointer; user-select: none;
+  }
+  .model-picker-pop .mp-1m-toggle.on {
+    background: var(--accent); color: #fff;
+  }
+  .model-picker-pop .mp-1m-toggle.disabled {
+    opacity: 0.35; cursor: not-allowed;
+  }
+  .model-picker-pop .mp-divider {
+    height: 1px; background: var(--border); margin: 4px 2px;
+  }
+  .model-picker-pop .mp-other {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px;
+  }
+  .model-picker-pop .mp-other input {
+    flex: 1; min-width: 0;
+    padding: 4px 6px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 3px; color: var(--text); font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+  }
+  .model-picker-pop .mp-other button {
+    padding: 4px 10px;
+    background: var(--accent); color: #fff;
+    border: none; border-radius: 3px; cursor: pointer;
+    font-size: 12px; font-weight: 600;
+  }
+  .model-picker-pop .mp-reset {
+    color: var(--text-muted); font-size: 12px;
+  }
+  .model-picker-pop .mp-reset:hover { color: var(--text); }
+  .model-picker-pop .mp-status {
+    padding: 4px 8px; font-size: 11px; color: var(--text-muted);
+  }
+  .model-picker-pop .mp-status.ok { color: var(--green); }
+  .model-picker-pop .mp-status.err { color: var(--red); }
   .conv-input-context .wp-ahead { color: var(--green); }
   .conv-input-context .wp-behind { color: var(--orange); }
   .conv-input-context .wp-even { color: var(--text-muted); opacity: 0.6; }
@@ -13460,13 +13541,37 @@
     // beta is delivered via the anthropic-beta header, not the model
     // name in the JSONL, so peak > 200k is the only honest signal.
     let modelPill = '';
-    if (u.model) {
-      const isOneM = (peak > 200000) || u.model.toLowerCase().includes('[1m]');
-      const shortModel = u.model.replace(/^claude-/, '').replace(/\[1m\]/i, '').trim();
-      const modelTip = u.model + (isOneM ? '\n(1M context window - anthropic-beta: context-1m)' : '');
-      modelPill = ' <span class="wp-model-pill" title="' + escapeHtml(modelTip) + '">'
-        + escapeHtml(shortModel) + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
-        + '</span>';
+    // The pill renders the *override* model (when set) so the user sees
+    // the new value immediately. The actual `u.model` from the JSONL only
+    // catches up after the next assistant turn. We show a "→ next" chip
+    // whenever the override has been set but the JSONL hasn't recorded
+    // that model yet (or when the inject explicitly returned applied=queued).
+    const ovr = u.override || null;
+    const displayModel = ovr ? ovr.model : (u.model || '');
+    const engine = u.engine || (ovr && ovr.engine) || 'claude';
+    const ovrNorm = ovr ? _normalizeModelId(ovr.model) : '';
+    const liveNorm = _normalizeModelId(u.model || '');
+    const queued = !!ovr && (ovr.applied === 'queued' || (ovrNorm && ovrNorm !== liveNorm));
+    if (displayModel) {
+      // 1M pill lights up when override.context_1m or peak provably exceeded
+      // 200k (only possible on the 1M variant). Non-Claude engines never
+      // show the 1M pill.
+      const ovrIsOneM = !!(ovr && ovr.context_1m);
+      const isOneM = engine === 'claude' && (ovrIsOneM || peak > 200000 || displayModel.toLowerCase().includes('[1m]'));
+      const shortModel = displayModel.replace(/^claude-/, '').replace(/\[1m\]/i, '').trim();
+      const modelTip = displayModel
+        + (isOneM ? '\n(1M context window — anthropic-beta: context-1m)' : '')
+        + (queued ? '\n(Applied on next ask — change is queued)' : '')
+        + '\n\nClick to change model';
+      modelPill = ' <button type="button" class="wp-model-pill" data-model-picker'
+        + ' data-engine="' + escapeHtml(engine) + '"'
+        + ' data-current="' + escapeHtml(displayModel) + '"'
+        + ' data-1m="' + (isOneM ? '1' : '0') + '"'
+        + ' title="' + escapeHtml(modelTip) + '">'
+        + escapeHtml(shortModel)
+        + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
+        + (queued ? ' <span class="wp-model-pending">→ next</span>' : '')
+        + '</button>';
     }
     // Click-toggle override: if you're on the 1M variant the server's
     // 200k default is wrong; one click flips and persists.
@@ -13529,6 +13634,206 @@
         renderSessionUsageIntoStrip();
       });
     }
+    const modelBtn = uSlot.querySelector('[data-model-picker]');
+    if (modelBtn) {
+      modelBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openModelPicker(modelBtn);
+      });
+    }
+  }
+
+  // Curated per-engine model lists. Free-text "Other…" handles unreleased
+  // models without a code change. The `oneM` flag controls whether the
+  // 1M-context toggle is offered for that model (Claude only — opus and
+  // sonnet support the 1M-context beta header; haiku does not).
+  const MODEL_OPTIONS_BY_ENGINE = {
+    claude: [
+      { id: 'opus-4-7',   label: 'opus-4-7',   oneM: true },
+      { id: 'sonnet-4-6', label: 'sonnet-4-6', oneM: true },
+      { id: 'haiku-4-5',  label: 'haiku-4-5',  oneM: false },
+    ],
+    codex: [
+      { id: 'gpt-5.5',      label: 'gpt-5.5 (default)' },
+      { id: 'gpt-5-codex',  label: 'gpt-5-codex' },
+      { id: 'o3',           label: 'o3' },
+      { id: 'o3-mini',      label: 'o3-mini' },
+    ],
+    gemini: [
+      { id: 'gemini-2.5-pro',   label: 'gemini-2.5-pro' },
+      { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash' },
+    ],
+  };
+
+  function _normalizeModelId(s) {
+    return (s || '').replace(/^claude-/, '').replace(/\[1m\]/i, '').trim().toLowerCase();
+  }
+
+  let _modelPickerEl = null;
+  let _modelPickerCloseHandler = null;
+
+  function closeModelPicker() {
+    if (_modelPickerEl) {
+      _modelPickerEl.remove();
+      _modelPickerEl = null;
+    }
+    if (_modelPickerCloseHandler) {
+      document.removeEventListener('click', _modelPickerCloseHandler, true);
+      document.removeEventListener('keydown', _modelPickerCloseHandler, true);
+      _modelPickerCloseHandler = null;
+    }
+  }
+
+  function openModelPicker(btn) {
+    closeModelPicker();
+    const sid = _usageSessionId || '';
+    if (!sid) return;
+    const engine = btn.dataset.engine || 'claude';
+    const currentModel = btn.dataset.current || '';
+    const currentIs1M = btn.dataset['1m'] === '1';
+    const options = MODEL_OPTIONS_BY_ENGINE[engine] || MODEL_OPTIONS_BY_ENGINE.claude;
+    const currentNorm = _normalizeModelId(currentModel);
+
+    const pop = document.createElement('div');
+    pop.className = 'model-picker-pop open';
+    let html = '<div class="mp-header">Switch model — ' + escapeHtml(engine) + '</div>';
+    options.forEach((opt) => {
+      const isActive = _normalizeModelId(opt.id) === currentNorm;
+      const oneM = !!opt.oneM;
+      const oneMOn = isActive && currentIs1M;
+      html += '<button type="button" class="mp-row' + (isActive ? ' active' : '') + '" data-model="' + escapeHtml(opt.id) + '">'
+        + escapeHtml(opt.label || opt.id);
+      if (oneM) {
+        html += '<span class="mp-1m-toggle' + (oneMOn ? ' on' : '') + '" data-1m-toggle title="1M context (anthropic-beta: context-1m)">1M</span>';
+      }
+      html += '</button>';
+    });
+    html += '<div class="mp-divider"></div>';
+    html += '<div class="mp-other">'
+      + '<input type="text" placeholder="Other model…" data-mp-other-input>'
+      + '<button type="button" data-mp-other-apply>Apply</button>'
+      + '</div>';
+    html += '<div class="mp-divider"></div>';
+    html += '<button type="button" class="mp-row mp-reset" data-mp-reset>↺ Reset to session default</button>';
+    html += '<div class="mp-status" data-mp-status></div>';
+    pop.innerHTML = html;
+
+    // Anchor: align below the pill, but clamp to the viewport so it doesn't
+    // get clipped at the right edge of the input strip.
+    document.body.appendChild(pop);
+    const r = btn.getBoundingClientRect();
+    const popW = pop.getBoundingClientRect().width || 240;
+    let left = r.left;
+    if (left + popW > window.innerWidth - 8) left = window.innerWidth - popW - 8;
+    pop.style.left = Math.max(8, left) + 'px';
+    pop.style.top = (r.bottom + 4) + 'px';
+    _modelPickerEl = pop;
+
+    const statusEl = pop.querySelector('[data-mp-status]');
+    const setStatus = (txt, kind) => {
+      if (!statusEl) return;
+      statusEl.textContent = txt || '';
+      statusEl.className = 'mp-status' + (kind ? ' ' + kind : '');
+    };
+
+    async function applyModel(model, context_1m) {
+      if (!model) return;
+      setStatus('Applying…');
+      try {
+        const r2 = await fetch('/api/session/' + encodeURIComponent(sid) + '/model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, context_1m: !!context_1m }),
+        });
+        const data = await r2.json();
+        if (!data.ok) {
+          setStatus(data.error || 'Failed', 'err');
+          return;
+        }
+        // Optimistic local update so the pill rerenders immediately.
+        _usageData = _usageData || {};
+        _usageData.override = {
+          model,
+          context_1m: !!context_1m,
+          engine: data.engine || engine,
+          applied: data.applied || 'queued',
+        };
+        renderSessionUsageIntoStrip();
+        setStatus(data.applied === 'live' ? 'Switched live ✓' : 'Queued for next ask', 'ok');
+        setTimeout(closeModelPicker, 800);
+      } catch (err) {
+        setStatus('Network error', 'err');
+      }
+    }
+
+    pop.querySelectorAll('.mp-row[data-model]').forEach((row) => {
+      row.addEventListener('click', (ev) => {
+        const t = ev.target;
+        if (t && t.matches && t.matches('[data-1m-toggle]')) {
+          // Click the 1M chip without selecting the row: just toggle the chip.
+          // Selecting + 1M happens when clicking the row itself with the 1M chip on.
+          ev.stopPropagation();
+          t.classList.toggle('on');
+          return;
+        }
+        const model = row.dataset.model;
+        const oneMChip = row.querySelector('[data-1m-toggle]');
+        const oneM = !!(oneMChip && oneMChip.classList.contains('on'));
+        applyModel(model, oneM);
+      });
+    });
+    const otherInput = pop.querySelector('[data-mp-other-input]');
+    const otherApply = pop.querySelector('[data-mp-other-apply]');
+    if (otherApply && otherInput) {
+      otherApply.addEventListener('click', () => {
+        const v = (otherInput.value || '').trim();
+        if (v) applyModel(v, false);
+      });
+      otherInput.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          otherApply.click();
+        }
+      });
+    }
+    const resetBtn = pop.querySelector('[data-mp-reset]');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', async () => {
+        setStatus('Clearing…');
+        try {
+          const r2 = await fetch('/api/session/' + encodeURIComponent(sid) + '/model/clear', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          });
+          const data = await r2.json();
+          if (!data.ok) {
+            setStatus(data.error || 'Failed', 'err');
+            return;
+          }
+          _usageData = _usageData || {};
+          _usageData.override = null;
+          renderSessionUsageIntoStrip();
+          setStatus('Cleared ✓', 'ok');
+          setTimeout(closeModelPicker, 600);
+        } catch (err) {
+          setStatus('Network error', 'err');
+        }
+      });
+    }
+
+    _modelPickerCloseHandler = (ev) => {
+      if (ev.type === 'keydown' && ev.key === 'Escape') {
+        closeModelPicker();
+        return;
+      }
+      if (ev.type === 'click' && pop && !pop.contains(ev.target) && ev.target !== btn) {
+        closeModelPicker();
+      }
+    };
+    document.addEventListener('click', _modelPickerCloseHandler, true);
+    document.addEventListener('keydown', _modelPickerCloseHandler, true);
   }
 
   // Session-activity timeline — fetched per conversation, rendered into
