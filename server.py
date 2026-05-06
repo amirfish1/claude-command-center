@@ -16,6 +16,7 @@ __version__ = "3.1.0"
 import ast
 import base64
 import fcntl
+import hashlib
 import http.server
 import json
 import os
@@ -5244,6 +5245,187 @@ def fetch_cross_repo_issues():
         reverse=True,
     )
     return {"issues": out, "errors": errors, "fetched_at": time.time()}
+
+
+def _gh_pr_status_notes(pr):
+    notes = []
+    if pr.get("isDraft"):
+        notes.append({"kind": "warning", "label": "draft", "title": "Draft PR"})
+    mergeable = (pr.get("mergeable") or "").upper()
+    if mergeable == "CONFLICTING":
+        notes.append({"kind": "danger", "label": "conflicts", "title": "PR has merge conflicts"})
+    elif mergeable in ("UNKNOWN", "BLOCKED"):
+        notes.append({
+            "kind": "warning",
+            "label": mergeable.lower(),
+            "title": f"Mergeability is {mergeable.lower()}",
+        })
+    for check in pr.get("statusCheckRollup") or []:
+        name = (check.get("name") or check.get("workflowName") or "check").strip()
+        conclusion = (check.get("conclusion") or "").upper()
+        if conclusion not in {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}:
+            continue
+        if "CLA" in name.upper():
+            label = "CLA failing"
+            title = f"{name} is failing"
+        else:
+            label = "check failed"
+            title = f"{name} failed"
+        notes.append({"kind": "danger", "label": label, "title": title})
+    return notes
+
+
+def fetch_cross_repo_prs():
+    try:
+        repos = list(dict.fromkeys(
+            _load_recent_repos() + _load_custom_repos()
+        ))
+    except Exception:
+        repos = []
+    if not repos:
+        return {"pull_requests": [], "errors": {}, "fetched_at": time.time()}
+
+    out = []
+    errors = {}
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=min(8, len(repos))) as ex:
+        futures = {ex.submit(_open_prs_cached, r): r for r in repos}
+        for f in as_completed(futures):
+            repo = futures[f]
+            try:
+                prs = f.result()
+            except Exception as e:
+                errors[repo] = f"unexpected: {e}"[:200]
+                continue
+            label = Path(repo).name
+            for pr in prs or []:
+                pr["repo_path"] = repo
+                pr["repo_label"] = label
+                pr["status_notes"] = _gh_pr_status_notes(pr)
+                out.append(pr)
+    out.sort(
+        key=lambda p: p.get("updatedAt") or p.get("createdAt") or "",
+        reverse=True,
+    )
+    return {"pull_requests": out, "errors": errors, "fetched_at": time.time()}
+
+
+def _iso_epoch_or_now(ts):
+    if not ts:
+        return time.time()
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return time.time()
+
+
+def _open_pr_archive_row(pr):
+    repo_path = pr.get("repo_path") or ""
+    number = int(pr.get("number") or 0)
+    digest = hashlib.sha1(f"{repo_path}:{number}".encode("utf-8")).hexdigest()
+    synthetic_id = f"00000000-0000-0000-0000-{digest[:12]}"
+    title = pr.get("title") or f"PR #{number}"
+    branch = pr.get("headRefName") or ""
+    mtime = _iso_epoch_or_now(pr.get("updatedAt") or pr.get("createdAt"))
+    return {
+        "id": synthetic_id,
+        "session_id": synthetic_id,
+        "source": "github_pr",
+        "engine": "github",
+        "timestamp": "",
+        "first_message": title,
+        "display_name": f"#{number}: {title}",
+        "name_overridden": False,
+        "mtime": mtime,
+        "size": 0,
+        "is_live": False,
+        "archived": False,
+        "worktree_dirty": False,
+        "has_commit": False,
+        "has_push": True,
+        "has_edit": False,
+        "tail_pr_number": number,
+        "tail_pr_url": pr.get("url") or "",
+        "pr_state": "OPEN",
+        "pr_is_draft": bool(pr.get("isDraft")),
+        "pr_mergeable": pr.get("mergeable") or "",
+        "pr_review_decision": pr.get("reviewDecision") or "",
+        "pr_notes": pr.get("status_notes") or [],
+        "sidecar_status": None,
+        "sidecar_tool": None,
+        "sidecar_file": None,
+        "sidecar_ts": 0,
+        "sidecar_in_flight": False,
+        "sidecar_has_writes": False,
+        "needs_approval": False,
+        "needs_approval_message": "",
+        "session_cwd": repo_path,
+        "session_cwd_exists": Path(repo_path).is_dir() if repo_path else False,
+        "session_cwd_is_worktree": False,
+        "git_branch": branch,
+        "branch": branch,
+        "effective_branch": branch,
+        "effective_kind": None,
+        "folder_label": pr.get("repo_label") or (Path(repo_path).name if repo_path else "GitHub"),
+        "folder_path": repo_path,
+        "slug": _encode_project_slug(repo_path) if repo_path else "github-pr",
+        "pinned_repo": False,
+    }
+
+
+def conversations_with_open_prs(convs):
+    convs = list(convs or [])
+    open_prs = fetch_cross_repo_prs().get("pull_requests") or []
+    pr_by_url = {
+        str(pr.get("url") or ""): pr
+        for pr in open_prs
+        if pr.get("url")
+    }
+    pr_by_key = {}
+    for pr in open_prs:
+        try:
+            n = int(pr.get("number") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        repo_path = pr.get("repo_path") or ""
+        if n and repo_path:
+            pr_by_key[(repo_path, n)] = pr
+
+    seen_urls = {
+        str(c.get("tail_pr_url") or "")
+        for c in convs
+        if c.get("tail_pr_url")
+    }
+    seen_keys = set()
+    for c in convs:
+        try:
+            n = int(c.get("tail_pr_number") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        repo_path = c.get("folder_path") or c.get("session_cwd") or ""
+        if n and repo_path:
+            seen_keys.add((repo_path, n))
+        pr = pr_by_url.get(str(c.get("tail_pr_url") or "")) or pr_by_key.get((repo_path, n))
+        if pr:
+            c["pr_notes"] = pr.get("status_notes") or []
+            c["pr_is_draft"] = bool(pr.get("isDraft"))
+            c["pr_mergeable"] = pr.get("mergeable") or ""
+            c["pr_review_decision"] = pr.get("reviewDecision") or ""
+
+    for pr in open_prs:
+        try:
+            number = int(pr.get("number") or 0)
+        except (TypeError, ValueError):
+            number = 0
+        if not number:
+            continue
+        repo_path = pr.get("repo_path") or ""
+        url = pr.get("url") or ""
+        if (url and url in seen_urls) or ((repo_path, number) in seen_keys):
+            continue
+        convs.append(_open_pr_archive_row(pr))
+    convs.sort(key=lambda c: c.get("mtime") or c.get("modified") or 0, reverse=True)
+    return convs
 
 
 def _bust_backlog_issue_cache(repo_path=None):
@@ -12045,7 +12227,7 @@ _OPEN_PRS_TTL = 30.0
 def _open_prs_cached(repo_top):
     """Return open PRs for a repo via `gh pr list`, cached for 30s.
 
-    Each entry: {number, title, headRefName, isDraft, url}. Empty list on
+    Each entry includes PR metadata plus status checks. Empty list on
     any failure (no `gh`, no GitHub remote, no auth, network blip) — the
     worktrees modal must keep working without GitHub access.
     """
@@ -12059,8 +12241,8 @@ def _open_prs_cached(repo_top):
     try:
         r = subprocess.run(
             ["gh", "pr", "list", "--state", "open", "--limit", "100",
-             "--json", "number,title,headRefName,isDraft,url"],
-            cwd=repo_top, capture_output=True, text=True, timeout=4,
+             "--json", "number,title,headRefName,isDraft,url,updatedAt,createdAt,statusCheckRollup,mergeable,reviewDecision"],
+            cwd=repo_top, capture_output=True, text=True, timeout=8,
         )
         if r.returncode == 0 and r.stdout.strip():
             data = json.loads(r.stdout)
@@ -12072,6 +12254,11 @@ def _open_prs_cached(repo_top):
                         "headRefName": p.get("headRefName") or "",
                         "isDraft": bool(p.get("isDraft")),
                         "url": p.get("url") or "",
+                        "updatedAt": p.get("updatedAt") or "",
+                        "createdAt": p.get("createdAt") or "",
+                        "statusCheckRollup": p.get("statusCheckRollup") or [],
+                        "mergeable": p.get("mergeable") or "",
+                        "reviewDecision": p.get("reviewDecision") or "",
                     }
                     for p in data if p.get("number")
                 ]
@@ -14676,7 +14863,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # chrono. Read-only browse, no peer registry consulted. The UI's
             # "All repos" mode renders from this. Slow on cold scan; the
             # caller is expected to show a loading state.
-            convs = find_all_conversations()
+            convs = conversations_with_open_prs(find_all_conversations())
             self.send_json({"conversations": convs, "count": len(convs)})
         elif path == "/api/issues/all":
             # Cross-repo GH issues: walk recent ∪ pinned repos in parallel,
@@ -15850,8 +16037,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 ctx = repo_from_session(sid)
             except RepoContextError as e:
-                self.send_json(e.as_payload(), e.status)
-                return
+                repo_payload = payload.get("repo_path") or payload.get("cwd")
+                if repo_payload:
+                    try:
+                        repo_path = resolve_repo_path(repo_payload)
+                        ctx = {"repo_path": repo_path, "cwd": repo_path}
+                    except RepoContextError as e2:
+                        self.send_json(e2.as_payload(), e2.status)
+                        return
+                else:
+                    self.send_json(e.as_payload(), e.status)
+                    return
             try:
                 state_cwd = session_cwd or ctx["cwd"]
                 state_out = subprocess.run(

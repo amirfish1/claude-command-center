@@ -1979,6 +1979,8 @@
   .conv-signal.pr-open    { background: rgba(57,210,192,0.15); color: var(--cyan); }
   .conv-signal.pr-merged  { background: rgba(163,113,247,0.18); color: #c4a8ff; }
   .conv-signal.pr-closed  { background: rgba(139,148,158,0.15); color: var(--text-muted); }
+  .conv-signal.pr-note { background: rgba(251,202,4,0.15); color: #FBCA04; }
+  .conv-signal.pr-note-danger { background: rgba(248,81,73,0.16); color: var(--red); }
   .conv-signal.activity-working { background: rgba(251,202,4,0.15); color: #FBCA04; animation: pulse 2s infinite; }
   .conv-signal.activity-waiting { background: rgba(88,166,255,0.1); color: var(--accent); }
   .conv-signal.activity-idle { background: rgba(139,148,158,0.08); color: var(--text-muted); }
@@ -9777,6 +9779,7 @@
     }
     const _renderRow = (c, opts = {}) => {
       const isBacklogRow = c.source === 'backlog';
+      const isGithubPrRow = c.source === 'github_pr';
       const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
       let rawTitle = c.display_name || (cleanFirst ? firstSentenceOf(cleanFirst, 60) : '(untitled)');
       if (c.backlog_type === 'github' || c.issue_number || c.linked_issue) {
@@ -9947,6 +9950,13 @@
           prCls = 'pushed';    prGlyph = '';   prTitle = 'PR opened by this session';
         }
         signals += '<span class="conv-signal ' + prCls + '" title="' + prTitle + '">' + prGlyph + 'PR #' + c.tail_pr_number + '</span>';
+        if (Array.isArray(c.pr_notes)) {
+          for (const note of c.pr_notes) {
+            if (!note || !note.label) continue;
+            const noteCls = note.kind === 'danger' ? 'pr-note-danger' : 'pr-note';
+            signals += '<span class="conv-signal ' + noteCls + '" title="' + escapeHtml(note.title || note.label) + '">' + escapeHtml(note.label) + '</span>';
+          }
+        }
       } else if (c.has_push) {
         signals += '<span class="conv-signal pushed">pushed</span>';
       } else if (c.has_commit) {
@@ -9983,10 +9993,12 @@
         const _spawnCwdAttr = escapeAttr(c.spawn_cwd || c.folder_path || '');
         startBtn = '<button class="conv-start-btn" data-role="start" data-issue="' + _issueAttr + '" data-title="' + _titleAttr + '" data-spawn-cwd="' + _spawnCwdAttr + '" title="Spawn a session to work on this issue" aria-label="Start issue session">&#9654;</button>';
         archiveBtn = '<button class="conv-archive-btn is-close" data-role="archive" title="Archive issue (close as not planned)" aria-label="Archive issue">&#128229;</button>';
+      } else if (isGithubPrRow) {
+        archiveBtn = '';
       } else {
         archiveBtn = '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>';
       }
-      const rowSizeHtml = isBacklogRow
+      const rowSizeHtml = (isBacklogRow || isGithubPrRow)
         ? ''
         : '<span class="conv-meta-inline">'
           + '<span>' + formatSize(c.size) + '</span>'
@@ -10509,6 +10521,11 @@
         // or that landed on the title (which now triggers rename instead
         // of opening the conversation — the pencil's job moved here).
         if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
+        const row = conversationsData.find(c => c.id === el.dataset.id);
+        if (row && row.source === 'github_pr') {
+          if (row.tail_pr_url) window.open(row.tail_pr_url, '_blank');
+          return;
+        }
         selectConversation(el.dataset.id);
       });
       attachDragHandlers(el);
@@ -10738,7 +10755,7 @@
         btn.disabled = true;
         try {
           const data = await ccPostJson('/api/conversations/' + convId + '/merge-pr',
-            { session_id: sessionId, branch: branchName, pr_number: prNumber, pr_url: prUrl });
+            { session_id: sessionId, branch: branchName, pr_number: prNumber, pr_url: prUrl, repo_path: rowRepoPath(c) || '' });
           if (data.ok) {
             if (data.via === 'session') {
               showOpToast('Asked session to merge ' + target + ' — see chat');
@@ -15587,6 +15604,7 @@
           tail_pr_number: c.tail_pr_number || null,
           tail_pr_url: c.tail_pr_url || null,
           pr_state: c.pr_state || null,
+          pr_notes: Array.isArray(c.pr_notes) ? c.pr_notes : [],
           sidecar_status: c.sidecar_status || null,
           sidecar_tool: c.sidecar_tool || null,
           sidecar_file: c.sidecar_file || null,
@@ -15634,6 +15652,7 @@
         tail_pr_number: c.tail_pr_number || null,
         tail_pr_url: c.tail_pr_url || null,
         pr_state: c.pr_state || null,
+        pr_notes: Array.isArray(c.pr_notes) ? c.pr_notes : [],
         // Sidecar overlay (Round 3) — only meaningful for live rows.
         // The renderer reads these directly to draw the live tool pill
         // ("▶ Editing foo.ts"), sending pulse, and needs-approval signal.
