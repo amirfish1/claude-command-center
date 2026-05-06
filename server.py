@@ -4320,15 +4320,23 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None):
         delay 2.0
         tell application "iTerm2" to activate
         delay 0.3
-        tell application "System Events" to keystroke "/rename {rename_target}"
-        delay 0.25
-        tell application "System Events" to key code 36
+        tell application "System Events"
+          tell process "iTerm2"
+            keystroke "/rename {rename_target}"
+            delay 0.25
+            key code 36
+          end tell
+        end tell
         delay 0.7
         tell application "iTerm2" to activate
         delay 0.2
-        tell application "System Events" to keystroke "/color {color}"
-        delay 0.25
-        tell application "System Events" to key code 36
+        tell application "System Events"
+          tell process "iTerm2"
+            keystroke "/color {color}"
+            delay 0.25
+            key code 36
+          end tell
+        end tell
         return "ok"
         '''
     else:
@@ -4357,18 +4365,26 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None):
           set frontmost of (first window whose id is winId) to true
         end tell
         delay 0.3
-        tell application "System Events" to keystroke "/rename {rename_target}"
-        delay 0.25
-        tell application "System Events" to key code 36
+        tell application "System Events"
+          tell process "Terminal"
+            keystroke "/rename {rename_target}"
+            delay 0.25
+            key code 36
+          end tell
+        end tell
         delay 0.7
         tell application "Terminal"
           activate
           set frontmost of (first window whose id is winId) to true
         end tell
         delay 0.2
-        tell application "System Events" to keystroke "/color {color}"
-        delay 0.25
-        tell application "System Events" to key code 36
+        tell application "System Events"
+          tell process "Terminal"
+            keystroke "/color {color}"
+            delay 0.25
+            key code 36
+          end tell
+        end tell
         return "ok"
         '''
 
@@ -4486,10 +4502,14 @@ def inject_input_via_keystroke(tty, terminal_app, text):
           tell foundSession to write text "{text_lit}"
           activate
         end tell
-        delay 0.1
+        delay 0.15
         set submitErr to ""
         try
-          tell application "System Events" to key code 36
+          tell application "System Events"
+            tell process "iTerm2"
+              key code 36
+            end tell
+          end tell
         on error errMsg
           set submitErr to errMsg
         end try
@@ -4506,8 +4526,8 @@ def inject_input_via_keystroke(tty, terminal_app, text):
         # Terminal.app: find the tab by tty, focus it, send text through
         # Terminal's native `do script ... in tab` API, then activate
         # Terminal and emit a real Return keystroke via System Events so
-        # the TUI submits. The reorder is re-asserted after activate to
-        # win the race against macOS restoring a different window as key.
+        # the TUI submits. Target "process Terminal" explicitly so the
+        # keystroke reaches the right process even if focus briefly shifts.
         script = f'''
         set prevApp to ""
         try
@@ -4534,21 +4554,19 @@ def inject_input_via_keystroke(tty, terminal_app, text):
             end try
           end repeat
           if foundTab is missing value then return "notfound"
-          set selected of foundTab to true
-          try
-            set index of foundWin to 1
-          end try
-          try
-            set index of foundWin to 1
-          end try
-          set selected of foundTab to true
           do script "{text_lit}" in foundTab
           activate
+          set index of foundWin to 1
+          set selected of foundTab to true
         end tell
-        delay 0.1
+        delay 0.15
         set submitErr to ""
         try
-          tell application "System Events" to key code 36
+          tell application "System Events"
+            tell process "Terminal"
+              key code 36
+            end tell
+          end tell
         on error errMsg
           set submitErr to errMsg
         end try
@@ -4675,7 +4693,9 @@ def interrupt_input_via_keystroke(tty, terminal_app):
         end tell
         delay 0.15
         tell application "System Events"
-          key code 53
+          tell process "iTerm2"
+            key code 53
+          end tell
         end tell
         delay 0.08
         try
@@ -4712,20 +4732,15 @@ def interrupt_input_via_keystroke(tty, terminal_app):
             end try
           end repeat
           if foundTab is missing value then return "notfound"
-          set selected of foundTab to true
-          try
-            set index of foundWin to 1
-          end try
           activate
-          delay 0.25
-          try
-            set index of foundWin to 1
-          end try
+          set index of foundWin to 1
           set selected of foundTab to true
         end tell
-        delay 0.1
+        delay 0.15
         tell application "System Events"
-          key code 53
+          tell process "Terminal"
+            key code 53
+          end tell
         end tell
         delay 0.08
         try
