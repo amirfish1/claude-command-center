@@ -9650,6 +9650,26 @@ def list_spawned_sessions():
     return result
 
 
+def _group_chat_read(path):
+    """Read a group-chat file. Returns (result_dict, None) or (None, 'forbidden')."""
+    group_chats_dir = os.path.realpath(os.path.expanduser("~/.claude/group-chats"))
+    try:
+        real_path = os.path.realpath(os.path.expanduser(path))
+    except Exception:
+        return None, "forbidden"
+    if not (real_path.startswith(group_chats_dir + os.sep) or real_path == group_chats_dir):
+        return None, "forbidden"
+    try:
+        stat_result = os.stat(real_path)
+        with open(real_path, "r", encoding="utf-8") as fh:
+            content = fh.read()
+        return {"ok": True, "content": content, "mtime": stat_result.st_mtime}, None
+    except FileNotFoundError:
+        return {"ok": False, "error": "not found"}, None
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}, None
+
+
 def _coordinate_sessions(payload):
     """Create a group-chat file and inject /group-chat into selected sessions."""
     session_ids = payload.get("session_ids") or []
@@ -14311,6 +14331,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # parallel; warm hits are sub-100ms.
             payload = fetch_cross_repo_issues()
             self.send_json(payload)
+        elif path == "/api/group-chat/read":
+            from urllib.parse import urlparse, parse_qs
+            parsed_qs = urlparse(self.path)
+            qs_params = parse_qs(parsed_qs.query)
+            chat_path = (qs_params.get("path") or [""])[0]
+            if not chat_path:
+                self.send_json({"ok": False, "error": "missing path"})
+            else:
+                result, forbidden = _group_chat_read(chat_path)
+                if forbidden:
+                    self.send_response(403)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"ok":false,"error":"forbidden"}')
+                else:
+                    self.send_json(result)
         elif path == "/api/identity":
             # This server's own identity card. Repo identity is request-level.
             self.send_json({

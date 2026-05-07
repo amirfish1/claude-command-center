@@ -633,6 +633,16 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("error", result)
 
+    def test_group_chat_read_helper_exists_and_rejects_traversal(self):
+        """_group_chat_read must exist and block path traversal outside group-chats/."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        self.assertTrue(hasattr(server, "_group_chat_read"))
+        result, forbidden = server._group_chat_read("/etc/passwd")
+        self.assertIsNone(result)
+        self.assertEqual(forbidden, "forbidden")
+
 
 class TestHealthcheck(unittest.TestCase):
     def test_healthcheck_returns_structured_result(self):
