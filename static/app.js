@@ -3111,16 +3111,16 @@
     const toolbar = document.getElementById('coordToolbar');
     const countEl = document.getElementById('coordCount');
     if (!toolbar) return;
-    if (selectedListIds.size >= 2) {
+    if (selectedListIds.size >= 1) {
       toolbar.classList.add('visible');
-      if (countEl) countEl.textContent = selectedListIds.size + ' sessions selected';
+      if (countEl) countEl.textContent = selectedListIds.size === 1 ? '1 session selected' : selectedListIds.size + ' sessions selected';
     } else {
       toolbar.classList.remove('visible');
     }
   }
 
   function openCoordModal() {
-    if (selectedListIds.size < 2) return;
+    if (selectedListIds.size < 1) return;
     const backdrop = document.getElementById('coordModalBackdrop');
     const topicInput = document.getElementById('coordTopicInput');
     const participantsList = document.getElementById('coordParticipantsList');
