@@ -1439,6 +1439,23 @@
   .coord-toolbar .coord-count { flex:1; }
   .coord-toolbar .coord-btn { padding:4px 10px; font-size:12px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer; }
   .coord-toolbar .coord-clear-btn { padding:4px 8px; font-size:13px; background:transparent; border:1px solid var(--border); color:var(--text-muted); border-radius:4px; cursor:pointer; line-height:1; }
+  .coord-modal-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; align-items:center; justify-content:center; }
+  .coord-modal-backdrop.visible { display:flex; }
+  .coord-modal { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:20px; width:420px; max-width:calc(100vw - 32px); box-shadow:0 8px 32px rgba(0,0,0,0.5); display:flex; flex-direction:column; gap:14px; }
+  .coord-modal h3 { margin:0; font-size:14px; font-weight:600; color:var(--text); }
+  .coord-modal label { font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px; }
+  .coord-modal input[type="text"] { width:100%; box-sizing:border-box; padding:6px 8px; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font-size:13px; }
+  .coord-modal .mode-row { display:flex; gap:16px; font-size:13px; }
+  .coord-modal .mode-hint { font-size:11px; color:var(--text-muted); margin-top:2px; }
+  .coord-modal .participants-list { display:flex; flex-direction:column; gap:6px; max-height:160px; overflow-y:auto; }
+  .coord-modal .participant-row { display:flex; align-items:center; gap:8px; font-size:12px; }
+  .coord-modal .participant-row .p-name { font-weight:500; color:var(--text); }
+  .coord-modal .participant-row .p-cwd { color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:200px; }
+  .coord-modal .modal-footer { display:flex; justify-content:flex-end; gap:8px; margin-top:4px; }
+  .coord-modal .modal-cancel { padding:6px 14px; background:transparent; border:1px solid var(--border); color:var(--text-muted); border-radius:4px; cursor:pointer; font-size:13px; }
+  .coord-modal .modal-start { padding:6px 14px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px; font-weight:500; }
+  .coord-modal .modal-error { font-size:12px; color:var(--red); display:none; }
+  .coord-modal .modal-error.visible { display:block; }
   .conv-item.is-history-match { border-left-color: rgba(120, 168, 255, 0.5); }
   .conv-history-badge {
     display: inline-block; margin-left: 6px; padding: 1px 5px;
@@ -6904,6 +6921,23 @@
     document.querySelectorAll('.conv-item.list-selected').forEach(el => el.classList.remove('list-selected'));
     updateCoordToolbar();
   });
+  const $coordModalCancel = document.getElementById('coordModalCancel');
+  const $coordModalStart = document.getElementById('coordModalStart');
+  const $coordModalBackdrop = document.getElementById('coordModalBackdrop');
+  if ($coordModalCancel) $coordModalCancel.addEventListener('click', () => {
+    if ($coordModalBackdrop) $coordModalBackdrop.classList.remove('visible');
+  });
+  if ($coordModalStart) $coordModalStart.addEventListener('click', () => startCoordination());
+  const $coordTopicInput = document.getElementById('coordTopicInput');
+  if ($coordTopicInput) {
+    $coordTopicInput.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') startCoordination();
+      if (ev.key === 'Escape' && $coordModalBackdrop) $coordModalBackdrop.classList.remove('visible');
+    });
+  }
+  if ($coordModalBackdrop) $coordModalBackdrop.addEventListener('click', ev => {
+    if (ev.target === $coordModalBackdrop) $coordModalBackdrop.classList.remove('visible');
+  });
   let convPanelOpen = true;
 
   const $kptOpenConvBtn = document.getElementById('kptOpenConvBtn');
@@ -8051,6 +8085,109 @@
       if (countEl) countEl.textContent = selectedListIds.size + ' sessions selected';
     } else {
       toolbar.classList.remove('visible');
+    }
+  }
+
+  function openCoordModal() {
+    if (selectedListIds.size < 2) return;
+    const backdrop = document.getElementById('coordModalBackdrop');
+    const topicInput = document.getElementById('coordTopicInput');
+    const participantsList = document.getElementById('coordParticipantsList');
+    const modeHint = document.getElementById('coordModeHint');
+    const errorEl = document.getElementById('coordModalError');
+    if (!backdrop) return;
+
+    const selectedRows = Array.from(selectedListIds)
+      .map(id => conversationsData.find(c => c.id === id))
+      .filter(Boolean);
+
+    const cwds = selectedRows.map(r => rowRepoPath(r)).filter(Boolean);
+    const allSameRepo = cwds.length === selectedRows.length && cwds.length > 0 && cwds.every(p => p === cwds[0]);
+    const autoMode = allSameRepo ? 'git' : 'topic';
+    const gitRadio = document.getElementById('coordModeGitRadio');
+    const topicRadio = document.getElementById('coordModeTopicRadio');
+    if (autoMode === 'git' && gitRadio) gitRadio.checked = true;
+    else if (topicRadio) topicRadio.checked = true;
+    if (modeHint) modeHint.textContent = allSameRepo
+      ? 'Auto-detected: all sessions share a repo.'
+      : 'Auto-detected: sessions span multiple repos.';
+
+    participantsList.innerHTML = selectedRows.map(r => {
+      const sid = r.session_id || r.id;
+      const name = escapeHtml(r.display_name || sid);
+      const cwd = rowRepoPath(r) || r.session_cwd || '';
+      const shortCwd = cwd.length > 40 ? '…' + cwd.slice(-39) : cwd;
+      return '<div class="participant-row">'
+        + '<input type="checkbox" checked data-sid="' + escapeAttr(sid) + '" data-name="' + escapeAttr(r.display_name || sid) + '" data-cwd="' + escapeAttr(cwd) + '">'
+        + '<span class="p-name">' + name + '</span>'
+        + '<span class="p-cwd">' + escapeHtml(shortCwd) + '</span>'
+        + '</div>';
+    }).join('') + '<div class="participant-row">'
+      + '<input type="checkbox" checked id="coordHumanCheck">'
+      + '<span class="p-name">You (human)</span>'
+      + '<span class="p-cwd">posts directly to chat</span>'
+      + '</div>';
+
+    if (errorEl) { errorEl.textContent = ''; errorEl.classList.remove('visible'); }
+    if (topicInput) { topicInput.value = ''; }
+    backdrop.classList.add('visible');
+    setTimeout(() => { if (topicInput) topicInput.focus(); }, 50);
+  }
+
+  async function startCoordination() {
+    const backdrop = document.getElementById('coordModalBackdrop');
+    const topicInput = document.getElementById('coordTopicInput');
+    const errorEl = document.getElementById('coordModalError');
+    const topic = (topicInput ? topicInput.value : '').trim();
+    if (!topic) {
+      if (errorEl) { errorEl.textContent = 'Topic is required.'; errorEl.classList.add('visible'); }
+      if (topicInput) topicInput.focus();
+      return;
+    }
+    const modeEl = document.querySelector('input[name="coordMode"]:checked');
+    const mode = modeEl ? modeEl.value : 'topic';
+    const humanCheckbox = document.getElementById('coordHumanCheck');
+    const includeHuman = humanCheckbox ? humanCheckbox.checked : true;
+
+    const checkedBoxes = Array.from(
+      (document.getElementById('coordParticipantsList') || {querySelectorAll: () => []})
+        .querySelectorAll('input[type="checkbox"][data-sid]')
+    ).filter(cb => cb.checked);
+
+    const sessionIds = checkedBoxes.map(cb => cb.dataset.sid);
+    const sessionsMeta = checkedBoxes.map(cb => ({
+      session_id: cb.dataset.sid,
+      display_name: cb.dataset.name || cb.dataset.sid,
+      cwd: cb.dataset.cwd || '',
+    }));
+
+    if (sessionIds.length < 2) {
+      if (errorEl) { errorEl.textContent = 'Select at least 2 sessions.'; errorEl.classList.add('visible'); }
+      return;
+    }
+
+    const startBtn = document.getElementById('coordModalStart');
+    if (startBtn) startBtn.disabled = true;
+    try {
+      const result = await ccPostJson('/api/coordinate', {
+        session_ids: sessionIds, topic, mode, sessions_meta: sessionsMeta, include_human: includeHuman,
+      });
+      if (!result.ok) {
+        if (errorEl) { errorEl.textContent = result.error || 'Failed to start coordination.'; errorEl.classList.add('visible'); }
+        return;
+      }
+      (result.results || []).forEach(r => {
+        if (!r.ok) showOpToast('Could not reach session — check its terminal (' + (r.error || 'tty not found') + ')', 'error');
+      });
+      if (backdrop) backdrop.classList.remove('visible');
+      selectedListIds.clear();
+      document.querySelectorAll('.conv-item.list-selected').forEach(el => el.classList.remove('list-selected'));
+      updateCoordToolbar();
+      openGroupChatReader(result.chat_path, topic, mode, includeHuman);
+    } catch (err) {
+      if (errorEl) { errorEl.textContent = 'Request failed: ' + err.message; errorEl.classList.add('visible'); }
+    } finally {
+      if (startBtn) startBtn.disabled = false;
     }
   }
 
@@ -18093,5 +18230,31 @@
   });
 })();
 </script>
+<div class="coord-modal-backdrop" id="coordModalBackdrop" role="dialog" aria-modal="true" aria-labelledby="coordModalTitle">
+  <div class="coord-modal">
+    <h3 id="coordModalTitle">Coordinate sessions</h3>
+    <div>
+      <label for="coordTopicInput">Topic</label>
+      <input type="text" id="coordTopicInput" placeholder="e.g. Redesign the auth flow" maxlength="120" autocomplete="off">
+    </div>
+    <div>
+      <label>Mode</label>
+      <div class="mode-row">
+        <label><input type="radio" name="coordMode" value="topic" id="coordModeTopicRadio"> Topic coordination</label>
+        <label><input type="radio" name="coordMode" value="git" id="coordModeGitRadio"> Git coordination</label>
+      </div>
+      <div class="mode-hint" id="coordModeHint"></div>
+    </div>
+    <div>
+      <label>Participants</label>
+      <div class="participants-list" id="coordParticipantsList"></div>
+    </div>
+    <div class="modal-error" id="coordModalError"></div>
+    <div class="modal-footer">
+      <button class="modal-cancel" id="coordModalCancel">Cancel</button>
+      <button class="modal-start" id="coordModalStart">Start coordination</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
