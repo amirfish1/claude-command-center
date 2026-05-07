@@ -3148,7 +3148,8 @@
 
     participantsList.innerHTML = selectedRows.map(r => {
       const sid = r.session_id || r.id;
-      const name = escapeHtml(r.display_name || sid);
+      const rawName = r.display_name || sid;
+      const name = escapeHtml(rawName.length > 50 ? rawName.slice(0, 49) + '…' : rawName);
       const cwd = rowRepoPath(r) || r.session_cwd || '';
       const shortCwd = cwd.length > 40 ? '…' + cwd.slice(-39) : cwd;
       return '<div class="participant-row">'
