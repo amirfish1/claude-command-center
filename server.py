@@ -1172,6 +1172,15 @@ def find_all_conversations(limit_per_folder=None):
                 folder_label = slug
                 folder_path = slug
 
+        # If this is a worktree dir (<parent>-wt-<name>), normalise
+        # folder_label to the parent repo name so sessions group under
+        # the parent, and stash the worktree suffix for the UI badge.
+        _wt_worktree_label = None
+        _wt_idx = folder_label.find("-wt-")
+        if _wt_idx > 0:
+            _wt_worktree_label = folder_label[_wt_idx + 4:]  # e.g. "gemini"
+            folder_label = folder_label[:_wt_idx]             # e.g. "claude-command-center"
+
         try:
             jsonls = []
             for f in project_dir.iterdir():
@@ -1411,6 +1420,11 @@ def find_all_conversations(limit_per_folder=None):
                 # means gh failed and the row stays visible to be safe.
                 "pr_state": None,
                 "is_live": is_live,
+                # When the session lives in a sibling worktree dir (e.g.
+                # "claude-command-center-wt-gemini"), folder_label is
+                # normalised to the parent repo name and this field carries
+                # the suffix so the UI can render a "wt-gemini" badge.
+                "worktree_label": _wt_worktree_label,
                 # Last assistant text — passed through so anyone re-enabling
                 # the subtitle in archive can see it. Currently hidden via
                 # _hideAskHtml flag in the UI shaper.

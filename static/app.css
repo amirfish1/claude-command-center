@@ -1540,6 +1540,19 @@
     background: rgba(255, 213, 100, 0.3); color: var(--text);
     padding: 0 2px; border-radius: 2px;
   }
+  /* Worktree-origin badge: shown when a session came from a sibling
+     worktree dir (e.g. claude-command-center-wt-gemini). */
+  .conv-wt-badge {
+    display: inline-block; margin-left: 6px; padding: 1px 5px;
+    font-size: 9px; font-weight: 500; line-height: 1.4;
+    color: rgba(100, 210, 180, 0.9);
+    background: rgba(100, 210, 180, 0.10);
+    border: 1px solid rgba(100, 210, 180, 0.30);
+    border-radius: 3px; letter-spacing: 0.03em;
+    vertical-align: middle;
+    max-width: 120px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   /* Semantic match — slightly different hue + label to make it visible
      when results came via the vector path (vs lexical BM25). */
   .conv-history-badge.is-semantic {

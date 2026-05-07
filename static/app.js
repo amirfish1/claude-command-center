@@ -4919,6 +4919,12 @@
       const leftFolderChipHtml = folderChipBeforeTitle ? '' : folderChipHtml;
       const titleFolderChipHtml = folderChipBeforeTitle ? folderChipHtml : '';
 
+      // Worktree badge — shown when the session came from a sibling worktree
+      // dir (e.g. "claude-command-center-wt-gemini" → badge shows "wt-gemini").
+      const worktreeBadgeHtml = c.worktree_label
+        ? '<span class="conv-wt-badge" title="Worktree: wt-' + escapeAttr(c.worktree_label) + '">wt-' + escapeHtml(c.worktree_label) + '</span>'
+        : '';
+
       // Live dot — sits in a reserved gutter before the title when this session
       // is actively being polled (sidecar marker exists). Helps the user
       // see at a glance which rows can change in real time.
@@ -4962,6 +4968,7 @@
             + titleFolderChipHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to open; click again to rename">' + escapeHtml(title) + '</div>'
             + historyBadgeHtml
+            + worktreeBadgeHtml
             + pinnedHtml
             + rowMetaHtml
             + '<span class="conv-row-actions">' + mergeBtn + startBtn + archiveBtn + '</span>'
@@ -10516,6 +10523,7 @@
           folder_chip_hue: _hashHue(c.folder_label || c.slug),
           folder_chip_orphan: folderOrphan,
           folder_path: c.folder_path,
+          worktree_label: c.worktree_label || null,
           pinned_repo: !!c.pinned_repo,
         });
       }
@@ -10583,6 +10591,9 @@
         folder_chip_hue: _hashHue(c.folder_label || c.slug),
         folder_chip_orphan: folderOrphan,
         folder_path: c.folder_path,
+        // When the session lives in a sibling worktree dir, this carries
+        // the suffix (e.g. "gemini") so the row can render a wt-badge.
+        worktree_label: c.worktree_label || null,
         // Pinned-to-this-repo flag — server overrides the row's folder
         // bucket. Renderer adds a 📌 indicator + click-to-unpin handler.
         pinned_repo: !!c.pinned_repo,
