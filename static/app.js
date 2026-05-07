@@ -10558,8 +10558,8 @@
       // Re-render the list whenever the active-chat set changes so the
       // "In Group Chat" section appears/disappears without waiting for
       // the next sessions poll.
-      if (_gcActiveChats.length !== prev && typeof renderConversationList === 'function') {
-        renderConversationList();
+      if (_gcActiveChats.length !== prev) {
+        renderConversationList(conversationsData);
       }
     } catch (_) {}
   }
