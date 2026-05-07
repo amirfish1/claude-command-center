@@ -3362,8 +3362,18 @@
     border-radius: 4px;
     border-left: 3px solid transparent;
     user-select: none;
+    margin-top: 6px;
+    border-top: 1px solid rgba(139,148,158,0.12);
   }
+  .conv-folder-group-header:first-child { margin-top: 0; border-top: none; }
   .conv-folder-group-header:hover { background: rgba(139,148,158,0.08); color: var(--text); }
+  /* Separator before a standalone (ungrouped) session that follows a group */
+  .conv-folder-group + .conv-item,
+  .conv-item + .conv-folder-group {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(139,148,158,0.12);
+  }
   .conv-folder-group-arrow {
     grid-column: 1;
     width: var(--conv-dot-col);
