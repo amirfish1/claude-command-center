@@ -3230,11 +3230,13 @@
   let _gcReaderPath = null;
   let _gcLastMtime = null;
   let _gcPollFailCount = 0;
+  let _gcLastNudgeTime = 0;
 
   function openGroupChatReader(chatPath, topic, mode, includeHuman) {
     _gcReaderPath = chatPath;
     _gcLastMtime = null;
     _gcPollFailCount = 0;
+    _gcLastNudgeTime = 0;
 
     const pane = document.querySelector('.conv-pane');
     if (!pane) return;
@@ -3286,10 +3288,19 @@
       if (errBanner) errBanner.remove();
       if (!data.ok) { body.innerHTML = renderMarkdown(data.error || 'File not found.'); return; }
       if (data.mtime !== _gcLastMtime) {
+        const isFirstLoad = _gcLastMtime === null;
         _gcLastMtime = data.mtime;
         const atBottom = body.scrollHeight - body.scrollTop <= body.clientHeight + 40;
         body.innerHTML = renderMarkdown(data.content);
         if (atBottom) body.scrollTop = body.scrollHeight;
+        // Nudge all participants when content changes (but not on first load, and debounced to 15s).
+        if (!isFirstLoad) {
+          const now = Date.now();
+          if (now - _gcLastNudgeTime > 15000) {
+            _gcLastNudgeTime = now;
+            ccPostJson('/api/group-chat/nudge', { path: _gcReaderPath }).catch(() => {});
+          }
+        }
       }
     } catch (_err) {
       _gcPollFailCount++;

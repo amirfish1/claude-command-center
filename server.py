@@ -10287,8 +10287,45 @@ def _coordinate_sessions(payload):
             "error": inject_result.get("error", ""),
         })
 
+    # Write sidecar JSON so nudge can re-inject participants later.
+    sidecar_path = chat_path[:-3] + ".json"
+    try:
+        with open(sidecar_path, "w", encoding="utf-8") as fh:
+            json.dump({"session_ids": session_ids, "topic": topic, "mode": mode}, fh)
+    except OSError:
+        pass  # sidecar failure is non-fatal
+
     chat_path_tilde = "~/.claude/group-chats/" + f"{slug}-{ts}.md"
     return {"ok": True, "chat_path": chat_path_tilde, "results": results}
+
+
+def _group_chat_nudge(path):
+    """Re-inject /group-chat into all participant sessions for a coordination."""
+    group_chats_dir = os.path.realpath(os.path.expanduser("~/.claude/group-chats"))
+    try:
+        real_path = os.path.realpath(os.path.expanduser(path))
+    except Exception:
+        return {"ok": False, "error": "forbidden"}
+    if not real_path.startswith(group_chats_dir + os.sep):
+        return {"ok": False, "error": "forbidden"}
+    sidecar_path = real_path[:-3] + ".json" if real_path.endswith(".md") else real_path + ".json"
+    try:
+        with open(sidecar_path, "r", encoding="utf-8") as fh:
+            meta = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        return {"ok": False, "error": f"sidecar not found or invalid: {exc}"}
+    session_ids = meta.get("session_ids") or []
+    topic = meta.get("topic", "")
+    mode = meta.get("mode", "topic")
+    if not session_ids:
+        return {"ok": False, "error": "no session_ids in sidecar"}
+    safe_topic = topic.replace('"', '\\"')
+    results = []
+    for sid in session_ids:
+        text = f'/group-chat chat="{real_path}" topic="{safe_topic}" mode={mode}'
+        r = _inject_text_into_session(sid, text)
+        results.append({"session_id": sid, "ok": bool(r.get("ok")), "error": r.get("error", "")})
+    return {"ok": True, "results": results}
 
 
 def _inject_text_into_session(session_id, text):
@@ -16776,6 +16813,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing path or text"})
                 return
             result = _group_chat_post(chat_path, text)
+            if not result.get("ok") and result.get("error") == "forbidden":
+                self.send_json(result, 403)
+            else:
+                self.send_json(result)
+        elif path == "/api/group-chat/nudge":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            chat_path = (payload.get("path") or "").strip()
+            if not chat_path:
+                self.send_json({"ok": False, "error": "missing path"})
+                return
+            result = _group_chat_nudge(chat_path)
             if not result.get("ok") and result.get("error") == "forbidden":
                 self.send_json(result, 403)
             else:
