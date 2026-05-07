@@ -663,6 +663,26 @@ def _legacy_project_slug(path):
 _fs_case_cache: dict = {}
 _git_root_cache: dict = {}
 
+def _slug_to_label(slug: str) -> str:
+    """Strip the home-directory prefix and common top-level dirs from a raw
+    project slug so the display label is just the project name.
+
+    e.g.  '-Users-amirfish-Apps-amirfish-com'  →  'amirfish-com'
+          '-Users-amirfish-dev-my-finance-app'  →  'my-finance-app'
+          '-Users-amirfish-agent-workshop'       →  'agent-workshop'
+    """
+    import os as _os
+    home_prefix = "-" + _os.path.expanduser("~").lstrip("/").replace("/", "-") + "-"
+    if not slug.startswith(home_prefix):
+        return slug
+    rest = slug[len(home_prefix):]
+    for _top in ("Apps-", "dev-", "Dev-", "Work-", "Projects-",
+                 "Research-", "Documents-", "Desktop-"):
+        if rest.startswith(_top):
+            rest = rest[len(_top):]
+            break
+    return rest or slug
+
 def _find_git_root(folder_path: str) -> "str | None":
     """Walk up from folder_path to find the nearest ancestor that is a git
     repo root (contains a .git file or dir).  Returns the root path string,
@@ -1222,7 +1242,7 @@ def find_all_conversations(limit_per_folder=None):
                 folder_label = _resolve_dir_case(str(decoded)) or slug
                 folder_path = str(decoded)
             else:
-                folder_label = slug
+                folder_label = _slug_to_label(slug)
                 folder_path = slug
 
         # If this is a worktree dir (<parent>-wt-<name>), normalise
