@@ -4914,6 +4914,8 @@
     const _ghIssueConvs = [];
     const _readyToMergeConvs = [];
     const _archivedConvs = [];
+    const _inGroupChatIds = new Set(_gcActiveChats.flatMap(c => c.session_ids || []));
+    const _inGroupChatConvs = [];
     for (const c of convs) {
       const col = classifyKanbanColumn(c);
       if (col === 'archived') { _archivedConvs.push(c); continue; }
@@ -4928,6 +4930,11 @@
       const _prDone = c.pr_state === 'MERGED' || c.pr_state === 'CLOSED';
       if (c.source !== 'pkood' && c.tail_pr_number && !_prDone) {
         _readyToMergeConvs.push(c);
+        continue;
+      }
+      const _sid = c.session_id || c.id || '';
+      if (_sid && _inGroupChatIds.has(_sid)) {
+        _inGroupChatConvs.push(c);
         continue;
       }
       _sessionConvs.push(c);
@@ -5533,10 +5540,27 @@
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + '</div>';
     }
-    // Order: GH Issues (to start) → Ready to merge (action) → In progress
-    // → Archived. "Ready to merge" floats above "In progress" because the
-    // user almost certainly wants to act on these first.
-    $convList.innerHTML = _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
+    // In Group Chat section: sessions currently participating in an active
+    // coordination. Floats to the top so the user can see what's live.
+    let _inGroupChatHtml = '';
+    if (_inGroupChatConvs.length > 0) {
+      const _gcRows = _inGroupChatConvs.map(c => _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter })).join('');
+      const _gcTopic = _gcActiveChats.length ? _gcActiveChats[0].topic : '';
+      const _gcTopicLabel = _gcTopic ? ' — ' + escapeHtml(_gcTopic.slice(0, 40)) : '';
+      _inGroupChatHtml =
+        '<div class="conv-ingroupchat-section" data-role="ingroupchat-section">'
+        + '<div class="conv-ingroupchat-header">'
+        +   '<span class="conv-ingroupchat-icon">💬</span>'
+        +   '<span class="conv-ingroupchat-label">In Group Chat</span>'
+        +   '<span class="conv-ingroupchat-topic">' + _gcTopicLabel + '</span>'
+        +   '<span class="conv-ingroupchat-count">' + _inGroupChatConvs.length + '</span>'
+        + '</div>'
+        + '<div class="conv-ingroupchat-list">' + _gcRows + '</div>'
+        + '</div>';
+    }
+    // Order: In Group Chat (live) → GH Issues (to start) → Ready to merge
+    // (action) → In progress → Archived.
+    $convList.innerHTML = _inGroupChatHtml + _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
     // Toggle handler for the Archived section header.
     const $archivedToggle = $convList.querySelector('[data-role="archived-toggle"]');
     if ($archivedToggle) {

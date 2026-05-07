@@ -4399,3 +4399,19 @@
 .gc-reader-input-row { display:flex; gap:8px; padding:10px 14px; border-top:1px solid var(--border); flex-shrink:0; }
 .gc-reader-input-row input { flex:1; padding:6px 8px; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font-size:13px; }
 .gc-reader-input-row button { padding:6px 12px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px; }
+
+/* In Group Chat section — sessions currently in an active coordination */
+#convList .conv-ingroupchat-section { margin-top: 0; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+#convList .conv-ingroupchat-header {
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px; color: var(--text-muted); font-size: 12px;
+  text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;
+}
+#convList .conv-ingroupchat-icon { font-size: 13px; }
+#convList .conv-ingroupchat-label { color: var(--accent); }
+#convList .conv-ingroupchat-topic { color: var(--text-muted); font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+#convList .conv-ingroupchat-count {
+  margin-left: auto; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; padding: 1px 8px; font-size: 11px;
+  color: var(--text-muted); font-weight: 600; flex-shrink: 0;
+}

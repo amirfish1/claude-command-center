@@ -15325,9 +15325,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         meta = json.load(fh)
                     c["topic"] = meta.get("topic", "")
                     c["mode"] = meta.get("mode", "topic")
+                    c["session_ids"] = meta.get("session_ids") or []
                 except OSError:
                     c["topic"] = ""
                     c["mode"] = "topic"
+                    c["session_ids"] = []
                 c["path_tilde"] = "~/.claude/group-chats/" + os.path.basename(c["path"])
             self.send_json({"ok": True, "chats": chats})
         elif path == "/api/group-chat/read":
