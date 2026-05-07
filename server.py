@@ -661,6 +661,33 @@ def _legacy_project_slug(path):
     return "-" + str(path).lstrip("/").replace("/", "-")
 
 _fs_case_cache: dict = {}
+_git_root_cache: dict = {}
+
+def _find_git_root(folder_path: str) -> "str | None":
+    """Walk up from folder_path to find the nearest ancestor that is a git
+    repo root (contains a .git file or dir).  Returns the root path string,
+    or None if no git repo is found up to the filesystem root.  Cached."""
+    if not folder_path:
+        return None
+    if folder_path in _git_root_cache:
+        return _git_root_cache[folder_path]
+    p = Path(folder_path)
+    candidate = p if p.is_dir() else p.parent
+    while True:
+        try:
+            if (candidate / ".git").exists():
+                result = str(candidate)
+                _git_root_cache[folder_path] = result
+                return result
+        except OSError:
+            pass
+        parent = candidate.parent
+        if parent == candidate:
+            break
+        candidate = parent
+    _git_root_cache[folder_path] = None
+    return None
+
 
 def _resolve_dir_case(folder_path: str) -> str:
     """Return the directory's name using the actual filesystem capitalisation.
@@ -8005,7 +8032,11 @@ def find_codex_conversations(repo_path=None, include_old=True, repo_only=True, p
         except OSError:
             cwd_exists = False
         folder_path = pinned or cwd or effective_cwd or ""
-        folder_label = _resolve_dir_case(folder_path) if folder_path else "Codex"
+        if folder_path:
+            _git_root = _find_git_root(folder_path)
+            folder_label = _resolve_dir_case(_git_root or folder_path)
+        else:
+            folder_label = "Codex"
         _wt_worktree_label = None
         _wt_idx = folder_label.find("-wt-")
         if _wt_idx > 0:
@@ -8943,7 +8974,11 @@ def find_gemini_conversations(repo_path=None, include_old=True, repo_only=True, 
         except OSError:
             cwd_exists = False
         folder_path = pinned or cwd or effective_cwd or ""
-        folder_label = _resolve_dir_case(folder_path) if folder_path else "Gemini"
+        if folder_path:
+            _git_root = _find_git_root(folder_path)
+            folder_label = _resolve_dir_case(_git_root or folder_path)
+        else:
+            folder_label = "Gemini"
         _wt_worktree_label = None
         _wt_idx = folder_label.find("-wt-")
         if _wt_idx > 0:
