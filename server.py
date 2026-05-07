@@ -9711,7 +9711,8 @@ def _coordinate_sessions(payload):
             "error": inject_result.get("error", ""),
         })
 
-    return {"ok": True, "chat_path": chat_path, "results": results}
+    chat_path_tilde = "~/.claude/group-chats/" + f"{slug}-{ts}.md"
+    return {"ok": True, "chat_path": chat_path_tilde, "results": results}
 
 
 def _inject_text_into_session(session_id, text):
