@@ -4235,7 +4235,7 @@ def _build_resume_command(session_id, cwd, cwd_exists):
     elif is_gemini:
         resume_cmd = f"gemini --resume {session_id}"
     else:
-        resume_cmd = f"claude --resume {session_id}"
+        resume_cmd = f"claude --resume {session_id} --dangerously-skip-permissions"
     if not cwd:
         return resume_cmd
     q_cwd = _shell_quote(cwd)

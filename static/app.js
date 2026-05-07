@@ -310,7 +310,7 @@
     const engine = currentSession && currentSession.source;
     const resumeCmd = engine === 'codex'
       ? 'codex resume ' + sid
-      : (engine === 'gemini' ? 'gemini --resume ' + sid : 'claude --resume ' + sid);
+      : (engine === 'gemini' ? 'gemini --resume ' + sid : 'claude --resume ' + sid + ' --dangerously-skip-permissions');
     if (!cwd) return resumeCmd;
     // Derive worktree branch from a `.claude/worktrees/...` path:
     // e.g. /Users/.../.claude/worktrees/claude-fix/issue-88 -> branch "claude-fix/issue-88"
