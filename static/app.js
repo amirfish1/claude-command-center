@@ -3245,9 +3245,9 @@
     const modeSafe = escapeHtml(mode);
     pane.innerHTML = '<div class="gc-reader" id="gcReader">'
       + '<div class="gc-reader-header">'
+        + '<button class="gc-close" id="gcCloseBtn" title="Close group chat reader">← Back</button>'
         + '<span class="gc-topic" title="' + topicSafe + '">' + topicSafe + '</span>'
         + '<span class="gc-mode-badge">' + modeSafe + '</span>'
-        + '<button class="gc-close" id="gcCloseBtn" title="Close reader">&times;</button>'
       + '</div>'
       + '<div class="gc-reader-body" id="gcReaderBody">Loading…</div>'
       + (includeHuman
@@ -5545,11 +5545,17 @@
     let _inGroupChatHtml = '';
     if (_inGroupChatConvs.length > 0) {
       const _gcRows = _inGroupChatConvs.map(c => _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter })).join('');
-      const _gcTopic = _gcActiveChats.length ? _gcActiveChats[0].topic : '';
+      // Find the chat this session belongs to for the header open-reader button.
+      const _gcFirst = _gcActiveChats[0] || null;
+      const _gcTopic = _gcFirst ? _gcFirst.topic : '';
       const _gcTopicLabel = _gcTopic ? ' — ' + escapeHtml(_gcTopic.slice(0, 40)) : '';
       _inGroupChatHtml =
         '<div class="conv-ingroupchat-section" data-role="ingroupchat-section">'
-        + '<div class="conv-ingroupchat-header">'
+        + '<div class="conv-ingroupchat-header" data-role="ingroupchat-open"'
+        +   (_gcFirst ? ' data-gc-path="' + escapeHtml(_gcFirst.path_tilde) + '"'
+                      + ' data-gc-topic="' + escapeHtml(_gcFirst.topic) + '"'
+                      + ' data-gc-mode="' + escapeHtml(_gcFirst.mode) + '"' : '')
+        +   ' title="Click to open group chat reader" style="cursor:pointer;">'
         +   '<span class="conv-ingroupchat-icon">💬</span>'
         +   '<span class="conv-ingroupchat-label">In Group Chat</span>'
         +   '<span class="conv-ingroupchat-topic">' + _gcTopicLabel + '</span>'
@@ -5573,6 +5579,16 @@
         const arrowEl = $archivedToggle.querySelector('.conv-archived-arrow');
         if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         $archivedToggle.setAttribute('aria-expanded', String(!wasCollapsed));
+      });
+    }
+    // Click handler for the "In Group Chat" section header — opens the reader.
+    const $gcOpen = $convList.querySelector('[data-role="ingroupchat-open"]');
+    if ($gcOpen) {
+      $gcOpen.addEventListener('click', () => {
+        const path = $gcOpen.dataset.gcPath;
+        const topic = $gcOpen.dataset.gcTopic || '';
+        const mode = $gcOpen.dataset.gcMode || 'topic';
+        if (path) openGroupChatReader(path, topic, mode, true);
       });
     }
     // Toggle handler for the GH Issues section header.
@@ -10537,8 +10553,12 @@
   if ($gcActiveBtn) {
     $gcActiveBtn.addEventListener('click', () => {
       if (!_gcActiveChats.length) return;
-      const c = _gcActiveChats[0];
-      openGroupChatReader(c.path_tilde, c.topic, c.mode, true);
+      if (_gcReaderPath) {
+        closeGroupChatReader();
+      } else {
+        const c = _gcActiveChats[0];
+        openGroupChatReader(c.path_tilde, c.topic, c.mode, true);
+      }
     });
   }
 

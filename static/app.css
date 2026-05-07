@@ -4393,7 +4393,8 @@
 .gc-reader-header { display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--border); flex-shrink:0; }
 .gc-reader-header .gc-topic { font-weight:600; font-size:13px; color:var(--text); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .gc-reader-header .gc-mode-badge { font-size:11px; padding:2px 6px; border-radius:10px; background:var(--surface-2); color:var(--text-muted); flex-shrink:0; }
-.gc-reader-header .gc-close { background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:16px; padding:2px 6px; line-height:1; }
+.gc-reader-header .gc-close { background:var(--surface-2); border:1px solid var(--border); color:var(--text); cursor:pointer; font-size:12px; font-weight:500; padding:3px 10px; border-radius:4px; flex-shrink:0; }
+.gc-reader-header .gc-close:hover { background:var(--border); }
 .gc-reader-body { flex:1; overflow-y:auto; padding:14px; font-size:13px; line-height:1.55; color:var(--text); }
 .gc-reader-body .gc-poll-error { color:var(--red); font-size:12px; padding:6px 0; }
 .gc-reader-input-row { display:flex; gap:8px; padding:10px 14px; border-top:1px solid var(--border); flex-shrink:0; }
