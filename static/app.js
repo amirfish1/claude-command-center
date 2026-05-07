@@ -5545,15 +5545,15 @@
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + '</div>';
     }
-    // In Group Chat section: sessions currently participating in an active
-    // coordination. Floats to the top so the user can see what's live.
+    // In Group Chat section: shown whenever any coordination is active,
+    // even if participants are from a different repo (cross-repo chats).
     let _inGroupChatHtml = '';
-    if (_inGroupChatConvs.length > 0) {
+    if (_gcActiveChats.length > 0) {
       const _gcRows = _inGroupChatConvs.map(c => _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter })).join('');
-      // Find the chat this session belongs to for the header open-reader button.
       const _gcFirst = _gcActiveChats[0] || null;
       const _gcTopic = _gcFirst ? _gcFirst.topic : '';
       const _gcTopicLabel = _gcTopic ? ' — ' + escapeHtml(_gcTopic.slice(0, 40)) : '';
+      const _gcCount = _inGroupChatConvs.length || _gcFirst.session_ids?.length || '';
       _inGroupChatHtml =
         '<div class="conv-ingroupchat-section" data-role="ingroupchat-section">'
         + '<div class="conv-ingroupchat-header" data-role="ingroupchat-open"'
@@ -5564,9 +5564,9 @@
         +   '<span class="conv-ingroupchat-icon">💬</span>'
         +   '<span class="conv-ingroupchat-label">In Group Chat</span>'
         +   '<span class="conv-ingroupchat-topic">' + _gcTopicLabel + '</span>'
-        +   '<span class="conv-ingroupchat-count">' + _inGroupChatConvs.length + '</span>'
+        +   (_gcCount ? '<span class="conv-ingroupchat-count">' + _gcCount + '</span>' : '')
         + '</div>'
-        + '<div class="conv-ingroupchat-list">' + _gcRows + '</div>'
+        + (_gcRows ? '<div class="conv-ingroupchat-list">' + _gcRows + '</div>' : '')
         + '</div>';
     }
     // Order: In Group Chat (live) → GH Issues (to start) → Ready to merge
