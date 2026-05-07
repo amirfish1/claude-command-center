@@ -8106,7 +8106,7 @@
     const participantsList = document.getElementById('coordParticipantsList');
     const modeHint = document.getElementById('coordModeHint');
     const errorEl = document.getElementById('coordModalError');
-    if (!backdrop) return;
+    if (!backdrop || !participantsList) return;
 
     const selectedRows = Array.from(selectedListIds)
       .map(id => conversationsData.find(c => c.id === id))
@@ -8114,6 +8114,7 @@
 
     const cwds = selectedRows.map(r => rowRepoPath(r)).filter(Boolean);
     const allSameRepo = cwds.length === selectedRows.length && cwds.length > 0 && cwds.every(p => p === cwds[0]);
+    const someLackCwd = cwds.length < selectedRows.length;
     const autoMode = allSameRepo ? 'git' : 'topic';
     const gitRadio = document.getElementById('coordModeGitRadio');
     const topicRadio = document.getElementById('coordModeTopicRadio');
@@ -8121,7 +8122,9 @@
     else if (topicRadio) topicRadio.checked = true;
     if (modeHint) modeHint.textContent = allSameRepo
       ? 'Auto-detected: all sessions share a repo.'
-      : 'Auto-detected: sessions span multiple repos.';
+      : someLackCwd
+        ? 'Auto-detected: one or more sessions have no repo context.'
+        : 'Auto-detected: sessions span multiple repos.';
 
     participantsList.innerHTML = selectedRows.map(r => {
       const sid = r.session_id || r.id;
