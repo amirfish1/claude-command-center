@@ -1462,7 +1462,7 @@
   .gc-reader-header .gc-topic { font-weight:600; font-size:13px; color:var(--text); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .gc-reader-header .gc-mode-badge { font-size:11px; padding:2px 6px; border-radius:10px; background:var(--surface-2); color:var(--text-muted); flex-shrink:0; }
   .gc-reader-header .gc-close { background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:16px; padding:2px 6px; line-height:1; }
-  .gc-reader-body { flex:1; overflow-y:auto; padding:14px; font-size:13px; line-height:1.55; color:var(--text); white-space:pre-wrap; font-family:monospace; }
+  .gc-reader-body { flex:1; overflow-y:auto; padding:14px; font-size:13px; line-height:1.55; color:var(--text); }
   .gc-reader-body .gc-poll-error { color:var(--red); font-size:12px; padding:6px 0; }
   .gc-reader-input-row { display:flex; gap:8px; padding:10px 14px; border-top:1px solid var(--border); flex-shrink:0; }
   .gc-reader-input-row input { flex:1; padding:6px 8px; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font-size:13px; }
@@ -8255,7 +8255,7 @@
   async function pollGroupChatReader() {
     if (!_gcReaderPath) return;
     const body = document.getElementById('gcReaderBody');
-    if (!body) { closeGroupChatReader(); return; }
+    if (!body) return;
     try {
       const res = await fetch('/api/group-chat/read?path=' + encodeURIComponent(_gcReaderPath));
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -8263,11 +8263,11 @@
       _gcPollFailCount = 0;
       const errBanner = body.querySelector('.gc-poll-error');
       if (errBanner) errBanner.remove();
-      if (!data.ok) { body.textContent = data.error || 'File not found.'; return; }
+      if (!data.ok) { body.innerHTML = renderMarkdown(data.error || 'File not found.'); return; }
       if (data.mtime !== _gcLastMtime) {
         _gcLastMtime = data.mtime;
         const atBottom = body.scrollHeight - body.scrollTop <= body.clientHeight + 40;
-        body.textContent = data.content;
+        body.innerHTML = renderMarkdown(data.content);
         if (atBottom) body.scrollTop = body.scrollHeight;
       }
     } catch (_err) {
