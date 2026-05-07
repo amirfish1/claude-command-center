@@ -9672,18 +9672,20 @@ def _group_chat_read(path):
 
 def _coordinate_sessions(payload):
     """Create a group-chat file and inject /group-chat into selected sessions."""
-    session_ids = payload.get("session_ids") or []
+    session_ids = payload.get("session_ids")
+    if not isinstance(session_ids, list):
+        session_ids = []
     topic = (payload.get("topic") or "").strip()
     mode = (payload.get("mode") or "topic").strip()
     sessions_meta = payload.get("sessions_meta") or []
-    include_human = payload.get("include_human", True)
+    include_human = bool(payload.get("include_human", True))
 
     if not session_ids or not topic:
         return {"ok": False, "error": "missing session_ids or topic"}
     if mode not in ("topic", "git"):
         mode = "topic"
 
-    slug = re.sub(r"[^a-z0-9]+", "-", topic.lower()).strip("-")[:60]
+    slug = re.sub(r"[^a-z0-9]+", "-", topic.lower()).strip("-")[:60] or "chat"
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     group_chats_dir = os.path.expanduser("~/.claude/group-chats")
@@ -9695,7 +9697,7 @@ def _coordinate_sessions(payload):
     chat_path = os.path.join(group_chats_dir, f"{slug}-{ts}.md")
 
     name_map = {m["session_id"]: m.get("display_name") or m["session_id"]
-                for m in sessions_meta if m.get("session_id")}
+                for m in sessions_meta if isinstance(m, dict) and m.get("session_id")}
     participant_names = [name_map.get(sid, sid) for sid in session_ids]
     if include_human:
         participant_names.append("human")
@@ -9721,9 +9723,10 @@ def _coordinate_sessions(payload):
     except OSError as exc:
         return {"ok": False, "error": f"cannot write chat file: {exc}"}
 
+    safe_topic = topic.replace('"', '\\"')
     results = []
     for sid in session_ids:
-        text = f'/group-chat chat={chat_path} topic="{topic}" mode={mode}'
+        text = f'/group-chat chat="{chat_path}" topic="{safe_topic}" mode={mode}'
         inject_result = _inject_text_into_session(sid, text)
         results.append({
             "session_id": sid,
