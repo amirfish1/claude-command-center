@@ -676,9 +676,14 @@ def _candidate_conversation_dirs(path):
         d = root / slug
         if d.is_dir():
             candidates.append(d)
-        # Include sibling worktree project dirs (<slug>-wt-*)
+        # Include sibling worktree project dirs (<slug>-wt-*), but skip
+        # auto-generated agent worktrees whose suffix is a bare UUID
+        # (e.g. -wt-a650bcb1196009f91) — those are ephemeral scratch dirs
+        # and would pollute the conversation list with noise.
+        import re as _re
+        _UUID_SUFFIX = _re.compile(r'-wt-[0-9a-f]{16,}$')
         for wt_dir in sorted(root.glob(f"{slug}-wt-*")):
-            if wt_dir.is_dir() and str(wt_dir) not in seen:
+            if wt_dir.is_dir() and str(wt_dir) not in seen and not _UUID_SUFFIX.search(wt_dir.name):
                 seen.add(str(wt_dir))
                 candidates.append(wt_dir)
     return candidates

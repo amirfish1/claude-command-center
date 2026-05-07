@@ -385,6 +385,17 @@
   .conv-sticky-header .tools-toggle:hover { color: var(--text); background: var(--surface-2); }
   .conv-sticky-header .tools-toggle.active { color: var(--accent); border-color: rgba(88,166,255,0.4); }
 
+  .conv-sticky-header .conv-sticky-header__close {
+    position: absolute; top: 10px; right: 10px;
+    width: 20px; height: 20px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none;
+    color: var(--text-muted); font-size: 16px; cursor: pointer;
+    line-height: 1; padding: 0;
+    opacity: 0.6; z-index: 10;
+  }
+  .conv-sticky-header .conv-sticky-header__close:hover { opacity: 1; color: var(--red); }
+
   .assistant-text {
     font-size: 15px; padding: 4px 0;
     line-height: 1.5;
@@ -3358,10 +3369,7 @@
     background: hsla(var(--chip-hue), 60%, 50%, 0.18);
     color: hsl(var(--chip-hue), 55%, 65%);
     border: 1px solid hsla(var(--chip-hue), 55%, 50%, 0.35);
-    max-width: 180px;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .conv-folder-group-chip.is-orphan { opacity: 0.55; font-style: italic; }
   .conv-folder-group + .conv-folder-group {

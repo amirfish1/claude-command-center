@@ -4980,7 +4980,10 @@
     // chooses which active rows are shown; the project view groups every row
     // in that selected window.
     const _folderFilterEl = document.getElementById('convFolderFilter');
-    const _isSpecificFolderFilter = !!(_folderFilterEl && _folderFilterEl.value && _folderFilterEl.value !== '__all__');
+    // Folder picker no longer filters — it only groups. Always show folder
+    // chips so sessions from other repos are clearly labelled regardless of
+    // which folder chip is active in the picker.
+    const _isSpecificFolderFilter = false;
     const _hasFolderChips = _sessionConvs.some(c => c.folder_label_chip);
     const _ipWindow = (() => {
       if (!_hasFolderChips) return 'all';
