@@ -5534,43 +5534,99 @@
     // collapsed by default so it doesn't crowd the active list. State
     // persists in localStorage. No gap separators inside — archived
     // rows are a single block, the user's done with timing.
+    //
+    // Archived group chats are interleaved into this section, sorted by
+    // mtime alongside session rows. They render as a slim custom row with
+    // a 💬 prefix so users can tell them apart from session rows.
     let _archivedHtml = '';
-    if (_archivedConvs.length > 0) {
+    // Build a merged list of (mtime, html) tuples so session rows and
+    // archived group-chat rows appear together in chronological order.
+    const _archivedItems = [];
+    for (const c of _archivedConvs) {
+      _archivedItems.push({
+        mtime: c.modified || c.last_interacted || 0,
+        html: _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter }),
+      });
+    }
+    if (Array.isArray(_archivedGroupChats) && _archivedGroupChats.length) {
+      for (const gc of _archivedGroupChats) {
+        const topic = gc.topic ? escapeHtml(gc.topic.slice(0, 80)) : '(untitled)';
+        const ago = (gc.archived_at || gc.closed_at || gc.last_mtime) || 0;
+        const partCount = (gc.session_ids || []).length;
+        const partLabel = partCount
+          ? '<span class="archive-row-gc-partcount">' + partCount + '</span>'
+          : '';
+        const html =
+          '<div class="conv-item conv-item-archived-gc" data-role="archived-gc-row"'
+          + ' data-gc-path="' + escapeHtml(gc.path_tilde) + '"'
+          + ' data-gc-topic="' + escapeHtml(gc.topic || '') + '"'
+          + ' data-gc-mode="' + escapeHtml(gc.mode || 'topic') + '"'
+          + ' title="Archived group chat — click to open reader">'
+          +   '<span class="archive-row-gc-icon" title="Group chat">💬</span>'
+          +   '<span class="archive-row-gc-topic">' + topic + '</span>'
+          +   partLabel
+          + '</div>';
+        _archivedItems.push({ mtime: ago, html });
+      }
+    }
+    if (_archivedItems.length > 0) {
+      _archivedItems.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
       const _arcCollapsed = localStorage.getItem('ccc-archived-collapsed') !== '0';
       const _arcArrow = _arcCollapsed ? '▸' : '▾';
-      const _arcRows = _archivedConvs.map(c => _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter })).join('');
+      const _arcRows = _archivedItems.map(it => it.html).join('');
       _archivedHtml =
         '<div class="conv-archived-section' + (_arcCollapsed ? ' collapsed' : '') + '" data-role="archived-section">'
         + '<button type="button" class="conv-archived-header" data-role="archived-toggle" aria-expanded="' + (!_arcCollapsed) + '">'
         +   '<span class="conv-archived-arrow">' + _arcArrow + '</span>'
         +   '<span class="conv-archived-label">Archived</span>'
-        +   '<span class="conv-archived-count">' + _archivedConvs.length + '</span>'
+        +   '<span class="conv-archived-count">' + _archivedItems.length + '</span>'
         + '</button>'
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + '</div>';
     }
-    // In Group Chat section: shown whenever any coordination is active,
-    // even if participants are from a different repo (cross-repo chats).
+    // In Group Chat section: shown whenever any coordination is active or
+    // recently closed (unarchived). Active rows render normally; closed
+    // rows are ghosted with a "closed" pill and stay visible until the
+    // user hits the per-row Archive button. Rows are per-chat (one per
+    // group chat) — clicking a row opens the reader for that chat. Each
+    // row also gets an Archive button that POSTs to /api/group-chats/archive.
     let _inGroupChatHtml = '';
     if (_gcActiveChats.length > 0) {
-      const _gcRows = _inGroupChatConvs.map(c => _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter })).join('');
-      const _gcFirst = _gcActiveChats[0] || null;
-      const _gcTopic = _gcFirst ? _gcFirst.topic : '';
-      const _gcTopicLabel = _gcTopic ? ' — ' + escapeHtml(_gcTopic.slice(0, 40)) : '';
-      const _gcCount = _inGroupChatConvs.length || _gcFirst.session_ids?.length || '';
+      const _gcRows = _gcActiveChats.map(chat => {
+        const isClosed = chat.status === 'closed';
+        const topicLabel = chat.topic ? escapeHtml(chat.topic.slice(0, 80)) : '(untitled)';
+        const partCount = (chat.session_ids || []).length;
+        const partLabel = partCount
+          ? '<span class="conv-ingroupchat-partcount" title="' + partCount + ' participant' + (partCount === 1 ? '' : 's') + '">'
+              + partCount + '</span>'
+          : '';
+        const closedPill = isClosed
+          ? '<span class="conv-ingroupchat-status-pill" title="Coordination ended">closed</span>'
+          : '';
+        return '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + '"'
+          + ' data-role="ingroupchat-row"'
+          + ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+          + ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
+          + ' data-gc-mode="' + escapeHtml(chat.mode || 'topic') + '"'
+          + ' title="Click to open group chat reader">'
+          +   '<span class="conv-ingroupchat-row-icon">💬</span>'
+          +   '<span class="conv-ingroupchat-row-topic">' + topicLabel + '</span>'
+          +   closedPill
+          +   partLabel
+          +   '<button type="button" class="conv-ingroupchat-archive-btn"'
+          +     ' data-role="ingroupchat-archive"'
+          +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+          +     ' title="Archive this group chat">📦</button>'
+          + '</div>';
+      }).join('');
       _inGroupChatHtml =
         '<div class="conv-ingroupchat-section" data-role="ingroupchat-section">'
-        + '<div class="conv-ingroupchat-header" data-role="ingroupchat-open"'
-        +   (_gcFirst ? ' data-gc-path="' + escapeHtml(_gcFirst.path_tilde) + '"'
-                      + ' data-gc-topic="' + escapeHtml(_gcFirst.topic) + '"'
-                      + ' data-gc-mode="' + escapeHtml(_gcFirst.mode) + '"' : '')
-        +   ' title="Click to open group chat reader" style="cursor:pointer;">'
+        + '<div class="conv-ingroupchat-header">'
         +   '<span class="conv-ingroupchat-icon">💬</span>'
         +   '<span class="conv-ingroupchat-label">In Group Chat</span>'
-        +   '<span class="conv-ingroupchat-topic">' + _gcTopicLabel + '</span>'
-        +   (_gcCount ? '<span class="conv-ingroupchat-count">' + _gcCount + '</span>' : '')
+        +   '<span class="conv-ingroupchat-count">' + _gcActiveChats.length + '</span>'
         + '</div>'
-        + (_gcRows ? '<div class="conv-ingroupchat-list">' + _gcRows + '</div>' : '')
+        + '<div class="conv-ingroupchat-list">' + _gcRows + '</div>'
         + '</div>';
     }
     // Order: In Group Chat (live) → GH Issues (to start) → Ready to merge
@@ -5590,16 +5646,36 @@
         $archivedToggle.setAttribute('aria-expanded', String(!wasCollapsed));
       });
     }
-    // Click handler for the "In Group Chat" section header — opens the reader.
-    const $gcOpen = $convList.querySelector('[data-role="ingroupchat-open"]');
-    if ($gcOpen) {
-      $gcOpen.addEventListener('click', () => {
-        const path = $gcOpen.dataset.gcPath;
-        const topic = $gcOpen.dataset.gcTopic || '';
-        const mode = $gcOpen.dataset.gcMode || 'topic';
+    // Click handler for archived group chat rows — open the reader.
+    $convList.querySelectorAll('[data-role="archived-gc-row"]').forEach(row => {
+      row.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const path = row.dataset.gcPath;
+        const topic = row.dataset.gcTopic || '';
+        const mode = row.dataset.gcMode || 'topic';
         if (path) openGroupChatReader(path, topic, mode, true);
       });
-    }
+    });
+    // Click handlers for In Group Chat rows. Row click → open the reader
+    // for that specific chat. Archive button click → POST archive and
+    // refresh; stopPropagation so it doesn't also open the reader.
+    $convList.querySelectorAll('[data-role="ingroupchat-row"]').forEach(row => {
+      row.addEventListener('click', (ev) => {
+        if (ev.target.closest('[data-role="ingroupchat-archive"]')) return;
+        const path = row.dataset.gcPath;
+        const topic = row.dataset.gcTopic || '';
+        const mode = row.dataset.gcMode || 'topic';
+        if (path) openGroupChatReader(path, topic, mode, true);
+      });
+    });
+    $convList.querySelectorAll('[data-role="ingroupchat-archive"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const path = btn.dataset.gcPath;
+        if (path) archiveGroupChat(path);
+      });
+    });
     // Toggle handler for the GH Issues section header.
     const $ghIssuesToggle = $convList.querySelector('[data-role="ghissues-toggle"]');
     if ($ghIssuesToggle) {
@@ -10534,6 +10610,16 @@
     if (opts.render !== false) {
       renderArchiveList(document.getElementById('convSearch')?.value || '');
     }
+    // Folder change → refresh archived-group-chat list scoped to the new
+    // folder, then re-render so rows for the right repo show up.
+    try {
+      refreshArchivedGroupChats().then(() => {
+        if (opts.render !== false) {
+          const $s = document.getElementById('convSearch');
+          renderArchiveList($s ? $s.value : '');
+        }
+      }).catch(() => {});
+    } catch (_) {}
     loadAttentionList();
     refreshWorktreesBadge();
     pollVercelDeploy();
@@ -10542,25 +10628,37 @@
   }
 
   const $gcActiveBtn = document.getElementById('gcActiveBtn');
+  // _gcActiveChats now contains active + closed (unarchived) chats. The
+  // topbar badge uses the .status field to count active-only; the sidebar
+  // section renders both, ghosting the closed ones.
   let _gcActiveChats = [];
+  // Compute a stable key that captures BOTH the chat set and each chat's
+  // status — so a transition from active → closed for the same path
+  // triggers a re-render even though the path set didn't change.
+  function _gcChatsKey(chats) {
+    return (chats || [])
+      .map(c => (c.path || c.path_tilde || '') + ':' + (c.status || ''))
+      .sort()
+      .join('|');
+  }
   async function pollGcActive() {
     try {
       const data = await fetch('/api/group-chats/active').then(r => r.json());
-      // Compare by path-set, not just length — a brand-new chat with the
-      // same count as before (rare, but possible if one ended in the same
-      // tick) would otherwise skip the re-render and the header would
-      // never refresh until the next archive poll.
-      const prevKey = _gcActiveChats.map(c => c.path || c.path_tilde || '').sort().join('|');
+      // Compare by path+status set, not just length — a brand-new chat
+      // with the same count as before (rare, but possible if one ended in
+      // the same tick) and a status flip on the same path both need to
+      // trigger a re-render.
+      const prevKey = _gcChatsKey(_gcActiveChats);
       _gcActiveChats = (data.chats || []);
-      const nextKey = _gcActiveChats.map(c => c.path || c.path_tilde || '').sort().join('|');
+      const nextKey = _gcChatsKey(_gcActiveChats);
+      const activeCount = _gcActiveChats.filter(c => c.status === 'active').length;
       if ($gcActiveBtn) {
-        if (_gcActiveChats.length === 0) {
+        if (activeCount === 0) {
           $gcActiveBtn.style.display = 'none';
         } else {
-          const n = _gcActiveChats.length;
-          $gcActiveBtn.textContent = n === 1
+          $gcActiveBtn.textContent = activeCount === 1
             ? '💬 1 active coordination'
-            : `💬 ${n} active coordinations`;
+            : `💬 ${activeCount} active coordinations`;
           $gcActiveBtn.style.display = '';
         }
       }
@@ -10575,14 +10673,64 @@
   }
   if ($gcActiveBtn) {
     $gcActiveBtn.addEventListener('click', () => {
-      if (!_gcActiveChats.length) return;
+      // Topbar button: only meaningful while at least one chat is active.
+      const activeChats = _gcActiveChats.filter(c => c.status === 'active');
+      if (!activeChats.length) return;
       if (_gcReaderPath) {
         closeGroupChatReader();
       } else {
-        const c = _gcActiveChats[0];
+        const c = activeChats[0];
         openGroupChatReader(c.path_tilde, c.topic, c.mode, true);
       }
     });
+  }
+
+  // Archive-the-current-group-chat handler. Used by per-row Archive button.
+  async function archiveGroupChat(chatPath) {
+    if (!chatPath) return;
+    try {
+      const res = await fetch('/api/group-chats/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: chatPath }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data || !data.ok) {
+        showOpToast?.('Could not archive group chat: ' + ((data && data.error) || 'unknown'), 'error');
+        return;
+      }
+      // Refresh both the active list (drops the row from In Group Chat)
+      // and the archive list (so it appears in Archived).
+      try { await pollGcActive(); } catch (_) {}
+      try { await refreshArchivedGroupChats(); } catch (_) {}
+      const $s = document.getElementById('convSearch');
+      renderArchiveList($s ? $s.value : '');
+      showOpToast?.('Group chat archived');
+    } catch (err) {
+      showOpToast?.('Could not archive group chat: ' + ((err && err.message) || 'network error'), 'error');
+    }
+  }
+
+  // Per-repo archived group chats. Keyed by the canonical archive folder
+  // value: '__all__' for the All view, an absolute path otherwise.
+  // Refreshed alongside the regular archive (refreshArchiveData / poll).
+  let _archivedGroupChats = [];
+  async function refreshArchivedGroupChats() {
+    try {
+      let url = '/api/group-chats/archived';
+      // archiveFolderFilter holds either ARCHIVE_FOLDER_ALL or an absolute
+      // path. Pass the path through as repo_path; for "All folders" we
+      // intentionally omit it so the server returns every archived chat.
+      if (typeof archiveFolderFilter === 'string'
+          && archiveFolderFilter
+          && archiveFolderFilter !== ARCHIVE_FOLDER_ALL) {
+        url += '?repo_path=' + encodeURIComponent(archiveFolderFilter);
+      }
+      const data = await fetch(url).then(r => r.json());
+      _archivedGroupChats = Array.isArray(data && data.chats) ? data.chats : [];
+    } catch (_) {
+      _archivedGroupChats = [];
+    }
   }
 
   // ── Sidebar repo picker ──
@@ -10759,6 +10907,10 @@
           loadArchiveAll(),
           loadCrossRepoIssues(),
           repoListState.repos.length ? Promise.resolve(null) : loadRepoList().catch(() => null),
+          // Pull archived group chats in parallel so the first archive
+          // render already has them. Folder-filter changes refresh again
+          // via setArchiveFolderFilter → refreshArchivedGroupChats.
+          refreshArchivedGroupChats().catch(() => {}),
         ]);
         archiveData = convs;
         crossRepoIssuesData = issues || [];

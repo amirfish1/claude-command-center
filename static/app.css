@@ -4416,3 +4416,59 @@
   border-radius: 10px; padding: 1px 8px; font-size: 11px;
   color: var(--text-muted); font-weight: 600; flex-shrink: 0;
 }
+
+/* In Group Chat rows — one row per chat (active or recently closed). */
+#convList .conv-ingroupchat-list { display: flex; flex-direction: column; }
+#convList .conv-ingroupchat-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 14px; cursor: pointer; font-size: 12px;
+  color: var(--text);
+}
+#convList .conv-ingroupchat-row:hover { background: var(--row-hover, rgba(255,255,255,0.04)); }
+#convList .conv-ingroupchat-row-icon { font-size: 12px; flex-shrink: 0; opacity: 0.85; }
+#convList .conv-ingroupchat-row-topic {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#convList .conv-ingroupchat-row-closed {
+  opacity: 0.55;
+  filter: saturate(0.7);
+}
+#convList .conv-ingroupchat-row-closed .conv-ingroupchat-row-topic { color: var(--text-muted); }
+#convList .conv-ingroupchat-status-pill {
+  font-size: 10px; padding: 1px 5px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--border);
+  color: var(--text-muted); text-transform: lowercase;
+  letter-spacing: 0.3px; flex-shrink: 0;
+}
+#convList .conv-ingroupchat-partcount {
+  font-size: 10px; padding: 1px 5px; border-radius: 8px;
+  background: transparent; color: var(--text-muted);
+  flex-shrink: 0;
+}
+#convList .conv-ingroupchat-archive-btn {
+  background: transparent; border: none; cursor: pointer;
+  font-size: 12px; padding: 2px 4px; opacity: 0;
+  color: var(--text-muted); flex-shrink: 0;
+  transition: opacity 0.1s ease-in;
+}
+#convList .conv-ingroupchat-row:hover .conv-ingroupchat-archive-btn { opacity: 0.85; }
+#convList .conv-ingroupchat-archive-btn:hover { opacity: 1; }
+
+/* Archived group chat rows — interleaved with regular archived sessions. */
+#convList .conv-item-archived-gc {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 14px; cursor: pointer; font-size: 12px;
+  color: var(--text-muted);
+}
+#convList .conv-item-archived-gc:hover { background: var(--row-hover, rgba(255,255,255,0.04)); }
+#convList .archive-row-gc-icon { font-size: 12px; flex-shrink: 0; opacity: 0.85; }
+#convList .archive-row-gc-topic {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#convList .archive-row-gc-partcount {
+  font-size: 10px; padding: 1px 5px; border-radius: 8px;
+  background: transparent; color: var(--text-muted);
+  flex-shrink: 0;
+}
