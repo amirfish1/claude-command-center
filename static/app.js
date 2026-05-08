@@ -4893,6 +4893,12 @@
     // catches "morning vs evening" + "today vs yesterday" without
     // littering the list with separators between consecutive turns.
     const GAP_SEPARATOR_S = 6 * 3600;
+    // Hysteresis window for the In Progress repo-group order. When two
+    // folders' max-modified timestamps differ by less than this, the
+    // previous-render order is kept so the list doesn't reshuffle on
+    // every poll tick.
+    const _FOLDER_ORDER_HYSTERESIS_S = 5 * 60;
+    const _FOLDER_ORDER_KEY = 'ccc-folder-stable-order';
     const _gapLabel = (newer, older) => {
       const gapH = (newer - older) / 3600;
       if (gapH < 24) return Math.round(gapH) + 'h gap';
@@ -5363,11 +5369,35 @@
         if (!_byFolder.has(key)) _byFolder.set(key, []);
         _byFolder.get(key).push(c);
       }
+      // Sort folders by max recent modification, with 5-min hysteresis:
+      // when two folders' max-modified timestamps are within 5 minutes,
+      // preserve the order they had in the previous render. Stops the
+      // In Progress section from reshuffling every refresh tick when the
+      // user is actively working across multiple repos.
+      let _prevFolderOrder = {};
+      try {
+        _prevFolderOrder = JSON.parse(localStorage.getItem(_FOLDER_ORDER_KEY) || '{}');
+      } catch (_) { /* corrupt or missing — start fresh */ }
       const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
         const aMax = a[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
         const bMax = b[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
+        if (Math.abs(aMax - bMax) < _FOLDER_ORDER_HYSTERESIS_S) {
+          const aPrev = _prevFolderOrder[a[0]];
+          const bPrev = _prevFolderOrder[b[0]];
+          // Only honour previous order if both folders were in the prior
+          // render; a brand-new folder still sorts by its real timestamp
+          // so it can enter at its natural position.
+          if (aPrev !== undefined && bPrev !== undefined && aPrev !== bPrev) {
+            return aPrev - bPrev;
+          }
+        }
         return bMax - aMax;
       });
+      try {
+        const _newOrder = {};
+        _folderEntries.forEach(([k], i) => { _newOrder[k] = i; });
+        localStorage.setItem(_FOLDER_ORDER_KEY, JSON.stringify(_newOrder));
+      } catch (_) { /* localStorage quota / disabled — degrade silently */ }
       const _renderFolderEntry = ([folder, cards]) => {
         if (cards.length === 1) {
           return _renderRow(cards[0], { folderChipBeforeTitle: true });
@@ -5483,11 +5513,31 @@
           if (!_byFolder.has(key)) _byFolder.set(key, []);
           _byFolder.get(key).push(c);
         }
+        // Hysteresis: same pattern as the In Progress section above.
+        // Stores order under a distinct key so the two sections don't
+        // bleed into each other's stable order.
+        const _GH_ORDER_KEY = 'ccc-folder-stable-order:ghissues';
+        let _prevGhOrder = {};
+        try {
+          _prevGhOrder = JSON.parse(localStorage.getItem(_GH_ORDER_KEY) || '{}');
+        } catch (_) { /* corrupt — start fresh */ }
         const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
           const aMax = a[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
           const bMax = b[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
+          if (Math.abs(aMax - bMax) < _FOLDER_ORDER_HYSTERESIS_S) {
+            const aPrev = _prevGhOrder[a[0]];
+            const bPrev = _prevGhOrder[b[0]];
+            if (aPrev !== undefined && bPrev !== undefined && aPrev !== bPrev) {
+              return aPrev - bPrev;
+            }
+          }
           return bMax - aMax;
         });
+        try {
+          const _newGhOrder = {};
+          _folderEntries.forEach(([k], i) => { _newGhOrder[k] = i; });
+          localStorage.setItem(_GH_ORDER_KEY, JSON.stringify(_newGhOrder));
+        } catch (_) { /* localStorage quota / disabled */ }
         _ghRows = _folderEntries.map(([folder, cards]) => {
           const hue = (cards[0].folder_chip_hue | 0);
           const orphan = cards[0].folder_chip_orphan ? ' is-orphan' : '';

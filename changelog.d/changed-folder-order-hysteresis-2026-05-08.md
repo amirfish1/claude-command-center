@@ -1,0 +1,1 @@
+Stop the In Progress and GH Issues repo groups from reshuffling on every poll tick. When two folders' max-modified timestamps differ by less than 5 minutes, the previous-render order is preserved instead of swapping rank — so a fresh tool-call in repo B no longer bumps it above repo A every refresh. Brand-new folders still enter at their natural position.
