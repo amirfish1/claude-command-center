@@ -11008,6 +11008,37 @@ def _group_chat_log_system(real_path: str, message: str) -> None:
             entry["mtime"] = new_mtime
 
 
+def _group_chat_rename(raw_path: str, new_topic: str) -> dict:
+    """Rename a chat by updating the sidecar's `topic` field. The chat
+    file's header line is left as-is (rewriting it would require parsing
+    every appended message); the UI reads `topic` from the sidecar so
+    the new name appears immediately. New posts to the chat will use
+    the updated topic in their inject text.
+    """
+    real_path = _resolve_group_chat_path(raw_path)
+    if not real_path:
+        return {"ok": False, "error": "forbidden"}
+    if not os.path.exists(real_path):
+        return {"ok": False, "error": "not found"}
+    new_topic = (new_topic or "").strip()
+    if not new_topic:
+        return {"ok": False, "error": "missing topic"}
+
+    sidecar = _load_group_chat_sidecar(real_path)
+    old_topic = sidecar.get("topic") or ""
+    if not _update_group_chat_sidecar(real_path, topic=new_topic):
+        return {"ok": False, "error": "could not update sidecar"}
+
+    if old_topic and old_topic != new_topic:
+        _group_chat_log_system(
+            real_path, f"renamed topic from `{old_topic}` to `{new_topic}`"
+        )
+    elif not old_topic:
+        _group_chat_log_system(real_path, f"set topic to `{new_topic}`")
+
+    return {"ok": True, "topic": new_topic}
+
+
 def _group_chat_remove_participant(raw_path: str, session_id: str) -> dict:
     """Drop a session from an existing chat: remove from session_ids /
     name_map. The session's running /group-chat skill will keep cycling
@@ -17691,6 +17722,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing path or session_id"})
                 return
             result = _group_chat_add_participant(chat_path, session_id, display_name)
+            if result.get("error") == "forbidden":
+                self.send_json(result, 403)
+            elif result.get("error") == "not found":
+                self.send_json(result, 404)
+            else:
+                self.send_json(result)
+        elif path == "/api/group-chats/rename":
+            # Rename a group chat's topic. Updates the sidecar; the chat
+            # file's header isn't rewritten (it's append-only history).
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            chat_path = (payload.get("path") or "").strip()
+            new_topic = (payload.get("topic") or "").strip()
+            if not chat_path or not new_topic:
+                self.send_json({"ok": False, "error": "missing path or topic"})
+                return
+            result = _group_chat_rename(chat_path, new_topic)
             if result.get("error") == "forbidden":
                 self.send_json(result, 403)
             elif result.get("error") == "not found":

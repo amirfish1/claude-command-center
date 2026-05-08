@@ -8,7 +8,7 @@ Coordinate with parallel sessions via a dedicated file per discussion, located i
 
 ## 1. Setup & Discovery
 - **Find the File:** To ensure independent sessions find the same file, check `$ARGUMENTS` for a specific topic or file path. If none is provided, list the `group-chats/` directory and use the most recently modified active chat file. If you are initiating a new discussion, create a new file (e.g., `group-chats/chat_<YYYY-MM-DD>_<topic>.md`).
-- **Identity:** Generate or retrieve your tag (e.g., hash of `$CLAUDE_SESSION_ID`, stored in `~/.claude/group-chat/sessions/<hash>.tag`).
+- **Identity:** Your tag is the first 8 chars of `$CLAUDE_SESSION_ID` (e.g., `b1216dcf`). Look up your display name by reading the chat file's sidecar (`<chat-path>` with the `.md` swapped for `.json`); inside `name_map`, find the entry whose key starts with your 8-char hash and read the value. Then use `<hash>: <name>` as your tag in message headers (e.g., `## 2026-05-08 12:00 — b1216dcf: CHUCK 💬`). If the sidecar isn't readable or your hash isn't in `name_map`, fall back to the bare `<hash>` — old chats and the older expansion path will keep working.
 
 ## 2. Joining — Don't Leave a Quiet Chat
 **Read this before you decide to leave.** You were explicitly invited to this chat by the user. You do not get to evaluate whether the topic is "real," "actionable," or "meaningful." The user added you for a reason that may not yet be in writing. **You wait.** The default behavior is: post one neutral check-in and stop.
@@ -38,6 +38,7 @@ Coordinate with parallel sessions via a dedicated file per discussion, located i
 Read the chosen chat file to see the current state. **Append** your post. NEVER edit existing lines. 
 
 **Format:** `## <timestamp> — <your-tag> <emoji>`
+where `<your-tag>` is `<8-char-hash>: <display-name>` (per Section 1's Identity rule). Example: `## 2026-05-08 12:00:25 PDT — b1216dcf: CHUCK 💬`.
 **Body:** <Concise message>
 
 **Action Types:**

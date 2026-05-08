@@ -3289,10 +3289,11 @@
   }
 
   // The /group-chat skill stamps each message with the session's first
-  // 8 chars (e.g. "— 25ea49ae 👋"). Expand those into "name — hash" using
-  // the name_map of any active chat with a matching participant. Falls
-  // through unchanged when no match (truncated logs, archived chats not
-  // in _gcActiveChats, etc.).
+  // 8 chars (e.g. "— 25ea49ae 👋"). Expand bare hashes to "hash: name"
+  // using the name_map of any active chat with a matching participant.
+  // New skill messages already write the "hash: name" form directly, so
+  // this is mostly a back-compat for older chat history. Lines already
+  // in "hash: name" form are left alone.
   function _gcExpandHashIds(text) {
     if (!text || !_gcActiveChats || !_gcActiveChats.length) return text;
     const byShort = {};
@@ -3304,15 +3305,14 @@
       }
     }
     if (!Object.keys(byShort).length) return text;
-    // Match the chat-message author marker: " — <8 hex chars>" preceded
-    // by something other than a hex char (so we don't gobble parts of
-    // longer ids). Case-insensitive — UUIDs are usually lowercase but
-    // be defensive.
+    // Match the chat-message author marker: " — <8 hex chars>" NOT
+    // already followed by a colon (which would indicate the new
+    // "hash: name" format that should pass through unchanged).
     return text.replace(
-      /(\s—\s)([0-9a-fA-F]{8})\b/g,
+      /(\s—\s)([0-9a-fA-F]{8})(?!:)\b/g,
       (m, dash, hash) => {
         const name = byShort[hash.toLowerCase()];
-        return name ? `${dash}${name} (${hash})` : m;
+        return name ? `${dash}${hash}: ${name}` : m;
       }
     );
   }
@@ -5747,6 +5747,11 @@
           +   '<span class="conv-ingroupchat-row-topic">' + topicLabel + '</span>'
           +   closedPill
           +   partLabel
+          +   '<button type="button" class="conv-ingroupchat-rename-btn"'
+          +     ' data-role="ingroupchat-rename"'
+          +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+          +     ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
+          +     ' title="Rename this group chat">✏️</button>'
           +   '<button type="button" class="conv-ingroupchat-archive-btn"'
           +     ' data-role="ingroupchat-archive"'
           +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
@@ -5800,6 +5805,7 @@
     $convList.querySelectorAll('[data-role="ingroupchat-row"]').forEach(row => {
       row.addEventListener('click', (ev) => {
         if (ev.target.closest('[data-role="ingroupchat-archive"]')) return;
+        if (ev.target.closest('[data-role="ingroupchat-rename"]')) return;
         const path = row.dataset.gcPath;
         const topic = row.dataset.gcTopic || '';
         const mode = row.dataset.gcMode || 'topic';
@@ -5812,6 +5818,15 @@
         ev.preventDefault();
         const path = btn.dataset.gcPath;
         if (path) archiveGroupChat(path);
+      });
+    });
+    $convList.querySelectorAll('[data-role="ingroupchat-rename"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const path = btn.dataset.gcPath;
+        const currentTopic = btn.dataset.gcTopic || '';
+        if (path) renameGroupChat(path, currentTopic);
       });
     });
     // Drop target: drag a conv-list row onto a chat row to add the
@@ -10996,13 +11011,11 @@
   }
 
   async function createEmptyGroupChat() {
-    // Minimal v1 flow: prompt for the topic, POST to /api/coordinate
-    // with no session_ids and include_human=true so the human can drive
-    // the chat solo. Sessions can be drag-dropped in afterward via the
-    // add-participant endpoint.
-    let topic = '';
-    try { topic = (window.prompt('Topic for the new group chat:') || '').trim(); } catch (_) {}
-    if (!topic) return;
+    // Default topic to "empty chat" — the user can rename it via the
+    // ✏️ button on the row, which is the same affordance as renaming
+    // any other conversation. No prompt, faster path: click "+",
+    // chat appears, click ✏️ to give it a real name.
+    const topic = 'empty chat';
     try {
       const res = await fetch('/api/coordinate', {
         method: 'POST',
@@ -11018,14 +11031,35 @@
         return;
       }
       try { await pollGcActive(); } catch (_) {}
-      showOpToast?.('Empty group chat created — drag sessions in to add them');
-      // Open the reader for the freshly-created chat so the user
-      // immediately sees their input strip.
+      showOpToast?.('Empty chat created — click ✏️ to rename, drag sessions in to add them');
       if (data.chat_path) {
         try { openGroupChatReader(data.chat_path, topic, 'topic', true); } catch (_) {}
       }
     } catch (err) {
       showOpToast?.('Could not create chat: ' + ((err && err.message) || 'network error'), 'error');
+    }
+  }
+
+  async function renameGroupChat(chatPath, currentTopic) {
+    if (!chatPath) return;
+    let topic = '';
+    try { topic = (window.prompt('New topic for this chat:', currentTopic || '') || '').trim(); } catch (_) {}
+    if (!topic || topic === currentTopic) return;
+    try {
+      const res = await fetch('/api/group-chats/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: chatPath, topic }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data || !data.ok) {
+        showOpToast?.('Could not rename: ' + ((data && data.error) || 'unknown'), 'error');
+        return;
+      }
+      try { await pollGcActive(); } catch (_) {}
+      showOpToast?.('Chat renamed');
+    } catch (err) {
+      showOpToast?.('Could not rename: ' + ((err && err.message) || 'network error'), 'error');
     }
   }
 
