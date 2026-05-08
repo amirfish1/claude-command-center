@@ -4497,6 +4497,19 @@
   font-size: 10px; opacity: 0.55;
   flex-shrink: 0; padding: 0 4px;
 }
+#convList .conv-ingroupchat-participant-remove {
+  background: transparent; border: none; cursor: pointer;
+  font-size: 14px; line-height: 1;
+  color: var(--text-muted); flex-shrink: 0;
+  padding: 0 4px; opacity: 0;
+  transition: opacity 0.1s ease, color 0.1s ease;
+}
+#convList .conv-ingroupchat-participant:hover .conv-ingroupchat-participant-remove {
+  opacity: 0.65;
+}
+#convList .conv-ingroupchat-participant-remove:hover {
+  opacity: 1; color: var(--red);
+}
 #convList .conv-ingroupchat-chat-closed .conv-ingroupchat-participant {
   opacity: 0.55;
 }

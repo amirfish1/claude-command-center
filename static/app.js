@@ -5729,6 +5729,11 @@
             +   '<span class="conv-ingroupchat-participant-bullet">↳</span>'
             +   '<span class="conv-ingroupchat-participant-name">' + escapeHtml(trimmed) + '</span>'
             +   '<span class="conv-ingroupchat-participant-hash" title="Session ID prefix used in chat message headers">' + escapeHtml(shortHash) + '</span>'
+            +   '<button type="button" class="conv-ingroupchat-participant-remove"'
+            +     ' data-role="ingroupchat-participant-remove"'
+            +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+            +     ' data-session-id="' + escapeHtml(sid) + '"'
+            +     ' title="Remove this session from the chat">×</button>'
             + '</div>';
         }).join('');
         return '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + '">'
@@ -5857,6 +5862,9 @@
     // Click an indented participant entry → jump to that session.
     $convList.querySelectorAll('[data-role="ingroupchat-participant"]').forEach(el => {
       el.addEventListener('click', (ev) => {
+        // The remove "×" button has its own handler below; don't open
+        // the session if the click landed on the remove button.
+        if (ev.target.closest('[data-role="ingroupchat-participant-remove"]')) return;
         ev.stopPropagation();
         ev.preventDefault();
         const sid = el.dataset.sessionId;
@@ -5874,6 +5882,15 @@
           // live sessions whose id IS their session_id).
           if (typeof selectConversation === 'function') selectConversation(sid);
         }
+      });
+    });
+    $convList.querySelectorAll('[data-role="ingroupchat-participant-remove"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const path = btn.dataset.gcPath;
+        const sid = btn.dataset.sessionId;
+        if (path && sid) removeSessionFromGroupChat(path, sid);
       });
     });
     // Toggle handler for the GH Issues section header.
@@ -10929,6 +10946,26 @@
       showOpToast?.('Group chat archived');
     } catch (err) {
       showOpToast?.('Could not archive group chat: ' + ((err && err.message) || 'network error'), 'error');
+    }
+  }
+
+  async function removeSessionFromGroupChat(chatPath, sessionId) {
+    if (!chatPath || !sessionId) return;
+    try {
+      const res = await fetch('/api/group-chats/remove-participant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: chatPath, session_id: sessionId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data || !data.ok) {
+        showOpToast?.('Could not remove session: ' + ((data && data.error) || 'unknown'), 'error');
+        return;
+      }
+      try { await pollGcActive(); } catch (_) {}
+      showOpToast?.(data.was_participant ? 'Session removed from chat' : 'Session was not in this chat');
+    } catch (err) {
+      showOpToast?.('Could not remove session: ' + ((err && err.message) || 'network error'), 'error');
     }
   }
 

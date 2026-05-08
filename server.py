@@ -10941,6 +10941,40 @@ def _group_chat_set_archived(raw_path: str, archived: bool) -> dict:
     return {"ok": True}
 
 
+def _group_chat_remove_participant(raw_path: str, session_id: str) -> dict:
+    """Drop a session from an existing chat: remove from session_ids /
+    name_map. The session's running /group-chat skill will keep cycling
+    until it self-leaves (or is killed) — we just stop nudging it via
+    the watcher because nudge reads session_ids fresh from the sidecar.
+    Idempotent — removing an absent session is a no-op success.
+    """
+    real_path = _resolve_group_chat_path(raw_path)
+    if not real_path:
+        return {"ok": False, "error": "forbidden"}
+    if not os.path.exists(real_path):
+        return {"ok": False, "error": "not found"}
+    sid = (session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+
+    sidecar = _load_group_chat_sidecar(real_path)
+    session_ids = list(sidecar.get("session_ids") or [])
+    name_map = dict(sidecar.get("name_map") or {})
+
+    if sid not in session_ids and sid not in name_map:
+        return {"ok": True, "session_id": sid, "was_participant": False}
+
+    session_ids = [s for s in session_ids if s != sid]
+    name_map.pop(sid, None)
+
+    if not _update_group_chat_sidecar(
+        real_path, session_ids=session_ids, name_map=name_map
+    ):
+        return {"ok": False, "error": "could not update sidecar"}
+
+    return {"ok": True, "session_id": sid, "was_participant": True}
+
+
 def _group_chat_add_participant(raw_path: str, session_id: str, display_name: str = "") -> dict:
     """Add a session to an existing chat: append to sidecar's session_ids /
     name_map, then inject /group-chat into the session so it joins live.
@@ -17585,6 +17619,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing path or session_id"})
                 return
             result = _group_chat_add_participant(chat_path, session_id, display_name)
+            if result.get("error") == "forbidden":
+                self.send_json(result, 403)
+            elif result.get("error") == "not found":
+                self.send_json(result, 404)
+            else:
+                self.send_json(result)
+        elif path == "/api/group-chats/remove-participant":
+            # Per-participant "×" button in the indented list under a
+            # chat — pulls the session out of the sidecar so the watcher
+            # stops nudging it. The session's currently-running cycle
+            # finishes naturally on its next 👋 Leave (or hangs around
+            # silently until killed); we don't try to inject a kill.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            chat_path = (payload.get("path") or "").strip()
+            session_id = (payload.get("session_id") or "").strip()
+            if not chat_path or not session_id:
+                self.send_json({"ok": False, "error": "missing path or session_id"})
+                return
+            result = _group_chat_remove_participant(chat_path, session_id)
             if result.get("error") == "forbidden":
                 self.send_json(result, 403)
             elif result.get("error") == "not found":
