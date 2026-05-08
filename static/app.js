@@ -10673,8 +10673,10 @@
     loadAttentionList();
     refreshWorktreesBadge();
     pollVercelDeploy();
+    // Note: the In Group Chat polling is set up once at boot via
+    // wireGroupChatPolling() — not here. Calling setInterval inside this
+    // handler used to leak a fresh 15s timer on every folder-filter change.
     pollGcActive();
-    setInterval(pollGcActive, 15000);
   }
 
   const $gcActiveBtn = document.getElementById('gcActiveBtn');
@@ -11278,6 +11280,17 @@
       }
       _firstSessionsLoaded.then(() => setArchiveMode());
     }
+  })();
+
+  // Set up the In Group Chat polling exactly once at boot. Used to be
+  // inside setArchiveFolderFilter, which (a) leaked a fresh 15s timer
+  // on every folder-filter change and (b) meant a clean reload with
+  // archive_mode already on never registered the interval at all — so
+  // the In Group Chat section silently never appeared until the user
+  // touched the folder picker. Wire-once here is the right home.
+  (function wireGroupChatPolling() {
+    try { pollGcActive(); } catch (_) {}
+    setInterval(() => { try { pollGcActive(); } catch (_) {} }, 15000);
   })();
 
   // ── Legacy repo-list (used by the modal + custom-repos browser) ─────────
