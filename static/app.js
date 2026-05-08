@@ -4957,11 +4957,12 @@
         _readyToMergeConvs.push(c);
         continue;
       }
-      const _sid = c.session_id || c.id || '';
-      if (_sid && _inGroupChatIds.has(_sid)) {
-        _inGroupChatConvs.push(c);
-        continue;
-      }
+      // Sessions in a group chat used to be filtered out of the main
+      // In Progress list (the old "In Group Chat" rendering replaced
+      // them with chat-only rows). With the new participants-under-chat
+      // UI, the user wants them VISIBLE in the main list AND in the
+      // chat's indented list — with an "IN GROUP CHAT" badge to mark
+      // them. Don't partition them out anymore.
       _sessionConvs.push(c);
     }
     const _renderRow = (c, opts = {}) => {
@@ -5084,6 +5085,13 @@
         : null;
       if (_linkedNum) {
         signals += '<span class="conv-signal gh-link" title="Linked to GitHub issue #' + escapeHtml(String(_linkedNum)) + '">#' + escapeHtml(String(_linkedNum)) + '</span>';
+      }
+      // "IN GROUP CHAT" badge — flagged when the row's session_id is a
+      // participant of any non-archived chat. _inGroupChatIds is built
+      // up at the top of renderConversationList from _gcActiveChats.
+      const _rowSid = c.session_id || c.id || '';
+      if (_rowSid && _inGroupChatIds.has(_rowSid)) {
+        signals += '<span class="conv-signal in-group-chat" title="This session is participating in a group chat">💬 IN GROUP CHAT</span>';
       }
       const _activityAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
       const _rowActivityTs = c.sidecar_ts || c.last_interacted || c.modified || 0;
@@ -5659,7 +5667,9 @@
       const _gcRows = (_gcActiveChats || []).map(chat => {
         const isClosed = chat.status === 'closed';
         const topicLabel = chat.topic ? escapeHtml(chat.topic.slice(0, 80)) : '(untitled)';
-        const partCount = (chat.session_ids || []).length;
+        const partSids = chat.session_ids || [];
+        const nameMap = chat.name_map || {};
+        const partCount = partSids.length;
         const partLabel = partCount
           ? '<span class="conv-ingroupchat-partcount" title="' + partCount + ' participant' + (partCount === 1 ? '' : 's') + '">'
               + partCount + '</span>'
@@ -5667,12 +5677,27 @@
         const closedPill = isClosed
           ? '<span class="conv-ingroupchat-status-pill" title="Coordination ended">closed</span>'
           : '';
-        return '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + '"'
-          + ' data-role="ingroupchat-row"'
-          + ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
-          + ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
-          + ' data-gc-mode="' + escapeHtml(chat.mode || 'topic') + '"'
-          + ' title="Click to open group chat reader">'
+        // Indented participant list under the chat row. Click to jump
+        // to that session in the conv pane (selectConversation handles
+        // the GC-reader teardown so it works whether the reader is open
+        // or not).
+        const partListHtml = partSids.map(sid => {
+          const display = nameMap[sid] || sid;
+          const trimmed = display.length > 60 ? display.slice(0, 57) + '…' : display;
+          return '<div class="conv-ingroupchat-participant" data-role="ingroupchat-participant"'
+            + ' data-session-id="' + escapeHtml(sid) + '"'
+            + ' title="' + escapeHtml(display) + ' — click to open this session">'
+            +   '<span class="conv-ingroupchat-participant-bullet">↳</span>'
+            +   '<span class="conv-ingroupchat-participant-name">' + escapeHtml(trimmed) + '</span>'
+            + '</div>';
+        }).join('');
+        return '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + '">'
+          + '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + '"'
+          +   ' data-role="ingroupchat-row"'
+          +   ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+          +   ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
+          +   ' data-gc-mode="' + escapeHtml(chat.mode || 'topic') + '"'
+          +   ' title="Click to open group chat reader">'
           +   '<span class="conv-ingroupchat-row-icon">💬</span>'
           +   '<span class="conv-ingroupchat-row-topic">' + topicLabel + '</span>'
           +   closedPill
@@ -5681,6 +5706,8 @@
           +     ' data-role="ingroupchat-archive"'
           +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
           +     ' title="Archive this group chat">📦</button>'
+          + '</div>'
+          + (partListHtml ? '<div class="conv-ingroupchat-participants">' + partListHtml + '</div>' : '')
           + '</div>';
       }).join('');
       const _gcCount = (_gcActiveChats || []).length;
@@ -5787,6 +5814,28 @@
         createEmptyGroupChat();
       });
     }
+    // Click an indented participant entry → jump to that session.
+    $convList.querySelectorAll('[data-role="ingroupchat-participant"]').forEach(el => {
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const sid = el.dataset.sessionId;
+        if (!sid) return;
+        // The session row in the main list keys by either id (often equal
+        // to session_id for live sessions) or session_id explicitly.
+        const target = (conversationsData || []).find(
+          c => c.session_id === sid || c.id === sid
+        );
+        if (target && typeof selectConversation === 'function') {
+          selectConversation(target.id);
+        } else {
+          // Session isn't in the current archive view — fall back to
+          // calling selectConversation by session_id directly (works for
+          // live sessions whose id IS their session_id).
+          if (typeof selectConversation === 'function') selectConversation(sid);
+        }
+      });
+    });
     // Toggle handler for the GH Issues section header.
     const $ghIssuesToggle = $convList.querySelector('[data-role="ghissues-toggle"]');
     if ($ghIssuesToggle) {

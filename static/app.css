@@ -4469,6 +4469,40 @@
    as a single bar rather than a half-empty container. */
 #convList .conv-ingroupchat-section.is-empty { padding-bottom: 0; }
 
+/* Indented participant list under each chat row. */
+#convList .conv-ingroupchat-participants {
+  display: flex; flex-direction: column;
+  padding: 2px 14px 6px 28px;  /* hanging indent under the 💬 icon */
+  gap: 1px;
+}
+#convList .conv-ingroupchat-participant {
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 6px; cursor: pointer;
+  font-size: 11px; color: var(--text-muted);
+  border-radius: 3px;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+#convList .conv-ingroupchat-participant:hover {
+  background: rgba(88, 166, 255, 0.08); color: var(--text);
+}
+#convList .conv-ingroupchat-participant-bullet {
+  opacity: 0.5; flex-shrink: 0;
+}
+#convList .conv-ingroupchat-participant-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#convList .conv-ingroupchat-chat-closed .conv-ingroupchat-participant {
+  opacity: 0.55;
+}
+
+/* "IN GROUP CHAT" badge on participating rows in the main list. */
+.conv-signal.in-group-chat {
+  background: rgba(88, 166, 255, 0.14);
+  color: var(--accent);
+  border: 1px solid rgba(88, 166, 255, 0.35);
+  font-weight: 600; letter-spacing: 0.3px;
+}
+
 /* Archived group chat rows — interleaved with regular archived sessions. */
 #convList .conv-item-archived-gc {
   display: flex; align-items: center; gap: 8px;

@@ -10869,6 +10869,10 @@ def _list_group_chats(include_archived: bool = False, only_archived: bool = Fals
             "topic": meta.get("topic", ""),
             "mode": meta.get("mode", "topic"),
             "session_ids": meta.get("session_ids") or [],
+            # name_map (session_id → display_name) lets the UI render
+            # the participant list under each chat row without an extra
+            # round-trip per session.
+            "name_map": meta.get("name_map") or {},
             "status": status,
             "started_at": meta.get("started_at"),
             "closed_at": closed_at,
