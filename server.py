@@ -1335,8 +1335,11 @@ def find_all_conversations(limit_per_folder=None):
 
             if _is_generated_helper_session(first_message):
                 continue
-            if session_cwd:
-                session_cwd = _resolve_session_cwd(session_id, session_cwd)
+            # Skip _resolve_session_cwd here — this is a cross-project
+            # bulk scan, and the relocation walk per stale-cwd row hangs
+            # /api/conversations/all on cold cache. Resolution still
+            # happens lazily via find_session_cwd / find_conversations
+            # (per-repo, cached) when the UI actually needs the cwd.
 
             # Tool-call inference — match what extract_session_workspace
             # does for active sessions. The JSONL's first-event cwd /

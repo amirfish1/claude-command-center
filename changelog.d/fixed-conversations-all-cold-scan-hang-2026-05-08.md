@@ -1,0 +1,1 @@
+Stop hanging `/api/conversations/all` on cold cache — `_resolve_session_cwd` was running an `os.walk` per stale-cwd row inside the cross-project bulk scan, compounding into a multi-minute hang. Resolution now happens lazily via the per-repo `find_session_cwd` / `find_conversations` paths (already cached) instead.
