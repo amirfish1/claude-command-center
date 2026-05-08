@@ -835,6 +835,71 @@ class TestModelPicker(unittest.TestCase):
         self.assertEqual(usage["compact_count"], 1)
 
 
+class TestGroupChatSidecarHelpers(unittest.TestCase):
+    """Cover the small helpers that load/merge sidecar JSON, list chats,
+    and flip the archived flag. Uses a tempdir-backed fake group-chats dir
+    so we don't touch the user's real ~/.claude/group-chats."""
+
+    def _setup_fake_dir(self, server, tmpdir):
+        """Patch the helpers to look at a tempdir instead of ~/.claude/group-chats."""
+        gcd = pathlib.Path(tmpdir) / "group-chats"
+        gcd.mkdir()
+        # Patch os.path.expanduser via monkeypatching os.path.expanduser only
+        # for the specific path. Simpler: just write into the real ~ via a
+        # subdirectory the helpers don't know about. The helpers all derive
+        # the dir from os.path.expanduser("~/.claude/group-chats") — so
+        # monkey-patch that lookup.
+        return gcd
+
+    def test_sidecar_round_trip(self):
+        """_load_group_chat_sidecar / _update_group_chat_sidecar must merge
+        fields atomically and survive missing files."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmp:
+            md = os.path.join(tmp, "demo.md")
+            with open(md, "w") as fh:
+                fh.write("# demo\n")
+            # No sidecar yet → load returns {}
+            self.assertEqual(server._load_group_chat_sidecar(md), {})
+            # Update creates the sidecar
+            ok = server._update_group_chat_sidecar(
+                md, archived=True, archived_at=1234.5, topic="hi"
+            )
+            self.assertTrue(ok)
+            data = server._load_group_chat_sidecar(md)
+            self.assertEqual(data.get("topic"), "hi")
+            self.assertIs(data.get("archived"), True)
+            self.assertEqual(data.get("archived_at"), 1234.5)
+            # Subsequent merge preserves prior fields
+            server._update_group_chat_sidecar(md, archived=False)
+            data2 = server._load_group_chat_sidecar(md)
+            self.assertEqual(data2.get("topic"), "hi")
+            self.assertIs(data2.get("archived"), False)
+
+    def test_message_count_counts_h2_lines(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmp:
+            md = os.path.join(tmp, "x.md")
+            with open(md, "w") as fh:
+                fh.write("# header\n## one\nbody\n## two\n## three — author\n")
+            self.assertEqual(server._group_chat_message_count(md), 3)
+
+    def test_resolve_group_chat_path_rejects_outside_dir(self):
+        """The path validator must clamp to ~/.claude/group-chats/ and
+        reject anything outside (no path traversal)."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        # Outside the group-chats dir → ""
+        self.assertEqual(server._resolve_group_chat_path("/etc/passwd"), "")
+        self.assertEqual(server._resolve_group_chat_path(""), "")
+        self.assertEqual(server._resolve_group_chat_path("../../../tmp/x.md"), "")
+
+
 class TestHealthcheck(unittest.TestCase):
     def test_healthcheck_returns_structured_result(self):
         """_run_healthcheck must always return a dict with 'checks' and

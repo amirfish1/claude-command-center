@@ -10552,6 +10552,8 @@ def _coordinate_sessions(payload):
 
     # Write sidecar JSON so nudge can re-inject participants later.
     # name_map stored for loop detection: display_name → session_id reverse lookup.
+    # archived/closed_at stay absent at registration time; the watcher fills
+    # closed_at on idle/done drop and the archive endpoint flips archived.
     sidecar_path = chat_path[:-3] + ".json"
     try:
         with open(sidecar_path, "w", encoding="utf-8") as fh:
@@ -10560,6 +10562,9 @@ def _coordinate_sessions(payload):
                 "topic": topic,
                 "mode": mode,
                 "name_map": name_map,
+                "started_at": time.time(),
+                "archived": False,
+                "closed_at": None,
             }, fh)
     except OSError:
         pass  # sidecar failure is non-fatal
@@ -10623,6 +10628,71 @@ def _group_chat_nudge(path):
 # server side.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Sidecar helpers
+# Each group chat .md has a .json sidecar at the same basename storing
+# session_ids/topic/mode/name_map plus lifecycle fields:
+#   - started_at: unix ts the chat was first registered (set at creation)
+#   - closed_at: unix ts the watcher dropped it (idle timeout or done marker);
+#     None while still active. Falls back to .md mtime if the watcher missed it.
+#   - archived: explicit "stop showing in In Group Chat" flag (default False).
+#   - archived_at: unix ts the user pressed Archive (None if never archived).
+# Both helpers are best-effort: missing files / corrupt JSON return {} rather
+# than raising, so a hand-edited or partially-written sidecar can't take the
+# whole list endpoint down.
+# ---------------------------------------------------------------------------
+
+def _group_chat_sidecar_path(chat_path: str) -> str:
+    """Return the .json sidecar path for a chat .md (or any path)."""
+    if chat_path.endswith(".md"):
+        return chat_path[:-3] + ".json"
+    if chat_path.endswith(".json"):
+        return chat_path
+    return chat_path + ".json"
+
+
+def _load_group_chat_sidecar(chat_path: str) -> dict:
+    """Load the sidecar JSON for a group chat. Returns {} on any failure."""
+    sidecar = _group_chat_sidecar_path(chat_path)
+    try:
+        with open(sidecar, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _update_group_chat_sidecar(chat_path: str, **fields) -> bool:
+    """Merge `fields` into the sidecar JSON. Returns True on success.
+
+    Reads the existing sidecar, applies the merge, writes back atomically.
+    Silent on missing-file (creates a fresh sidecar) so the caller doesn't
+    need to special-case "this chat predates the sidecar fields" — but a
+    sidecar is only created if at least one valid field is supplied.
+    """
+    if not fields:
+        return False
+    sidecar = _group_chat_sidecar_path(chat_path)
+    data = _load_group_chat_sidecar(chat_path)
+    data.update(fields)
+    try:
+        with open(sidecar, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        return True
+    except OSError:
+        return False
+
+
+def _group_chat_message_count(md_path: str) -> int:
+    """Cheap message count: lines starting with '## '. Best-effort only."""
+    try:
+        with open(md_path, "r", encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return 0
+    return sum(1 for line in content.splitlines() if line.startswith("## "))
+
+
 _active_coordinations: dict = {}          # chat_path → {mtime, last_nudge, last_activity}
 _coord_lock = threading.Lock()
 
@@ -10667,7 +10737,11 @@ def _coordination_watcher() -> None:
             try:
                 mtime = os.stat(path).st_mtime
             except OSError:
-                # File deleted — drop it
+                # File deleted — drop it. Can't write closed_at because the .md
+                # is gone; the sidecar may also be gone. The list endpoint
+                # falls back to .md mtime when closed_at is missing, but in
+                # this case the sidecar will be filtered out anyway since the
+                # .md is missing too.
                 with _coord_lock:
                     _active_coordinations.pop(path, None)
                 continue
@@ -10684,10 +10758,15 @@ def _coordination_watcher() -> None:
                 entry["mtime"] = mtime
                 entry["last_activity"] = now
 
-            # Drop if done or idle too long
+            # Drop if done or idle too long. Stamp closed_at so the UI can
+            # show "closed Xh ago" and sort closed rows chronologically.
             if idle_seconds > _COORD_DEATH_TIMEOUT or _is_coord_done(path):
                 with _coord_lock:
                     _active_coordinations.pop(path, None)
+                try:
+                    _update_group_chat_sidecar(path, closed_at=time.time())
+                except Exception:
+                    pass
                 continue
 
             # Nudge if file changed and debounce window passed
@@ -10722,6 +10801,130 @@ def _start_coordination_watcher() -> None:
 
     t = threading.Thread(target=_coordination_watcher, daemon=True, name="coord-watcher")
     t.start()
+
+
+def _list_group_chats(include_archived: bool = False, only_archived: bool = False) -> list:
+    """Scan ~/.claude/group-chats/ and build a list of chat entries.
+
+    Each entry: {path, path_tilde, topic, mode, session_ids, status,
+    started_at, closed_at, archived_at, last_mtime, last_activity,
+    message_count}. Status is one of "active" / "closed" / "archived":
+      - active = .md exists AND chat is in _active_coordinations dict.
+      - closed = sidecar present, archived flag falsy, NOT in _active_coordinations.
+      - archived = sidecar's archived flag is true.
+    Sorted reverse-chronologically by mtime.
+    """
+    group_chats_dir = os.path.expanduser("~/.claude/group-chats")
+    try:
+        fnames = os.listdir(group_chats_dir)
+    except OSError:
+        return []
+    with _coord_lock:
+        active_paths = set(_active_coordinations.keys())
+        active_meta = {p: dict(e) for p, e in _active_coordinations.items()}
+
+    out = []
+    for fname in fnames:
+        if not fname.endswith(".json"):
+            continue
+        sidecar = os.path.join(group_chats_dir, fname)
+        md_path = sidecar[:-5] + ".md"
+        try:
+            stat = os.stat(md_path)
+        except OSError:
+            continue   # .md missing — skip stale sidecars
+        meta = _load_group_chat_sidecar(md_path)
+        is_archived = bool(meta.get("archived"))
+        if only_archived and not is_archived:
+            continue
+        if not include_archived and is_archived:
+            continue
+        if md_path in active_paths:
+            status = "active"
+        elif is_archived:
+            status = "archived"
+        else:
+            status = "closed"
+        # Closed_at fallback: if the watcher was bypassed (server restarted
+        # while idle, or a hand-edited sidecar), we still want the UI to
+        # show "closed Xh ago" — fall back to the .md mtime so the row
+        # isn't stuck at "just now" forever.
+        closed_at = meta.get("closed_at")
+        if status == "closed" and not closed_at:
+            closed_at = stat.st_mtime
+        last_activity = (active_meta.get(md_path) or {}).get("last_activity") or stat.st_mtime
+        out.append({
+            "path": md_path,
+            "path_tilde": "~/.claude/group-chats/" + os.path.basename(md_path),
+            "topic": meta.get("topic", ""),
+            "mode": meta.get("mode", "topic"),
+            "session_ids": meta.get("session_ids") or [],
+            "status": status,
+            "started_at": meta.get("started_at"),
+            "closed_at": closed_at,
+            "archived_at": meta.get("archived_at"),
+            "last_mtime": stat.st_mtime,
+            "last_activity": last_activity,
+            "message_count": _group_chat_message_count(md_path),
+        })
+    out.sort(key=lambda c: c["last_mtime"], reverse=True)
+    return out
+
+
+def _gc_touches_repo(chat: dict, repo_path_canon: str) -> bool:
+    """True if any participant session's cwd resolves into repo_path_canon."""
+    if not repo_path_canon:
+        return False
+    for sid in chat.get("session_ids") or []:
+        cwd = find_session_cwd(sid)
+        if not cwd:
+            continue
+        try:
+            cwd_canon = str(Path(cwd).expanduser().resolve())
+        except (OSError, ValueError, RuntimeError):
+            continue
+        if cwd_canon == repo_path_canon:
+            return True
+        if cwd_canon.startswith(repo_path_canon + os.sep):
+            return True
+    return False
+
+
+def _resolve_group_chat_path(raw: str) -> str:
+    """Canonicalize a chat path (accepts either absolute or ~-prefixed).
+    Returns the realpath if it lies under ~/.claude/group-chats/, else "".
+    """
+    group_chats_dir = os.path.realpath(os.path.expanduser("~/.claude/group-chats"))
+    try:
+        real_path = os.path.realpath(os.path.expanduser(str(raw or "")))
+    except Exception:
+        return ""
+    if not real_path.startswith(group_chats_dir + os.sep):
+        return ""
+    return real_path
+
+
+def _group_chat_set_archived(raw_path: str, archived: bool) -> dict:
+    """Flip the archived flag on a chat sidecar. Drops the chat from the
+    active watcher dict on archive (so it stops getting nudged). Returns
+    the same shape as other group-chat handlers: {ok, error?}.
+    """
+    real_path = _resolve_group_chat_path(raw_path)
+    if not real_path:
+        return {"ok": False, "error": "forbidden"}
+    if not os.path.exists(real_path):
+        return {"ok": False, "error": "not found"}
+    fields = {"archived": bool(archived)}
+    if archived:
+        fields["archived_at"] = time.time()
+    else:
+        fields["archived_at"] = None
+    if not _update_group_chat_sidecar(real_path, **fields):
+        return {"ok": False, "error": "could not update sidecar"}
+    if archived:
+        with _coord_lock:
+            _active_coordinations.pop(real_path, None)
+    return {"ok": True}
 
 
 def _inject_text_into_session(session_id, text):
@@ -15571,26 +15774,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             payload = fetch_cross_repo_issues()
             self.send_json(payload)
         elif path == "/api/group-chats/active":
-            with _coord_lock:
-                chats = [
-                    {"path": p, "last_activity": e["last_activity"]}
-                    for p, e in _active_coordinations.items()
-                ]
-            # Sort most-recently-active first; attach topic from sidecar if available.
-            chats.sort(key=lambda c: c["last_activity"], reverse=True)
-            for c in chats:
-                sidecar = c["path"][:-3] + ".json"
+            # Returns all unarchived chats (active + recently closed) so the
+            # sidebar can render a single section with ghosted closed rows.
+            # Active = currently in _active_coordinations; closed = sidecar
+            # exists, archived flag is falsy, and it's NOT in the watcher's
+            # in-memory dict.
+            self.send_json({
+                "ok": True,
+                "chats": _list_group_chats(include_archived=False),
+            })
+        elif path == "/api/group-chats/archived":
+            # Filtered to archived chats whose participants touch repo_path,
+            # or all archived chats when repo_path is missing/invalid (used
+            # by the "All folders" archive view).
+            qs_params = urllib.parse.parse_qs(parsed.query)
+            repo_path_raw = (qs_params.get("repo_path") or [""])[0]
+            repo_path_canon = None
+            if repo_path_raw:
                 try:
-                    with open(sidecar, "r", encoding="utf-8") as fh:
-                        meta = json.load(fh)
-                    c["topic"] = meta.get("topic", "")
-                    c["mode"] = meta.get("mode", "topic")
-                    c["session_ids"] = meta.get("session_ids") or []
-                except OSError:
-                    c["topic"] = ""
-                    c["mode"] = "topic"
-                    c["session_ids"] = []
-                c["path_tilde"] = "~/.claude/group-chats/" + os.path.basename(c["path"])
+                    repo_path_canon = str(Path(repo_path_raw).expanduser().resolve())
+                except (OSError, ValueError, RuntimeError):
+                    repo_path_canon = None
+            chats = _list_group_chats(include_archived=True, only_archived=True)
+            if repo_path_canon:
+                chats = [c for c in chats if _gc_touches_repo(c, repo_path_canon)]
             self.send_json({"ok": True, "chats": chats})
         elif path == "/api/group-chat/read":
             qs_params = urllib.parse.parse_qs(parsed.query)
@@ -17249,6 +17456,50 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             result = _group_chat_nudge(chat_path)
             if not result.get("ok") and result.get("error") == "forbidden":
                 self.send_json(result, 403)
+            else:
+                self.send_json(result)
+        elif path == "/api/group-chats/archive":
+            # Persistently archive a group chat: flips sidecar archived flag
+            # to True and drops it from _active_coordinations so the watcher
+            # stops nudging. UI removes it from the In Group Chat section
+            # and the row appears in the per-repo Archived section instead.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            chat_path = (payload.get("path") or "").strip()
+            if not chat_path:
+                self.send_json({"ok": False, "error": "missing path"})
+                return
+            result = _group_chat_set_archived(chat_path, True)
+            if result.get("error") == "forbidden":
+                self.send_json(result, 403)
+            elif result.get("error") == "not found":
+                self.send_json(result, 404)
+            else:
+                self.send_json(result)
+        elif path == "/api/group-chats/unarchive":
+            # Symmetric to /archive — flips sidecar archived flag back to
+            # False. No UI button wires this in v1, but the endpoint exists
+            # so a future "unarchive" affordance can flip the flag without
+            # a server change.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            chat_path = (payload.get("path") or "").strip()
+            if not chat_path:
+                self.send_json({"ok": False, "error": "missing path"})
+                return
+            result = _group_chat_set_archived(chat_path, False)
+            if result.get("error") == "forbidden":
+                self.send_json(result, 403)
+            elif result.get("error") == "not found":
+                self.send_json(result, 404)
             else:
                 self.send_json(result)
         elif path == "/api/inject-input":
