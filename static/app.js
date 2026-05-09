@@ -1662,6 +1662,21 @@
       { re: /-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/, cls: 'tok-number' },
     ],
   };
+  // Wrap http(s) URLs inside already-HTML-escaped output in anchor tags.
+  // Used as a post-pass on highlightCode output and on inline code that
+  // contains a URL alongside other text. Only matches URLs that aren't
+  // already inside an existing <a …> tag (the prefix lookbehind via a
+  // negative pattern is approximated by a check that we're not currently
+  // inside an open anchor — easier just to require URL chars not contain
+  // < or >, which are the anchor delimiters).
+  function _linkifyEscapedUrls(html) {
+    if (!html || html.indexOf('http') === -1) return html;
+    return html.replace(
+      /(https?:\/\/[^\s<>"'`]+)/g,
+      '<a href="$1" target="_blank" rel="noopener">$1</a>'
+    );
+  }
+
   function highlightCode(code, lang) {
     const key = _CB_LANG_ALIAS[String(lang || '').toLowerCase()] || String(lang || '').toLowerCase();
     const patterns = _CB_LANG_PATTERNS[key];
@@ -1700,7 +1715,7 @@
         '<div class="cb-head">' + langLabel +
           '<button class="cb-copy" type="button" title="Copy">Copy</button>' +
         '</div>' +
-        '<pre class="cb"><code>' + highlightCode(code, lang) + '</code></pre>' +
+        '<pre class="cb"><code>' + _linkifyEscapedUrls(highlightCode(code, lang)) + '</code></pre>' +
       '</div>'
     );
   }
@@ -1712,6 +1727,12 @@
     s = s.replace(/`([^`]+)`/g, (m, inner) => {
       if (/^(https?:\/\/\S+|~\/[\w./@#:\-+]*|\/[\w./@#:\-+]*|[\w./@#:\-+]+\.(md|ts|tsx|js|jsx|py|json|yaml|yml|css|html|sql|prisma|sh))$/.test(inner)) {
         return '<code class="md-code">' + linkifyPath(inner) + '</code>';
+      }
+      // Mixed inline content (e.g. `see http://… for details`) — link
+      // any http(s) URLs inside. `inner` is the captured group from the
+      // already-escaped `s`, so it's HTML-safe; we just wrap URL spans.
+      if (inner.indexOf('http') !== -1) {
+        return '<code class="md-code">' + _linkifyEscapedUrls(inner) + '</code>';
       }
       return '<code class="md-code">' + inner + '</code>';
     });
@@ -9913,7 +9934,15 @@
             // <pre>'s text content instead.
             const _toolTs = eventStamp(ev.ts) || nowStamp();
             out.dataset.renderTs = _toolTs;
-            out.textContent = '[J ' + _toolTs + ']  ' + text;
+            // textContent for safety, then if the text has URLs swap to
+            // an escaped+linkified innerHTML so they're one-click. The
+            // `[J <ts>]` prefix is also preserved in escaped form.
+            const _prefix = '[J ' + _toolTs + ']  ';
+            if (text.indexOf('http') !== -1) {
+              out.innerHTML = _linkifyEscapedUrls(escapeHtml(_prefix + text));
+            } else {
+              out.textContent = _prefix + text;
+            }
             // Bump the group's header stamp too so it reflects the most
             // recent activity (tool_use OR tool_result), not just tool_use.
             // CSS ::before reads attr() from its own element, so the header
