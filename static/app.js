@@ -4997,7 +4997,6 @@
     const _readyToMergeConvs = [];
     const _archivedConvs = [];
     const _inGroupChatIds = new Set(_gcActiveChats.flatMap(c => c.session_ids || []));
-    const _inGroupChatConvs = [];
     for (const c of convs) {
       const col = classifyKanbanColumn(c);
       if (col === 'archived') { _archivedConvs.push(c); continue; }
