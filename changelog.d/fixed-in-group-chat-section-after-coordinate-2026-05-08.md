@@ -1,1 +1,0 @@
-Fix the "In Group Chat" sidebar section not appearing after creating a coordination — single-session chats were blocked by a stale min-2 client check, the section refresh only fired up to 15s later, and the change-detector compared list lengths instead of paths so identical-count swaps were missed.

@@ -1,1 +1,0 @@
-Remove duplicate "In Group Chat" header in archive mode — `renderArchiveList` was injecting a second copy on top of the one `renderConversationList` already rendered, leaving two stacked headers in the sidebar whenever a coordination was active.

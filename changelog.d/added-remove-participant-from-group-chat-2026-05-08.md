@@ -1,1 +1,0 @@
-Each participant in the indented list under a chat row now has a small `×` button (visible on hover) that drops the session from the chat. New `POST /api/group-chats/remove-participant` updates the sidecar; the watcher's nudge loop reads `session_ids` fresh each tick, so the removed session stops being nudged immediately.

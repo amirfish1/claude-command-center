@@ -1,1 +1,0 @@
-Multi-session coordination: Ctrl/Shift-click sessions in the conversation list, click "Coordinate…", enter a topic, and Claude Code sessions self-organize via a fresh per-topic group-chat file. Live-reader panel in the conv pane lets you follow and participate directly from the CCC.

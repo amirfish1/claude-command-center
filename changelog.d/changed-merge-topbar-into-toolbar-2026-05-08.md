@@ -1,1 +1,0 @@
-Merge the global topbar (Worktrees / Stats / Terminal / Vercel / History pills) into the main toolbar row, recovering ~33px of vertical space at the top of the page. The buttons now sit at the right end of `#convToolbar` instead of in their own fixed-position bar above the sidebar/main split.
