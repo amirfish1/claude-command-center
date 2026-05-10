@@ -12,6 +12,12 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#0d1117">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<!-- W3C-standard equivalent. The apple-prefixed one is deprecated; the
+     unprefixed `mobile-web-app-capable` is the spec-compliant form
+     Chrome/Edge/Firefox prefer. We keep both during the transition so
+     older iOS Safari versions (which only know the apple form) still
+     get the standalone behavior. -->
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CCC">
 <link rel="apple-touch-icon" href="/static/icon.svg">

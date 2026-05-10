@@ -1,0 +1,1 @@
+- PWA install metadata now includes the W3C-standard `<meta name="mobile-web-app-capable">` alongside the older `apple-mobile-web-app-capable`. Chrome, Edge, and Firefox prefer the unprefixed form; Apple's prefixed variant is deprecated but still required for older iOS Safari versions, so both ship during the transition.
