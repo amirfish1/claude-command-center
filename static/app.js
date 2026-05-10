@@ -3388,7 +3388,7 @@
         + '<span class="gc-topic" title="' + topicSafe + '">' + topicSafe + '</span>'
         + '<span class="gc-mode-badge">' + modeSafe + '</span>'
       + '</div>'
-      + '<div class="gc-reader-body" id="gcReaderBody">Loading…</div>'
+      + '<div class="gc-reader-body" id="gcReaderBody" tabindex="0">Loading…</div>'
       + (includeHuman
         ? '<div class="gc-reader-input-row" id="gcInputRow">'
             + '<textarea id="gcHumanInput" rows="1" placeholder="Add to chat…" autocomplete="off" spellcheck="false"></textarea>'
@@ -3446,6 +3446,48 @@
     if (_gcReaderInterval) clearInterval(_gcReaderInterval);
     pollGroupChatReader();
     _gcReaderInterval = setInterval(pollGroupChatReader, 3000);
+
+    // Space → jump to the top of the next message in the gc reader.
+    // Each message starts with `## ts — hash: name` which renders as
+    // <h2 class="md-h">. Listener is GLOBAL (document) and gated on the
+    // reader being live + the user not typing into the reply textarea.
+    // Idempotent: we mark the document so we only attach once even if
+    // openGroupChatReader is called multiple times.
+    if (!document._gcSpaceHandlerAttached) {
+      document._gcSpaceHandlerAttached = true;
+      // Capture phase so we fire BEFORE the browser's default Space-page-
+      // scroll triggers. Without `true` the default kicks in first and
+      // bubbles to us, producing a compound jump.
+      document.addEventListener('keydown', (ev) => {
+        if (ev.key !== ' ' && ev.key !== 'Spacebar') return;
+        if (ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+        const gcBody = document.getElementById('gcReaderBody');
+        if (!gcBody) return;
+        if (gcBody.offsetParent === null) return;
+        const ae = document.activeElement;
+        if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable)) return;
+        // Claim Space fully so the browser's default page-down doesn't
+        // also fire and produce a compound jump.
+        ev.preventDefault();
+        ev.stopPropagation();
+        const headings = gcBody.querySelectorAll('h2.md-h');
+        if (!headings.length) return;
+        const bodyRect = gcBody.getBoundingClientRect();
+        const slop = 4;
+        let target = null;
+        for (const h of headings) {
+          if (h.getBoundingClientRect().top - bodyRect.top > slop) { target = h; break; }
+        }
+        if (!target) return;
+        // Use native scrollIntoView — the browser handles margin/padding/
+        // box math correctly. block:'start' aligns the element's start
+        // edge with the scroll container's start.
+        target.scrollIntoView({ block: 'start', behavior: 'auto' });
+      }, true);
+    }
+    // Defer focus a tick so we don't fight with selectConversation flow.
+    const gcBodyForFocus = document.getElementById('gcReaderBody');
+    if (gcBodyForFocus) setTimeout(() => gcBodyForFocus.focus(), 0);
   }
 
   // The /group-chat skill stamps each message with the session's first
