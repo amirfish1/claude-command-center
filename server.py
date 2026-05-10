@@ -12667,6 +12667,355 @@ def vercel_deploy_status_with_autofix(repo_path):
     return status
 
 
+# ── Next.js dev server (localhost pill) ──────────────────────────────────────
+# One tracked dev server per repo. Started on demand from the localhost pill,
+# polled by /api/nextjs/status, opens http://localhost:<port> on click.
+
+_NEXTJS_PROCS: dict = {}
+_NEXTJS_LOCK = threading.Lock()
+_NEXTJS_LOG_DIR = COMMAND_CENTER_STATE_DIR / "nextjs"
+_NEXTJS_PORT_RE = re.compile(
+    r"(?:Local:|started server on|ready - started server on|Local URL:)\s+"
+    r"https?://[^\s:/]+:(\d{2,5})",
+    re.IGNORECASE,
+)
+
+
+def _has_next_locally(path: Path) -> bool:
+    """Per-directory Next.js check (no recursion, no walking up)."""
+    for cfg in ("next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs"):
+        if (path / cfg).is_file():
+            return True
+    pkg = path / "package.json"
+    if not pkg.is_file():
+        return False
+    try:
+        with open(pkg, "r") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+    for key in ("dependencies", "devDependencies", "peerDependencies"):
+        deps = data.get(key) or {}
+        if isinstance(deps, dict) and "next" in deps:
+            return True
+    return False
+
+
+def _read_pkg_json(path: Path):
+    pkg = Path(path) / "package.json"
+    if not pkg.is_file():
+        return None
+    try:
+        with open(pkg, "r") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _enumerate_workspaces(repo_path: Path):
+    """Glob the root package.json's `workspaces` field. Tolerant of dict and
+    list forms (yarn classic vs npm/pnpm)."""
+    data = _read_pkg_json(repo_path) or {}
+    workspaces = data.get("workspaces")
+    if isinstance(workspaces, dict):
+        workspaces = workspaces.get("packages") or []
+    if not isinstance(workspaces, list):
+        return []
+    out = []
+    for pattern in workspaces:
+        if not isinstance(pattern, str):
+            continue
+        for m in repo_path.glob(pattern):
+            if m.is_dir():
+                out.append(m)
+    return out
+
+
+def _find_turbo_root(repo_path: Path):
+    """Walk up looking for turbo.json. Returns the dir or None."""
+    p = Path(repo_path).resolve()
+    for candidate in [p, *p.parents]:
+        if (candidate / "turbo.json").is_file():
+            return candidate
+    return None
+
+
+def _detect_nextjs(repo_path: Path) -> bool:
+    """True when the repo looks like a Next.js project — directly, or as a
+    turbo/npm-workspaces monorepo root with at least one Next.js workspace."""
+    repo_path = Path(repo_path)
+    if _has_next_locally(repo_path):
+        return True
+    # Monorepo root: if any declared workspace is Next.js, the pill should
+    # offer to start it (turbo dev or npm-run-dev with a workspace filter).
+    for ws in _enumerate_workspaces(repo_path):
+        if _has_next_locally(ws):
+            return True
+    return False
+
+
+def _nextjs_pkg_manager(repo_path: Path):
+    """Pick a package manager + dev argv based on lockfile presence."""
+    repo_path = Path(repo_path)
+    if (repo_path / "pnpm-lock.yaml").is_file():
+        return ["pnpm", "dev"]
+    if (repo_path / "yarn.lock").is_file():
+        return ["yarn", "dev"]
+    return ["npm", "run", "dev"]
+
+
+def _resolve_dev_invocation(repo_path: Path):
+    """Return (cmd, cwd) for spawning the dev server.
+
+    Turbo-aware: if a `turbo.json` lives at the picked dir or any ancestor
+    AND its `tasks` (or legacy `pipeline`) include `dev`, we run the user's
+    monorepo flow — `npx turbo run dev` from the turbo root, scoped to the
+    current package via `--filter=<name>` when picked at a workspace.
+
+    Falls back to `npm run dev` / `pnpm dev` / `yarn dev` from the picked
+    dir when there's no turbo setup.
+    """
+    repo_path = Path(repo_path).resolve()
+    turbo_root = _find_turbo_root(repo_path)
+    if turbo_root:
+        turbo_cfg = {}
+        try:
+            with open(turbo_root / "turbo.json", "r") as f:
+                turbo_cfg = json.load(f) or {}
+        except (OSError, json.JSONDecodeError):
+            turbo_cfg = {}
+        tasks = turbo_cfg.get("tasks") or turbo_cfg.get("pipeline") or {}
+        if "dev" in tasks:
+            if repo_path == turbo_root:
+                return (["npx", "turbo", "run", "dev"], turbo_root)
+            pkg = _read_pkg_json(repo_path) or {}
+            pkg_name = pkg.get("name")
+            if pkg_name:
+                return (
+                    ["npx", "turbo", "run", "dev", f"--filter={pkg_name}"],
+                    turbo_root,
+                )
+            # Workspace without a name field — fall through to direct npm.
+    return (_nextjs_pkg_manager(repo_path), repo_path)
+
+
+def _nextjs_proc_alive(entry):
+    """True when the tracked process is still running.
+
+    Uses Popen.poll() (which calls waitpid internally) when we have the
+    handle — that reaps zombies and reflects an exited child correctly.
+    Falls back to `os.kill(pid, 0)` only when the entry is from a foreign
+    source (currently nothing — kept defensively).
+    """
+    if not entry:
+        return False
+    proc = entry.get("proc")
+    if proc is not None:
+        return proc.poll() is None
+    pid = entry.get("pid")
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _nextjs_evict(repo_key: str):
+    """Drop the tracked entry for a repo; safe to call without holding lock."""
+    with _NEXTJS_LOCK:
+        _NEXTJS_PROCS.pop(repo_key, None)
+
+
+def _nextjs_tail_for_port(repo_key: str, log_path: Path, popen):
+    """Background thread: tail the dev-server log, parse the port, store it."""
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        if popen.poll() is not None:
+            return  # process exited before printing port
+        try:
+            text = log_path.read_text(errors="replace")
+        except OSError:
+            text = ""
+        m = _NEXTJS_PORT_RE.search(text)
+        if m:
+            port = int(m.group(1))
+            with _NEXTJS_LOCK:
+                entry = _NEXTJS_PROCS.get(repo_key)
+                if entry and entry.get("pid") == popen.pid:
+                    entry["port"] = port
+            return
+        time.sleep(0.5)
+
+
+def _nextjs_log_tail(log_path, max_lines=12):
+    """Last N non-blank lines of a dev-server log, for failure surfacing."""
+    if not log_path:
+        return ""
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError:
+        return ""
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    return "\n".join(lines[-max_lines:])
+
+
+# Sticky exit info per repo so the UI can surface why a server died after
+# eviction. Cleared on next successful start.
+_NEXTJS_LAST_EXIT: dict = {}
+
+
+def nextjs_status(repo_path):
+    """Status payload for /api/nextjs/status."""
+    repo_path = resolve_repo_path(repo_path)
+    repo_key = str(Path(repo_path).resolve())
+    detected = _detect_nextjs(Path(repo_path))
+    with _NEXTJS_LOCK:
+        entry = _NEXTJS_PROCS.get(repo_key)
+        snapshot = dict(entry) if entry else None
+    last_exit = None
+    if snapshot and not _nextjs_proc_alive(snapshot):
+        proc = snapshot.get("proc")
+        rc = proc.returncode if proc is not None else None
+        last_exit = {
+            "returncode": rc,
+            "log_tail": _nextjs_log_tail(snapshot.get("log_path")),
+            "log_path": snapshot.get("log_path"),
+            "cmd": snapshot.get("cmd"),
+            "ended_at": time.time(),
+        }
+        _NEXTJS_LAST_EXIT[repo_key] = last_exit
+        _nextjs_evict(repo_key)
+        snapshot = None
+    elif not snapshot:
+        last_exit = _NEXTJS_LAST_EXIT.get(repo_key)
+    return {
+        "detected": detected,
+        "running": bool(snapshot),
+        "pid": snapshot.get("pid") if snapshot else None,
+        "port": snapshot.get("port") if snapshot else None,
+        "log_path": snapshot.get("log_path") if snapshot else None,
+        "started_at": snapshot.get("started_at") if snapshot else None,
+        "cmd": snapshot.get("cmd") if snapshot else None,
+        "cwd": snapshot.get("cwd") if snapshot else None,
+        "last_exit": last_exit,
+    }
+
+
+def nextjs_start(repo_path):
+    """Spawn `<pm> dev` in repo_path, track it, return pid + log path."""
+    repo_path = resolve_repo_path(repo_path)
+    repo_key = str(Path(repo_path).resolve())
+    if not _detect_nextjs(Path(repo_path)):
+        return {"ok": False, "error": "not a Next.js project"}, 400
+    with _NEXTJS_LOCK:
+        existing = _NEXTJS_PROCS.get(repo_key)
+        if existing and _nextjs_proc_alive(existing):
+            return {"ok": False, "error": "already running", **existing}, 409
+        if existing:
+            _NEXTJS_PROCS.pop(repo_key, None)
+    cmd, run_cwd = _resolve_dev_invocation(Path(repo_path))
+    _NEXTJS_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", repo_key).strip("_")[-120:]
+    log_path = _NEXTJS_LOG_DIR / f"{slug}.log"
+    # The CCC server itself runs on $PORT; if that env var leaks into the
+    # spawned `next dev`, Next.js will try to bind to the same port and the
+    # user gets a baffling "URL is the CCC UI, not my app" experience (or a
+    # bind error). Strip PORT/HOSTNAME so Next.js picks its default 3000
+    # (or auto-bumps to 3001/3002 on collision).
+    spawn_env = {k: v for k, v in os.environ.items() if k not in ("PORT", "HOSTNAME", "HOST")}
+    spawn_env["FORCE_COLOR"] = "0"
+    spawn_env["NO_COLOR"] = "1"
+    spawn_env["BROWSER"] = "none"
+    try:
+        log_path.write_text("")  # truncate prior run
+        log_fh = open(log_path, "a")
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(run_cwd),
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            env=spawn_env,
+        )
+    except FileNotFoundError as e:
+        return {"ok": False, "error": f"package manager not found: {cmd[0]} ({e})"}, 500
+    except OSError as e:
+        return {"ok": False, "error": str(e)}, 500
+    entry = {
+        "pid": proc.pid,
+        "proc": proc,
+        "port": None,
+        "started_at": time.time(),
+        "log_path": str(log_path),
+        "cmd": " ".join(cmd),
+        "cwd": str(run_cwd),
+    }
+    with _NEXTJS_LOCK:
+        _NEXTJS_PROCS[repo_key] = entry
+        _NEXTJS_LAST_EXIT.pop(repo_key, None)
+    threading.Thread(
+        target=_nextjs_tail_for_port,
+        args=(repo_key, log_path, proc),
+        daemon=True,
+    ).start()
+    payload = {k: v for k, v in entry.items() if k != "proc"}
+    return {"ok": True, **payload}, 200
+
+
+def nextjs_stop(repo_path):
+    """SIGTERM the tracked process group; SIGKILL after 3s if still alive."""
+    repo_path = resolve_repo_path(repo_path)
+    repo_key = str(Path(repo_path).resolve())
+    with _NEXTJS_LOCK:
+        entry = _NEXTJS_PROCS.get(repo_key)
+    if not entry:
+        return {"ok": True, "running": False}, 200
+    pid = entry.get("pid")
+    if not pid:
+        _nextjs_evict(repo_key)
+        return {"ok": True, "running": False}, 200
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except ProcessLookupError:
+        _nextjs_evict(repo_key)
+        return {"ok": True, "running": False}, 200
+    except OSError as e:
+        return {"ok": False, "error": str(e)}, 500
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        if not _nextjs_proc_alive(entry):
+            break
+        time.sleep(0.1)
+    if _nextjs_proc_alive(entry):
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except OSError:
+            pass
+    _nextjs_evict(repo_key)
+    return {"ok": True, "running": False, "pid": pid}, 200
+
+
+def _nextjs_shutdown_all():
+    """atexit hook: SIGTERM every tracked Next.js process group."""
+    with _NEXTJS_LOCK:
+        entries = list(_NEXTJS_PROCS.values())
+        _NEXTJS_PROCS.clear()
+    for entry in entries:
+        pid = entry.get("pid")
+        if not pid:
+            continue
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+        except OSError:
+            pass
+
+
+import atexit as _atexit
+_atexit.register(_nextjs_shutdown_all)
+
+
 def auto_verify_closed_issues(repo_path):
     """For any session with has_push + linked to a CLOSED GitHub issue,
     auto-set verified=True if not already. Returns what was changed."""
@@ -15740,6 +16089,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(vercel_deploy_status_with_autofix(ctx["repo_path"]))
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
+        elif path == "/api/nextjs/status":
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                ctx = require_repo_context(query=qs, allow_session=False)
+                self.send_json(nextjs_status(ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif re.match(r"^/api/issues/\d+/summary$", path):
             num = path.split("/")[3]
             qs = urllib.parse.parse_qs(parsed.query)
@@ -17029,6 +17385,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json({"ok": True, "path": fpath, "name": fname, "bytes": len(raw)})
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path in ("/api/nextjs/start", "/api/nextjs/stop"):
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            try:
+                ctx = require_repo_context(payload, allow_session=False)
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+                return
+            handler = nextjs_start if path.endswith("/start") else nextjs_stop
+            result, status = handler(ctx["repo_path"])
+            self.send_json(result, status)
         elif path == "/api/reveal-file":
             # SECURITY: macOS `open` will execute apps and scripts. Unlike
             # /api/open, this launches the file directly, so it clamps to the

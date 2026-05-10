@@ -10898,6 +10898,7 @@
     _captureRailEl(document.getElementById('liveBadgeConv'));
     _captureRailEl(document.getElementById('launchWrapConv'));
     _captureRailEl(document.getElementById('deployPill'));
+    _captureRailEl(document.getElementById('localhostPill'));
     _captureRailEl(document.getElementById('announceBtnConv'));
     _captureRailEl(document.getElementById('jumpBtnConv'));
     _captureRailEl(document.getElementById('pkoodKillBtn'));
@@ -11263,6 +11264,273 @@
     return Math.floor(s / 86400) + 'd ago';
   }
 
+  // ── Localhost / Next.js dev server pill ──
+  const $localhostPill = document.getElementById('localhostPill');
+  const $localhostDot = document.getElementById('localhostDot');
+  const $localhostLabel = document.getElementById('localhostLabel');
+  // States govern click semantics:
+  //   no-repo / no-nextjs → click is a no-op with a one-shot explainer alert
+  //   idle (Next.js detected, no server) → click POSTs /api/nextjs/start
+  //   starting → click ignored
+  //   running  → <a href> opens http://localhost:<port> in a new tab
+  //   failed   → click retries start
+  let _localhostState = 'idle';
+  let _localhostFastPollUntil = 0;
+  let _localhostPollTimer = null;
+
+  function setLocalhostPill({ dotClass, label, title, href, busy }) {
+    if ($localhostDot) $localhostDot.className = 'deploy-dot' + (dotClass ? ' ' + dotClass : '');
+    if ($localhostLabel) $localhostLabel.textContent = label;
+    if (!$localhostPill) return;
+    $localhostPill.title = title || '';
+    if (href) {
+      $localhostPill.setAttribute('href', href);
+      $localhostPill.setAttribute('target', '_blank');
+      $localhostPill.style.cursor = 'pointer';
+    } else {
+      $localhostPill.removeAttribute('href');
+      $localhostPill.removeAttribute('target');
+      // Always pointer (except when busy) so it's obvious the pill is
+      // interactive even when there's no actionable state — the click
+      // handler always responds (alert, retry, etc.).
+      $localhostPill.style.cursor = busy ? 'wait' : 'pointer';
+    }
+  }
+
+  async function pollLocalhost() {
+    if (!$localhostPill) return;
+    const repoPath = selectedRepoPath();
+    if (!repoPath) {
+      _localhostState = 'no-repo';
+      setLocalhostPill({
+        dotClass: '',
+        label: 'localhost',
+        title: 'Pick a repo first — the localhost pill needs to know which directory to look in.',
+        href: '',
+      });
+      return;
+    }
+    let res;
+    try {
+      res = await fetch(repoUrl('/api/nextjs/status', repoPath));
+    } catch (e) {
+      _localhostState = 'unreachable';
+      setLocalhostPill({
+        dotClass: 'error',
+        label: 'localhost: offline',
+        title: 'Could not reach the CCC server: ' + (e && e.message || e),
+        href: '',
+      });
+      return;
+    }
+    if (!res.ok) {
+      _localhostState = 'unreachable';
+      setLocalhostPill({
+        dotClass: 'error',
+        label: 'localhost: needs restart',
+        title: '/api/nextjs/status returned ' + res.status +
+               '. Restart the CCC server (./run.sh) to pick up the new endpoint.',
+        href: '',
+      });
+      return;
+    }
+    let d;
+    try {
+      d = await res.json();
+    } catch (_e) {
+      _localhostState = 'unreachable';
+      setLocalhostPill({
+        dotClass: 'error',
+        label: 'localhost: bad response',
+        title: 'CCC server returned non-JSON for /api/nextjs/status — likely an old build. Restart it.',
+        href: '',
+      });
+      return;
+    }
+    if (!d.detected) {
+      _localhostState = 'no-nextjs';
+      setLocalhostPill({
+        dotClass: '',
+        label: 'No Next.js',
+        title: 'This repo isn\'t a Next.js project (no `next` in package.json, no next.config.*). ' +
+               'Click for details.',
+        href: '',
+      });
+      return;
+    }
+    if (d.running && d.port) {
+      _localhostState = 'running';
+      const url = 'http://localhost:' + d.port;
+      const age = d.started_at ? timeAgo(d.started_at * 1000) : '';
+      setLocalhostPill({
+        dotClass: 'ready',
+        label: 'localhost:' + d.port,
+        title: 'Next.js dev server running' + (age ? ' · started ' + age : '') +
+               (d.cmd ? ' · ' + d.cmd : '') +
+               (d.cwd ? '\nin: ' + d.cwd : '') +
+               ' · click to open · right-click to stop',
+        href: url,
+      });
+      return;
+    }
+    if (d.running && !d.port) {
+      _localhostState = 'starting';
+      setLocalhostPill({
+        dotClass: 'building',
+        label: 'Starting…',
+        title: 'Next.js dev server is starting — waiting for the port. ' +
+               'Tail the log: ' + (d.log_path || '<unknown>'),
+        href: '',
+        busy: true,
+      });
+      return;
+    }
+    if (d.last_exit) {
+      _localhostState = 'failed';
+      const rc = d.last_exit.returncode;
+      const tail = (d.last_exit.log_tail || '').slice(-800);
+      setLocalhostPill({
+        dotClass: 'error',
+        label: 'Start failed',
+        title: 'Last `' + (d.last_exit.cmd || 'dev') + '` exited' +
+               (rc !== null && rc !== undefined ? ' with code ' + rc : '') +
+               ' · click to retry · log tail:\n' + tail,
+        href: '',
+      });
+      return;
+    }
+    _localhostState = 'idle';
+    setLocalhostPill({
+      dotClass: '',
+      label: '▶ Start localhost',
+      title: 'Click to start a Next.js dev server in this repo (' +
+             'auto-detects npm / pnpm / yarn from your lockfile).',
+      href: '',
+    });
+  }
+
+  function _scheduleLocalhostFastPoll() {
+    _localhostFastPollUntil = Date.now() + 30_000;
+    if (_localhostPollTimer) return;
+    const tick = () => {
+      pollLocalhost();
+      if (Date.now() < _localhostFastPollUntil) {
+        _localhostPollTimer = setTimeout(tick, 1000);
+      } else {
+        _localhostPollTimer = null;
+      }
+    };
+    _localhostPollTimer = setTimeout(tick, 250);
+  }
+
+  if ($localhostPill) {
+    $localhostPill.addEventListener('click', async (ev) => {
+      // Running state: pill has an href, let the browser open the URL.
+      if ($localhostPill.getAttribute('href')) return;
+      ev.preventDefault();
+
+      // Explicit feedback for every non-actionable state, so a click is
+      // never silent.
+      if (_localhostState === 'starting') {
+        showOpToast('Dev server is already starting — give it a moment.');
+        return;
+      }
+      if (_localhostState === 'no-repo') {
+        showOpToast('Pick a repo from the sidebar before starting a dev server.');
+        return;
+      }
+      if (_localhostState === 'no-nextjs') {
+        showOpToast(
+          'No Next.js detected in this repo. The pill looks for `next` in ' +
+          'package.json or a next.config.{js,mjs,ts,cjs} at the repo root.',
+          'error'
+        );
+        return;
+      }
+      if (_localhostState === 'unreachable') {
+        showOpToast(
+          'CCC server can\'t answer /api/nextjs/status. Restart with ./run.sh ' +
+          'so the new endpoints load.',
+          'error'
+        );
+        return;
+      }
+
+      const repoPath = selectedRepoPath();
+      if (!repoPath) {
+        showOpToast('Pick a repo first.');
+        return;
+      }
+      setLocalhostPill({
+        dotClass: 'building',
+        label: 'Starting…',
+        title: 'Asking the server to spawn the dev server…',
+        href: '',
+        busy: true,
+      });
+      _localhostState = 'starting';
+      let d;
+      try {
+        const res = await fetch(repoUrl('/api/nextjs/start', repoPath), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo_path: repoPath }),
+        });
+        try {
+          d = await res.json();
+        } catch (_e) {
+          d = { ok: false, error: 'HTTP ' + res.status + ' — non-JSON reply (restart CCC?)' };
+        }
+      } catch (e) {
+        _localhostState = 'failed';
+        setLocalhostPill({
+          dotClass: 'error',
+          label: 'Start failed',
+          title: 'Could not reach server: ' + (e && e.message || e) + ' · click to retry',
+          href: '',
+        });
+        showOpToast('Could not reach CCC server: ' + (e && e.message || e), 'error');
+        return;
+      }
+      if (!d.ok && d.error && !/already running/i.test(d.error)) {
+        _localhostState = 'failed';
+        setLocalhostPill({
+          dotClass: 'error',
+          label: 'Start failed',
+          title: 'Could not start dev server: ' + d.error + ' · click to retry',
+          href: '',
+        });
+        showOpToast('Start failed: ' + d.error, 'error');
+        return;
+      }
+      showOpToast('Dev server starting — waiting for port…');
+      _scheduleLocalhostFastPoll();
+    });
+
+    $localhostPill.addEventListener('contextmenu', async (ev) => {
+      if (_localhostState !== 'running') return;
+      ev.preventDefault();
+      if (!confirm('Stop the Next.js dev server for this repo?')) return;
+      const repoPath = selectedRepoPath();
+      if (!repoPath) return;
+      setLocalhostPill({
+        dotClass: 'building',
+        label: 'Stopping…',
+        title: 'Sending SIGTERM…',
+        href: '',
+        busy: true,
+      });
+      try {
+        await fetch(repoUrl('/api/nextjs/stop', repoPath), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo_path: repoPath }),
+        });
+      } catch (_e) {}
+      pollLocalhost();
+    });
+  }
+
   // ── Sidebar resizer ──
   const $sidebar = document.querySelector('.sidebar');
   const $resizer = document.getElementById('sidebarResizer');
@@ -11537,6 +11805,7 @@
     loadAttentionList();
     refreshWorktreesBadge();
     pollVercelDeploy();
+    pollLocalhost();
     // Note: the In Group Chat polling is set up once at boot via
     // wireGroupChatPolling() — not here. Calling setInterval inside this
     // handler used to leak a fresh 15s timer on every folder-filter change.
@@ -14449,4 +14718,6 @@
 
   pollVercelDeploy();
   setInterval(pollVercelDeploy, 15000);
+  pollLocalhost();
+  setInterval(pollLocalhost, 15000);
 })();
