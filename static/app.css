@@ -387,6 +387,54 @@
   }
   .event.user_text .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; }
   .event.user_text .user-msg { margin-top: 6px; white-space: pre-wrap; font-size: 15px; }
+  .task-notification-card {
+    display: grid;
+    gap: 6px;
+    white-space: normal;
+    color: var(--text);
+    font-family: var(--font-ui);
+  }
+  .task-notification-card .tn-kicker {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0;
+  }
+  .task-notification-card .tn-kind {
+    color: var(--orange);
+    font-weight: 700;
+    text-transform: none;
+  }
+  .task-notification-card .tn-summary {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 650;
+    line-height: 1.4;
+  }
+  .task-notification-card .tn-event {
+    padding-left: 10px;
+    border-left: 2px solid rgba(210, 153, 34, 0.45);
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .task-notification-card .tn-meta {
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+  .task-notification-card .tn-meta code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--accent);
+    background: rgba(110, 118, 129, 0.16);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
   .msg-image {
     display: block;
     width: auto;
@@ -871,6 +919,25 @@
     color: var(--accent);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
     font-weight: 400;
+  }
+  .conversations-view .event.user_text.task-notification-event {
+    max-width: min(720px, 92%);
+    background: rgba(110, 140, 175, 0.08);
+    border: 1px solid rgba(110, 140, 175, 0.18);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .conversations-view .event.user_text.task-notification-event::before {
+    color: var(--text-muted);
+    opacity: 0.65;
+  }
+  .conversations-view .event.user_text .task-notification-card {
+    margin-top: 6px;
+    white-space: normal;
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    line-height: 1.45;
   }
   /* The first user message is pinned in the sticky header as "Original ask".
      Hide its in-conversation chat bubble so the same text isn't shown twice

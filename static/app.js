@@ -1605,12 +1605,110 @@
     return '<div class="session-state-block">' + rows.join('') + '</div>';
   }
 
+  function normalizeTaskNotificationField(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function taskNotificationTagText(root, tagName) {
+    if (!root) return '';
+    const el = root.getElementsByTagName(tagName)[0];
+    return el ? normalizeTaskNotificationField(el.textContent || '') : '';
+  }
+
+  function parseTaskNotificationBlock(text) {
+    const src = String(text || '').trim();
+    if (!/^<task-notification\b/i.test(src) || !/<\/task-notification>\s*$/i.test(src)) return null;
+    let parsed = { taskId: '', summary: '', event: '' };
+
+    if (typeof DOMParser !== 'undefined') {
+      try {
+        const doc = new DOMParser().parseFromString(src, 'application/xml');
+        const root = doc.getElementsByTagName('task-notification')[0];
+        const hasParserError = doc.getElementsByTagName('parsererror').length > 0;
+        if (root && !hasParserError) {
+          parsed = {
+            taskId: taskNotificationTagText(root, 'task-id'),
+            summary: taskNotificationTagText(root, 'summary'),
+            event: taskNotificationTagText(root, 'event'),
+          };
+        }
+      } catch (_) {}
+    }
+
+    if (!parsed.taskId && !parsed.summary && !parsed.event) {
+      const tagText = (tag) => {
+        const re = new RegExp('<' + tag + '\\b[^>]*>([\\s\\S]*?)<\\/' + tag + '>', 'i');
+        const m = src.match(re);
+        return m ? normalizeTaskNotificationField(m[1]) : '';
+      };
+      parsed = {
+        taskId: tagText('task-id'),
+        summary: tagText('summary'),
+        event: tagText('event'),
+      };
+    }
+
+    if (!parsed.taskId && !parsed.summary && !parsed.event) return null;
+    parsed.event = parsed.event.replace(/^\[([\s\S]*)\]$/, '$1').trim();
+    return parsed;
+  }
+
+  function splitTaskNotificationSummary(summary) {
+    const s = normalizeTaskNotificationField(summary);
+    const m = s.match(/^([A-Za-z][A-Za-z0-9 _-]{1,32}):\s+([\s\S]+)$/);
+    if (!m) return { kind: '', headline: s };
+    return { kind: m[1].trim(), headline: m[2].trim() };
+  }
+
+  function taskNotificationPlainText(notification) {
+    const n = notification || {};
+    const lines = [];
+    if (n.summary) lines.push(n.summary);
+    if (n.event) lines.push(n.event);
+    if (n.taskId) lines.push('Task ' + n.taskId);
+    return lines.join('\n');
+  }
+
+  function renderTaskNotificationBlock(notification, rawText, asUserMessage) {
+    const n = notification || {};
+    const parts = splitTaskNotificationSummary(n.summary || '');
+    const rawValue = asUserMessage ? taskNotificationPlainText(n) : rawText;
+    const rawAttr = rawValue ? ' data-raw-text="' + escapeAttr(rawValue) + '"' : '';
+    const cls = asUserMessage ? 'user-msg task-notification-card' : 'task-notification-card';
+    let html = '<div class="' + cls + '"' + rawAttr + '>';
+    html += '<div class="tn-kicker"><span>Task notification</span>'
+      + (parts.kind ? '<span class="tn-kind">' + renderInline(parts.kind) + '</span>' : '')
+      + '</div>';
+    if (parts.headline) {
+      html += '<div class="tn-summary">' + renderInline(parts.headline) + '</div>';
+    }
+    if (n.event) {
+      html += '<div class="tn-event">' + renderInline(n.event) + '</div>';
+    }
+    if (n.taskId) {
+      html += '<div class="tn-meta"><span>Task <code>' + escapeHtml(n.taskId) + '</code></span></div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
   function renderMarkdown(text) {
     const lines = text.split('\n');
     const out = [];
     let i = 0;
     while (i < lines.length) {
       const line = lines[i];
+      if (/^\s*<task-notification\b/i.test(line)) {
+        const start = i;
+        while (i < lines.length && !/^\s*<\/task-notification>\s*$/i.test(lines[i])) i++;
+        if (i < lines.length) i++;
+        const notification = parseTaskNotificationBlock(lines.slice(start, i).join('\n'));
+        if (notification) {
+          out.push(renderTaskNotificationBlock(notification, '', false));
+          continue;
+        }
+        i = start;
+      }
       // Session-state block emitted by the orchestration prompt:
       //   <session-state>
       //   DID: …
@@ -2394,7 +2492,7 @@
       : escapeHtml(card.display_name || 'New session');
     $view.innerHTML = '<div class="event user_text pending">'
       + '<span class="label">User</span>'
-      + '<div class="user-msg" data-raw-text="' + escapeHtml(prompt || card.display_name || 'New session') + '">' + promptHtml + '</div>'
+      + '<div class="user-msg" data-raw-text="' + escapeAttr(prompt || card.display_name || 'New session') + '">' + promptHtml + '</div>'
       + (meta ? '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">' + escapeHtml(meta) + '</div>' : '')
       + '</div>';
     showOptimisticAgentIndicator($view);
@@ -8931,7 +9029,7 @@
   function _dynAskItems() {
     const st = _dynamicAskState;
     if (!st) return [];
-    return Array.from(st.view.querySelectorAll(':scope > .event.user_text'));
+    return Array.from(st.view.querySelectorAll(':scope > .event.user_text:not(.task-notification-event)'));
   }
   function _dynAskApply(idx, items) {
     const st = _dynamicAskState;
@@ -10261,11 +10359,15 @@
         }
         const imagesHtml = renderImageDescriptors(ev.images);
         const cleanedText = cleanIssuePrompt(ev.text || '');
+        const notification = parseTaskNotificationBlock(cleanedText);
+        if (notification) div.classList.add('task-notification-event');
         // data-raw-text preserves the original prose so _dynAskApply can pin
         // the same wording in the "Earlier ask" sticky — reading textContent
         // back would lose any pasted-image path that's been replaced with <img>.
-        const textHtml = cleanedText
-          ? '<div class="user-msg" data-raw-text="' + escapeHtml(cleanedText) + '">' + linkifyPastedImages(escapeHtml(cleanedText)) + '</div>'
+        const textHtml = notification
+          ? renderTaskNotificationBlock(notification, cleanedText, true)
+          : cleanedText
+          ? '<div class="user-msg" data-raw-text="' + escapeAttr(cleanedText) + '">' + linkifyPastedImages(escapeHtml(cleanedText)) + '</div>'
           : '';
         div.innerHTML = '<span class="label">User</span>'
           + '<span class="line-num">L' + ev.line + '</span>'

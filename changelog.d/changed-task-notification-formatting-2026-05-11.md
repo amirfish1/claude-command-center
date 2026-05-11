@@ -1,0 +1,1 @@
+- Task notification payloads in the conversation pane now render as compact structured cards instead of raw `<task-notification>` XML blocks.
