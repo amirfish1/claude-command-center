@@ -1488,16 +1488,39 @@
     return escapeHtml(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
-  // Replace literal pasted-image paths inside an already-escapeHtml'd string
+  // Replace pasted-image references inside an already-escapeHtml'd string
   // with inline <img> tags. CCC now uploads to `.claude/command-center/
   // pasted-images/`; legacy `.claude/pasted-images/` paths still render.
   // The server's /api/pasted-image route performs the real path sandboxing.
-  const PASTED_IMG_RE = /(\/[^\s<>"]*?\/\.claude\/(?:command-center\/)?pasted-images\/paste-[\w.-]+?\.(?:png|jpe?g|gif|webp))/gi;
+  const PASTED_IMG_RE = /(?:file:\/\/)?(\/[^\s<>"']*?\/\.claude\/(?:command-center\/)?pasted-images\/paste-[\w.-]+?\.(?:png|jpe?g|gif|webp))/gi;
+  const PASTED_IMG_MD_LINK_RE = /!?\[[^\]\n]*\]\((?:file:\/\/)?(\/[^\s<>"')]*?\/\.claude\/(?:command-center\/)?pasted-images\/paste-[\w.-]+?\.(?:png|jpe?g|gif|webp))(?:\s+(?:&quot;[^&]*&quot;|'[^']*'))?\)/gi;
+  function pastedImageTag(path) {
+    return '<img class="msg-image pasted-image-inline" src="/api/pasted-image?path='
+      + encodeURIComponent(path)
+      + '" alt="pasted image" loading="lazy">';
+  }
   function linkifyPastedImages(escapedHtml) {
     if (!escapedHtml) return escapedHtml;
-    return String(escapedHtml).replace(PASTED_IMG_RE, (m) =>
-      '<img class="msg-image" src="/api/pasted-image?path=' + encodeURIComponent(m) + '" alt="pasted image">'
-    );
+    return String(escapedHtml)
+      .replace(PASTED_IMG_MD_LINK_RE, (_m, path) => pastedImageTag(path))
+      .replace(PASTED_IMG_RE, (_m, path) => pastedImageTag(path));
+  }
+
+  function renderImageDescriptors(images) {
+    if (!Array.isArray(images) || !images.length) return '';
+    let html = '';
+    for (const img of images) {
+      let src = '';
+      if (img.kind === 'path' && img.session_id && img.filename) {
+        src = '/image-cache/' + encodeURIComponent(img.session_id) + '/' + encodeURIComponent(img.filename);
+      } else if (img.kind === 'base64' && img.data) {
+        src = 'data:' + (img.media_type || 'image/png') + ';base64,' + img.data;
+      }
+      if (src) {
+        html += '<img class="msg-image" src="' + escapeAttr(src) + '" alt="pasted image" loading="lazy">';
+      }
+    }
+    return html;
   }
 
   // Subtle timestamp span shown next to line-num. Returns '' when ts is missing/unparseable.
@@ -10103,9 +10126,11 @@
             +       (function () {
                       const cleaned = cleanIssuePrompt(ev.text);
                       const parts = splitFirstSentence(cleaned);
+                      const imagesHtml = renderImageDescriptors(ev.images);
                       let h = '<div class="user-msg">';
                       h += '<span class="ask-first">' + linkifyPastedImages(escapeHtml(parts[0])) + '</span>';
                       h += '<span class="ask-rest"' + (parts[1] ? '' : ' style="display:none"') + '>' + linkifyPastedImages(escapeHtml(parts[1] || '')) + '</span>';
+                      h += imagesHtml;
                       h += '</div>';
                       return h;
                     })()
@@ -10234,20 +10259,7 @@
           if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
           _pendingSends.splice(pIdx, 1);
         }
-        let imagesHtml = '';
-        if (Array.isArray(ev.images) && ev.images.length) {
-          for (const img of ev.images) {
-            let src = '';
-            if (img.kind === 'path' && img.session_id && img.filename) {
-              src = '/image-cache/' + encodeURIComponent(img.session_id) + '/' + encodeURIComponent(img.filename);
-            } else if (img.kind === 'base64' && img.data) {
-              src = 'data:' + (img.media_type || 'image/png') + ';base64,' + img.data;
-            } else {
-              continue;
-            }
-            imagesHtml += '<img class="msg-image" src="' + src + '" alt="pasted image">';
-          }
-        }
+        const imagesHtml = renderImageDescriptors(ev.images);
         const cleanedText = cleanIssuePrompt(ev.text || '');
         // data-raw-text preserves the original prose so _dynAskApply can pin
         // the same wording in the "Earlier ask" sticky — reading textContent

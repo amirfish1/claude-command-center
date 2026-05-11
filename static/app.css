@@ -387,7 +387,18 @@
   }
   .event.user_text .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; }
   .event.user_text .user-msg { margin-top: 6px; white-space: pre-wrap; font-size: 15px; }
-  .msg-image { max-width: 480px; max-height: 360px; border-radius: 6px; display: block; margin: 6px 0; cursor: zoom-in; }
+  .msg-image {
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: min(480px, 100%);
+    max-height: 360px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 6px 0;
+    object-fit: contain;
+    cursor: zoom-in;
+  }
   .img-lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; z-index: 9999; cursor: zoom-out; }
   .img-lightbox.open { display: flex; }
   .img-lightbox img { max-width: 95vw; max-height: 95vh; border-radius: 6px; box-shadow: 0 4px 30px rgba(0,0,0,0.5); }
@@ -976,6 +987,11 @@
     font-size: 12px;
     line-height: 1.5;
     opacity: 0.85;
+  }
+  .conv-sticky-header .csh-col-ask .msg-image {
+    max-width: 100%;
+    max-height: 220px;
+    margin-top: 8px;
   }
   /* Workspace context strip — single row above the conv input bar,
      Claude-Desktop-style: "⎇ branch ← base · ↑N · ↓M · ⚠ co-tenants".
@@ -5327,6 +5343,11 @@ body.status-pos-right .status-rail > .csh-ask-original .user-msg {
   display: block; margin-top: 6px;
   color: var(--text-muted); font-size: 12px; line-height: 1.5; opacity: 0.85;
 }
+.status-rail .csh-ask-original .msg-image {
+  max-width: 100%;
+  max-height: 240px;
+  margin-top: 8px;
+}
 
 /* Earlier-ask label: hide it everywhere — the user said "just show the
    earlier ask, no need to announce it". The orange "EARLIER ASK" header
@@ -5535,4 +5556,3 @@ body.status-pos-right .conv-sticky-header .csh-col-ask {
 .assistant-text blockquote p:last-child {
   margin-bottom: 0;
 }
-

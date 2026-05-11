@@ -755,6 +755,15 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("function _isMarkdownPath", js)
         self.assertIn("payload.launch = true", js)
 
+    def test_original_ask_renders_pasted_images_inline(self):
+        """Pasted-image references should become images in the ask panels."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn("PASTED_IMG_MD_LINK_RE", js)
+        self.assertIn("function pastedImageTag", js)
+        self.assertIn("/api/pasted-image?path=", js)
+        self.assertIn("const imagesHtml = renderImageDescriptors(ev.images);", js)
+        self.assertIn("h += imagesHtml;", js)
+
     def test_files_endpoint_route_registered(self):
         """Smoke check: GET /api/conversations/<id>/files dispatcher
         branch must be present in the do_GET source. Route registration
