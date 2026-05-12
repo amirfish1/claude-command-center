@@ -14627,6 +14627,49 @@
     setSpawnCwdMenuOpen(false);
   }
 
+  function setSpawnCwdInputValue(path) {
+    const input = document.getElementById('spawnCwdPicker');
+    const value = normalizeSpawnCwdPath(path);
+    if (!input || !value) return;
+    input.value = value;
+    persistSpawnCwdPickerValue({ target: input });
+    input.focus();
+  }
+
+  async function chooseSpawnCwdFolder() {
+    const btn = document.getElementById('spawnCwdBrowseBtn');
+    if (btn) btn.disabled = true;
+    closeSpawnCwdMenu();
+    try {
+      const r = await fetch('/api/fs/pick-folder', { method: 'POST' });
+      const picked = await r.json().catch(() => ({}));
+      if (picked && picked.cancelled) return;
+      if (!picked || !picked.ok || !picked.path) {
+        showOpToast('Folder picker failed: ' + ((picked && picked.error) || 'unknown'), 'error');
+        return;
+      }
+      let selectedPath = picked.path;
+      try {
+        const addRes = await fetch('/api/repo/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: selectedPath }),
+        });
+        const addData = await addRes.json().catch(() => ({}));
+        if (addRes.ok && addData && addData.ok) {
+          selectedPath = addData.path || selectedPath;
+          if (Array.isArray(addData.repos)) repoListState.repos = addData.repos;
+          populateSpawnCwdPicker();
+        }
+      } catch (_) {}
+      setSpawnCwdInputValue(selectedPath);
+    } catch (err) {
+      showOpToast('Folder picker failed: ' + ((err && err.message) || 'network'), 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   function updateNewSessionCwdNotice() {
     if (currentConversation !== '__new__') return;
     const notice = document.getElementById('newSessionCwdNotice');
@@ -14650,6 +14693,7 @@
 
   {
     const spawnCwdBtn = document.getElementById('spawnCwdMenuBtn');
+    const spawnCwdBrowseBtn = document.getElementById('spawnCwdBrowseBtn');
     const spawnCwdInput = document.getElementById('spawnCwdPicker');
     if (spawnCwdBtn) {
       spawnCwdBtn.addEventListener('click', (ev) => {
@@ -14657,6 +14701,13 @@
         ev.stopPropagation();
         if (isSpawnCwdMenuOpen()) closeSpawnCwdMenu();
         else openSpawnCwdMenu('');
+      });
+    }
+    if (spawnCwdBrowseBtn) {
+      spawnCwdBrowseBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        chooseSpawnCwdFolder();
       });
     }
     if (spawnCwdInput) {

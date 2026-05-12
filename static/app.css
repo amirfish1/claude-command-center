@@ -1297,7 +1297,8 @@
   .conv-input-context .spawn-cwd-row .spawn-cwd-picker:focus + .spawn-cwd-menu-btn {
     border-color: var(--accent);
   }
-  .conv-input-context .spawn-cwd-row .spawn-cwd-menu-btn {
+  .conv-input-context .spawn-cwd-row .spawn-cwd-menu-btn,
+  .conv-input-context .spawn-cwd-row .spawn-cwd-browse-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1306,14 +1307,23 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-left: 0;
-    border-radius: 0 4px 4px 0;
+    border-radius: 0;
     cursor: pointer;
     font-size: 11px;
   }
+  .conv-input-context .spawn-cwd-row .spawn-cwd-browse-btn {
+    width: 30px;
+    border-radius: 0 4px 4px 0;
+  }
   .conv-input-context .spawn-cwd-row .spawn-cwd-menu-btn:hover,
-  .conv-input-context .spawn-cwd-row .spawn-cwd-menu-btn[aria-expanded="true"] {
+  .conv-input-context .spawn-cwd-row .spawn-cwd-menu-btn[aria-expanded="true"],
+  .conv-input-context .spawn-cwd-row .spawn-cwd-browse-btn:hover {
     color: var(--text);
     border-color: var(--accent);
+  }
+  .conv-input-context .spawn-cwd-row .spawn-cwd-browse-btn:disabled {
+    opacity: 0.55;
+    cursor: wait;
   }
   .conv-input-context .spawn-cwd-row .spawn-cwd-menu {
     display: none;
@@ -1323,7 +1333,7 @@
     bottom: calc(100% + 6px);
     left: 0;
     width: min(560px, calc(100vw - 80px));
-    max-height: 280px;
+    max-height: min(520px, 70vh);
     overflow: auto;
     padding: 4px;
     background: var(--surface);

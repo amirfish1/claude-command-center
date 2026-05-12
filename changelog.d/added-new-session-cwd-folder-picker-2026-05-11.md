@@ -1,0 +1,1 @@
+- Added a native folder picker button to the new-session CWD control so users can choose a directory without typing the path.
