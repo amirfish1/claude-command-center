@@ -12667,6 +12667,44 @@
   // dropdown narrows the archive locally instead of switching repos.
   let archiveData = [];
   let archiveLoaded = false;
+  let _lastArchiveRenderFilter = null;
+
+  function _captureArchiveListScroll(q, $list) {
+    if (!$list || _lastArchiveRenderFilter !== q) return null;
+    const state = { filter: q, top: $list.scrollTop, anchorId: '', anchorOffset: 0 };
+    const listRect = $list.getBoundingClientRect();
+    for (const row of $list.querySelectorAll('.conv-item[data-id]')) {
+      const rect = row.getBoundingClientRect();
+      if (rect.bottom >= listRect.top && rect.top <= listRect.bottom) {
+        state.anchorId = row.dataset.id || '';
+        state.anchorOffset = rect.top - listRect.top;
+        break;
+      }
+    }
+    return state;
+  }
+
+  function _archiveScrollTopWithinBounds($list, top) {
+    return Math.max(0, Math.min(top, Math.max(0, $list.scrollHeight - $list.clientHeight)));
+  }
+
+  function _restoreArchiveListScroll(state, $list) {
+    if (!state || !$list) return;
+    requestAnimationFrame(() => {
+      if (state.filter !== _lastArchiveRenderFilter) return;
+      if (state.anchorId && window.CSS && CSS.escape) {
+        const row = $list.querySelector('.conv-item[data-id="' + CSS.escape(state.anchorId) + '"]');
+        if (row) {
+          const listRect = $list.getBoundingClientRect();
+          const rowRect = row.getBoundingClientRect();
+          const nextTop = $list.scrollTop + ((rowRect.top - listRect.top) - state.anchorOffset);
+          $list.scrollTop = _archiveScrollTopWithinBounds($list, nextTop);
+          return;
+        }
+      }
+      $list.scrollTop = _archiveScrollTopWithinBounds($list, state.top);
+    });
+  }
 
   async function loadArchiveAll() {
     try {
@@ -12824,6 +12862,11 @@
     if (!$list) return;
     if (_renameInProgress) return;
     const q = (filter || '').trim().toLowerCase();
+    const scrollState = _captureArchiveListScroll(q, $list);
+    const _finishArchiveRender = () => {
+      _lastArchiveRenderFilter = q;
+      _restoreArchiveListScroll(scrollState, $list);
+    };
     const archiveRows = _archiveRowsWithBacklog();
     // Never filter by folder — the folder picker controls grouping and the
     // active-chip highlight only. Hiding sessions from other repos breaks
@@ -12856,18 +12899,22 @@
 
     if (!archiveLoaded && !archiveRows.length) {
       $list.innerHTML = '<div class="archive-empty-state">Loading archive&hellip;</div>';
+      _finishArchiveRender();
       return;
     }
     if (!archiveRows.length) {
       $list.innerHTML = '<div class="archive-empty-state">No conversations on disk.</div>';
+      _finishArchiveRender();
       return;
     }
     if (!byFolder.length) {
       $list.innerHTML = '<div class="archive-empty-state">No conversations in this folder.</div>';
+      _finishArchiveRender();
       return;
     }
     if (!rows.length) {
       $list.innerHTML = '<div class="archive-empty-state">No conversations match your filter.</div>';
+      _finishArchiveRender();
       return;
     }
 
@@ -13055,6 +13102,7 @@
     if (archiveSelectionSwap) {
       rebindCurrentSelectionToRealCard(archiveSelectionSwap.realCard);
     }
+    _finishArchiveRender();
   }
 
   async function setArchiveMode() {

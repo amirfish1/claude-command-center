@@ -938,6 +938,14 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("const imagesHtml = renderImageDescriptors(ev.images);", js)
         self.assertIn("h += imagesHtml;", js)
 
+    def test_archive_search_refresh_preserves_scroll(self):
+        """Periodic archive refreshes should not snap active search results."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn("let _lastArchiveRenderFilter = null;", js)
+        self.assertIn("function _captureArchiveListScroll", js)
+        self.assertIn("function _restoreArchiveListScroll", js)
+        self.assertIn("_lastArchiveRenderFilter = q;", js)
+
     def test_files_endpoint_route_registered(self):
         """Smoke check: GET /api/conversations/<id>/files dispatcher
         branch must be present in the do_GET source. Route registration
