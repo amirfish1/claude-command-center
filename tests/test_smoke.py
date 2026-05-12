@@ -616,6 +616,144 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(row["effective_branch"], "feat/demo")
         self.assertEqual(row["session_cwd"], "/tmp/example-worktree")
 
+    def test_shell_command_signals_detect_real_git_subcommands(self):
+        cases = [
+            ("git push", {"push": True}),
+            ("git -C /tmp/repo push origin HEAD", {"push": True, "external_cd": True}),
+            ("git -c user.name=Bot commit -m ok && git push", {"commit": True, "push": True}),
+            ("command git commit -m ok", {"commit": True}),
+            ("env GIT_DIR=/tmp/repo/.git git push", {"push": True}),
+            ("bash -lc 'git push'", {"push": True}),
+            ("gh --repo owner/repo pr create --title ok", {"pr": True}),
+        ]
+        for cmd, expected in cases:
+            with self.subTest(cmd=cmd):
+                signals = self.server._shell_command_signals(cmd)
+                for key, value in expected.items():
+                    self.assertEqual(signals[key], value)
+
+    def test_shell_command_signals_ignore_git_text_in_other_commands(self):
+        cases = [
+            'rg -n "git push" server.py',
+            'grep "git commit" rollout.jsonl',
+            'echo "git push"',
+            'python3 - <<\'PY\'\nprint("git push")\nPY',
+            'git status | rg "push"',
+        ]
+        for cmd in cases:
+            with self.subTest(cmd=cmd):
+                signals = self.server._shell_command_signals(cmd)
+                self.assertFalse(signals["commit"])
+                self.assertFalse(signals["push"])
+
+        signals = self.server._shell_command_signals(
+            'git commit -m "document git push workflow"'
+        )
+        self.assertTrue(signals["commit"])
+        self.assertFalse(signals["push"])
+
+    def test_shell_command_signals_resolve_relative_worktree_add(self):
+        base = pathlib.Path(self.tmp_home, "repo").resolve()
+        base.mkdir()
+        expected = base.parent / "repo-wt-ui"
+
+        signals = self.server._shell_command_signals(
+            "git worktree add -b fix/worktree-ui ../repo-wt-ui origin/main",
+            base_cwd=str(base),
+        )
+
+        self.assertEqual(signals["worktree_branch"], "fix/worktree-ui")
+        self.assertEqual(signals["worktree_path"], str(expected.resolve()))
+
+    def test_codex_tail_meta_resolves_relative_worktree_add_from_workdir(self):
+        base = pathlib.Path(self.tmp_home, "repo").resolve()
+        base.mkdir()
+        expected = base.parent / "repo-wt-ui"
+        event = {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "call_worktree",
+                "arguments": json.dumps({
+                    "cmd": "git worktree add -b fix/worktree-ui ../repo-wt-ui origin/main",
+                    "workdir": str(base),
+                }),
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "rollout.jsonl"
+            path.write_text(json.dumps(event) + "\n")
+            meta = self.server._extract_codex_tail_meta(path)
+
+        self.assertEqual(meta["tail_branch"], "fix/worktree-ui")
+        self.assertEqual(meta["tail_worktree_path"], str(expected.resolve()))
+
+    def test_workspace_uses_explicit_worktree_tail_hint(self):
+        worktree = pathlib.Path(self.tmp_home, "repo-wt-ui").resolve()
+        worktree.mkdir()
+        (worktree / ".git").write_text("gitdir: /tmp/fake/worktrees/repo-wt-ui\n")
+
+        with mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "_session_tail_worktree_hint",
+                 return_value={
+                     "path": str(worktree),
+                     "branch": "fix/worktree-ui",
+                     "source": "worktree-add",
+                 },
+             ), \
+             mock.patch.object(self.server, "_infer_effective_repo") as infer:
+            workspace = self.server.extract_session_workspace(
+                "00000000-0000-4000-8000-000000000001"
+            )
+
+        infer.assert_not_called()
+        self.assertEqual(workspace["effective_cwd"], str(worktree))
+        self.assertEqual(workspace["effective_branch"], "fix/worktree-ui")
+        self.assertEqual(workspace["effective_kind"], "worktree")
+        self.assertEqual(workspace["effective_source"], "worktree-add")
+
+    def test_tail_meta_ignores_bash_search_for_git_push(self):
+        event = {
+            "type": "assistant",
+            "timestamp": "2026-05-11T12:00:00.000Z",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "Bash",
+                    "input": {"command": 'rg -n "git push" server.py'},
+                }],
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "s.jsonl"
+            path.write_text(json.dumps(event) + "\n")
+            meta = self.server._extract_tail_meta(path)
+
+        self.assertFalse(meta["has_commit"])
+        self.assertFalse(meta["has_push"])
+
+    def test_codex_tail_meta_ignores_exec_search_for_git_push(self):
+        event = {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "call_1",
+                "arguments": json.dumps({"cmd": 'rg -n "git push" server.py'}),
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "rollout.jsonl"
+            path.write_text(json.dumps(event) + "\n")
+            meta = self.server._extract_codex_tail_meta(path)
+
+        self.assertFalse(meta["has_commit"])
+        self.assertFalse(meta["has_push"])
+
     def test_reattach_spawned_orphans_defaults_legacy_rows_to_claude(self):
         """A registry row written before the `engine` field existed
         must reattach as engine='claude' — not raise KeyError, not

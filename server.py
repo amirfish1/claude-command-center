@@ -3497,18 +3497,7 @@ def _extract_tail_meta(path):
     _gh_issue_cmd_re = re.compile(r'gh\s+issue\s+(?:view|edit|close|comment|reopen|create)\s+(?:.*?)(?<!\d)(\d{1,6})(?!\d)')
     _closes_re = re.compile(r'(?i)\bClos(?:es|e|ed|ing)\s+#(\d{1,6})\b')
     _gh_url_re = re.compile(r'github\.com/[^/\s]+/[^/\s]+/issues/(\d{1,6})')
-    _gh_pr_create_re = re.compile(r'\bgh\s+pr\s+create\b')
     _gh_pr_url_re = re.compile(r'github\.com/([^/\s]+/[^/\s]+)/pull/(\d{1,7})')
-    # Git subcommand detector — survives the `git -C <path>` /
-    # `git --git-dir=<x>` / `git -c key=val` flag prefixes that CLAUDE.md
-    # mandates for shared-clone multi-session work. Naive `"git commit"
-    # in cmd` substring checks miss every one of those forms, so a real
-    # commit on a sibling worktree never flips has_commit and the row's
-    # "committed" pill never lights up. Up to 8 flag tokens are tolerated
-    # before the subcommand; `-C <arg>` / `-c <arg>` consume their value.
-    _git_subcmd_re = re.compile(
-        r'\bgit\b(?:\s+(?:-[Cc]\s+\S+|--\S+|-[A-Za-z]\S*)){0,8}\s+(commit|push)\b'
-    )
     _pending_pr_ids = set()
     _pos = 0
     try:
@@ -3607,33 +3596,19 @@ def _extract_tail_meta(path):
                             meta["last_edit_pos"] = _pos
                         elif name == "Bash":
                             cmd = inp.get("command", "")
-                            # Detect `git commit` / `git push` tool calls.
-                            # Walk shell segments so chained
-                            # `git commit … && git push …` registers both,
-                            # and trim each segment at the `-m`/`--message`
-                            # flag so a commit message body containing
-                            # the word "push" can't false-fire has_push
-                            # (and vice versa).
-                            for _seg in re.split(r'\s*(?:&&|\|\||\||;|\n)\s*', cmd):
-                                _seg_head = re.split(r'\s+(?:-m\b|--message\b)', _seg, maxsplit=1)[0]
-                                _m = _git_subcmd_re.search(_seg_head)
-                                if not _m:
-                                    continue
-                                _sub = _m.group(1)
-                                if _sub == "commit":
-                                    meta["has_commit"] = True
-                                    meta["last_commit_pos"] = _pos
-                                elif _sub == "push":
-                                    meta["has_push"] = True
-                                    meta["last_push_pos"] = _pos
+                            signals = _shell_command_signals(cmd)
+                            if signals["commit"]:
+                                meta["has_commit"] = True
+                                meta["last_commit_pos"] = _pos
+                            if signals["push"]:
+                                meta["has_push"] = True
+                                meta["last_push_pos"] = _pos
                             # Drift indicator: any `cd <path>` or `git -C <path>`
                             # means the session may have moved across repos.
                             # Used by find_conversations() to skip the
                             # _infer_effective_repo walk when there's nothing
                             # to find.
-                            if not meta["has_external_cd"] and (
-                                "cd " in cmd or "git -C " in cmd
-                            ):
+                            if signals["external_cd"]:
                                 meta["has_external_cd"] = True
                             # Detect issue number from high-confidence signals
                             mi = (_gh_issue_cmd_re.search(cmd)
@@ -3643,7 +3618,7 @@ def _extract_tail_meta(path):
                                 meta["tail_issue_number"] = mi.group(1)
                             # Track gh-pr-create tool_use_ids; the matching
                             # tool_result will carry the PR URL we want.
-                            if _gh_pr_create_re.search(cmd):
+                            if signals["pr"]:
                                 tu_id = block.get("id")
                                 if tu_id:
                                     _pending_pr_ids.add(tu_id)
@@ -8429,6 +8404,14 @@ def _codex_tool_command(name, args):
     return ""
 
 
+def _codex_tool_workdir(name, args):
+    lname = _codex_tool_name(name)
+    if lname == "exec_command":
+        workdir = args.get("workdir") or ""
+        return workdir if isinstance(workdir, str) else ""
+    return ""
+
+
 def _codex_event_epoch(ev):
     ts = ev.get("timestamp") or ""
     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
@@ -8446,61 +8429,249 @@ def _codex_event_timestamp(ev):
     return ev.get("timestamp") or payload.get("timestamp") or payload.get("started_at") or ""
 
 
-def _codex_command_signals(cmd):
+_SHELL_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_SHELL_WRAPPERS = {"command", "builtin", "exec", "noglob"}
+_SHELLS = {"sh", "bash", "zsh"}
+_GIT_OPTS_WITH_VALUE = {
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--config-env",
+    "--exec-path",
+    "--super-prefix",
+}
+_GIT_OPTS_WITH_VALUE_PREFIXES = (
+    "-C",
+    "-c",
+    "--git-dir=",
+    "--work-tree=",
+    "--namespace=",
+    "--config-env=",
+    "--exec-path=",
+    "--super-prefix=",
+)
+_ENV_OPTS_WITH_VALUE = {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}
+_SUDO_OPTS_WITH_VALUE = {"-u", "-g", "-h", "-p", "-C", "-T"}
+
+
+def _shell_words(cmd):
+    """Tokenize shell-ish command text without treating quoted text as code."""
+    src = cmd or ""
+    if "<<" not in src:
+        src = src.replace("\n", " ; ")
+    try:
+        lex = shlex.shlex(src, posix=True, punctuation_chars=";&|")
+        lex.whitespace_split = True
+        return list(lex)
+    except (TypeError, ValueError):
+        try:
+            return shlex.split(src)
+        except ValueError:
+            return src.split()
+
+
+def _shell_segments(cmd):
+    segment = []
+    for tok in _shell_words(cmd):
+        if tok and all(ch in ";&|" for ch in tok):
+            if segment:
+                yield segment
+                segment = []
+            continue
+        segment.append(tok)
+    if segment:
+        yield segment
+
+
+def _is_shell_assignment(tok):
+    return bool(_SHELL_ASSIGNMENT_RE.match(tok or ""))
+
+
+def _skip_sudo_options(tokens, i):
+    while i < len(tokens) and tokens[i].startswith("-"):
+        opt = tokens[i]
+        if opt in _SUDO_OPTS_WITH_VALUE and i + 1 < len(tokens):
+            i += 2
+        else:
+            i += 1
+    return i
+
+
+def _skip_env_options(tokens, i):
+    while i < len(tokens):
+        opt = tokens[i]
+        if _is_shell_assignment(opt):
+            i += 1
+        elif opt in _ENV_OPTS_WITH_VALUE and i + 1 < len(tokens):
+            i += 2
+        elif opt.startswith("--unset=") or opt.startswith("--chdir="):
+            i += 1
+        elif opt.startswith("-"):
+            i += 1
+        else:
+            break
+    return i
+
+
+def _shell_command_start(tokens):
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if _is_shell_assignment(tok) or tok in _SHELL_WRAPPERS:
+            i += 1
+            continue
+        base = os.path.basename(tok)
+        if base == "sudo":
+            i = _skip_sudo_options(tokens, i + 1)
+            continue
+        if base == "env":
+            i = _skip_env_options(tokens, i + 1)
+            continue
+        break
+    return i
+
+
+def _shell_nested_command(tokens, start):
+    if start >= len(tokens) or os.path.basename(tokens[start]) not in _SHELLS:
+        return None
+    i = start + 1
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "--":
+            i += 1
+            continue
+        if tok.startswith("-") and "c" in tok[1:]:
+            return tokens[i + 1] if i + 1 < len(tokens) else None
+        i += 1
+    return None
+
+
+def _resolve_shell_path(path, base_cwd=None):
+    if not path:
+        return None
+    expanded = os.path.expanduser(path)
+    if os.path.isabs(expanded):
+        return os.path.abspath(expanded)
+    base = os.path.expanduser(base_cwd) if base_cwd else os.getcwd()
+    return os.path.abspath(os.path.join(base, expanded))
+
+
+def _git_invocation(tokens, start, base_cwd=None):
+    if start >= len(tokens) or os.path.basename(tokens[start]) != "git":
+        return None
+    used_dash_c = False
+    dash_c_path = None
+    i = start + 1
+    while i < len(tokens):
+        opt = tokens[i]
+        if opt == "--":
+            i += 1
+            break
+        if opt in _GIT_OPTS_WITH_VALUE and i + 1 < len(tokens):
+            used_dash_c = used_dash_c or opt == "-C"
+            if opt == "-C":
+                dash_c_path = _resolve_shell_path(tokens[i + 1], base_cwd)
+            i += 2
+            continue
+        if any(opt.startswith(prefix) and opt != prefix for prefix in _GIT_OPTS_WITH_VALUE_PREFIXES):
+            used_dash_c = used_dash_c or opt.startswith("-C")
+            if opt.startswith("-C"):
+                dash_c_path = _resolve_shell_path(opt[2:], base_cwd)
+            i += 1
+            continue
+        if opt.startswith("-"):
+            i += 1
+            continue
+        break
+    subcmd = tokens[i] if i < len(tokens) else ""
+    return {
+        "subcmd": subcmd,
+        "subcmd_index": i,
+        "used_dash_c": used_dash_c,
+        "dash_c_path": dash_c_path,
+    }
+
+
+def _gh_pr_create(tokens, start):
+    if start >= len(tokens) or os.path.basename(tokens[start]) != "gh":
+        return False
+    i = start + 1
+    while i < len(tokens) and tokens[i].startswith("-"):
+        opt = tokens[i]
+        if opt in ("-R", "--repo", "--hostname") and i + 1 < len(tokens):
+            i += 2
+        else:
+            i += 1
+    return tokens[i:i + 2] == ["pr", "create"]
+
+
+def _shell_command_signals(cmd, base_cwd=None, _depth=0):
     """Return edit/commit/push/pr/external-cd flags for a shell command."""
     cmd = cmd or ""
     worktree_path = None
     worktree_branch = None
-    head_segments = []
-    for seg in re.split(r"\s*(?:&&|\|\||\||;|\n)\s*", cmd):
-        head_segments.append(re.split(r"\s+(?:-m\b|--message\b)", seg, maxsplit=1)[0])
-        try:
-            toks = shlex.split(seg)
-        except ValueError:
-            toks = seg.split()
-        for i, tok in enumerate(toks):
-            if tok != "git":
-                continue
-            j = i + 1
-            while j < len(toks):
-                opt = toks[j]
-                if opt in ("-C", "-c", "--git-dir", "--work-tree") and j + 1 < len(toks):
-                    j += 2
-                    continue
-                if opt.startswith("-"):
-                    j += 1
-                    continue
-                break
-            if j + 1 >= len(toks) or toks[j:j + 2] != ["worktree", "add"]:
-                continue
-            branch = None
-            path = None
-            k = j + 2
-            while k < len(toks):
-                part = toks[k]
-                if part in ("-b", "-B") and k + 1 < len(toks):
-                    branch = toks[k + 1]
-                    k += 2
-                    continue
-                if part in ("--reason", "--lock") and k + 1 < len(toks):
-                    k += 2
-                    continue
-                if part == "--":
-                    k += 1
-                    continue
-                if part.startswith("-"):
-                    k += 1
-                    continue
-                path = part
-                break
-            if path and (path.startswith("/") or path.startswith("~")):
-                worktree_path = os.path.expanduser(path)
-                worktree_branch = branch or worktree_branch
-    head = "\n".join(head_segments)
-    git_subcmd = re.compile(
-        r"\bgit\b(?:\s+(?:-[Cc]\s+\S+|--\S+|-[A-Za-z]\S*)){0,8}\s+(commit|push)\b"
-    )
-    subcommands = {m.group(1) for m in git_subcmd.finditer(head)}
+    subcommands = set()
+    pr_create = False
+    external_cd = False
+    for toks in _shell_segments(cmd):
+        start = _shell_command_start(toks)
+        if start >= len(toks):
+            continue
+
+        nested = _shell_nested_command(toks, start)
+        if nested and _depth < 2:
+            child = _shell_command_signals(nested, base_cwd=base_cwd, _depth=_depth + 1)
+            subcommands.update(k for k in ("commit", "push") if child[k])
+            pr_create = pr_create or child["pr"]
+            external_cd = external_cd or child["external_cd"]
+            worktree_path = child.get("worktree_path") or worktree_path
+            worktree_branch = child.get("worktree_branch") or worktree_branch
+            continue
+
+        exe = os.path.basename(toks[start])
+        if exe == "cd":
+            target = toks[start + 1] if start + 1 < len(toks) else ""
+            external_cd = external_cd or target.startswith("/") or target.startswith("~")
+            continue
+
+        git = _git_invocation(toks, start, base_cwd=base_cwd)
+        if git:
+            subcmd = git["subcmd"]
+            if subcmd in ("commit", "push"):
+                subcommands.add(subcmd)
+            external_cd = external_cd or git["used_dash_c"]
+            if subcmd == "worktree" and git["subcmd_index"] + 1 < len(toks):
+                if toks[git["subcmd_index"] + 1] == "add":
+                    branch = None
+                    path = None
+                    k = git["subcmd_index"] + 2
+                    while k < len(toks):
+                        part = toks[k]
+                        if part in ("-b", "-B") and k + 1 < len(toks):
+                            branch = toks[k + 1]
+                            k += 2
+                            continue
+                        if part in ("--reason", "--lock") and k + 1 < len(toks):
+                            k += 2
+                            continue
+                        if part == "--":
+                            k += 1
+                            continue
+                        if part.startswith("-"):
+                            k += 1
+                            continue
+                        path = part
+                        break
+                    if path:
+                        path_base = git.get("dash_c_path") or base_cwd
+                        worktree_path = _resolve_shell_path(path, path_base)
+                        worktree_branch = branch or worktree_branch
+            continue
+
+        pr_create = pr_create or _gh_pr_create(toks, start)
+
     edit_like = bool(re.search(
         r"\b(apply_patch|tee|sed\s+-i|perl\s+-pi)\b|"
         r"(?:^|[\s;&|])cat\s+>|write_text\s*\(|"
@@ -8511,11 +8682,15 @@ def _codex_command_signals(cmd):
         "edit": edit_like,
         "commit": "commit" in subcommands,
         "push": "push" in subcommands,
-        "pr": bool(re.search(r"\bgh\s+pr\s+create\b", head)),
-        "external_cd": bool(re.search(r"(^|[;&|]\s*)cd\s+[/~]|\bgit\s+-C\s+", cmd)),
+        "pr": pr_create,
+        "external_cd": external_cd,
         "worktree_path": worktree_path,
         "worktree_branch": worktree_branch,
     }
+
+
+def _codex_command_signals(cmd, base_cwd=None):
+    return _shell_command_signals(cmd, base_cwd=base_cwd)
 
 
 _CODEX_SUMMARY_BRANCH_RE = re.compile(r"(?im)^\s*(?:[-*]\s*)?Branch:\s*`?([^\r\n`]+?)`?\s*$")
@@ -8703,8 +8878,9 @@ def _extract_codex_tail_meta(path):
                         meta["has_edit"] = True
                         meta["last_edit_pos"] = pos
                     cmd = _codex_tool_command(name, args)
+                    tool_workdir = _codex_tool_workdir(name, args) or meta.get("cwd")
                     if cmd:
-                        signals = _codex_command_signals(cmd)
+                        signals = _codex_command_signals(cmd, base_cwd=tool_workdir)
                         if signals["edit"]:
                             meta["has_edit"] = True
                             meta["last_edit_pos"] = pos
@@ -9674,6 +9850,7 @@ def _extract_gemini_tail_meta(path):
         "tail_pr_url": None,
         "tail_branch": None,
         "tail_worktree_path": None,
+        "has_external_cd": False,
         "cwd": _gemini_project_root_for_chat(path),
         "model": None,
     }
@@ -9728,6 +9905,12 @@ def _extract_gemini_tail_meta(path):
                 if signals["push"]:
                     meta["has_push"] = True
                     meta["last_push_pos"] = pos
+                if signals["external_cd"]:
+                    meta["has_external_cd"] = True
+                if signals.get("worktree_path"):
+                    meta["tail_worktree_path"] = signals["worktree_path"]
+                if signals.get("worktree_branch"):
+                    meta["tail_branch"] = signals["worktree_branch"]
                 output = _gemini_tool_output(call)
                 if signals["pr"] and output:
                     mp = pr_url_re.search(output)
@@ -14767,6 +14950,89 @@ def _list_worktrees(repo_top):
     return out
 
 
+def _session_tail_worktree_hint(session_id):
+    """Return a worktree path/branch explicitly recorded in session tail meta."""
+    if not session_id:
+        return None
+    tail = None
+    source = None
+    try:
+        if _is_codex_session(session_id):
+            path = _resolve_codex_rollout_path(session_id)
+            tail = _extract_codex_tail_meta(path) if path else None
+            source = "worktree-add"
+        elif _is_gemini_session(session_id):
+            path = _resolve_gemini_chat_path(session_id)
+            tail = _extract_gemini_tail_meta(path) if path else None
+            source = "worktree-add"
+    except Exception:
+        tail = None
+    if not tail:
+        return None
+    worktree_path = tail.get("tail_worktree_path") or ""
+    if not worktree_path:
+        return None
+    return {
+        "path": worktree_path,
+        "branch": tail.get("tail_branch") or "",
+        "source": source or "session-tail",
+    }
+
+
+def _workspace_git_snapshot(path, branch_hint=None):
+    if not path:
+        return None
+    try:
+        p = Path(path).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not p.is_dir():
+        return None
+
+    git_path = p / ".git"
+    if git_path.is_file():
+        kind = "worktree"
+    elif git_path.is_dir():
+        kind = "clone"
+    else:
+        kind = "other"
+
+    def git(*args, timeout=2):
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(p), *args],
+                capture_output=True, text=True, timeout=timeout,
+            )
+            if r.returncode == 0:
+                return r.stdout.strip()
+        except (subprocess.SubprocessError, OSError):
+            pass
+        return None
+
+    branch = branch_hint or git("rev-parse", "--abbrev-ref", "HEAD")
+    if branch == "HEAD":
+        branch = None
+    upstream = git("rev-parse", "--abbrev-ref", "@{u}")
+    base = upstream or "main"
+    ahead = behind = None
+    counts = git("rev-list", "--left-right", "--count", f"{base}...HEAD")
+    if counts:
+        try:
+            behind_s, ahead_s = counts.split()
+            behind = int(behind_s)
+            ahead = int(ahead_s)
+        except (ValueError, IndexError):
+            pass
+
+    return {
+        "path": str(p),
+        "branch": branch,
+        "kind": kind,
+        "ahead": ahead,
+        "behind": behind,
+    }
+
+
 def extract_session_workspace(session_id):
     """Resolve which workspace (shared clone vs. git worktree) a session
     is editing in, plus branch + ahead/behind. Powers the conv pane's
@@ -14882,10 +15148,29 @@ def extract_session_workspace(session_id):
     cwd_top = None
     if out["is_repo"]:
         cwd_top = _git_toplevel_for_path(cwd, {})
-    try:
-        eff = _infer_effective_repo(session_id, literal_cwd=cwd, exclude_top=cwd_top)
-    except Exception:
-        eff = None
+    tail_hint = _session_tail_worktree_hint(session_id)
+    if tail_hint:
+        snap = _workspace_git_snapshot(tail_hint.get("path"), tail_hint.get("branch"))
+        try:
+            same_as_cwd = bool(snap and Path(snap["path"]).resolve() == Path(cwd).resolve())
+        except (OSError, RuntimeError, ValueError):
+            same_as_cwd = False
+        if snap and not same_as_cwd:
+            out["effective_cwd"] = snap["path"]
+            out["effective_branch"] = snap["branch"]
+            out["effective_kind"] = snap["kind"]
+            out["effective_commits_ahead"] = snap["ahead"]
+            out["effective_commits_behind"] = snap["behind"]
+            out["effective_path_count"] = 1
+            out["effective_total_paths"] = 1
+            out["effective_source"] = tail_hint.get("source") or "session-tail"
+
+    eff = None
+    if not out["effective_cwd"]:
+        try:
+            eff = _infer_effective_repo(session_id, literal_cwd=cwd, exclude_top=cwd_top)
+        except Exception:
+            eff = None
     if eff:
         out["effective_cwd"] = eff["top"]
         out["effective_branch"] = eff["branch"]

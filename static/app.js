@@ -9478,7 +9478,9 @@
     const pillAhead = useEff ? w.effective_commits_ahead : w.commits_ahead;
     const pillBehind = useEff ? w.effective_commits_behind : w.commits_behind;
     const inferTitle = useEff
-      ? ' (inferred from ' + (w.effective_path_count || 0) + '/' + (w.effective_total_paths || 0) + ' tool-call paths)'
+      ? (w.effective_source === 'worktree-add'
+        ? ' (from git worktree add)'
+        : ' (inferred from ' + (w.effective_path_count || 0) + '/' + (w.effective_total_paths || 0) + ' tool-call paths)')
       : '';
     const parts = [];
     let kindCls, kindLabel, kindTitle;
