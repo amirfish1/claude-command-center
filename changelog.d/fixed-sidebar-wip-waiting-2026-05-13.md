@@ -1,0 +1,1 @@
+- Sidebar rows now keep the yellow `WIP` chip visible for live Claude sessions that are waiting for user input or carrying a needs-approval marker, so active-but-idle group-chat participants no longer look quiet.

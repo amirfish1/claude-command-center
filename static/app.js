@@ -5823,6 +5823,7 @@
       const _rowActivityAge = _rowActivityTs ? Math.max(0, Math.floor(Date.now() / 1000 - _rowActivityTs)) : 9999;
       const _midTurn = c.last_event_type === 'assistant' || ((isCodexRow || isGeminiRow) && c.last_event_type === 'user');
       const _isActiveSidecar = c.is_live && c.sidecar_status === 'active';
+      const _isWaitingForUser = c.is_live && (c.needs_approval || c.sidecar_status === 'waiting');
       const _knownActivityTool = c.sidecar_tool || c.pending_tool || '';
       const _hasLivePendingTool = c.is_live && !!c.pending_tool;
       const _codexHasOpenTool = isCodexRow && !c.sidecar_status && !!c.pending_tool;
@@ -5833,15 +5834,18 @@
             && _rowActivityAge < (30 * 60)));
       const _isWip = !!c.gh_in_progress || !!c.pending_spawn
         || _hasLivePendingTool
+        || _isWaitingForUser
         || _codexOpenTurn
         || (_isActiveSidecar && (_activityAge < 300 || _midTurn || !c.sidecar_ts));
       if (_isWip && !liveToolHtml) {
         const wipTitle = _knownActivityTool
           ? ((c.sidecar_in_flight ? 'Currently running' : 'Last known tool') + ': ' + _knownActivityTool)
-          : (c.gh_in_progress
+          : (_isWaitingForUser
+              ? (c.needs_approval_message || 'Agent is waiting for your input')
+              : (c.gh_in_progress
               ? 'Linked GitHub issue is marked in progress'
-              : (isCodexRow ? 'Codex is working' : (isGeminiRow ? 'Gemini is working' : 'Agent is working')));
-        const wipLabel = _codexOpenTurn ? 'WIP' : (_knownActivityTool || 'WIP');
+              : (isCodexRow ? 'Codex is working' : (isGeminiRow ? 'Gemini is working' : 'Agent is working'))));
+        const wipLabel = (_codexOpenTurn || _isWaitingForUser) ? 'WIP' : (_knownActivityTool || 'WIP');
         signals += '<span class="conv-signal activity-working" title="' + escapeHtml(wipTitle) + '">' + escapeHtml(wipLabel) + '</span>';
       }
       if (c.source === 'pkood') {
