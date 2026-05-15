@@ -1,0 +1,1 @@
+- Fixed transcript file links so exact files written outside the session cwd can still open from that session, and archive-only folder slugs no longer poison the open request.

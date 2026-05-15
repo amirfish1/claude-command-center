@@ -175,6 +175,39 @@ def _resolve_pasted_image_path(target, *, require_file=False):
     return resolved
 
 
+def _session_referenced_open_path(session_id, resolved_target):
+    """True when `resolved_target` is an exact file path referenced by a
+    session tool call.
+
+    This intentionally authorizes only the single file the transcript names,
+    not its parent directory. The extension allowlist in _resolve_open_target
+    still decides whether non-core paths are revealable/launchable.
+    """
+    if not session_id or not resolved_target:
+        return False
+    try:
+        target = Path(resolved_target).expanduser().resolve(strict=False)
+    except (OSError, ValueError, RuntimeError):
+        return False
+    try:
+        file_paths, _cd_targets = _scan_session_tool_paths(session_id, max_events=2000)
+    except Exception:
+        return False
+    for raw in file_paths:
+        if not isinstance(raw, str):
+            continue
+        try:
+            normalized = _open_target_path(raw)
+            if not normalized:
+                continue
+            candidate = Path(normalized).expanduser().resolve(strict=False)
+        except (OSError, ValueError, RuntimeError):
+            continue
+        if candidate == target:
+            return True
+    return False
+
+
 def _extract_pasted_image_paths(text):
     """Extract existing CCC-pasted images from prompt text for CLI attachment."""
     out = []
@@ -197,7 +230,9 @@ def _resolve_open_target(target, *, session_id=None, cwd=None, repo_path=None):
     Historical behavior allowed only the active repo/log dir. Inline
     transcript links often point at files relative to the session cwd. Those
     cwd-relative files are allowed only as Finder reveals and only for the
-    same whitelisted file extensions used by /api/reveal-file.
+    same whitelisted file extensions used by /api/reveal-file. Absolute files
+    that a session explicitly touched via Read/Edit/Write are allowed by exact
+    path match only, never by parent directory.
     """
     target = _open_target_path(target)
     if not target:
@@ -215,13 +250,23 @@ def _resolve_open_target(target, *, session_id=None, cwd=None, repo_path=None):
         if rp.is_dir() and all(rp != existing for existing in session_roots):
             session_roots.append(rp)
 
+    ctx_payload = {"session_id": session_id, "cwd": cwd, "repo_path": repo_path}
     try:
-        ctx = require_repo_context(
-            {"session_id": session_id, "cwd": cwd, "repo_path": repo_path},
-            allow_session=True,
-        )
+        ctx = require_repo_context(ctx_payload, allow_session=True)
     except RepoContextError as e:
-        return e.as_payload() | {"status": e.status}
+        # Archive rows can carry a display-only folder slug as repo_path while
+        # still carrying a concrete cwd/session id. Don't let that stale/virtual
+        # repo value poison a file-open request that can be resolved from cwd.
+        if repo_path and (cwd or session_id):
+            try:
+                ctx = require_repo_context(
+                    {"session_id": session_id, "cwd": cwd},
+                    allow_session=True,
+                )
+            except RepoContextError:
+                return e.as_payload() | {"status": e.status}
+        else:
+            return e.as_payload() | {"status": e.status}
 
     repo_root = Path(ctx["repo_path"]).expanduser().resolve(strict=False)
     log_root = repo_log_dir(ctx["repo_path"]).resolve(strict=False)
@@ -264,7 +309,10 @@ def _resolve_open_target(target, *, session_id=None, cwd=None, repo_path=None):
     core_sandbox = _path_is_within(resolved, repo_root) or _path_is_within(resolved, log_root)
     session_sandbox = any(_path_is_within(resolved, root) for root in session_roots)
     pasted_image_sandbox = _resolve_pasted_image_path(resolved, require_file=True) is not None
+    session_file_sandbox = False
     if not core_sandbox and not session_sandbox and not pasted_image_sandbox:
+        session_file_sandbox = _session_referenced_open_path(session_id, resolved)
+    if not core_sandbox and not session_sandbox and not pasted_image_sandbox and not session_file_sandbox:
         return {
             "ok": False,
             "error": "path outside repo/session sandbox",
@@ -287,6 +335,7 @@ def _resolve_open_target(target, *, session_id=None, cwd=None, repo_path=None):
         "core_sandbox": core_sandbox,
         "session_sandbox": session_sandbox,
         "pasted_image_sandbox": pasted_image_sandbox,
+        "session_file_sandbox": session_file_sandbox,
         "tried": tried,
     }
 

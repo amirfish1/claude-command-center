@@ -944,6 +944,99 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(pathlib.Path(result["path"]), report.resolve())
         self.assertTrue(result["core_sandbox"])
 
+    def test_open_target_falls_back_when_archive_repo_path_is_virtual(self):
+        """Archive rows may pass a display slug as repo_path; cwd should win."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            repo = root / "repo"
+            session_cwd = repo / "work"
+            session_cwd.mkdir(parents=True)
+            (repo / ".git").mkdir()
+            doc = session_cwd / "notes.md"
+            doc.write_text("# notes\n")
+
+            result = server._resolve_open_target(
+                str(doc),
+                session_id="11111111-2222-3333-4444-555555555555",
+                cwd=str(session_cwd),
+                repo_path="-virtual-archive-folder",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(pathlib.Path(result["path"]), doc.resolve())
+
+    def test_open_target_allows_exact_session_tool_file_outside_cwd(self):
+        """Files explicitly touched by the selected session are revealable."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        sid = "11111111-2222-3333-4444-555555555555"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            repo = root / "repo"
+            session_cwd = repo / "work"
+            session_cwd.mkdir(parents=True)
+            (repo / ".git").mkdir()
+            external = root / "library" / "stack.md"
+            external.parent.mkdir()
+            external.write_text("# stack\n")
+
+            with mock.patch.object(
+                server,
+                "_scan_session_tool_paths",
+                return_value=([str(external)], []),
+            ):
+                result = server._resolve_open_target(
+                    str(external),
+                    session_id=sid,
+                    cwd=str(session_cwd),
+                    repo_path=str(repo),
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["core_sandbox"])
+        self.assertFalse(result["session_sandbox"])
+        self.assertTrue(result["session_file_sandbox"])
+        self.assertTrue(server._open_launch_allowed(result))
+
+    def test_open_target_blocks_unreferenced_file_outside_cwd(self):
+        """The session tool exception is exact-path, not a directory escape."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        sid = "11111111-2222-3333-4444-555555555555"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            repo = root / "repo"
+            session_cwd = repo / "work"
+            session_cwd.mkdir(parents=True)
+            (repo / ".git").mkdir()
+            external = root / "library" / "stack.md"
+            external.parent.mkdir()
+            external.write_text("# stack\n")
+
+            with mock.patch.object(
+                server,
+                "_scan_session_tool_paths",
+                return_value=([], []),
+            ):
+                result = server._resolve_open_target(
+                    str(external),
+                    session_id=sid,
+                    cwd=str(session_cwd),
+                    repo_path=str(repo),
+                )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], 403)
+        self.assertIn("outside repo/session sandbox", result["error"])
+
     def test_open_launch_blocks_non_markdown_session_cwd_files(self):
         """Launching outside the repo/log sandbox stays limited to markdown."""
         for mod in ("server",):
@@ -1096,6 +1189,14 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("function _isMarkdownPath", js)
         self.assertIn("function normalizeMarkdownLinkTarget", js)
         self.assertIn("payload.launch = true", js)
+
+    def test_archive_progress_does_not_replace_search_empty_state(self):
+        """Background archive refresh must not clobber no-match search results."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn(".archive-loading-placeholder, .archive-loading-stages", js)
+        self.assertIn("archive-empty-state archive-loading-placeholder", js)
+        self.assertIn("No conversations match your filter.", js)
+        self.assertNotIn(".archive-empty-state, .archive-loading-stages", js)
 
     def test_original_ask_renders_pasted_images_inline(self):
         """Pasted-image references should become images in the ask panels."""

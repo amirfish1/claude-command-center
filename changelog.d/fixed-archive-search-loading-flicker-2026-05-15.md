@@ -1,0 +1,1 @@
+- Fixed archive search results so background refresh progress no longer replaces an active keyword search's empty-results state.

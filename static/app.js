@@ -12776,7 +12776,7 @@
     // Don't overwrite a populated list — only swap when we're still in
     // the placeholder state. Once renderArchiveList() runs with real
     // data, this poll's job is done.
-    const isPlaceholder = $list.querySelector('.archive-empty-state, .archive-loading-stages');
+    const isPlaceholder = $list.querySelector('.archive-loading-placeholder, .archive-loading-stages');
     if (!isPlaceholder) return;
     const steps = (snapshot && snapshot.steps) || [];
     if (!steps.length) return;
@@ -12928,7 +12928,7 @@
     }
 
     if (!archiveLoaded && !archiveRows.length) {
-      $list.innerHTML = '<div class="archive-empty-state">Loading archive&hellip;</div>';
+      $list.innerHTML = '<div class="archive-empty-state archive-loading-placeholder">Loading archive&hellip;</div>';
       _finishArchiveRender();
       return;
     }
@@ -13145,7 +13145,7 @@
     if ($kanban) $kanban.style.display = 'none';
     if ($list) {
       $list.style.display = '';
-      $list.innerHTML = '<div class="archive-empty-state">Loading archive…</div>';
+      $list.innerHTML = '<div class="archive-empty-state archive-loading-placeholder">Loading archive…</div>';
     }
     await refreshArchiveData();
     renderArchiveList(document.getElementById('convSearch')?.value || '');
@@ -13179,7 +13179,7 @@
       if ($kanban) $kanban.style.display = 'none';
       if ($list) {
         $list.style.display = '';
-        $list.innerHTML = '<div class="archive-empty-state">Loading archive&hellip;</div>';
+        $list.innerHTML = '<div class="archive-empty-state archive-loading-placeholder">Loading archive&hellip;</div>';
       }
       _firstSessionsLoaded.then(() => setArchiveMode());
     }
