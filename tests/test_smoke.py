@@ -179,6 +179,41 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(result["ok"])
         inject.assert_called_once_with("/dev/ttys001", "Terminal", "follow up")
 
+    def test_terminal_inject_queues_when_live_session_is_busy(self):
+        sid = "00000000-0000-4000-8000-000000000001"
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue.clear()
+        try:
+            with mock.patch.object(self.server, "_is_codex_session", return_value=False), \
+                 mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+                 mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+                 mock.patch.object(
+                     self.server,
+                     "session_live_status",
+                     return_value={
+                         "live": True,
+                         "tty": "/dev/ttys001",
+                         "terminal_app": "Terminal",
+                         "status": "busy",
+                         "pid": 123,
+                     },
+                 ), \
+                 mock.patch.object(self.server, "inject_input_via_keystroke") as inject:
+                result = self.server._inject_text_into_session(sid, "follow up")
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["queued"])
+            self.assertEqual(result["via"], "terminal-queued")
+            inject.assert_not_called()
+            with self.server._pending_terminal_input_lock:
+                self.assertEqual(
+                    self.server._pending_terminal_input_queue[sid],
+                    ["follow up"],
+                )
+        finally:
+            with self.server._pending_terminal_input_lock:
+                self.server._pending_terminal_input_queue.clear()
+
     def test_terminal_inject_timeout_has_actionable_macos_error(self):
         timeout = subprocess.TimeoutExpired(cmd=["osascript", "-e", "secret"], timeout=5)
         with mock.patch.object(self.server.subprocess, "run", side_effect=timeout):

@@ -4737,6 +4737,8 @@ def session_live_status(session_id, session_cwd):
         "pid": None,
         "tty": None,
         "terminal_app": None,
+        "status": None,
+        "kind": None,
         "recently_written": False,
         "ambiguous": False,
         "match_count": 0,
@@ -4831,6 +4833,8 @@ def session_live_status(session_id, session_cwd):
         pid = int(entry["pid"])
         result["pid"] = pid
         result["match_count"] = 1
+        result["status"] = entry.get("status")
+        result["kind"] = entry.get("kind")
         # Hydrate tty + terminal_app from the live pid
         try:
             ps_out = subprocess.run(
@@ -9343,10 +9347,41 @@ def _parse_codex_conversation(thread_id, after_line=0):
 
 _pending_resume_queue: dict = {}   # session_id → [text, ...]
 _pending_resume_lock = threading.Lock()
+_pending_terminal_input_queue: dict = {}   # session_id → [text, ...]
+_pending_terminal_input_lock = threading.Lock()
+_BUSY_SESSION_STATUSES = {"busy", "running"}
+
+
+def _session_status_is_busy(status):
+    return (status.get("status") or "").lower() in _BUSY_SESSION_STATUSES
+
+
+def _queue_terminal_input(session_id, text, status=None):
+    """Queue input until an interactive Claude CLI reports it is idle again."""
+    with _pending_terminal_input_lock:
+        queue = _pending_terminal_input_queue.setdefault(session_id, [])
+        queue.append(text)
+        queued_count = len(queue)
+    payload = {
+        "ok": True,
+        "queued": True,
+        "via": "terminal-queued",
+        "session_id": session_id,
+        "queued_count": queued_count,
+    }
+    if status:
+        payload["pid"] = status.get("pid")
+        payload["status"] = status.get("status")
+    return payload
+
+
+def _terminal_input_queue_has_pending(session_id):
+    with _pending_terminal_input_lock:
+        return bool(_pending_terminal_input_queue.get(session_id))
 
 
 def _start_resume_queue_watcher() -> None:
-    """Drain queued prompts to Codex/Gemini sessions once their process finishes."""
+    """Drain queued prompts once Codex/Gemini or live terminal sessions go idle."""
     def _watcher():
         while True:
             time.sleep(5)
@@ -9373,6 +9408,24 @@ def _start_resume_queue_watcher() -> None:
                         resume_session_codex(sid, text)
                     elif _is_gemini_session(sid):
                         resume_session_gemini(sid, text)
+                except Exception:
+                    pass
+            with _pending_terminal_input_lock:
+                terminal_sids = list(_pending_terminal_input_queue.keys())
+            for sid in terminal_sids:
+                try:
+                    status = session_live_status(sid, find_session_cwd(sid))
+                    if status.get("live") and status.get("tty") and _session_status_is_busy(status):
+                        continue
+                    with _pending_terminal_input_lock:
+                        queue = _pending_terminal_input_queue.get(sid, [])
+                        if not queue:
+                            _pending_terminal_input_queue.pop(sid, None)
+                            continue
+                        text = queue.pop(0)
+                        if not queue:
+                            _pending_terminal_input_queue.pop(sid, None)
+                    _inject_text_into_session(sid, text, _from_terminal_queue=True)
                 except Exception:
                     pass
     threading.Thread(target=_watcher, daemon=True, name="resume-queue-watcher").start()
@@ -12377,7 +12430,7 @@ def _group_chat_add_participant(raw_path: str, session_id: str, display_name: st
     }
 
 
-def _inject_text_into_session(session_id, text):
+def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
     else `claude --resume` headless. Returns a dict with at least
@@ -12401,6 +12454,9 @@ def _inject_text_into_session(session_id, text):
             ok = _write_stream_json_user_message(spawn, text)
             return {"ok": ok, "pid": spawn["pid"], "via": "spawn-fifo"}
         return resume_session_headless(session_id, text)
+    if not _from_terminal_queue:
+        if _terminal_input_queue_has_pending(session_id) or _session_status_is_busy(status):
+            return _queue_terminal_input(session_id, text, status)
     return inject_input_via_keystroke(tty, term_app or "Terminal", text)
 
 

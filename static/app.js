@@ -1526,7 +1526,13 @@
       }
       let data = {};
       try { data = await res.json(); } catch (_) {}
-      if (res.ok && data.ok) {
+      if (res.ok && data.ok && data.submitted === false) {
+        showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
+        $input.value = '';
+      } else if (res.ok && data.ok) {
+        if (data.queued) {
+          showOpToast('Queued until the terminal session is idle.');
+        }
         // Optimistic echo: append an italicized pending entry so the user sees
         // their message immediately. renderConversationEvents replaces it when
         // the real user_text event arrives from the jsonl tail.
@@ -14082,7 +14088,15 @@
         }
         let data = {};
         try { data = await res.json(); } catch (_) {}
-        if (res.ok && data.ok) {
+        if (res.ok && data.ok && data.submitted === false) {
+          showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
+          $cpInput.value = '';
+          $cpInput.style.height = '';
+          if ($cpInput.__cpRefresh) $cpInput.__cpRefresh();
+        } else if (res.ok && data.ok) {
+          if (data.queued) {
+            showOpToast('Queued until the terminal session is idle.');
+          }
           // Optimistic echo into the conv view (replaced by the real user_text
           // event when the jsonl tail catches up).
           const $view = getConvView();
