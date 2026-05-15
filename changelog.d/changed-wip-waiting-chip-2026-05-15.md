@@ -1,0 +1,1 @@
+- Sidebar rows no longer show a generic `WIP`/`waiting` chip for idle live sessions whose only signal is `sidecar_status: "waiting"`; the live dot carries that state instead.

@@ -85,6 +85,58 @@ class TestServerImports(unittest.TestCase):
                              "MORNING_ENABLED must be False when plugin missing")
 
 
+class TestPrStateResolution(unittest.TestCase):
+    def setUp(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        self.server = importlib.import_module("server")
+        self.server._PR_STATE_CACHE.clear()
+
+    def tearDown(self):
+        self.server._PR_STATE_CACHE.clear()
+
+    def test_pr_state_falls_back_to_gh_api(self):
+        url = "https://github.com/octo-org/demo-repo/pull/25"
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[1:3] == ["pr", "view"]:
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom")
+            if cmd[1] == "api":
+                self.assertIn("repos/octo-org/demo-repo/pulls/25", cmd)
+                return subprocess.CompletedProcess(cmd, 0, stdout="MERGED\n", stderr="")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        with mock.patch.object(self.server.shutil, "which",
+                               return_value="/opt/homebrew/bin/gh"), \
+             mock.patch.object(self.server.subprocess, "run",
+                               side_effect=fake_run):
+            self.assertEqual(self.server._get_pr_state(url), "MERGED")
+            self.assertEqual(self.server._get_pr_state(url), "MERGED")
+
+        self.assertEqual(len(calls), 2, "second lookup should hit cache")
+        cached = self.server._PR_STATE_CACHE[url]
+        self.assertEqual(cached["state"], "MERGED")
+        self.assertEqual(cached["ttl"], self.server._PR_STATE_TTL)
+
+    def test_pr_state_failures_use_short_ttl(self):
+        url = "https://github.com/octo-org/demo-repo/pull/25"
+
+        def fail_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom")
+
+        with mock.patch.object(self.server.shutil, "which",
+                               return_value="/opt/homebrew/bin/gh"), \
+             mock.patch.object(self.server.subprocess, "run",
+                               side_effect=fail_run):
+            self.assertIsNone(self.server._get_pr_state(url))
+
+        cached = self.server._PR_STATE_CACHE[url]
+        self.assertIsNone(cached["state"])
+        self.assertEqual(cached["ttl"], self.server._PR_STATE_FAILURE_TTL)
+
+
 class TestRunScript(unittest.TestCase):
     def test_run_script_syntax_is_valid(self):
         script = pathlib.Path(PROJECT_ROOT, "run.sh")
@@ -240,6 +292,31 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("unix id of first application process whose frontmost is true", script)
         self.assertIn("frontmost of first application process whose unix id is prevPid", script)
         self.assertNotIn("tell application prevApp", script)
+
+    def test_live_claude_scan_skips_headless_processes_before_lsof(self):
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append(args)
+            if args[:4] == ["ps", "-A", "-o", "pid=,comm="]:
+                return subprocess.CompletedProcess(args, 0, stdout="100 claude\n101 claude\n102 node\n", stderr="")
+            if args == ["ps", "-o", "pid,tty", "-p", "100,101"]:
+                return subprocess.CompletedProcess(args, 0, stdout="  PID TTY\n  100 ??\n  101 ttys001\n", stderr="")
+            raise AssertionError(f"unexpected command: {args}")
+
+        cwd_calls = []
+
+        def fake_cwd(pid):
+            cwd_calls.append(pid)
+            return "/tmp/demo"
+
+        with mock.patch.object(self.server.subprocess, "run", side_effect=fake_run), \
+             mock.patch.object(self.server, "_proc_cwd", side_effect=fake_cwd), \
+             mock.patch.object(self.server, "_proc_ancestor_terminal", return_value=("Terminal", 9)):
+            procs = self.server.find_live_claude_processes()
+
+        self.assertEqual([p["pid"] for p in procs], [101])
+        self.assertEqual(cwd_calls, ["101"])
 
     def test_ask_user_question_tool_detail_surfaces_prompt(self):
         ev = {

@@ -1636,6 +1636,29 @@ _PR_STATE_CACHE = {}
 _PR_STATE_LOCK = threading.Lock()
 _PR_STATE_TTL = 300  # 5 minutes — short enough to catch a merge, long
 # enough that the dashboard's ~10s refresh cadence doesn't fan out to gh.
+_PR_STATE_FAILURE_TTL = 30  # Retry gh failures soon; don't pin stale RTM rows.
+
+
+def _github_pull_api_path(pr_url):
+    """Return the gh-api path for a github.com PR URL, or None."""
+    try:
+        parsed = urllib.parse.urlparse(pr_url or "")
+    except (TypeError, ValueError):
+        return None
+    if parsed.netloc.lower() != "github.com":
+        return None
+    parts = [urllib.parse.unquote(p) for p in parsed.path.split("/") if p]
+    if len(parts) < 4 or parts[2] != "pull" or not parts[3].isdigit():
+        return None
+    owner, repo, number = parts[0], parts[1], parts[3]
+    if not owner or not repo:
+        return None
+    return f"repos/{owner}/{repo}/pulls/{number}"
+
+
+def _valid_pr_state(value):
+    state = (value or "").strip().upper()
+    return state if state in ("OPEN", "MERGED", "CLOSED") else None
 
 
 def _get_pr_state(pr_url):
@@ -1651,22 +1674,47 @@ def _get_pr_state(pr_url):
     now = time.time()
     with _PR_STATE_LOCK:
         cached = _PR_STATE_CACHE.get(pr_url)
-        if cached and (now - cached["at"]) < _PR_STATE_TTL:
-            return cached["state"]
+        if cached:
+            ttl = cached.get("ttl", _PR_STATE_TTL)
+            if (now - cached.get("at", 0)) < ttl:
+                return cached.get("state")
+    gh_bin = shutil.which("gh") or "gh"
     state = None
     try:
         r = subprocess.run(
-            ["gh", "pr", "view", pr_url, "--json", "state", "-q", ".state"],
-            capture_output=True, text=True, timeout=4,
+            [gh_bin, "pr", "view", pr_url, "--json", "state", "-q", ".state"],
+            capture_output=True, text=True, timeout=8,
         )
         if r.returncode == 0:
-            s = (r.stdout or "").strip().upper()
-            if s in ("OPEN", "MERGED", "CLOSED"):
-                state = s
+            state = _valid_pr_state(r.stdout)
     except (subprocess.SubprocessError, OSError):
         state = None
+
+    # `gh pr view <url>` can be more cwd/config-sensitive than the REST API
+    # path. Fall back to `gh api` so merged PRs don't linger in Ready to merge
+    # just because one resolver path hiccupped.
+    if state is None:
+        api_path = _github_pull_api_path(pr_url)
+        if api_path:
+            try:
+                r = subprocess.run(
+                    [
+                        gh_bin, "api", api_path,
+                        "--jq",
+                        'if .merged_at then "MERGED" elif .state == "closed" then "CLOSED" else "OPEN" end',
+                    ],
+                    capture_output=True, text=True, timeout=8,
+                )
+                if r.returncode == 0:
+                    state = _valid_pr_state(r.stdout)
+            except (subprocess.SubprocessError, OSError):
+                state = None
     with _PR_STATE_LOCK:
-        _PR_STATE_CACHE[pr_url] = {"state": state, "at": now}
+        _PR_STATE_CACHE[pr_url] = {
+            "state": state,
+            "at": now,
+            "ttl": _PR_STATE_TTL if state else _PR_STATE_FAILURE_TTL,
+        }
     return state
 
 
@@ -1686,7 +1734,8 @@ def _prime_pr_states(pr_urls):
                 continue
             seen.add(url)
             cached = _PR_STATE_CACHE.get(url)
-            if not cached or (now - cached["at"]) >= _PR_STATE_TTL:
+            ttl = cached.get("ttl", _PR_STATE_TTL) if cached else _PR_STATE_TTL
+            if not cached or (now - cached.get("at", 0)) >= ttl:
                 needed.append(url)
     if not needed:
         return
@@ -4563,7 +4612,7 @@ def _proc_ancestor_terminal(pid):
                 ["ps", "-o", "pid,ppid,comm", "-p", str(current)],
                 capture_output=True, text=True, timeout=1,
             )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             return None, None
         lines = [l.strip() for l in out.stdout.splitlines() if l.strip()]
         if len(lines) < 2:
@@ -4591,7 +4640,7 @@ def _proc_cwd(pid):
             ["lsof", "-a", "-d", "cwd", "-p", str(pid), "-Fn"],
             capture_output=True, text=True, timeout=1,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
     for line in out.stdout.splitlines():
         if line.startswith("n"):
@@ -4615,7 +4664,7 @@ def find_live_claude_processes():
             ["ps", "-A", "-o", "pid=,comm="],
             capture_output=True, text=True, timeout=2,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return procs
     pids = []
     for line in ps_out.stdout.splitlines():
@@ -4637,7 +4686,7 @@ def find_live_claude_processes():
             ["ps", "-o", "pid,tty", "-p", ",".join(pids)],
             capture_output=True, text=True, timeout=1,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return procs
     tty_by_pid = {}
     for line in ps_out.stdout.splitlines()[1:]:
@@ -4645,13 +4694,16 @@ def find_live_claude_processes():
         if len(parts) == 2:
             tty_by_pid[parts[0]] = parts[1]
     for pid in pids:
+        tty = tty_by_pid.get(pid)
+        if not tty or tty == "??":
+            continue
         cwd = _proc_cwd(pid)
         if not cwd:
             continue
         term_app, _term_pid = _proc_ancestor_terminal(pid)
         procs.append({
             "pid": int(pid),
-            "tty": tty_by_pid.get(pid),
+            "tty": tty,
             "cwd": cwd,
             "terminal_app": term_app,
         })
@@ -4757,10 +4809,14 @@ def _load_session_registry():
                     live_claude_pids.add(int(parts[0]))
                 except ValueError:
                     pass
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         pass
 
-    for f in SESSIONS_REGISTRY.iterdir():
+    try:
+        session_files = list(SESSIONS_REGISTRY.iterdir())
+    except OSError:
+        return registry
+    for f in session_files:
         if not f.name.endswith(".json") or not f.is_file():
             continue
         try:
@@ -4900,7 +4956,7 @@ def session_live_status(session_id, session_cwd):
             tty = (ps_out.stdout or "").strip()
             if tty and tty != "??":
                 result["tty"] = tty
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
         term_app, _ = _proc_ancestor_terminal(pid)
         result["terminal_app"] = term_app
@@ -11142,6 +11198,13 @@ def _cleanup_finished_entry(entry):
     if fifo:
         _unlink_quiet(fifo)
         entry["fifo"] = None
+    log_fh = entry.get("log_fh")
+    if log_fh is not None:
+        try:
+            log_fh.close()
+        except OSError:
+            pass
+        entry["log_fh"] = None
 
 
 def _write_via_pipe(proc, line_bytes):
@@ -21177,11 +21240,29 @@ def install_orchestration_skill():
     _install_skill("group-chat")
 
 
+def _raise_open_file_limit(min_soft=2048):
+    """Raise the soft RLIMIT_NOFILE when launchd starts us with a tiny default."""
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft >= min_soft:
+            return
+        target = min_soft
+        if hard not in (resource.RLIM_INFINITY, -1):
+            target = min(target, hard)
+        if target > soft:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+            print(f"  [limits] max open files: {soft} -> {target}")
+    except Exception as e:
+        print(f"  [limits] could not raise max open files ({e})")
+
+
 def main():
     import socketserver
     class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         allow_reuse_address = True
         daemon_threads = True
+    _raise_open_file_limit()
     migrate_state_dir()
     ensure_hooks_installed()
     install_orchestration_skill()

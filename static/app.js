@@ -1478,6 +1478,46 @@
   });
   window.addEventListener('resize', () => positionSlashCommandMenu(_slashMenuInput));
 
+  function appendPendingSendEcho(text, sid) {
+    const pending = { text, sid, element: null, list: null, entry: null };
+    const $view = getConvView();
+    if ($view) {
+      const pendingDiv = document.createElement('div');
+      pendingDiv.className = 'event user_text pending';
+      pendingDiv.innerHTML = '<span class="label">User</span>'
+        + '<div class="user-msg">' + escapeHtml(text) + '</div>';
+      $view.appendChild(pendingDiv);
+      showOptimisticAgentIndicator($view);
+      $view.scrollTop = $view.scrollHeight;
+
+      const entry = { text, element: pendingDiv };
+      pending.element = pendingDiv;
+      pending.list = _pendingSends;
+      pending.entry = entry;
+      pending.list.push(entry);
+    }
+    if (sid) markSessionSending(sid);
+    return pending;
+  }
+
+  function removePendingSendEcho(pending) {
+    if (!pending) return;
+    if (pending.element && pending.element.parentNode) {
+      pending.element.parentNode.removeChild(pending.element);
+    }
+    if (pending.list && pending.entry) {
+      const idx = pending.list.indexOf(pending.entry);
+      if (idx >= 0) pending.list.splice(idx, 1);
+    }
+  }
+
+  function restoreInputAfterSendFailure($input, text) {
+    if (!$input) return;
+    if (($input.value || '').trim()) return;
+    $input.value = text;
+    $input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
   async function sendToTerminal(paneId) {
     if (paneId) {
       const idx = paneIndexByPaneId(paneId);
@@ -1514,12 +1554,15 @@
       await spawnFromInlineInput(text);
       return;
     }
-    if (!currentSession.id) return;
+    const sid = currentSession.id;
+    if (!sid) return;
     $sendBtn.disabled = true;
     const flashRed = () => {
       $input.style.borderColor = 'var(--red)';
       setTimeout(() => { $input.style.borderColor = ''; }, 1500);
     };
+    const pendingSend = appendPendingSendEcho(text, sid);
+    $input.value = '';
     try {
       let res;
       if (currentSession.source === 'pkood') {
@@ -1533,49 +1576,28 @@
         res = await fetch('/api/inject-input', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ session_id: currentSession.id, text }),
+          body: JSON.stringify({ session_id: sid, text }),
         });
       }
       let data = {};
       try { data = await res.json(); } catch (_) {}
       if (res.ok && data.ok && data.submitted === false) {
+        removePendingSendEcho(pendingSend);
         showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
-        $input.value = '';
       } else if (res.ok && data.ok) {
         if (data.queued) {
           showOpToast('Queued until the terminal session is idle.');
         }
-        // Optimistic echo: append an italicized pending entry so the user sees
-        // their message immediately. renderConversationEvents replaces it when
-        // the real user_text event arrives from the jsonl tail.
-        const $view = getConvView();
-        if ($view) {
-          const pendingDiv = document.createElement('div');
-          pendingDiv.className = 'event user_text pending';
-          pendingDiv.innerHTML = '<span class="label">User</span>'
-            + '<div class="user-msg">' + escapeHtml(text) + '</div>';
-          $view.appendChild(pendingDiv);
-          // Optimistic "agent starting" indicator — yellow glowing dot in
-          // the same shape as the live-tool inline indicator, so the user
-          // gets immediate feedback that work has begun without waiting
-          // for the next 5s liveStatus poll. Updated by updateLiveToolStrip
-          // once a real sidecar event lands; otherwise self-removes after
-          // 60s in case the agent never came up.
-          showOptimisticAgentIndicator($view);
-          // Mirror the optimistic "Sending..." indicator onto the
-          // sidebar row so the left list shows the same yellow-glow
-          // immediate feedback the right pane shows.
-          if (currentSession.id) markSessionSending(currentSession.id);
-          $view.scrollTop = $view.scrollHeight;
-          _pendingSends.push({ text, element: pendingDiv });
-        }
-        $input.value = '';
       } else {
+        removePendingSendEcho(pendingSend);
+        restoreInputAfterSendFailure($input, text);
         flashRed();
         const reason = formatInjectFailure(data, res.status);
         showOpToast('Send failed: ' + reason, 'error');
       }
     } catch (err) {
+      removePendingSendEcho(pendingSend);
+      restoreInputAfterSendFailure($input, text);
       flashRed();
       showOpToast('Send failed: ' + (err.message || 'network error'), 'error');
     }
@@ -5704,7 +5726,8 @@
       // `gh pr view` lookup on the server. Drop merged/closed so this
       // bucket isn't a graveyard of completed work; treat null/'OPEN'
       // as still ready (gh failures shouldn't hide real PRs).
-      const _prDone = c.pr_state === 'MERGED' || c.pr_state === 'CLOSED';
+      const _prState = (c.pr_state || '').toUpperCase();
+      const _prDone = _prState === 'MERGED' || _prState === 'CLOSED';
       if (c.source !== 'pkood' && c.tail_pr_number && !_prDone) {
         _readyToMergeConvs.push(c);
         continue;
@@ -5856,7 +5879,7 @@
       const _midTurn = c.last_event_type === 'assistant' || ((isCodexRow || isGeminiRow) && c.last_event_type === 'user');
       const _isActiveSidecar = c.is_live && c.sidecar_status === 'active';
       const _isQuestionWaiting = c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion'));
-      const _isWaitingForUser = c.is_live && (c.needs_approval || _isQuestionWaiting || c.sidecar_status === 'waiting');
+      const _isWaitingForUser = c.is_live && (c.needs_approval || _isQuestionWaiting);
       const _knownActivityTool = c.sidecar_tool || c.pending_tool || '';
       const _hasLivePendingTool = c.is_live && !!c.pending_tool;
       const _codexHasOpenTool = isCodexRow && !c.sidecar_status && !!c.pending_tool;
@@ -5878,7 +5901,9 @@
               : (c.gh_in_progress
               ? 'Linked GitHub issue is marked in progress'
               : (isCodexRow ? 'Codex is working' : (isGeminiRow ? 'Gemini is working' : 'Agent is working'))));
-        const wipLabel = _isQuestionWaiting ? 'QUESTION' : ((_codexOpenTurn || _isWaitingForUser) ? 'WIP' : (_knownActivityTool || 'WIP'));
+        const wipLabel = _isQuestionWaiting
+          ? 'QUESTION'
+          : ((_codexOpenTurn || _isWaitingForUser) ? 'WIP' : (_knownActivityTool || 'WIP'));
         signals += '<span class="conv-signal activity-working" title="' + escapeHtml(wipTitle) + '">' + escapeHtml(wipLabel) + '</span>';
       }
       if (c.source === 'pkood') {
@@ -14099,13 +14124,18 @@
   if ($cpSendBtn && $cpInput) {
     async function sendToSplitTerminal() {
       const text = ($cpInput.value || '').trim();
-      if (!text || !currentSession.id) return;
+      const sid = currentSession.id;
+      if (!text || !sid) return;
       hideSlashCommandMenu();
       $cpSendBtn.disabled = true;
       const flashRed = () => {
         $cpInput.style.borderColor = 'var(--red)';
         setTimeout(() => { $cpInput.style.borderColor = ''; }, 1500);
       };
+      const pendingSend = appendPendingSendEcho(text, sid);
+      $cpInput.value = '';
+      $cpInput.style.height = '';
+      if ($cpInput.__cpRefresh) $cpInput.__cpRefresh();
       try {
         let res;
         if (currentSession.source === 'pkood') {
@@ -14126,49 +14156,33 @@
           res = await fetch('/api/inject-input', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ session_id: currentSession.id, text }),
+            body: JSON.stringify({ session_id: sid, text }),
           });
         }
         let data = {};
         try { data = await res.json(); } catch (_) {}
         if (res.ok && data.ok && data.submitted === false) {
+          removePendingSendEcho(pendingSend);
           showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
-          $cpInput.value = '';
-          $cpInput.style.height = '';
-          if ($cpInput.__cpRefresh) $cpInput.__cpRefresh();
         } else if (res.ok && data.ok) {
           if (data.queued) {
             showOpToast('Queued until the terminal session is idle.');
           }
-          // Optimistic echo into the conv view (replaced by the real user_text
-          // event when the jsonl tail catches up).
-          const $view = getConvView();
-          if ($view) {
-            const pendingDiv = document.createElement('div');
-            pendingDiv.className = 'event user_text pending';
-            pendingDiv.innerHTML = '<span class="label">User</span>'
-              + '<div class="user-msg">' + escapeHtml(text) + '</div>';
-            $view.appendChild(pendingDiv);
-            showOptimisticAgentIndicator($view);
-            if (currentSession.id) markSessionSending(currentSession.id);
-            $view.scrollTop = $view.scrollHeight;
-            _pendingSends.push({ text, element: pendingDiv });
-          }
-          $cpInput.value = '';
-          // Collapse the auto-grown textarea back to one row and refresh the
-          // send-button disabled state.
-          $cpInput.style.height = '';
-          if ($cpInput.__cpRefresh) $cpInput.__cpRefresh();
         } else {
+          removePendingSendEcho(pendingSend);
+          restoreInputAfterSendFailure($cpInput, text);
           flashRed();
           const reason = formatInjectFailure(data, res.status);
           showOpToast('Send failed: ' + reason, 'error');
         }
       } catch (err) {
+        removePendingSendEcho(pendingSend);
+        restoreInputAfterSendFailure($cpInput, text);
         flashRed();
         showOpToast('Send failed: ' + (err.message || 'network error'), 'error');
       }
-      $cpSendBtn.disabled = false;
+      if ($cpInput.__cpRefresh) $cpInput.__cpRefresh();
+      else $cpSendBtn.disabled = false;
     }
     // Grow the textarea to fit content (capped by CSS max-height, which kicks
     // in scrolling). Runs on every input; cheap enough.

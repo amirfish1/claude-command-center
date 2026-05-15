@@ -124,6 +124,11 @@ write_plist() {
   <string>$SERVICE_LOG_DIR/service.out.log</string>
   <key>StandardErrorPath</key>
   <string>$SERVICE_LOG_DIR/service.err.log</string>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>2048</integer>
+  </dict>
   <key>EnvironmentVariables</key>
   <dict>
 $env_block  </dict>
