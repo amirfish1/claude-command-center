@@ -7481,6 +7481,19 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             f"git_top_cache_size={len(git_top_cache)}",
             flush=True,
         )
+    # Overlay the live-registry signal onto every row. The frontend's WIP
+    # logic gates on c.is_live + c.pending_tool / sidecar_status; without
+    # this overlay an active session shows no WIP chip in the sidebar.
+    # Callers that go through find_all_sessions get the same overlay applied
+    # at line ~7643 — it's idempotent. The /api/conversations endpoint
+    # historically only had it via find_all_sessions, so direct callers
+    # (e.g. the conversations handler at line ~17611) would silently lose
+    # is_live; do it here so every caller sees the field.
+    _reg_live_sids = live_sids if live_sids else set(_load_session_registry().keys())
+    for c in conversations:
+        sid = c.get("session_id")
+        if sid is not None:
+            c["is_live"] = sid in _reg_live_sids
     _dec_inflight()
     return conversations
 
