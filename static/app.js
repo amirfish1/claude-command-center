@@ -1184,6 +1184,114 @@
   const $convSendBtn = document.getElementById('convSendBtn');
   const $convEscBtn = document.getElementById('convEscBtn');
   const $convTtyLabel = document.getElementById('convTtyLabel');
+  const INPUT_DRAFTS_KEY = 'ccc-input-drafts-v1';
+  const INPUT_DRAFTS_MAX = 200;
+  const INPUT_DRAFT_MAX_CHARS = 50000;
+  let inputDrafts = (() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(INPUT_DRAFTS_KEY) || '{}');
+      const out = {};
+      if (raw && typeof raw === 'object') {
+        for (const [key, value] of Object.entries(raw)) {
+          if (!key) continue;
+          if (value && typeof value === 'object' && typeof value.text === 'string') {
+            out[key] = {
+              text: value.text,
+              updated: Number(value.updated) || Date.now(),
+            };
+          } else if (typeof value === 'string') {
+            out[key] = { text: value, updated: Date.now() };
+          }
+        }
+      }
+      return out;
+    } catch (_) {
+      return {};
+    }
+  })();
+
+  function saveInputDrafts() {
+    try {
+      const entries = Object.entries(inputDrafts)
+        .filter(([, value]) => value && typeof value.text === 'string' && value.text.length)
+        .sort((a, b) => (Number(b[1].updated) || 0) - (Number(a[1].updated) || 0))
+        .slice(0, INPUT_DRAFTS_MAX);
+      inputDrafts = Object.fromEntries(entries);
+      localStorage.setItem(INPUT_DRAFTS_KEY, JSON.stringify(inputDrafts));
+    } catch (_) {}
+  }
+
+  function inputDraftKeyForConversation(convId) {
+    const id = String(convId || '');
+    if (!id) return '';
+    if (id === '__new__') return 'new-session';
+    const row = (Array.isArray(conversationsData) ? conversationsData : [])
+      .find(c => c && c.id === id);
+    if ((row && row.source === 'backlog') || id.startsWith('backlog-issue-')) {
+      return 'repo:' + (rowRepoPath(row) || selectedRepoPath() || 'unknown') + ':conv:' + id;
+    }
+    return 'conv:' + id;
+  }
+
+  function setInputDraftForKey(key, value) {
+    if (!key) return;
+    const text = String(value == null ? '' : value);
+    if (!text) {
+      if (inputDrafts[key]) {
+        delete inputDrafts[key];
+        saveInputDrafts();
+      }
+      return;
+    }
+    inputDrafts[key] = {
+      text: text.length > INPUT_DRAFT_MAX_CHARS ? text.slice(0, INPUT_DRAFT_MAX_CHARS) : text,
+      updated: Date.now(),
+    };
+    saveInputDrafts();
+  }
+
+  function clearInputDraftForConversation(convId) {
+    setInputDraftForKey(inputDraftKeyForConversation(convId), '');
+  }
+
+  function inputDraftForConversation(convId) {
+    const draft = inputDrafts[inputDraftKeyForConversation(convId)];
+    return draft && typeof draft.text === 'string' ? draft.text : '';
+  }
+
+  function rememberInputDraft(input, convId) {
+    if (!input) return;
+    setInputDraftForKey(inputDraftKeyForConversation(convId), input.value || '');
+  }
+
+  function composerInputForPane(paneId) {
+    const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
+    if (!pane) return paneId === 'p1' ? $convInput : null;
+    return pane.querySelector('.conv-input-bar textarea, .conv-input-bar input[type="text"]');
+  }
+
+  function rememberComposerDraftForPane(paneId) {
+    const pane = paneByPaneId(paneId || activePaneId());
+    if (!pane || !pane.conversationId) return;
+    rememberInputDraft(composerInputForPane(pane.id), pane.conversationId);
+  }
+
+  function restoreInputDraft(input, convId) {
+    if (!input) return;
+    input.value = inputDraftForConversation(convId);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function restoreComposerDraftForPane(paneId, convId) {
+    restoreInputDraft(composerInputForPane(paneId), convId);
+  }
+
+  function restoreSplitPanelDraft(convId) {
+    const input = document.getElementById('cpInput');
+    if (!input) return;
+    restoreInputDraft(input, convId);
+    if (input.__cpRefresh) input.__cpRefresh();
+  }
 
   function issueInputPlaceholder(issueNum) {
     const $ia = document.getElementById('convInputIssueAction');
@@ -1531,6 +1639,7 @@
     const $input = (_paneEl && _paneEl.querySelector('textarea, input[type="text"]')) || $convInput;
     const $sendBtn = (_paneEl && _paneEl.querySelector('.send-btn')) || $convSendBtn;
     const text = ($input && $input.value || '').trim();
+    const draftConversation = currentConversation;
     hideSlashCommandMenu();
     // Backlog GH issue: dispatch based on the action selector.
     if ((currentConversation || '').startsWith('backlog-issue-') ||
@@ -1563,6 +1672,7 @@
     };
     const pendingSend = appendPendingSendEcho(text, sid);
     $input.value = '';
+    clearInputDraftForConversation(draftConversation);
     try {
       let res;
       if (currentSession.source === 'pkood') {
@@ -1663,6 +1773,7 @@
   }
   if ($convInput) {
     $convInput.addEventListener('input', () => {
+      rememberInputDraft($convInput, currentConversation);
       _autosizeConvInput();
       refreshSlashCommandMenu($convInput);
     });
@@ -7639,7 +7750,11 @@
       });
     }
     if (input) {
-      input.addEventListener('input', () => refreshSlashCommandMenu(input));
+      input.addEventListener('input', () => {
+        const pane = paneByPaneId(paneId);
+        rememberInputDraft(input, pane && pane.conversationId);
+        refreshSlashCommandMenu(input);
+      });
       input.addEventListener('focus', () => refreshSlashCommandMenu(input));
       input.addEventListener('click', () => refreshSlashCommandMenu(input));
       input.addEventListener('keydown', (ev) => {
@@ -8104,6 +8219,7 @@
     // this issue" rather than injecting into the previously-viewed session.
     setCurrentSession(null, null, null, false, null);
     updateInputBar();
+    restoreComposerDraftForPane(activePaneId(), currentConversation);
     $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading issue #' + issueNum + '...</div>';
     if (!concreteRepo) {
       $view.innerHTML = '<div class="empty-state" style="padding:40px;color:var(--red);">Pick a repo to load issue #' + escapeHtml(String(issueNum)) + '.</div>';
@@ -8334,6 +8450,7 @@
     if (!pane) return;
     const selectedConv = (conversationsData || []).find(x => x.id === id) || {};
     const source = sessionSourceByConv[id] || selectedConv.source || 'interactive';
+    rememberComposerDraftForPane(paneId);
     // Make this pane active so the existing globals (which proxy through
     // splitState.activeIndex) target the right pane while we run.
     splitState.activeIndex = paneIdx;
@@ -8446,6 +8563,8 @@
     updateSplitInputBar();
     // Update split panel toolbar buttons
     updateSplitToolbar();
+    restoreComposerDraftForPane(paneId, id);
+    restoreSplitPanelDraft(id);
 
     try {
       if (source === 'pkood') {
@@ -14133,7 +14252,9 @@
         setTimeout(() => { $cpInput.style.borderColor = ''; }, 1500);
       };
       const pendingSend = appendPendingSendEcho(text, sid);
+      const draftConversation = currentConversation;
       $cpInput.value = '';
+      clearInputDraftForConversation(draftConversation);
       $cpInput.style.height = '';
       if ($cpInput.__cpRefresh) $cpInput.__cpRefresh();
       try {
@@ -14198,6 +14319,7 @@
     };
     $cpSendBtn.addEventListener('click', sendToSplitTerminal);
     $cpInput.addEventListener('input', () => {
+      rememberInputDraft($cpInput, currentConversation);
       cpInputAutoResize();
       $cpInput.__cpRefresh();
       refreshSlashCommandMenu($cpInput);
@@ -15195,6 +15317,7 @@
   }
 
   function enterNewSessionMode() {
+    rememberComposerDraftForPane(activePaneId());
     if (typeof stopConvStream === 'function') stopConvStream();
     if (typeof stopSpawnStream === 'function') stopSpawnStream();
     if (typeof stopPkoodTailPoller === 'function') stopPkoodTailPoller();
@@ -15231,7 +15354,12 @@
       _cic.classList.add('visible');
     }
     if (typeof mobileShowForCurrentMode === 'function') mobileShowForCurrentMode();
-    setTimeout(() => { if ($convInput) { $convInput.value = ''; $convInput.focus(); } }, 30);
+    setTimeout(() => {
+      if ($convInput) {
+        restoreInputDraft($convInput, '__new__');
+        $convInput.focus();
+      }
+    }, 30);
   }
 
   // Spawn a session from the bottom input bar while viewing a backlog GH
@@ -15280,6 +15408,7 @@
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(withRepoPath({}, repoPath)),
         }).catch(() => {});
+        clearInputDraftForConversation(currentConversation);
         setTimeout(refreshConversationList, 600);
         setTimeout(refreshConversationList, 1500);
         setTimeout(refreshConversationList, 3000);
@@ -15319,6 +15448,7 @@
       if (data.ok) {
         showOpToast('Issue #' + issueNum + ' closed');
         if ($convInput) $convInput.value = '';
+        clearInputDraftForConversation(currentConversation);
         const $actionSel = document.getElementById('convInputIssueAction');
         if ($actionSel) $actionSel.value = 'spawn';
         renderIssueInConvPane(issueNum, repoPath);
@@ -15351,6 +15481,7 @@
         const label = action === 'needs_attention' ? 'flagged needs-attention' : 'commented + closed';
         showOpToast('Issue #' + issueNum + ' ' + label);
         if ($convInput) $convInput.value = '';
+        clearInputDraftForConversation(currentConversation);
         const $actionSel = document.getElementById('convInputIssueAction');
         if ($actionSel) $actionSel.value = 'spawn';
         renderIssueInConvPane(issueNum, repoPath);
@@ -15408,6 +15539,7 @@
       session_cwd_exists: true,
     });
     if ($convInput) $convInput.value = '';
+    clearInputDraftForConversation('__new__');
     const restoreDraftAfterFailure = () => {
       _removePendingSpawnCard(tempPid);
       enterNewSessionMode();

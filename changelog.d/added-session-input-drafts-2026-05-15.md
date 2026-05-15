@@ -1,0 +1,1 @@
+- Preserve unsent input drafts separately for each selected session, including the inline new-session prompt.
