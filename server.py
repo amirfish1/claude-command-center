@@ -8261,7 +8261,7 @@ def _shell_preview_wrapper_segment(segment):
     return False
 
 
-def _shell_command_preview(command, max_len=240):
+def _shell_command_preview(command, max_len=1000):
     """Return a readable shell command preview for live activity chips."""
     if not isinstance(command, str):
         return ""
@@ -8334,6 +8334,8 @@ def _tool_use_detail(name, tool_input, max_len=200):
         tool_input = {}
     if name == "AskUserQuestion":
         return _ask_user_question_payload(tool_input).get("summary", "")
+    if name == "Bash":
+        return _shell_command_preview(tool_input.get("command", ""), max_len=max_len)
     detail = (
         tool_input.get("file_path")
         or tool_input.get("pattern")
@@ -8659,7 +8661,8 @@ def _parse_conversation_event(ev, line_num):
             if btype == "tool_use":
                 inp = block.get("input", {})
                 name = block.get("name", "?")
-                detail = _tool_use_detail(name, inp, max_len=200)
+                detail_max = 1200 if name == "Bash" else 240
+                detail = _tool_use_detail(name, inp, max_len=detail_max)
                 blocks.append({"kind": "tool_use", "name": name, "detail": detail})
             elif btype == "text":
                 txt = block.get("text", "").strip()

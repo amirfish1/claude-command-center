@@ -540,6 +540,34 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("Full auto", detail)
         self.assertIn("Half auto", detail)
 
+    def test_bash_tool_detail_strips_shell_wrapper(self):
+        ev = {
+            "type": "assistant",
+            "timestamp": "2026-05-15T00:00:00Z",
+            "message": {
+                "id": "msg-bash",
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu-bash",
+                    "name": "Bash",
+                    "input": {
+                        "command": (
+                            "true && unsetopt NO_EXTENDED_GLOB 2>/dev/null || true && "
+                            "setopt NO_EXTENDED_GLOB 2>/dev/null || true && "
+                            "python3 render_short_slides.py 2>&1 | grep slide"
+                        )
+                    },
+                }],
+            },
+        }
+
+        parsed = self.server._parse_conversation_event(ev, 8)
+
+        detail = parsed["blocks"][0]["detail"]
+        self.assertEqual(detail, "python3 render_short_slides.py 2>&1 | grep slide")
+        self.assertNotIn("NO_EXTENDED_GLOB", detail)
+
     def test_pending_ask_user_question_clears_after_answer(self):
         sid = "00000000-0000-4000-8000-000000000099"
         project_dir = pathlib.Path(self.tmp_home, ".claude", "projects", "-demo-repo")

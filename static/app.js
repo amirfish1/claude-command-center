@@ -936,10 +936,28 @@
     return '...' + value.slice(-(Math.max(1, n - 3))).replace(/^\s+/g, '');
   }
 
+  function cleanLiveActivityDetail(detail) {
+    return String(detail || '').replace(/\s+/g, ' ').trim();
+  }
+
   function liveActivityTitle(stateLabel, tool, detail) {
     const bits = [stateLabel, liveActivityToolLabel(tool)].filter(Boolean);
-    const value = String(detail || '').replace(/\s+/g, ' ').trim();
+    const value = cleanLiveActivityDetail(detail);
     return bits.join(': ') + (value ? ': ' + value : '');
+  }
+
+  function updateLiveStripOffset($view, strip) {
+    if (!$view) return;
+    if (!strip) {
+      $view.style.removeProperty('--live-strip-offset');
+      return;
+    }
+    const apply = () => {
+      const h = Math.max(24, Math.ceil(strip.offsetHeight || 24) - 2);
+      $view.style.setProperty('--live-strip-offset', h + 'px');
+    };
+    apply();
+    requestAnimationFrame(apply);
   }
 
   function updateLiveToolStrip() {
@@ -961,6 +979,7 @@
     if (!shouldShow) {
       if (strip) strip.remove();
       if (inline) inline.remove();
+      updateLiveStripOffset($view, null);
       return;
     }
     // Real data arrived — drop the optimistic placeholder (right pane)
@@ -968,7 +987,9 @@
     clearOptimisticAgentIndicator($view);
     if (currentSession.id) clearSessionSending(currentSession.id);
     const file = liveStatus.sidecarFile || liveStatus.questionText || '';
-    const shortFile = shortenLiveActivityDetail(file, tool, isCommandActivityTool(tool) ? 140 : 80);
+    const shortFile = isCommandActivityTool(tool)
+      ? cleanLiveActivityDetail(file)
+      : shortenLiveActivityDetail(file, tool, 80);
     const dur = ageSec < 2 ? '<1s' : ageSec < 60 ? ageSec + 's' : Math.floor(ageSec / 60) + 'm';
     const inFlight = !!liveStatus.sidecarInFlight;
     const ageLbl = isQuestion ? 'waiting for answer' : (inFlight ? 'running ' + dur : dur + ' ago');
@@ -990,6 +1011,7 @@
     strip.classList.toggle('is-question', isQuestion);
     strip.title = title;
     strip.innerHTML = html;
+    updateLiveStripOffset($view, strip);
     // Inline twin at the bottom of the transcript. Re-append on every
     // refresh so it stays the last child even when new events have
     // streamed in since the last poll.
@@ -10798,12 +10820,49 @@
   // command. Reads the rendered .tool-call's .tool-name and .tool-detail
   // text so we don't need to re-parse the underlying ev. Falls back to
   // "Ran <Tool>" if the shape isn't what we expect.
+  function toolCallName(toolCall) {
+    const nameEl = toolCall ? toolCall.querySelector('.tool-name') : null;
+    return (nameEl?.dataset?.toolName || nameEl?.textContent || '').trim();
+  }
+
+  function toolCallDetailText(toolCall) {
+    if (!toolCall) return '';
+    return (toolCall.dataset.toolDetail || toolCall.querySelector('.tool-detail')?.textContent || '').trim();
+  }
+
+  function isEditToolName(name) {
+    return name === 'Edit' || name === 'MultiEdit' || name === 'Write' || name === 'NotebookEdit';
+  }
+
+  function isFileToolName(name) {
+    return isEditToolName(name) || name === 'Read';
+  }
+
+  function compactPathDetail(detail) {
+    const value = String(detail || '').trim();
+    if (!value || !value.includes('/')) return value;
+    const parts = value.split('/').filter(Boolean);
+    if (parts.length <= 2) return value;
+    return parts.slice(-2).join('/');
+  }
+
+  function formatToolCallDetail(name, detail) {
+    const full = String(detail || '').trim();
+    if (!full) return { display: '', full: '', className: '' };
+    if (isCommandActivityTool(name)) {
+      return { display: full, full, className: ' tool-command' };
+    }
+    if (isFileToolName(name)) {
+      return { display: compactPathDetail(full), full, className: ' tool-file' };
+    }
+    return { display: full, full, className: '' };
+  }
+
   function summarizeToolCall(div) {
     const tc = div.querySelector('.tool-call');
     if (!tc) return 'Ran 1 command';
-    const nameEl = tc.querySelector('.tool-name');
-    const name = (nameEl?.dataset?.toolName || nameEl?.textContent || '').trim();
-    const detail = (tc.querySelector('.tool-detail')?.textContent || '').trim();
+    const name = toolCallName(tc);
+    const detail = toolCallDetailText(tc);
     const basename = (s) => {
       if (!s) return '';
       const cleaned = s.replace(/^[\"\'\s]+|[\"\'\s]+$/g, '');
@@ -10952,9 +11011,8 @@
 
   function toolCallCommandInfo(toolCall) {
     if (!toolCall) return null;
-    const nameEl = toolCall.querySelector('.tool-name');
-    const name = (nameEl?.dataset?.toolName || nameEl?.textContent || '').trim();
-    const detail = (toolCall.querySelector('.tool-detail')?.textContent || '').trim();
+    const name = toolCallName(toolCall);
+    const detail = toolCallDetailText(toolCall);
     if (name !== 'exec_command' && name !== 'Bash') return null;
     return parseCodeReadCommand(detail);
   }
@@ -10969,14 +11027,52 @@
     if (!label) return;
     const count = Number(group.dataset.toolCount || 0);
     const codeReads = Number(group.dataset.codeReadCount || 0);
+    const calls = Array.from(group.querySelectorAll('.tool-call'));
     if (count === 1) {
       const only = group.querySelector('.tool-call-group-body > .event.tool-only');
       label.textContent = only ? summarizeToolCall(only) : 'Ran 1 command';
     } else if (count > 1 && codeReads === count) {
       label.textContent = 'Viewed ' + count + ' file excerpts';
+    } else if (calls.length) {
+      const edits = calls.filter(tc => isEditToolName(toolCallName(tc)));
+      const commands = calls.filter(tc => isCommandActivityTool(toolCallName(tc)));
+      const parts = [];
+      if (edits.length) {
+        const files = Array.from(new Set(edits.map(tc => toolCallDetailText(tc)).filter(Boolean)));
+        if (files.length === 1) {
+          parts.push('Edited ' + _pathBase(files[0]) + (edits.length > 1 ? ' ' + edits.length + ' times' : ''));
+        } else if (files.length > 1) {
+          parts.push('Edited ' + files.length + ' files');
+        } else {
+          parts.push('Edited ' + edits.length + ' time' + (edits.length === 1 ? '' : 's'));
+        }
+      }
+      if (commands.length) {
+        parts.push(commands.length === 1 ? 'ran shell command' : 'ran ' + commands.length + ' shell commands');
+      }
+      const accounted = edits.length + commands.length;
+      const other = Math.max(0, calls.length - accounted);
+      if (other) parts.push('ran ' + other + ' other tool' + (other === 1 ? '' : 's'));
+      label.textContent = parts.length ? parts.join('; ') : 'Ran ' + count + ' commands';
     } else {
       label.textContent = 'Ran ' + count + ' commands';
     }
+  }
+
+  function isRoutineSuccessfulToolResult(toolCall, text) {
+    const name = toolCallName(toolCall);
+    if (!isEditToolName(name)) return false;
+    const t = String(text || '');
+    return /has been (?:updated|created) successfully/i.test(t)
+      || /file state is current/i.test(t)
+      || /no need to Read it back/i.test(t);
+  }
+
+  function stampCurrentToolGroup(ts) {
+    if (!_currentToolGroup) return;
+    _currentToolGroup.dataset.renderTs = ts;
+    const header = _currentToolGroup.querySelector('.tool-call-group-header');
+    if (header) header.dataset.renderTs = ts;
   }
 
   function stripToolOutputEnvelope(text) {
@@ -11250,7 +11346,12 @@
           if (b.kind === 'tool_use') {
             const displayName = b.name === 'AskUserQuestion' ? 'Question' : b.name;
             const toolClass = b.name === 'AskUserQuestion' ? ' ask-user-question' : '';
-            html += '<div class="tool-call' + toolClass + '"><span class="arrow">-></span> <span class="tool-name" data-tool-name="' + escapeAttr(b.name || '') + '">' + escapeHtml(displayName) + '</span> <span class="tool-detail">' + escapeHtml(b.detail) + '</span></div>';
+            const detail = formatToolCallDetail(b.name, b.detail);
+            html += '<div class="tool-call' + toolClass + detail.className + '" data-tool-detail="' + escapeAttr(detail.full) + '">'
+              + '<span class="arrow">-></span> '
+              + '<span class="tool-name" data-tool-name="' + escapeAttr(b.name || '') + '">' + escapeHtml(displayName) + '</span>'
+              + (detail.display ? ' <span class="tool-detail" title="' + escapeAttr(detail.full) + '">' + escapeHtml(detail.display) + '</span>' : '')
+              + '</div>';
           } else if (b.kind === 'text') {
             html += '<div class="assistant-text">' + renderMarkdown(b.text) + '</div>';
             hasNonTool = true;
@@ -11304,6 +11405,11 @@
             // CSS ::before never renders. Plain outputs bake the prefix into
             // their <pre>; structured code previews rely on the group stamp.
             const _toolTs = eventStamp(ev.ts) || nowStamp();
+            if (!ev.is_error && isRoutineSuccessfulToolResult(last, text)) {
+              last.classList.add('tool-call-ok');
+              stampCurrentToolGroup(_toolTs);
+              continue;
+            }
             const codePreview = ev.is_error ? null : renderToolCodePreview(last, text);
             const out = codePreview || document.createElement('pre');
             if (codePreview) {
@@ -11325,11 +11431,7 @@
             // recent activity (tool_use OR tool_result), not just tool_use.
             // CSS ::before reads attr() from its own element, so the header
             // node needs the attribute set, not just the parent group.
-            if (_currentToolGroup) {
-              _currentToolGroup.dataset.renderTs = _toolTs;
-              const $h = _currentToolGroup.querySelector('.tool-call-group-header');
-              if ($h) $h.dataset.renderTs = _toolTs;
-            }
+            stampCurrentToolGroup(_toolTs);
             last.appendChild(out);
           }
         }

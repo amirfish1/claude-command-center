@@ -88,7 +88,7 @@ def shell_wrapper_segment(segment):
     return False
 
 
-def shell_command_preview(command, max_len=240):
+def shell_command_preview(command, max_len=1000):
     if not isinstance(command, str):
         return ""
     raw = SECRET_RE.sub("[redacted]", re.sub(r"\s+", " ", command).strip())

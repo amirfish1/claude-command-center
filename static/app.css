@@ -461,14 +461,33 @@
   .event.result .stats span { margin-right: 16px; }
 
   .tool-call {
-    display: flex; align-items: baseline; gap: 8px;
+    display: flex; align-items: flex-start; gap: 8px;
+    flex-wrap: wrap;
     padding: 4px 0; font-size: 14px;
   }
   .tool-call .arrow { color: var(--orange); font-weight: bold; }
   .tool-call .tool-name { color: var(--orange); font-weight: 600; }
+  .tool-call.tool-call-ok .tool-name::after {
+    content: ' ok';
+    color: var(--green);
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 4px;
+  }
   .tool-call .tool-detail {
     color: var(--text-muted); font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-    font-size: 13px; word-break: break-all;
+    font-size: 13px;
+    flex: 1 1 280px;
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+  .tool-call.tool-command .tool-detail {
+    color: var(--text);
+  }
+  .tool-call.tool-file .tool-detail {
+    color: var(--text);
   }
   .hide-tools .tool-call { display: none !important; }
   .hide-tools .event.tool-only { display: none !important; }
@@ -3596,7 +3615,8 @@
      conversation events scrolling underneath the sticky strip stay hidden
      instead of bleeding through (an 8% rgba alone is essentially see-through). */
   .conv-live-tool-strip {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: flex-start; gap: 8px;
+    flex-wrap: wrap;
     padding: 6px 12px; font-size: 12px;
     color: #FBCA04;
     background: linear-gradient(rgba(251,202,4,0.08), rgba(251,202,4,0.08)), var(--bg);
@@ -3614,6 +3634,11 @@
   .conv-live-tool-strip .cl-file.is-command {
     color: var(--text);
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    flex: 1 1 320px;
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    word-break: normal;
   }
   .conv-live-tool-strip .cl-age { color: var(--text-muted); font-size: 11px; margin-left: auto; flex: 0 0 auto; }
   .conv-live-tool-strip.in-flight {
@@ -3638,7 +3663,8 @@
      to scroll up to the sticky strip. Shows whenever the strip shows;
      hidden the moment status flips back to idle. */
   .conv-live-tool-inline {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: flex-start; gap: 8px;
+    flex-wrap: wrap;
     padding: 8px 12px; margin: 12px 0;
     font-size: 12px; color: #FBCA04;
     background: linear-gradient(rgba(251,202,4,0.10), rgba(251,202,4,0.10)), var(--bg);
@@ -3670,6 +3696,11 @@
   .conv-live-tool-inline .cl-file.is-command {
     color: var(--text);
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    flex: 1 1 320px;
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    word-break: normal;
   }
   .conv-live-tool-inline .cl-age { color: var(--text-muted); font-size: 11px; margin-left: auto; flex: 0 0 auto; }
   /* When the live-tool strip is present above the sticky header, push the
@@ -3680,7 +3711,7 @@
      the conversation events scrolling underneath. (Strip height varies
      with the user-agent's default line-height for 12px text, ~26-32px.) */
   .conversations-view:has(.conv-live-tool-strip) .conv-sticky-header {
-    top: 24px;
+    top: var(--live-strip-offset, 24px);
   }
   .kanban-approve-deny {
     display: flex; gap: 4px; margin-top: 4px;
