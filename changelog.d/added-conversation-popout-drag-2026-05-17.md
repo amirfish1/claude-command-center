@@ -1,0 +1,1 @@
+- Dragging a conversation row outside the Command Center window now opens that conversation in a focused pop-up pane near the drag target, with compact source/project/title headers, a conversation-only pop-up boot path, and 24 per-conversation pane background colors in the right rail.

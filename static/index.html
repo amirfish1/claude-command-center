@@ -47,6 +47,10 @@
      the script in standalone mode. -->
 <script>
   (function () {
+    const params = new URLSearchParams(window.location.search || '');
+    window.__CCC_CONVERSATION_POPOUT__ = params.get('ccc_popout') === 'conversation'
+      || params.get('popout') === 'conversation';
+    if (window.__CCC_CONVERSATION_POPOUT__) return;
     const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
       window.matchMedia('(display-mode: window-controls-overlay)').matches ||
@@ -224,7 +228,7 @@
       poll();
       window.cccLoadingPollId = setInterval(poll, 450);
     };
-    window.cccBeginLoadingStatusPolling();
+    if (!window.__CCC_CONVERSATION_POPOUT__) window.cccBeginLoadingStatusPolling();
     // If the user just switched repos, surface that in the label.
     (function () {
       try {
@@ -464,6 +468,10 @@
     <div class="conv-split" id="convSplit" data-orientation="">
       <div class="conv-pane" data-pane-id="p1">
         <div class="conv-pane-header" data-role="pane-header">
+          <div class="conv-pane-titlebar" data-role="pane-titlebar">
+            <span class="conv-pane-category" data-role="pane-category"></span>
+            <span class="conv-pane-title" data-role="pane-title"></span>
+          </div>
           <button class="conv-pane-close" data-role="pane-close" title="Close pane" aria-label="Close pane" style="display:none;">&times;</button>
         </div>
         <div class="conversations-view" id="conversationsView">
@@ -507,6 +515,7 @@
         <aside class="status-rail" id="statusRail" aria-label="Session status rail">
           <div class="status-rail-resizer" id="statusRailResizer" role="separator" aria-orientation="vertical" aria-label="Resize status rail" aria-controls="statusRail" tabindex="0" title="Drag to resize the status rail; drag to the right edge to hide it"></div>
           <div class="rail-actions" id="railActions" data-role="rail-actions"></div>
+          <div class="conv-bg-palette" data-role="conv-bg-palette" role="radiogroup" aria-label="Conversation background color"></div>
         </aside>
         <button class="status-rail-restore" id="statusRailRestoreBtn" type="button" title="Show status rail" aria-label="Show status rail" aria-controls="statusRail">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1188,7 +1197,7 @@
       setCwdDisplay(j.cwd, j.rel);
     } catch (_) {}
   }
-  refreshCwd();
+  if (!window.__CCC_CONVERSATION_POPOUT__) refreshCwd();
 
   // Tiny ANSI SGR parser — handles \x1b[<n>;<m>m. Strips other escape
   // sequences (cursor moves, etc.) so they don't render as literal junk.

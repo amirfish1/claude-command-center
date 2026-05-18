@@ -9,6 +9,19 @@
     pkood_enabled: false,
     gh_enabled: true,
   };
+  const _bootUrlParams = new URLSearchParams(window.location.search || '');
+  const CONV_POPOUT_MODE = _bootUrlParams.get('ccc_popout') === 'conversation'
+    || _bootUrlParams.get('popout') === 'conversation';
+  const CONV_POPOUT_TARGET = (
+    _bootUrlParams.get('conv')
+    || _bootUrlParams.get('conversation')
+    || _bootUrlParams.get('session_id')
+    || ''
+  ).trim();
+  const CONV_POPOUT_REPO_PATH = (_bootUrlParams.get('repo_path') || '').trim();
+  if (CONV_POPOUT_MODE && document.body) {
+    document.body.classList.add('conversation-popout');
+  }
   // Regex compiled from APP_CONFIG.title_strip at load; used to strip
   // user-configured prefixes like "[ACME ...]" from session titles.
   let _titleStripRe = null;  // null = no stripping until config loads
@@ -196,6 +209,7 @@
   const $convFolderFilter = document.getElementById('convFolderFilter');
   let repoListState = { repos: [], current: '', recent: [] };
   let archiveFolderFilter = (() => {
+    if (CONV_POPOUT_MODE && CONV_POPOUT_REPO_PATH) return CONV_POPOUT_REPO_PATH;
     try { return localStorage.getItem(ARCHIVE_FOLDER_FILTER_KEY) || ARCHIVE_FOLDER_ALL; }
     catch (_) { return ARCHIVE_FOLDER_ALL; }
   })();
@@ -2933,6 +2947,130 @@
     return !!born && (Date.now() - born) < 30000;
   }
 
+  let _popoutSelectInFlight = false;
+  let _popoutMissingShown = false;
+  function popoutTargetMatches(row) {
+    if (!row || !CONV_POPOUT_TARGET) return false;
+    return row.id === CONV_POPOUT_TARGET || row.session_id === CONV_POPOUT_TARGET;
+  }
+  function findPopoutConversationRow() {
+    if (!CONV_POPOUT_TARGET) return null;
+    return (conversationsData || []).find(popoutTargetMatches) || null;
+  }
+  function popoutConversationIdForRow(row) {
+    return (row && (row.id || row.session_id)) || CONV_POPOUT_TARGET;
+  }
+  function setPopoutTitle(row) {
+    if (!CONV_POPOUT_MODE) return;
+    const title = (row && (row.display_name || firstSentenceOf(row.first_message || '', 70)))
+      || CONV_POPOUT_TARGET.slice(0, 8)
+      || 'Conversation';
+    document.title = title + ' - Claude Command Center';
+  }
+  function renderPopoutMissingConversation() {
+    if (_popoutMissingShown || currentConversation) return;
+    const view = getConvView();
+    if (!view) return;
+    _popoutMissingShown = true;
+    updatePaneHeader(activePaneId(), null, {
+      category: 'not found',
+      title: (CONV_POPOUT_TARGET || '').slice(0, 8) || 'Conversation',
+    });
+    view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Conversation not found: '
+      + escapeHtml(CONV_POPOUT_TARGET || '(missing id)')
+      + '</div>';
+  }
+  function maybeSelectPopoutConversation(opts = {}) {
+    if (!CONV_POPOUT_MODE || !CONV_POPOUT_TARGET) return false;
+    const row = findPopoutConversationRow();
+    if (!row) {
+      if (opts.allowMissing) renderPopoutMissingConversation();
+      return false;
+    }
+    const convId = popoutConversationIdForRow(row);
+    setPopoutTitle(row);
+    if (currentConversation === convId || _popoutSelectInFlight) return true;
+    _popoutMissingShown = false;
+    _popoutSelectInFlight = true;
+    Promise.resolve(selectConversation(convId, activePaneId()))
+      .catch(err => {
+        const view = getConvView();
+        if (view) {
+          view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load conversation: '
+            + escapeHtml(err && err.message ? err.message : String(err))
+            + '</div>';
+        }
+      })
+      .finally(() => { _popoutSelectInFlight = false; });
+    return true;
+  }
+
+  function popoutParam(name) {
+    return (_bootUrlParams.get(name) || '').trim();
+  }
+
+  function popoutIntParam(name) {
+    const raw = popoutParam(name);
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function buildSyntheticPopoutRow() {
+    if (!CONV_POPOUT_MODE || !CONV_POPOUT_TARGET) return null;
+    const source = popoutParam('source') || 'interactive';
+    const sessionId = popoutParam('session_id') || (source === 'backlog' ? '' : CONV_POPOUT_TARGET);
+    const issueNumber = popoutIntParam('issue_number');
+    const spawnPid = popoutIntParam('spawn_pid');
+    return {
+      id: CONV_POPOUT_TARGET,
+      session_id: sessionId || undefined,
+      source,
+      display_name: popoutParam('title') || '',
+      first_message: popoutParam('first_message') || '',
+      folder_label: popoutParam('folder_label') || '',
+      folder_label_chip: popoutParam('folder_label') || '',
+      repo_path: CONV_POPOUT_REPO_PATH || '',
+      session_cwd: popoutParam('cwd') || '',
+      session_cwd_exists: popoutParam('cwd_exists') === '1',
+      spawn_pid: spawnPid === null ? undefined : spawnPid,
+      issue_number: issueNumber === null ? undefined : issueNumber,
+    };
+  }
+
+  function installSyntheticPopoutRow(row) {
+    if (!row) return;
+    conversationsData = [row];
+    conversationsLoaded = true;
+    _convInitialLoadDone = true;
+    currentRepoBacklogData = row.source === 'backlog' ? [row] : [];
+    sessionIdByConv = {};
+    sessionCwdByConv = {};
+    sessionCwdExistsByConv = {};
+    sessionSourceByConv = {};
+    sessionSpawnPidByConv = {};
+    if (row.session_id) sessionIdByConv[row.id] = row.session_id;
+    if (row.session_cwd) sessionCwdByConv[row.id] = row.session_cwd;
+    sessionCwdExistsByConv[row.id] = !!row.session_cwd_exists;
+    sessionSourceByConv[row.id] = row.source || 'interactive';
+    if (row.spawn_pid) sessionSpawnPidByConv[row.id] = row.spawn_pid;
+  }
+
+  async function bootConversationPopoutDirect() {
+    if (!CONV_POPOUT_MODE || !CONV_POPOUT_TARGET) return false;
+    const row = findPopoutConversationRow() || buildSyntheticPopoutRow();
+    installSyntheticPopoutRow(row);
+    setPopoutTitle(row);
+    updatePaneHeader(activePaneId(), row, {
+      category: popoutParam('category') || paneCategoryForRow(row),
+      title: popoutParam('title') || paneTitleForRow(row),
+    });
+    hideLoadingOverlay();
+    _markFirstSessionsLoaded();
+    await selectConversation(row.id, activePaneId());
+    return true;
+  }
+
   // Optimistic state overrides for archived/verified flags. When the user
   // archives or verifies a card we mutate the in-memory copy, but a /api/sessions
   // poll already in flight will return *pre-click* data and overwrite that
@@ -3061,7 +3199,7 @@
     const sid = real.session_id || realId;
     if (!realId) return;
     currentConversation = realId;
-    try { localStorage.setItem('ccc-last-conv', realId); } catch (_) {}
+    try { if (!CONV_POPOUT_MODE) localStorage.setItem('ccc-last-conv', realId); } catch (_) {}
     if (typeof stopConvStream === 'function') stopConvStream();
     if (typeof stopSpawnStream === 'function') stopSpawnStream();
     setCurrentSession(
@@ -3282,7 +3420,7 @@
       if (_selectionSwap) {
         const real = _selectionSwap.realCard;
         currentConversation = real.id;
-        try { localStorage.setItem('ccc-last-conv', real.id); } catch (_) {}
+        try { if (!CONV_POPOUT_MODE) localStorage.setItem('ccc-last-conv', real.id); } catch (_) {}
         if (typeof stopConvStream === 'function') stopConvStream();
         if (typeof stopSpawnStream === 'function') stopSpawnStream();
         setCurrentSession(
@@ -3315,7 +3453,9 @@
       // Auto-restore the last-opened card on first load. Only fires when
       // the user hasn't already clicked something — refresh-after-refresh
       // shouldn't yank a card out from under an active selection.
-      if (!currentConversation) {
+      if (CONV_POPOUT_MODE) {
+        maybeSelectPopoutConversation();
+      } else if (!currentConversation) {
         let lastId = '';
         try { lastId = localStorage.getItem('ccc-last-conv') || ''; } catch (_) {}
         if (lastId && conversationsData.some(c => c.id === lastId)) {
@@ -5212,12 +5352,14 @@
         ev.dataTransfer.setData('text/plain', ids.join(','));
         ev.dataTransfer.effectAllowed = 'move';
         card.classList.add('dragging');
+        startExternalConversationDrag(ids[0], repoPathForConversationPopout(ids[0], ''));
         // Mark all selected cards as dragging too
         if (ids.length > 1) {
           targetEl.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.add('dragging'));
         }
       });
-      card.addEventListener('dragend', () => {
+      card.addEventListener('dragend', (ev) => {
+        finishExternalConversationDrag(ev);
         targetEl.querySelectorAll('.kanban-card.dragging').forEach(el => el.classList.remove('dragging'));
       });
       // Cards are not drop targets — columns are the only drop targets.
@@ -7450,17 +7592,157 @@
     });
   }
 
-  // ── Drag-to-reorder ──
+  // ── Drag-to-pop-out + drag-to-reorder ──
+  let _externalDragState = null;
+
+  function rowForConversationId(convId) {
+    if (!convId) return null;
+    return (conversationsData || []).find(c => c && (c.id === convId || c.session_id === convId)) || null;
+  }
+
+  function repoPathForConversationPopout(convId, explicitRepoPath) {
+    const row = rowForConversationId(convId);
+    return explicitRepoPath || rowRepoPath(row) || selectedRepoPath() || '';
+  }
+
+  function conversationPopoutUrl(convId, repoPath) {
+    const u = new URL(window.location.pathname || '/', window.location.href);
+    const row = rowForConversationId(convId);
+    const rowRepo = rowRepoPath(row) || repoPath || selectedRepoPath() || '';
+    const addParam = (key, value, maxLen) => {
+      if (value === undefined || value === null || value === '') return;
+      const s = String(value);
+      u.searchParams.set(key, maxLen ? s.slice(0, maxLen) : s);
+    };
+    u.search = '';
+    u.hash = '';
+    u.searchParams.set('ccc_popout', 'conversation');
+    u.searchParams.set('conv', convId);
+    if (rowRepo) u.searchParams.set('repo_path', rowRepo);
+    if (row) {
+      const source = row.source || '';
+      addParam('source', source, 40);
+      addParam('session_id', row.session_id || (source === 'backlog' ? '' : convId), 120);
+      addParam('title', paneTitleForRow(row), 180);
+      addParam('category', paneCategoryForRow(row), 180);
+      addParam('folder_label', row.folder_label_chip || row.folder_label || '', 120);
+      addParam('cwd', row.session_cwd || row.cwd || '', 500);
+      if (row.session_cwd_exists) addParam('cwd_exists', '1');
+      addParam('spawn_pid', row.spawn_pid, 20);
+      addParam('issue_number', row.issue_number, 20);
+    }
+    return u.toString();
+  }
+
+  function screenPointFromDragEvent(ev) {
+    if (!ev) return null;
+    const x = Number(ev.screenX);
+    const y = Number(ev.screenY);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { x, y };
+  }
+
+  function rememberExternalDragScreenPoint(ev) {
+    if (!_externalDragState) return;
+    const point = screenPointFromDragEvent(ev);
+    if (point) _externalDragState.screenPoint = point;
+  }
+
+  function popoutPositionFeature(anchor, width, height) {
+    if (!anchor) return '';
+    const left = Math.round(anchor.x - (width / 2));
+    const top = Math.round(anchor.y - 80);
+    return ',left=' + left + ',top=' + top + ',screenX=' + left + ',screenY=' + top;
+  }
+
+  function openConversationPopout(convId, repoPath, anchor) {
+    if (!convId) return false;
+    const row = rowForConversationId(convId);
+    if (row && row.source === 'github_pr') {
+      if (row.tail_pr_url) window.open(row.tail_pr_url, '_blank', 'noopener');
+      return true;
+    }
+    const url = conversationPopoutUrl(convId, repoPathForConversationPopout(convId, repoPath));
+    const name = 'ccc-conversation-' + String(convId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
+    const width = 920;
+    const height = 900;
+    const features = 'popup=yes,width=' + width + ',height=' + height
+      + ',menubar=no,toolbar=no,location=no,status=no,scrollbars=yes,resizable=yes'
+      + popoutPositionFeature(anchor, width, height);
+    const popup = window.open(url, name, features);
+    if (popup) {
+      try { popup.focus(); } catch (_) {}
+      showOpToast('Conversation opened in a pop-up');
+      return true;
+    }
+    showOpToast('Pop-up blocked. Allow pop-ups for CCC and try again.', 'error');
+    return false;
+  }
+
+  function pointOutsideViewport(ev) {
+    if (!ev) return false;
+    const x = Number(ev.clientX);
+    const y = Number(ev.clientY);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    return x <= 0 || y <= 0 || x >= window.innerWidth - 1 || y >= window.innerHeight - 1;
+  }
+
+  function startExternalConversationDrag(convId, repoPath) {
+    if (CONV_POPOUT_MODE || !convId) return;
+    const row = rowForConversationId(convId);
+    _externalDragState = {
+      convId,
+      repoPath: repoPathForConversationPopout(convId, repoPath),
+      droppedInside: false,
+      leftWindow: false,
+      cancelled: false,
+    };
+    if (row && row.source === 'backlog' && row.issue_number) {
+      _externalDragState.repoPath = rowRepoPath(row) || _externalDragState.repoPath;
+    }
+    document.body.classList.add('conversation-external-dragging');
+  }
+
+  function finishExternalConversationDrag(ev) {
+    const st = _externalDragState;
+    rememberExternalDragScreenPoint(ev);
+    _externalDragState = null;
+    document.body.classList.remove('conversation-external-dragging');
+    if (!st || st.droppedInside || st.cancelled) return;
+    if (st.leftWindow || pointOutsideViewport(ev)) {
+      openConversationPopout(st.convId, st.repoPath, st.screenPoint || screenPointFromDragEvent(ev));
+    }
+  }
+
+  window.addEventListener('dragleave', (ev) => {
+    if (!_externalDragState) return;
+    rememberExternalDragScreenPoint(ev);
+    if (pointOutsideViewport(ev)) _externalDragState.leftWindow = true;
+  }, true);
+  window.addEventListener('dragover', (ev) => {
+    if (!_externalDragState) return;
+    rememberExternalDragScreenPoint(ev);
+    if (!pointOutsideViewport(ev)) _externalDragState.leftWindow = false;
+  }, true);
+  document.addEventListener('drop', () => {
+    if (_externalDragState) _externalDragState.droppedInside = true;
+  }, true);
+  window.addEventListener('keydown', (ev) => {
+    if (_externalDragState && ev.key === 'Escape') _externalDragState.cancelled = true;
+  }, true);
+
   let dragSourceId = null;
 
   function attachDragHandlers(el) {
     el.addEventListener('dragstart', (ev) => {
       dragSourceId = el.dataset.id;
       el.classList.add('dragging');
+      startExternalConversationDrag(el.dataset.id, el.dataset.repoPath || '');
       try { ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
       try { ev.dataTransfer.setData('text/plain', el.dataset.id); } catch (_) {}
     });
-    el.addEventListener('dragend', () => {
+    el.addEventListener('dragend', (ev) => {
+      finishExternalConversationDrag(ev);
       dragSourceId = null;
       $convList.querySelectorAll('.conv-item').forEach(n => {
         n.classList.remove('dragging', 'drop-above', 'drop-below');
@@ -7813,6 +8095,58 @@
     return pane ? pane.querySelector('.conv-input-bar') : null;
   }
 
+  function paneTitleForRow(row) {
+    if (!row) return '';
+    const explicit = row.display_name || row.title || '';
+    if (explicit) return stripTitle(stripGhIssueProjectTag(String(explicit))).trim();
+    const first = row.first_message || row.prompt || row.last_prompt || '';
+    if (first) return firstSentenceOf(cleanIssuePrompt(first), 96);
+    const sid = row.session_id || row.id || '';
+    return sid ? sid.slice(0, 8) : '';
+  }
+
+  function sourceLabelForPane(row) {
+    const source = (row && row.source) || '';
+    if (source === 'codex') return 'codex';
+    if (source === 'gemini') return 'gemini';
+    if (source === 'pkood') return 'pkood';
+    if (source === 'backlog') return row && row.issue_number ? 'issue' : 'backlog';
+    if (source === 'github_pr') return 'pull request';
+    return 'claude';
+  }
+
+  function paneCategoryForRow(row) {
+    if (!row) return '';
+    const bits = [];
+    const source = sourceLabelForPane(row);
+    if (source) bits.push(source);
+    const folder = row.folder_label_chip || row.folder_label || '';
+    if (folder && bits.indexOf(folder) === -1) bits.push(folder);
+    return bits.join(' · ');
+  }
+
+  function updatePaneHeader(paneId, row, opts = {}) {
+    const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
+    if (!pane) return;
+    const categoryEl = pane.querySelector('[data-role="pane-category"]');
+    const titleEl = pane.querySelector('[data-role="pane-title"]');
+    if (!categoryEl || !titleEl) return;
+    const category = opts.category !== undefined ? opts.category : paneCategoryForRow(row);
+    const title = opts.title !== undefined ? opts.title : paneTitleForRow(row);
+    categoryEl.textContent = category || '';
+    titleEl.textContent = title || '';
+    pane.classList.toggle('has-pane-title', !!(category || title));
+    const header = pane.querySelector('[data-role="pane-header"]');
+    if (header) header.title = [category, title].filter(Boolean).join(' - ');
+  }
+
+  if (CONV_POPOUT_MODE && CONV_POPOUT_TARGET) {
+    updatePaneHeader(activePaneId(), null, {
+      category: CONV_POPOUT_REPO_PATH ? (_pathLeaf(CONV_POPOUT_REPO_PATH) || 'conversation') : 'conversation',
+      title: CONV_POPOUT_TARGET.slice(0, 8) || 'Conversation',
+    });
+  }
+
   const CONV_BOTTOM_TOLERANCE = 80;
 
   function conversationDistanceFromBottom(view) {
@@ -7935,6 +8269,13 @@
     const tmpl = document.querySelector('.conv-pane[data-pane-id="p1"]');
     const clone = tmpl.cloneNode(true);
     clone.setAttribute('data-pane-id', paneId);
+    clone.classList.remove('has-pane-title', 'has-conv-bg');
+    ['data-conv-bg', 'data-conv-bg-key', 'data-conv-id'].forEach(name => clone.removeAttribute(name));
+    [
+      '--conv-bg', '--conv-surface', '--conv-surface-2', '--conv-border',
+      '--conv-text', '--conv-text-muted', '--conv-accent', '--conv-user-bg',
+      '--conv-user-text', '--conv-shadow',
+    ].forEach(name => clone.style.removeProperty(name));
     // Strip every id in the clone — HTML mandates id uniqueness, and any
     // future code that does getElementById('convInput') etc. would resolve
     // to p1's element, never the clone's. Task 6 will re-find the cloned
@@ -7948,6 +8289,13 @@
     if (view) {
       view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading…</div>';
     }
+    const paneCat = clone.querySelector('[data-role="pane-category"]');
+    const paneTitle = clone.querySelector('[data-role="pane-title"]');
+    if (paneCat) paneCat.textContent = '';
+    if (paneTitle) paneTitle.textContent = '';
+    const bgPalette = clone.querySelector('[data-role="conv-bg-palette"]');
+    if (bgPalette) bgPalette.innerHTML = '';
+    renderConversationBackgroundPalette(clone);
     // Hide the cloned workspace/usage strip — the pill renderers key off
     // the singular #convInputContext id (which only p1 keeps), so the
     // strip in cloned panes would render as empty space. Hiding it keeps
@@ -8407,6 +8755,14 @@
     stopConvStream();
     const concreteRepo = repoPath || repoPathForIssueNumber(issueNum);
     currentConversation = rowId || 'backlog-issue-' + issueNum;
+    refreshConversationBackgroundForPane(activePaneId());
+    const issueRow = conversationsData.find(x => x.id === currentConversation)
+      || conversationsData.find(x => x.id === 'backlog-issue-' + issueNum)
+      || { source: 'backlog', issue_number: issueNum, display_name: 'Issue #' + issueNum };
+    updatePaneHeader(activePaneId(), issueRow, {
+      category: paneCategoryForRow(issueRow) || 'issue',
+      title: paneTitleForRow(issueRow) || ('Issue #' + issueNum),
+    });
     // Drop any prior session so the bottom input bar routes to "spawn for
     // this issue" rather than injecting into the previously-viewed session.
     setCurrentSession(null, null, null, false, null);
@@ -8452,6 +8808,11 @@
       let html = '<div style="padding:20px;max-width:900px;">';
       html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;">';
       const issueTitle = stripGhIssueProjectTag(issue.title || '(no title)');
+      updatePaneHeader(activePaneId(), Object.assign({}, issueRow, {
+        display_name: issueTitle,
+        issue_number: issueNum,
+        source: 'backlog',
+      }), { category: paneCategoryForRow(issueRow) || 'issue', title: issueTitle + ' #' + issueNum });
       html += '<div><h1 style="margin:0 0 6px;font-size:20px;">' + escapeHtml(issueTitle) + ' <span style="color:var(--text-muted);font-weight:400;">#' + escapeHtml(String(issueNum)) + '</span></h1>';
       html += '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtml((issue.author && issue.author.login) || '') + ' &middot; ' + escapeHtml(created) + ' &middot; <span style="color:' + (issue.state === 'OPEN' ? 'var(--green)' : 'var(--text-muted)') + ';">' + escapeHtml(issue.state || '') + '</span></div></div>';
       if (url) html += '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener" style="font-size:12px;color:var(--accent);">Open on GitHub &#x2197;</a>';
@@ -8671,10 +9032,11 @@
     }
     mobileShowForCurrentMode();
     currentConversation = id;
+    refreshConversationBackgroundForPane(paneId);
     // Remember which card was last opened so we can re-open it on the
     // next page load. Reads happen in loadConversationList once the list
     // is populated; misses (id no longer present) just fall through.
-    try { if (id) localStorage.setItem('ccc-last-conv', id); } catch (_) {}
+    try { if (id && !CONV_POPOUT_MODE) localStorage.setItem('ccc-last-conv', id); } catch (_) {}
     convLastLine = 0;
     _firstUserMsgRendered = false;
     _dynamicAskState = null;  // sticky-header scroll tracker — repopulated when the new sticky is built
@@ -8682,6 +9044,7 @@
     _currentToolCount = 0;
     _pendingSends = [];  // drop any optimistic sends from the previous conv
     const selectedRow = conversationsData.find(x => x.id === id) || null;
+    updatePaneHeader(paneId, selectedRow || Object.assign({ id, source }, selectedConv || {}));
     if (selectedRow && selectedRow.source === 'backlog' && selectedRow.issue_number) {
       await renderIssueInConvPane(selectedRow.issue_number, rowRepoPath(selectedRow), selectedRow.id);
       return;
@@ -10212,8 +10575,10 @@
         : baseTitle;
     } catch (_) { /* network blip — leave the badge state alone */ }
   }
-  refreshWorktreesBadge();
-  setInterval(refreshWorktreesBadge, 60000);
+  if (!CONV_POPOUT_MODE) {
+    refreshWorktreesBadge();
+    setInterval(refreshWorktreesBadge, 60000);
+  }
 
   // ── Usage stats overlay ────────────────────────────────────────────
   // Loads /api/stats and renders an Overview/Models view in a modal.
@@ -11921,7 +12286,7 @@
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _hiTriggerSetup(); }
       });
     }
-    _hiStartPolling();
+    if (!CONV_POPOUT_MODE) _hiStartPolling();
 
     // Status-position toggle. Two states: top (default) and right (resizable
     // rail beside the conversation pane). Body class is restored before
@@ -13166,9 +13531,18 @@
 
   function renderArchiveFolderFilter() {
     if (!$convFolderFilter) return;
-    const options = _archiveFolderOptions();
-    const hasCurrent = archiveFolderFilter === ARCHIVE_FOLDER_ALL
+    let options = _archiveFolderOptions();
+    let hasCurrent = archiveFolderFilter === ARCHIVE_FOLDER_ALL
       || options.some(opt => opt.value === archiveFolderFilter);
+    if (!hasCurrent && CONV_POPOUT_MODE && CONV_POPOUT_REPO_PATH && archiveFolderFilter === CONV_POPOUT_REPO_PATH) {
+      options = [{
+        value: CONV_POPOUT_REPO_PATH,
+        path: CONV_POPOUT_REPO_PATH,
+        baseLabel: _pathLeaf(CONV_POPOUT_REPO_PATH) || CONV_POPOUT_REPO_PATH,
+        label: _pathLeaf(CONV_POPOUT_REPO_PATH) || CONV_POPOUT_REPO_PATH,
+      }].concat(options);
+      hasCurrent = true;
+    }
     if (!hasCurrent) {
       archiveFolderFilter = ARCHIVE_FOLDER_ALL;
       try { localStorage.setItem(ARCHIVE_FOLDER_FILTER_KEY, archiveFolderFilter); } catch (_) {}
@@ -14087,6 +14461,9 @@
     if (archiveSelectionSwap) {
       rebindCurrentSelectionToRealCard(archiveSelectionSwap.realCard);
     }
+    if (CONV_POPOUT_MODE) {
+      maybeSelectPopoutConversation({ allowMissing: archiveLoaded });
+    }
     _finishArchiveRender();
   }
 
@@ -14107,6 +14484,7 @@
   }
 
   (function wireArchiveMode() {
+    if (CONV_POPOUT_MODE) return;
     updateRepoPickerVisibility();
     renderArchiveFolderFilter();
     if ($convFolderFilter) {
@@ -14147,6 +14525,7 @@
   // the In Group Chat section silently never appeared until the user
   // touched the folder picker. Wire-once here is the right home.
   (function wireGroupChatPolling() {
+    if (CONV_POPOUT_MODE) return;
     try { pollGcActive(); } catch (_) {}
     setInterval(() => { try { pollGcActive(); } catch (_) {} }, 15000);
   })();
@@ -14198,7 +14577,7 @@
     showOpToast('Filtered to ' + (targetLabel || _pathLeaf(targetPath) || targetPath));
   }
 
-  if ($sbRepoPicker) {
+  if ($sbRepoPicker && !CONV_POPOUT_MODE) {
     // Initial: load both the peer registry (running CCC servers) and the
     // legacy repo list (all known repos, including not-running ones for the
     // "switch this server to…" group). Render once both are in.
@@ -14435,6 +14814,7 @@
   // Lives in the layout-agnostic top bar so it shows in both list mode and
   // kanban-split mode. Re-runs on page load only; click Refresh to re-probe.
   (async function renderSetupBanner() {
+    if (CONV_POPOUT_MODE) return;
     const $banner = document.getElementById('setupBanner');
     if (!$banner) return;
     try {
@@ -14531,8 +14911,10 @@
       await refreshEngineAvailability();
     } catch (_) {}
   }
-  refreshCodexAvailability();
-  window.addEventListener('focus', refreshCodexAvailability);
+  if (!CONV_POPOUT_MODE) {
+    refreshCodexAvailability();
+    window.addEventListener('focus', refreshCodexAvailability);
+  }
   // Hide-descriptions toggle
   const $kptDescToggle = document.getElementById('kptDescToggle');
   if ($kptDescToggle) {
@@ -15131,10 +15513,11 @@
   // loadConversationList() so the merge logic (placeholder preservation,
   // display-name override carry-over, sticky columns) lives in one place —
   // divergence here was what caused new-session rows to flicker.
+  if (!CONV_POPOUT_MODE) {
 	  setInterval(async () => {
-	    if (activeTab !== 'sessions') return;
-	    if (isInlineRenameInProgress()) return;
-	    if (conversationPaneLoading) return;
+		    if (activeTab !== 'sessions') return;
+		    if (isInlineRenameInProgress()) return;
+		    if (conversationPaneLoading) return;
     // Refresh /api/conversations/all and re-render — cheap because
     // _extract_tail_meta is mtime-cached server-side; only changed
     // JSONLs get re-scanned.
@@ -15142,8 +15525,9 @@
       await refreshArchiveData();
       const $search = document.getElementById('convSearch');
       renderArchiveList($search ? $search.value : '');
-    } catch (_) { /* best-effort */ }
-  }, 10000);
+	    } catch (_) { /* best-effort */ }
+	  }, 10000);
+  }
 
   // The convToolbar new-session input + Run/pkood toggle were removed —
   // spawning now flows through the sidebar's "+ New session" button (which
@@ -15286,19 +15670,21 @@
   }
   if ($updNowBtn) $updNowBtn.addEventListener('click', updRunSelfUpdate);
 
-  (async () => {
-    try {
-      const r = await fetch('/api/version/check', { cache: 'no-store' });
-      const d = await r.json();
-      if (d && d.ok && d.behind) {
-        updCheckData = d;
-        if ($updPillText) {
-          $updPillText.textContent = 'Update → v' + String(d.latest).replace(/[<>&]/g, '');
+  if (!CONV_POPOUT_MODE) {
+    (async () => {
+      try {
+        const r = await fetch('/api/version/check', { cache: 'no-store' });
+        const d = await r.json();
+        if (d && d.ok && d.behind) {
+          updCheckData = d;
+          if ($updPillText) {
+            $updPillText.textContent = 'Update → v' + String(d.latest).replace(/[<>&]/g, '');
+          }
+          if ($updPill) $updPill.classList.add('visible');
         }
-        if ($updPill) $updPill.classList.add('visible');
-      }
-    } catch (_) { /* silent — the pill just stays hidden */ }
-  })();
+      } catch (_) { /* silent — the pill just stays hidden */ }
+    })();
+  }
 
   // ── Manual server restart ─────────────────────────────────────
   // Settings menu → POST /api/restart → wait for the same port to answer.
@@ -15391,7 +15777,7 @@
   }
 
   if ($restartServerBtn) {
-    restartServerRefreshPort();
+    if (!CONV_POPOUT_MODE) restartServerRefreshPort();
     $restartServerBtn.addEventListener('click', restartServerRun);
   }
 
@@ -16091,6 +16477,7 @@
     if (typeof stopSpawnStream === 'function') stopSpawnStream();
     if (typeof stopPkoodTailPoller === 'function') stopPkoodTailPoller();
     currentConversation = '__new__';
+    refreshConversationBackgroundForPane(paneId);
     syncActivePaneChrome('__new__');
     setCurrentSession(null, null, null, false, null);
     // Drop the previous session's workspace/usage data so the input-context
@@ -16103,6 +16490,11 @@
     if ($kanbanBoardSplit) $kanbanBoardSplit.querySelectorAll('.kanban-card.active').forEach(el => el.classList.remove('active'));
     populateSpawnCwdPicker();
     const spawnCwd = getSpawnCwd();
+    updatePaneHeader(paneId, {
+      source: getSpawnEngine(),
+      display_name: 'New session',
+      folder_label_chip: spawnCwdLabel(spawnCwd),
+    }, { category: 'new session', title: 'New session' });
     const $view = getConvView();
     if ($view) {
       const spawnEngine = getSpawnEngine();
@@ -16374,6 +16766,254 @@
   const $settingsPopover = document.getElementById('settingsPopover');
   const _systemThemeMQ = window.matchMedia('(prefers-color-scheme: light)');
 
+  const CONV_BG_STORAGE_KEY = 'ccc-conv-bg-by-conversation';
+  const CONV_BG_DEFAULT = 'charcoal';
+  const CONV_BG_PALETTE = [
+    { id: 'charcoal', label: 'Charcoal', bg: '#0d1117' },
+    { id: 'midnight', label: 'Midnight', bg: '#101827' },
+    { id: 'slate', label: 'Slate', bg: '#1b263b' },
+    { id: 'ocean', label: 'Ocean', bg: '#0d2438' },
+    { id: 'cobalt', label: 'Cobalt', bg: '#172554' },
+    { id: 'indigo', label: 'Indigo', bg: '#171a33' },
+    { id: 'plum', label: 'Plum', bg: '#2a1824' },
+    { id: 'wine', label: 'Wine', bg: '#351b24' },
+    { id: 'sepia', label: 'Sepia', bg: '#2a2118' },
+    { id: 'olive', label: 'Olive', bg: '#232b18' },
+    { id: 'pine', label: 'Pine', bg: '#14301f' },
+    { id: 'teal', label: 'Deep teal', bg: '#102c2f' },
+    { id: 'paper', label: 'Paper', bg: '#f7f2e8' },
+    { id: 'parchment', label: 'Parchment', bg: '#f3ead8' },
+    { id: 'sand', label: 'Sand', bg: '#f4efe2' },
+    { id: 'clay', label: 'Clay', bg: '#f4e9e0' },
+    { id: 'peach', label: 'Peach', bg: '#fff1e8' },
+    { id: 'rose', label: 'Rose', bg: '#fff3f6' },
+    { id: 'lilac', label: 'Lilac', bg: '#f3edff' },
+    { id: 'mist', label: 'Mist', bg: '#eef4ff' },
+    { id: 'sky', label: 'Sky', bg: '#e7f0fb' },
+    { id: 'ice', label: 'Ice', bg: '#edf8fb' },
+    { id: 'mint', label: 'Mint', bg: '#e9f7ee' },
+    { id: 'sage', label: 'Sage', bg: '#edf7f2' },
+  ];
+
+  function conversationBgPaletteItem(id) {
+    return CONV_BG_PALETTE.find(p => p.id === id) || CONV_BG_PALETTE.find(p => p.id === CONV_BG_DEFAULT) || CONV_BG_PALETTE[0];
+  }
+  function hexToRgb(hex) {
+    const clean = String(hex || '').replace('#', '').trim();
+    if (clean.length !== 6) return { r: 13, g: 17, b: 23 };
+    return {
+      r: parseInt(clean.slice(0, 2), 16),
+      g: parseInt(clean.slice(2, 4), 16),
+      b: parseInt(clean.slice(4, 6), 16),
+    };
+  }
+  function rgbToHex(rgb) {
+    const part = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+    return '#' + part(rgb.r) + part(rgb.g) + part(rgb.b);
+  }
+  function mixRgb(a, b, amount) {
+    return {
+      r: a.r + (b.r - a.r) * amount,
+      g: a.g + (b.g - a.g) * amount,
+      b: a.b + (b.b - a.b) * amount,
+    };
+  }
+  function relLuminance(rgb) {
+    const chan = (v) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * chan(rgb.r) + 0.7152 * chan(rgb.g) + 0.0722 * chan(rgb.b);
+  }
+  function contrastRatio(a, b) {
+    const hi = Math.max(relLuminance(a), relLuminance(b));
+    const lo = Math.min(relLuminance(a), relLuminance(b));
+    return (hi + 0.05) / (lo + 0.05);
+  }
+  function readableTextRgb(bg) {
+    const light = { r: 248, g: 250, b: 252 };
+    const dark = { r: 25, g: 29, b: 36 };
+    return contrastRatio(bg, light) >= contrastRatio(bg, dark) ? light : dark;
+  }
+  function conversationPaletteVars(bgHex) {
+    const bg = hexToRgb(bgHex);
+    const text = readableTextRgb(bg);
+    const isDarkText = relLuminance(text) < 0.5;
+    const accent = hexToRgb(isDarkText ? '#245a9a' : '#9bbcff');
+    const surface = mixRgb(bg, text, isDarkText ? 0.055 : 0.085);
+    const surface2 = mixRgb(bg, text, isDarkText ? 0.105 : 0.145);
+    const border = mixRgb(bg, text, isDarkText ? 0.22 : 0.26);
+    const muted = mixRgb(bg, text, isDarkText ? 0.58 : 0.62);
+    const userBg = mixRgb(bg, accent, isDarkText ? 0.11 : 0.20);
+    const userText = contrastRatio(userBg, accent) >= 4.5 ? accent : text;
+    return {
+      bg: bgHex,
+      surface: rgbToHex(surface),
+      surface2: rgbToHex(surface2),
+      border: rgbToHex(border),
+      text: rgbToHex(text),
+      muted: rgbToHex(muted),
+      accent: rgbToHex(accent),
+      userBg: rgbToHex(userBg),
+      userText: rgbToHex(userText),
+      shadow: isDarkText ? 'rgba(0,0,0,0.14)' : 'rgba(0,0,0,0.42)',
+    };
+  }
+
+  function conversationPaneForId(paneId) {
+    const pid = paneId || activePaneId();
+    return Array.from(document.querySelectorAll('.conv-pane'))
+      .find(el => el.getAttribute('data-pane-id') === pid) || null;
+  }
+
+  function conversationBgKeysForPane(paneId) {
+    const pid = paneId || activePaneId();
+    const keys = [];
+    const paneState = paneByPaneId(pid);
+    let convId = paneState && paneState.conversationId;
+    if (!convId && pid === activePaneId()) convId = currentConversation;
+    if (convId) keys.push(convId);
+    const paneEl = conversationPaneForId(pid);
+    const attrConvId = paneEl && paneEl.getAttribute('data-conv-id');
+    if (!convId && attrConvId) keys.push(attrConvId);
+    const row = rowForConversationId(convId || attrConvId);
+    if (row) {
+      if (row.id) keys.push(row.id);
+      if (row.session_id) keys.push(row.session_id);
+    }
+    const seen = new Set();
+    return keys
+      .map(v => String(v || '').trim())
+      .filter(v => {
+        if (!v || seen.has(v)) return false;
+        seen.add(v);
+        return true;
+      });
+  }
+
+  function conversationBgPrimaryKeyForPane(paneId) {
+    return conversationBgKeysForPane(paneId)[0] || '__pane__:' + (paneId || activePaneId() || 'p1');
+  }
+
+  function conversationBgKeyIsPersistable(key) {
+    return !!key && key.indexOf('__') !== 0;
+  }
+
+  function readConversationBgPrefs() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(CONV_BG_STORAGE_KEY) || '{}');
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function writeConversationBgPrefs(prefs) {
+    try { localStorage.setItem(CONV_BG_STORAGE_KEY, JSON.stringify(prefs || {})); } catch (_) {}
+  }
+
+  function storedConversationBgForPane(paneId) {
+    const prefs = readConversationBgPrefs();
+    const keys = conversationBgKeysForPane(paneId);
+    for (const key of keys) {
+      if (prefs[key] && conversationBgPaletteItem(prefs[key]).id === prefs[key]) return prefs[key];
+    }
+    return CONV_BG_DEFAULT;
+  }
+
+  function persistConversationBgForPane(paneId, colorId) {
+    const keys = conversationBgKeysForPane(paneId).filter(conversationBgKeyIsPersistable);
+    if (!keys.length) return;
+    const prefs = readConversationBgPrefs();
+    keys.forEach(key => { prefs[key] = colorId; });
+    writeConversationBgPrefs(prefs);
+  }
+
+  function setConversationPanePaletteVars(pane, vars) {
+    if (!pane) return;
+    pane.style.setProperty('--conv-bg', vars.bg);
+    pane.style.setProperty('--conv-surface', vars.surface);
+    pane.style.setProperty('--conv-surface-2', vars.surface2);
+    pane.style.setProperty('--conv-border', vars.border);
+    pane.style.setProperty('--conv-text', vars.text);
+    pane.style.setProperty('--conv-text-muted', vars.muted);
+    pane.style.setProperty('--conv-accent', vars.accent);
+    pane.style.setProperty('--conv-user-bg', vars.userBg);
+    pane.style.setProperty('--conv-user-text', vars.userText);
+    pane.style.setProperty('--conv-shadow', vars.shadow);
+    pane.classList.add('has-conv-bg');
+  }
+
+  function updateConversationBackgroundPaletteState(pane, colorId) {
+    if (!pane) return;
+    pane.querySelectorAll('[data-conv-bg]').forEach(btn => {
+      const active = btn.getAttribute('data-conv-bg') === colorId;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-checked', String(active));
+    });
+  }
+
+  function applyConversationBackgroundToPane(paneId, colorId, opts = {}) {
+    const pane = conversationPaneForId(paneId);
+    if (!pane) return;
+    const item = conversationBgPaletteItem(colorId);
+    const key = conversationBgPrimaryKeyForPane(paneId);
+    pane.setAttribute('data-conv-bg', item.id);
+    pane.setAttribute('data-conv-bg-key', key);
+    setConversationPanePaletteVars(pane, conversationPaletteVars(item.bg));
+    updateConversationBackgroundPaletteState(pane, item.id);
+    if (opts.persist) persistConversationBgForPane(paneId, item.id);
+  }
+
+  function renderConversationBackgroundPalette(paneOrId) {
+    const pane = typeof paneOrId === 'string' ? conversationPaneForId(paneOrId) : paneOrId;
+    if (!pane) return;
+    const host = pane.querySelector('[data-role="conv-bg-palette"]');
+    if (!host) return;
+    const paneId = pane.getAttribute('data-pane-id') || activePaneId();
+    host.innerHTML = '';
+    CONV_BG_PALETTE.forEach(item => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'conv-bg-swatch';
+      btn.setAttribute('role', 'radio');
+      btn.setAttribute('aria-label', item.label);
+      btn.setAttribute('aria-checked', 'false');
+      btn.setAttribute('data-conv-bg', item.id);
+      btn.title = 'Conversation background: ' + item.label;
+      btn.style.setProperty('--swatch-color', item.bg);
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        applyConversationBackgroundToPane(paneId, item.id, { persist: true });
+      });
+      host.appendChild(btn);
+    });
+    updateConversationBackgroundPaletteState(pane, pane.getAttribute('data-conv-bg') || storedConversationBgForPane(paneId));
+  }
+
+  function refreshConversationBackgroundForPane(paneId) {
+    const pane = conversationPaneForId(paneId);
+    if (!pane) return;
+    const pid = pane.getAttribute('data-pane-id') || paneId || activePaneId();
+    const convKey = conversationBgPrimaryKeyForPane(pid);
+    if (convKey && convKey.indexOf('__pane__:') !== 0) pane.setAttribute('data-conv-id', convKey);
+    renderConversationBackgroundPalette(pane);
+    applyConversationBackgroundToPane(pid, storedConversationBgForPane(pid), { persist: false });
+  }
+
+  function renderAllConversationBackgroundPalettes() {
+    document.querySelectorAll('.conv-pane').forEach(pane => {
+      const paneId = pane.getAttribute('data-pane-id') || activePaneId();
+      refreshConversationBackgroundForPane(paneId);
+    });
+  }
+
+  renderAllConversationBackgroundPalettes();
+  window.addEventListener('storage', (ev) => {
+    if (ev.key === CONV_BG_STORAGE_KEY) renderAllConversationBackgroundPalettes();
+  });
+
   function getThemePref() { return localStorage.getItem('ccc-theme') || 'system'; }
   function getFontPref() { return localStorage.getItem('ccc-font') || 'system'; }
 
@@ -16589,7 +17229,20 @@
   }
 
   // Init
-  loadConversationList();
+  if (CONV_POPOUT_MODE && CONV_POPOUT_TARGET) {
+    bootConversationPopoutDirect().catch(err => {
+      const view = getConvView();
+      if (view) {
+        view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load conversation: '
+          + escapeHtml(err && err.message ? err.message : String(err))
+          + '</div>';
+      }
+      hideLoadingOverlay();
+      _markFirstSessionsLoaded();
+    });
+  } else {
+    loadConversationList();
+  }
   attachAllPaneDropZones();
 
   // Wire the static p1 close button. Closing p1 when split is engaged:
@@ -16632,8 +17285,10 @@
     });
   });
 
-  pollVercelDeploy();
-  setInterval(pollVercelDeploy, 15000);
-  pollLocalhost();
-  setInterval(pollLocalhost, 15000);
+  if (!CONV_POPOUT_MODE) {
+    pollVercelDeploy();
+    setInterval(pollVercelDeploy, 15000);
+    pollLocalhost();
+    setInterval(pollLocalhost, 15000);
+  }
 })();

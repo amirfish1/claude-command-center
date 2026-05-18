@@ -167,6 +167,21 @@
      width — without it, the toolbar's non-wrapping buttons set a floor that
      prevents the sidebar resizer from making the conversation pane narrow. */
   .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+  .conv-pane.has-conv-bg {
+    --bg: var(--conv-bg);
+    --surface: var(--conv-surface);
+    --surface-2: var(--conv-surface-2);
+    --border: var(--conv-border);
+    --text: var(--conv-text);
+    --text-muted: var(--conv-text-muted);
+    --text-secondary: var(--conv-text-muted);
+    --accent: var(--conv-accent);
+    background: var(--conv-bg);
+    color: var(--conv-text);
+  }
+  .conv-pane.has-conv-bg .conversations-view {
+    background: var(--conv-bg);
+  }
   .toolbar {
     padding: 12px 16px; border-bottom: 1px solid var(--border);
     display: flex; align-items: center; gap: 16px; flex-wrap: wrap; row-gap: 8px;
@@ -181,6 +196,40 @@
     min-height: 0 !important;
     height: 0 !important;
     overflow: hidden;
+  }
+  body.conversation-popout .sidebar,
+  body.conversation-popout #sidebarResizer,
+  body.conversation-popout #kanbanLayout,
+  body.conversation-popout .pwa-install-banner {
+    display: none !important;
+  }
+  body.conversation-popout .main {
+    display: flex !important;
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    transition: none !important;
+    z-index: auto !important;
+    width: 100vw;
+    height: 100vh;
+    flex: 1 1 auto;
+  }
+  body.conversation-popout .toolbar {
+    display: none !important;
+  }
+  body.conversation-popout .ccc-topbar,
+  body.conversation-popout .font-size-controls,
+  body.conversation-popout #mobileBackBtn,
+  body.conversation-popout .conv-pane-drop-overlay {
+    display: none !important;
+  }
+  body.conversation-popout #convSplit {
+    min-height: 0;
+    height: 100%;
+  }
+  body.conversation-popout .conversations-view {
+    padding-left: 24px;
+    padding-right: 24px;
   }
   /* #2 — Mobile-back button: only show on narrow viewports. The button
      is captured into the rail's _railSet, but we don't want it visually
@@ -737,6 +786,7 @@
      both modes. DOM order kept the historical "context above input"
      layout for back-compat with anything that queried by index. */
   .conv-pane > .conv-input-bar     { order: 1; }
+  .conv-pane > .conv-input-hint    { order: 1; }
   .conv-pane > .conv-input-context { order: 2; }
   .conv-pane > .conv-input-context.is-new-session {
     order: 0;
@@ -747,15 +797,54 @@
     box-shadow: inset 4px 0 0 rgba(88, 166, 255, 0.72);
   }
   .conv-pane-header {
-    display: none;            /* shown only when split is active */
+    display: none;            /* shown when a pane has title chrome */
     flex: 0 0 auto;
     align-items: center;
-    justify-content: flex-end;
-    padding: 4px 8px;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 34px;
+    padding: 5px 8px 5px 12px;
     border-bottom: 1px solid var(--border, #2a2a2a);
+    background: color-mix(in srgb, var(--surface) 82%, var(--bg));
   }
+  .conv-pane.has-pane-title > .conv-pane-header,
+  body.conversation-popout .conv-pane > .conv-pane-header,
   .conv-split[data-orientation="vertical"] .conv-pane-header,
-  .conv-split[data-orientation="horizontal"] .conv-pane-header { display: flex; }
+  .conv-split[data-orientation="horizontal"] .conv-pane-header {
+    display: flex;
+  }
+  .conv-pane-titlebar {
+    min-width: 0;
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .conv-pane-category {
+    flex: 0 1 auto;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 2px 7px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--bg) 70%, var(--surface));
+    font-size: 11px;
+    line-height: 1.2;
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+  }
+  .conv-pane-category:empty { display: none; }
+  .conv-pane-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 650;
+  }
   .conv-split[data-orientation="vertical"] .conv-pane.is-active,
   .conv-split[data-orientation="horizontal"] .conv-pane.is-active {
     box-shadow: inset 0 0 0 1px var(--accent, #4ea1ff);
@@ -944,6 +1033,14 @@
     border-color: rgba(88,166,255,0.4);
     background: #141b25;
   }
+  .conv-pane.has-conv-bg .conv-sticky-header,
+  .conv-pane.has-conv-bg .conv-sticky-header__collapse {
+    background: var(--conv-surface);
+    box-shadow: 0 4px 10px var(--conv-shadow);
+  }
+  .conv-pane.has-conv-bg .conv-sticky-header__collapse:hover {
+    background: var(--conv-surface-2);
+  }
   .conv-sticky-header__collapse-icon { display: inline-block; line-height: 1; }
   /* When expanded, the unified panel grows to half the viewport height.
      The fixed-height rule in `.csh-row` is overridden here. */
@@ -982,6 +1079,12 @@
     color: var(--accent);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
     font-weight: 400;
+  }
+  .conv-pane.has-conv-bg .conversations-view .event.user_text {
+    background: var(--conv-user-bg);
+  }
+  .conv-pane.has-conv-bg .conversations-view .event.user_text .user-msg {
+    color: var(--conv-user-text);
   }
   .conversations-view .event.user_text.task-notification-event {
     max-width: min(720px, 92%);
@@ -2474,8 +2577,14 @@
     min-height: 24px;
     max-height: 240px;
   }
+  .conv-pane.has-conv-bg .conv-input-bar input,
+  .conv-pane.has-conv-bg .conv-input-bar textarea {
+    color: var(--conv-text);
+  }
   :root[data-theme="light"] .conv-input-bar input,
   :root[data-theme="light"] .conv-input-bar textarea { color: #1f2328; }
+  :root[data-theme="light"] .conv-pane.has-conv-bg .conv-input-bar input,
+  :root[data-theme="light"] .conv-pane.has-conv-bg .conv-input-bar textarea { color: var(--conv-text); }
   .conv-input-bar input::placeholder,
   .conv-input-bar textarea::placeholder { color: var(--text-muted); opacity: 0.6; font-weight: 400; }
   .slash-command-menu {
@@ -4514,6 +4623,34 @@
   .sidebar-footer-btn:hover { background: var(--surface-2); color: var(--text); }
   .sidebar-footer-btn svg { width: 16px; height: 16px; display: block; }
   .sidebar-footer-spacer { flex: 1; }
+  .conv-bg-palette {
+    display: grid;
+    grid-template-columns: repeat(12, 14px);
+    grid-auto-rows: 14px;
+    gap: 3px;
+    align-items: center;
+  }
+  .conv-bg-palette:empty { display: none; }
+  .conv-bg-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid color-mix(in srgb, var(--text-muted) 50%, transparent);
+    background: var(--swatch-color);
+    cursor: pointer;
+    padding: 0;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12);
+  }
+  .conv-bg-swatch:hover {
+    transform: scale(1.12);
+    border-color: var(--text);
+  }
+  .conv-bg-swatch.active {
+    border-color: var(--accent);
+    box-shadow:
+      inset 0 0 0 1px rgba(255,255,255,0.18),
+      0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
 
   /* Generic dropdown popover (used by appearance + settings menus) */
   .desktop-popover {
@@ -5379,16 +5516,17 @@
    Important for mobile + narrow windows where 260px is a real cost.
 
    Status row order in right-rail mode: header → conversation → INPUT BAR
-   → status row. Input reads as the primary action; the status (worktree
-   / context / cost / model) is reference info underneath. */
+   → keyboard hint → status row. Input reads as the primary action; the
+   status (worktree / context / cost / model) is reference info underneath. */
 body.status-pos-right .conv-pane {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
-  grid-template-rows: auto 1fr auto auto;
+  grid-template-rows: auto 1fr auto auto auto;
   grid-template-areas:
     "header  rail"
     "conv    rail"
     "input   rail"
+    "hint    rail"
     "context rail";
   min-height: 0;
 }
@@ -5397,11 +5535,13 @@ body.status-pos-right .conv-pane:has(> .conv-input-context.is-new-session) {
     "header  rail"
     "conv    rail"
     "context rail"
-    "input   rail";
+    "input   rail"
+    "hint    rail";
 }
 body.status-pos-right .conv-pane > .conv-pane-header   { grid-area: header;  min-width: 0; }
 body.status-pos-right .conv-pane > .conversations-view { grid-area: conv;    min-width: 0; min-height: 0; }
 body.status-pos-right .conv-pane > .conv-input-bar     { grid-area: input;   min-width: 0; }
+body.status-pos-right .conv-pane > .conv-input-hint    { grid-area: hint;    min-width: 0; }
 body.status-pos-right .conv-pane > .conv-input-context { grid-area: context; min-width: 0; }
 body.status-pos-right .conv-pane > .status-rail {
   grid-area: rail;
@@ -5411,6 +5551,13 @@ body.status-pos-right .conv-pane > .status-rail {
   background: color-mix(in srgb, var(--surface) 60%, var(--bg));
   overflow-y: auto;
   min-height: 0;
+}
+body.status-pos-right .status-rail .conv-bg-palette {
+  align-self: flex-end;
+  margin: auto 12px 12px auto;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--border);
+  justify-content: end;
 }
 /* Default (top mode): rail completely hidden. JS also moves its children
    back to their original toolbar slots in this mode so no functionality
@@ -5474,6 +5621,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane {
     "header"
     "conv"
     "input"
+    "hint"
     "context";
 }
 body.status-pos-right.status-rail-collapsed .conv-pane:has(> .conv-input-context.is-new-session) {
@@ -5481,7 +5629,8 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .conv-input-context
     "header"
     "conv"
     "context"
-    "input";
+    "input"
+    "hint";
 }
 body.status-pos-right.status-rail-collapsed .conv-pane > .status-rail {
   display: none;
