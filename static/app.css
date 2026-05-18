@@ -2658,6 +2658,37 @@
     border-color: var(--border); cursor: not-allowed; opacity: 0.5;
   }
   .conv-input-bar .send-btn svg { display: block; }
+  .conv-input-bar .tts-btn {
+    width: 32px; height: 32px; flex-shrink: 0;
+    border-radius: 999px; border: 1px solid var(--border); cursor: pointer;
+    background: transparent; color: var(--text-muted);
+    line-height: 1; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.05s;
+  }
+  .conv-input-bar .tts-btn:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .conv-input-bar .tts-btn:active { transform: translateY(1px); }
+  .conv-input-bar .tts-btn.speaking {
+    color: #fff;
+    border-color: var(--accent);
+    background: var(--accent);
+    box-shadow:
+      inset 0 2px 6px rgba(0,0,0,0.28),
+      0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+    transform: translateY(1px);
+  }
+  .conv-input-bar .tts-btn.failed {
+    color: var(--red);
+    border-color: color-mix(in srgb, var(--red) 55%, transparent);
+  }
+  .conv-input-bar .tts-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .conv-input-bar .tts-btn svg { display: block; }
   /* Demoted Esc — borderless ghost so it stops competing visually with
      the send button. Same hover/state cues, just less prominent at rest. */
   .conv-input-bar .esc-btn {

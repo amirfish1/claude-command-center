@@ -18203,6 +18203,79 @@ def _term_kill_running(state):
     return True
 
 
+_TTS_LOCK = threading.Lock()
+_TTS_PROC = None
+_TTS_MAX_CHARS = 12000
+
+
+def _tts_cleanup_locked():
+    global _TTS_PROC
+    if _TTS_PROC is not None and _TTS_PROC.poll() is not None:
+        _TTS_PROC = None
+
+
+def _tts_stop_locked():
+    global _TTS_PROC
+    _tts_cleanup_locked()
+    proc = _TTS_PROC
+    if proc is None:
+        return False
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=0.6)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
+    _TTS_PROC = None
+    return True
+
+
+def _tts_stop():
+    with _TTS_LOCK:
+        stopped = _tts_stop_locked()
+    return {"ok": True, "stopped": stopped}
+
+
+def _tts_status():
+    with _TTS_LOCK:
+        _tts_cleanup_locked()
+        proc = _TTS_PROC
+        return {"ok": True, "speaking": proc is not None, "pid": proc.pid if proc is not None else None}
+
+
+def _tts_say(text):
+    global _TTS_PROC
+    say_bin = shutil.which("say")
+    if not say_bin:
+        return {"ok": False, "error": "macOS say command is unavailable", "code": "say_unavailable"}
+    text = str(text or "").strip()
+    if not text:
+        return {"ok": False, "error": "missing text", "code": "missing_text"}
+    if len(text) > _TTS_MAX_CHARS:
+        text = text[:_TTS_MAX_CHARS].rstrip() + "..."
+    with _TTS_LOCK:
+        _tts_stop_locked()
+        try:
+            proc = subprocess.Popen(
+                [say_bin],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            if proc.stdin:
+                proc.stdin.write(text)
+                proc.stdin.close()
+            _TTS_PROC = proc
+            pid = proc.pid
+        except (OSError, ValueError) as e:
+            _TTS_PROC = None
+            return {"ok": False, "error": f"failed to start say: {e}", "code": "spawn_failed"}
+    return {"ok": True, "pid": pid, "chars": len(text)}
+
+
 # ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
@@ -19176,6 +19249,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "error": "Morning view is disabled. Set CCC_ENABLE_MORNING=1 to enable."
             }, 404)
+            return
+        if path == "/api/tts/say":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            result = _tts_say(payload.get("text", ""))
+            status = 200 if result.get("ok") else (501 if result.get("code") == "say_unavailable" else 400)
+            self.send_json(result, status)
+            return
+        if path == "/api/tts/stop":
+            self.send_json(_tts_stop())
+            return
+        if path == "/api/tts/status":
+            self.send_json(_tts_status())
             return
         if path == "/api/bust-issue-state":
             # External signal that GitHub issue state may have changed (e.g. a

@@ -1,0 +1,1 @@
+- Added a conversation speaker button that reads selected text or the latest message through the local macOS `say` command and stops when new input is sent.

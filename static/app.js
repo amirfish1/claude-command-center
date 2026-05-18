@@ -1268,6 +1268,7 @@
   const $convInputBar = document.getElementById('convInputBar');
   const $convInput = document.getElementById('convInput');
   const $convSendBtn = document.getElementById('convSendBtn');
+  const $convTtsBtn = document.getElementById('convTtsBtn');
   const $convEscBtn = document.getElementById('convEscBtn');
   const $convTtyLabel = document.getElementById('convTtyLabel');
   const INPUT_DRAFTS_KEY = 'ccc-input-drafts-v1';
@@ -1740,16 +1741,20 @@
       const action = $actionSel ? $actionSel.value : 'fix';
       if (action === 'spawn') {
         if (!text) return;
+        if (_ttsActive) await stopTextToSpeech();
         await spawnFromBacklogIssue(text);
       } else if (action === 'needs_attention' || action === 'close') {
         if (!text) return;
+        if (_ttsActive) await stopTextToSpeech();
         await replyToIssueFromInputBar(action, text);
       } else {
+        if (_ttsActive) await stopTextToSpeech();
         await closeIssueFromInputBar(action, text);
       }
       return;
     }
     if (!text) return;
+    if (_ttsActive) await stopTextToSpeech();
     // New-session mode: input doubles as the prompt for a fresh spawn.
     if (currentConversation === '__new__') {
       await spawnFromInlineInput(text);
@@ -1807,6 +1812,188 @@
     $input.focus();
   }
 
+  const TTS_TEXT_MAX_CHARS = 12000;
+  let _ttsActive = false;
+  let _ttsActivePaneId = null;
+  let _ttsStatusTimer = null;
+  let _ttsStatusFailures = 0;
+
+  function ttsButtons() {
+    return Array.from(document.querySelectorAll('.conv-input-bar .tts-btn'));
+  }
+
+  function setTtsButtonsBusy(busy) {
+    ttsButtons().forEach(btn => { btn.disabled = !!busy; });
+  }
+
+  function ttsButtonPaneId(btn) {
+    const pane = btn && btn.closest && btn.closest('.conv-pane');
+    return pane && pane.dataset ? pane.dataset.paneId : '';
+  }
+
+  function clearTtsStatusTimer() {
+    if (_ttsStatusTimer) {
+      clearTimeout(_ttsStatusTimer);
+      _ttsStatusTimer = null;
+    }
+  }
+
+  function setTtsButtonsState(active, failed, paneId) {
+    _ttsActive = !!active;
+    _ttsActivePaneId = active ? (paneId || _ttsActivePaneId || activePaneId()) : null;
+    if (!active) {
+      clearTtsStatusTimer();
+      _ttsStatusFailures = 0;
+    }
+    ttsButtons().forEach(btn => {
+      const pressed = !!active && ttsButtonPaneId(btn) === _ttsActivePaneId;
+      btn.classList.toggle('speaking', pressed);
+      btn.classList.toggle('failed', !!failed);
+      btn.title = active ? 'Stop reading' : 'Read last message';
+      btn.setAttribute('aria-label', active ? 'Stop reading' : 'Read last message');
+      btn.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+    });
+    if (failed) {
+      setTimeout(() => ttsButtons().forEach(btn => btn.classList.remove('failed')), 1200);
+    }
+  }
+
+  function scheduleTtsStatusPoll(delay) {
+    clearTtsStatusTimer();
+    _ttsStatusTimer = setTimeout(pollTtsStatus, delay || 700);
+  }
+
+  function normalizeTtsText(text) {
+    return String(text || '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n[ \t]+/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
+  }
+
+  function clippedTtsText(text) {
+    const clean = normalizeTtsText(text);
+    return clean.length > TTS_TEXT_MAX_CHARS
+      ? clean.slice(0, TTS_TEXT_MAX_CHARS).trim() + '...'
+      : clean;
+  }
+
+  function elementForSelectionNode(node) {
+    if (!node) return null;
+    return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+  }
+
+  function selectedConversationTextForTts(paneId) {
+    const sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return '';
+    const text = clippedTtsText(sel.toString());
+    if (!text) return '';
+    const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
+    if (!pane) return '';
+    const anchorEl = elementForSelectionNode(sel.anchorNode);
+    const focusEl = elementForSelectionNode(sel.focusNode);
+    const rangeEl = elementForSelectionNode(sel.getRangeAt(0).commonAncestorContainer);
+    const inPane = anchorEl && focusEl && pane.contains(anchorEl) && pane.contains(focusEl);
+    const inComposer = [anchorEl, focusEl, rangeEl].some(el => el && el.closest && el.closest('.conv-input-bar'));
+    return inPane && !inComposer ? text : '';
+  }
+
+  function lastMessageTextForTts(paneId) {
+    const view = getConvViewForPane(paneId || activePaneId()) || getConvView();
+    if (!view) return '';
+    const candidates = Array.from(view.querySelectorAll(
+      '.stream-bubble, .event.assistant:not(.tool-only), .event.user_text:not(.pending), .assistant-text'
+    ));
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      const el = candidates[i];
+      if (!el || el.closest('.conv-sticky-header')) continue;
+      if (el.classList.contains('assistant-text') && el.closest('.event')) continue;
+      let text = '';
+      if (el.classList.contains('stream-bubble')) {
+        const blocks = el.querySelector('.stream-bubble-blocks');
+        text = blocks ? (blocks.innerText || blocks.textContent || '') : '';
+      } else if (el.classList.contains('assistant')) {
+        text = Array.from(el.querySelectorAll('.assistant-text'))
+          .map(node => node.innerText || node.textContent || '')
+          .join('\n\n');
+      } else if (el.classList.contains('user_text')) {
+        const msg = el.querySelector('.user-msg');
+        text = (msg && msg.getAttribute('data-raw-text')) || (msg && (msg.innerText || msg.textContent)) || '';
+      } else if (el.classList.contains('assistant-text')) {
+        text = el.innerText || el.textContent || '';
+      }
+      text = clippedTtsText(text);
+      if (text) return text;
+    }
+    return '';
+  }
+
+  async function pollTtsStatus() {
+    _ttsStatusTimer = null;
+    if (!_ttsActive) return;
+    try {
+      const data = await ccPostJson('/api/tts/status', {});
+      _ttsStatusFailures = 0;
+      if (!data.speaking) {
+        setTtsButtonsState(false, false);
+        return;
+      }
+    } catch (_) {
+      _ttsStatusFailures += 1;
+      if (_ttsStatusFailures >= 5) {
+        setTtsButtonsState(false, false);
+        return;
+      }
+    }
+    if (_ttsActive) scheduleTtsStatusPoll(700);
+  }
+
+  async function stopTextToSpeech() {
+    clearTtsStatusTimer();
+    setTtsButtonsBusy(true);
+    try {
+      await ccPostJson('/api/tts/stop', {});
+    } catch (_) {
+      // Stopping speech is best-effort; clear the local state either way.
+    } finally {
+      setTtsButtonsBusy(false);
+      setTtsButtonsState(false, false);
+    }
+  }
+
+  async function readLastMessageAloud(paneId) {
+    if (_ttsActive) {
+      await stopTextToSpeech();
+      return;
+    }
+    paneId = paneId || activePaneId();
+    const text = selectedConversationTextForTts(paneId) || lastMessageTextForTts(paneId);
+    if (!text) {
+      setTtsButtonsState(false, true);
+      showOpToast('No message to read yet.', 'error');
+      return;
+    }
+    setActivePaneById(paneId);
+    setTtsButtonsBusy(true);
+    try {
+      const data = await ccPostJson('/api/tts/say', {
+        text,
+        conversation_id: currentConversation || '',
+      });
+      if (!data.ok) throw new Error(data.error || 'text-to-speech failed');
+      _ttsStatusFailures = 0;
+      setTtsButtonsState(true, false, paneId);
+      scheduleTtsStatusPoll(700);
+    } catch (err) {
+      setTtsButtonsState(false, true);
+      showOpToast('Text-to-speech failed: ' + (err && err.message || 'unknown'), 'error');
+    } finally {
+      setTtsButtonsBusy(false);
+    }
+  }
+
   function formatInjectFailure(data, status) {
     if (data && (data.code === 'macos_keystroke_permission' || data.code === 'macos_automation_permission')) {
       return data.error || 'macOS blocked CCC from sending input to the terminal.';
@@ -1854,6 +2041,10 @@
 
   if ($convEscBtn) $convEscBtn.addEventListener('click', sendEscToTerminal);
   if ($convSendBtn) $convSendBtn.addEventListener('click', () => sendToTerminal('p1'));
+  if ($convTtsBtn) {
+    $convTtsBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
+    $convTtsBtn.addEventListener('click', () => readLastMessageAloud('p1'));
+  }
   // Textarea autosize: grow up to ~10 rows then scroll. Reset to one row
   // on every input so deletions shrink the box too. Mirrors Omnara's
   // behavior — typing more than one line expands the composer in place.
@@ -8315,11 +8506,19 @@
     }
     // Wire the cloned input bar to send into this specific pane.
     const sendBtn = clone.querySelector('.send-btn');
+    const ttsBtn = clone.querySelector('.tts-btn');
     const input = clone.querySelector('textarea, input[type="text"]');
     if (sendBtn) {
       sendBtn.addEventListener('click', (ev) => {
         ev.preventDefault();
         sendToTerminal(paneId);
+      });
+    }
+    if (ttsBtn) {
+      ttsBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
+      ttsBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        readLastMessageAloud(paneId);
       });
     }
     if (input) {
