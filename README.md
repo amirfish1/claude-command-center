@@ -2,7 +2,7 @@
 
 **Start the next while Claude builds the first.**
 
-Organize every Claude and Codex session into projects, issues, and features. Build them in parallel. Stop staring at the spinner.
+A local-first dashboard that orchestrates **Claude Code**, **Codex**, and **Gemini CLI** sessions side-by-side. Organize every session into projects, issues, and features. Build them in parallel. Stop staring at the spinner.
 
 <video src="https://github.com/user-attachments/assets/9d00b168-c21c-4397-9334-e3b4a3515500" controls width="100%" poster="docs/images/kanban.png">
   Your browser doesn't support inline video. <a href="https://github.com/amirfish1/claude-command-center/releases/download/v0.1.0/CCC-web.mp4">Download the demo</a> or watch the GIF below.
@@ -10,7 +10,9 @@ Organize every Claude and Codex session into projects, issues, and features. Bui
 
 ![Claude Command Center demo](docs/images/demo.gif)
 
-CCC is a local dashboard that latches onto every Claude Code and Codex session on your Mac. Terminal sessions, headless processes, sessions you spawned from the dashboard. It treats Claude Code's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
+CCC is a local dashboard that latches onto every Claude Code, Codex, and Gemini CLI session on your Mac. Terminal sessions, headless processes, sessions you spawned from the dashboard. It treats each CLI's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
+
+See the [engine support matrix](#engine-support) below for what's first-class vs. partial per engine — spawn works across all three, transcript ingestion and UX parity vary.
 
 > **If you install it, I'd love to hear how.** Drop a ⭐, open an issue with
 > what worked or what broke, or just say hi. This is a one-person project
@@ -107,8 +109,21 @@ the UI uses for the kanban.
 - **Backlog**: open GitHub issues + `TODO.md` entries, surfaced as cards
   next to your active sessions so everything lives on one board.
 
+## Engine support
+
+CCC was built around Claude Code first; Codex and Gemini CLI support followed. Spawn-from-dashboard works for all three. The rest varies:
+
+| Engine        | Spawn (headless from UI) | Resume (terminal inject / headless resume) | Transcript ingestion | Per-session model picker |
+|---------------|--------------------------|--------------------------------------------|----------------------|--------------------------|
+| Claude Code   | yes                      | yes (both)                                 | yes — first-class JSONL (`~/.claude/projects/*.jsonl`) | yes — UI picker, incl. 1M-context toggle |
+| Codex         | yes                      | yes (both)                                 | partial — Codex JSONL parsed, broader parity tracked in [#57](https://github.com/amirfish1/claude-command-center/issues/57) | yes — UI picker via per-session override; default from `CCC_CODEX_MODEL` |
+| Gemini CLI    | yes                      | partial — terminal inject + `gemini --resume`; no first-class headless resume yet | partial — Gemini chat JSON parsed for transcript view | no UI picker — set via `CCC_GEMINI_MODEL` env var |
+
+If you'd like to see an engine bumped from "partial" to first-class, open an issue — it's mostly adapter work, the ingestion layer is engine-agnostic.
+
 ## Features
 
+- **Multi-engine orchestration**: spawn, resume, and review **Claude Code**, **Codex**, and **Gemini CLI** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity.
 - **Kanban** across every session, with drag-drop between columns,
   rubber-band multi-select, and per-column tinting.
 - **Split conversations**: drag any sidebar session onto the right or
@@ -203,7 +218,7 @@ The `CCC_BIND_HOST`, `CCC_ALLOWED_ORIGIN`, and `CCC_TRUST_TAILNET` knobs can als
 ## Roadmap
 
 **Shipped**
-- Kanban over all live + dormant Claude Code sessions
+- Kanban over all live + dormant Claude Code, Codex, and Gemini CLI sessions
 - GitHub issue → session → verify → close pipeline
 - Headless spawn with stdin-pipe follow-up
 - Resume-on-demand
@@ -213,9 +228,11 @@ The `CCC_BIND_HOST`, `CCC_ALLOWED_ORIGIN`, and `CCC_TRUST_TAILNET` knobs can als
 **Not yet**
 - Test suite. Zero tests today. The session classifier is where this hurts
   most.
-- Non-Claude-Code agent runtimes. The ingestion layer would port to
-  anything that writes structured transcripts (Aider, Gemini CLI, etc.),
-  but adapters don't exist yet.
+- First-class parity for Codex / Gemini CLI. Spawn works for all three, but
+  transcript ingestion and UX polish lag behind Claude Code — see the
+  [engine support matrix](#engine-support) and [#57](https://github.com/amirfish1/claude-command-center/issues/57).
+- More agent runtimes (Aider, OpenCode, etc.). The ingestion layer is
+  engine-agnostic; adapters just don't exist yet.
 - Code split. `server.py` and `index.html` are each one huge file on
   purpose, so you can read the whole product in an afternoon. That tradeoff
   bends eventually; it hasn't yet.

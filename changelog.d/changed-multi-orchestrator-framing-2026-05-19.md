@@ -1,0 +1,1 @@
+README and GitHub repo description now name **Claude Code**, **Codex**, and **Gemini CLI** explicitly, with a per-engine support matrix flagging where parity is partial (Codex transcript ingestion, Gemini resume/model picker). Docs-only — no behavior change. (#53)
