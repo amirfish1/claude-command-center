@@ -59,6 +59,17 @@
     // so demo fixtures don't have to enumerate every variant. Numeric path
     // segments are replaced by "_id" so e.g. /api/issues/42/details maps to
     // /api/issues/_id/details.json — fixtures share across IDs.
+    // Pool size for per-session transcript fixtures. The transcript endpoint
+    // /api/conversations/<uuid> fans out to _id-1.json .. _id-N.json by
+    // hashing the UUID, so clicking different sidebar cards shows distinct
+    // transcripts. Sub-paths like .../files still share the single _id/
+    // fixture set — those are uniform enough across cards that one suffices.
+    const CONV_POOL_SIZE = 4;
+    function hashStr(s) {
+      let h = 0;
+      for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+      return Math.abs(h);
+    }
     function fixturePathFor(rawUrl) {
       try {
         const u = new URL(rawUrl, window.location.href);
@@ -70,7 +81,17 @@
         // /demo/api/conversations/_id/files.json — one file covers every
         // seeded card.
         const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        p = p.split('/').map(seg => {
+        const segs = p.split('/');
+        // Special case: /api/conversations/<uuid> (the transcript fetch,
+        // no further segment) maps to one of N pool fixtures based on a
+        // stable hash of the UUID. Every other endpoint — including
+        // /api/conversations/<uuid>/files — keeps the shared `_id` collapse.
+        const isConvTranscript = segs.length === 2 && segs[0] === 'conversations' && UUID_RE.test(segs[1]);
+        if (isConvTranscript) {
+          const idx = (hashStr(segs[1].toLowerCase()) % CONV_POOL_SIZE) + 1;
+          return FIXTURE_BASE + '/conversations/_id-' + idx + '.json';
+        }
+        p = segs.map(seg => {
           if (/^\d+$/.test(seg)) return '_id';
           if (UUID_RE.test(seg)) return '_id';
           return seg;
