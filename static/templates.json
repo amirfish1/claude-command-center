@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "id": "fix-issue-and-pr",
+      "name": "Fix a GitHub issue → PR",
+      "description": "Pull the issue, plan, implement with tests, push, open the PR.",
+      "engine": "claude",
+      "worktree": true,
+      "cwd": "",
+      "prompt": "Pick up GitHub issue #<NUMBER> in this repo.\n\n1. Read the issue and any linked discussion so you understand the scope.\n2. Sketch a short implementation plan (files touched, public API changes, risk).\n3. Implement the change. Keep commits small and conventional (`fix:` / `feat:` etc.).\n4. Add or update tests so the failure mode in the issue can't silently come back.\n5. Run the test suite. Don't move on if anything fails.\n6. Push the branch and open a PR that links the issue (`Closes #<NUMBER>`). Title and body should explain the *why*, not just the *what*."
+    },
+    {
+      "id": "refactor-with-tests",
+      "name": "Refactor under test coverage",
+      "description": "Tests-first refactor. Behavior preserved, small commits, no scope creep.",
+      "engine": "claude",
+      "worktree": true,
+      "cwd": "",
+      "prompt": "Refactor <TARGET> in this repo.\n\nGround rules:\n- Behavior is not allowed to change. If you find a bug, stop and surface it separately.\n- Cover the target with tests BEFORE you touch it. If coverage already exists, run it and confirm it's green.\n- Make the smallest change that achieves the refactor, then commit. One concern per commit.\n- Re-run the tests after every commit.\n- No drive-by cleanups in unrelated files. Stay in scope.\n\nFinish with a short summary of what changed, what you deliberately left alone, and which tests cover the change."
+    },
+    {
+      "id": "investigate-failing-ci",
+      "name": "Investigate failing CI (read-only)",
+      "description": "Diagnose a red build. No code changes — just a written postmortem.",
+      "engine": "claude",
+      "worktree": false,
+      "cwd": "",
+      "prompt": "CI is failing on this branch. You are in READ-ONLY mode — do not edit code, do not push, do not run destructive commands.\n\n1. Find the failing job(s). Use `gh run list --branch $(git rev-parse --abbrev-ref HEAD)` and drill into the latest red run.\n2. Pull the failing logs. Identify the first real failure (ignore cascading downstream noise).\n3. Reproduce locally if you can do it without side effects (read-only commands, dry runs).\n4. Write a postmortem with: (a) what failed, (b) the smallest reproduction, (c) the suspected root cause, (d) a proposed fix, (e) confidence level.\n\nDo not implement the fix. The goal of this session is a clean diagnosis the next session can act on."
+    },
+    {
+      "id": "review-pr",
+      "name": "Review a pull request",
+      "description": "Independent review. Inline comments only — never approves, never merges.",
+      "engine": "claude",
+      "worktree": false,
+      "cwd": "",
+      "prompt": "Review PR #<NUMBER> in this repo as an independent reviewer.\n\nGuard-rails:\n- You may read code, run tests, and check out the PR branch locally.\n- You MUST NOT approve, request changes, merge, or push.\n- All feedback goes in as inline review comments (`gh pr review --comment` with line-anchored notes).\n\nLook for: correctness, test coverage, security (input validation, auth, secrets), API/contract changes, perf regressions, dead code, and whether the PR description matches the diff.\n\nFinish with a top-level summary comment listing the highest-impact items and any blocking concerns. Leave the human author to make the merge call."
+    },
+    {
+      "id": "scout-codebase",
+      "name": "Scout the codebase (audit brief)",
+      "description": "Read-only audit. Output is a markdown brief of how the codebase is organised.",
+      "engine": "claude",
+      "worktree": false,
+      "cwd": "",
+      "prompt": "Produce an audit brief of this codebase. READ-ONLY — no edits, no commits.\n\nThe brief should answer:\n- What does this project do (one paragraph, plain language)?\n- Entry points (CLI, server, library — whichever apply).\n- Module map: top-level directories and what each is responsible for.\n- Runtime dependencies and the smallest set needed to boot it locally.\n- Test strategy: where the tests live, what they cover, what they don't.\n- Notable conventions (commit style, branch model, CI gates) — point to the files that document them.\n- Risks I'd watch for if I were inheriting this repo tomorrow.\n\nWrite the brief to `docs/audit-<YYYY-MM-DD>.md`. Keep it under ~500 lines. Link to specific files with `path:line` so a reader can jump straight to the evidence."
+    }
+  ]
+}

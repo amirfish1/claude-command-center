@@ -3410,6 +3410,8 @@ _session_cwd_relocation_cache = {}
 _session_cwd_cache_mtime = 0
 
 SESSIONS_REGISTRY = Path.home() / ".claude" / "sessions"  # per-pid {sessionId, cwd, ...}
+DAEMON_ROSTER_FILE = Path.home() / ".claude" / "daemon" / "roster.json"
+CLAUDE_JOBS_ROOT = Path.home() / ".claude" / "jobs"
 # Backwards-compat alias — older code / forks may import the previous name.
 LOG_VIEWER_STATE_DIR = COMMAND_CENTER_STATE_DIR
 SESSION_NAMES_FILE = COMMAND_CENTER_STATE_DIR / "session-names.json"  # side-car overrides
@@ -4885,6 +4887,27 @@ def _command_targets_engine_session(command, session_id, engine):
     return False
 
 
+def _process_comm_is_claude(comm):
+    """Return True when a ps comm value belongs to Claude Code.
+
+    Native builds report the versioned binary path
+    (`~/.local/share/claude/versions/2.1.144`) instead of the wrapper name
+    `claude`, so basename-only checks miss live background agents.
+    """
+    if not comm:
+        return False
+    name = str(comm).rsplit("/", 1)[-1]
+    if name == "claude":
+        return True
+    try:
+        path = Path(comm).expanduser()
+        versions_dir = Path.home() / ".local" / "share" / "claude" / "versions"
+        path.resolve(strict=False).relative_to(versions_dir.resolve(strict=False))
+    except (OSError, ValueError):
+        return False
+    return bool(re.match(r"^\d+\.\d+\.\d+(?:[-+].*)?$", name))
+
+
 def _load_session_registry():
     """Read ~/.claude/sessions/*.json and return {session_id: {pid, cwd, ...}}.
 
@@ -4908,7 +4931,7 @@ def _load_session_registry():
         )
         for line in ps_out.stdout.splitlines():
             parts = line.strip().split(None, 1)
-            if len(parts) == 2 and parts[1].rsplit("/", 1)[-1] == "claude":
+            if len(parts) == 2 and _process_comm_is_claude(parts[1]):
                 try:
                     live_claude_pids.add(int(parts[0]))
                 except ValueError:
@@ -4955,6 +4978,8 @@ def session_live_status(session_id, session_cwd):
         "terminal_app": None,
         "status": None,
         "kind": None,
+        "job_id": None,
+        "agent": None,
         "recently_written": False,
         "ambiguous": False,
         "match_count": 0,
@@ -5087,6 +5112,8 @@ def session_live_status(session_id, session_cwd):
         result["match_count"] = 1
         result["status"] = entry.get("status")
         result["kind"] = entry.get("kind")
+        result["job_id"] = entry.get("jobId")
+        result["agent"] = entry.get("agent")
         # Hydrate tty + terminal_app from the live pid
         try:
             ps_out = subprocess.run(
@@ -9957,6 +9984,189 @@ def _terminal_input_queue_has_pending(session_id):
         return bool(_pending_terminal_input_queue.get(session_id))
 
 
+def _load_daemon_roster():
+    """Read Claude Code's background-agent roster, if the daemon is running."""
+    try:
+        data = json.loads(DAEMON_ROSTER_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _find_live_bg_agent_entry_for_session(session_id):
+    """Return the daemon roster worker for a live background Claude session."""
+    if not session_id:
+        return None
+    workers = (_load_daemon_roster().get("workers") or {})
+    if not isinstance(workers, dict):
+        return None
+    for short, worker in workers.items():
+        if not isinstance(worker, dict):
+            continue
+        if worker.get("sessionId") != session_id:
+            continue
+        entry = dict(worker)
+        entry["short"] = short
+        return entry
+    return None
+
+
+def _bg_agent_state_for_session(session_id, status=None):
+    """Read ~/.claude/jobs/<short>/state.json for a background agent."""
+    if not session_id:
+        return None
+    status = status or {}
+    candidates = []
+    job_id = status.get("job_id") or status.get("jobId") or ""
+    if job_id:
+        candidates.append(CLAUDE_JOBS_ROOT / str(job_id) / "state.json")
+    candidates.append(CLAUDE_JOBS_ROOT / session_id[:8] / "state.json")
+
+    seen = set()
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("sessionId") in (None, session_id) or data.get("resumeSessionId") == session_id:
+            return data
+
+    try:
+        state_files = list(CLAUDE_JOBS_ROOT.glob("*/state.json"))
+    except OSError:
+        return None
+    for path in state_files:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("sessionId") == session_id or data.get("resumeSessionId") == session_id:
+            return data
+    return None
+
+
+def _bg_agent_ready_for_input(session_id, status=None):
+    """Whether a live background agent has a prompt ready for user text.
+
+    Claude's registry can report `busy` while the main agent is blocked for
+    user input but a child local agent is still running. The jobs state is the
+    better signal for background-agent input readiness.
+    """
+    sc = _read_sidecar_state(session_id)
+    if sc and (sc.get("status") or "").lower() == "waiting":
+        return True
+
+    job_state = _bg_agent_state_for_session(session_id, status)
+    if job_state:
+        state = (job_state.get("state") or "").lower()
+        if state in {"blocked", "done", "idle", "waiting"}:
+            return True
+        if state in {"active", "busy", "running", "working"}:
+            return False
+
+    status_text = ((status or {}).get("status") or "").lower()
+    if status_text in {"idle", "waiting"}:
+        return True
+    if status_text in _BUSY_SESSION_STATUSES:
+        return False
+    return True
+
+
+def _daemon_socket_path_allowed(path):
+    """Clamp daemon socket use to Claude's per-user temp daemon directory."""
+    if not path:
+        return False
+    try:
+        real = os.path.realpath(path)
+        daemon_dir = f"cc-daemon-{os.getuid()}"
+        base_parents = {tempfile.gettempdir(), "/tmp", "/private/tmp"}
+        for base_parent in base_parents:
+            base = os.path.realpath(os.path.join(base_parent, daemon_dir))
+            if real == base or real.startswith(base + os.sep):
+                return True
+        return False
+    except (TypeError, ValueError, OSError):
+        return False
+
+
+def _clean_pty_prompt_text(text):
+    """Drop terminal-control characters before writing into a background PTY."""
+    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    return "".join(
+        ch for ch in text
+        if ch in ("\n", "\t") or (ord(ch) >= 32 and ord(ch) != 127)
+    )
+
+
+def _inject_bg_agent_via_pty_socket(worker, text):
+    """Send text to a live `claude agents` background session.
+
+    The daemon PTY socket uses framed messages:
+      4-byte big-endian payload length, 1-byte channel, payload bytes.
+    Channel 0 is PTY data. We bracket-paste the body so multi-line prompts
+    land as text, then send Return to submit.
+    """
+    if not worker:
+        return {
+            "ok": False,
+            "via": "bg-agent-pty",
+            "error": "background agent is live, but its daemon worker was not found",
+        }
+    pty_sock = worker.get("ptySock") or ""
+    if not _daemon_socket_path_allowed(pty_sock):
+        return {
+            "ok": False,
+            "via": "bg-agent-pty",
+            "error": "background agent PTY socket is outside the expected daemon directory",
+        }
+    try:
+        mode = os.stat(pty_sock).st_mode
+    except OSError as e:
+        return {"ok": False, "via": "bg-agent-pty", "error": str(e)}
+    if not stat.S_ISSOCK(mode):
+        return {
+            "ok": False,
+            "via": "bg-agent-pty",
+            "error": "background agent PTY path is not a socket",
+        }
+
+    clean_text = _clean_pty_prompt_text(text)
+    if not clean_text.strip():
+        return {"ok": False, "via": "bg-agent-pty", "error": "missing text"}
+    payload = ("\x1b[200~" + clean_text + "\x1b[201~").encode("utf-8")
+    frame = len(payload).to_bytes(4, "big") + b"\x00" + payload
+    submit = b"\r"
+    submit_frame = len(submit).to_bytes(4, "big") + b"\x00" + submit
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(2)
+    try:
+        sock.connect(pty_sock)
+        sock.sendall(frame)
+        time.sleep(0.05)
+        sock.sendall(submit_frame)
+    except (OSError, socket.timeout) as e:
+        return {"ok": False, "via": "bg-agent-pty", "error": str(e)}
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+    return {
+        "ok": True,
+        "via": "bg-agent-pty",
+        "pid": worker.get("pid"),
+        "session_id": worker.get("sessionId"),
+    }
+
+
 def _start_resume_queue_watcher() -> None:
     """Drain queued prompts once Codex/Gemini or live terminal sessions go idle."""
     def _watcher():
@@ -9994,6 +10204,9 @@ def _start_resume_queue_watcher() -> None:
                     status = session_live_status(sid, find_session_cwd(sid))
                     if status.get("live") and status.get("tty") and _session_status_is_busy(status):
                         continue
+                    if status.get("live") and status.get("kind") == "bg":
+                        if not _bg_agent_ready_for_input(sid, status):
+                            continue
                     if status.get("live") and not status.get("tty"):
                         spawn = _find_live_spawn_entry_for_session(sid)
                         if spawn is not None and _spawn_entry_active_tool_child(spawn):
@@ -13230,6 +13443,14 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False):
             if _terminal_input_queue_has_pending(session_id) or _session_status_is_busy(status):
                 return _queue_terminal_input(session_id, text, status)
         return inject_input_via_keystroke(tty, term_app or "Terminal", text)
+    if status.get("live") and status.get("kind") == "bg":
+        if not _from_terminal_queue:
+            if _terminal_input_queue_has_pending(session_id) or not _bg_agent_ready_for_input(session_id, status):
+                queued_status = dict(status or {})
+                queued_status["status"] = queued_status.get("status") or "busy"
+                return _queue_terminal_input(session_id, text, queued_status)
+        worker = _find_live_bg_agent_entry_for_session(session_id)
+        return _inject_bg_agent_via_pty_socket(worker, text)
     if _is_codex_session(session_id):
         return resume_session_codex(session_id, text)
     if _is_gemini_session(session_id):
@@ -18924,6 +19145,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 ".js": "application/javascript",
                 ".svg": "image/svg+xml",
                 ".webmanifest": "application/manifest+json",
+                ".json": "application/json",
             }
             ext = ""
             for candidate in static_ct_map:

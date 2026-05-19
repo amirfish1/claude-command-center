@@ -502,6 +502,7 @@
               <div id="spawnCwdMenu" class="spawn-cwd-menu" role="listbox"></div>
             </span>
           </span>
+          <span id="spawnCwdQuickChips" class="spawn-cwd-quick-chips" aria-label="Recent repositories"></span>
           <label class="spawn-worktree-row" title="Spawn the session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main.">
             <input type="checkbox" id="inlineWorktreeToggle"> 🌿 worktree
           </label>
@@ -682,6 +683,11 @@
         <span>New session</span>
         <span class="nsm-hint">Esc to cancel · &#8984;&#9166; to launch</span>
       </div>
+      <!-- Template gallery. Cards render from static/templates.json; clicking
+           one prefills the body, engine, and worktree toggle below. Hidden
+           when the gallery is empty or fails to load (graceful fallback to
+           the blank-prompt experience). -->
+      <div id="nsmGallery" class="nsm-gallery" style="display:none;" aria-label="Session templates"></div>
       <textarea id="nsmBody" placeholder="What should this session do? (the first sentence becomes the card title — you can rename later or hit ✨ to AI-generate one)"></textarea>
       <div class="nsm-actions">
         <label class="nsm-engine" style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);">

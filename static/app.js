@@ -2853,7 +2853,7 @@
   })();
 
   let kanbanView = false;
-  try { localStorage.setItem('ccc-kanban-view', 'false'); } catch (_) {}
+  try { kanbanView = localStorage.getItem('ccc-kanban-view') === 'true'; } catch (_) {}
   let kanbanCollapsed = {}; // column_key -> bool, tracks user collapse state
   try { kanbanCollapsed = JSON.parse(localStorage.getItem('ccc-kanban-collapsed') || '{}'); } catch (_) {}
   let kanbanShowAll = {};   // column_key -> bool, tracks "show all" state for large columns
@@ -4052,10 +4052,57 @@
     const $list = document.getElementById('convList');
     return !!($list && $list.querySelector('.conv-title-input'));
   }
+  function renderKanbanSidebar(convs) {
+    const $kanbanBoard = document.getElementById('kanbanBoard');
+    const $convList = document.getElementById('convList');
+    if (!$kanbanBoard) return;
+
+    const scrolls = {};
+    document.querySelectorAll('.kanban-board, .kanban-board-split').forEach(el => {
+      if (el.scrollLeft > 0 || el.scrollTop > 0) {
+        const key = el.id || (el.className.split(' ')[0] + (el.closest('.kanban-panel') ? '-split' : ''));
+        scrolls[key] = [el.scrollLeft, el.scrollTop];
+      }
+    });
+    document.querySelectorAll('.kanban-column').forEach(el => {
+      const cards = el.querySelector('.kanban-cards');
+      if (cards && cards.scrollTop > 0) {
+        const inSplit = el.closest('.kanban-panel') ? '-split' : '';
+        scrolls['col-' + el.dataset.col + inSplit] = [0, cards.scrollTop];
+      }
+    });
+
+    if ($convList) $convList.style.display = 'none';
+    $kanbanBoard.style.display = '';
+    renderKanbanBoard(convs || [], $kanbanBoard, false);
+    if ($kanbanBoardSplit) renderKanbanBoard(convs || [], $kanbanBoardSplit, true);
+
+    requestAnimationFrame(() => {
+      for (const [key, [left, top]] of Object.entries(scrolls)) {
+        if (key.startsWith('col-')) {
+          const isSplit = key.endsWith('-split');
+          const colKey = isSplit ? key.slice(4, -6) : key.slice(4);
+          const scope = isSplit ? '.kanban-panel' : '#kanbanBoard';
+          const selector = scope + ' .kanban-column[data-col="' + colKey + '"] .kanban-cards';
+          const cards = document.querySelector(selector);
+          if (cards) cards.scrollTop = top;
+        } else {
+          const el = document.getElementById(key) || document.querySelector('.' + key.replace('-split', ''));
+          if (el) { el.scrollLeft = left; el.scrollTop = top; }
+        }
+      }
+      _applyCardTransitions();
+    });
+  }
+
   function renderSidebar(convs) {
     if (_renameInProgress) return;
     const $kanbanBoard = document.getElementById('kanbanBoard');
     const $convList = document.getElementById('convList');
+    if (kanbanView) {
+      renderKanbanSidebar(convs);
+      return;
+    }
     if ($kanbanBoard) $kanbanBoard.style.display = 'none';
     if ($convList) $convList.style.display = '';
     const $search = document.getElementById('convSearch');
@@ -14417,6 +14464,15 @@
       _lastArchiveRenderFilter = q;
       _restoreArchiveListScroll(scrollState, $list);
     };
+    const _renderArchiveEmpty = (html) => {
+      if (kanbanView) {
+        conversationsData = [];
+        renderKanbanSidebar([]);
+      } else {
+        $list.innerHTML = html;
+      }
+      _finishArchiveRender();
+    };
     const archiveRows = _archiveRowsWithBacklog();
     // Never filter by folder — the folder picker controls grouping and the
     // active-chip highlight only. Hiding sessions from other repos breaks
@@ -14448,23 +14504,19 @@
     }
 
     if (!archiveLoaded && !archiveRows.length) {
-      $list.innerHTML = '<div class="archive-empty-state archive-loading-placeholder">Loading archive&hellip;</div>';
-      _finishArchiveRender();
+      _renderArchiveEmpty('<div class="archive-empty-state archive-loading-placeholder">Loading archive&hellip;</div>');
       return;
     }
     if (!archiveRows.length) {
-      $list.innerHTML = '<div class="archive-empty-state">No conversations on disk.</div>';
-      _finishArchiveRender();
+      _renderArchiveEmpty('<div class="archive-empty-state">No conversations on disk.</div>');
       return;
     }
     if (!byFolder.length) {
-      $list.innerHTML = '<div class="archive-empty-state">No conversations in this folder.</div>';
-      _finishArchiveRender();
+      _renderArchiveEmpty('<div class="archive-empty-state">No conversations in this folder.</div>');
       return;
     }
     if (!rows.length) {
-      $list.innerHTML = '<div class="archive-empty-state">No conversations match your filter.</div>';
-      _finishArchiveRender();
+      _renderArchiveEmpty('<div class="archive-empty-state">No conversations match your filter.</div>');
       return;
     }
 
@@ -14633,11 +14685,6 @@
     });
     const rowsForRender = pendingRows.concat(shaped);
 
-    // Make sure the list is visible (kanban is hidden in setArchiveMode).
-    const $kanban = document.getElementById('kanbanBoard');
-    if ($kanban) $kanban.style.display = 'none';
-    $list.style.display = '';
-
     // The click-to-currentSession bridge uses sessionIdByConv et al., which
     // are normally populated inside loadConversationList() — a path archive
     // mode bypasses. Without this, clicking an archive row passes undefined
@@ -14656,7 +14703,18 @@
     // gets reset on toggle-off via loadConversationList().
     conversationsData = applyConvSort(_applyOptimisticTouches(rowsForRender));
 
-    renderConversationList(conversationsData);
+    // Make sure the active sidebar mode stays active. Archive refreshes run on
+    // search and on the 10s poll; if the board is open, refresh its cards
+    // instead of snapping the user back to the row list.
+    const $kanban = document.getElementById('kanbanBoard');
+    if (kanbanView) {
+      if ($list) $list.style.display = 'none';
+      renderKanbanSidebar(filterConversations(''));
+    } else {
+      if ($kanban) $kanban.style.display = 'none';
+      $list.style.display = '';
+      renderConversationList(conversationsData);
+    }
     if (archiveSelectionSwap) {
       rebindCurrentSelectionToRealCard(archiveSelectionSwap.realCard);
     }
@@ -14671,10 +14729,14 @@
     updateRepoPickerVisibility();
     const $list = document.getElementById('convList');
     const $kanban = document.getElementById('kanbanBoard');
-    // Hide kanban if it was visible; the archive renders into the same
-    // #convList slot.
-    if ($kanban) $kanban.style.display = 'none';
-    if ($list) {
+    if (kanbanView) {
+      if ($list) $list.style.display = 'none';
+      if ($kanban) {
+        $kanban.style.display = '';
+        $kanban.innerHTML = '<div class="archive-empty-state archive-loading-placeholder">Loading board&hellip;</div>';
+      }
+    } else if ($list) {
+      if ($kanban) $kanban.style.display = 'none';
       $list.style.display = '';
       $list.innerHTML = '<div class="archive-empty-state archive-loading-placeholder">Loading archive…</div>';
     }
@@ -14708,8 +14770,14 @@
       // during the wait — the actual fetch fires after sessions land.
       const $list = document.getElementById('convList');
       const $kanban = document.getElementById('kanbanBoard');
-      if ($kanban) $kanban.style.display = 'none';
-      if ($list) {
+      if (kanbanView) {
+        if ($list) $list.style.display = 'none';
+        if ($kanban) {
+          $kanban.style.display = '';
+          $kanban.innerHTML = '<div class="archive-empty-state archive-loading-placeholder">Loading board&hellip;</div>';
+        }
+      } else if ($list) {
+        if ($kanban) $kanban.style.display = 'none';
         $list.style.display = '';
         $list.innerHTML = '<div class="archive-empty-state archive-loading-placeholder">Loading archive&hellip;</div>';
       }
@@ -14740,6 +14808,9 @@
       current: d.current || '',
       recent: d.recent || [],
     };
+    try {
+      if (currentConversation === '__new__') populateSpawnCwdPicker();
+    } catch (_) {}
     return repoListState;
   }
 
@@ -15403,6 +15474,100 @@
   const $nsmCancel = document.getElementById('nsmCancel');
   const $nsmBackdrop = document.getElementById('nsmBackdrop');
   const $nsmEngineSelect = document.getElementById('nsmEngineSelect');
+  const $nsmGallery = document.getElementById('nsmGallery');
+
+  // Lazy-loaded template cache. Loaded on first modal open and reused after
+  // — keep it in module scope so reopening the modal doesn't refetch. If the
+  // fetch fails (missing file, malformed JSON) we stash an empty array so we
+  // don't retry on every reopen; the gallery just stays hidden.
+  let _nsmTemplatesCache = null;
+  async function _loadNsmTemplates() {
+    if (_nsmTemplatesCache !== null) return _nsmTemplatesCache;
+    try {
+      const res = await fetch('/static/templates.json', { cache: 'no-store' });
+      if (!res.ok) { _nsmTemplatesCache = []; return _nsmTemplatesCache; }
+      const data = await res.json();
+      const list = Array.isArray(data && data.templates) ? data.templates : [];
+      _nsmTemplatesCache = list.filter(t => t && typeof t.id === 'string' && typeof t.prompt === 'string');
+    } catch (err) {
+      console.warn('[New session] template gallery load failed', err);
+      _nsmTemplatesCache = [];
+    }
+    return _nsmTemplatesCache;
+  }
+
+  function _applyNsmTemplate(tpl) {
+    if (!tpl) return;
+    $nsmBody.value = tpl.prompt || '';
+    if (tpl.engine && $nsmEngineSelect) {
+      const valid = Array.from($nsmEngineSelect.options).some(o => o.value === tpl.engine);
+      if (valid) {
+        $nsmEngineSelect.value = tpl.engine;
+        // setSpawnEngine syncs the other engine selectors (inline, kanban
+        // toolbar) so the picker that opens next stays consistent.
+        if (typeof setSpawnEngine === 'function') setSpawnEngine(tpl.engine);
+      }
+    }
+    const $nsmWorktree = document.getElementById('nsmWorktree');
+    if ($nsmWorktree && typeof tpl.worktree === 'boolean') {
+      $nsmWorktree.checked = tpl.worktree;
+    }
+    // Mark the picked card so the user has a visual anchor for what they
+    // applied. Re-renderable on each open without leaking state — the class
+    // is reset every time the gallery is rebuilt.
+    if ($nsmGallery) {
+      const prev = $nsmGallery.querySelector('.nsm-gallery-card.is-selected');
+      if (prev) prev.classList.remove('is-selected');
+      const next = $nsmGallery.querySelector('[data-template-id="' + cssEscapeAttr(tpl.id) + '"]');
+      if (next) next.classList.add('is-selected');
+    }
+    // Drop focus into the body so the user can immediately edit the
+    // prefilled prompt. Caret at end so they can append context.
+    if ($nsmBody) {
+      $nsmBody.focus();
+      const len = $nsmBody.value.length;
+      try { $nsmBody.setSelectionRange(len, len); } catch (e) { /* old Safari */ }
+    }
+  }
+
+  // Lightweight CSS.escape fallback for the attribute selectors above —
+  // template ids are restricted but a stray quote shouldn't blow up the DOM.
+  function cssEscapeAttr(s) {
+    return String(s).replace(/["\\]/g, '\\$&');
+  }
+
+  async function _renderNsmGallery() {
+    if (!$nsmGallery) return;
+    const templates = await _loadNsmTemplates();
+    if (!templates.length) {
+      $nsmGallery.style.display = 'none';
+      $nsmGallery.innerHTML = '';
+      return;
+    }
+    $nsmGallery.innerHTML = templates.map(t => {
+      const id = escapeAttr(t.id);
+      const name = escapeHtml(t.name || t.id);
+      const desc = escapeHtml(t.description || '');
+      const engine = escapeHtml(t.engine || 'claude');
+      const wt = t.worktree ? '<span class="nsm-gallery-chip is-wt">🌿 worktree</span>' : '';
+      return ''
+        + '<button type="button" class="nsm-gallery-card" data-template-id="' + id + '">'
+        + '<div class="nsm-gallery-card-title">' + name + '</div>'
+        + '<div class="nsm-gallery-card-desc">' + desc + '</div>'
+        + '<div class="nsm-gallery-card-meta">'
+        +   '<span class="nsm-gallery-chip">' + engine + '</span>' + wt
+        + '</div>'
+        + '</button>';
+    }).join('');
+    $nsmGallery.style.display = '';
+    $nsmGallery.querySelectorAll('.nsm-gallery-card').forEach(el => {
+      el.addEventListener('click', () => {
+        const tplId = el.getAttribute('data-template-id');
+        const tpl = (_nsmTemplatesCache || []).find(t => t.id === tplId);
+        _applyNsmTemplate(tpl);
+      });
+    });
+  }
   // Modal selector participates in the same shared-state sync as the
   // inline ones — change it here and the inline selectors update too.
   if ($nsmEngineSelect) {
@@ -15422,6 +15587,15 @@
     const $kptWorktreeToggle = document.getElementById('kptWorktreeToggle');
     if ($nsmWorktree && $kptWorktreeToggle) $nsmWorktree.checked = $kptWorktreeToggle.checked;
     $nsm.style.display = 'flex';
+    // Render the template gallery (cards above the textarea). Fire-and-forget:
+    // the modal is usable immediately; cards appear once templates.json
+    // resolves. Failure leaves the gallery hidden — see _loadNsmTemplates.
+    // We only show the gallery when the body is empty so a pre-filled
+    // "edit prompt before launch" flow isn't visually crowded by cards.
+    if ($nsmGallery) {
+      if (!body) _renderNsmGallery();
+      else { $nsmGallery.style.display = 'none'; }
+    }
     setTimeout(() => { $nsmBody.focus(); }, 30);
   }
   function closeNewSessionModal() {
@@ -16426,6 +16600,7 @@
   // exactly where the new session will land. This is the explicit repo
   // context for All-repos mode.
   const SPAWN_CWD_KEY = 'ccc-spawn-cwd';
+  const SPAWN_CWD_CHIP_LIMIT = 6;
   let spawnCwdOptions = [];
 
   function normalizeSpawnCwdPath(value) {
@@ -16493,6 +16668,70 @@
     const prevValue = normalizeSpawnCwdPath(sel.value);
     sel.value = prevValue || defaultPath;
     if (isSpawnCwdMenuOpen()) renderSpawnCwdMenu('');
+    renderSpawnCwdQuickChips();
+  }
+
+  function spawnCwdOptionForPath(path) {
+    const value = normalizeSpawnCwdPath(path);
+    if (!value) return null;
+    const known = findSpawnCwdRepo(value);
+    return {
+      value,
+      label: (known && (known.label || known.path)) || _pathLeaf(value) || value,
+    };
+  }
+
+  function spawnCwdQuickChipOptions(current) {
+    const wanted = normalizeSpawnCwdPath(current);
+    const out = [];
+    const seen = new Set();
+    const addPath = (path) => {
+      const opt = spawnCwdOptionForPath(path);
+      if (!opt || seen.has(opt.value)) return;
+      seen.add(opt.value);
+      out.push(opt);
+    };
+
+    for (const path of ((repoListState && repoListState.recent) || [])) {
+      addPath(path);
+      if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
+    }
+    if (!out.length) {
+      for (const repo of ((repoListState && repoListState.repos) || [])) {
+        addPath(repo && repo.path);
+        if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
+      }
+    }
+    if (wanted && !seen.has(wanted)) {
+      const currentOpt = spawnCwdOptionForPath(wanted);
+      if (currentOpt) out.unshift(currentOpt);
+    }
+    return out.slice(0, SPAWN_CWD_CHIP_LIMIT);
+  }
+
+  function renderSpawnCwdQuickChips() {
+    const wrap = document.getElementById('spawnCwdQuickChips');
+    if (!wrap) return;
+    const current = getSpawnCwd();
+    const chips = spawnCwdQuickChipOptions(current);
+    wrap.innerHTML = '';
+    wrap.style.display = chips.length ? '' : 'none';
+    for (const opt of chips) {
+      const active = normalizeSpawnCwdPath(opt.value) === normalizeSpawnCwdPath(current);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'spawn-cwd-chip' + (active ? ' active' : '');
+      btn.textContent = opt.label;
+      btn.title = opt.value;
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      if (active) btn.setAttribute('aria-current', 'true');
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setSpawnCwdInputValue(opt.value);
+      });
+      wrap.appendChild(btn);
+    }
   }
 
   function isSpawnCwdMenuOpen() {
@@ -16621,6 +16860,7 @@
     if (ev.target && ev.target.id === 'spawnCwdPicker') {
       try { localStorage.setItem(SPAWN_CWD_KEY, normalizeSpawnCwdPath(ev.target.value)); } catch (_) {}
       if (isSpawnCwdMenuOpen()) renderSpawnCwdMenu(ev.target.value);
+      renderSpawnCwdQuickChips();
       updateNewSessionCwdNotice();
       if (currentConversation === '__new__') updateInputBar();
     }
