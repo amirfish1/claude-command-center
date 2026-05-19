@@ -45,12 +45,14 @@ Requirements: macOS, Python 3, and [Claude Code](https://docs.claude.com/en/docs
 Optional: [`gh`](https://cli.github.com/) for GitHub integration, `vercel` for deploy status.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
 ```
 
 The installer clones to `~/.ccc/claude-command-center`, verifies your
 `python3` and `claude` CLI, and launches the dashboard in the foreground.
 Re-running the same command does a `git pull` instead of a second clone.
+
+If you'd rather clone first and run the script directly, pass the channel as a flag instead: `./scripts/install.sh --from=readme`.
 
 ### From source
 

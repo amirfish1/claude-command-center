@@ -2,9 +2,9 @@
 # Claude Command Center one-command installer.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | bash
-#   curl -fsSL ".../install.sh?from=hn" | bash
-#   ./install.sh --from=readme
+#   curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=hn bash
+#   curl -fsSL .../install.sh | bash               # channel defaults to unknown
+#   ./install.sh --from=readme                     # direct invocation after git clone
 #
 # Behaviour:
 #   - macOS only. Linux exits fast with a one-line pointer to the Docker issue.
@@ -31,15 +31,18 @@ err() {
 # ---------------------------------------------------------------------------
 # Attribution channel
 # ---------------------------------------------------------------------------
-# Parsed from either:
-#   - a query string on $0 (when curled like ".../install.sh?from=hn | bash"
-#     some shells preserve the URL in $0; we look defensively)
-#   - --from=<channel> argv
+# Resolution order (highest precedence first):
+#   1. --from=<channel> CLI flag (for direct ./install.sh invocation)
+#   2. CCC_FROM env var (for `curl ... | CCC_FROM=hn bash` pipe invocation)
+#   3. default 'unknown'
+#
+# We can't recover the URL from $0 under `curl ... | bash` because bash sets
+# $0 to "bash" or "-", not the source URL. Hence the env-var hand-off.
 parse_channel() {
   local raw=""
-  case "${0:-}" in
-    *\?from=*) raw="${0#*\?from=}"; raw="${raw%%[&# ]*}" ;;
-  esac
+  if [ -n "${CCC_FROM:-}" ]; then
+    raw="$CCC_FROM"
+  fi
   for arg in "$@"; do
     case "$arg" in
       --from=*) raw="${arg#--from=}" ;;
@@ -158,4 +161,8 @@ main() {
   launch_server
 }
 
-main "$@"
+# Only auto-run when executed, not when sourced (tests source us for
+# direct `parse_channel` calls).
+if [ "${BASH_SOURCE[0]:-$0}" = "${0}" ]; then
+  main "$@"
+fi
