@@ -1,0 +1,1 @@
+- One-command install: pipe `scripts/install.sh` into bash to clone, verify prereqs, and launch the dashboard on port 8090.
