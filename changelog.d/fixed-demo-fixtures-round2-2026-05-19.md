@@ -1,0 +1,1 @@
+Fixed the GH Pages demo's empty "In Progress" column (fixture mtimes were a full year stale — 2025-05-19 vs today) and the empty transcript pane on click (Jekyll was stripping every `_id`-prefixed fixture under `docs/demo/api/`; added `docs/.nojekyll`).
