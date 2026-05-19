@@ -228,6 +228,12 @@ case "${1:-}" in
   --install-service) install_service; exit 0 ;;
   --uninstall-service) uninstall_service; exit 0 ;;
   --service-status) service_status; exit 0 ;;
+  --app)
+    # Shortcut: open the dashboard as a chromeless app-style window.
+    # Delegates to scripts/open-app.sh; remaining args are forwarded.
+    shift
+    exec "$HERE/scripts/open-app.sh" "$@"
+    ;;
   --help|-h)
     cat <<'EOF'
 Usage: ./run.sh [OPTION]
@@ -236,6 +242,9 @@ Usage: ./run.sh [OPTION]
   --install-service    Install as a launchd agent that starts at login
   --uninstall-service  Remove the launchd agent
   --service-status     Show launchd install/load status
+  --app [...]          Open the dashboard in a chromeless app window.
+                       Forwards extra args to scripts/open-app.sh.
+                       Example: ./run.sh --app --size 1600x1000
   --help, -h           Show this help
 
 Env vars (PORT, CCC_BIND_HOST, CCC_ALLOWED_ORIGIN, etc.)

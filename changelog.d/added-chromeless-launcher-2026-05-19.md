@@ -1,0 +1,1 @@
+- Added `scripts/open-app.sh` (and a matching `./run.sh --app` shortcut) that opens the dashboard as a chromeless, dock-pinnable browser window via Chrome/Edge/Brave/Chromium's `--app=` flag. Honours `PORT` and supports `--browser`, `--size`, `--url`, and `--dry-run`. macOS is the supported target; Linux is best-effort via PATH lookup. (#17)
