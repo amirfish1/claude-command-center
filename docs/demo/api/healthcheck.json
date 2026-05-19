@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "checks": {
+    "python": { "ok": true, "version": "3.12.0" },
+    "claude": { "ok": true, "version": "1.0.0" },
+    "gh": { "ok": true, "version": "2.40.0" },
+    "git": { "ok": true, "version": "2.45.0" }
+  }
+}

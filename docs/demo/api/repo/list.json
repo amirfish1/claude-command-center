@@ -1,0 +1,24 @@
+{
+  "current": null,
+  "repos": [
+    {
+      "path": "/home/demo/code/widgets-api",
+      "label": "widgets-api",
+      "remote": "https://github.com/demo/widgets-api"
+    },
+    {
+      "path": "/home/demo/code/blog-engine",
+      "label": "blog-engine",
+      "remote": "https://github.com/demo/blog-engine"
+    },
+    {
+      "path": "/home/demo/code/marketing-site",
+      "label": "marketing-site",
+      "remote": "https://github.com/demo/marketing-site"
+    }
+  ],
+  "recent": [
+    { "path": "/home/demo/code/widgets-api", "label": "widgets-api" },
+    { "path": "/home/demo/code/blog-engine", "label": "blog-engine" }
+  ]
+}

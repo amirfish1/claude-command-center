@@ -1,0 +1,9 @@
+{
+  "exists": false,
+  "indexing": false,
+  "embedding": false,
+  "message_count": 0,
+  "latest_message_unix": null,
+  "semantic": { "available": false },
+  "available": false
+}

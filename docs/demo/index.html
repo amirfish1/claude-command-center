@@ -1,0 +1,1836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230d1117'/><text x='32' y='48' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='44' font-weight='700' fill='%23d97757'>%E2%8C%98</text></svg>">
+<!-- Installable-app metadata. The manifest + service worker turn CCC into a
+     PWA so users can "Add to Dock" (Safari) or "Install app" (Chrome/Edge)
+     and run it in its own window without browser chrome. The CSS
+     `@media (display-mode: standalone)` rules lean into that mode with a
+     more focused look; the regular browser experience is unchanged. -->
+<link rel="manifest" href="./static/manifest.webmanifest">
+<meta name="theme-color" content="#0d1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<!-- W3C-standard equivalent. The apple-prefixed one is deprecated; the
+     unprefixed `mobile-web-app-capable` is the spec-compliant form
+     Chrome/Edge/Firefox prefer. We keep both during the transition so
+     older iOS Safari versions (which only know the apple form) still
+     get the standalone behavior. -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CCC">
+<link rel="apple-touch-icon" href="./static/icon.svg">
+<!-- Inter, loaded for the standalone-mode "Omnara look" font upgrade. The
+     base UI keeps `-apple-system` (SF Pro) when not in standalone — only
+     the @media (display-mode: standalone) block in app.css opts into
+     Inter. Preconnect lets the font fetch start in parallel with app.css.
+     `display=swap` means the system font paints first, then Inter swaps
+     in on load — no FOIT, just a brief FOUT. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<title>CCC demo — Claude Command Center</title>
+<!-- Demo-mode flag. Picked up by static/app.js's installDemoMode() block,
+     which rewires `fetch('/api/...')` to ./api/<path>.json. Setting this
+     here (rather than relying on ?demo=1) lets the demo URL stay clean. -->
+<script>
+  window.__CCC_DEMO__ = true;
+  window.__CCC_DEMO_FIXTURE_BASE__ = './api';
+</script>
+<link rel="stylesheet" href="./static/app.css">
+<!-- Optional Morning side-nav. Loaded conditionally based on the feature
+     flag so installs without the morning plugin don't get a 404 in the
+     console + a stranded 52px left gutter. The /api/features endpoint is
+     always available and returns {morning: false} when the plugin is absent.
+
+     Skipped entirely when running as an installed PWA (display-mode:
+     standalone or window-controls-overlay). The standalone window opts
+     into a focused single-pane look; the leftmost rail of repo letter
+     avatars is browser-mode-only chrome. Hiding via CSS alone wasn't
+     enough because side-nav.js dynamically injects `body { padding-left:
+     52px }` after we paint, which shifts the layout regardless of
+     `display: none` on the rail itself. The right fix is to never load
+     the script in standalone mode. -->
+<script>
+  // Demo: skip the morning side-nav probe. The real app fetches /api/features
+  // here, but on GH Pages that 404s before app.js's demo wrapper is even
+  // loaded. We know morning is disabled in the demo, so the probe is a no-op.
+  (function () {
+    const params = new URLSearchParams(window.location.search || '');
+    window.__CCC_CONVERSATION_POPOUT__ = params.get('ccc_popout') === 'conversation'
+      || params.get('popout') === 'conversation';
+  })();
+</script>
+</head>
+<body>
+  <!-- Demo strip. Fixed across the top, slim, lives outside the dashboard
+       layout so it's always visible. The dashboard's own body padding is
+       large enough to absorb the 32px without overlap on typical screens. -->
+  <div id="__ccc_demo_strip__" style="position:fixed;top:0;left:0;right:0;height:32px;background:linear-gradient(90deg,#1f2430,#2a1f1a);color:#e6edf3;font:12px/32px -apple-system,Inter,Segoe UI,sans-serif;display:flex;align-items:center;justify-content:center;gap:10px;z-index:9998;border-bottom:1px solid #d97757;text-align:center;padding:0 12px;">
+    <span><strong>CCC demo</strong> — read-only, all data is fake. Every action shows a banner instead of running.</span>
+    <a href="https://github.com/amirfish1/claude-command-center#quickstart" target="_blank" rel="noopener" style="color:#d97757;text-decoration:underline;font-weight:600;">Install CCC</a>
+    <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" style="color:#8b949e;text-decoration:none;">View source</a>
+  </div>
+  <style>body{padding-top:32px;}</style>
+  <!-- PWA install banner (tab-mode only). Hidden by default; surfaced after
+       a short delay if the page is NOT running standalone, with copy
+       tailored to the current platform. Dismissal is persisted for 14
+       days in localStorage so it doesn't nag declined visitors. The
+       Install button is wired to a stashed `beforeinstallprompt` event
+       on Chrome/Edge; Safari (mac) and iOS get instruction text only. -->
+  <div id="pwaInstallBanner" class="pwa-install-banner" hidden role="dialog" aria-live="polite" aria-label="Install CCC as a standalone app">
+    <button class="pwa-install-banner__close" id="pwaInstallClose" type="button" aria-label="Dismiss install banner">&times;</button>
+    <div class="pwa-install-banner__title">Install Claude Command Center</div>
+    <div class="pwa-install-banner__body" id="pwaInstallBody"></div>
+    <div class="pwa-install-banner__actions">
+      <button id="pwaInstallBtn" class="pwa-install-banner__cta" type="button" hidden>Install</button>
+    </div>
+  </div>
+  <!-- FOIT guard: read the persisted layout choice synchronously and apply
+       the body class BEFORE any layout paint. Without this, the sidebar
+       briefly renders for kanban-split users (whose sidebar is display:none)
+       and the resize handle flickers in then disappears.
+
+       Also runs the localStorage rename map (clv-* → ccc-*) inline, since
+       this read needs the new key to be populated. The main migration block
+       further down is idempotent — it's safe to run twice. -->
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem('ccc-kanban-view') === null
+            && localStorage.getItem('clv-kanban-view') !== null) {
+          localStorage.setItem('ccc-kanban-view', localStorage.getItem('clv-kanban-view'));
+        }
+        // The split-pane kanban layout (#kanbanLayout, gated on body.kanban-split)
+        // is no longer engaged by the user-facing toggle — the Board button now
+        // only swaps the sidebar's list ↔ kanban-board view, leaving .main
+        // visible always. Adding the class here hides .main via the
+        // `body.kanban-split .main { display: none }` rule below, so the FOIT
+        // pre-paint of the class is intentionally skipped now.
+        // Apply persisted appearance (theme + font) before first paint to
+        // avoid a flash of wrong theme.
+        const themePref = localStorage.getItem('ccc-theme') || 'system';
+        let resolved = themePref;
+        if (themePref === 'system') {
+          resolved = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        if (resolved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+        const fontPref = localStorage.getItem('ccc-font') || 'system';
+        if (fontPref === 'mono') document.documentElement.setAttribute('data-font', 'mono');
+      } catch (_) {}
+    })();
+  </script>
+
+  <!-- Loading overlay — covers the page until the first /api/sessions call
+       completes. Removed once the kanban renders. The label is set
+       synchronously based on a sessionStorage flag the picker writes
+       just before triggering location.reload(). -->
+  <div class="ccc-loading-overlay" id="cccLoadingOverlay">
+    <div class="ccc-loading-spinner"></div>
+    <div class="ccc-loading-label" id="cccLoadingLabel">
+      <strong>Loading sessions&hellip;</strong>
+      <div class="ccc-loading-detail">Preparing source-by-source scan.</div>
+      <div class="ccc-loading-breakdown" id="cccLoadingBreakdown" aria-live="polite">
+        <div class="ccc-loading-row" data-state="running">
+          <span class="ccc-loading-row-label"><span class="ccc-loading-status"></span>Repo</span>
+          <span class="ccc-loading-row-detail">Identifying watched repo.</span>
+          <span class="ccc-loading-count"></span>
+        </div>
+        <div class="ccc-loading-row" data-state="pending">
+          <span class="ccc-loading-row-label"><span class="ccc-loading-status"></span>Claude transcripts</span>
+          <span class="ccc-loading-row-detail">Counting JSONL files.</span>
+          <span class="ccc-loading-count"></span>
+        </div>
+        <div class="ccc-loading-row" data-state="pending">
+          <span class="ccc-loading-row-label"><span class="ccc-loading-status"></span>GitHub issues</span>
+          <span class="ccc-loading-row-detail">Waiting.</span>
+          <span class="ccc-loading-count"></span>
+        </div>
+        <div class="ccc-loading-row" data-state="pending">
+          <span class="ccc-loading-row-label"><span class="ccc-loading-status"></span>Issue states</span>
+          <span class="ccc-loading-row-detail">Waiting.</span>
+          <span class="ccc-loading-count"></span>
+        </div>
+        <div class="ccc-loading-row" data-state="pending">
+          <span class="ccc-loading-row-label"><span class="ccc-loading-status"></span>Backlog files</span>
+          <span class="ccc-loading-row-detail">Waiting.</span>
+          <span class="ccc-loading-count"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    function cccEscapeLoadingHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+    function cccDefaultLoadingSteps() {
+      return [
+        { key: 'repo', label: 'Repo', state: 'running', detail: 'Identifying watched repo.' },
+        { key: 'transcripts', label: 'Claude transcripts', state: 'pending', detail: 'Counting JSONL files.' },
+        { key: 'sessions', label: 'Interactive sessions', state: 'pending', detail: 'Waiting on transcript metadata.' },
+        { key: 'github', label: 'GitHub issues', state: 'pending', detail: 'Waiting.' },
+        { key: 'issue_states', label: 'Issue states', state: 'pending', detail: 'Waiting.' },
+        { key: 'todo', label: 'TODO.md', state: 'pending', detail: 'Waiting.' },
+        { key: 'parking', label: 'PARKING_LOT.md', state: 'pending', detail: 'Waiting.' },
+        { key: 'native_tasks', label: 'Native tasks', state: 'pending', detail: 'Waiting.' },
+      ];
+    }
+    function cccFormatLoadingCount(step) {
+      const hasCount = typeof step.count === 'number';
+      const hasTotal = typeof step.total === 'number';
+      if (hasCount && hasTotal) return step.count + '/' + step.total;
+      if (hasCount) return String(step.count);
+      return '';
+    }
+    function cccRenderLoadingStatus(status) {
+      const $label = document.getElementById('cccLoadingLabel');
+      if (!$label) return;
+      const title = window.cccLoadingTitleOverride || status.title || 'Loading sessions';
+      const message = status.message || 'Scanning sources by element.';
+      const steps = Array.isArray(status.steps) && status.steps.length ? status.steps : cccDefaultLoadingSteps();
+      const rows = steps.map((step) => {
+        const state = step.state || 'pending';
+        const count = cccFormatLoadingCount(step);
+        return '<div class="ccc-loading-row" data-state="' + cccEscapeLoadingHtml(state) + '">'
+          + '<span class="ccc-loading-row-label"><span class="ccc-loading-status"></span>'
+          + cccEscapeLoadingHtml(step.label || step.key || 'Source') + '</span>'
+          + '<span class="ccc-loading-row-detail">' + cccEscapeLoadingHtml(step.detail || '') + '</span>'
+          + '<span class="ccc-loading-count">' + cccEscapeLoadingHtml(count) + '</span>'
+          + '</div>';
+      }).join('');
+      $label.innerHTML =
+        '<strong>' + cccEscapeLoadingHtml(title) + '&hellip;</strong>' +
+        '<div class="ccc-loading-detail">' + cccEscapeLoadingHtml(message) + '</div>' +
+        '<div class="ccc-loading-breakdown" id="cccLoadingBreakdown" aria-live="polite">' + rows + '</div>';
+    }
+    window.cccSetLoadingStatus = function (title, message, steps) {
+      cccRenderLoadingStatus({ title, message, steps: steps || cccDefaultLoadingSteps() });
+    };
+    window.cccBeginLoadingStatusPolling = function () {
+      if (window.cccLoadingPollId) return;
+      const poll = async () => {
+        const $overlay = document.getElementById('cccLoadingOverlay');
+        if (!$overlay || $overlay.classList.contains('gone')) {
+          clearInterval(window.cccLoadingPollId);
+          window.cccLoadingPollId = null;
+          return;
+        }
+        try {
+          const res = await fetch('/api/loading-status', { cache: 'no-store' });
+          if (!res.ok) return;
+          const status = await res.json();
+          if (status && status.active && Array.isArray(status.steps)) {
+            cccRenderLoadingStatus(status);
+          }
+        } catch (_) {}
+      };
+      poll();
+      window.cccLoadingPollId = setInterval(poll, 450);
+    };
+    if (!window.__CCC_CONVERSATION_POPOUT__) window.cccBeginLoadingStatusPolling();
+    // If the user just switched repos, surface that in the label.
+    (function () {
+      try {
+        const switching = sessionStorage.getItem('ccc-switching-to');
+        if (switching) {
+          window.cccLoadingTitleOverride = 'Switching to ' + switching.replace(/[<>&]/g, '');
+          if (window.cccSetLoadingStatus) {
+            window.cccSetLoadingStatus(window.cccLoadingTitleOverride, 'Preparing source-by-source scan for the new repo.');
+          }
+          sessionStorage.removeItem('ccc-switching-to');
+        }
+        // Same idea for the in-app update flow — the post-restart page
+        // shows "Update complete, reconnecting…" instead of the default
+        // "Loading sessions…" while the session scan runs.
+        if (sessionStorage.getItem('ccc-updating')) {
+          window.cccLoadingTitleOverride = 'Update complete, reconnecting';
+          if (window.cccSetLoadingStatus) {
+            window.cccSetLoadingStatus(window.cccLoadingTitleOverride, 'Rescanning sources with the new version.');
+          }
+        } else if (sessionStorage.getItem('ccc-restarting')) {
+          window.cccLoadingTitleOverride = 'Restart complete, reconnecting';
+          if (window.cccSetLoadingStatus) {
+            window.cccSetLoadingStatus(window.cccLoadingTitleOverride, 'Rescanning sources after the server restart.');
+          }
+        }
+        // Archive-default boot: the slow request on cold scan is
+        // /api/conversations/all (cross-folder JSONL walk + git ops),
+        // not /api/sessions. Keep the overlay honest about what we're
+        // actually waiting on so 10s of "Loading sessions…" doesn't
+        // mislead. Mirrors the localStorage key + default in the
+        // archive toggle below — repeating it here avoids loading the
+        // whole script just to label the overlay.
+        let _archiveDefault = true;
+        try { localStorage.setItem('ccc-archive-mode', '1'); } catch (_) {}
+        if (_archiveDefault
+            && !sessionStorage.getItem('ccc-switching-to')
+            && !sessionStorage.getItem('ccc-updating')
+            && !sessionStorage.getItem('ccc-restarting')) {
+          const $label3 = document.getElementById('cccLoadingLabel');
+          if ($label3) {
+            $label3.innerHTML =
+              '<strong>Loading conversations&hellip;</strong>' +
+              '<div class="ccc-loading-detail">Scanning Claude Code transcripts across every folder. Faster on subsequent loads.</div>';
+          }
+        }
+        // Status-position class restore — has to run before first paint so
+        // the layout doesn't flash from "top strip" to "right rail".
+        // Persisted as `ccc-status-pos` ('top' | 'right'); default 'top'.
+        try {
+          const pos = localStorage.getItem('ccc-status-pos');
+          const railWidth = parseInt(localStorage.getItem('ccc-status-rail-width') || '0', 10);
+          if (railWidth >= 220 && railWidth <= 520) {
+            document.documentElement.style.setProperty('--status-rail-width', railWidth + 'px');
+          }
+          if (pos === 'right') {
+            document.body.classList.add('status-pos-right');
+            if (localStorage.getItem('ccc-status-rail-collapsed') === '1') {
+              document.body.classList.add('status-rail-collapsed');
+            }
+          }
+        } catch (_) {}
+        // Chip color mode — same FOIT-guard reasoning. Persisted as
+        // `ccc-chips-mode` ('color' default, 'muted' alt).
+        try {
+          const m = localStorage.getItem('ccc-chips-mode');
+          if (m === 'muted') document.body.classList.add('chips-muted');
+        } catch (_) {}
+      } catch (_) {}
+    })();
+  </script>
+
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
+      <!-- Top-left alerts strip. Hosts always-visible app-level signals
+           (Update pill, History-stale alert if indexing >24h behind, etc.)
+           Items are populated at boot by JS that re-parents nodes from
+           `.ccc-topbar`. Empty by default; collapses via :empty rule. -->
+      <div class="sidebar-top-alerts" id="sidebarTopAlerts" data-role="top-alerts"></div>
+      <div class="sidebar-header-actions">
+        <button id="historyBtn" class="sh-btn" title="Search past Claude Code conversations across every project on this Mac (powered by the local claude-index). Shortcut: /" aria-label="Search past conversations">&#128269; History</button>
+        <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Toggle Kanban board view" aria-label="Toggle Kanban board view"><span aria-hidden="true">&#9783;</span> Board</button>
+        <!-- Status position toggle. Two states: top (status strip above the
+             input — default) and right (status moved into a resizable right
+             rail beside the conversation pane). Persisted under
+             `ccc-status-pos`; the body class is restored on page load
+             before first paint to avoid a layout flash. -->
+        <button id="statusPosToggle" class="sh-btn" title="Move status (branch / context / cost / model) between the strip above the input and a right-side rail" aria-label="Toggle status position"><span aria-hidden="true" id="statusPosIcon">&#9707;</span></button>
+        <!-- Folder chip color toggle. Two states: color (per-folder hue —
+             default) and muted (uniform neutral). Persisted under
+             `ccc-chips-mode`. The body class `chips-muted` flips the
+             palette via CSS so no chip needs to re-render. -->
+        <button id="chipsColorToggle" class="sh-btn" title="Toggle colored / muted folder chips" aria-label="Toggle folder chip colors"><span aria-hidden="true" id="chipsColorIcon">&#9899;</span></button>
+      </div>
+    </div>
+
+    <div class="new-session-panel">
+      <button class="new-session-btn" id="sidebarNewBtn" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New session</button>
+    </div>
+    <div class="conv-list-panel" id="convListPanel">
+      <div class="conv-list-header">
+        <select id="convFolderFilter" title="Filter conversations by folder"></select>
+        <div class="search-wrap">
+          <input type="text" id="convSearch" class="conv-search-input" placeholder="Search conversations..." autocomplete="off">
+          <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
+        </div>
+      </div>
+      <div class="log-list" id="convList" style="overflow-y:auto;flex:1;min-height:0;max-height:none;">
+        <div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Loading...</div>
+      </div>
+      <div class="coord-toolbar" id="coordToolbar">
+        <span class="coord-count" id="coordCount"></span>
+        <button class="coord-btn" id="coordBtn">Coordinate&hellip;</button>
+        <button class="coord-clear-btn" id="coordClearBtn" title="Clear selection">&times;</button>
+      </div>
+      <div class="kanban-board" id="kanbanBoard" style="display:none;"></div>
+    </div>
+    <div class="attention-panel collapsed" id="attentionPanel">
+      <div class="attention-resize-handle" id="attentionResizeHandle" title="Drag up to resize · double-click to reset"></div>
+      <div class="attention-header">
+        <span class="att-title-label">Needs your attention</span>
+        <span class="att-count" id="attentionCount"></span>
+        <button id="attentionRefreshBtn" title="Force refresh — busts GH state cache and re-queries" style="margin-left:auto;font-size:13px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;line-height:1;">&#8634;</button>
+        <button id="attentionSeeAllBtn" title="Show every candidate, including stale ones" style="font-size:11px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;">See all</button>
+        <button class="att-toggle" id="attentionToggle" title="Collapse / expand" aria-label="Toggle Needs Your Attention panel">&#9662;</button>
+      </div>
+      <div class="attention-list" id="attentionList"></div>
+    </div>
+
+    <!-- Global app-level actions (History indexing pill, Stats, Report a bug,
+         Worktrees). Populated at boot by JS that moves these buttons here
+         from `.ccc-topbar` in the conversation toolbar — they aren't
+         conversation-scoped, so they don't belong above a single conv pane. -->
+    <div class="sidebar-global-actions" id="sidebarGlobalActions" data-role="global-actions"></div>
+
+    <!-- Bottom-mounted settings strip, Claude-Desktop-style -->
+    <div class="sidebar-footer">
+      <div class="sidebar-footer-spacer"></div>
+      <div style="position:relative;">
+        <button type="button" class="sidebar-footer-btn" id="settingsBtn" title="Settings" aria-label="Settings" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
+        <div class="desktop-popover" id="settingsPopover" role="menu" aria-label="Settings menu" style="bottom:calc(100% + 6px);right:0;">
+          <div id="appearancePopover" role="group" aria-label="Appearance options">
+            <details class="pop-submenu">
+              <summary class="pop-item"><span class="pop-icon">&#9680;</span><span>Theme</span><span class="pop-chevron">&#8250;</span></summary>
+              <div class="pop-submenu-panel">
+                <button class="pop-item" type="button" data-theme="light" role="menuitemradio"><span class="pop-check" data-check-theme="light"></span><span>Light</span></button>
+                <button class="pop-item" type="button" data-theme="dark" role="menuitemradio"><span class="pop-check" data-check-theme="dark"></span><span>Dark</span></button>
+                <button class="pop-item" type="button" data-theme="system" role="menuitemradio"><span class="pop-check" data-check-theme="system"></span><span>Match system</span></button>
+              </div>
+            </details>
+            <details class="pop-submenu">
+              <summary class="pop-item"><span class="pop-icon">Aa</span><span>Font</span><span class="pop-chevron">&#8250;</span></summary>
+              <div class="pop-submenu-panel">
+                <button class="pop-item" type="button" data-font="system" role="menuitemradio"><span class="pop-check" data-check-font="system"></span><span>System</span></button>
+                <button class="pop-item" type="button" data-font="mono" role="menuitemradio"><span class="pop-check" data-check-font="mono"></span><span>Mono</span></button>
+              </div>
+            </details>
+          </div>
+          <div class="pop-divider"></div>
+          <!-- Slot for app-level actions moved out of the conv toolbar
+               (Terminal panel toggle, History indexing status, Worktrees,
+               Stats, Report a bug, Font A-/A+). Populated at boot by JS;
+               the items get the .pop-item style via the menu wrapper. -->
+          <div class="settings-menu-slot" id="settingsMenuSlot" data-role="settings-menu-slot"></div>
+          <div class="pop-divider"></div>
+          <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
+          <button class="pop-item" type="button" id="restartServerBtn"><span class="pop-icon">&#8635;</span><span id="restartServerLabel">Restart server</span></button>
+          <a class="pop-item" href="https://github.com/amirfish1/claude-command-center#readme" target="_blank" rel="noopener"><span class="pop-icon">?</span><span>Get help</span></a>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="sidebar-resizer" id="sidebarResizer" title="Drag to resize"></div>
+  <div class="main">
+    <div class="toolbar" id="convToolbar">
+      <button class="mobile-back-btn" id="mobileBackBtn" title="Back to sidebar">&#8592; Back</button>
+      <button class="pkood-kill-btn" id="pkoodKillBtn" style="display:none;" title="Kill this pkood agent">Kill</button>
+      <button class="announce-btn-conv" id="announceBtnConv" style="display:none;" title="Run /announce-feature — ships and broadcasts to every studio">Close &amp; announce</button>
+      <button class="jump-btn" id="jumpBtnConv" style="display:none;" title="Bring the terminal running this session to the front">
+        <span class="jump-icon">&#8599;</span>
+        <span class="jump-label">Jump to terminal</span>
+      </button>
+      <span class="launch-split" id="launchWrapConv" style="display:none;">
+        <button class="launch-btn" id="launchBtnConv" title="Open a new terminal and resume this session">
+          <span class="jump-icon">&#43;</span>
+          <span class="jump-label">Launch</span>
+        </button>
+        <button class="launch-choice-btn" id="launchChoiceBtnConv" type="button" title="Choose launch target" aria-label="Choose launch target" aria-haspopup="menu" aria-expanded="false">&#9662;</button>
+        <span class="launch-choice-menu" id="launchChoiceMenuConv" role="menu" aria-hidden="true"></span>
+      </span>
+      <span class="live-badge" id="liveBadgeConv" style="display:none;" title="Streaming directly from the headless agent's stdout (block-level)">
+        <span class="live-badge-dot"></span>
+        <span class="live-badge-label">live</span>
+      </span>
+      <span class="status" id="convStatus"></span>
+      <!-- Global controls (formerly the standalone .ccc-topbar row above —
+           merged into the main toolbar to recover ~33px of vertical space). -->
+      <div class="ccc-topbar" id="cccTopbar" style="margin-left:auto;">
+        <button type="button" id="updPill" class="upd-pill" title="A new release is available on GitHub. Click to review and update.">
+          <span class="upd-pill-dot"></span>
+          <span id="updPillText">Update available</span>
+        </button>
+        <button type="button" id="bugReportLink" class="bug-link" title="Report a bug or request a feature. Files a GitHub issue against amirfish1/claude-command-center.">
+          &#9873; Report a bug
+        </button>
+        <button id="kptWorktreesBtn" class="topbar-btn" title="Show all worktrees of this repo, with an indicator for those that have uncommitted changes." aria-label="Show worktrees">&#127807; Worktrees</button>
+        <button id="statsBtn" class="topbar-btn" title="Usage stats — sessions, messages, tokens, streaks across every Claude Code transcript on this machine." aria-label="Show usage stats">&#128202; Stats</button>
+        <button id="gcActiveBtn" class="topbar-btn" style="display:none;" title="Active group-chat coordinations — click to open the most recent one" aria-label="Active group chats"></button>
+        <button id="termToggleBtn" class="topbar-btn" title="Open the in-UI terminal panel — run quick shell commands (git status, npm test, ./script.sh) without leaving the page. One-shot per command, no interactive TTY (no vim/top)." aria-label="Toggle terminal panel">&#9000; Terminal</button>
+        <a class="topbar-btn sh-btn-deploy" id="deployPill" target="_blank" rel="noopener" title="Vercel deploy — loading…" aria-label="Vercel deploy status"><span class="deploy-dot" id="deployDot"></span><span class="deploy-label" id="deployStateLabel">Vercel</span></a>
+        <a class="topbar-btn sh-btn-deploy" id="localhostPill" target="_blank" rel="noopener" title="localhost dev server — loading…" aria-label="Local Next.js dev server"><span class="deploy-dot" id="localhostDot"></span><span class="deploy-label" id="localhostLabel">localhost</span></a>
+        <div id="historyStatusPill" class="topbar-btn hi-status-pill" style="display:none;" title="" role="button" tabindex="0">
+          <span class="hi-pill-icon" id="hiPillIcon">&#128218;</span>
+          <span class="hi-pill-label" id="hiPillLabel">History</span>
+          <span class="hi-pill-sem" id="hiPillSem" style="display:none;" title="Semantic embeddings present">&#10024;</span>
+        </div>
+        <div id="setupBanner" class="ccc-setup-banner"></div>
+      </div>
+      <div class="font-size-controls">
+        <button class="font-size-btn" id="fontMinus" title="Decrease font size">A-</button>
+        <button class="font-size-btn" id="fontPlus" title="Increase font size">A+</button>
+      </div>
+      <span style="font-size:11px;color:var(--text-muted);font-family:'SF Mono',SFMono-Regular,Consolas,monospace;opacity:0.6;cursor:pointer;user-select:all;margin-left:8px;" id="convSessionId" title="Click to copy session ID"></span>
+      <div class="conv-overflow-wrap">
+        <button type="button" class="conv-overflow-btn" id="convOverflowBtn" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
+        <div class="conv-overflow-menu" id="convOverflowMenu" role="menu" aria-hidden="true"></div>
+      </div>
+    </div>
+    <div class="issues-view" id="issuesView" style="display:none;">
+      <div class="empty-state" style="height:auto;padding:40px;">Loading issues...</div>
+    </div>
+    <div class="conv-split" id="convSplit" data-orientation="">
+      <div class="conv-pane" data-pane-id="p1">
+        <div class="conv-pane-header" data-role="pane-header">
+          <div class="conv-pane-titlebar" data-role="pane-titlebar">
+            <span class="conv-pane-category" data-role="pane-category"></span>
+            <span class="conv-pane-title" data-role="pane-title"></span>
+          </div>
+          <button class="conv-pane-close" data-role="pane-close" title="Close pane" aria-label="Close pane" style="display:none;">&times;</button>
+        </div>
+        <div class="conversations-view" id="conversationsView">
+          <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
+        </div>
+        <div class="conv-input-context" id="convInputContext" data-role="input-context">
+          <span class="wp-row" data-workspace></span>
+          <span id="spawnCwdQuickChips" class="spawn-cwd-quick-chips" aria-label="Recent repositories"></span>
+          <!-- New-session-only cwd picker. Visibility controlled by
+               .is-new-session on the context strip; populated by
+               populateSpawnCwdPicker(); read by spawnFromInlineInput()
+               so the spawn lands in the user-chosen folder. -->
+          <span class="spawn-cwd-row">
+            <span class="spawn-cwd-label">cwd</span>
+            <span class="spawn-cwd-combo">
+              <input id="spawnCwdPicker" class="spawn-cwd-picker"
+                     title="Folder the new session will be spawned in"
+                     aria-label="Folder for new session"
+                     autocomplete="off"
+                     spellcheck="false">
+              <button id="spawnCwdMenuBtn" class="spawn-cwd-menu-btn" type="button"
+                      title="Show folder suggestions"
+                      aria-label="Show folder suggestions"
+                      aria-haspopup="listbox"
+                      aria-expanded="false">&#9662;</button>
+              <button id="spawnCwdBrowseBtn" class="spawn-cwd-browse-btn" type="button"
+                      title="Choose folder"
+                      aria-label="Choose folder">&#128193;</button>
+              <div id="spawnCwdMenu" class="spawn-cwd-menu" role="listbox"></div>
+            </span>
+          </span>
+          <label class="spawn-worktree-row" title="Spawn the session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main.">
+            <input type="checkbox" id="inlineWorktreeToggle"> 🌿 worktree
+          </label>
+          <span class="wp-usage" data-usage></span>
+        </div>
+        <!-- Right-side status rail. Always visible — hosts session-level
+             actions (Launch terminal, Terminal panel toggle, Vercel deploy
+             status) at the top, and (when toggled) the sticky-header's
+             Original ask + Session activity below them. Buttons are moved
+             in by JS at boot from `.ccc-topbar`. -->
+        <aside class="status-rail" id="statusRail" aria-label="Session status rail">
+          <div class="status-rail-resizer" id="statusRailResizer" role="separator" aria-orientation="vertical" aria-label="Resize status rail" aria-controls="statusRail" tabindex="0" title="Drag to resize the status rail; drag to the right edge to hide it"></div>
+          <div class="rail-actions" id="railActions" data-role="rail-actions"></div>
+          <div class="conv-bg-palette" data-role="conv-bg-palette" role="radiogroup" aria-label="Conversation background color"></div>
+        </aside>
+        <button class="status-rail-restore" id="statusRailRestoreBtn" type="button" title="Show status rail" aria-label="Show status rail" aria-controls="statusRail">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+            <line x1="15" y1="3" x2="15" y2="21"></line>
+          </svg>
+        </button>
+        <div class="conv-input-bar" id="convInputBar">
+          <textarea id="convInput" rows="1" placeholder="Send to terminal..." autocomplete="off" spellcheck="false"></textarea>
+          <!-- Engine picker for new-session mode. Occupies the same slot as
+               the Esc button (mutually exclusive — Esc only appears for live
+               sessions, this only for `__new__`). updateInputBar() toggles
+               visibility. -->
+          <select id="convInputEngineSelect" class="engine-select" title="Engine that spawns this new session — claude, codex, or gemini" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
+            <option value="claude">claude</option>
+            <option value="codex">codex</option>
+            <option value="gemini">gemini</option>
+          </select>
+          <select id="convInputIssueAction" title="Action to take on this issue" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
+            <option value="spawn">Fix (session)</option>
+            <option value="needs_attention">Reply + Needs-Attention</option>
+            <option value="close">Reply + Close</option>
+            <option value="completed">Close: completed</option>
+            <option value="not_planned">Close: not planned</option>
+            <option value="duplicate">Close: duplicate #</option>
+          </select>
+          <button class="esc-btn" id="convEscBtn" title="Send Esc to terminal — cancels in-flight response (or kills a headless spawn)">Esc</button>
+          <button class="send-btn" id="convSendBtn" title="Send to terminal" aria-label="Send to terminal">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 19 L12 5 M6 11 L12 5 L18 11"></path>
+            </svg>
+          </button>
+          <button class="tts-btn" id="convTtsBtn" title="Read last message" aria-label="Read last message" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M11 5 6 9H3v6h3l5 4V5Z"></path>
+              <path d="M15.5 8.5a5 5 0 0 1 0 7"></path>
+              <path d="M18.5 5.5a9 9 0 0 1 0 13"></path>
+            </svg>
+          </button>
+        </div>
+        <!-- Footer hint row beneath the input card — tty label on the left,
+             keyboard-shortcut hint on the right. Kept out of the input row
+             itself so the row stays uncluttered. -->
+        <div class="conv-input-hint" id="convInputHint">
+          <span class="tty-label" id="convTtyLabel"></span>
+          <span class="conv-input-kbd"><kbd>⏎</kbd> send &nbsp;·&nbsp; <kbd>⇧⏎</kbd> newline</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Split Kanban Layout (hidden by default) ── -->
+  <div id="kanbanLayout">
+    <div class="kanban-panel">
+      <div class="kanban-panel-toolbar">
+        <input type="text" class="kpt-search" id="kptSearch" placeholder="Search sessions...">
+        <button id="kptRefreshBtn" title="Refresh data" aria-label="Refresh data">&#8634;</button>
+        <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
+        <select id="kptToolbarEngineSelect" title="Engine that spawns the new session — claude, codex, or gemini" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
+          <option value="claude">claude</option>
+          <option value="codex">codex</option>
+          <option value="gemini">gemini</option>
+        </select>
+        <button id="kptRunBtn" title="Run new session" aria-label="Run new session">Run</button>
+        <button id="kptListViewBtn" title="Switch to list view" aria-label="Switch to list view">&#9783;</button>
+        <span class="kpt-deploy" id="kptDeployStatus" title="Vercel deploy status" style="margin-left:auto;font-size:11px;display:flex;align-items:center;gap:4px;color:var(--text-muted);white-space:nowrap;"></span>
+        <button id="kptOpenConvBtn" class="panel-toggle-btn" title="Show conversation panel (⌘\)" aria-label="Show conversation panel" style="display:none;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2"/>
+            <line x1="15" y1="4" x2="15" y2="20"/>
+          </svg>
+        </button>
+      </div>
+      <div class="kanban-board-split" id="kanbanBoardSplit"></div>
+      <button class="kanban-reload-btn" id="kanbanReloadBtn" title="Reload page">&#8634;</button>
+    </div>
+    <div class="split-resizer" id="splitResizer"></div>
+    <div class="conv-panel">
+      <div class="conv-panel-toolbar" id="convPanelToolbar">
+        <button class="mobile-back-btn" id="cpMobileBackBtn" title="Back to board">&#8592; Back</button>
+        <button id="cpJumpBtn" style="display:none;" title="Jump to terminal"><span>&#8599;</span> Jump</button>
+        <span class="launch-split cp-launch-split" id="cpLaunchSplit" style="display:none;">
+          <button id="cpLaunchBtn" title="Launch in terminal"><span>&#43;</span> Launch</button>
+          <button class="launch-choice-btn" id="cpLaunchChoiceBtn" type="button" title="Choose launch target" aria-label="Choose launch target" aria-haspopup="menu" aria-expanded="false">&#9662;</button>
+          <span class="launch-choice-menu" id="cpLaunchChoiceMenu" role="menu" aria-hidden="true"></span>
+        </span>
+        <span class="live-badge" id="cpLiveBadge" style="display:none;" title="Streaming directly from the headless agent's stdout (block-level)">
+          <span class="live-badge-dot"></span>
+          <span class="live-badge-label">live</span>
+        </span>
+        <button id="cpKillBtn" style="display:none;" title="Kill agent">Kill</button>
+        <div style="display:flex;gap:4px;margin-left:auto;">
+          <button id="cpFontMinus" title="Decrease font size">A-</button>
+          <button id="cpFontPlus" title="Increase font size">A+</button>
+        </div>
+        <span class="cpt-session-id" id="cpSessionId"></span>
+        <button id="cpCloseBtn" class="panel-toggle-btn" title="Hide conversation panel (⌘\)" aria-label="Hide conversation panel" style="margin-left:8px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2"/>
+            <line x1="15" y1="4" x2="15" y2="20"/>
+          </svg>
+        </button>
+      </div>
+      <div class="conv-panel-view" id="convPanelView">
+        <div class="empty-state">Select a session from the board</div>
+      </div>
+      <div class="conv-panel-input" id="convPanelInput">
+        <div class="cpi-wrap">
+          <textarea id="cpInput" rows="1" placeholder="Send to terminal…" autocomplete="off" spellcheck="false"></textarea>
+          <button class="cpi-send" id="cpSendBtn" type="button" title="Send (Enter)" aria-label="Send" disabled>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M5 12 L19 12 M13 6 L19 12 L13 18"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="cpi-hint">
+          <span class="tty-label" id="cpTtyLabel"></span>
+          <span class="cpi-enter-hint"><kbd>⏎</kbd> send &nbsp;·&nbsp; <kbd>⇧⏎</kbd> newline</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <button class="mobile-reload-btn" id="mobileReloadBtn" title="Reload page" aria-label="Reload">&#8634;</button>
+
+  <!-- ⌘K / ⌘P session search modal — fuzzy-filters all sessions by
+       display_name / first_message, sorted by recency. -->
+  <div id="cmdkModal" class="cmdk-overlay" role="dialog" aria-modal="true" aria-label="Search sessions">
+    <div class="cmdk-backdrop" id="cmdkBackdrop"></div>
+    <div class="cmdk-dialog">
+      <div class="cmdk-input-wrap">
+        <svg class="cmdk-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="text" id="cmdkInput" placeholder="Search chats and projects…" autocomplete="off" spellcheck="false" />
+        <span class="cmdk-hint" aria-hidden="true">Esc</span>
+      </div>
+      <div id="cmdkList" role="listbox" aria-label="Sessions"></div>
+      <div class="cmdk-footer">
+        <span><span class="cmdk-hint">↑↓</span> navigate</span>
+        <span><span class="cmdk-hint">↵</span> open</span>
+        <span><span class="cmdk-hint">Esc</span> close</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="ffcOverlay" class="ffc-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="ffcTitle">
+    <div class="ffc-backdrop" id="ffcBackdrop"></div>
+    <div class="ffc-dialog">
+      <div class="ffc-header">
+        <div class="ffc-title" id="ffcTitle">Files in this conversation</div>
+        <button type="button" class="ffc-close" id="ffcClose" aria-label="Close">×</button>
+      </div>
+      <div class="ffc-body" id="ffcBody"></div>
+      <div class="ffc-footer" id="ffcFooter" hidden></div>
+    </div>
+  </div>
+
+  <div id="newSessionModal" class="nsm-overlay" style="display:none;" role="dialog" aria-modal="true">
+    <div class="nsm-backdrop" id="nsmBackdrop"></div>
+    <div class="nsm-dialog">
+      <div class="nsm-header">
+        <span>New session</span>
+        <span class="nsm-hint">Esc to cancel · &#8984;&#9166; to launch</span>
+      </div>
+      <!-- Template gallery. Cards render from static/templates.json; clicking
+           one prefills the body, engine, and worktree toggle below. Hidden
+           when the gallery is empty or fails to load (graceful fallback to
+           the blank-prompt experience). -->
+      <div id="nsmGallery" class="nsm-gallery" style="display:none;" aria-label="Session templates"></div>
+      <textarea id="nsmBody" placeholder="What should this session do? (the first sentence becomes the card title — you can rename later or hit ✨ to AI-generate one)"></textarea>
+      <div class="nsm-actions">
+        <label class="nsm-engine" style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);">
+          Engine
+          <select id="nsmEngineSelect" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:12px;">
+            <option value="claude">claude</option>
+            <option value="codex">codex</option>
+            <option value="gemini">gemini</option>
+          </select>
+        </label>
+        <label class="nsm-pkood" title="Spawn the session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main."><input type="checkbox" id="nsmWorktree"> 🌿 worktree</label>
+        <span style="flex:1;"></span>
+        <button id="nsmCancel" class="nsm-btn">Cancel</button>
+        <button id="nsmSubmit" class="nsm-btn nsm-primary">Launch</button>
+      </div>
+      <div id="nsmError" style="display:none;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;font-size:12px;color:var(--red);background:rgba(248,81,73,0.1);border:1px solid rgba(248,81,73,0.3);border-radius:6px;padding:10px 12px;user-select:text;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow:auto;"></div>
+    </div>
+  </div>
+
+  <!-- Repo picker modal — opens when the user selects "Pick a repo…" from
+       the topbar dropdown. Shows a Recent section, the full known list,
+       and a Browse button that triggers the OS-native folder chooser. -->
+  <div id="repoPickerModal" class="rpm-overlay" role="dialog" aria-modal="true" aria-labelledby="rpmTitle">
+    <div class="rpm-backdrop" id="rpmBackdrop"></div>
+    <div class="rpm-dialog">
+      <div class="rpm-header">
+        <span class="rpm-header-title" id="rpmTitle">Pick a repo</span>
+        <span class="rpm-header-hint">Esc to cancel</span>
+      </div>
+      <div class="rpm-section-label" id="rpmRecentLabel" style="display:none;">Recent</div>
+      <div class="rpm-list" id="rpmRecentList" style="display:none;"></div>
+      <div class="rpm-section-label" id="rpmOtherLabel">All known</div>
+      <div class="rpm-list" id="rpmOtherList"></div>
+      <div class="rpm-error" id="rpmError"></div>
+      <div class="rpm-actions">
+        <button type="button" class="rpm-browse-btn" id="rpmBrowseBtn" title="Open the native macOS folder chooser">Browse&hellip;</button>
+        <button type="button" class="rpm-cancel-btn" id="rpmCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- In-app update modal. Opened from #updPill when the local install is
+       behind the latest GitHub release. Runs `git reset --hard origin/main`
+       in the install dir and restarts the server in-place. -->
+  <div id="updModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="updTitle">
+    <div class="upd-backdrop" id="updBackdrop"></div>
+    <div class="upd-dialog">
+      <div class="upd-title" id="updTitle">Update Claude Command Center</div>
+      <div class="upd-versions" id="updVersions"></div>
+      <a id="updCompareLink" class="upd-compare-link" href="#" target="_blank" rel="noopener">View changes on GitHub &rarr;</a>
+      <div class="upd-warning">
+        Runs <code>git fetch + reset --hard origin/main</code> in the install
+        directory, then restarts the server. Pre-flight checks require a
+        clean working tree on the <code>main</code> branch.
+      </div>
+      <div class="upd-error" id="updError"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="updLaterBtn">Later</button>
+        <button type="button" class="upd-btn upd-primary" id="updNowBtn">Update now</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bug-report modal. Opened from #bugReportLink. POSTs to
+       /api/bug-report which shells out to `gh issue create` against
+       amirfish1/claude-command-center. If gh is missing or fails, the
+       handler returns a rendered markdown blob and we offer a
+       copy-to-clipboard fallback. -->
+  <div id="bugReportModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="bugReportTitle">
+    <div class="upd-backdrop" id="bugReportBackdrop"></div>
+    <div class="upd-dialog" style="width:min(560px,92vw);">
+      <div class="upd-title" id="bugReportTitle">Report a bug</div>
+      <div class="upd-versions">
+        Files a GitHub issue against
+        <strong>amirfish1/claude-command-center</strong>. The context block
+        below is auto-attached to the report.
+      </div>
+      <div>
+        <label class="bug-label" for="bugReportTitleInput">Title</label>
+        <input type="text" id="bugReportTitleInput" class="bug-input" maxlength="200"
+               placeholder="One-line summary of the bug or feature request" />
+      </div>
+      <div>
+        <label class="bug-label" for="bugReportDescInput">Description</label>
+        <textarea id="bugReportDescInput" class="bug-input bug-textarea"
+                  placeholder="What did you see? What did you expect? Steps to reproduce…"></textarea>
+      </div>
+      <div>
+        <label class="bug-label">Screenshot (optional)</label>
+        <div class="bug-shot-row">
+          <button type="button" class="bug-shot-btn" id="bugReportShotBtn">
+            <span class="bug-shot-ico" aria-hidden="true"></span>
+            <span id="bugReportShotBtnLabel">Add screenshot</span>
+          </button>
+        </div>
+        <div class="bug-shot-help">
+          Opens the macOS area-selector — draw a rectangle over what you want to share.
+          Screenshots are published to a public branch of the CCC repo, so include
+          only what you're OK making public.
+        </div>
+        <div class="bug-shot-preview" id="bugReportShotPreview">
+          <img id="bugReportShotImg" alt="Screenshot preview" />
+          <div class="bug-shot-preview-actions">
+            <button type="button" class="bug-shot-btn" id="bugReportShotRetakeBtn">Retake</button>
+            <button type="button" class="bug-shot-btn" id="bugReportShotRemoveBtn">Remove</button>
+          </div>
+        </div>
+      </div>
+      <div>
+        <label class="bug-label">Auto-attached context</label>
+        <div class="bug-meta" id="bugReportMeta">Loading…</div>
+      </div>
+      <div class="upd-error" id="bugReportError"></div>
+      <div class="bug-success" id="bugReportSuccess"></div>
+      <div class="bug-fallback" id="bugReportFallback"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="bugReportCancelBtn">Cancel</button>
+        <button type="button" class="upd-btn" id="bugReportCopyBtn" style="display:none;">Copy markdown</button>
+        <button type="button" class="upd-btn upd-primary" id="bugReportSubmitBtn">Send report</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Network-access modal. Opened from the settings popover.
+       Lets the user opt in to reachability over their tailnet without
+       editing env vars. POSTs to /api/network-config which writes
+       ~/.claude/command-center/network.json and triggers an in-place
+       restart. Localhost-only on the server side — see SECURITY.md. -->
+  <div id="networkModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="networkTitle">
+    <div class="upd-backdrop" id="networkBackdrop"></div>
+    <div class="upd-dialog" style="width:min(620px,94vw);">
+      <div class="upd-title" id="networkTitle">Network access</div>
+      <div class="upd-versions">
+        Lets a phone or other device on your trusted network reach the UI.
+        CCC has no auth — every origin trusted here can run commands as
+        you. See <a href="https://github.com/amirfish1/claude-command-center/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;">
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;">
+          <input type="checkbox" id="networkBindAll" style="margin-top:3px;">
+          <span>
+            <strong>Listen on all network interfaces</strong>
+            <div style="color:var(--text-muted);font-size:12px;margin-top:2px;">
+              Switches the bind from <code>127.0.0.1</code> to <code>0.0.0.0</code>.
+              Required for any non-loopback access. The same-origin check below still gates writes.
+            </div>
+          </span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;">
+          <input type="checkbox" id="networkTrustTailnet" style="margin-top:3px;">
+          <span>
+            <strong>Trust my Tailscale tailnet</strong>
+            <div style="color:var(--text-muted);font-size:12px;margin-top:2px;" id="networkTailnetSummary">
+              Detecting Tailscale…
+            </div>
+          </span>
+        </label>
+        <div>
+          <label class="bug-label" for="networkExtraOrigins">Additional allowed origins</label>
+          <textarea id="networkExtraOrigins" class="bug-input bug-textarea" style="min-height:60px;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;font-size:12px;"
+                    placeholder="http://my-host:8090&#10;http://192.168.1.50:8090"></textarea>
+          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
+            One per line. Use full origins (scheme://host[:port]). Useful for VPNs other than Tailscale.
+          </div>
+        </div>
+        <div id="networkEnvNotice" style="display:none;font-size:12px;color:var(--text-muted);background:rgba(255,176,0,0.08);border:1px solid rgba(255,176,0,0.25);border-radius:6px;padding:8px 10px;"></div>
+      </div>
+      <div class="upd-error" id="networkError"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="networkCancelBtn">Cancel</button>
+        <button type="button" class="upd-btn upd-primary" id="networkSaveBtn">Save &amp; restart</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Worktrees modal. Opened from the 🌿 pill in the input-context
+       strip. Lists sibling worktrees of the session's repo so the user
+       can spot subagent-spawned forks they may not realise exist. -->
+  <div id="worktreesModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="worktreesTitle">
+    <div class="upd-backdrop" id="worktreesBackdrop"></div>
+    <div class="upd-dialog" style="width:min(720px,94vw);">
+      <div class="upd-title" id="worktreesTitle">Worktrees</div>
+      <div class="wt-summary" id="worktreesSummary"></div>
+      <div class="wt-list" id="worktreesList"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="worktreesCloseBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Usage stats overlay. Opened from the topbar Stats button.
+       Renders an Overview tab (8 metric cards + day-of-week × hour heatmap)
+       and a Models tab (per-model message share). Data comes from the
+       /api/stats endpoint, which aggregates every transcript under
+       ~/.claude/projects via mtime-cached per-file walks. -->
+  <div id="statsModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="statsTitle">
+    <div class="upd-backdrop" data-stats-close="1"></div>
+    <div class="stats-dialog" id="statsDialog">
+      <div class="stats-header">
+        <button type="button" class="stats-tab active" data-stats-tab="overview" id="statsTabOverview">Overview</button>
+        <button type="button" class="stats-tab" data-stats-tab="models" id="statsTabModels">Models</button>
+        <div class="stats-range" role="group" aria-label="Date range">
+          <button type="button" data-stats-range="all">All</button>
+          <button type="button" data-stats-range="30d" class="active">30d</button>
+          <button type="button" data-stats-range="7d">7d</button>
+        </div>
+        <button type="button" class="stats-close" id="statsCloseBtn" aria-label="Close stats">&times;</button>
+      </div>
+      <div id="statsBody">
+        <div class="stats-loading">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- History search — right-side drawer over a backdrop.
+       Read-only window onto ~/.claude-index/index.db (see /api/search-history). -->
+  <div id="hsdOverlay" class="hsd-overlay" role="dialog" aria-modal="true" aria-labelledby="hsdTitle" hidden>
+    <aside class="hsd-drawer" aria-label="History search">
+      <header class="hsd-header">
+        <h2 id="hsdTitle">&#128269; History search</h2>
+        <button type="button" id="hsdCloseBtn" class="hsd-close" aria-label="Close">&times;</button>
+      </header>
+      <div class="hsd-controls">
+        <input type="search" id="hsdInput" class="hsd-input"
+               placeholder="Search past Claude Code conversations…" autocomplete="off"
+               spellcheck="false" />
+        <div class="hsd-filters">
+          <select id="hsdSince" class="hsd-since" aria-label="Time window">
+            <option value="">All time</option>
+            <option value="1d">Today</option>
+            <option value="7d" selected>Past 7 days</option>
+            <option value="30d">Past 30 days</option>
+          </select>
+          <label class="hsd-repo-only">
+            <input type="checkbox" id="hsdRepoOnly"> This repo only
+          </label>
+        </div>
+        <div class="hsd-status" id="hsdStatus" aria-live="polite"></div>
+      </div>
+      <div class="hsd-body">
+        <ul class="hsd-results" id="hsdResults" role="listbox" tabindex="0"></ul>
+        <article class="hsd-detail" id="hsdDetail">
+          <div class="hsd-detail-empty">Click a result to view the full message.</div>
+        </article>
+      </div>
+    </aside>
+  </div>
+
+<!-- Coordinate sessions modal -->
+<div class="coord-modal-backdrop" id="coordModalBackdrop">
+  <div class="coord-modal" role="dialog" aria-modal="true" aria-labelledby="coordModalTitle">
+    <h3 id="coordModalTitle">Coordinate sessions</h3>
+    <div>
+      <label for="coordTopicInput">Topic</label>
+      <input type="text" id="coordTopicInput" maxlength="120" placeholder="e.g. Redesign the auth flow" autocomplete="off">
+    </div>
+    <div>
+      <label>Mode</label>
+      <div class="mode-row">
+        <label><input type="radio" name="coordMode" id="coordModeTopicRadio" value="topic" checked> Topic coordination</label>
+        <label><input type="radio" name="coordMode" id="coordModeGitRadio" value="git"> Git coordination</label>
+      </div>
+      <div class="mode-hint" id="coordModeHint"></div>
+    </div>
+    <div>
+      <label>Participants</label>
+      <div class="participants-list" id="coordParticipantsList"></div>
+    </div>
+    <div class="modal-error" id="coordModalError"></div>
+    <div class="modal-footer">
+      <button class="modal-cancel" id="coordModalCancel">Cancel</button>
+      <button class="modal-start" id="coordModalStart" type="button">Start coordination</button>
+    </div>
+  </div>
+</div>
+
+<script src="./static/app.js"></script>
+
+<!-- ── In-UI terminal panel ──────────────────────────────────────────────
+     A small one-shot terminal: type a command, hit Enter, output streams
+     in via SSE. `cd` is parsed server-side so the prompt's cwd survives
+     between commands. Cancel kills the whole process group. Not a real
+     PTY — no vim / top / interactive prompts. -->
+<style>
+  #termPanel {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 99;
+    height: 280px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: none;
+    flex-direction: column;
+    box-shadow: 0 -4px 16px rgba(0,0,0,0.35);
+    font-family: ui-monospace, "SF Mono", "Menlo", "Monaco", "Roboto Mono", monospace;
+    font-size: 12px;
+  }
+  body.has-side-nav #termPanel { left: 52px; }
+  #termPanel.open { display: flex; }
+  #termPanel .term-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    background: var(--surface-2, #1c2128);
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+    flex-shrink: 0;
+  }
+  #termPanel .term-title {
+    font-weight: 600; color: var(--text); font-size: 11px;
+    letter-spacing: 0.3px;
+  }
+  #termPanel .term-cwd {
+    color: var(--text-muted); font-size: 11px; opacity: 0.85;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1;
+  }
+  #termPanel .term-cwd b { color: var(--accent); font-weight: 600; }
+  #termPanel .term-resize {
+    cursor: ns-resize; height: 4px; width: 100%;
+    position: absolute; top: -2px; left: 0;
+    background: transparent;
+  }
+  #termPanel .term-resize:hover { background: var(--accent); opacity: 0.4; }
+  #termPanel .term-actions { display: flex; gap: 4px; }
+  #termPanel .term-actions button {
+    padding: 2px 8px; font-size: 11px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    cursor: pointer;
+  }
+  #termPanel .term-actions button:hover { background: var(--surface-2); }
+  #termPanel .term-actions button.danger { color: #f85149; border-color: rgba(248,81,73,0.4); }
+  #termPanel .term-actions button[disabled] { opacity: 0.4; cursor: not-allowed; }
+  #termPanel .term-log {
+    flex: 1; min-height: 0; overflow-y: auto;
+    padding: 8px 10px;
+    background: var(--bg);
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.45;
+  }
+  #termPanel .term-log .term-cmd { color: var(--accent); font-weight: 600; }
+  #termPanel .term-log .term-err { color: #f85149; }
+  #termPanel .term-log .term-exit { color: var(--text-muted); opacity: 0.75; font-style: italic; }
+  #termPanel .term-input-row {
+    display: flex; align-items: center;
+    padding: 6px 10px;
+    background: var(--surface-2, #1c2128);
+    border-top: 1px solid var(--border);
+    gap: 8px;
+    flex-shrink: 0;
+    min-height: 32px;
+    box-sizing: border-box;
+  }
+  #termPanel .term-prompt {
+    color: var(--accent); font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 30ch;
+  }
+  #termPanel .term-prompt::after { content: ' $'; color: var(--text-muted); }
+  #termPanel .term-input {
+    flex: 1; min-width: 0;
+    background: transparent; border: none; outline: none;
+    color: var(--text); font-family: inherit; font-size: 12px;
+    line-height: 18px; padding: 0; margin: 0; height: 18px;
+  }
+  #termPanel .term-input:disabled { opacity: 0.5; }
+  #termPanel .term-busy {
+    width: 10px; height: 10px;
+    border: 2px solid rgba(88,166,255,0.25);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: ccc-spin 0.7s linear infinite;
+    display: none;
+  }
+  #termPanel.busy .term-busy { display: inline-block; }
+  /* ANSI SGR colors — minimal palette. */
+  #termPanel .ansi-30 { color: #6e7681; } #termPanel .ansi-31 { color: #f85149; }
+  #termPanel .ansi-32 { color: #56d364; } #termPanel .ansi-33 { color: #d29922; }
+  #termPanel .ansi-34 { color: #58a6ff; } #termPanel .ansi-35 { color: #bc8cff; }
+  #termPanel .ansi-36 { color: #76e3ea; } #termPanel .ansi-37 { color: #c9d1d9; }
+  #termPanel .ansi-90 { color: #484f58; } #termPanel .ansi-91 { color: #ff7b72; }
+  #termPanel .ansi-92 { color: #7ee787; } #termPanel .ansi-93 { color: #d2a8ff; }
+  #termPanel .ansi-94 { color: #79c0ff; } #termPanel .ansi-95 { color: #d2a8ff; }
+  #termPanel .ansi-96 { color: #a5d6ff; } #termPanel .ansi-97 { color: #f0f6fc; }
+  #termPanel .ansi-bold { font-weight: 700; }
+</style>
+
+<div id="termPanel" role="region" aria-label="Terminal panel">
+  <div class="term-resize" id="termResize" title="Drag to resize"></div>
+  <div class="term-header">
+    <span class="term-title">Terminal</span>
+    <span class="term-cwd" id="termCwdLabel" title="Current working directory (relative to repo root)">…</span>
+    <span class="term-busy" id="termBusy" aria-hidden="true"></span>
+    <div class="term-actions">
+      <button id="termCancelBtn" class="danger" disabled title="Cancel the running command (kills the process group)">Cancel</button>
+      <button id="termClearBtn" title="Clear the output log">Clear</button>
+      <button id="termCloseBtn" title="Hide the terminal panel">&times;</button>
+    </div>
+  </div>
+  <div class="term-log" id="termLog" tabindex="0"></div>
+  <div class="term-input-row">
+    <span class="term-prompt" id="termPrompt">repo</span>
+    <input type="text" class="term-input" id="termInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="run a command (no vim/top — use --yes for interactive scripts)">
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const $panel = document.getElementById('termPanel');
+  const $toggle = document.getElementById('termToggleBtn');
+  const $closeBtn = document.getElementById('termCloseBtn');
+  const $cancelBtn = document.getElementById('termCancelBtn');
+  const $clearBtn = document.getElementById('termClearBtn');
+  const $log = document.getElementById('termLog');
+  const $input = document.getElementById('termInput');
+  const $prompt = document.getElementById('termPrompt');
+  const $cwdLabel = document.getElementById('termCwdLabel');
+  const $resize = document.getElementById('termResize');
+  if (!$panel || !$toggle || !$input) return;
+
+  const HISTORY_KEY = 'ccc.term.history';
+  const PANEL_OPEN_KEY = 'ccc.term.open';
+  const PANEL_HEIGHT_KEY = 'ccc.term.height';
+  const MAX_LOG_LINES = 5000;
+  const MAX_HISTORY = 50;
+
+  let history = [];
+  try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (_) {}
+  if (!Array.isArray(history)) history = [];
+  let histIdx = history.length;          // pointer for up/down recall
+  let pendingDraft = '';                  // what the user was typing before recall
+
+  let evtSource = null;                   // active EventSource, if any
+  let abortCtrl = null;                   // for fetch-based POST + body stream
+  let running = false;
+
+  function setRunning(on) {
+    running = on;
+    $panel.classList.toggle('busy', on);
+    $cancelBtn.disabled = !on;
+    $input.disabled = on;
+    if (!on) requestAnimationFrame(() => $input.focus());
+  }
+
+  function persistOpen(open) {
+    try { localStorage.setItem(PANEL_OPEN_KEY, open ? '1' : '0'); } catch (_) {}
+  }
+
+  function openPanel() {
+    $panel.classList.add('open');
+    $toggle.classList.add('active');
+    persistOpen(true);
+    refreshCwd();
+    setTimeout(() => $input.focus(), 0);
+  }
+  function closePanel() {
+    $panel.classList.remove('open');
+    $toggle.classList.remove('active');
+    persistOpen(false);
+    if (running) cancelRunning();
+  }
+  $toggle.addEventListener('click', () => {
+    if ($panel.classList.contains('open')) closePanel(); else openPanel();
+  });
+  $closeBtn.addEventListener('click', closePanel);
+  $clearBtn.addEventListener('click', () => { $log.innerHTML = ''; });
+
+  // Restore panel state.
+  try {
+    if (localStorage.getItem(PANEL_OPEN_KEY) === '1') openPanel();
+    const h = parseInt(localStorage.getItem(PANEL_HEIGHT_KEY) || '0', 10);
+    if (h >= 120 && h <= 700) $panel.style.height = h + 'px';
+  } catch (_) {}
+
+  // Resize handle (drag the top edge).
+  let dragStartY = 0, dragStartH = 0;
+  $resize.addEventListener('mousedown', (e) => {
+    dragStartY = e.clientY;
+    dragStartH = $panel.getBoundingClientRect().height;
+    document.body.style.userSelect = 'none';
+    const onMove = (m) => {
+      const dy = dragStartY - m.clientY;
+      const next = Math.max(120, Math.min(700, dragStartH + dy));
+      $panel.style.height = next + 'px';
+    };
+    const onUp = () => {
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      try {
+        const h = Math.round($panel.getBoundingClientRect().height);
+        localStorage.setItem(PANEL_HEIGHT_KEY, String(h));
+      } catch (_) {}
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  function setCwdDisplay(cwd, rel) {
+    const shown = rel ? rel : '.';
+    $cwdLabel.innerHTML = 'cwd: <b></b>';
+    $cwdLabel.querySelector('b').textContent = shown;
+    $cwdLabel.title = cwd || shown;
+    // Prompt: last path segment, or 'repo' if at root.
+    let label = shown.split('/').filter(Boolean).pop() || 'repo';
+    if (label.length > 24) label = '…' + label.slice(-23);
+    $prompt.textContent = label;
+  }
+
+  async function refreshCwd() {
+    const repoPath = selectedRepoPath();
+    if (!repoPath) {
+      setCwdDisplay('', 'Pick a repo');
+      return;
+    }
+    try {
+      const r = await fetch(repoUrl('/api/term/cwd', repoPath));
+      if (!r.ok) return;
+      const j = await r.json();
+      setCwdDisplay(j.cwd, j.rel);
+    } catch (_) {}
+  }
+  if (!window.__CCC_CONVERSATION_POPOUT__) refreshCwd();
+
+  // Tiny ANSI SGR parser — handles \x1b[<n>;<m>m. Strips other escape
+  // sequences (cursor moves, etc.) so they don't render as literal junk.
+  // Returns an array of { text, classes } segments.
+  function parseAnsi(input) {
+    const segs = [];
+    const re = /\x1b\[([0-9;]*)m|\x1b\[[0-9;?]*[A-Za-z]/g;
+    let last = 0, classes = [];
+    let m;
+    const flush = (end) => {
+      if (end > last) segs.push({ text: input.slice(last, end), classes: classes.slice() });
+    };
+    while ((m = re.exec(input)) !== null) {
+      flush(m.index);
+      last = re.lastIndex;
+      if (m[1] === undefined) continue; // non-SGR escape — drop
+      const codes = m[1].split(';').filter(s => s !== '').map(Number);
+      if (codes.length === 0) { classes = []; continue; }
+      for (const c of codes) {
+        if (c === 0) classes = [];
+        else if (c === 1) { if (!classes.includes('ansi-bold')) classes.push('ansi-bold'); }
+        else if ((c >= 30 && c <= 37) || (c >= 90 && c <= 97)) {
+          classes = classes.filter(x => !/^ansi-\d+$/.test(x));
+          classes.push('ansi-' + c);
+        }
+      }
+    }
+    flush(input.length);
+    return segs;
+  }
+
+  function appendOutput(text, kind) {
+    // Strip carriage returns that would otherwise render as artifacts.
+    text = text.replace(/\r(?!\n)/g, '');
+    const wrap = document.createElement('span');
+    if (kind) wrap.className = 'term-' + kind;
+    if (kind === 'cmd' || kind === 'exit' || kind === 'err') {
+      wrap.textContent = text;
+    } else {
+      for (const seg of parseAnsi(text)) {
+        if (seg.classes.length === 0) {
+          wrap.appendChild(document.createTextNode(seg.text));
+        } else {
+          const span = document.createElement('span');
+          span.className = seg.classes.join(' ');
+          span.textContent = seg.text;
+          wrap.appendChild(span);
+        }
+      }
+    }
+    $log.appendChild(wrap);
+    // Trim if log grew too large.
+    if ($log.childNodes.length > MAX_LOG_LINES) {
+      while ($log.childNodes.length > MAX_LOG_LINES) {
+        $log.removeChild($log.firstChild);
+      }
+    }
+    // Auto-scroll if the user is near the bottom.
+    const nearBottom = ($log.scrollHeight - $log.scrollTop - $log.clientHeight) < 80;
+    if (nearBottom) $log.scrollTop = $log.scrollHeight;
+  }
+
+  function pushHistory(cmd) {
+    if (!cmd) return;
+    if (history[history.length - 1] === cmd) return;
+    history.push(cmd);
+    while (history.length > MAX_HISTORY) history.shift();
+    histIdx = history.length;
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch (_) {}
+  }
+
+  async function runCommand(cmd) {
+    if (!cmd.trim()) return;
+    if (running) return;  // ignore Enter while running (per design)
+    const repoPath = requireSelectedRepo('Terminal');
+    if (!repoPath) return;
+    appendOutput((($prompt.textContent || 'repo')) + ' $ ' + cmd + '\n', 'cmd');
+    pushHistory(cmd);
+    setRunning(true);
+
+    abortCtrl = new AbortController();
+    let resp;
+    try {
+      resp = await fetch('/api/term/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cmd, repo_path: repoPath }),
+        signal: abortCtrl.signal,
+      });
+    } catch (e) {
+      appendOutput('[connection failed: ' + (e && e.message || e) + ']\n', 'err');
+      setRunning(false);
+      return;
+    }
+    if (resp.status === 409) {
+      appendOutput('[server says another command is running]\n', 'err');
+      setRunning(false);
+      return;
+    }
+    if (!resp.ok || !resp.body) {
+      appendOutput('[server error ' + resp.status + ']\n', 'err');
+      setRunning(false);
+      return;
+    }
+
+    // Parse the SSE stream by hand — EventSource doesn't support POST.
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buf = '';
+    let sawExit = false;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        // Events end with \n\n.
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) !== -1) {
+          const raw = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          let evName = 'message', dataLines = [];
+          for (const line of raw.split('\n')) {
+            if (line.startsWith('event: ')) evName = line.slice(7).trim();
+            else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
+          }
+          const dataStr = dataLines.join('\n');
+          let payload = null;
+          if (dataStr) { try { payload = JSON.parse(dataStr); } catch (_) {} }
+          if (handleSseEvent(evName, payload)) sawExit = true;
+        }
+        if (sawExit) {
+          // Server sends `Connection: close`, but don't depend on socket
+          // close timing — once we've seen `exit`, we're done.
+          try { reader.cancel(); } catch (_) {}
+          break;
+        }
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        appendOutput('[stream error: ' + (e && e.message || e) + ']\n', 'err');
+      }
+    } finally {
+      setRunning(false);
+      abortCtrl = null;
+    }
+  }
+
+  // Returns true if this event is a terminal `exit`, signalling the
+  // reader loop to wind up regardless of socket-close timing.
+  function handleSseEvent(name, payload) {
+    if (!payload) return false;
+    if (name === 'data' && typeof payload.chunk === 'string') {
+      appendOutput(payload.chunk, null);
+      return false;
+    }
+    if (name === 'error' && payload.message) {
+      appendOutput('[' + payload.message + ']\n', 'err');
+      return false;
+    }
+    if (name === 'exit') {
+      const code = payload.code;
+      if (typeof code === 'number' && code !== 0) {
+        appendOutput('[exit ' + code + ']\n', 'exit');
+      }
+      if (typeof payload.cwd === 'string') {
+        setCwdDisplay(payload.cwd, payload.rel || '');
+      }
+      return true;
+    }
+    return false;
+  }
+
+  async function cancelRunning() {
+    if (!running) return;
+    const repoPath = selectedRepoPath();
+    try {
+      await fetch('/api/term/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(withRepoPath({}, repoPath)),
+      });
+    } catch (_) {}
+    appendOutput('^C\n', 'exit');
+    if (abortCtrl) { try { abortCtrl.abort(); } catch (_) {} }
+  }
+  $cancelBtn.addEventListener('click', cancelRunning);
+
+  $input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const cmd = $input.value;
+      $input.value = '';
+      pendingDraft = '';
+      runCommand(cmd);
+    } else if (e.key === 'ArrowUp') {
+      if (!history.length) return;
+      e.preventDefault();
+      if (histIdx === history.length) pendingDraft = $input.value;
+      histIdx = Math.max(0, histIdx - 1);
+      $input.value = history[histIdx] || '';
+      requestAnimationFrame(() => {
+        $input.setSelectionRange($input.value.length, $input.value.length);
+      });
+    } else if (e.key === 'ArrowDown') {
+      if (histIdx === history.length) return;
+      e.preventDefault();
+      histIdx = Math.min(history.length, histIdx + 1);
+      $input.value = histIdx === history.length ? pendingDraft : history[histIdx];
+    } else if (e.key === 'c' && (e.ctrlKey || e.metaKey)) {
+      // Let real copy through if there's a selection in the log; otherwise
+      // treat ctrl-c as cancel.
+      if (window.getSelection && String(window.getSelection())) return;
+      if (running) { e.preventDefault(); cancelRunning(); }
+    } else if (e.key === 'Escape') {
+      // Close panel on Escape (when input is empty).
+      if (!$input.value) { e.preventDefault(); closePanel(); }
+    }
+  });
+
+  // Global hotkey: Ctrl/Cmd+` to toggle panel.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '`' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if ($panel.classList.contains('open')) closePanel(); else openPanel();
+    }
+  });
+})();
+</script>
+
+<script>
+// ============================================================================
+// History search — search past Claude Code conversations from inside CCC.
+// Read-only window onto ~/.claude-index/index.db via /api/search-history and
+// /api/history-message. Self-contained; no dependencies on other CCC modules.
+// ============================================================================
+(function () {
+  const $overlay = document.getElementById('hsdOverlay');
+  if (!$overlay) return;  // markup not present — feature disabled in this build
+  const $btn      = document.getElementById('historyBtn');
+  const $closeBtn = document.getElementById('hsdCloseBtn');
+  const $input    = document.getElementById('hsdInput');
+  const $since    = document.getElementById('hsdSince');
+  const $repoOnly = document.getElementById('hsdRepoOnly');
+  const $status   = document.getElementById('hsdStatus');
+  const $results  = document.getElementById('hsdResults');
+  const $detail   = document.getElementById('hsdDetail');
+
+  let _searchSeq = 0;     // monotonic — guards against out-of-order responses
+  let _debounceT = null;
+  let _selectedUuid = null;
+
+  // Resolve the current repo for the "this repo only" filter. Prefer the
+  // global repoListState the rest of the UI maintains; fall back to a
+  // one-off fetch if it hasn't loaded yet.
+  async function currentRepoCwd() {
+    try {
+      if (typeof selectedRepoPath === 'function' && selectedRepoPath()) {
+        return selectedRepoPath();
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      const r = await fetch('/api/repo/list');
+      if (!r.ok) return '';
+      const j = await r.json();
+      return '';
+    } catch (e) { return ''; }
+  }
+
+  function setStatus(text, isError) {
+    $status.textContent = text || '';
+    $status.classList.toggle('is-error', !!isError);
+  }
+
+  function fmtTs(iso) {
+    if (!iso) return '';
+    // 2026-04-30T17:03:29.123Z → 2026-04-30 17:03
+    return String(iso).slice(0, 16).replace('T', ' ');
+  }
+
+  function shortCwd(cwd) {
+    if (!cwd) return '';
+    return cwd.replace(/^\/Users\/[^/]+/, '~');
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // Snippet contains literal <mark>...</mark> tags from FTS5; render them.
+  // Everything outside the marks is escaped so user content can't inject.
+  function renderSnippet(snippet) {
+    const s = String(snippet == null ? '' : snippet);
+    const parts = s.split(/(<mark>|<\/mark>)/g);
+    let out = '';
+    let inMark = false;
+    for (const part of parts) {
+      if (part === '<mark>') { out += '<mark>'; inMark = true; }
+      else if (part === '</mark>') { out += '</mark>'; inMark = false; }
+      else { out += escapeHtml(part); }
+    }
+    return out;
+  }
+
+  function renderResults(results) {
+    if (!results || !results.length) {
+      $results.innerHTML = '<li class="hsd-empty-state">No matches.</li>';
+      return;
+    }
+    const html = results.map(r => {
+      const ts = fmtTs(r.timestamp);
+      const role = escapeHtml(r.type || '');
+      const cwd = shortCwd(r.cwd || '');
+      const snippet = renderSnippet(r.snippet);
+      const uuid = escapeHtml(r.uuid || '');
+      return `
+        <li class="hsd-result" data-uuid="${uuid}">
+          <div class="hsd-result-meta">
+            <span class="role">${role}</span>
+            <span class="ts">${escapeHtml(ts)}</span>
+          </div>
+          <div class="hsd-result-cwd" title="${escapeHtml(r.cwd || '')}">${escapeHtml(cwd)}</div>
+          <div class="hsd-result-snippet">${snippet}</div>
+        </li>`;
+    }).join('');
+    $results.innerHTML = html;
+  }
+
+  function renderDetail(msg) {
+    if (!msg) {
+      $detail.innerHTML = '<div class="hsd-detail-empty">Click a result to view the full message.</div>';
+      return;
+    }
+    const meta = [
+      ['Time', fmtTs(msg.timestamp)],
+      ['Type', msg.type || ''],
+      ['Role', msg.role || ''],
+      ['Session', msg.session_id || ''],
+      ['CWD', msg.cwd || ''],
+      ['Branch', msg.git_branch || '-'],
+      ['Model', msg.model || ''],
+    ];
+    const metaHtml = meta.map(([k, v]) =>
+      `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`
+    ).join('');
+    $detail.innerHTML = `
+      <dl class="hsd-detail-meta">${metaHtml}</dl>
+      <pre class="hsd-detail-content">${escapeHtml(msg.content || '')}</pre>
+    `;
+  }
+
+  async function runSearch() {
+    const q = $input.value.trim();
+    if (!q) {
+      $results.innerHTML = '';
+      setStatus('');
+      return;
+    }
+    const seq = ++_searchSeq;
+    setStatus('Searching…');
+
+    const params = new URLSearchParams({ q, limit: '50' });
+    const since = $since.value;
+    if (since) params.set('since', since);
+    if ($repoOnly.checked) {
+      const cwd = await currentRepoCwd();
+      if (cwd) params.set('cwd', cwd);
+    }
+
+    let json;
+    try {
+      const r = await fetch('/api/search-history?' + params.toString());
+      json = await r.json();
+    } catch (e) {
+      if (seq !== _searchSeq) return;
+      setStatus('Network error — see console.', true);
+      console.error(e);
+      return;
+    }
+    if (seq !== _searchSeq) return;  // newer query already in flight
+
+    if (json.error) {
+      setStatus(json.error, true);
+      $results.innerHTML = '';
+      return;
+    }
+    const n = (json.results || []).length;
+    setStatus(n ? `${n} result${n === 1 ? '' : 's'}` : 'No matches');
+    renderResults(json.results || []);
+  }
+
+  function debouncedSearch() {
+    if (_debounceT) clearTimeout(_debounceT);
+    _debounceT = setTimeout(runSearch, 220);
+  }
+
+  async function loadDetail(uuid) {
+    if (!uuid) return;
+    _selectedUuid = uuid;
+    // Highlight the selected row.
+    Array.from($results.querySelectorAll('.hsd-result')).forEach(el => {
+      el.classList.toggle('is-selected', el.getAttribute('data-uuid') === uuid);
+    });
+    $detail.innerHTML = '<div class="hsd-detail-empty">Loading…</div>';
+    let msg = null;
+    try {
+      const r = await fetch('/api/history-message?uuid=' + encodeURIComponent(uuid));
+      if (r.ok) msg = await r.json();
+    } catch (e) { console.error(e); }
+    renderDetail(msg);
+  }
+
+  function openDrawer() {
+    $overlay.hidden = false;
+    // Force reflow then mark open so the CSS transition runs.
+    void $overlay.offsetHeight;
+    $overlay.dataset.open = '1';
+    setTimeout(() => $input.focus(), 50);
+    if (!$input.value) {
+      // Empty drawer — show hint, no fetch.
+      $results.innerHTML = '<li class="hsd-empty-state">Type to search past Claude Code conversations.</li>';
+      $detail.innerHTML = '<div class="hsd-detail-empty">Click a result to view the full message.</div>';
+    }
+  }
+
+  function closeDrawer() {
+    delete $overlay.dataset.open;
+    setTimeout(() => { $overlay.hidden = true; }, 220);
+  }
+
+  // ----- wiring -----
+  if ($btn) $btn.addEventListener('click', openDrawer);
+  $closeBtn.addEventListener('click', closeDrawer);
+
+  // Click backdrop (but not the drawer itself) to close.
+  $overlay.addEventListener('click', (e) => {
+    if (e.target === $overlay) closeDrawer();
+  });
+
+  $input.addEventListener('input', debouncedSearch);
+  $input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); runSearch(); }
+    if (e.key === 'Escape') { e.preventDefault(); closeDrawer(); }
+  });
+  $since.addEventListener('change', runSearch);
+  $repoOnly.addEventListener('change', runSearch);
+
+  $results.addEventListener('click', (e) => {
+    const li = e.target.closest('.hsd-result');
+    if (li) loadDetail(li.getAttribute('data-uuid'));
+  });
+
+  // Global '/' shortcut to open the drawer (unless typing in another input).
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== '/') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const tag = (e.target && e.target.tagName) || '';
+    const editable = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
+                     (e.target && e.target.isContentEditable);
+    if (editable) return;
+    e.preventDefault();
+    openDrawer();
+  });
+})();
+</script>
+
+<!-- Register the PWA service worker so Chrome/Edge expose the "Install app"
+     affordance and Safari users can "Add to Dock". Registration is fire-and-
+     forget — failures (sandboxed contexts, file://) are silently ignored
+     because CCC works fine without the SW; it just doesn't show as
+     installable. Deferred behind `load` so it never competes with the
+     initial render. -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      // Demo: skip SW registration. On GitHub Pages we live under /demo/,
+      // not the site root, and trying to install a SW at /sw.js 404s or
+      // captures the wrong scope. Real install still has its own SW.
+      // navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+    });
+  }
+</script>
+
+<!-- PWA install nudge. Tab-mode only — never shows when already installed.
+     Per-platform copy: Chrome/Edge get a one-click Install button wired to
+     the stashed `beforeinstallprompt` event; Safari (mac) and iOS Safari
+     get instruction text since neither browser exposes the install API.
+     Dismissal persists in localStorage for 14 days so it doesn't nag
+     visitors who declined; auto-hides if the app is installed mid-session.
+  -->
+<script>
+(function() {
+  const $banner = document.getElementById('pwaInstallBanner');
+  const $body   = document.getElementById('pwaInstallBody');
+  const $btn    = document.getElementById('pwaInstallBtn');
+  const $close  = document.getElementById('pwaInstallClose');
+  if (!$banner || !$body || !$btn || !$close) return;
+
+  const DISMISS_KEY = 'ccc-pwa-install-dismissed';
+  const RENAG_AFTER_MS = 14 * 24 * 3600 * 1000;
+  let deferred = null;
+
+  // Standalone detection covers all known PWA modes plus the legacy iOS
+  // Safari `navigator.standalone` flag. If any matches, the user already
+  // installed — don't nag.
+  function isStandalone() {
+    return window.matchMedia('(display-mode: standalone)').matches
+        || window.matchMedia('(display-mode: window-controls-overlay)').matches
+        || window.matchMedia('(display-mode: minimal-ui)').matches
+        || window.navigator.standalone === true;
+  }
+  if (isStandalone()) return;
+
+  // Honor previous dismissal for 14 days. After that the banner re-appears
+  // on the next non-standalone visit — long enough not to be annoying,
+  // short enough to catch users who forgot.
+  try {
+    const last = parseInt(localStorage.getItem(DISMISS_KEY) || '0', 10);
+    if (last && (Date.now() - last) < RENAG_AFTER_MS) return;
+  } catch (_) {}
+
+  // Platform sniff — only used to pick the right copy. Browsers don't all
+  // expose the same install affordance, so we tailor the instructions:
+  //   • iOS Safari   → Share sheet → Add to Home Screen
+  //   • macOS Safari → File menu → Add to Dock…
+  //   • Chrome/Edge  → click the Install button (uses beforeinstallprompt)
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPad|iPhone|iPod/.test(ua) && !window.MSStream;
+  const isSafari = /^((?!chrome|android|edg|crios|fxios).)*safari/i.test(ua) && !isIOS;
+  const isChromiumLike = /Chrome|CriOS|Edg/.test(ua) && !isSafari;
+
+  if (isIOS) {
+    $body.innerHTML = 'Tap the <strong>Share</strong> icon, then <strong>Add to Home Screen</strong>. CCC opens in its own window — no tab bar, native feel.';
+  } else if (isSafari) {
+    $body.innerHTML = 'In Safari\'s menu bar, choose <strong>File → Add to Dock…</strong> CCC opens in its own window with no browser chrome.';
+    // Safari has no install API; turn the button into a "Show me" link
+    // that re-states the menu path with a small visual cue.
+    $btn.hidden = false;
+    $btn.textContent = 'How to install';
+  } else if (isChromiumLike) {
+    $body.innerHTML = 'Install CCC as a focused dashboard window — no browser chrome, dock icon, faster context switches.';
+    // Show the button immediately so the banner always has a click target,
+    // even before `beforeinstallprompt` fires (it can take a few seconds,
+    // or never fire if the engagement heuristic isn't met). Click handler
+    // below falls back to manual-install instructions when the event
+    // hasn't been stashed yet.
+    $btn.hidden = false;
+    $btn.textContent = 'Install';
+  } else {
+    $body.innerHTML = 'Look for "Install app" in your browser menu — CCC will open in its own window.';
+    $btn.hidden = false;
+    $btn.textContent = 'How to install';
+  }
+
+  // Stash the install event so the user-gesture click can call .prompt()
+  // later. Without preventDefault the browser may show its own mini-infobar.
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    deferred = e;
+    $btn.hidden = false;
+    $btn.textContent = 'Install';
+  });
+
+  function showManualInstructions() {
+    let msg;
+    if (isIOS) {
+      msg = 'Tap the Share icon at the bottom of the screen, scroll down, then tap "Add to Home Screen".';
+    } else if (isSafari) {
+      msg = 'In Safari\'s menu bar (top of the screen), choose File → Add to Dock…';
+    } else if (isChromiumLike) {
+      msg = 'Click the install icon in the address bar (looks like a screen with a down-arrow), or open the browser menu and choose "Install Claude Command Center".';
+    } else {
+      msg = 'Open your browser menu and look for "Install app" or "Add to Home Screen".';
+    }
+    // Use a simple alert for now — keeps the install path obvious without
+    // a custom modal. Could swap for an inline expanding panel later.
+    window.alert(msg);
+  }
+
+  $btn.addEventListener('click', async function () {
+    if (deferred) {
+      try {
+        deferred.prompt();
+        const choice = await deferred.userChoice;
+        if (choice && choice.outcome === 'accepted') {
+          $banner.hidden = true;
+        }
+      } catch (_) { /* user cancelled */ }
+      deferred = null;
+      return;
+    }
+    // No stashed event — fall back to manual instructions for the
+    // platform. This is the "engagement heuristic not yet met" path on
+    // Chrome/Edge, plus the only path on Safari (mac + iOS).
+    showManualInstructions();
+  });
+
+  $close.addEventListener('click', function () {
+    $banner.hidden = true;
+    try { localStorage.setItem(DISMISS_KEY, String(Date.now())); } catch (_) {}
+  });
+
+  // If install completes mid-session, hide the banner immediately.
+  window.addEventListener('appinstalled', function () {
+    $banner.hidden = true;
+    try { localStorage.removeItem(DISMISS_KEY); } catch (_) {}
+  });
+
+  // Show after a short delay so it doesn't compete with first paint.
+  // 2.5s is long enough for the page to settle, short enough to catch
+  // the user before they get distracted.
+  setTimeout(function () { $banner.hidden = false; }, 2500);
+})();
+</script>
+
+</body>
+</html>

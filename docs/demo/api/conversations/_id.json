@@ -1,0 +1,53 @@
+{
+  "events": [
+    {
+      "type": "user",
+      "line": 1,
+      "ts": "2026-05-19T08:01:00Z",
+      "blocks": [
+        { "type": "text", "text": "This is a demo session. In the real dashboard, this pane shows the live JSONL transcript of the selected Claude / Codex / Gemini session as it happens." }
+      ]
+    },
+    {
+      "type": "assistant",
+      "line": 2,
+      "ts": "2026-05-19T08:01:18Z",
+      "blocks": [
+        { "type": "text", "text": "Right — I'll walk through the plan first, then implement. The demo doesn't actually run anything; it's a static snapshot of the dashboard's chrome and a hand-written conversation fixture so you can see the layout." }
+      ]
+    },
+    {
+      "type": "assistant",
+      "line": 3,
+      "ts": "2026-05-19T08:01:42Z",
+      "blocks": [
+        { "type": "tool_use", "tool": "Read", "detail": "app/routes/health.py" }
+      ]
+    },
+    {
+      "type": "assistant",
+      "line": 4,
+      "ts": "2026-05-19T08:01:55Z",
+      "blocks": [
+        { "type": "tool_use", "tool": "Edit", "detail": "app/routes/health.py" }
+      ]
+    },
+    {
+      "type": "assistant",
+      "line": 5,
+      "ts": "2026-05-19T08:02:12Z",
+      "blocks": [
+        { "type": "tool_use", "tool": "Bash", "detail": "pytest tests/test_health.py -q" }
+      ]
+    },
+    {
+      "type": "assistant",
+      "line": 6,
+      "ts": "2026-05-19T08:02:35Z",
+      "blocks": [
+        { "type": "text", "text": "Done. New `/healthz` route returns `{ok: true, sha: <BUILD_SHA>}`. Tests pass. Install CCC locally to drive your own sessions through this dashboard." }
+      ]
+    }
+  ],
+  "last_line": 6
+}

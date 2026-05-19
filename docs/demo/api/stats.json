@@ -1,0 +1,23 @@
+{
+  "totals": {
+    "sessions": 12,
+    "input_tokens": 2480000,
+    "output_tokens": 312000,
+    "cache_read": 5800000,
+    "cache_creation": 410000
+  },
+  "by_day": [
+    { "date": "2026-05-13", "sessions": 1, "input_tokens": 180000, "output_tokens": 22000 },
+    { "date": "2026-05-14", "sessions": 2, "input_tokens": 320000, "output_tokens": 41000 },
+    { "date": "2026-05-15", "sessions": 3, "input_tokens": 510000, "output_tokens": 64000 },
+    { "date": "2026-05-16", "sessions": 1, "input_tokens": 220000, "output_tokens": 28000 },
+    { "date": "2026-05-17", "sessions": 2, "input_tokens": 380000, "output_tokens": 47000 },
+    { "date": "2026-05-18", "sessions": 1, "input_tokens": 240000, "output_tokens": 30000 },
+    { "date": "2026-05-19", "sessions": 2, "input_tokens": 630000, "output_tokens": 80000 }
+  ],
+  "by_repo": [
+    { "repo": "/home/demo/code/widgets-api", "label": "widgets-api", "sessions": 7 },
+    { "repo": "/home/demo/code/blog-engine", "label": "blog-engine", "sessions": 3 },
+    { "repo": "/home/demo/code/marketing-site", "label": "marketing-site", "sessions": 2 }
+  ]
+}

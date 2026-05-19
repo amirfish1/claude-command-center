@@ -1,0 +1,10 @@
+{
+  "session_id": "_id",
+  "input_tokens": 18400,
+  "output_tokens": 1820,
+  "cache_creation_input_tokens": 12200,
+  "cache_read_input_tokens": 124000,
+  "total_input_with_cache": 154600,
+  "limit_assumed": 200000,
+  "pct": 77
+}

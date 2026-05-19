@@ -1,0 +1,8 @@
+{
+  "host": "demo-host",
+  "port": 8090,
+  "pid": 0,
+  "started": "2026-05-19T08:00:00Z",
+  "repo_path": "/home/demo/code/widgets-api",
+  "repo_label": "widgets-api"
+}

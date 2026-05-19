@@ -1,0 +1,6 @@
+{
+  "files": [
+    { "path": "app/routes/health.py", "kind": "edit", "lines_changed": 12 },
+    { "path": "tests/test_health.py", "kind": "create", "lines_changed": 24 }
+  ]
+}

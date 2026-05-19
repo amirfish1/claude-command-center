@@ -1,0 +1,11 @@
+{
+  "stored": {},
+  "runtime": {
+    "bind_host": "127.0.0.1",
+    "allowed_origins": ["http://localhost:8090"],
+    "trust_tailnet": false,
+    "env_overrides": {},
+    "port": 8090
+  },
+  "tailnet": []
+}

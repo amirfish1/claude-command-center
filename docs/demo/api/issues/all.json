@@ -1,0 +1,125 @@
+{
+  "fetched_at": 1747671600,
+  "errors": {},
+  "issues": [
+    {
+      "number": 312,
+      "title": "Pagination breaks when filter has > 100 items",
+      "body": "On the admin list view, applying a filter with more than 100 matching items shows page 1 but the page-2 button is dead. Looks like the count query uses the filtered count but the link uses the unfiltered count.",
+      "url": "https://github.com/demo/widgets-api/issues/312",
+      "state": "OPEN",
+      "stateReason": null,
+      "createdAt": "2026-05-15T11:32:00Z",
+      "updatedAt": "2026-05-18T09:14:00Z",
+      "labels": [
+        { "name": "bug" }
+      ],
+      "repo_path": "/home/demo/code/widgets-api",
+      "repo_label": "widgets-api"
+    },
+    {
+      "number": 318,
+      "title": "Add audit log for billing changes",
+      "body": "Every time a billing plan changes (upgrade, downgrade, cancel), we should write an audit row with the actor, the before/after, and the timestamp.",
+      "url": "https://github.com/demo/widgets-api/issues/318",
+      "state": "OPEN",
+      "stateReason": null,
+      "createdAt": "2026-05-16T08:01:00Z",
+      "updatedAt": "2026-05-17T13:40:00Z",
+      "labels": [
+        { "name": "enhancement" }
+      ],
+      "repo_path": "/home/demo/code/widgets-api",
+      "repo_label": "widgets-api"
+    },
+    {
+      "number": 321,
+      "title": "Webhook retries hammer downstream when the upstream is flapping",
+      "body": "Reported by two customers. When the receiving end returns 5xx intermittently, our retry loop fires too aggressively. Switch to exponential backoff with jitter; cap at 6 retries.",
+      "url": "https://github.com/demo/widgets-api/issues/321",
+      "state": "OPEN",
+      "stateReason": null,
+      "createdAt": "2026-05-18T14:12:00Z",
+      "updatedAt": "2026-05-19T07:02:00Z",
+      "labels": [
+        { "name": "bug" },
+        { "name": "needs-attention" }
+      ],
+      "repo_path": "/home/demo/code/widgets-api",
+      "repo_label": "widgets-api"
+    },
+    {
+      "number": 39,
+      "title": "Code blocks in posts overflow on mobile",
+      "body": "Long lines in code samples cause horizontal scroll on phones. The body wrapper should clamp them.",
+      "url": "https://github.com/demo/blog-engine/issues/39",
+      "state": "OPEN",
+      "stateReason": null,
+      "createdAt": "2026-05-14T20:00:00Z",
+      "updatedAt": "2026-05-15T09:00:00Z",
+      "labels": [
+        { "name": "bug" }
+      ],
+      "repo_path": "/home/demo/code/blog-engine",
+      "repo_label": "blog-engine"
+    },
+    {
+      "number": 42,
+      "title": "Add dark-mode toggle that respects prefers-color-scheme",
+      "body": "Default to system preference; allow override; persist the override in localStorage.",
+      "url": "https://github.com/demo/blog-engine/issues/42",
+      "state": "OPEN",
+      "stateReason": null,
+      "createdAt": "2026-05-12T10:00:00Z",
+      "updatedAt": "2026-05-14T08:00:00Z",
+      "labels": [
+        { "name": "enhancement" }
+      ],
+      "repo_path": "/home/demo/code/blog-engine",
+      "repo_label": "blog-engine"
+    },
+    {
+      "number": 11,
+      "title": "Hero CTA hard to find on mobile",
+      "body": "Heat-map shows visitors miss the primary CTA on small screens. Try sticky CTA below the fold; A/B test.",
+      "url": "https://github.com/demo/marketing-site/issues/11",
+      "state": "OPEN",
+      "stateReason": null,
+      "createdAt": "2026-05-10T11:00:00Z",
+      "updatedAt": "2026-05-11T15:30:00Z",
+      "labels": [
+        { "name": "ux" }
+      ],
+      "repo_path": "/home/demo/code/marketing-site",
+      "repo_label": "marketing-site"
+    },
+    {
+      "number": 14,
+      "title": "Replace stock photo on /about with team photo",
+      "body": "Awkward stock shot on /about. We have a real team photo from the offsite — use that.",
+      "url": "https://github.com/demo/marketing-site/issues/14",
+      "state": "OPEN",
+      "stateReason": null,
+      "createdAt": "2026-05-13T16:00:00Z",
+      "updatedAt": "2026-05-13T16:00:00Z",
+      "labels": [],
+      "repo_path": "/home/demo/code/marketing-site",
+      "repo_label": "marketing-site"
+    },
+    {
+      "number": 19,
+      "title": "Pricing page should pull live prices from the billing service",
+      "body": "Currently hard-coded. When we change a plan price in the admin, the marketing site lies for hours until someone manually updates the YAML. Pull from the public pricing endpoint at build time and re-deploy on changes.",
+      "url": "https://github.com/demo/marketing-site/issues/19",
+      "state": "OPEN",
+      "stateReason": null,
+      "createdAt": "2026-05-16T09:30:00Z",
+      "updatedAt": "2026-05-17T11:00:00Z",
+      "labels": [
+        { "name": "icebox" }
+      ],
+      "repo_path": "/home/demo/code/marketing-site",
+      "repo_label": "marketing-site"
+    }
+  ]
+}

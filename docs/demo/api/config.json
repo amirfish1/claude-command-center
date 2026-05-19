@@ -1,0 +1,10 @@
+{
+  "app_name": "Claude Command Center (demo)",
+  "title_strip": [],
+  "repo": "demo/widgets-api",
+  "vercel_enabled": false,
+  "vercel_project": "",
+  "pkood_enabled": false,
+  "gh_enabled": true,
+  "orgs": []
+}

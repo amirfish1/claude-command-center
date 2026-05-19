@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Claude Command Center">
+  <!-- Maskable icon: full-bleed background so platforms can crop to any
+       shape (circle, squircle, rounded rect) without cutting into the glyph.
+       The ⌘ is shrunk into the inner 80% safe zone (≈51px inset). -->
+  <rect width="512" height="512" fill="#0d1117"/>
+  <text x="256" y="340" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif"
+        font-size="240" font-weight="700" fill="#d97757">⌘</text>
+</svg>
