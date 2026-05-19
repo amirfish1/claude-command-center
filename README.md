@@ -2,17 +2,40 @@
 
 **Start the next while Claude builds the first.**
 
-A local-first dashboard that orchestrates **Claude Code**, **Codex**, and **Gemini CLI** sessions side-by-side. Organize every session into projects, issues, and features. Build them in parallel. Stop staring at the spinner.
-
-<video src="https://github.com/user-attachments/assets/9d00b168-c21c-4397-9334-e3b4a3515500" controls width="100%" poster="docs/images/kanban.png">
-  Your browser doesn't support inline video. <a href="https://github.com/amirfish1/claude-command-center/releases/download/v0.1.0/CCC-web.mp4">Download the demo</a> or watch the GIF below.
-</video>
+One local dashboard for every **Claude Code**, **Codex**, and **Gemini CLI** session on your Mac. Spawn in parallel, ship in parallel.
 
 ![Claude Command Center demo](docs/images/demo.gif)
 
-CCC is a local dashboard that latches onto every Claude Code, Codex, and Gemini CLI session on your Mac. Terminal sessions, headless processes, sessions you spawned from the dashboard. It treats each CLI's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
+> **Hero GIF placeholder.** The image above is the current demo loop
+> (`docs/images/demo.gif`). When a fresher 20–30s capture lands, swap
+> the path here — see [`docs/hero-placeholder.md`](docs/hero-placeholder.md)
+> for the target shot.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
+```
+
+Try the read-only demo first: [amirfish1.github.io/claude-command-center](https://amirfish1.github.io/claude-command-center/) — full kanban with seeded fake data, no install required.
+
+<video src="https://github.com/user-attachments/assets/9d00b168-c21c-4397-9334-e3b4a3515500" controls width="100%" poster="docs/images/kanban.png">
+  Your browser doesn't support inline video. <a href="https://github.com/amirfish1/claude-command-center/releases/download/v0.1.0/CCC-web.mp4">Download the demo</a> or watch the GIF above.
+</video>
+
+CCC latches onto every Claude Code, Codex, and Gemini CLI session on your Mac — terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each CLI's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
 
 See the [engine support matrix](#engine-support) below for what's first-class vs. partial per engine — spawn works across all three, transcript ingestion and UX parity vary.
+
+## Recent
+
+- **2026-05-19** — Static GitHub Pages demo with seeded mock data (no install required). ([#49](https://github.com/amirfish1/claude-command-center/issues/49))
+- **2026-05-19** — One-command `curl | bash` installer; `git clone` demoted to a "From source" section. ([#58](https://github.com/amirfish1/claude-command-center/pull/58))
+- **2026-05-19** — README and repo description now name Claude Code, Codex, and Gemini CLI explicitly, with a per-engine support matrix. ([#53](https://github.com/amirfish1/claude-command-center/issues/53))
+- **2026-05-19** — Template gallery in the new-session modal (five starter prompts, edit `static/templates.json` to add more). ([#46](https://github.com/amirfish1/claude-command-center/issues/46))
+- **2026-05-19** — VS Code extension v0.1.0 published — spawn a session from the active workspace folder. ([#52](https://github.com/amirfish1/claude-command-center/issues/52))
+- **2026-05-18** — Local macOS `say` text-to-speech button on conversations.
+- **2026-05-17** — Drag any conversation row out of the window to pop it into a focused side pane.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=amirfish1/claude-command-center&type=Date)](https://star-history.com/#amirfish1/claude-command-center&Date)
 
 > **If you install it, I'd love to hear how.** Drop a ⭐, open an issue with
 > what worked or what broke, or just say hi. This is a one-person project

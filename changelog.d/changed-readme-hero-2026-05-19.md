@@ -1,0 +1,1 @@
+- Rewrote the README hero: sharper one-liner naming Claude Code, Codex, and Gemini CLI; demo GIF, one-command install, and read-only demo link all surfaced in the first scroll; dated "Recent" timeline below the hero; Star History chart embedded just above the install footer. The Quickstart, engine support matrix, and From-source instructions are unchanged. (#51)
