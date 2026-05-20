@@ -11808,6 +11808,76 @@ def _antigravity_log_display_name(path):
     return label or "Antigravity CLI session"
 
 
+def _antigravity_cli_log_diagnostic(text):
+    if not text:
+        return ""
+    patterns = (
+        r"RESOURCE_EXHAUSTED.*?Resets in [^\n.]+",
+        r"trajectory not found[^\n]*",
+        r"Error: [^\n]+",
+    )
+    for pattern in patterns:
+        matches = list(re.finditer(pattern, text, re.IGNORECASE))
+        if matches:
+            return matches[-1].group(0).strip()
+    match = re.search(r"Print mode: conversation=([0-9a-f-]+)", text, re.IGNORECASE)
+    if match:
+        return f"AGY print mode created conversation {match.group(1)}, but returned no stdout."
+    return ""
+
+
+def _parse_antigravity_cli_log_conversation(session_id, after_line=0):
+    meta = _antigravity_cli_log_meta_for_session(session_id)
+    log_path = meta.get("log_path")
+    if not log_path:
+        return {"events": [], "last_line": 0}
+    events = []
+    line_num = 0
+    prompt_label = ""
+    log_name = Path(log_path).name
+    if log_name.startswith("spawn-antigravity-"):
+        prompt_label = _antigravity_log_display_name(log_path)
+    if prompt_label:
+        line_num += 1
+        if line_num > after_line:
+            events.append({
+                "line": line_num,
+                "ts": "",
+                "type": "user_text",
+                "text": prompt_label,
+                "images": [],
+            })
+    stdout_path = str(log_path)
+    if stdout_path.endswith(".agy.log"):
+        stdout_path = stdout_path[:-8]
+    stdout_text = ""
+    if stdout_path and os.path.exists(stdout_path):
+        stdout_text = _antigravity_read_log_tail(stdout_path, max_bytes=24000).strip()
+    if stdout_text:
+        line_num += 1
+        if line_num > after_line:
+            events.append({
+                "line": line_num,
+                "ts": "",
+                "type": "assistant",
+                "message_id": f"antigravity-cli-{line_num}",
+                "blocks": [{"kind": "text", "text": stdout_text}],
+            })
+    debug_text = _antigravity_read_log_tail(log_path, max_bytes=24000)
+    diagnostic = _antigravity_cli_log_diagnostic(debug_text)
+    if diagnostic:
+        line_num += 1
+        if line_num > after_line:
+            events.append({
+                "line": line_num,
+                "ts": "",
+                "type": "assistant",
+                "message_id": f"antigravity-cli-{line_num}",
+                "blocks": [{"kind": "text", "text": diagnostic}],
+            })
+    return {"events": events, "last_line": line_num}
+
+
 def _antigravity_user_text(content):
     if not isinstance(content, str):
         return ""
@@ -12408,7 +12478,7 @@ def _parse_antigravity_conversation(session_id, after_line=0):
     events = []
     line_num = 0
     if not path:
-        return {"events": [], "last_line": 0}
+        return _parse_antigravity_cli_log_conversation(session_id, after_line=after_line)
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
