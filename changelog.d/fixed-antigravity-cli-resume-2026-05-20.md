@@ -1,0 +1,1 @@
+- Antigravity headless follow-ups now target AGY CLI conversations and avoid sending app-only sessions through an unsupported resume path.

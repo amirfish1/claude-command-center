@@ -5217,11 +5217,17 @@ def _build_resume_command(session_id, cwd, cwd_exists):
     elif is_antigravity:
         resolved = _resolve_antigravity_bin()
         if resolved.get("available"):
-            resume_cmd = (
-                "echo " + _shell_quote("CCC: opening AGY conversation in the TUI.")
-                + " && exec " + _antigravity_shell_command(resolved)
-                + " --conversation " + _shell_quote(session_id)
-            )
+            if _antigravity_cli_conversation_path(session_id) and _antigravity_cli_conversation_path(session_id).is_file():
+                resume_cmd = (
+                    "echo " + _shell_quote("CCC: opening AGY conversation in the TUI.")
+                    + " && exec " + _antigravity_shell_command(resolved)
+                    + " --conversation " + _shell_quote(session_id)
+                )
+            else:
+                resume_cmd = (
+                    "echo " + _shell_quote("CCC: this Antigravity app session is not in the AGY CLI conversation store; use /open inside AGY.")
+                    + " && exec " + _antigravity_shell_command(resolved)
+                )
         else:
             resume_cmd = "echo " + _shell_quote(resolved.get("reason") or "Antigravity CLI not found.")
     else:
@@ -10590,6 +10596,9 @@ def _extract_codex_timeline(session_id):
 GEMINI_HOME = Path.home() / ".gemini"
 ANTIGRAVITY_HOME = GEMINI_HOME / "antigravity"
 ANTIGRAVITY_BRAIN = ANTIGRAVITY_HOME / "brain"
+ANTIGRAVITY_CLI_HOME = GEMINI_HOME / "antigravity-cli"
+ANTIGRAVITY_CLI_BRAIN = ANTIGRAVITY_CLI_HOME / "brain"
+ANTIGRAVITY_CLI_CONVERSATIONS = ANTIGRAVITY_CLI_HOME / "conversations"
 GEMINI_CONTEXT_LIMIT = 1_000_000
 
 
@@ -11263,6 +11272,116 @@ def find_gemini_conversations(
             "model": tail.get("model") or "",
             "reasoning_effort": "",
         })
+    seen_ids = {c.get("id") for c in out}
+    for log_path in _antigravity_cli_log_paths(repo_path if repo_only else None):
+        if limit and scanned >= int(limit):
+            break
+        meta = _antigravity_cli_log_meta(log_path)
+        sid = meta.get("session_id") or ""
+        if not sid or sid in seen_ids:
+            continue
+        cli_conversation = _antigravity_cli_conversation_path(sid)
+        if not cli_conversation or not cli_conversation.is_file():
+            continue
+        scanned += 1
+        cwd = meta.get("cwd") or ""
+        pinned = repo_pins.get(sid)
+        pinned_repo = False
+        if repo_only:
+            if pinned and pinned != repo_path:
+                continue
+            if pinned == repo_path:
+                pinned_repo = True
+            elif not _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
+                continue
+        try:
+            st = cli_conversation.stat()
+        except OSError:
+            try:
+                st = log_path.stat()
+            except OSError:
+                continue
+        try:
+            log_mtime = log_path.stat().st_mtime
+        except OSError:
+            log_mtime = st.st_mtime
+        modified = max(st.st_mtime, log_mtime, last_interactions.get(sid) or 0)
+        if not include_old and cutoff > 0 and modified < cutoff:
+            continue
+        if not include_old and max_rows > 0 and len(out) >= max_rows:
+            continue
+        effective_cwd = cwd or (repo_path if repo_only else "")
+        try:
+            cwd_exists = bool(effective_cwd and Path(effective_cwd).is_dir())
+        except OSError:
+            cwd_exists = False
+        folder_path = pinned or effective_cwd or ""
+        if folder_path:
+            _git_root = _find_git_root(folder_path)
+            folder_label = _resolve_dir_case(_git_root or folder_path)
+        else:
+            folder_label = "Antigravity CLI"
+        display_name = name_overrides.get(sid) or _antigravity_log_display_name(log_path)
+        branch = _git_branch_for_cwd(effective_cwd)
+        out.append({
+            "id": sid,
+            "session_id": sid,
+            "source": "antigravity",
+            "engine": "antigravity",
+            "timestamp": "",
+            "branch": branch,
+            "git_branch": branch,
+            "first_message": "",
+            "display_name": display_name,
+            "name_overridden": bool(name_overrides.get(sid)),
+            "last_prompt": "",
+            "size": st.st_size,
+            "modified": modified,
+            "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)),
+            "mtime": modified,
+            "jsonl_path": "",
+            "log_path": str(log_path),
+            "folder_label": folder_label,
+            "folder_path": folder_path,
+            "worktree_label": None,
+            "session_cwd": effective_cwd,
+            "session_cwd_exists": cwd_exists,
+            "session_cwd_is_worktree": bool(effective_cwd and (Path(effective_cwd) / ".git").is_file()),
+            "worktree_dirty": (
+                _worktree_dirty_cached(effective_cwd, modified)
+                if resolve_worktree_dirty and effective_cwd else False
+            ),
+            "effective_branch": branch or None,
+            "effective_kind": None,
+            "has_edit": False,
+            "has_commit": False,
+            "has_push": False,
+            "last_edit_pos": 0,
+            "last_commit_pos": 0,
+            "last_push_pos": 0,
+            "last_event_type": "user",
+            "pending_tool": None,
+            "pending_file": None,
+            "last_assistant_text": "",
+            "tail_issue_number": None,
+            "tail_pr_number": None,
+            "tail_pr_url": None,
+            "pr_state": None,
+            "session_state": None,
+            "archived": sid in archived_set,
+            "verified": sid in verified_set,
+            "pinned_repo": pinned_repo,
+            "last_interacted": last_interactions.get(sid),
+            "is_live": False,
+            "spawn_pid": None,
+            "can_headless_resume": True,
+            **_antigravity_activity_fields_from_tail({}, False),
+            "needs_approval": False,
+            "needs_approval_message": "",
+            "model": "",
+            "reasoning_effort": "",
+        })
+        seen_ids.add(sid)
     if resolve_pr_states:
         _prime_pr_states(c.get("tail_pr_url") for c in out)
         for c in out:
@@ -11495,20 +11614,37 @@ def _antigravity_transcript_path(session_id):
     sid = str(session_id).strip()
     if not _SESSION_UUID_RE.match(sid):
         return None
-    return ANTIGRAVITY_BRAIN / sid / ".system_generated" / "logs" / "transcript.jsonl"
+    for brain_root in (ANTIGRAVITY_BRAIN, ANTIGRAVITY_CLI_BRAIN):
+        transcript = brain_root / sid / ".system_generated" / "logs" / "transcript.jsonl"
+        if transcript.is_file():
+            return transcript
+    return None
+
+
+def _antigravity_cli_conversation_path(session_id):
+    if not session_id:
+        return None
+    sid = str(session_id).strip()
+    if not _SESSION_UUID_RE.match(sid):
+        return None
+    return ANTIGRAVITY_CLI_CONVERSATIONS / f"{sid}.pb"
 
 
 def _antigravity_transcript_paths():
-    if not ANTIGRAVITY_BRAIN.is_dir():
-        return []
     paths = []
+    seen = set()
     try:
-        for brain_dir in ANTIGRAVITY_BRAIN.iterdir():
-            if not brain_dir.is_dir():
+        for brain_root in (ANTIGRAVITY_BRAIN, ANTIGRAVITY_CLI_BRAIN):
+            if not brain_root.is_dir():
                 continue
-            transcript = brain_dir / ".system_generated" / "logs" / "transcript.jsonl"
-            if transcript.is_file():
-                paths.append(transcript)
+            for brain_dir in brain_root.iterdir():
+                if not brain_dir.is_dir():
+                    continue
+                transcript = brain_dir / ".system_generated" / "logs" / "transcript.jsonl"
+                key = str(transcript)
+                if transcript.is_file() and key not in seen:
+                    seen.add(key)
+                    paths.append(transcript)
     except OSError:
         return []
     try:
@@ -11520,7 +11656,10 @@ def _antigravity_transcript_paths():
 
 def _is_antigravity_session(session_id):
     path = _antigravity_transcript_path(session_id)
-    return bool(path and path.is_file())
+    if path and path.is_file():
+        return True
+    cli_path = _antigravity_cli_conversation_path(session_id)
+    return bool(cli_path and cli_path.is_file())
 
 
 def _load_antigravity_transcript(session_id):
@@ -11573,6 +11712,100 @@ _ANTIGRAVITY_USER_REQUEST_RE = re.compile(
 )
 _ANTIGRAVITY_TAG_RE = re.compile(r"<[^>\n]+>")
 _ANTIGRAVITY_FILE_URL_RE = re.compile(r"file://[^\s`'\"<>)\]]+")
+_UUID_TEXT_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_ANTIGRAVITY_CLI_CONVERSATION_RE = re.compile(
+    r"(?:Created conversation|conversation=|Streaming conversation|to conversation)\s*("
+    + _UUID_TEXT_RE
+    + r")",
+    re.IGNORECASE,
+)
+_ANTIGRAVITY_CLI_WORKSPACE_RE = re.compile(
+    r"Initializing CLI store manager for workspace ([^\n]+)"
+)
+
+
+def _antigravity_read_log_tail(path, max_bytes=64000):
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            if size > max_bytes:
+                fh.seek(-max_bytes, os.SEEK_END)
+            raw = fh.read()
+        return raw.decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def _antigravity_cli_log_meta(path):
+    text = _antigravity_read_log_tail(path)
+    if not text:
+        return {}
+    session_id = ""
+    for match in _ANTIGRAVITY_CLI_CONVERSATION_RE.finditer(text):
+        session_id = match.group(1)
+    workspace = ""
+    for match in _ANTIGRAVITY_CLI_WORKSPACE_RE.finditer(text):
+        workspace = match.group(1).strip().strip('"')
+    return {"session_id": session_id, "cwd": workspace}
+
+
+def _antigravity_cli_log_paths(repo_path=None):
+    paths = []
+    seen = set()
+
+    def add_path(path):
+        key = str(path)
+        if key in seen or not path.is_file():
+            return
+        seen.add(key)
+        paths.append(path)
+
+    repo_log_roots = []
+    if repo_path:
+        repo_log_roots.append(repo_path)
+    else:
+        repo_log_roots.append(str(Path.cwd()))
+        repo_log_roots.extend(_load_recent_repos())
+        repo_log_roots.extend(_load_custom_repos())
+    for root_path in repo_log_roots:
+        try:
+            log_dir = repo_log_dir(root_path)
+            for pattern in ("spawn-antigravity-*.log.agy.log", "resume-antigravity-*.log.agy.log"):
+                for path in log_dir.glob(pattern):
+                    add_path(path)
+        except OSError:
+            pass
+    cli_log_dir = ANTIGRAVITY_CLI_HOME / "log"
+    if cli_log_dir.is_dir():
+        try:
+            for path in cli_log_dir.glob("*.log"):
+                add_path(path)
+        except OSError:
+            pass
+    try:
+        paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        paths.sort(key=lambda p: str(p), reverse=True)
+    return paths
+
+
+def _antigravity_cli_log_meta_for_session(session_id, repo_path=None):
+    if not session_id or not _SESSION_UUID_RE.match(str(session_id)):
+        return {}
+    for path in _antigravity_cli_log_paths(repo_path):
+        meta = _antigravity_cli_log_meta(path)
+        if meta.get("session_id") == session_id:
+            return {**meta, "log_path": str(path)}
+    return {}
+
+
+def _antigravity_log_display_name(path):
+    name = Path(path).name
+    name = re.sub(r"\.agy\.log$", "", name)
+    name = re.sub(r"^(spawn|resume)-antigravity-", "", name)
+    name = re.sub(r"-\d{8}T\d{6}\.log$", "", name)
+    label = name.replace("-", " ").strip()
+    return label or "Antigravity CLI session"
 
 
 def _antigravity_user_text(content):
@@ -11907,10 +12140,12 @@ def _extract_antigravity_tail_meta(path_or_session_id):
 
 def _extract_antigravity_cwd(session_id):
     path = _antigravity_transcript_path(session_id)
-    if not path or not path.is_file():
-        return ""
-    tail = _extract_antigravity_tail_meta(path) or {}
-    return tail.get("cwd") or ""
+    if path and path.is_file():
+        tail = _extract_antigravity_tail_meta(path) or {}
+        if tail.get("cwd"):
+            return tail.get("cwd") or ""
+    meta = _antigravity_cli_log_meta_for_session(session_id)
+    return meta.get("cwd") or ""
 
 
 def _antigravity_activity_fields_from_tail(tail, live):
@@ -11951,10 +12186,6 @@ def find_antigravity_conversations(
     resolve_worktree_dirty=True,
 ):
     paths = _antigravity_transcript_paths()
-    if not paths:
-        if progress:
-            progress("antigravity", state="done", count=0, total=0, detail="No Antigravity transcripts found.")
-        return []
     repo_path_obj = None
     if repo_only:
         repo_path = resolve_repo_path(repo_path)
@@ -12089,6 +12320,10 @@ def find_antigravity_conversations(
             "last_interacted": last_interactions.get(sid),
             "is_live": False,
             "spawn_pid": None,
+            "can_headless_resume": bool(
+                _antigravity_cli_conversation_path(sid)
+                and _antigravity_cli_conversation_path(sid).is_file()
+            ),
             **_antigravity_activity_fields_from_tail(tail, False),
             "needs_approval": False,
             "needs_approval_message": "",
@@ -12572,6 +12807,14 @@ def resume_session_antigravity(session_id, text):
     text = _strip_ccc_session_state_instruction(text)
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
+    cli_conversation = _antigravity_cli_conversation_path(session_id)
+    if not cli_conversation or not cli_conversation.is_file():
+        return {
+            "ok": False,
+            "error": "Antigravity session is not in the AGY CLI conversation store; open it in Antigravity to continue.",
+            "code": "antigravity_cli_conversation_missing",
+            "via": "antigravity-resume",
+        }
     resolved = _resolve_antigravity_bin()
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}

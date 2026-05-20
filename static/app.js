@@ -630,9 +630,10 @@
     const isCodex = currentSession.source === 'codex';
     const isGemini = currentSession.source === 'gemini';
     const isAntigravity = currentSession.source === 'antigravity';
+    const antigravityCanResume = !isAntigravity || currentSession.can_headless_resume !== false;
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(currentSession.id || '');
     return [
-      { id: 'terminal', label: 'Terminal', hint: isAntigravity ? '/resume in AGY' : 'default', disabled: false },
+      { id: 'terminal', label: 'Terminal', hint: isAntigravity ? (antigravityCanResume ? 'AGY conversation' : '/open in AGY') : 'default', disabled: false },
       {
         id: 'desktop',
         label: 'Claude Desktop',
@@ -1665,6 +1666,7 @@
     const isCodex = currentSession.source === 'codex';
     const isGemini = currentSession.source === 'gemini';
     const isAntigravity = currentSession.source === 'antigravity';
+    const antigravityCanResume = !isAntigravity || currentSession.can_headless_resume !== false;
     const live = liveStatus.live && liveStatus.tty;
     const isConvTab = activeTab === 'sessions';
     const hasSession = !!currentSession.id;
@@ -1715,7 +1717,9 @@
         $convInput.placeholder = live ? 'Send to Gemini terminal...' : 'Resume Gemini and send...';
       } else if (isAntigravity) {
         $convTtyLabel.textContent = 'antigravity';
-        $convInput.placeholder = 'Resume Antigravity headlessly and send...';
+        $convInput.placeholder = antigravityCanResume
+          ? 'Resume Antigravity headlessly and send...'
+          : 'Open Antigravity to continue this app session...';
       } else if (live) {
         $convTtyLabel.textContent = liveStatus.tty;
         $convInput.placeholder = 'Send to terminal...';
@@ -2036,6 +2040,10 @@
     }
     const sid = currentSession.id;
     if (!sid) return;
+    if (currentSession.source === 'antigravity' && currentSession.can_headless_resume === false) {
+      showOpToast('This Antigravity app session is not available in AGY CLI. Use Launch to open AGY.', 'error');
+      return;
+    }
     $sendBtn.disabled = true;
     const flashRed = () => {
       $input.style.borderColor = 'var(--red)';
@@ -9696,6 +9704,7 @@
     const isCodex = currentSession.source === 'codex';
     const isGemini = currentSession.source === 'gemini';
     const isAntigravity = currentSession.source === 'antigravity';
+    const antigravityCanResume = !isAntigravity || currentSession.can_headless_resume !== false;
     const live = liveStatus.live && liveStatus.tty;
     const hasSession = !!currentSession.id;
     if (hasSession && kanbanView) {
@@ -9705,7 +9714,7 @@
         if (isPkood) $cpInput.placeholder = 'Send to pkood agent...';
         else if (isCodex) $cpInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
         else if (isGemini) $cpInput.placeholder = live ? 'Send to Gemini terminal...' : 'Resume Gemini and send...';
-        else if (isAntigravity) $cpInput.placeholder = 'Resume Antigravity headlessly and send...';
+        else if (isAntigravity) $cpInput.placeholder = antigravityCanResume ? 'Resume Antigravity headlessly and send...' : 'Open Antigravity to continue this app session...';
         else if (live) $cpInput.placeholder = 'Send to terminal...';
         else $cpInput.placeholder = 'Send to terminal (offline)...';
       }
@@ -16242,6 +16251,10 @@
       const text = ($cpInput.value || '').trim();
       const sid = currentSession.id;
       if (!text || !sid) return;
+      if (currentSession.source === 'antigravity' && currentSession.can_headless_resume === false) {
+        showOpToast('This Antigravity app session is not available in AGY CLI. Use Launch to open AGY.', 'error');
+        return;
+      }
       hideSlashCommandMenu();
       $cpSendBtn.disabled = true;
       const flashRed = () => {
@@ -16263,7 +16276,12 @@
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ agent_id: agentId, message: text }),
           });
-        } else if (currentSession.spawnPid && currentSession.source !== 'codex' && currentSession.source !== 'gemini') {
+        } else if (
+          currentSession.spawnPid
+          && currentSession.source !== 'codex'
+          && currentSession.source !== 'gemini'
+          && currentSession.source !== 'antigravity'
+        ) {
           // Headless session we spawned — push via stdin pipe
           res = await fetch('/api/sessions/spawned/' + currentSession.spawnPid + '/inject', {
             method: 'POST',
@@ -16285,6 +16303,10 @@
         } else if (res.ok && data.ok) {
           if (data.queued) {
             showOpToast('Queued until the terminal session is idle.');
+          } else if (data.via === 'antigravity-resume') {
+            showOpToast('Antigravity headless follow-up started.');
+            setTimeout(refreshConversationList, 1500);
+            setTimeout(refreshConversationList, 3500);
           }
         } else {
           removePendingSendEcho(pendingSend);
@@ -16312,7 +16334,8 @@
     // Exposed on the element so sendToSplitTerminal can re-run it after clearing value.
     $cpInput.__cpRefresh = function () {
       const hasText = ($cpInput.value || '').trim().length > 0;
-      $cpSendBtn.disabled = !hasText || !currentSession.id;
+      const canSend = !(currentSession.source === 'antigravity' && currentSession.can_headless_resume === false);
+      $cpSendBtn.disabled = !hasText || !currentSession.id || !canSend;
     };
     $cpSendBtn.addEventListener('click', sendToSplitTerminal);
     $cpInput.addEventListener('input', () => {
