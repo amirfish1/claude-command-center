@@ -1,0 +1,1 @@
+- Ready to merge no longer flashes archived or already-merged PR sessions during the archive load before GitHub status hydration completes.

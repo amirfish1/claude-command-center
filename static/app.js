@@ -6620,11 +6620,14 @@
       // rows are excluded (they don't open PRs the same way).
       // pr_state ("OPEN" / "MERGED" / "CLOSED") comes from a TTL-cached
       // `gh pr view` lookup on the server. Drop merged/closed so this
-      // bucket isn't a graveyard of completed work; treat null/'OPEN'
-      // as still ready (gh failures shouldn't hide real PRs).
+      // bucket isn't a graveyard of completed work. Archive rows get a
+      // fast first pass before GitHub state has been queried; keep those
+      // pending rows out of Ready to merge so merged PRs don't flash here
+      // for a few seconds on load.
       const _prState = (c.pr_state || '').toUpperCase();
       const _prDone = _prState === 'MERGED' || _prState === 'CLOSED';
-      if (c.source !== 'pkood' && c.tail_pr_number && !_prDone) {
+      const _prStatePending = c._pr_state_pending === true;
+      if (c.source !== 'pkood' && c.tail_pr_number && !_prStatePending && !_prDone) {
         _readyToMergeConvs.push(c);
         continue;
       }
@@ -15009,6 +15012,7 @@
           tail_pr_number: c.tail_pr_number || null,
           tail_pr_url: c.tail_pr_url || null,
           pr_state: c.pr_state || null,
+          _pr_state_pending: !!(c.tail_pr_number && !c.pr_state && !_archivePrHydratedAt),
           pr_notes: Array.isArray(c.pr_notes) ? c.pr_notes : [],
           sidecar_status: c.sidecar_status || null,
           sidecar_tool: c.sidecar_tool || null,
@@ -15062,6 +15066,7 @@
         tail_pr_number: c.tail_pr_number || null,
         tail_pr_url: c.tail_pr_url || null,
         pr_state: c.pr_state || null,
+        _pr_state_pending: !!(c.tail_pr_number && !c.pr_state && !_archivePrHydratedAt),
         pr_notes: Array.isArray(c.pr_notes) ? c.pr_notes : [],
         // Sidecar overlay (Round 3) — only meaningful for live rows.
         // The renderer reads these directly to draw the live tool pill
