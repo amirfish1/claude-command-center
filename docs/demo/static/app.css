@@ -2167,6 +2167,11 @@
     flex: 0 0 var(--conv-dot-col);
     vertical-align: middle;
   }
+  .conv-session-icon svg {
+    width: 13px;
+    height: 13px;
+    display: block;
+  }
   .conv-item .conv-title {
     /* Omnara-style: slightly larger and looser line-height than the old
        13/1.2, weight stays at 400 — the difference reads as "designed
