@@ -1,0 +1,1 @@
+- Fixed archived group-chat rows opening and then immediately getting overwritten by an empty conversation selection that left the detail pane stuck on "Loading...".

@@ -7558,6 +7558,8 @@
     // Click handler for archived group chat rows — open the reader.
     $convList.querySelectorAll('[data-role="archived-gc-row"]').forEach(row => {
       row.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
         ev.stopPropagation();
         const path = row.dataset.gcPath;
         const topic = row.dataset.gcTopic || '';
@@ -7816,6 +7818,7 @@
       });
     });
     $convList.querySelectorAll('.conv-item').forEach(el => {
+      if (el.dataset.role === 'archived-gc-row' || !el.dataset.id) return;
       el.addEventListener('click', (ev) => {
         // Ignore clicks that started the inline editor, archive button,
         // or that landed on the title (which now triggers rename instead
