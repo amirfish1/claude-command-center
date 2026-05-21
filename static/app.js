@@ -1751,7 +1751,7 @@
         $convTtyLabel.textContent = live ? (liveStatus.tty || 'gemini') : 'gemini';
         $convInput.placeholder = live ? 'Send to Gemini terminal...' : 'Resume Gemini and send...';
       } else if (isAntigravity) {
-        $convTtyLabel.textContent = 'antigravity';
+        $convTtyLabel.textContent = liveStatus.live ? (liveStatus.tty || 'antigravity') : 'antigravity';
         $convInput.placeholder = antigravityInputPlaceholder(currentSession);
       } else if (live) {
         $convTtyLabel.textContent = liveStatus.tty;
@@ -7083,10 +7083,24 @@
         && (_codexHasOpenTool
           || (!!(c.last_event_type === 'user' || c.last_event_type === 'assistant')
             && _rowActivityAge < (30 * 60)));
+      const _geminiHasOpenTool = isGeminiRow && !c.sidecar_status && !!c.pending_tool;
+      const _geminiOpenTurn = isGeminiRow
+        && !c.sidecar_status
+        && (_geminiHasOpenTool
+          || (!!(c.last_event_type === 'user' || c.last_event_type === 'assistant')
+            && _rowActivityAge < (30 * 60)));
+      const _antigravityHasOpenTool = isAntigravityRow && !c.sidecar_status && !!c.pending_tool;
+      const _antigravityOpenTurn = isAntigravityRow
+        && !c.sidecar_status
+        && (_antigravityHasOpenTool
+          || (!!(c.last_event_type === 'user' || c.last_event_type === 'assistant')
+            && _rowActivityAge < (30 * 60)));
       const _isWip = !!c.gh_in_progress || !!c.pending_spawn
         || _hasLivePendingTool
         || _isWaitingForUser
         || _codexOpenTurn
+        || _geminiOpenTurn
+        || _antigravityOpenTurn
         || (_isActiveSidecar && (_activityAge < 300 || _midTurn || !c.sidecar_ts));
       if (_isWip && !liveToolHtml) {
         const wipTitle = _knownActivityTool
@@ -7098,7 +7112,7 @@
               : (isCodexRow ? 'Codex is working' : (isGeminiRow ? 'Gemini is working' : (isAntigravityRow ? 'Antigravity is working' : 'Agent is working')))));
         const wipLabel = _isQuestionWaiting
           ? 'QUESTION'
-          : ((_codexOpenTurn || _isWaitingForUser) ? 'WIP' : (_knownActivityTool || 'WIP'));
+          : ((_codexOpenTurn || _geminiOpenTurn || _antigravityOpenTurn || _isWaitingForUser) ? 'WIP' : (_knownActivityTool || 'WIP'));
         signals += '<span class="conv-signal activity-working" title="' + escapeHtml(wipTitle) + '">' + escapeHtml(wipLabel) + '</span>';
       }
       if (c.source === 'pkood') {
@@ -10012,7 +10026,7 @@
     const hasSession = !!currentSession.id;
     if (hasSession && kanbanView) {
       $convPanelInput.classList.add('visible');
-      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (isCodex ? (liveStatus.tty || 'codex') : (isGemini ? (liveStatus.tty || 'gemini') : (isAntigravity ? 'antigravity' : (liveStatus.tty || (live ? '' : 'offline')))));
+      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (isCodex ? (liveStatus.tty || 'codex') : (isGemini ? (liveStatus.tty || 'gemini') : (isAntigravity ? (liveStatus.tty || 'antigravity') : (liveStatus.tty || (live ? '' : 'offline')))));
       if ($cpInput) {
         if (isPkood) $cpInput.placeholder = 'Send to pkood agent...';
         else if (isCodex) $cpInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
