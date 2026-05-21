@@ -2701,6 +2701,13 @@
   :root[data-theme="light"] .conv-pane.has-conv-bg .conv-input-bar textarea { color: var(--conv-text); }
   .conv-input-bar input::placeholder,
   .conv-input-bar textarea::placeholder { color: var(--text-muted); opacity: 0.6; font-weight: 400; }
+  .conv-input-bar input.is-readonly,
+  .conv-input-bar textarea.is-readonly {
+    cursor: default;
+    color: var(--text-muted);
+  }
+  .conv-input-bar input.is-readonly::placeholder,
+  .conv-input-bar textarea.is-readonly::placeholder { opacity: 0.9; }
   .slash-command-menu {
     position: fixed;
     z-index: 10000;
@@ -3821,6 +3828,11 @@
     padding: 0; overflow-y: auto;
   }
   .conv-panel-input textarea::placeholder { color: var(--text-muted); opacity: 0.6; }
+  .conv-panel-input textarea.is-readonly {
+    cursor: default;
+    color: var(--text-muted);
+  }
+  .conv-panel-input textarea.is-readonly::placeholder { opacity: 0.9; }
   .conv-panel-input .cpi-send {
     flex: none; width: 32px; height: 32px; padding: 0;
     display: inline-flex; align-items: center; justify-content: center;

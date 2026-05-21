@@ -1734,6 +1734,15 @@
         $convTtyLabel.textContent = 'dormant';
         $convInput.placeholder = 'Resume and send…';
       }
+      const canSend = !(isAntigravity && !antigravityCanResume);
+      if ($convInput) {
+        $convInput.readOnly = !canSend;
+        $convInput.classList.toggle('is-readonly', !canSend);
+      }
+      if ($convSendBtn) {
+        $convSendBtn.disabled = !canSend;
+        $convSendBtn.title = canSend ? 'Send' : 'Open Antigravity to continue this app session';
+      }
       // Esc only makes sense when there's something live to interrupt — and
       // we don't support pkood interrupts. Hide it everywhere else so the
       // button doesn't tease an action that will just error.
@@ -1752,6 +1761,14 @@
       }
     } else {
       $convInputBar.classList.remove('visible');
+      if ($convInput) {
+        $convInput.readOnly = false;
+        $convInput.classList.remove('is-readonly');
+      }
+      if ($convSendBtn) {
+        $convSendBtn.disabled = false;
+        $convSendBtn.title = 'Send';
+      }
     }
   }
 
@@ -2049,7 +2066,7 @@
     const sid = currentSession.id;
     if (!sid) return;
     if (currentSession.source === 'antigravity' && currentSession.can_headless_resume !== true) {
-      showOpToast('This Antigravity app session is not available in AGY CLI. Use Launch to open AGY.', 'error');
+      if ($input) $input.blur();
       return;
     }
     $sendBtn.disabled = true;
@@ -9731,9 +9748,15 @@
         else if (isAntigravity) $cpInput.placeholder = antigravityCanResume ? 'Resume Antigravity headlessly and send...' : 'Open Antigravity to continue this app session...';
         else if (live) $cpInput.placeholder = 'Send to terminal...';
         else $cpInput.placeholder = 'Send to terminal (offline)...';
+        $cpInput.readOnly = isAntigravity && !antigravityCanResume;
+        $cpInput.classList.toggle('is-readonly', isAntigravity && !antigravityCanResume);
       }
     } else {
       $convPanelInput.classList.remove('visible');
+      if ($cpInput) {
+        $cpInput.readOnly = false;
+        $cpInput.classList.remove('is-readonly');
+      }
     }
     // Enable/disable the send button based on new session state.
     if ($cpInput && $cpInput.__cpRefresh) $cpInput.__cpRefresh();
@@ -15026,6 +15049,7 @@
           question_text: c.question_text || '',
           question_header: c.question_header || '',
           question_options: Array.isArray(c.question_options) ? c.question_options : [],
+          can_headless_resume: c.can_headless_resume === true,
           session_cwd: c.session_cwd || c.folder_path,
           session_cwd_exists: !!c.folder_path,
           session_cwd_is_worktree: !!c.session_cwd_is_worktree,
@@ -15087,6 +15111,7 @@
         question_header: c.question_header || '',
         question_options: Array.isArray(c.question_options) ? c.question_options : [],
         source: c.source || 'interactive',
+        can_headless_resume: c.can_headless_resume === true,
         session_cwd: c.session_cwd || c.folder_path,
         session_cwd_exists: !folderOrphan,
         // #4 worktree leaf — the renderer reads session_cwd_is_worktree.
@@ -16275,7 +16300,7 @@
       const sid = currentSession.id;
       if (!text || !sid) return;
       if (currentSession.source === 'antigravity' && currentSession.can_headless_resume !== true) {
-        showOpToast('This Antigravity app session is not available in AGY CLI. Use Launch to open AGY.', 'error');
+        $cpInput.blur();
         return;
       }
       hideSlashCommandMenu();
@@ -16359,6 +16384,7 @@
       const hasText = ($cpInput.value || '').trim().length > 0;
       const canSend = !(currentSession.source === 'antigravity' && currentSession.can_headless_resume !== true);
       $cpSendBtn.disabled = !hasText || !currentSession.id || !canSend;
+      $cpSendBtn.title = canSend ? 'Send' : 'Open Antigravity to continue this app session';
     };
     $cpSendBtn.addEventListener('click', sendToSplitTerminal);
     $cpInput.addEventListener('input', () => {

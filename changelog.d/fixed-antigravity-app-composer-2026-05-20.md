@@ -1,0 +1,1 @@
+- Antigravity app-only sessions now show a read-only composer that points to Launch instead of attempting an AGY CLI send.
