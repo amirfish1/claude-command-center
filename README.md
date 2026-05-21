@@ -2,7 +2,7 @@
 
 **Start the next while Claude builds the first.**
 
-One local dashboard for every **Claude Code**, **Codex**, and **Gemini CLI** session on your Mac. Spawn in parallel, ship in parallel.
+One local dashboard for every **Claude Code**, **Codex**, and **Antigravity** session on your Mac. Spawn in parallel, ship in parallel.
 
 ![Claude Command Center demo](docs/images/demo.gif)
 
@@ -21,19 +21,19 @@ Try the read-only demo first: [amirfish1.github.io/claude-command-center](https:
   Your browser doesn't support inline video. <a href="https://github.com/amirfish1/claude-command-center/releases/download/v0.1.0/CCC-web.mp4">Download the demo</a> or watch the GIF above.
 </video>
 
-CCC latches onto every Claude Code, Codex, and Gemini CLI session on your Mac — terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each CLI's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
+CCC latches onto every Claude Code, Codex, and Antigravity session on your Mac — terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each agent's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
 
 See the [engine support matrix](#engine-support) below for what's first-class vs. partial per engine — spawn works across all three, transcript ingestion and UX parity vary.
 
 ## Recent
 
-- **2026-05-19** — Static GitHub Pages demo with seeded mock data (no install required). ([#49](https://github.com/amirfish1/claude-command-center/issues/49))
-- **2026-05-19** — One-command `curl | bash` installer; `git clone` demoted to a "From source" section. ([#58](https://github.com/amirfish1/claude-command-center/pull/58))
-- **2026-05-19** — README and repo description now name Claude Code, Codex, and Gemini CLI explicitly, with a per-engine support matrix. ([#53](https://github.com/amirfish1/claude-command-center/issues/53))
+- **2026-05-21** — **v4.0.0** — Antigravity (Google DeepMind) joins the dashboard as a first-class engine alongside Claude Code and Codex.
+- **2026-05-21** — Drag any conversation row outside the window to pop it into a focused side pane, with 24 per-conversation accent colors.
 - **2026-05-19** — Template gallery in the new-session modal (five starter prompts, edit `static/templates.json` to add more). ([#46](https://github.com/amirfish1/claude-command-center/issues/46))
 - **2026-05-19** — VS Code extension v0.1.0 published — spawn a session from the active workspace folder. ([#52](https://github.com/amirfish1/claude-command-center/issues/52))
+- **2026-05-19** — One-command `curl | bash` installer; `git clone` demoted to a "From source" section. ([#58](https://github.com/amirfish1/claude-command-center/pull/58))
+- **2026-05-19** — Static GitHub Pages demo with seeded mock data (no install required). ([#49](https://github.com/amirfish1/claude-command-center/issues/49))
 - **2026-05-18** — Local macOS `say` text-to-speech button on conversations.
-- **2026-05-17** — Drag any conversation row out of the window to pop it into a focused side pane.
 
 [![Star History Chart](https://api.star-history.com/svg?repos=amirfish1/claude-command-center&type=Date)](https://star-history.com/#amirfish1/claude-command-center&Date)
 
@@ -148,19 +148,19 @@ the UI uses for the kanban.
 
 ## Engine support
 
-CCC was built around Claude Code first; Codex and Gemini CLI support followed. Spawn-from-dashboard works for all three. The rest varies:
+CCC was built around Claude Code first; Codex and Antigravity support followed. Spawn-from-dashboard works for all three. The rest varies:
 
 | Engine        | Spawn (headless from UI) | Resume (terminal inject / headless resume) | Transcript ingestion | Per-session model picker |
 |---------------|--------------------------|--------------------------------------------|----------------------|--------------------------|
 | Claude Code   | yes                      | yes (both)                                 | yes — first-class JSONL (`~/.claude/projects/*.jsonl`) | yes — UI picker, incl. 1M-context toggle |
 | Codex         | yes                      | yes (both)                                 | partial — Codex JSONL parsed, broader parity tracked in [#57](https://github.com/amirfish1/claude-command-center/issues/57) | yes — UI picker via per-session override; default from `CCC_CODEX_MODEL` |
-| Gemini CLI    | yes                      | partial — terminal inject + `gemini --resume`; no first-class headless resume yet | partial — Gemini chat JSON parsed for transcript view | no UI picker — set via `CCC_GEMINI_MODEL` env var |
+| Antigravity   | yes — headless via `agy` print mode | yes — follow-ups route through AGY CLI or the running app's language-server RPC | yes — JSONL transcripts from `~/.gemini/antigravity/brain/` | auto-detected from transcript metadata |
 
 If you'd like to see an engine bumped from "partial" to first-class, open an issue — it's mostly adapter work, the ingestion layer is engine-agnostic.
 
 ## Features
 
-- **Multi-engine orchestration**: spawn, resume, and review **Claude Code**, **Codex**, and **Gemini CLI** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity.
+- **Multi-engine orchestration**: spawn, resume, and review **Claude Code**, **Codex**, and **Antigravity** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity.
 - **Kanban** across every session, with drag-drop between columns,
   rubber-band multi-select, and per-column tinting.
 - **Split conversations**: drag any sidebar session onto the right or
@@ -256,19 +256,18 @@ The `CCC_BIND_HOST`, `CCC_ALLOWED_ORIGIN`, and `CCC_TRUST_TAILNET` knobs can als
 ## Roadmap
 
 **Shipped**
-- Kanban over all live + dormant Claude Code, Codex, and Gemini CLI sessions
+- Kanban over all live + dormant Claude Code, Codex, and Antigravity sessions
 - GitHub issue → session → verify → close pipeline
 - Headless spawn with stdin-pipe follow-up
 - Resume-on-demand
 - Auto-fix-deploy (Vercel)
 - AI title regeneration
+- Antigravity (Google DeepMind) — full session view, transcript ingestion, headless resume via AGY CLI or app RPC
 
 **Not yet**
-- Test suite. Zero tests today. The session classifier is where this hurts
-  most.
-- First-class parity for Codex / Gemini CLI. Spawn works for all three, but
-  transcript ingestion and UX polish lag behind Claude Code — see the
-  [engine support matrix](#engine-support) and [#57](https://github.com/amirfish1/claude-command-center/issues/57).
+- First-class parity for Codex. Spawn works, but transcript ingestion and UX
+  polish lag behind Claude Code — see the [engine support matrix](#engine-support)
+  and [#57](https://github.com/amirfish1/claude-command-center/issues/57).
 - More agent runtimes (Aider, OpenCode, etc.). The ingestion layer is
   engine-agnostic; adapters just don't exist yet.
 - Code split. `server.py` and `index.html` are each one huge file on
