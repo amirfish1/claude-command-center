@@ -7529,6 +7529,164 @@
     // group chats; collapse state persists in localStorage. Group chats
     // render as a slim block at the TOP of the list so the "what's in
     // a chat" overview reads first.
+    // Group-chat rows — historically rendered in their own section above
+    // In Progress. Now merged INTO the In Progress section so a group
+    // chat reads as just another live "conversation" the user is
+    // tracking, alongside the underlying sessions. The actual concat
+    // into _inProgressHtml happens below; here we just build the rows.
+    //
+    // Active rows render normally; closed rows are ghosted with a
+    // "closed" pill and stay visible until the user hits the per-row
+    // Archive button. Each row carries data-role="ingroupchat-row"
+    // (+ child data-roles) so the click / drag / archive handlers
+    // wired further down still find them regardless of where the rows
+    // ended up in the DOM.
+    let _inGroupChatRowsHtml = '';
+    {
+      const _gcRows = (_gcActiveChats || []).map(chat => {
+        const isClosed = chat.status === 'closed';
+        const topicLabel = chat.topic ? escapeHtml(chat.topic.slice(0, 80)) : '(untitled)';
+        const partSids = chat.session_ids || [];
+        const nameMap = chat.name_map || {};
+        const partCount = partSids.length;
+        const partLabel = partCount
+          ? '<span class="conv-ingroupchat-partcount" title="' + partCount + ' participant' + (partCount === 1 ? '' : 's') + '">'
+              + partCount + '</span>'
+          : '';
+        const closedPill = isClosed
+          ? '<span class="conv-ingroupchat-status-pill" title="Coordination ended">closed</span>'
+          : '';
+        // Indented participant list under the chat row. Click to jump
+        // to that session in the conv pane (selectConversation handles
+        // the GC-reader teardown so it works whether the reader is open
+        // or not). The short 8-char hash is shown alongside each name so
+        // the user can map the "— 25ea49ae 👋" markers in the chat
+        // messages back to a participant in this list.
+        const partMeta = chat.participant_meta || {};
+        // Hashes (8-char) we'd be waiting on if a nudge fired right
+        // now — used to flag the participants whose response is most
+        // expected.
+        const waitingSet = new Set((chat.waiting_on_hashes || []).map(h => String(h).toLowerCase()));
+        const partListHtml = partSids.map(sid => {
+          const display = nameMap[sid] || sid;
+          const trimmed = display.length > 60 ? display.slice(0, 57) + '…' : display;
+          const shortHash = String(sid).slice(0, 8);
+          const m = partMeta[sid] || {};
+          // "Last activity" chip — uses session transcript mtime so
+          // it tracks what the main conversation list shows.
+          // last_activity from the API is unix SECONDS (file mtime),
+          // but timeAgo expects MILLISECONDS — multiply.
+          const lastActChip = m.last_activity
+            ? '<span class="conv-ingroupchat-participant-when" title="Last activity in this session">'
+                + escapeHtml(timeAgo(m.last_activity * 1000))
+              + '</span>'
+            : '';
+          // WIP chip — same yellow look as the main list. The label
+          // prefers the active tool name, falls back to "WIP".
+          const wipChip = m.wip
+            ? '<span class="conv-signal activity-working" title="' + escapeHtml(m.pending_tool || 'Agent is working') + '">'
+                + escapeHtml(m.pending_tool || 'WIP')
+              + '</span>'
+            : '';
+          // "Waiting" chip — flags the participant the watcher would
+          // ping next. Suppressed for closed chats (no nudge happens).
+          const waitingChip = (!isClosed && waitingSet.has(shortHash.toLowerCase()))
+            ? '<span class="conv-ingroupchat-waiting-chip" title="The next nudge would target this participant">waiting</span>'
+            : '';
+          return '<div class="conv-ingroupchat-participant" data-role="ingroupchat-participant"'
+            + ' data-session-id="' + escapeHtml(sid) + '"'
+            + ' title="' + escapeHtml(display) + ' — click to open this session">'
+            +   '<span class="conv-ingroupchat-participant-bullet">↳</span>'
+            +   '<span class="conv-ingroupchat-participant-name">' + escapeHtml(trimmed) + '</span>'
+            +   wipChip
+            +   waitingChip
+            +   lastActChip
+            +   '<span class="conv-ingroupchat-participant-hash" title="Session ID prefix used in chat message headers">' + escapeHtml(shortHash) + '</span>'
+            +   '<button type="button" class="conv-ingroupchat-participant-remove"'
+            +     ' data-role="ingroupchat-participant-remove"'
+            +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+            +     ' data-session-id="' + escapeHtml(sid) + '"'
+            +     ' title="Remove this session from the chat">×</button>'
+            + '</div>';
+        }).join('');
+        // Chat-row meta line: file mtime + who-wrote-last + waiting-on
+        // hint. Lets the user see at a glance whether the chat is
+        // moving and whose turn the orchestrator considers it.
+        // last_mtime from the API is unix SECONDS — convert to ms.
+        const chatAge = chat.last_mtime
+          ? '<span class="conv-ingroupchat-row-when" title="Last update to chat file">'
+              + escapeHtml(timeAgo(chat.last_mtime * 1000))
+            + '</span>'
+          : '';
+        let chatWaitingHint = '';
+        if (!isClosed) {
+          const waitingShortHashes = (chat.waiting_on_hashes || [])
+            .map(h => String(h).slice(0, 8).toLowerCase());
+          if (waitingShortHashes.length) {
+            const waitingNames = waitingShortHashes
+              .map(h => {
+                const fullSid = partSids.find(s => s.toLowerCase().startsWith(h));
+                return fullSid ? (nameMap[fullSid] || h) : h;
+              })
+              .map(n => n.length > 24 ? n.slice(0, 23) + '…' : n);
+            const lastAuthor = chat.last_author_hash;
+            const lastAuthorIsHuman = chat.last_author_is_human;
+            let summary;
+            if (lastAuthorIsHuman) {
+              summary = `Human → waiting on ${waitingNames.join(', ')}`;
+            } else if (lastAuthor) {
+              const lastFullSid = partSids.find(s => s.toLowerCase().startsWith(lastAuthor));
+              const lastName = lastFullSid ? (nameMap[lastFullSid] || lastAuthor) : lastAuthor;
+              const lastTrim = lastName.length > 18 ? lastName.slice(0, 17) + '…' : lastName;
+              summary = `${lastTrim} → waiting on ${waitingNames.join(', ')}`;
+            }
+            if (summary) {
+              chatWaitingHint = '<div class="conv-ingroupchat-row-waiting" title="Last writer → who the orchestrator will nudge next">'
+                + escapeHtml(summary)
+                + '</div>';
+            }
+          }
+        }
+        return '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + '">'
+          + '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + '"'
+          +   ' data-role="ingroupchat-row"'
+          +   ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+          +   ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
+          +   ' data-gc-mode="' + escapeHtml(chat.mode || 'topic') + '"'
+          +   ' title="Click to open group chat reader">'
+          +   '<span class="conv-ingroupchat-row-icon">💬</span>'
+          +   '<span class="conv-ingroupchat-row-topic">' + topicLabel + '</span>'
+          +   closedPill
+          +   partLabel
+          +   chatAge
+          +   '<button type="button" class="conv-ingroupchat-rename-btn"'
+          +     ' data-role="ingroupchat-rename"'
+          +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+          +     ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
+          +     ' title="Rename this group chat">✏️</button>'
+          +   '<button type="button" class="conv-ingroupchat-clear-btn"'
+          +     ' data-role="ingroupchat-clear"'
+          +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+          +     ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
+          +     ' title="Clear chat content (header + participants kept; participants re-engaged)">🧹</button>'
+          +   '<button type="button" class="conv-ingroupchat-archive-btn"'
+          +     ' data-role="ingroupchat-archive"'
+          +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+          +     ' title="Archive this group chat">📦</button>'
+          + '</div>'
+          + chatWaitingHint
+          + (partListHtml ? '<div class="conv-ingroupchat-participants">' + partListHtml + '</div>' : '')
+          + '</div>';
+      }).join('');
+      const _gcCount = (_gcActiveChats || []).length;
+      // Wrap rows in an opt-in container so the existing styles (which
+      // key off `.conv-ingroupchat-list`) keep applying without further
+      // edits. The wrapper appears INSIDE the In Progress section list
+      // when there are chats; otherwise we emit nothing at all.
+      _inGroupChatRowsHtml = _gcCount
+        ? '<div class="conv-ingroupchat-list conv-ingroupchat-list--inline">' + _gcRows + '</div>'
+        : '';
+    }
     let _inProgressHtml = '';
     const _gcCountForSection = (_gcActiveChats || []).length;
     if (_sessionConvs.length > 0 || _gcCountForSection > 0) {
@@ -7741,164 +7899,6 @@
         + '</button>'
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + '</div>';
-    }
-    // Group-chat rows — historically rendered in their own section above
-    // In Progress. Now merged INTO the In Progress section so a group
-    // chat reads as just another live "conversation" the user is
-    // tracking, alongside the underlying sessions. The actual concat
-    // into _inProgressHtml happens below; here we just build the rows.
-    //
-    // Active rows render normally; closed rows are ghosted with a
-    // "closed" pill and stay visible until the user hits the per-row
-    // Archive button. Each row carries data-role="ingroupchat-row"
-    // (+ child data-roles) so the click / drag / archive handlers
-    // wired further down still find them regardless of where the rows
-    // ended up in the DOM.
-    let _inGroupChatRowsHtml = '';
-    {
-      const _gcRows = (_gcActiveChats || []).map(chat => {
-        const isClosed = chat.status === 'closed';
-        const topicLabel = chat.topic ? escapeHtml(chat.topic.slice(0, 80)) : '(untitled)';
-        const partSids = chat.session_ids || [];
-        const nameMap = chat.name_map || {};
-        const partCount = partSids.length;
-        const partLabel = partCount
-          ? '<span class="conv-ingroupchat-partcount" title="' + partCount + ' participant' + (partCount === 1 ? '' : 's') + '">'
-              + partCount + '</span>'
-          : '';
-        const closedPill = isClosed
-          ? '<span class="conv-ingroupchat-status-pill" title="Coordination ended">closed</span>'
-          : '';
-        // Indented participant list under the chat row. Click to jump
-        // to that session in the conv pane (selectConversation handles
-        // the GC-reader teardown so it works whether the reader is open
-        // or not). The short 8-char hash is shown alongside each name so
-        // the user can map the "— 25ea49ae 👋" markers in the chat
-        // messages back to a participant in this list.
-        const partMeta = chat.participant_meta || {};
-        // Hashes (8-char) we'd be waiting on if a nudge fired right
-        // now — used to flag the participants whose response is most
-        // expected.
-        const waitingSet = new Set((chat.waiting_on_hashes || []).map(h => String(h).toLowerCase()));
-        const partListHtml = partSids.map(sid => {
-          const display = nameMap[sid] || sid;
-          const trimmed = display.length > 60 ? display.slice(0, 57) + '…' : display;
-          const shortHash = String(sid).slice(0, 8);
-          const m = partMeta[sid] || {};
-          // "Last activity" chip — uses session transcript mtime so
-          // it tracks what the main conversation list shows.
-          // last_activity from the API is unix SECONDS (file mtime),
-          // but timeAgo expects MILLISECONDS — multiply.
-          const lastActChip = m.last_activity
-            ? '<span class="conv-ingroupchat-participant-when" title="Last activity in this session">'
-                + escapeHtml(timeAgo(m.last_activity * 1000))
-              + '</span>'
-            : '';
-          // WIP chip — same yellow look as the main list. The label
-          // prefers the active tool name, falls back to "WIP".
-          const wipChip = m.wip
-            ? '<span class="conv-signal activity-working" title="' + escapeHtml(m.pending_tool || 'Agent is working') + '">'
-                + escapeHtml(m.pending_tool || 'WIP')
-              + '</span>'
-            : '';
-          // "Waiting" chip — flags the participant the watcher would
-          // ping next. Suppressed for closed chats (no nudge happens).
-          const waitingChip = (!isClosed && waitingSet.has(shortHash.toLowerCase()))
-            ? '<span class="conv-ingroupchat-waiting-chip" title="The next nudge would target this participant">waiting</span>'
-            : '';
-          return '<div class="conv-ingroupchat-participant" data-role="ingroupchat-participant"'
-            + ' data-session-id="' + escapeHtml(sid) + '"'
-            + ' title="' + escapeHtml(display) + ' — click to open this session">'
-            +   '<span class="conv-ingroupchat-participant-bullet">↳</span>'
-            +   '<span class="conv-ingroupchat-participant-name">' + escapeHtml(trimmed) + '</span>'
-            +   wipChip
-            +   waitingChip
-            +   lastActChip
-            +   '<span class="conv-ingroupchat-participant-hash" title="Session ID prefix used in chat message headers">' + escapeHtml(shortHash) + '</span>'
-            +   '<button type="button" class="conv-ingroupchat-participant-remove"'
-            +     ' data-role="ingroupchat-participant-remove"'
-            +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
-            +     ' data-session-id="' + escapeHtml(sid) + '"'
-            +     ' title="Remove this session from the chat">×</button>'
-            + '</div>';
-        }).join('');
-        // Chat-row meta line: file mtime + who-wrote-last + waiting-on
-        // hint. Lets the user see at a glance whether the chat is
-        // moving and whose turn the orchestrator considers it.
-        // last_mtime from the API is unix SECONDS — convert to ms.
-        const chatAge = chat.last_mtime
-          ? '<span class="conv-ingroupchat-row-when" title="Last update to chat file">'
-              + escapeHtml(timeAgo(chat.last_mtime * 1000))
-            + '</span>'
-          : '';
-        let chatWaitingHint = '';
-        if (!isClosed) {
-          const waitingShortHashes = (chat.waiting_on_hashes || [])
-            .map(h => String(h).slice(0, 8).toLowerCase());
-          if (waitingShortHashes.length) {
-            const waitingNames = waitingShortHashes
-              .map(h => {
-                const fullSid = partSids.find(s => s.toLowerCase().startsWith(h));
-                return fullSid ? (nameMap[fullSid] || h) : h;
-              })
-              .map(n => n.length > 24 ? n.slice(0, 23) + '…' : n);
-            const lastAuthor = chat.last_author_hash;
-            const lastAuthorIsHuman = chat.last_author_is_human;
-            let summary;
-            if (lastAuthorIsHuman) {
-              summary = `Human → waiting on ${waitingNames.join(', ')}`;
-            } else if (lastAuthor) {
-              const lastFullSid = partSids.find(s => s.toLowerCase().startsWith(lastAuthor));
-              const lastName = lastFullSid ? (nameMap[lastFullSid] || lastAuthor) : lastAuthor;
-              const lastTrim = lastName.length > 18 ? lastName.slice(0, 17) + '…' : lastName;
-              summary = `${lastTrim} → waiting on ${waitingNames.join(', ')}`;
-            }
-            if (summary) {
-              chatWaitingHint = '<div class="conv-ingroupchat-row-waiting" title="Last writer → who the orchestrator will nudge next">'
-                + escapeHtml(summary)
-                + '</div>';
-            }
-          }
-        }
-        return '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + '">'
-          + '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + '"'
-          +   ' data-role="ingroupchat-row"'
-          +   ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
-          +   ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
-          +   ' data-gc-mode="' + escapeHtml(chat.mode || 'topic') + '"'
-          +   ' title="Click to open group chat reader">'
-          +   '<span class="conv-ingroupchat-row-icon">💬</span>'
-          +   '<span class="conv-ingroupchat-row-topic">' + topicLabel + '</span>'
-          +   closedPill
-          +   partLabel
-          +   chatAge
-          +   '<button type="button" class="conv-ingroupchat-rename-btn"'
-          +     ' data-role="ingroupchat-rename"'
-          +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
-          +     ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
-          +     ' title="Rename this group chat">✏️</button>'
-          +   '<button type="button" class="conv-ingroupchat-clear-btn"'
-          +     ' data-role="ingroupchat-clear"'
-          +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
-          +     ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
-          +     ' title="Clear chat content (header + participants kept; participants re-engaged)">🧹</button>'
-          +   '<button type="button" class="conv-ingroupchat-archive-btn"'
-          +     ' data-role="ingroupchat-archive"'
-          +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
-          +     ' title="Archive this group chat">📦</button>'
-          + '</div>'
-          + chatWaitingHint
-          + (partListHtml ? '<div class="conv-ingroupchat-participants">' + partListHtml + '</div>' : '')
-          + '</div>';
-      }).join('');
-      const _gcCount = (_gcActiveChats || []).length;
-      // Wrap rows in an opt-in container so the existing styles (which
-      // key off `.conv-ingroupchat-list`) keep applying without further
-      // edits. The wrapper appears INSIDE the In Progress section list
-      // when there are chats; otherwise we emit nothing at all.
-      _inGroupChatRowsHtml = _gcCount
-        ? '<div class="conv-ingroupchat-list conv-ingroupchat-list--inline">' + _gcRows + '</div>'
-        : '';
     }
     // Order: GH Issues (to start) → Ready to merge (action) → In
     // progress (which now also contains the group-chat rows at the
@@ -15598,6 +15598,30 @@
     renderArchiveFolderFilter();
     renderArchiveList(_archiveQuery());
   }
+  let _archiveStuckRenderRecoveryPromise = null;
+  function _archiveListStillShowsLoader() {
+    const $list = document.getElementById('convList');
+    return !!($list && $list.querySelector('.archive-loading-placeholder, .archive-loading-stages'));
+  }
+  function _recoverArchiveRenderIfStuck() {
+    if (!_archiveListStillShowsLoader()) return Promise.resolve();
+    if (archiveLoaded && Array.isArray(archiveData) && archiveData.length) {
+      renderArchiveFolderFilter();
+      renderArchiveList(_archiveQuery());
+      return Promise.resolve();
+    }
+    if (_archiveStuckRenderRecoveryPromise) return _archiveStuckRenderRecoveryPromise;
+    _archiveStuckRenderRecoveryPromise = loadArchiveAll({ staleOk: true }).then(convs => {
+      if (!Array.isArray(convs) || !convs.length || !_archiveListStillShowsLoader()) return;
+      archiveData = _mergeArchivePrSnapshot(convs, archiveData);
+      archiveLoaded = true;
+      renderArchiveFolderFilter();
+      renderArchiveList(_archiveQuery());
+    }).finally(() => {
+      _archiveStuckRenderRecoveryPromise = null;
+    });
+    return _archiveStuckRenderRecoveryPromise;
+  }
   function _scheduleArchiveStaleRetry() {
     if (_archiveStaleRetryId) return;
     _archiveStaleRetryId = setTimeout(() => {
@@ -15649,7 +15673,10 @@
         if (!r.ok) return;
         const snap = await r.json();
         _renderArchiveLoadingStages(snap);
-        if (!snap.active) _stopArchiveProgressPoll();
+        if (!snap.active) {
+          _stopArchiveProgressPoll();
+          _recoverArchiveRenderIfStuck();
+        }
       } catch (_) { /* polling is best-effort; ignore */ }
     };
     tick();  // immediate first paint

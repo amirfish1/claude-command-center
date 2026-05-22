@@ -1,0 +1,1 @@
+- Fixed the conversation sidebar getting stuck on "Loading archive…" — the group-chat rendering block was using its own variable before declaration, throwing a ReferenceError that aborted the conversation list render.
