@@ -15,7 +15,7 @@ One local dashboard for every **Claude Code**, **Codex**, and **Antigravity** se
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
 ```
 
-Try the read-only demo first: [amirfish1.github.io/claude-command-center](https://amirfish1.github.io/claude-command-center/) — full kanban with seeded fake data, no install required.
+Try the read-only demo first: [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/) (or [amirfish1.github.io/claude-command-center/demo](https://amirfish1.github.io/claude-command-center/demo/)) - full kanban with seeded fake data, no install required.
 
 <video src="https://github.com/user-attachments/assets/9d00b168-c21c-4397-9334-e3b4a3515500" controls width="100%" poster="docs/images/kanban.png">
   Your browser doesn't support inline video. <a href="https://github.com/amirfish1/claude-command-center/releases/download/v0.1.0/CCC-web.mp4">Download the demo</a> or watch the GIF above.

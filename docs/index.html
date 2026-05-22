@@ -1,25 +1,742 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Command Center</title>
-<meta http-equiv="refresh" content="0; url=./demo/">
-<link rel="canonical" href="./demo/">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CCC: One inbox for every Claude, Codex, and Antigravity session on your Mac</title>
+<meta name="description" content="One inbox for every Claude, Codex, and Antigravity session on your machine. Pin strategy sessions on top, fan out sub-sessions below. Local, open source, MIT.">
+<link rel="canonical" href="https://ccc.amirfish.ai">
+
+<meta property="og:title" content="Claude Command Center, v4 with Antigravity">
+<meta property="og:description" content="One inbox for every Claude, Codex, and Antigravity session on your machine. Pin strategy, fan out execution.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://ccc.amirfish.ai">
+<meta property="og:image" content="https://ccc.amirfish.ai/images/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://ccc.amirfish.ai/images/social-preview.png">
+
 <style>
-  html, body { margin: 0; padding: 0; background: #0d1117; color: #e6edf3;
-    font: 15px/1.5 -apple-system, Inter, Segoe UI, sans-serif; }
-  .wrap { max-width: 640px; margin: 80px auto; padding: 0 24px; }
-  h1 { color: #d97757; font-size: 22px; margin: 0 0 12px; }
-  a { color: #d97757; }
+  :root {
+    --bg: #0a0d11;
+    --bg-2: #11151b;
+    --bg-3: #161b22;
+    --bg-4: #1c232b;
+    --fg: #e6ebf2;
+    --fg-dim: #9aa3ad;
+    --fg-mute: #6b727c;
+    --line: #232830;
+    --line-strong: #2e343d;
+    --orange: #f5a623;
+    --orange-soft: rgba(245, 166, 35, 0.12);
+    --green: #6ee7b7;
+    --green-bright: #4dd599;
+    --blue: #8fb3ff;
+    --purple: #bd9bff;
+    --red: #ff7a66;
+    --code-bg: #0a0c0f;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  body { line-height: 1.5; }
+  a { color: var(--fg); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+  a:hover { text-decoration-color: var(--orange); }
+  code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
+
+  /* Layout */
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  .wrap-narrow { max-width: 880px; margin: 0 auto; padding: 0 24px; }
+
+  /* Nav */
+  header.nav {
+    border-bottom: 1px solid var(--line);
+    background: rgba(10, 13, 17, 0.85);
+    backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; }
+  .brand { font-family: var(--mono); font-size: 14px; letter-spacing: 0.02em; display: flex; align-items: center; gap: 10px; }
+  .brand .dot { display: inline-block; width: 8px; height: 8px; background: var(--orange); border-radius: 50%; box-shadow: 0 0 12px var(--orange); }
+  .brand .version { font-size: 11px; color: var(--orange); background: var(--orange-soft); padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(245, 166, 35, 0.4); }
+  .nav-links { display: flex; gap: 22px; font-size: 14px; }
+  .nav-links a { text-decoration: none; color: var(--fg-dim); }
+  .nav-links a:hover { color: var(--fg); }
+  .nav-links a.star {
+    color: var(--orange);
+    border: 1px solid rgba(245, 166, 35, 0.4);
+    background: var(--orange-soft);
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  @media (max-width: 640px) { .nav-links a:not(.star):not(.gh) { display: none; } }
+
+  /* Hero */
+  .hero { padding: 70px 0 40px; position: relative; }
+  .hero::before {
+    content: "";
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 800px 400px at 15% 10%, rgba(245, 166, 35, 0.10), transparent 60%),
+      radial-gradient(ellipse 600px 300px at 85% 30%, rgba(110, 231, 183, 0.06), transparent 60%);
+    pointer-events: none;
+  }
+  .hero-inner { position: relative; text-align: center; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; color: var(--green-bright);
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 22px;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .eyebrow .badge {
+    background: var(--orange); color: #0a0d11;
+    padding: 3px 8px; border-radius: 4px; font-weight: 700;
+    letter-spacing: 0.05em;
+  }
+  h1.hero-title {
+    font-size: clamp(40px, 6vw, 68px);
+    line-height: 1.02; letter-spacing: -0.025em;
+    margin: 0 auto 24px; font-weight: 700;
+    max-width: 22ch;
+  }
+  h1.hero-title .orange { color: var(--orange); }
+  h1.hero-title .green { color: var(--green-bright); }
+  .lede { font-size: 20px; color: var(--fg-dim); max-width: 60ch; margin: 0 auto 36px; }
+  .cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 13px 22px; border-radius: 8px;
+    font-family: var(--mono); font-size: 14px;
+    text-decoration: none; border: 1px solid var(--line-strong);
+    background: var(--bg-2); color: var(--fg);
+    transition: border-color 120ms, transform 120ms, background 120ms;
+  }
+  .btn:hover { border-color: var(--orange); }
+  .btn-primary { background: var(--orange); color: #0a0d11; border-color: var(--orange); font-weight: 600; }
+  .btn-primary:hover { transform: translateY(-1px); background: #ffb930; }
+  .btn .arrow { transition: transform 120ms; }
+  .btn:hover .arrow { transform: translateX(2px); }
+  .btn-soft { background: transparent; border-color: var(--line-strong); color: var(--fg-dim); }
+  .btn-soft:hover { color: var(--fg); border-color: var(--orange); }
+
+  /* Quick install */
+  .quick-install {
+    margin: 32px auto 0; padding: 14px 18px;
+    background: var(--code-bg); border: 1px solid var(--line);
+    border-radius: 8px; display: flex; align-items: center; gap: 12px;
+    max-width: 700px;
+  }
+  .quick-install code { color: var(--fg); flex: 1; overflow-x: auto; white-space: nowrap; font-size: 13px; }
+  .quick-install .copy {
+    background: transparent; color: var(--fg-dim);
+    border: 1px solid var(--line-strong); border-radius: 6px;
+    padding: 5px 12px; font-family: var(--mono); font-size: 12px; cursor: pointer;
+  }
+  .quick-install .copy:hover { color: var(--fg); border-color: var(--orange); }
+  .quick-install .copy.ok { color: var(--green-bright); border-color: var(--green-bright); }
+
+  .install-meta { margin-top: 14px; color: var(--fg-mute); font-size: 13px; font-family: var(--mono); }
+  .install-meta .sep { color: var(--line-strong); margin: 0 8px; }
+
+  /* Demo block */
+  .demo {
+    margin: 60px auto 0; border: 1px solid var(--line);
+    border-radius: 14px; overflow: hidden;
+    background: var(--bg-2);
+    box-shadow: 0 40px 80px -30px rgba(0, 0, 0, 0.7);
+    max-width: 1080px;
+  }
+  .demo-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 11px 16px; background: var(--bg-3);
+    border-bottom: 1px solid var(--line);
+  }
+  .demo-bar .lights { display: flex; gap: 6px; }
+  .demo-bar .light { width: 12px; height: 12px; border-radius: 50%; }
+  .demo-bar .light.red { background: #ff5f57; }
+  .demo-bar .light.yel { background: #febc2e; }
+  .demo-bar .light.grn { background: #28c840; }
+  .demo-bar .url {
+    margin-left: 16px; font-family: var(--mono); font-size: 12px;
+    color: var(--fg-mute);
+  }
+  .demo-bar .live {
+    margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--green-bright);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .demo-bar .live .pulse {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--green-bright);
+    box-shadow: 0 0 0 0 var(--green-bright);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(77, 213, 153, 0.7); }
+    70% { box-shadow: 0 0 0 10px rgba(77, 213, 153, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(77, 213, 153, 0); }
+  }
+  .demo-body { position: relative; aspect-ratio: 16 / 9; background: #0a0c0f; }
+  .demo-body img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .demo-placeholder {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--fg-mute); font-family: var(--mono); font-size: 13px; text-align: center; padding: 24px;
+  }
+  .demo-link {
+    text-align: center; margin-top: 16px;
+    color: var(--fg-dim); font-size: 14px;
+  }
+  .demo-link a { color: var(--orange); }
+
+  /* Sections */
+  section { padding: 80px 0; border-top: 1px solid var(--line); }
+  section h2 {
+    font-size: clamp(30px, 4.4vw, 42px); margin: 0 0 14px;
+    letter-spacing: -0.015em; font-weight: 700;
+  }
+  section h2 .orange { color: var(--orange); }
+  section .section-lede { color: var(--fg-dim); max-width: 60ch; margin: 0 0 44px; font-size: 17px; }
+  .section-eyebrow {
+    font-family: var(--mono); font-size: 12px; color: var(--orange);
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 18px;
+  }
+
+  /* What's new in v4 */
+  .news-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  @media (max-width: 860px) { .news-grid { grid-template-columns: 1fr; } }
+  .news-card {
+    padding: 28px; background: var(--bg-2);
+    border: 1px solid var(--line); border-radius: 12px;
+    display: flex; flex-direction: column; gap: 14px;
+    position: relative;
+    transition: border-color 120ms, transform 120ms;
+  }
+  .news-card:hover { border-color: var(--line-strong); transform: translateY(-2px); }
+  .news-card.headline { border-color: rgba(245, 166, 35, 0.5); background: linear-gradient(180deg, var(--orange-soft), var(--bg-2)); }
+  .news-card .pill {
+    align-self: flex-start; font-family: var(--mono); font-size: 11px;
+    color: var(--orange); background: var(--orange-soft);
+    padding: 3px 10px; border-radius: 999px;
+    border: 1px solid rgba(245, 166, 35, 0.4);
+    letter-spacing: 0.05em;
+  }
+  .news-card h3 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+  .news-card p { margin: 0; color: var(--fg-dim); font-size: 15px; }
+  .news-card .sub { color: var(--fg-mute); font-size: 12px; font-family: var(--mono); margin-top: auto; padding-top: 8px; }
+
+  /* Features */
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  @media (max-width: 860px) { .features { grid-template-columns: 1fr; } }
+  .feature {
+    padding: 28px; background: var(--bg-2);
+    border: 1px solid var(--line); border-radius: 12px;
+    display: flex; flex-direction: column; gap: 14px;
+    transition: border-color 120ms, transform 120ms;
+  }
+  .feature:hover { border-color: var(--line-strong); transform: translateY(-2px); }
+  .feature .num {
+    font-family: var(--mono); font-size: 12px; color: var(--orange);
+    letter-spacing: 0.08em;
+  }
+  .feature h3 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
+  .feature p { margin: 0; color: var(--fg-dim); font-size: 15px; }
+  .feature pre {
+    margin: 0; padding: 12px; background: var(--code-bg);
+    border: 1px solid var(--line); border-radius: 6px;
+    font-size: 12.5px; overflow-x: auto; color: var(--fg-dim);
+  }
+
+  /* Use cases */
+  .use-cases { display: grid; grid-template-columns: repeat(2, 1fr); gap: 22px; }
+  @media (max-width: 860px) { .use-cases { grid-template-columns: 1fr; } }
+  .use-case {
+    padding: 28px; background: var(--bg-2);
+    border: 1px solid var(--line); border-radius: 12px;
+  }
+  .use-case .who { font-family: var(--mono); font-size: 12px; color: var(--green-bright); letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 14px; }
+  .use-case h3 { margin: 0 0 10px; font-size: 18px; letter-spacing: -0.01em; }
+  .use-case p { margin: 0; color: var(--fg-dim); font-size: 15px; }
+
+  /* Comparison table */
+  .compare-wrap { overflow-x: auto; }
+  table.compare {
+    width: 100%; border-collapse: collapse; font-size: 14px;
+    border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden;
+  }
+  table.compare th, table.compare td {
+    padding: 14px 16px; text-align: left;
+    border-bottom: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+  }
+  table.compare th:last-child, table.compare td:last-child { border-right: 0; }
+  table.compare tr:last-child td { border-bottom: 0; }
+  table.compare thead th {
+    background: var(--bg-3); color: var(--fg);
+    font-family: var(--mono); font-size: 13px; font-weight: 600;
+  }
+  table.compare thead th.us { color: var(--orange); }
+  table.compare tbody td:first-child {
+    color: var(--fg); font-weight: 500; background: var(--bg-2);
+  }
+  table.compare tbody td { color: var(--fg-dim); }
+  table.compare .yes { color: var(--green-bright); font-weight: 600; }
+  table.compare .no { color: var(--fg-mute); }
+  table.compare .partial { color: var(--orange); font-weight: 500; }
+
+  /* Install section */
+  .install-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 860px) { .install-grid { grid-template-columns: 1fr; } }
+  .install-block { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 26px; }
+  .install-block h3 { margin: 0 0 14px; font-size: 16px; font-family: var(--mono); color: var(--fg-dim); font-weight: 500; }
+  .install-block pre {
+    margin: 0; padding: 16px; background: var(--code-bg);
+    border: 1px solid var(--line); border-radius: 8px;
+    overflow-x: auto; color: var(--fg);
+    font-size: 13.5px; line-height: 1.55;
+  }
+  .install-block .req { margin-top: 14px; color: var(--fg-mute); font-size: 13px; }
+  .install-block .coming-soon {
+    display: inline-block; padding: 3px 8px; background: var(--bg-3);
+    color: var(--fg-mute); font-family: var(--mono); font-size: 11px;
+    border-radius: 4px; margin-left: 6px;
+  }
+  .comment { color: var(--fg-mute); }
+
+  /* Why block */
+  .why { display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: start; }
+  @media (max-width: 860px) { .why { grid-template-columns: 1fr; } }
+  .why-text p { color: var(--fg-dim); font-size: 16px; }
+  .why-text p + p { margin-top: 14px; }
+  .why-text strong { color: var(--fg); font-weight: 600; }
+  .why-list { margin: 0; padding: 0; list-style: none; }
+  .why-list li {
+    padding: 16px 0; border-bottom: 1px solid var(--line);
+    color: var(--fg-dim); font-size: 15px;
+  }
+  .why-list li:first-child { padding-top: 0; }
+  .why-list li:last-child { border-bottom: 0; }
+  .why-list li strong { color: var(--fg); display: block; margin-bottom: 4px; font-weight: 600; font-size: 14px; font-family: var(--mono); }
+
+  /* CTA banner */
+  .cta-banner {
+    text-align: center;
+    padding: 64px 28px;
+    background: linear-gradient(180deg, var(--orange-soft), transparent);
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .cta-banner h2 { margin: 0 0 12px; font-size: clamp(28px, 4vw, 36px); }
+  .cta-banner p { color: var(--fg-dim); margin: 0 auto 28px; max-width: 56ch; }
+
+  /* Footer */
+  footer { padding: 56px 0 80px; color: var(--fg-mute); font-size: 14px; }
+  footer .foot-row { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  footer .links { display: flex; gap: 22px; }
+  footer a { color: var(--fg-mute); text-decoration: none; }
+  footer a:hover { color: var(--fg); }
+  .star-line { margin-top: 28px; padding-top: 28px; border-top: 1px dashed var(--line); color: var(--fg-mute); font-size: 13px; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>Claude Command Center</h1>
-  <p>Redirecting to the <a href="./demo/">static demo</a>&hellip;</p>
-  <p>For the real local dashboard, see the
-    <a href="https://github.com/amirfish1/claude-command-center#quickstart">install instructions on GitHub</a>.</p>
-</div>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <div class="brand">
+      <span class="dot"></span>
+      <span>claude command center</span>
+      <span class="version">v4 with Antigravity</span>
+    </div>
+    <nav class="nav-links">
+      <a href="#whats-new">What's new</a>
+      <a href="#features">Features</a>
+      <a href="#compare">Compare</a>
+      <a href="#install">Install</a>
+      <a class="gh" href="/demo" rel="noopener">Demo</a>
+      <a class="star" href="https://github.com/amirfish1/claude-command-center" rel="noopener">★ Star on GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero" style="border-top: 0;">
+    <div class="wrap hero-inner">
+      <div class="eyebrow">
+        <span class="badge">v4</span>
+        <span>Antigravity now a first-class engine</span>
+      </div>
+      <h1 class="hero-title">
+        One inbox for every <span class="orange">Claude</span>, <span class="orange">Codex</span>, and <span class="orange">Antigravity</span> session on your Mac.
+      </h1>
+      <p class="lede">
+        Pin strategy sessions on top. Fan out sub-sessions for execution. Stay above the noise across 30+ agent sessions. Local, open source, MIT.
+      </p>
+
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#install">
+          Install with one line <span class="arrow">&rarr;</span>
+        </a>
+        <a class="btn btn-soft" href="/demo">Try the live demo</a>
+        <a class="btn btn-soft" href="https://github.com/amirfish1/claude-command-center" rel="noopener">★ GitHub</a>
+      </div>
+
+      <div class="quick-install" id="quickInstall">
+        <code id="quickCmd">curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/install.sh | bash</code>
+        <button class="copy" type="button" data-target="quickCmd">copy</button>
+      </div>
+
+      <div class="install-meta">
+        macOS <span class="sep">·</span> Python 3 stdlib <span class="sep">·</span> No telemetry by default <span class="sep">·</span> MIT
+      </div>
+
+      <div class="demo" aria-label="CCC v4 dashboard demo">
+        <div class="demo-bar">
+          <div class="lights">
+            <span class="light red"></span>
+            <span class="light yel"></span>
+            <span class="light grn"></span>
+          </div>
+          <span class="url">localhost:8090</span>
+          <span class="live"><span class="pulse"></span>3 sessions live · 12 total</span>
+        </div>
+        <div class="demo-body">
+          <img src="./images/demo.gif" alt="CCC dashboard showing Claude, Codex, and Antigravity sessions in one view" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+          <div class="demo-placeholder" style="display:none;">
+            TODO: ensure docs/images/demo.gif is the v4 capture<br>
+            (current file may still be the v3 era loop)
+          </div>
+        </div>
+      </div>
+      <div class="demo-link">
+        Or skip install, <a href="/demo">tour the read-only demo with seeded data &rarr;</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="whats-new">
+    <div class="wrap">
+      <div class="section-eyebrow">New in v4 · Shipped May 21, 2026</div>
+      <h2>Three things that ship with <span class="orange">v4</span>.</h2>
+      <p class="section-lede">
+        The biggest is Antigravity. Google's new coding agent is now a first-class engine alongside Claude Code and Codex, including the app-only sessions other tools cannot drive.
+      </p>
+
+      <div class="news-grid">
+        <div class="news-card headline">
+          <span class="pill">★ Headline</span>
+          <h3>Antigravity engine</h3>
+          <p>Both AGY CLI and app-only sessions are drivable. CCC reads the Antigravity app's local HTTPS language server and posts follow-up messages through the cascade RPC.</p>
+          <div class="sub">// app-session input via local RPC</div>
+        </div>
+        <div class="news-card">
+          <span class="pill">Telemetry</span>
+          <h3>WIP + tokens</h3>
+          <p>WIP indication, TTY display, and token usage tracking for Antigravity rows. Same telemetry surface as the Claude rows.</p>
+          <div class="sub">// per-session, per-engine</div>
+        </div>
+        <div class="news-card">
+          <span class="pill">UX</span>
+          <h3>Row pinning</h3>
+          <p>Pin any session to the top of the list. Strategy stays visible while execution scrolls below. The foundation for the pin-and-fan workflow.</p>
+          <div class="sub">// the power loop</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <div class="section-eyebrow">What it does</div>
+      <h2>Three things every other orchestrator <span class="orange">misses</span>.</h2>
+      <p class="section-lede">
+        Most tools want to own execution. You launch agents through them, and the moment you open a terminal and resume something by hand, the dashboard goes blind. CCC works the other way.
+      </p>
+
+      <div class="features">
+        <article class="feature">
+          <div class="num">01</div>
+          <h3>Sees every session, not just the ones it spawned.</h3>
+          <p>
+            CCC reads each engine's on-disk state as the source of truth. Open a terminal, run <code>claude --resume</code> or <code>agy --conversation</code>, and the row appears. Close the dashboard, sessions keep running.
+          </p>
+          <pre>~/.claude/projects/*.jsonl
+~/.claude/sessions/&lt;pid&gt;.json
+~/.claude/command-center/live-state/</pre>
+        </article>
+
+        <article class="feature">
+          <div class="num">02</div>
+          <h3>Pin strategy on top, fan out sub-sessions below.</h3>
+          <p>
+            Pin five strategy sessions at the top. Each one spawns sub-sessions for execution. Strategy stays visible. Execution fans out under it. The workflow most people invent the hard way after their tenth session.
+          </p>
+          <pre>📌 launch coordination    [CLAUDE]
+📌 product roadmap        [CLAUDE]
+  └─ draft post           [CLAUDE]
+  └─ render video         [AGY]
+  └─ QC draft             [CODEX]</pre>
+        </article>
+
+        <article class="feature">
+          <div class="num">03</div>
+          <h3>GitHub and headless built in.</h3>
+          <p>
+            One click turns a GitHub issue into a session. Verify closes the issue with a commit-SHA comment. Spawn headless <code>claude -p</code> or <code>agy --conversation</code> sessions from the dashboard and keep typing at them from the browser.
+          </p>
+          <pre>gh issue → session → PR → verify
+claude -p --input-format stream-json
+agy --conversation &lt;sid&gt;</pre>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="use-cases">
+    <div class="wrap">
+      <div class="section-eyebrow">Who it's for</div>
+      <h2>If you've felt this, CCC is for you.</h2>
+      <p class="section-lede">
+        The audience is anyone who tried to run more than 10 agent sessions and felt the bottleneck stop being the model and start being them.
+      </p>
+
+      <div class="use-cases">
+        <div class="use-case">
+          <div class="who">Solo product builder</div>
+          <h3>Shipping two products in parallel</h3>
+          <p>Two repos in flight. Claude builds feature A while Codex refactors feature B while Antigravity drafts the migration. You pin the two strategy sessions and the sub-sessions are visible across both.</p>
+        </div>
+        <div class="use-case">
+          <div class="who">Agency lead</div>
+          <h3>Orchestrating four client codebases</h3>
+          <p>Each client gets a pinned strategy session. Spawn sub-sessions per ticket from their GitHub issues. The "All repos" view shows everything in flight across every client, with PR badges and time-gap markers.</p>
+        </div>
+        <div class="use-case">
+          <div class="who">Research engineer</div>
+          <h3>Running multi-agent experiments</h3>
+          <p>Spawn a research swarm: 10 parallel Claude sessions each evaluating a different hypothesis. Per-turn auto-summaries let you scan 10 transcripts in two minutes instead of reading each one. Group-chat sessions coordinate.</p>
+        </div>
+        <div class="use-case">
+          <div class="who">Open source maintainer</div>
+          <h3>Turning issues into PRs faster</h3>
+          <p>Triage issues into the kanban. One click spawns a headless session against the issue. Rows move Working → Review → In Testing automatically as the agent ships. Then you review, not write.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="compare">
+    <div class="wrap">
+      <div class="section-eyebrow">Honest comparison</div>
+      <h2>How CCC differs from the <span class="orange">other tools</span>.</h2>
+      <p class="section-lede">
+        Tools in this category make different bets. Here is where each one wins and where each one loses. We listed where CCC loses too.
+      </p>
+
+      <div class="compare-wrap">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th></th>
+              <th class="us">CCC v4</th>
+              <th>claude-squad</th>
+              <th>Conductor</th>
+              <th>Chorus</th>
+              <th>Sculptor</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Sees terminal sessions you didn't spawn</td>
+              <td class="yes">✓</td>
+              <td class="no">no</td>
+              <td class="no">no</td>
+              <td class="no">no</td>
+              <td class="no">no</td>
+            </tr>
+            <tr>
+              <td>Multi-engine (Claude + Codex + Antigravity)</td>
+              <td class="yes">✓ all 3</td>
+              <td class="partial">Claude only</td>
+              <td class="partial">Claude only</td>
+              <td class="partial">Claude only</td>
+              <td class="partial">Claude only</td>
+            </tr>
+            <tr>
+              <td>Antigravity app-session support</td>
+              <td class="yes">✓</td>
+              <td class="no">no</td>
+              <td class="no">no</td>
+              <td class="no">no</td>
+              <td class="no">no</td>
+            </tr>
+            <tr>
+              <td>Row pinning + sub-session hierarchy</td>
+              <td class="yes">✓</td>
+              <td class="no">no</td>
+              <td class="no">no</td>
+              <td class="no">no</td>
+              <td class="no">no</td>
+            </tr>
+            <tr>
+              <td>GitHub issue → session in one click</td>
+              <td class="yes">✓</td>
+              <td class="no">no</td>
+              <td class="partial">partial</td>
+              <td class="no">no</td>
+              <td class="no">no</td>
+            </tr>
+            <tr>
+              <td>Local. Survives dashboard close.</td>
+              <td class="yes">✓</td>
+              <td class="yes">✓</td>
+              <td class="yes">✓</td>
+              <td class="no">cloud</td>
+              <td class="yes">✓</td>
+            </tr>
+            <tr>
+              <td>Source you can read in an afternoon</td>
+              <td class="yes">✓ stdlib</td>
+              <td class="partial">Go</td>
+              <td class="no">closed</td>
+              <td class="no">closed</td>
+              <td class="partial">closed UI</td>
+            </tr>
+            <tr>
+              <td>Polished native app (DMG)</td>
+              <td class="partial">v4.1</td>
+              <td class="no">CLI</td>
+              <td class="yes">✓</td>
+              <td class="yes">✓</td>
+              <td class="yes">✓</td>
+            </tr>
+            <tr>
+              <td>Windows / Linux</td>
+              <td class="partial">best-effort</td>
+              <td class="yes">✓</td>
+              <td class="no">macOS</td>
+              <td class="yes">✓</td>
+              <td class="yes">✓</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <div class="section-eyebrow">Get it</div>
+      <h2>Install in 60 seconds.</h2>
+      <p class="section-lede">
+        macOS, Python 3, Claude Code (and optionally Codex CLI, Antigravity CLI for those engines).
+      </p>
+
+      <div class="install-grid">
+        <div class="install-block">
+          <h3># one-line install</h3>
+<pre><span class="comment"># downloads, installs, opens the dashboard</span>
+curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/install.sh | bash
+
+<span class="comment"># launch later</span>
+ccc start
+open http://localhost:8090</pre>
+          <p class="req">Installs two hooks into <code>~/.claude/settings.json</code> so every Claude Code session writes the sidecar state CCC reads. Idempotent.</p>
+        </div>
+
+        <div class="install-block">
+          <h3># native Mac app <span class="coming-soon">v4.1 · soon</span></h3>
+<pre><span class="comment"># DMG installer coming with v4.1</span>
+open https://ccc.amirfish.ai/download/CCC.dmg
+
+<span class="comment"># or, today, brew tap</span>
+brew tap amirfish1/ccc
+brew install ccc</pre>
+          <p class="req">A signed DMG with the dashboard, launchd agent, and engine adapters bundled. Shipping in the v4.1 follow-up. Star the repo to be notified.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="why">
+    <div class="wrap">
+      <div class="section-eyebrow">Why this exists</div>
+      <h2>Most orchestrators want to <span class="orange">own you</span>.</h2>
+      <div class="why">
+        <div class="why-text">
+          <p>
+            Other tools want to own execution. You launch agents through their dashboard, and in return you get a card on a kanban. <strong>That's fine until you open a terminal.</strong>
+          </p>
+          <p>
+            The moment you <code>claude --resume</code> or <code>agy --conversation</code> something by hand, you're outside the tool's universe. The dashboard can't see it. The work you just did doesn't show up against the issue, in the review queue, or anywhere.
+          </p>
+          <p>
+            <strong>CCC goes the other way.</strong> Each engine's on-disk state is the source of truth. If Claude Code, Codex, or Antigravity is running anywhere on your machine, it shows up here. Close the dashboard. Sessions keep running. Reopen tomorrow. Everything still there.
+          </p>
+        </div>
+        <ul class="why-list">
+          <li><strong>Architecture</strong>One Python file (stdlib HTTP server). One HTML file (vanilla JS, no build). Read the whole product in an afternoon.</li>
+          <li><strong>State</strong>Human-readable JSON sidecars under <code>~/.claude/command-center/</code>. Rewriteable by hand.</li>
+          <li><strong>Workers</strong>Zero. Every API request rescans Claude's session directories and returns a flat list. No background jobs to babysit.</li>
+          <li><strong>Telemetry</strong>Anonymous, opt-in, off by default. Five fields, all bounded. Inspectable locally. Source of the worker is in the repo.</li>
+          <li><strong>Scope</strong>Local dev tool. macOS-first. No multi-user. No network mode. If you're looking at it on a remote host, something has gone wrong.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<section class="cta-banner">
+  <div class="wrap-narrow">
+    <h2>Stop staring at the spinner.</h2>
+    <p>If you've ever forgotten which Claude tab was waiting on you, you already know why this exists. Two-line install. Local. Open source.</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#install">Install <span class="arrow">&rarr;</span></a>
+      <a class="btn btn-soft" href="https://github.com/amirfish1/claude-command-center" rel="noopener">★ Star on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-row">
+      <div>
+        Claude Command Center. MIT &copy; 2026 Amir Fish.<br>
+        Built on top of <a href="https://docs.claude.com/en/docs/claude-code">Claude Code</a>, <a href="https://github.com/openai/codex">Codex</a>, and <a href="https://antigravity.google">Antigravity</a>.
+      </div>
+      <div class="links">
+        <a href="https://github.com/amirfish1/claude-command-center">GitHub</a>
+        <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/amirfish1/claude-command-center/issues">Issues</a>
+        <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md">Telemetry</a>
+        <a href="https://github.com/amirfish1/claude-command-center/blob/main/SECURITY.md">Security</a>
+        <a href="/demo">Demo</a>
+      </div>
+    </div>
+    <div class="star-line">
+      If you install it, drop a star or open an issue. One-person project. Outside feedback is the only way to know how widely it lands. <a href="https://github.com/amirfish1">@amirfish1</a>.
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('.copy[data-target]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const target = document.getElementById(btn.dataset.target);
+      if (!target) return;
+      try {
+        await navigator.clipboard.writeText(target.textContent.trim());
+        const prev = btn.textContent;
+        btn.textContent = 'copied';
+        btn.classList.add('ok');
+        setTimeout(() => { btn.textContent = prev; btn.classList.remove('ok'); }, 1400);
+      } catch (e) {
+        const range = document.createRange();
+        range.selectNodeContents(target);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    });
+  });
+</script>
 </body>
 </html>
