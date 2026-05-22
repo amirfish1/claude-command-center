@@ -173,6 +173,41 @@
     }
   })();
 
+  // ── DEBUG: mute every setInterval callback while user is typing ──────
+  // Wrap window.setInterval so any timer-driven work CCC registers from
+  // this point on bails out when a TEXTAREA or text-style INPUT is
+  // focused. Re-applies the same guard we already sprinkled onto a few
+  // specific intervals, but globally — so we can confirm whether any
+  // remaining ticker is the source of typing hitches, then un-wrap one
+  // at a time. SSE / requestAnimationFrame / one-shot setTimeouts are
+  // intentionally NOT wrapped: SSE only fires on real server events,
+  // RAFs only on paint, and setTimeouts run user-visible debounced work
+  // (toast hide, refresh-on-action, etc.) we want firing on schedule.
+  (function muteTickersWhileTyping() {
+    if (window.__cccTickerMuteInstalled) return;
+    window.__cccTickerMuteInstalled = true;
+    const _origSetInterval = window.setInterval;
+    const _isTyping = () => {
+      const ae = document.activeElement;
+      if (!ae) return false;
+      if (ae.tagName === 'TEXTAREA') return true;
+      if (ae.tagName !== 'INPUT') return false;
+      const t = (ae.type || 'text').toLowerCase();
+      return /^(text|search|email|url|tel|password)$/.test(t);
+    };
+    window.setInterval = function patchedSetInterval(fn, delay) {
+      if (typeof fn !== 'function') {
+        return _origSetInterval.apply(this, arguments);
+      }
+      const extra = Array.prototype.slice.call(arguments, 2);
+      const wrapped = function() {
+        if (_isTyping()) return;
+        return fn.apply(this, arguments);
+      };
+      return _origSetInterval.call(this, wrapped, delay, ...extra);
+    };
+  })();
+
   // App config from server — populated before anything else renders.
   let APP_CONFIG = {
     app_name: 'Claude Command Center',

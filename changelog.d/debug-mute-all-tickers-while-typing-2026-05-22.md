@@ -1,0 +1,1 @@
+- DEBUG: globally pauses every `setInterval` callback while a textarea or text input is focused, so we can confirm whether timer-driven work is the source of remaining typing hitches. SSE, `requestAnimationFrame`, and one-shot `setTimeout`s are not affected.
