@@ -12079,6 +12079,32 @@
     return String(n);
   }
 
+  // Antigravity's own UI prints token counts as `11.2k`, `2.6k`, `847` —
+  // one decimal place for >=1k, raw integer otherwise. Truncates rather
+  // than rounds so a 999-token turn never silently shows as `1.0k`. The
+  // per-turn token chips and the antigravity bottom-bar totals reuse this
+  // so they read consistent with Antigravity's chat header.
+  function _formatTokensAntigravity(n) {
+    n = Number(n) || 0;
+    if (n < 1000) return String(n);
+    // Truncate to one decimal (e.g. 1199 -> 1.1k, not 1.2k).
+    return (Math.floor(n / 100) / 10).toFixed(1) + 'k';
+  }
+
+  // Build "11.2k in | 2.6k out | 1.0k thinking" the way Antigravity does.
+  // Drops the thinking segment when it's effectively zero (non-reasoning
+  // models commonly emit 0 here and the chip looks noisier with it on).
+  function _formatAntigravityTokenChips(tIn, tOut, tThinking) {
+    tIn = Number(tIn) || 0;
+    tOut = Number(tOut) || 0;
+    tThinking = Number(tThinking) || 0;
+    const parts = [];
+    if (tIn) parts.push(_formatTokensAntigravity(tIn) + ' in');
+    if (tOut) parts.push(_formatTokensAntigravity(tOut) + ' out');
+    if (tThinking >= 100) parts.push(_formatTokensAntigravity(tThinking) + ' thinking');
+    return parts.join(' | ');
+  }
+
   function _getCtxLimitOverride() {
     const v = parseInt(localStorage.getItem('ccc-context-limit') || '0', 10);
     return v === 1_000_000 || v === 200_000 ? v : 0;
@@ -12187,10 +12213,32 @@
         + 'list-price equivalent if metered against the API directly.';
       costPill = ' <span class="wp-cost-pill" title="' + escapeHtml(costTip) + '">' + fmt(cost) + '</span>';
     }
+    // Antigravity-only: running per-session totals in the exact format
+    // Antigravity prints in its chat header (`11.2k in | 2.6k out | 1.0k
+    // thinking`). Other engines have their own totals story (cost pill +
+    // cached-tokens tooltip) so we don't show this elsewhere.
+    let antigravityTotalsPill = '';
+    if (engine === 'antigravity') {
+      const totalIn = Number(u.total_input_tokens || 0)
+        + Number(u.total_cache_read_tokens || 0)
+        + Number(u.total_cache_creation_tokens || 0);
+      const totalOut = Number(u.total_output_tokens || 0);
+      const totalThinking = Number(u.total_thinking_tokens || 0);
+      const totalsText = _formatAntigravityTokenChips(totalIn, totalOut, totalThinking);
+      if (totalsText) {
+        const totalsTip = 'Antigravity session totals (sums per-turn modelUsage)\n'
+          + '  Input:        ' + totalIn.toLocaleString() + ' tok'
+          + (u.total_cache_read_tokens ? '  (incl. ' + Number(u.total_cache_read_tokens).toLocaleString() + ' cached read)' : '') + '\n'
+          + '  Output:       ' + totalOut.toLocaleString() + ' tok\n'
+          + '  Thinking:     ' + totalThinking.toLocaleString() + ' tok';
+        antigravityTotalsPill = ' <span class="wp-antigravity-tokens" title="'
+          + escapeHtml(totalsTip) + '">' + escapeHtml(totalsText) + '</span>';
+      }
+    }
     uSlot.innerHTML = '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
       + 'ctx ' + _formatTokens(latest) + ' / ' + _formatTokens(limit)
       + ' <span class="wp-usage-pct">(' + pct + '%)</span>'
-      + '</span>' + peakNote + costPill + modelPill;
+      + '</span>' + peakNote + costPill + antigravityTotalsPill + modelPill;
     slot.classList.add('visible');
     scheduleInputContextFit();
     const pill = uSlot.querySelector('.wp-usage-clickable');
@@ -13179,6 +13227,19 @@
           } else if (b.kind === 'thinking') {
             html += '<div class="thinking-block" style="display:none"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">Thinking</span><div class="t-body">' + escapeHtml(b.text) + '</div></div>';
             hasNonTool = true;
+          }
+        }
+        // Per-turn token chips (currently only set for Antigravity sessions —
+        // the server attaches tokens_in/out/thinking from the trajectory's
+        // modelUsage when the Antigravity app is running). Mirrors the line
+        // Antigravity prints in its own chat header.
+        if ((ev.tokens_in || ev.tokens_out || ev.tokens_thinking)) {
+          const chipText = _formatAntigravityTokenChips(ev.tokens_in, ev.tokens_out, ev.tokens_thinking);
+          if (chipText) {
+            const chipTitle = 'Input:    ' + (Number(ev.tokens_in) || 0).toLocaleString() + ' tokens'
+              + '\nOutput:   ' + (Number(ev.tokens_out) || 0).toLocaleString() + ' tokens'
+              + '\nThinking: ' + (Number(ev.tokens_thinking) || 0).toLocaleString() + ' tokens';
+            html += '<div class="event-token-chips" title="' + escapeAttr(chipTitle) + '">' + escapeHtml(chipText) + '</div>';
           }
         }
         if (!hasNonTool) div.classList.add('tool-only');

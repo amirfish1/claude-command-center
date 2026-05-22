@@ -2478,7 +2478,7 @@ class TestModelPicker(unittest.TestCase):
             sys.modules.pop(mod, None)
         import server
         sid = "22222222-3333-4444-5555-777777777777"
-        
+
         # Test case 1: RPC succeeds and returns usage metrics
         fake_response = {
             "trajectory": {
@@ -2490,6 +2490,7 @@ class TestModelPicker(unittest.TestCase):
                                 "inputTokens": "5000",
                                 "outputTokens": "150",
                                 "cacheReadTokens": "1000",
+                                "thinkingTokens": "400",
                             }
                         }
                     },
@@ -2501,20 +2502,21 @@ class TestModelPicker(unittest.TestCase):
                                 "outputTokens": "200",
                                 "cacheReadTokens": "1200",
                                 "cacheCreationTokens": 100,
+                                "thinkingTokens": 600,
                             }
                         }
                     }
                 ]
             }
         }
-        
+
         with mock.patch.object(server, "_antigravity_app_rpc", return_value={"ok": True, "response": fake_response}), \
              mock.patch.object(server, "_is_antigravity_session", return_value=True), \
              mock.patch.object(server, "_antigravity_transcript_path", return_value=None), \
              mock.patch.object(server, "_get_session_override", return_value=None):
-            
+
             usage = server.extract_session_usage(sid)
-            
+
             # check stats for second step: input (6000) + cacheRead (1200) + cacheCreation (100) = 7300
             self.assertEqual(usage["latest_input_tokens"], 7300)
             self.assertEqual(usage["peak_input_tokens"], 7300)
@@ -2522,6 +2524,8 @@ class TestModelPicker(unittest.TestCase):
             self.assertEqual(usage["total_cache_read_tokens"], 1000 + 1200)
             self.assertEqual(usage["total_cache_creation_tokens"], 100)
             self.assertEqual(usage["total_output_tokens"], 150 + 200)
+            # Per-turn thinking tokens are summed for the bottom-bar totals.
+            self.assertEqual(usage["total_thinking_tokens"], 400 + 600)
             self.assertEqual(usage["model"], "gemini-1.5-pro")
             self.assertEqual(usage["engine"], "antigravity")
             self.assertEqual(usage["context_limit"], 1_000_000)
@@ -2531,12 +2535,61 @@ class TestModelPicker(unittest.TestCase):
              mock.patch.object(server, "_is_antigravity_session", return_value=True), \
              mock.patch.object(server, "_antigravity_transcript_path", return_value=None), \
              mock.patch.object(server, "_get_session_override", return_value=None):
-            
+
             usage = server.extract_session_usage(sid)
             self.assertEqual(usage["latest_input_tokens"], 0)
             self.assertEqual(usage["peak_input_tokens"], 0)
+            self.assertEqual(usage["total_thinking_tokens"], 0)
             self.assertEqual(usage["model"], "")
             self.assertEqual(usage["engine"], "antigravity")
+
+    def test_parse_antigravity_event_attaches_per_turn_tokens(self):
+        """Assistant events should carry tokens_in/out/thinking when the
+        trajectory's modelUsage covers the event's step_index. This is what
+        feeds the per-turn chips in the conversation pane."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        usage_map = {
+            13: {"in": 11200, "out": 2600, "thinking": 1000,
+                 "cache_read": 0, "cache_create": 0, "model": "agy-1"},
+        }
+        ev_with_step = {
+            "type": "PLANNER_RESPONSE",
+            "source": "MODEL",
+            "step_index": 13,
+            "created_at": "2026-05-22T10:00:00Z",
+            "content": "Here is the plan.",
+            "tool_calls": [],
+        }
+        out = server._parse_antigravity_event(ev_with_step, 99, usage_map=usage_map)
+        self.assertIsNotNone(out)
+        self.assertEqual(out["type"], "assistant")
+        self.assertEqual(out["tokens_in"], 11200)
+        self.assertEqual(out["tokens_out"], 2600)
+        self.assertEqual(out["tokens_thinking"], 1000)
+
+        # Step index with no matching trajectory entry → no token fields,
+        # so the frontend falls back to the no-chip render path.
+        ev_no_match = {
+            "type": "PLANNER_RESPONSE",
+            "source": "MODEL",
+            "step_index": 999,
+            "created_at": "2026-05-22T10:00:01Z",
+            "content": "Another step.",
+            "tool_calls": [],
+        }
+        out2 = server._parse_antigravity_event(ev_no_match, 100, usage_map=usage_map)
+        self.assertIsNotNone(out2)
+        self.assertNotIn("tokens_in", out2)
+        self.assertNotIn("tokens_out", out2)
+        self.assertNotIn("tokens_thinking", out2)
+
+        # Old call shape (no usage_map kw) must still work.
+        out3 = server._parse_antigravity_event(ev_with_step, 101)
+        self.assertIsNotNone(out3)
+        self.assertNotIn("tokens_in", out3)
 
 
 

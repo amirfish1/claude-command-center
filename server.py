@@ -13455,7 +13455,7 @@ def find_antigravity_conversations(
     return out
 
 
-def _parse_antigravity_event(ev, line_num):
+def _parse_antigravity_event(ev, line_num, usage_map=None):
     ev_type = ev.get("type") or ""
     source = ev.get("source") or ""
     ts = _antigravity_event_timestamp(ev)
@@ -13485,13 +13485,28 @@ def _parse_antigravity_event(ev, line_num):
                 "detail": detail or "",
             })
         if blocks:
-            return {
+            out = {
                 "line": line_num,
                 "ts": ts,
                 "type": "assistant",
                 "message_id": f"antigravity-{line_num}",
                 "blocks": blocks,
             }
+            # Look up per-step token usage by the transcript's step_index, so
+            # each assistant turn can render its own "in | out | thinking"
+            # chip mirroring Antigravity's own UI.
+            if usage_map:
+                step_idx = ev.get("step_index")
+                try:
+                    step_int = int(step_idx) if step_idx is not None else None
+                except (TypeError, ValueError):
+                    step_int = None
+                if step_int is not None and step_int in usage_map:
+                    usage = usage_map[step_int]
+                    out["tokens_in"] = usage.get("in", 0)
+                    out["tokens_out"] = usage.get("out", 0)
+                    out["tokens_thinking"] = usage.get("thinking", 0)
+            return out
         return None
     if ev_type in ("CONVERSATION_HISTORY", "SYSTEM_MESSAGE", "EPHEMERAL_MESSAGE", "CHECKPOINT"):
         return None
@@ -13517,6 +13532,13 @@ def _parse_antigravity_conversation(session_id, after_line=0):
     line_num = 0
     if not path:
         return _parse_antigravity_cli_log_conversation(session_id, after_line=after_line)
+    # One RPC call per parse — the trajectory carries per-step token usage
+    # that the transcript.jsonl itself doesn't. If the Antigravity app isn't
+    # running the map is just empty and the parser degrades to its old shape.
+    try:
+        usage_map = _antigravity_step_usage_map(session_id)
+    except Exception:  # pragma: no cover — RPC layer is best-effort
+        usage_map = {}
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -13530,12 +13552,107 @@ def _parse_antigravity_conversation(session_id, after_line=0):
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                parsed = _parse_antigravity_event(ev, line_num)
+                parsed = _parse_antigravity_event(ev, line_num, usage_map=usage_map)
                 if parsed:
                     events.append(parsed)
     except OSError:
         pass
     return {"events": events, "last_line": line_num}
+
+
+def _antigravity_usage_to_int(val):
+    if isinstance(val, bool):
+        return 0
+    if isinstance(val, int):
+        return val
+    if isinstance(val, str) and val.isdigit():
+        return int(val)
+    return 0
+
+
+# Field-name fallbacks for the trajectory step's modelUsage entry. Antigravity
+# (and downstream models) have shipped these under slightly different keys —
+# thinking/reasoning/thought all refer to the same internal scratchpad tokens
+# that aren't part of the user-visible output. Reading all of them keeps the
+# per-turn chips honest even when the schema drifts.
+_ANTIGRAVITY_USAGE_KEYS = {
+    "in":           ("inputTokens", "input_tokens"),
+    "out":          ("outputTokens", "output_tokens"),
+    "thinking":     ("thinkingTokens", "thinking_tokens",
+                     "reasoningTokens", "reasoning_tokens",
+                     "thoughtTokens", "thought_tokens"),
+    "cache_read":   ("cacheReadTokens", "cache_read_tokens"),
+    "cache_create": ("cacheCreationTokens", "cache_creation_tokens"),
+}
+
+
+def _antigravity_step_usage(usage):
+    """Pull a normalized per-step usage dict out of a modelUsage payload."""
+    if not isinstance(usage, dict):
+        return None
+    out = {"model": usage.get("model") or ""}
+    saw_any = False
+    for key, candidates in _ANTIGRAVITY_USAGE_KEYS.items():
+        value = 0
+        for cand in candidates:
+            if cand in usage:
+                value = _antigravity_usage_to_int(usage.get(cand))
+                if value:
+                    break
+        out[key] = value
+        if value:
+            saw_any = True
+    if not saw_any and not out["model"]:
+        return None
+    return out
+
+
+def _antigravity_trajectory_steps(session_id):
+    """Fetch GetCascadeTrajectory and return its raw `steps` list (or [])."""
+    result = _antigravity_app_rpc(
+        "GetCascadeTrajectory",
+        {"cascadeId": session_id},
+        timeout=5,
+    )
+    if not result.get("ok"):
+        return []
+    trajectory = (result.get("response") or {}).get("trajectory") or {}
+    steps = trajectory.get("steps") or []
+    return steps if isinstance(steps, list) else []
+
+
+def _antigravity_step_usage_map(session_id, steps=None):
+    """Build a {transcript step_index -> per-step usage dict} map.
+
+    Antigravity's trajectory steps each carry a `stepIndex` (or `step_index`)
+    that matches the `step_index` field on transcript.jsonl events. We use it
+    to look up per-turn token counts at render time. When the trajectory
+    doesn't expose an explicit index, we fall back to positional order so the
+    map is still useful as a per-PLANNER_RESPONSE walking index.
+    """
+    if steps is None:
+        steps = _antigravity_trajectory_steps(session_id)
+    usage_map = {}
+    for pos, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        metadata = step.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        usage = _antigravity_step_usage(metadata.get("modelUsage"))
+        if not usage:
+            continue
+        idx = step.get("stepIndex")
+        if idx is None:
+            idx = step.get("step_index")
+        if idx is None:
+            idx = pos
+        try:
+            idx_int = int(idx)
+        except (TypeError, ValueError):
+            continue
+        usage_map[idx_int] = usage
+    return usage_map
 
 
 def _extract_antigravity_usage(session_id):
@@ -13544,6 +13661,7 @@ def _extract_antigravity_usage(session_id):
         "peak_input_tokens": 0,
         "total_output_tokens": 0,
         "total_input_tokens": 0,
+        "total_thinking_tokens": 0,
         "total_cache_creation_tokens": 0,
         "total_cache_read_tokens": 0,
         "model": "",
@@ -13562,50 +13680,39 @@ def _extract_antigravity_usage(session_id):
     total_cached_read = 0
     total_cached_create = 0
     total_out = 0
+    total_thinking = 0
 
-    result = _antigravity_app_rpc(
-        "GetCascadeTrajectory",
-        {"cascadeId": session_id},
-        timeout=5,
-    )
-    if result.get("ok"):
-        trajectory = (result.get("response") or {}).get("trajectory") or {}
-        steps = trajectory.get("steps") or []
-        for step in steps:
-            if not isinstance(step, dict):
-                continue
-            metadata = step.get("metadata")
-            if not isinstance(metadata, dict):
-                continue
-            usage = metadata.get("modelUsage")
-            if not isinstance(usage, dict):
-                continue
+    steps = _antigravity_trajectory_steps(session_id)
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        metadata = step.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        usage = _antigravity_step_usage(metadata.get("modelUsage"))
+        if not usage:
+            continue
 
-            if usage.get("model"):
-                model = usage.get("model")
+        if usage.get("model"):
+            model = usage["model"]
 
-            def to_int(val):
-                if isinstance(val, int):
-                    return val
-                if isinstance(val, str) and val.isdigit():
-                    return int(val)
-                return 0
+        in_tokens = usage["in"]
+        out_tokens = usage["out"]
+        cr_tokens = usage["cache_read"]
+        cc_tokens = usage["cache_create"]
+        thinking_tokens = usage["thinking"]
 
-            in_tokens = to_int(usage.get("inputTokens"))
-            out_tokens = to_int(usage.get("outputTokens"))
-            cr_tokens = to_int(usage.get("cacheReadTokens"))
-            cc_tokens = to_int(usage.get("cacheCreationTokens"))
+        window = in_tokens + cr_tokens + cc_tokens
+        if window:
+            latest = window
+            if window > peak:
+                peak = window
 
-            window = in_tokens + cr_tokens + cc_tokens
-            if window:
-                latest = window
-                if window > peak:
-                    peak = window
-
-            total_in += in_tokens
-            total_cached_read += cr_tokens
-            total_cached_create += cc_tokens
-            total_out += out_tokens
+        total_in += in_tokens
+        total_cached_read += cr_tokens
+        total_cached_create += cc_tokens
+        total_out += out_tokens
+        total_thinking += thinking_tokens
 
     return {
         **empty,
@@ -13613,6 +13720,7 @@ def _extract_antigravity_usage(session_id):
         "peak_input_tokens": peak,
         "total_output_tokens": total_out,
         "total_input_tokens": total_in,
+        "total_thinking_tokens": total_thinking,
         "total_cache_creation_tokens": total_cached_create,
         "total_cache_read_tokens": total_cached_read,
         "model": model,

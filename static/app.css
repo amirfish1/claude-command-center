@@ -752,6 +752,21 @@
   .thinking-toggle:hover { color: var(--text); }
   .t-body { white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
 
+  /* Per-turn token chips — rendered under an assistant event when the
+   * source engine exposes per-turn token usage (currently only Antigravity,
+   * via GetCascadeTrajectory). Mirrors the `11.2k in | 2.6k out | 1.0k
+   * thinking` line Antigravity prints in its own UI. Quiet by design so it
+   * doesn't compete with the message text. */
+  .event-token-chips {
+    margin: 4px 0 0;
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.65;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-variant-numeric: tabular-nums;
+    cursor: help;
+  }
+
   .line-num { font-size: 10px; color: var(--text-muted); opacity: 0.5; float: right; }
   .msg-ts { font-size: 10px; color: var(--text-muted); opacity: 0.4; float: right; margin-right: 8px; font-variant-numeric: tabular-nums; }
 
@@ -1382,6 +1397,16 @@
   .conv-input-context .wp-cost-pill {
     padding: 2px 7px; border-radius: 3px; font-weight: 600;
     color: var(--text-muted); background: rgba(139,148,158,0.06);
+    cursor: help;
+  }
+  /* Antigravity-only running totals — mirrors the `11.2k in | 2.6k out |
+   * 1.0k thinking` line Antigravity prints in its own chat header. Quiet
+   * monospace so it visually pairs with the wp-model-pill next to it. */
+  .conv-input-context .wp-antigravity-tokens {
+    padding: 2px 7px; border-radius: 3px; font-weight: 600;
+    color: var(--text-muted); background: rgba(139,148,158,0.06);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-size: 10px;
     cursor: help;
   }
   /* Model badge — shown next to the context/cost pills so you can tell

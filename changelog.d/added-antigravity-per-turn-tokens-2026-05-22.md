@@ -1,0 +1,1 @@
+Antigravity sessions now show a per-turn `<in> | <out> | <thinking>` token chip under each assistant message, plus running session totals in the bottom context bar — mirroring the format Antigravity prints in its own UI. Pulled from the trajectory's `modelUsage` per-step counters via `GetCascadeTrajectory` (the same RPC the bottom-bar context pill already calls).
