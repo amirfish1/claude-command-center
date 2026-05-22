@@ -23105,8 +23105,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             result, status = handler(ctx["repo_path"], ctx.get("cwd"))
             self.send_json(result, status)
         elif path == "/api/read-file":
-            # SECURITY: Allows reading safe markdown files from the sandbox.
-            # Requires session context and validates that target path is within allowed_roots.
+            # Reads file content for the Files-panel preview / transcript
+            # link preview. Sandbox checks were removed alongside /api/open
+            # (commit befd5f7); CCC binds to 127.0.0.1 and same-origin-
+            # gates POSTs, so the trust boundary is the user, not the path.
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
@@ -23120,42 +23122,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "path must be absolute"}, 400)
             else:
                 ext = os.path.splitext(target)[1].lower()
-                sid = payload.get("session_id", "")
-                try:
-                    ctx = require_repo_context(payload, allow_session=True)
-                    rp = Path(target).resolve(strict=False)
-                    allowed_roots = [
-                        Path(ctx["repo_path"]).resolve(),
-                        repo_log_dir(ctx["repo_path"]).resolve(),
-                        COMMAND_CENTER_STATE_DIR.resolve(),
-                        Path.home() / ".claude",
-                    ]
-                    in_sandbox = (
-                        any(rp == root or root in rp.parents for root in allowed_roots)
-                        or _non_repo_file_sandbox(sid, rp)
-                        or _safe_local_file_open_path(rp, categories={"markdown"})
-                    )
-                except RepoContextError as e:
-                    # No repo context -- still allow pasted images,
-                    # global safe paths, session-referenced files, and
-                    # safe markdown files surfaced by the Files panel.
-                    in_sandbox = False
-                    rp = Path(target).resolve(strict=False)
-                    if _non_repo_file_sandbox(sid, rp) or _safe_local_file_open_path(rp, categories={"markdown"}):
-                        in_sandbox = True
-                    else:
-                        self.send_json(e.as_payload(), e.status)
-                        return
-                except OSError:
-                    in_sandbox = False
-
                 if ext not in {".md", ".mdx", ".markdown"}:
                     self.send_json(
                         {"ok": False, "error": "extension not allowed", "ext": ext},
                         403,
                     )
-                elif not in_sandbox:
-                    self.send_json({"ok": False, "error": "path outside repo/session sandbox", "path": target}, 403)
                 elif not os.path.exists(target):
                     self.send_json({"ok": False, "error": "not found", "path": target}, 404)
                 elif os.path.isdir(target):
@@ -23168,13 +23139,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except Exception as e:
                         self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/reveal-file":
-            # SECURITY: macOS `open` will execute apps and scripts. Unlike
-            # /api/open, this launches the file directly, so it clamps to the
-            # repo/session context AND requires an allowlisted extension.
-            # The whitelist excludes .app, .sh,
-            # .command, .py, etc., so subprocess.Popen(["open", path])
-            # cannot trigger code execution. Adding executable types to
-            # FILE_EXT_TO_CATEGORY would re-introduce the RCE risk.
+            # macOS `open` will execute apps and scripts, so this endpoint
+            # still enforces the FILE_EXT_TO_CATEGORY allowlist (which
+            # excludes .app, .sh, .command, .py, etc.) to block trivial
+            # RCE via subprocess.Popen(["open", path]). The repo/session
+            # sandbox check was lifted alongside /api/open (commit
+            # befd5f7) — CCC binds to 127.0.0.1, same-origin-gates POSTs,
+            # and the user explicitly clicked the link, so the trust
+            # boundary is the extension allowlist, not the path location.
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
@@ -23188,41 +23160,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "path must be absolute"}, 400)
             else:
                 ext = os.path.splitext(target)[1].lower()
-                sid = payload.get("session_id", "")
-                try:
-                    ctx = require_repo_context(payload, allow_session=True)
-                    rp = Path(target).resolve(strict=False)
-                    allowed_roots = [
-                        Path(ctx["repo_path"]).resolve(),
-                        repo_log_dir(ctx["repo_path"]).resolve(),
-                        COMMAND_CENTER_STATE_DIR.resolve(),
-                        Path.home() / ".claude",
-                    ]
-                    in_sandbox = (
-                        any(rp == root or root in rp.parents for root in allowed_roots)
-                        or _non_repo_file_sandbox(sid, rp)
-                        or _safe_local_file_open_path(rp)
-                    )
-                except RepoContextError as e:
-                    # No repo context -- still allow pasted images,
-                    # global safe paths, session-referenced files, and
-                    # safe local document/media files surfaced by the Files panel.
-                    in_sandbox = False
-                    rp = Path(target).resolve(strict=False)
-                    if _non_repo_file_sandbox(sid, rp) or _safe_local_file_open_path(rp):
-                        in_sandbox = True
-                    else:
-                        self.send_json(e.as_payload(), e.status)
-                        return
-                except OSError:
-                    in_sandbox = False
                 if ext not in FILE_EXT_TO_CATEGORY:
                     self.send_json(
                         {"ok": False, "error": "extension not allowed", "ext": ext},
                         403,
                     )
-                elif not in_sandbox:
-                    self.send_json({"ok": False, "error": "path outside repo/session sandbox", "path": target}, 403)
                 elif not os.path.exists(target):
                     self.send_json({"ok": False, "error": "not found", "path": target}, 404)
                 else:

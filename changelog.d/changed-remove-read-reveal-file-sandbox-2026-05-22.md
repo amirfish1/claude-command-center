@@ -1,0 +1,1 @@
+- Removed the remaining "path outside repo/session sandbox" checks from `/api/read-file` and `/api/reveal-file` so transcript path chips outside the repo open just like they do via `/api/open`. The extension allowlist (which still blocks .app/.sh/.py for reveal) keeps RCE off the table.
