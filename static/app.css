@@ -2523,33 +2523,6 @@
   #convList .conv-ghissues-section,
   #convList .conv-readytomerge-section,
   #convList .conv-inprogress-section { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 6px; }
-  #convList .conv-pinned-section {
-    position: sticky;
-    top: 0;
-    z-index: 30;
-    margin-bottom: 12px;
-    padding-top: 4px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-    box-shadow: 0 8px 16px rgba(0,0,0,0.18);
-  }
-  #convList .conv-pinned-header {
-    width: 100%; display: flex; align-items: center; gap: 8px;
-    padding: 2px 14px 6px;
-    color: var(--text-muted); font-size: 12px; text-transform: uppercase;
-    letter-spacing: 0.5px; font-weight: 600;
-  }
-  #convList .conv-pinned-arrow { font-size: 11px; opacity: 0.85; color: var(--accent); }
-  #convList .conv-pinned-count {
-    margin-left: auto;
-    background: rgba(88,166,255,0.10); border: 1px solid rgba(88,166,255,0.28);
-    border-radius: 10px; padding: 1px 8px; font-size: 11px;
-    color: var(--accent); font-weight: 600;
-  }
-  #convList .conv-pinned-list {
-    display: block;
-  }
   /* The first section in the list (whichever it is — typically GH Issues,
    * but the next section takes the spot if earlier ones are empty) loses
    * its divider so the list doesn't start with an empty stripe. */

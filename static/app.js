@@ -6853,10 +6853,8 @@
     const _ghIssueConvs = [];
     const _readyToMergeConvs = [];
     const _archivedConvs = [];
-    const _pinnedConvs = [];
     const _inGroupChatIds = new Set(_gcActiveChats.flatMap(c => c.session_ids || []));
     for (const c of convs) {
-      if (c.pinned) { _pinnedConvs.push(c); continue; }
       const col = classifyKanbanColumn(c);
       if (col === 'archived') { _archivedConvs.push(c); continue; }
       if (col === 'backlog') { _ghIssueConvs.push(c); continue; }
@@ -7316,7 +7314,7 @@
       ? Math.floor(Date.now() / 1000) - (_ipWindowDays * 24 * 3600)
       : null;
     const _visibleSessionConvs = _hasFolderChips
-      ? (_ipWindowCutoff ? _sessionConvs.filter(c => (c.modified || 0) >= _ipWindowCutoff) : _sessionConvs)
+      ? (_ipWindowCutoff ? _sessionConvs.filter(c => c.pinned || (c.modified || 0) >= _ipWindowCutoff) : _sessionConvs)
       : _sessionConvs;
     // User-controlled grouping preference for the In Progress section.
     // 'project' (default): group by folder. 'time': flat chrono
@@ -7329,6 +7327,13 @@
       catch (_) { return 'project'; }
     })();
     const _shouldGroupByFolder = _hasFolderChips && _ipGrouping === 'project';
+    const _pinRankValue = (c) => {
+      const rank = Number(c && c.pin_rank);
+      return Number.isFinite(rank) ? rank : 0;
+    };
+    const _minPinnedRank = (cards) => (cards || []).reduce((best, c) => (
+      c && c.pinned ? Math.min(best, _pinRankValue(c)) : best
+    ), Infinity);
     const _flatRowsWithSeparators = (cards, opts = {}) => {
       // Only render the FIRST gap separator. The list naturally fans out
       // from "things from the last few hours" → "older" — that one
@@ -7353,16 +7358,6 @@
         return separator + _renderRow(c, opts);
       }).join('');
     };
-    const _pinnedHtml = _pinnedConvs.length
-      ? '<div class="conv-pinned-section">'
-        + '<div class="conv-pinned-header">'
-        +   '<span class="conv-pinned-arrow">&#128204;</span>'
-        +   '<span class="conv-pinned-label">Pinned</span>'
-        +   '<span class="conv-pinned-count">' + _pinnedConvs.length + '</span>'
-        + '</div>'
-        + '<div class="conv-pinned-list">' + _pinnedConvs.map(c => _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter })).join('') + '</div>'
-      + '</div>'
-      : '';
     const _folderGroupStorageKey = (section, key) =>
       'ccc-folder-group-collapsed:' + section + ':' + String(key || '').slice(0, 180);
     const _isFolderGroupCollapsed = (section, key) => {
@@ -7425,6 +7420,9 @@
         _prevFolderOrder = JSON.parse(localStorage.getItem(_FOLDER_ORDER_KEY) || '{}');
       } catch (_) { /* corrupt or missing — start fresh */ }
       const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
+        const aPinned = _minPinnedRank(a[1]);
+        const bPinned = _minPinnedRank(b[1]);
+        if (aPinned !== bPinned) return aPinned - bPinned;
         const aMax = a[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
         const bMax = b[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
         if (Math.abs(aMax - bMax) < _FOLDER_ORDER_HYSTERESIS_S) {
@@ -7561,6 +7559,9 @@
           _prevGhOrder = JSON.parse(localStorage.getItem(_GH_ORDER_KEY) || '{}');
         } catch (_) { /* corrupt — start fresh */ }
         const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
+          const aPinned = _minPinnedRank(a[1]);
+          const bPinned = _minPinnedRank(b[1]);
+          if (aPinned !== bPinned) return aPinned - bPinned;
           const aMax = a[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
           const bMax = b[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
           if (Math.abs(aMax - bMax) < _FOLDER_ORDER_HYSTERESIS_S) {
@@ -7633,6 +7634,7 @@
     const _archivedItems = [];
     for (const c of _archivedConvs) {
       _archivedItems.push({
+        pinRank: c.pinned ? _pinRankValue(c) : Infinity,
         mtime: c.modified || c.last_interacted || 0,
         html: _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter }),
       });
@@ -7655,11 +7657,14 @@
           +   '<span class="archive-row-gc-topic">' + topic + '</span>'
           +   partLabel
           + '</div>';
-        _archivedItems.push({ mtime: ago, html });
+        _archivedItems.push({ pinRank: Infinity, mtime: ago, html });
       }
     }
     if (_archivedItems.length > 0) {
-      _archivedItems.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+      _archivedItems.sort((a, b) => {
+        if (a.pinRank !== b.pinRank) return a.pinRank - b.pinRank;
+        return (b.mtime || 0) - (a.mtime || 0);
+      });
       const _arcCollapsed = localStorage.getItem('ccc-archived-collapsed') !== '0';
       const _arcArrow = _arcCollapsed ? '▸' : '▾';
       const _arcRows = _archivedItems.map(it => it.html).join('');
@@ -7840,9 +7845,9 @@
         + (_gcCount ? '<div class="conv-ingroupchat-list">' + _gcRows + '</div>' : '')
         + '</div>';
     }
-    // Order: Pinned → In Group Chat (live) → GH Issues (to start) →
+    // Order: In Group Chat (live) → GH Issues (to start) →
     // Ready to merge (action) → In progress → Archived.
-    $convList.innerHTML = _pinnedHtml + _inGroupChatHtml + _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
+    $convList.innerHTML = _inGroupChatHtml + _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
     // Toggle handler for the Archived section header.
     const $archivedToggle = $convList.querySelector('[data-role="archived-toggle"]');
     if ($archivedToggle) {

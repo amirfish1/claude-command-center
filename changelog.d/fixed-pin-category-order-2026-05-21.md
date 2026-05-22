@@ -1,0 +1,1 @@
+- Keep pinned conversations inside their current section while sorting them to the top of that section.
