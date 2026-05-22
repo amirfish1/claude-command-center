@@ -1,0 +1,1 @@
+Fixed: bug-report modal was silently dropping attached screenshots — `bugSubmit` reset the form state (including the captured screenshot) right before reading it, so every "Send report" click filed an issue with no image even when the preview showed one. The reset now wipes UI chrome only and preserves the user's attached screenshot until the modal is reopened.

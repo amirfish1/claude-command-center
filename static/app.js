@@ -18022,18 +18022,31 @@
     if ($bugShotBtn) $bugShotBtn.disabled = false;
   }
 
-  function bugResetState() {
+  // Reset only the transient UI chrome (error banner, success banner,
+  // fallback markdown, button labels). Leaves user input (the Details
+  // textarea and any attached screenshot) intact — used on each submit
+  // click to wipe stale messages before the new attempt. The previous
+  // version also called bugClearShot() here, which silently dropped
+  // attached screenshots from every submission.
+  function bugResetMessages() {
     if ($bugError) { $bugError.textContent = ''; $bugError.classList.remove('visible'); }
     if ($bugSuccess) { $bugSuccess.innerHTML = ''; $bugSuccess.classList.remove('visible'); }
     if ($bugFallback) { $bugFallback.textContent = ''; $bugFallback.classList.remove('visible'); }
     if ($bugCopyBtn) $bugCopyBtn.style.display = 'none';
     bugFallbackMarkdown = '';
-    bugClearShot();
     if ($bugSubmitBtn) {
       $bugSubmitBtn.disabled = false;
       $bugSubmitBtn.textContent = 'Send report';
     }
     if ($bugCancelBtn) { $bugCancelBtn.disabled = false; $bugCancelBtn.textContent = 'Cancel'; }
+  }
+
+  // Full reset for modal open: messages + any attached screenshot.
+  // The description textarea is cleared separately in bugOpenModal so
+  // bugResetState stays focused on derived UI state.
+  function bugResetState() {
+    bugResetMessages();
+    bugClearShot();
   }
 
   async function bugCaptureScreenshot() {
@@ -18105,7 +18118,9 @@
   async function bugSubmit() {
     if (!$bugDescInput) return;
     const desc = $bugDescInput.value.trim();
-    bugResetState();
+    // Wipe stale UI chrome but keep the attached screenshot — the user
+    // explicitly added it and expects it to ride along with this submit.
+    bugResetMessages();
     if (!desc) {
       if ($bugError) { $bugError.textContent = 'Please describe the bug.'; $bugError.classList.add('visible'); }
       $bugDescInput.focus();
