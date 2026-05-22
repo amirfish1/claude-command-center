@@ -7405,6 +7405,42 @@
         return separator + _renderRow(c, opts);
       }).join('');
     };
+    // Same gap-separator behavior as _flatRowsWithSeparators, but the
+    // input is a mixed list of session cards and pre-built group-chat
+    // items. Each item carries (mtime, html, pinRank) so the sort
+    // stays pure on mtime regardless of item type.
+    const _flatItemsWithSeparators = (sessionCards, gcItems, opts = {}) => {
+      const items = [];
+      for (const c of sessionCards) {
+        items.push({
+          pinRank: c.pinned ? _pinRankValue(c) : Infinity,
+          mtime: c.modified || 0,
+          html: _renderRow(c, opts),
+        });
+      }
+      for (const gc of (gcItems || [])) items.push(gc);
+      items.sort((a, b) => {
+        if (a.pinRank !== b.pinRank) return a.pinRank - b.pinRank;
+        return (b.mtime || 0) - (a.mtime || 0);
+      });
+      let _gapShown = false;
+      return items.map((it, i, arr) => {
+        let separator = '';
+        if (i > 0 && !_gapShown) {
+          const newer = (arr[i - 1] && arr[i - 1].mtime) || 0;
+          const older = it.mtime || 0;
+          if (newer && older && (newer - older) >= GAP_SEPARATOR_S) {
+            separator = '<div class="conv-gap-separator">'
+              + '<span class="conv-gap-line"></span>'
+              + '<span class="conv-gap-label">' + escapeHtml(_gapLabel(newer, older)) + '</span>'
+              + '<span class="conv-gap-line"></span>'
+              + '</div>';
+            _gapShown = true;
+          }
+        }
+        return separator + it.html;
+      }).join('');
+    };
     const _folderGroupStorageKey = (section, key) =>
       'ccc-folder-group-collapsed:' + section + ':' + String(key || '').slice(0, 180);
     const _isFolderGroupCollapsed = (section, key) => {
@@ -7447,93 +7483,10 @@
         + _ghIssueShowMoreHtml(key, hiddenCount, expanded);
     };
 
-    let _activeRowsHtml;
-    if (_shouldGroupByFolder) {
-      // Group cards by folder; preserve folder order by the most
-      // recent card in each group (freshest folder appears first).
-      const _byFolder = new Map();
-      for (const c of _visibleSessionConvs) {
-        const key = c.folder_label_chip || c.folder_path || '(unknown)';
-        if (!_byFolder.has(key)) _byFolder.set(key, []);
-        _byFolder.get(key).push(c);
-      }
-      // Sort folders by max recent modification, with 5-min hysteresis:
-      // when two folders' max-modified timestamps are within 5 minutes,
-      // preserve the order they had in the previous render. Stops the
-      // In Progress section from reshuffling every refresh tick when the
-      // user is actively working across multiple repos.
-      let _prevFolderOrder = {};
-      try {
-        _prevFolderOrder = JSON.parse(localStorage.getItem(_FOLDER_ORDER_KEY) || '{}');
-      } catch (_) { /* corrupt or missing — start fresh */ }
-      const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
-        const aPinned = _minPinnedRank(a[1]);
-        const bPinned = _minPinnedRank(b[1]);
-        if (aPinned !== bPinned) return aPinned - bPinned;
-        const aMax = a[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
-        const bMax = b[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
-        if (Math.abs(aMax - bMax) < _FOLDER_ORDER_HYSTERESIS_S) {
-          const aPrev = _prevFolderOrder[a[0]];
-          const bPrev = _prevFolderOrder[b[0]];
-          // Only honour previous order if both folders were in the prior
-          // render; a brand-new folder still sorts by its real timestamp
-          // so it can enter at its natural position.
-          if (aPrev !== undefined && bPrev !== undefined && aPrev !== bPrev) {
-            return aPrev - bPrev;
-          }
-        }
-        return bMax - aMax;
-      });
-      try {
-        const _newOrder = {};
-        _folderEntries.forEach(([k], i) => { _newOrder[k] = i; });
-        localStorage.setItem(_FOLDER_ORDER_KEY, JSON.stringify(_newOrder));
-      } catch (_) { /* localStorage quota / disabled — degrade silently */ }
-      const _renderFolderEntry = ([folder, cards]) => {
-        const hue = (cards[0].folder_chip_hue | 0);
-        const orphan = cards[0].folder_chip_orphan ? ' is-orphan' : '';
-        const dropPath = cards[0].folder_path || '';
-        const collapseKey = dropPath || folder;
-        const collapsed = _isFolderGroupCollapsed('inprogress', collapseKey);
-        const headerAttrs = ' data-folder-path="' + escapeHtml(dropPath) + '"'
-          + ' data-folder-label="' + escapeHtml(folder) + '"';
-        return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
-          + _folderGroupHeaderHtml('inprogress', folder, cards.length, hue, orphan, collapseKey, headerAttrs)
-          + cards.map(c => _renderRow(c, { suppressFolderChip: true })).join('')
-          + '</div>';
-      };
-      const _groupHtml = _folderEntries.map(_renderFolderEntry).join('');
-      _activeRowsHtml = _isSpecificFolderFilter
-        ? _flatRowsWithSeparators(_visibleSessionConvs, { suppressFolderChip: true })
-        : _groupHtml;
-    } else {
-      _activeRowsHtml = _flatRowsWithSeparators(_visibleSessionConvs, { suppressFolderChip: _isSpecificFolderFilter });
-    }
-    if (!_visibleSessionConvs.length) {
-      // If there are group chats but no underlying sessions in the
-      // window, suppress the "no sessions" empty-state — the group
-      // chat rows we render right above ARE content; the empty-state
-      // would read as a contradiction.
-      const _hasGroupChatRows = (_gcActiveChats || []).length > 0;
-      if (_hasGroupChatRows) {
-        _activeRowsHtml = '';
-      } else {
-        const _emptyWindowLabel = _ipWindow === 'all' ? '' : (' in the last ' + (_ipWindow === '7d' ? '7 days' : 'day'));
-        _activeRowsHtml = '<div class="archive-empty-state">No in-progress sessions' + _emptyWindowLabel + '.</div>';
-      }
-    }
-    // In progress section: every row that's not a backlog card or archived.
-    // Mirrors the kanban "In progress" column (key: 'working' under the
-    // hood — relabel only) so the two surfaces use the same vocabulary.
-    // Hidden entirely when there are no active sessions AND no active
-    // group chats; collapse state persists in localStorage. Group chats
-    // render as a slim block at the TOP of the list so the "what's in
-    // a chat" overview reads first.
-    // Group-chat rows — historically rendered in their own section above
-    // In Progress. Now merged INTO the In Progress section so a group
-    // chat reads as just another live "conversation" the user is
-    // tracking, alongside the underlying sessions. The actual concat
-    // into _inProgressHtml happens below; here we just build the rows.
+    // Group-chat ITEMS — each chat becomes one sortable item with its
+    // own mtime, so the In Progress list can interleave chats with
+    // session rows (or folder groups) by recency instead of always
+    // pinning chats to the top.
     //
     // Active rows render normally; closed rows are ghosted with a
     // "closed" pill and stay visible until the user hits the per-row
@@ -7541,9 +7494,7 @@
     // (+ child data-roles) so the click / drag / archive handlers
     // wired further down still find them regardless of where the rows
     // ended up in the DOM.
-    let _inGroupChatRowsHtml = '';
-    {
-      const _gcRows = (_gcActiveChats || []).map(chat => {
+    const _gcItems = (_gcActiveChats || []).map(chat => {
         const isClosed = chat.status === 'closed';
         const topicLabel = chat.topic ? escapeHtml(chat.topic.slice(0, 80)) : '(untitled)';
         const partSids = chat.session_ids || [];
@@ -7647,7 +7598,7 @@
             }
           }
         }
-        return '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + '">'
+        const _chatHtml = '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + '">'
           + '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + '"'
           +   ' data-role="ingroupchat-row"'
           +   ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
@@ -7677,16 +7628,105 @@
           + chatWaitingHint
           + (partListHtml ? '<div class="conv-ingroupchat-participants">' + partListHtml + '</div>' : '')
           + '</div>';
-      }).join('');
-      const _gcCount = (_gcActiveChats || []).length;
-      // Wrap rows in an opt-in container so the existing styles (which
-      // key off `.conv-ingroupchat-list`) keep applying without further
-      // edits. The wrapper appears INSIDE the In Progress section list
-      // when there are chats; otherwise we emit nothing at all.
-      _inGroupChatRowsHtml = _gcCount
-        ? '<div class="conv-ingroupchat-list conv-ingroupchat-list--inline">' + _gcRows + '</div>'
-        : '';
+        return {
+          mtime: chat.last_mtime || 0,
+          pinRank: Infinity,  // group chats aren't pinnable today
+          html: _chatHtml,
+        };
+      });
+    let _activeRowsHtml;
+    if (_shouldGroupByFolder) {
+      // Group cards by folder; preserve folder order by the most
+      // recent card in each group (freshest folder appears first).
+      const _byFolder = new Map();
+      for (const c of _visibleSessionConvs) {
+        const key = c.folder_label_chip || c.folder_path || '(unknown)';
+        if (!_byFolder.has(key)) _byFolder.set(key, []);
+        _byFolder.get(key).push(c);
+      }
+      // Sort folders by max recent modification, with 5-min hysteresis:
+      // when two folders' max-modified timestamps are within 5 minutes,
+      // preserve the order they had in the previous render. Stops the
+      // In Progress section from reshuffling every refresh tick when the
+      // user is actively working across multiple repos.
+      let _prevFolderOrder = {};
+      try {
+        _prevFolderOrder = JSON.parse(localStorage.getItem(_FOLDER_ORDER_KEY) || '{}');
+      } catch (_) { /* corrupt or missing — start fresh */ }
+      const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
+        const aPinned = _minPinnedRank(a[1]);
+        const bPinned = _minPinnedRank(b[1]);
+        if (aPinned !== bPinned) return aPinned - bPinned;
+        const aMax = a[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
+        const bMax = b[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
+        if (Math.abs(aMax - bMax) < _FOLDER_ORDER_HYSTERESIS_S) {
+          const aPrev = _prevFolderOrder[a[0]];
+          const bPrev = _prevFolderOrder[b[0]];
+          // Only honour previous order if both folders were in the prior
+          // render; a brand-new folder still sorts by its real timestamp
+          // so it can enter at its natural position.
+          if (aPrev !== undefined && bPrev !== undefined && aPrev !== bPrev) {
+            return aPrev - bPrev;
+          }
+        }
+        return bMax - aMax;
+      });
+      try {
+        const _newOrder = {};
+        _folderEntries.forEach(([k], i) => { _newOrder[k] = i; });
+        localStorage.setItem(_FOLDER_ORDER_KEY, JSON.stringify(_newOrder));
+      } catch (_) { /* localStorage quota / disabled — degrade silently */ }
+      const _renderFolderEntry = ([folder, cards]) => {
+        const hue = (cards[0].folder_chip_hue | 0);
+        const orphan = cards[0].folder_chip_orphan ? ' is-orphan' : '';
+        const dropPath = cards[0].folder_path || '';
+        const collapseKey = dropPath || folder;
+        const collapsed = _isFolderGroupCollapsed('inprogress', collapseKey);
+        const headerAttrs = ' data-folder-path="' + escapeHtml(dropPath) + '"'
+          + ' data-folder-label="' + escapeHtml(folder) + '"';
+        return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
+          + _folderGroupHeaderHtml('inprogress', folder, cards.length, hue, orphan, collapseKey, headerAttrs)
+          + cards.map(c => _renderRow(c, { suppressFolderChip: true })).join('')
+          + '</div>';
+      };
+      // Each folder group becomes one mtime-stamped item; group chats
+      // become their own items at the same level. Sorted together so a
+      // recent chat can outrank a stale folder, and a recent folder can
+      // outrank a stale chat. Pinned items still float to the top.
+      const _folderItems = _folderEntries.map(([folder, cards]) => ({
+        pinRank: _minPinnedRank(cards),
+        mtime: cards.reduce((m, c) => Math.max(m, c.modified || 0), 0),
+        html: _renderFolderEntry([folder, cards]),
+      }));
+      const _mixed = _folderItems.concat(_gcItems);
+      _mixed.sort((a, b) => {
+        if (a.pinRank !== b.pinRank) return a.pinRank - b.pinRank;
+        return (b.mtime || 0) - (a.mtime || 0);
+      });
+      _activeRowsHtml = _isSpecificFolderFilter
+        ? _flatItemsWithSeparators(_visibleSessionConvs, _gcItems, { suppressFolderChip: true })
+        : _mixed.map(it => it.html).join('');
+    } else {
+      _activeRowsHtml = _flatItemsWithSeparators(_visibleSessionConvs, _gcItems, { suppressFolderChip: _isSpecificFolderFilter });
     }
+    if (!_visibleSessionConvs.length) {
+      // Group chats are already in _activeRowsHtml (interleaved by
+      // _flatItemsWithSeparators / the by-folder merge), so when chats
+      // exist we leave the HTML alone. Only when both sessions AND
+      // chats are empty do we render the explicit empty state.
+      const _hasGroupChatRows = (_gcItems || []).length > 0;
+      if (!_hasGroupChatRows) {
+        const _emptyWindowLabel = _ipWindow === 'all' ? '' : (' in the last ' + (_ipWindow === '7d' ? '7 days' : 'day'));
+        _activeRowsHtml = '<div class="archive-empty-state">No in-progress sessions' + _emptyWindowLabel + '.</div>';
+      }
+    }
+    // In progress section: every row that's not a backlog card or archived.
+    // Mirrors the kanban "In progress" column (key: 'working' under the
+    // hood — relabel only) so the two surfaces use the same vocabulary.
+    // Hidden entirely when there are no active sessions AND no active
+    // group chats; collapse state persists in localStorage. Group chats
+    // interleave with session rows (or folder groups) by mtime — see
+    // the _gcItems build and the _activeRowsHtml merge above.
     let _inProgressHtml = '';
     const _gcCountForSection = (_gcActiveChats || []).length;
     if (_sessionConvs.length > 0 || _gcCountForSection > 0) {
@@ -7728,7 +7768,7 @@
         +   '<span class="conv-inprogress-count" title="' + _ipCountTitle + '">' + _ipCountValue + '</span>'
         +   _ipTools
         + '</button>'
-        + '<div class="conv-inprogress-list">' + _inGroupChatRowsHtml + _activeRowsHtml + '</div>'
+        + '<div class="conv-inprogress-list">' + _activeRowsHtml + '</div>'
         + '</div>';
     }
     // Ready to merge section: sessions whose work has landed in a PR
