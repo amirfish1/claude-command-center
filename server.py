@@ -22169,6 +22169,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 ".svg": "image/svg+xml",
                 ".webmanifest": "application/manifest+json",
                 ".json": "application/json",
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".ico": "image/x-icon",
             }
             ext = ""
             for candidate in static_ct_map:
