@@ -1,0 +1,1 @@
+- Fixed "Add screenshot" failing with "`screencapture` not found on PATH" when CCC is launched outside a login shell — now resolves the binary directly at /usr/sbin/screencapture and surfaces a clearer "Screenshots are macOS-only" message on non-macOS platforms.

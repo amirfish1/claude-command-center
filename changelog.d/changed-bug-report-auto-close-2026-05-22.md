@@ -1,0 +1,1 @@
+- The Report a bug modal now closes automatically about 2 seconds after a successful submit, instead of waiting on the Close button.
