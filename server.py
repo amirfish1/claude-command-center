@@ -22078,6 +22078,44 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "private, max-age=3600")
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/api/local-image":
+            # Serves any local image file by absolute path. Used by the MD
+            # file viewer to render <img> tags whose src points at a file
+            # next to (or anywhere relative to) the markdown being viewed.
+            # Sandbox-free in line with /api/open / /api/read-file /
+            # /api/reveal-file — CCC is loopback-bound and same-origin-
+            # gated. The image-extension allowlist below is the only
+            # remaining guard.
+            qs = urllib.parse.parse_qs(parsed.query)
+            raw = (qs.get("path", [""])[0] or "").strip()
+            ext = ("." + raw.rsplit(".", 1)[-1].lower()) if "." in raw else ""
+            ct_map = {
+                ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+                ".ico": "image/x-icon", ".bmp": "image/bmp",
+            }
+            if not raw or ext not in ct_map:
+                self.send_json({"error": "not found"}, 404)
+                return
+            try:
+                resolved = Path(raw).expanduser().resolve(strict=False)
+            except OSError:
+                self.send_json({"error": "not found"}, 404)
+                return
+            if not resolved.is_file():
+                self.send_json({"error": "not found"}, 404)
+                return
+            try:
+                body = resolved.read_bytes()
+            except OSError:
+                self.send_json({"error": "not found"}, 404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", ct_map[ext])
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.end_headers()
+            self.wfile.write(body)
         elif path.startswith("/image-cache/"):
             # Serve user-pasted images from ~/.claude/image-cache/<sid>/<file>.
             # Path sandboxing (realpath under base) is the sole authorization check;

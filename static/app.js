@@ -10658,6 +10658,21 @@
                 const viewer = document.getElementById('statusRailFileViewer');
                 if (bodyEl) {
                   bodyEl.innerHTML = typeof renderMarkdown === 'function' ? renderMarkdown(res.content) : res.content;
+                  // Rewrite <img src=…> to route through /api/local-image
+                  // so relative paths (./screenshot.png), bare names, and
+                  // absolute filesystem paths all resolve against the
+                  // markdown file's directory instead of the CCC origin.
+                  const _mdDir = row.target.replace(/\/[^/]*$/, '');
+                  bodyEl.querySelectorAll('img').forEach((img) => {
+                    const raw = img.getAttribute('src') || '';
+                    if (!raw) return;
+                    if (/^(https?:|data:|blob:|file:|\/api\/)/i.test(raw)) return;
+                    let abs;
+                    if (raw.startsWith('/')) abs = raw;
+                    else if (raw.startsWith('~/')) abs = raw;
+                    else abs = _mdDir + '/' + raw;
+                    img.src = '/api/local-image?path=' + encodeURIComponent(abs);
+                  });
                 }
                 if (filenameEl) {
                   filenameEl.textContent = row.label;
