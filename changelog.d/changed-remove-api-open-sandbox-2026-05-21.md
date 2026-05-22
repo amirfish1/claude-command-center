@@ -1,0 +1,1 @@
+- Removed all path restrictions from `/api/open`, allowing files outside of the repo or log directory to be opened from the conversation pane and files sidebar.

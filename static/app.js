@@ -13066,27 +13066,39 @@
               : '';
             const toolClass = baseName === 'AskUserQuestion' ? ' ask-user-question' : '';
             const detail = formatToolCallDetail(b.name, b.detail);
-            const askQ = baseName === 'AskUserQuestion' && b.question && typeof b.question === 'object' ? b.question : null;
+            // AskUserQuestion may carry up to 4 questions in one tool call.
+            // Accept the new {questions:[...]} shape and the older single-
+            // question shape so older transcripts still render.
+            let askQuestions = null;
+            if (baseName === 'AskUserQuestion' && b.question && typeof b.question === 'object') {
+              if (Array.isArray(b.question.questions) && b.question.questions.length) {
+                askQuestions = b.question.questions;
+              } else if (b.question.header || b.question.question || (Array.isArray(b.question.options) && b.question.options.length)) {
+                askQuestions = [b.question];
+              }
+            }
             let askBody = '';
-            if (askQ) {
-              const headerHtml = askQ.header
-                ? '<span class="ask-user-header">' + escapeHtml(askQ.header) + '</span>'
-                : '';
-              const questionHtml = askQ.question
-                ? '<div class="ask-user-question-text">' + escapeHtml(askQ.question) + '</div>'
-                : '';
-              const opts = Array.isArray(askQ.options) ? askQ.options : [];
-              const optsHtml = opts.length
-                ? '<ul class="ask-user-options">' + opts.map(function (o) {
-                    const lbl = (o && typeof o === 'object') ? (o.label || '') : String(o || '');
-                    const desc = (o && typeof o === 'object') ? (o.description || '') : '';
-                    return '<li>'
-                      + '<span class="ask-user-option-label">' + escapeHtml(lbl) + '</span>'
-                      + (desc ? '<span class="ask-user-option-desc"> — ' + escapeHtml(desc) + '</span>' : '')
-                      + '</li>';
-                  }).join('') + '</ul>'
-                : '';
-              askBody = headerHtml + questionHtml + optsHtml;
+            if (askQuestions) {
+              askBody = askQuestions.map(function (askQ) {
+                const headerHtml = askQ.header
+                  ? '<div class="ask-user-header">' + escapeHtml(askQ.header) + '</div>'
+                  : '';
+                const questionHtml = askQ.question
+                  ? '<div class="ask-user-question-text">' + escapeHtml(askQ.question) + '</div>'
+                  : '';
+                const opts = Array.isArray(askQ.options) ? askQ.options : [];
+                const optsHtml = opts.length
+                  ? '<ul class="ask-user-options">' + opts.map(function (o) {
+                      const lbl = (o && typeof o === 'object') ? (o.label || '') : String(o || '');
+                      const desc = (o && typeof o === 'object') ? (o.description || '') : '';
+                      return '<li>'
+                        + '<span class="ask-user-option-label">' + escapeHtml(lbl) + '</span>'
+                        + (desc ? '<span class="ask-user-option-desc"> — ' + escapeHtml(desc) + '</span>' : '')
+                        + '</li>';
+                    }).join('') + '</ul>'
+                  : '';
+                return '<div class="ask-user-block">' + headerHtml + questionHtml + optsHtml + '</div>';
+              }).join('');
             }
             html += '<div class="tool-call' + toolClass + detail.className + '" data-tool-detail="' + escapeAttr(detail.full) + '" data-tool-source="' + escapeAttr(source) + '">'
               + '<span class="arrow">-></span> '
@@ -13976,11 +13988,19 @@
       _moveToHome('historyStatusPill', $settingsSlot);
       _moveToHome('kptWorktreesBtn',   $settingsSlot);
       _moveToHome('statsBtn',          $settingsSlot);
-      _moveToHome('bugReportLink',     $settingsSlot);
       if ($toolbar) {
         const fontCtrls = $toolbar.querySelector('.font-size-controls');
         if (fontCtrls) $settingsSlot.appendChild(fontCtrls);
       }
+    }
+    // Report a bug sits at the very left of the sidebar header action
+    // row — closer to where bugs are noticed (the conversation list)
+    // than buried in the settings gear. The static Refresh+Restart
+    // split-button and History button stay to its right.
+    const $sidebarHeaderActions = document.querySelector('.sidebar-header-actions');
+    const $bugLinkEl = document.getElementById('bugReportLink');
+    if ($sidebarHeaderActions && $bugLinkEl && $bugLinkEl.parentElement !== $sidebarHeaderActions) {
+      $sidebarHeaderActions.prepend($bugLinkEl);
     }
 
     // CONDITIONAL set (toggle-aware): rail in right-mode, original toolbar
@@ -17616,6 +17636,80 @@
     })();
   }
 
+  // ── Sidebar header version + last-updated line ───────────────────
+  // Populates #cccVersionLabel ("V4.3") and #cccLastUpdated
+  // ("21/05/26-07:38PM") from /api/version. The "check for updates"
+  // link forces a fresh /api/version/check (bypassing the 6h server
+  // cache) and either opens the existing update modal or toasts that
+  // the install is current.
+  const $cccVersionLabel = document.getElementById('cccVersionLabel');
+  const $cccLastUpdated = document.getElementById('cccLastUpdated');
+  const $cccCheckUpdatesLink = document.getElementById('cccCheckUpdatesLink');
+
+  function formatCccUpdatedAt(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    const day = pad(d.getDate());
+    const mon = pad(d.getMonth() + 1);
+    const yr = pad(d.getFullYear() % 100);
+    let h = d.getHours();
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12; if (h === 0) h = 12;
+    const min = pad(d.getMinutes());
+    return `${day}/${mon}/${yr}-${pad(h)}:${min}${ampm}`;
+  }
+
+  (async () => {
+    if (!$cccVersionLabel && !$cccLastUpdated) return;
+    try {
+      const r = await fetch('/api/version', { cache: 'no-store' });
+      const d = await r.json();
+      if ($cccVersionLabel && d && d.version) {
+        const major = String(d.version).split('.')[0];
+        $cccVersionLabel.textContent = 'V' + major + '.' + (String(d.version).split('.')[1] || '0');
+        $cccVersionLabel.title = 'Installed version: v' + d.version;
+      }
+      if ($cccLastUpdated) {
+        const formatted = formatCccUpdatedAt(d && d.last_updated);
+        $cccLastUpdated.textContent = formatted || '—';
+      }
+    } catch (_) {
+      if ($cccLastUpdated) $cccLastUpdated.textContent = '—';
+    }
+  })();
+
+  if ($cccCheckUpdatesLink) {
+    $cccCheckUpdatesLink.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      if ($cccCheckUpdatesLink.classList.contains('checking')) return;
+      $cccCheckUpdatesLink.classList.add('checking');
+      $cccCheckUpdatesLink.textContent = 'checking…';
+      try {
+        const r = await fetch('/api/version/check?force=1', { cache: 'no-store' });
+        const d = await r.json();
+        if (d && d.ok && d.behind) {
+          updCheckData = d;
+          if ($updPillText) {
+            $updPillText.textContent = 'Update → v' + String(d.latest).replace(/[<>&]/g, '');
+          }
+          if ($updPill) $updPill.classList.add('visible');
+          updOpenModal();
+        } else if (d && d.ok) {
+          showOpToast('Up to date — v' + (d.current || '?'));
+        } else {
+          showOpToast('Update check failed: ' + ((d && d.error) || 'unknown'), 'error');
+        }
+      } catch (e) {
+        showOpToast('Update check failed: ' + (e.message || 'network error'), 'error');
+      } finally {
+        $cccCheckUpdatesLink.classList.remove('checking');
+        $cccCheckUpdatesLink.textContent = 'check for updates';
+      }
+    });
+  }
+
   // ── Manual server restart ─────────────────────────────────────
   // Settings menu → POST /api/restart → wait for the same port to answer.
   const $restartServerBtn = document.getElementById('restartServerBtn');
@@ -17710,6 +17804,69 @@
     if (!CONV_POPOUT_MODE) restartServerRefreshPort();
     $restartServerBtn.addEventListener('click', restartServerRun);
   }
+
+  // ── Sidebar refresh split-button ──────────────────────────────
+  // Primary action: hard reload (cache-bust via ?_r=<ts>). The caret
+  // opens a small menu whose only entry today is "Restart server",
+  // which delegates to the same restartServerRun() the settings menu
+  // uses.
+  const $sidebarRefreshWrap = document.querySelector('.sh-refresh-wrap');
+  const $sidebarRefreshBtn = document.getElementById('sidebarRefreshBtn');
+  const $sidebarRefreshCaret = document.getElementById('sidebarRefreshCaret');
+  const $sidebarRefreshMenu = document.getElementById('sidebarRefreshMenu');
+  const $sidebarRestartServerItem = document.getElementById('sidebarRestartServerItem');
+
+  function hideSidebarRefreshMenu() {
+    if (!$sidebarRefreshMenu) return;
+    $sidebarRefreshMenu.style.display = 'none';
+    if ($sidebarRefreshCaret) $sidebarRefreshCaret.setAttribute('aria-expanded', 'false');
+  }
+  function toggleSidebarRefreshMenu() {
+    if (!$sidebarRefreshMenu) return;
+    const open = $sidebarRefreshMenu.style.display !== 'none';
+    if (open) {
+      hideSidebarRefreshMenu();
+    } else {
+      $sidebarRefreshMenu.style.display = 'block';
+      if ($sidebarRefreshCaret) $sidebarRefreshCaret.setAttribute('aria-expanded', 'true');
+    }
+  }
+  if ($sidebarRefreshBtn) {
+    $sidebarRefreshBtn.addEventListener('click', () => {
+      if ($sidebarRefreshWrap) {
+        $sidebarRefreshWrap.classList.add('spinning');
+        setTimeout(() => $sidebarRefreshWrap.classList.remove('spinning'), 600);
+      }
+      const url = new URL(window.location.href);
+      url.searchParams.set('_r', String(Date.now()));
+      window.location.replace(url.toString());
+    });
+  }
+  if ($sidebarRefreshCaret) {
+    $sidebarRefreshCaret.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      toggleSidebarRefreshMenu();
+    });
+  }
+  if ($sidebarRestartServerItem) {
+    $sidebarRestartServerItem.addEventListener('click', () => {
+      hideSidebarRefreshMenu();
+      if (typeof restartServerRun === 'function') {
+        restartServerRun();
+      }
+    });
+  }
+  document.addEventListener('click', (ev) => {
+    if (!$sidebarRefreshMenu) return;
+    if ($sidebarRefreshMenu.style.display === 'none') return;
+    if ($sidebarRefreshWrap && $sidebarRefreshWrap.contains(ev.target)) return;
+    hideSidebarRefreshMenu();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && $sidebarRefreshMenu && $sidebarRefreshMenu.style.display !== 'none') {
+      hideSidebarRefreshMenu();
+    }
+  });
 
   // ── In-app bug reporting ────────────────────────────────────────
   // Topbar link → modal → POST /api/bug-report → server shells out

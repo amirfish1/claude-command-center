@@ -11,7 +11,7 @@ Usage:
     PORT=9000 ./run.sh       # custom port
 """
 
-__version__ = "4.2.0"
+__version__ = "4.3.0"
 
 import ast
 import base64
@@ -384,29 +384,6 @@ def _resolve_open_target(target, *, session_id=None, cwd=None, repo_path=None):
         and not session_artifact_sandbox
     ):
         session_file_sandbox = _session_referenced_open_path(session_id, resolved)
-    if (
-        not core_sandbox
-        and not session_sandbox
-        and not pasted_image_sandbox
-        and not session_artifact_sandbox
-        and not session_file_sandbox
-    ):
-        return {
-            "ok": False,
-            "error": "path outside repo/session sandbox",
-            "path": str(resolved),
-            "status": 403,
-        }
-    if not core_sandbox and not _categorize_file_target(str(resolved)):
-        ext = os.path.splitext(str(resolved))[1].lower()
-        return {
-            "ok": False,
-            "error": "extension not allowed outside repo/log dir",
-            "ext": ext,
-            "path": str(resolved),
-            "status": 403,
-        }
-
     return {
         "ok": True,
         "path": str(resolved),
@@ -420,9 +397,7 @@ def _resolve_open_target(target, *, session_id=None, cwd=None, repo_path=None):
 
 def _open_launch_allowed(resolved_target):
     """Whether /api/open may launch, not just reveal, a resolved target."""
-    if resolved_target.get("core_sandbox"):
-        return True
-    return _categorize_file_target(resolved_target.get("path")) == "markdown"
+    return True
 
 
 _SESSION_LOAD_STATUS_LOCK = threading.Lock()
@@ -2822,6 +2797,32 @@ _VERSION_CHECK_TTL = 6 * 60 * 60  # 6h — GitHub unauth limit is 60/h/IP
 def _install_dir():
     """Dir containing server.py — this is the git clone we'd update."""
     return Path(__file__).resolve().parent
+
+
+def _ccc_last_updated_iso():
+    """ISO-8601 timestamp of the most recent change to this install.
+
+    Prefers `git log -1 --format=%cI HEAD` so a fresh `git pull` (or
+    self-update) reflects immediately, even when no source file mtime
+    changed. Falls back to server.py mtime when git is unavailable
+    (e.g. zip install). Returns "" on total failure.
+    """
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(_install_dir()), "log", "-1", "--format=%cI", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).decode("utf-8", "replace").strip()
+        if out:
+            return out
+    except Exception:
+        pass
+    try:
+        import datetime as _dt
+        ts = Path(__file__).resolve().stat().st_mtime
+        return _dt.datetime.fromtimestamp(ts).astimezone().isoformat()
+    except Exception:
+        return ""
 
 
 def _strip_v(tag):
@@ -8945,30 +8946,43 @@ def _ask_user_question_payload(tool_input, max_options=3):
 
 
 def _ask_user_question_structured(tool_input):
-    """Full header/question/options for rich client rendering (no truncation cap)."""
+    """Full per-question header/question/options for rich client rendering.
+
+    AskUserQuestion's `questions` array may carry up to 4 questions in a
+    single tool call. Return all of them so the UI can stack each as its
+    own block — earlier versions only kept `questions[0]` and silently
+    dropped the rest.
+    """
     if not isinstance(tool_input, dict):
         return {}
     questions = tool_input.get("questions")
     if not isinstance(questions, list) or not questions:
         return {}
-    first = questions[0]
-    if not isinstance(first, dict):
+    out_questions = []
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        header = _prompt_fragment(q.get("header"), 120)
+        question = _prompt_fragment(q.get("question"), 400)
+        options = []
+        for opt in q.get("options") or []:
+            if isinstance(opt, dict):
+                label = _prompt_fragment(opt.get("label"), 120)
+                description = _prompt_fragment(opt.get("description"), 240)
+            else:
+                label = _prompt_fragment(opt, 120)
+                description = ""
+            if label:
+                options.append({"label": label, "description": description})
+        if header or question or options:
+            out_questions.append({
+                "header": header,
+                "question": question,
+                "options": options,
+            })
+    if not out_questions:
         return {}
-    header = _prompt_fragment(first.get("header"), 120)
-    question = _prompt_fragment(first.get("question"), 400)
-    options = []
-    for opt in first.get("options") or []:
-        if isinstance(opt, dict):
-            label = _prompt_fragment(opt.get("label"), 120)
-            description = _prompt_fragment(opt.get("description"), 240)
-        else:
-            label = _prompt_fragment(opt, 120)
-            description = ""
-        if label:
-            options.append({"label": label, "description": description})
-    if not (header or question or options):
-        return {}
-    return {"header": header, "question": question, "options": options}
+    return {"questions": out_questions}
 
 
 def _tool_use_detail(name, tool_input, max_len=200):
@@ -22023,7 +22037,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # missing instead of an empty UI with no explanation.
             self.send_json(_run_healthcheck())
         elif path == "/api/version":
-            self.send_json({"version": __version__})
+            self.send_json({
+                "version": __version__,
+                "last_updated": _ccc_last_updated_iso(),
+            })
         elif path == "/api/search-history":
             # Read window onto ~/.claude-index/index.db, populated by the
             # bundled _history_index indexer. Returns BM25-ranked matches
