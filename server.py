@@ -3005,6 +3005,23 @@ def _build_bug_report_body(description, ccc_version, user_agent, session_id,
     return "\n".join(lines)
 
 
+def _resolve_screencapture_bin():
+    """Locate the macOS `screencapture` binary.
+
+    On every Mac the binary lives at /usr/sbin/screencapture, but /usr/sbin
+    is missing from PATH when CCC is launched outside a login shell (e.g.
+    by launchd, or by Claude Code itself). Prefer the absolute path; fall
+    back to PATH lookup for non-standard installs.
+
+    Returns the absolute path string, or None if the binary truly isn't
+    on the system.
+    """
+    fixed = "/usr/sbin/screencapture"
+    if os.path.isfile(fixed) and os.access(fixed, os.X_OK):
+        return fixed
+    return shutil.which("screencapture")
+
+
 def _capture_screenshot_native(timeout=120):
     """Trigger the macOS area-screenshot picker (`screencapture -i`) and
     return the resulting PNG as base64. Blocks until the user finishes
@@ -3019,9 +3036,13 @@ def _capture_screenshot_native(timeout=120):
     return an explanatory error so the UI can hide / explain the feature.
     """
     if platform.system() != "Darwin":
-        return {"ok": False, "error": "area screenshots are macOS-only today"}
-    if not _which("screencapture"):
-        return {"ok": False, "error": "`screencapture` not found on PATH"}
+        return {"ok": False, "error": "Screenshots are macOS-only."}
+    screencapture_bin = _resolve_screencapture_bin()
+    if not screencapture_bin:
+        # Should be unreachable on a real Mac (`/usr/sbin/screencapture` is
+        # shipped with the OS), but surface a friendly error if a stripped
+        # install or a hardened sandbox really is missing it.
+        return {"ok": False, "error": "`screencapture` not found — is this a full macOS install?"}
     # NamedTemporaryFile(delete=False) so screencapture (a separate process)
     # can write to the path; we reap it ourselves once we've base64-encoded.
     tmp = tempfile.NamedTemporaryFile(prefix="ccc-bug-", suffix=".png", delete=False)
@@ -3034,7 +3055,7 @@ def _capture_screenshot_native(timeout=120):
         # zero-bytes and screencapture exits 0.
         try:
             proc = subprocess.run(
-                ["screencapture", "-i", "-x", tmp_path],
+                [screencapture_bin, "-i", "-x", tmp_path],
                 capture_output=True, text=True, timeout=timeout,
             )
         except subprocess.TimeoutExpired:
@@ -3256,16 +3277,27 @@ def _create_bug_report_issue(payload):
     `screenshot_needs_manual=true` so the client can `open -R` the file
     and surface the issue URL for manual attachment.
     """
-    title = (payload.get("title") or "").strip()
+    # The modal collapsed Title+Description into a single Details field, so
+    # we derive the issue title from the first non-empty line. We still
+    # accept an explicit `title` from older clients / programmatic callers.
     description = (payload.get("description") or "").strip()
-    if not title:
-        return {"ok": False, "error": "title is required"}
     if not description:
-        return {"ok": False, "error": "description is required"}
-    # Cap title at GitHub's 256 char limit with a generous safety margin so
-    # we surface a clean error rather than a truncated one from gh.
-    if len(title) > 200:
-        title = title[:200].rstrip() + "…"
+        return {"ok": False, "error": "details are required"}
+    title = (payload.get("title") or "").strip()
+    if not title:
+        for line in description.splitlines():
+            candidate = line.strip()
+            if candidate:
+                title = candidate
+                break
+    if not title:
+        # Should be unreachable because `description` is non-empty above,
+        # but guard anyway so we never ship an empty title to gh.
+        return {"ok": False, "error": "details are required"}
+    # Cap title at a friendly length so the GitHub issue list stays readable.
+    # GitHub itself accepts 256 chars; 120 keeps things tidy.
+    if len(title) > 120:
+        title = title[:120].rstrip() + "…"
 
     ccc_version = (payload.get("ccc_version") or "").strip() or __version__
     user_agent = (payload.get("user_agent") or "").strip()

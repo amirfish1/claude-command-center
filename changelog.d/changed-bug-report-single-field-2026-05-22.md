@@ -1,0 +1,1 @@
+- Collapsed the Report-a-bug modal's Title and Description fields into a single "Details" field; the GitHub issue title is now derived from the first non-empty line.

@@ -17718,7 +17718,6 @@
   const $bugLink = document.getElementById('bugReportLink');
   const $bugModal = document.getElementById('bugReportModal');
   const $bugBackdrop = document.getElementById('bugReportBackdrop');
-  const $bugTitleInput = document.getElementById('bugReportTitleInput');
   const $bugDescInput = document.getElementById('bugReportDescInput');
   const $bugMeta = document.getElementById('bugReportMeta');
   const $bugError = document.getElementById('bugReportError');
@@ -17836,11 +17835,10 @@
   function bugOpenModal() {
     if (!$bugModal) return;
     bugResetState();
-    if ($bugTitleInput) $bugTitleInput.value = '';
     if ($bugDescInput) $bugDescInput.value = '';
     bugRenderMeta();
     $bugModal.classList.add('open');
-    setTimeout(() => { if ($bugTitleInput) $bugTitleInput.focus(); }, 0);
+    setTimeout(() => { if ($bugDescInput) $bugDescInput.focus(); }, 0);
   }
   function bugCloseModal() {
     if ($bugModal) $bugModal.classList.remove('open');
@@ -17856,15 +17854,9 @@
   });
 
   async function bugSubmit() {
-    if (!$bugTitleInput || !$bugDescInput) return;
-    const title = $bugTitleInput.value.trim();
+    if (!$bugDescInput) return;
     const desc = $bugDescInput.value.trim();
     bugResetState();
-    if (!title) {
-      if ($bugError) { $bugError.textContent = 'Please add a title.'; $bugError.classList.add('visible'); }
-      $bugTitleInput.focus();
-      return;
-    }
     if (!desc) {
       if ($bugError) { $bugError.textContent = 'Please describe the bug.'; $bugError.classList.add('visible'); }
       $bugDescInput.focus();
@@ -17880,8 +17872,9 @@
     if ($bugCancelBtn) $bugCancelBtn.disabled = true;
     const version = await bugFetchVersion();
     const sid = (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '';
+    // Server derives the GitHub issue title from the first non-empty line
+    // of `description`, so we only send the unified Details field now.
     const payload = {
-      title,
       description: desc,
       ccc_version: version || '',
       user_agent: (navigator && navigator.userAgent) || '',
