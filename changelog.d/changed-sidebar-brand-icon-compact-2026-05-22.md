@@ -1,0 +1,1 @@
+- Sidebar header now leads with a 26px app icon and folds the version chip onto the title line, dropping the brand block from four rows to three.

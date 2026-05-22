@@ -112,24 +112,33 @@
   .sidebar-header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
   .sidebar-header-brand {
     display: flex; flex-direction: column; align-items: flex-start;
-    gap: 1px; min-width: 0;
+    gap: 2px; min-width: 0;
   }
-  .sidebar-header-brand > a:first-child { line-height: 1.2; }
-  .sidebar-header-brand .sh-version-row {
-    display: inline-flex; align-items: baseline; gap: 5px;
-    font-size: 10px; line-height: 1.25;
-    color: var(--text-muted);
+  .sidebar-header-brand .sh-title-row {
+    display: flex; align-items: center; gap: 8px;
+    min-width: 0;
+  }
+  .sidebar-header-brand .sh-app-icon {
+    width: 26px; height: 26px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    display: block;
+  }
+  .sidebar-header-brand .sh-title-link {
+    color: inherit; text-decoration: none;
+    line-height: 1.2;
   }
   .sidebar-header-brand .sh-version {
-    font-weight: 600; letter-spacing: 0.3px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.3px;
+    color: var(--text-muted);
+    line-height: 1.2;
   }
   .sidebar-header-brand .sh-version:empty { display: none; }
-  .sidebar-header-brand .sh-version-sep { opacity: 0.6; }
-  .sidebar-header-brand .sh-version:empty + .sh-version-sep { display: none; }
-  .sidebar-header-brand .sh-updated {
+  .sidebar-header-brand .sh-meta-row {
     font-size: 10px; font-weight: 400; line-height: 1.25;
     color: var(--text-muted);
   }
+  .sidebar-header-brand .sh-meta-sep { opacity: 0.55; margin: 0 2px; }
   .sidebar-header-brand .sh-check-updates {
     color: var(--text-muted); text-decoration: underline;
     text-decoration-color: rgba(255,255,255,0.2);

@@ -32,6 +32,11 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <title>Claude Command Center</title>
 <link rel="stylesheet" href="/static/app.css">
+<style>
+  body.hide-gh-issues .is-github-issue {
+    display: none !important;
+  }
+</style>
 <!-- Optional Morning side-nav. Loaded conditionally based on the feature
      flag so installs without the morning plugin don't get a 404 in the
      console + a stranded 52px left gutter. The /api/features endpoint is
@@ -303,13 +308,14 @@
   <div class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-header-brand">
-        <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
-        <span class="sh-version-row">
+        <div class="sh-title-row">
+          <img class="sh-app-icon" src="/static/icon-app.png" alt="" aria-hidden="true">
+          <a class="sh-title-link" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub">Claude Command Center</a>
           <span class="sh-version" id="cccVersionLabel" title="Installed Claude Command Center version"></span>
-          <span class="sh-version-sep" id="cccVersionSep">·</span>
-          <span class="sh-updated">Last updated <span id="cccLastUpdated">…</span></span>
-        </span>
-        <span class="sh-updated" id="cccUpdatedLine">
+        </div>
+        <span class="sh-meta-row">
+          Last updated <span id="cccLastUpdated">…</span>
+          <span class="sh-meta-sep">·</span>
           <a href="#" class="sh-check-updates" id="cccCheckUpdatesLink" title="Check GitHub for a newer release">check for updates</a>
         </span>
         <a class="sh-repo-link" id="cccRepoLink" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Open the repo on GitHub">git: amirfish1/claude-command-center</a>
@@ -414,8 +420,8 @@
             <details class="pop-submenu">
               <summary class="pop-item"><span class="pop-icon">&#128065;</span><span>View</span><span class="pop-chevron">&#8250;</span></summary>
               <div class="pop-submenu-panel">
-                <button class="pop-item" type="button" data-view-gh="show" role="menuitemradio"><span class="pop-check" data-check-view-gh="show"></span><span>Show GH issues</span></button>
-                <button class="pop-item" type="button" data-view-gh="hide" role="menuitemradio"><span class="pop-check" data-check-view-gh="hide"></span><span>Hide GH issues</span></button>
+                <button class="pop-item" id="btnShowGhIssues" type="button" data-view-gh="show" role="menuitem"><span>Show GH issues</span></button>
+                <button class="pop-item" id="btnHideGhIssues" type="button" data-view-gh="hide" role="menuitem"><span>Hide GH issues</span></button>
               </div>
             </details>
           </div>
