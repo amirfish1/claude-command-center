@@ -8281,7 +8281,9 @@
           patchRows(archiveData, !!data.pinned, rank);
           patchRows(currentRepoBacklogData, !!data.pinned, rank);
           setOptimisticOverride(sessionId, { pinned: !!data.pinned, pin_rank: rank });
+          const pinScrollTop = $convList ? $convList.scrollTop : null;
           renderSidebar(filterConversations($convSearch.value));
+          _restoreConversationListScrollTop($convList, pinScrollTop);
           showOpToast(data.pinned ? 'Pinned to top' : 'Unpinned');
         } catch (err) {
           showOpToast('Pin failed (' + err.message + ')', 'error');
@@ -15363,6 +15365,14 @@
 
   function _archiveScrollTopWithinBounds($list, top) {
     return Math.max(0, Math.min(top, Math.max(0, $list.scrollHeight - $list.clientHeight)));
+  }
+
+  function _restoreConversationListScrollTop($list, top) {
+    const scrollTop = Number(top);
+    if (!$list || !Number.isFinite(scrollTop)) return;
+    requestAnimationFrame(() => {
+      $list.scrollTop = _archiveScrollTopWithinBounds($list, scrollTop);
+    });
   }
 
   function _findConversationRowElement(convId) {
