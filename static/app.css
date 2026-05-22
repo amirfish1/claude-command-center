@@ -5119,28 +5119,46 @@
     .mobile-reload-btn:active { background: var(--accent); color: #fff; }
   }
 
-  /* Prominent "+ New session" button — sits in the slot the Vercel
-     deploy panel used to occupy (just below the sidebar header). The
-     deploy indicator now lives in the global topbar, freeing this slot
-     for the primary CTA. */
+  /* Prominent "+ New session" / "+ New Group chat" pair — sits in the slot
+     the Vercel deploy panel used to occupy (just below the sidebar header).
+     The deploy indicator now lives in the global topbar, freeing this slot
+     for the primary CTAs. The two buttons share the row 50/50. */
   .new-session-panel {
     border-bottom: 1px solid var(--border);
     padding: 10px 12px;
+    display: flex;
+    gap: 6px;
   }
   .new-session-btn {
-    width: 100%;
+    flex: 1 1 0;
+    min-width: 0;
     display: inline-flex; align-items: center; justify-content: center;
     gap: 6px;
-    padding: 8px 12px; border-radius: 6px;
+    padding: 8px 10px; border-radius: 6px;
     background: rgba(88, 166, 255, 0.10);
     border: 1px solid rgba(88, 166, 255, 0.35);
     color: var(--accent);
     font-family: inherit; font-size: 13px; font-weight: 600;
     cursor: pointer; line-height: 1.2;
     transition: background 0.12s, border-color 0.12s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .new-session-btn:hover { background: rgba(88, 166, 255, 0.18); border-color: rgba(88, 166, 255, 0.55); }
   .new-session-btn .plus { font-weight: 700; }
+  /* Secondary action (group chat) — same shape, muted palette so it
+     doesn't compete visually with the primary "+ New session" CTA. */
+  .new-session-btn-secondary {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+  .new-session-btn-secondary:hover {
+    background: var(--surface);
+    border-color: var(--text-muted);
+    color: var(--text);
+  }
 
   /* Sidebar footer strip — appearance + settings (Claude-Desktop pattern) */
   .sidebar-footer {
@@ -5722,6 +5740,24 @@
 #convList .conv-ingroupchat-row.gc-drop-target {
   outline: 2px dashed var(--accent); outline-offset: -3px;
   background: rgba(88, 166, 255, 0.08);
+}
+
+/* Inline group-chat list: sits at the TOP of the In Progress section
+   (instead of a standalone section above it). A subtle bottom rule
+   visually divides the chat rows from the underlying session rows so
+   the eye can still see them as a distinct cluster. */
+#convList .conv-ingroupchat-list--inline {
+  padding-bottom: 4px;
+  margin-bottom: 6px;
+  border-bottom: 1px dashed var(--border);
+}
+
+/* Drop-target highlight on the open group-chat reader pane — drag any
+   conv-list session row onto the reader to add it as a participant.
+   Mirror the sidebar row highlight. */
+#gcReader.gc-drop-target {
+  outline: 2px dashed var(--accent); outline-offset: -4px;
+  background: rgba(88, 166, 255, 0.05);
 }
 
 /* Empty section: collapse the bottom padding so the lone header reads

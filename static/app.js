@@ -5162,6 +5162,41 @@
     // Defer focus a tick so we don't fight with selectConversation flow.
     const gcBodyForFocus = document.getElementById('gcReaderBody');
     if (gcBodyForFocus) setTimeout(() => gcBodyForFocus.focus(), 0);
+
+    // Drop target: dragging an in-progress session row onto the reader
+    // pane itself adds that session as a participant. Mirrors the
+    // sidebar drag-onto-chat-row affordance — useful when the reader
+    // is already open and the user wants to bring more sessions in
+    // without scrolling back to the chat's sidebar row.
+    const gcReaderEl = document.getElementById('gcReader');
+    if (gcReaderEl) {
+      gcReaderEl.addEventListener('dragover', (ev) => {
+        if (!dragSourceId || !_gcReaderPath) return;
+        ev.preventDefault();
+        try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+        gcReaderEl.classList.add('gc-drop-target');
+      });
+      gcReaderEl.addEventListener('dragleave', (ev) => {
+        // Browsers fire dragleave when crossing into child elements;
+        // only clear the highlight when the cursor actually exits the
+        // reader's bounding box.
+        if (ev.relatedTarget && gcReaderEl.contains(ev.relatedTarget)) return;
+        gcReaderEl.classList.remove('gc-drop-target');
+      });
+      gcReaderEl.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        gcReaderEl.classList.remove('gc-drop-target');
+        if (!_gcReaderPath || !dragSourceId) return;
+        const draggedConv = (conversationsData || []).find(c => c.id === dragSourceId);
+        if (draggedConv && (draggedConv.source === 'backlog' || draggedConv.source === 'github_pr')) {
+          showOpToast?.('Drag a real session row, not a backlog/issue card', 'error');
+          return;
+        }
+        const sid = (draggedConv && (draggedConv.session_id || draggedConv.id)) || dragSourceId;
+        const displayName = draggedConv ? (draggedConv.display_name || '') : '';
+        addSessionToGroupChat(_gcReaderPath, sid, displayName);
+      });
+    }
   }
 
   // The /group-chat skill stamps each message with the session's first
@@ -7475,16 +7510,28 @@
       _activeRowsHtml = _flatRowsWithSeparators(_visibleSessionConvs, { suppressFolderChip: _isSpecificFolderFilter });
     }
     if (!_visibleSessionConvs.length) {
-      const _emptyWindowLabel = _ipWindow === 'all' ? '' : (' in the last ' + (_ipWindow === '7d' ? '7 days' : 'day'));
-      _activeRowsHtml = '<div class="archive-empty-state">No in-progress sessions' + _emptyWindowLabel + '.</div>';
+      // If there are group chats but no underlying sessions in the
+      // window, suppress the "no sessions" empty-state — the group
+      // chat rows we render right above ARE content; the empty-state
+      // would read as a contradiction.
+      const _hasGroupChatRows = (_gcActiveChats || []).length > 0;
+      if (_hasGroupChatRows) {
+        _activeRowsHtml = '';
+      } else {
+        const _emptyWindowLabel = _ipWindow === 'all' ? '' : (' in the last ' + (_ipWindow === '7d' ? '7 days' : 'day'));
+        _activeRowsHtml = '<div class="archive-empty-state">No in-progress sessions' + _emptyWindowLabel + '.</div>';
+      }
     }
     // In progress section: every row that's not a backlog card or archived.
     // Mirrors the kanban "In progress" column (key: 'working' under the
     // hood — relabel only) so the two surfaces use the same vocabulary.
-    // Hidden entirely when there are no active sessions; collapse state
-    // persists in localStorage.
+    // Hidden entirely when there are no active sessions AND no active
+    // group chats; collapse state persists in localStorage. Group chats
+    // render as a slim block at the TOP of the list so the "what's in
+    // a chat" overview reads first.
     let _inProgressHtml = '';
-    if (_sessionConvs.length > 0) {
+    const _gcCountForSection = (_gcActiveChats || []).length;
+    if (_sessionConvs.length > 0 || _gcCountForSection > 0) {
       const _ipCollapsed = localStorage.getItem('ccc-inprogress-collapsed') === '1';
       const _ipArrow = _ipCollapsed ? '▸' : '▾';
       // 1d / 7d / All and by-project / by-time toggles, only when there are
@@ -7510,15 +7557,20 @@
       const _ipTools = (_ipWindowToggle || _ipGroupingToggle)
         ? '<span class="conv-inprogress-tools">' + _ipWindowToggle + _ipGroupingToggle + '</span>'
         : '';
+      // Count display: sessions in window + active group chats. Title
+      // attribute spells both out so a hover explains the headline number.
+      const _ipCountTitle = _sessionConvs.length + ' total in-progress sessions'
+        + (_gcCountForSection ? ' · ' + _gcCountForSection + ' group chat' + (_gcCountForSection === 1 ? '' : 's') : '');
+      const _ipCountValue = _visibleSessionConvs.length + (_gcCountForSection || 0);
       _inProgressHtml =
         '<div class="conv-inprogress-section' + (_ipCollapsed ? ' collapsed' : '') + '" data-role="inprogress-section">'
         + '<button type="button" class="conv-inprogress-header" data-role="inprogress-toggle" aria-expanded="' + (!_ipCollapsed) + '">'
         +   '<span class="conv-inprogress-arrow">' + _ipArrow + '</span>'
         +   '<span class="conv-inprogress-label">In progress</span>'
-        +   '<span class="conv-inprogress-count" title="' + _sessionConvs.length + ' total in-progress sessions">' + _visibleSessionConvs.length + '</span>'
+        +   '<span class="conv-inprogress-count" title="' + _ipCountTitle + '">' + _ipCountValue + '</span>'
         +   _ipTools
         + '</button>'
-        + '<div class="conv-inprogress-list">' + _activeRowsHtml + '</div>'
+        + '<div class="conv-inprogress-list">' + _inGroupChatRowsHtml + _activeRowsHtml + '</div>'
         + '</div>';
     }
     // Ready to merge section: sessions whose work has landed in a PR
@@ -7690,17 +7742,19 @@
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + '</div>';
     }
-    // In Group Chat section: shown whenever any coordination is active or
-    // recently closed (unarchived). Active rows render normally; closed
-    // rows are ghosted with a "closed" pill and stay visible until the
-    // user hits the per-row Archive button. Rows are per-chat (one per
-    // group chat) — clicking a row opens the reader for that chat. Each
-    // row also gets an Archive button that POSTs to /api/group-chats/archive.
-    // Always render the section header — even when there are no chats —
-    // so the user has a persistent affordance for creating a new empty
-    // chat (the "+" button on the header). The rows only render when
-    // there's at least one chat to show.
-    let _inGroupChatHtml = '';
+    // Group-chat rows — historically rendered in their own section above
+    // In Progress. Now merged INTO the In Progress section so a group
+    // chat reads as just another live "conversation" the user is
+    // tracking, alongside the underlying sessions. The actual concat
+    // into _inProgressHtml happens below; here we just build the rows.
+    //
+    // Active rows render normally; closed rows are ghosted with a
+    // "closed" pill and stay visible until the user hits the per-row
+    // Archive button. Each row carries data-role="ingroupchat-row"
+    // (+ child data-roles) so the click / drag / archive handlers
+    // wired further down still find them regardless of where the rows
+    // ended up in the DOM.
+    let _inGroupChatRowsHtml = '';
     {
       const _gcRows = (_gcActiveChats || []).map(chat => {
         const isClosed = chat.status === 'closed';
@@ -7838,28 +7892,18 @@
           + '</div>';
       }).join('');
       const _gcCount = (_gcActiveChats || []).length;
-      // Collapsed by default — most sessions don't have an active group
-      // chat, so the section just adds noise above the GH issues / Ready to
-      // merge / In progress sections that the user actually scans for.
-      // Persisted under `ccc-ingroupchat-collapsed`, mirroring the Archived
-      // section pattern. Default '1' (collapsed) when the key is absent.
-      const _igcCollapsed = localStorage.getItem('ccc-ingroupchat-collapsed') !== '0';
-      const _igcArrow = _igcCollapsed ? '▸' : '▾';
-      _inGroupChatHtml =
-        '<div class="conv-ingroupchat-section' + (_gcCount === 0 ? ' is-empty' : '') + (_igcCollapsed ? ' collapsed' : '') + '" data-role="ingroupchat-section">'
-        + '<div class="conv-ingroupchat-header" data-role="ingroupchat-toggle" aria-expanded="' + (!_igcCollapsed) + '">'
-        +   '<span class="conv-ingroupchat-arrow">' + _igcArrow + '</span>'
-        +   '<span class="conv-ingroupchat-icon">💬</span>'
-        +   '<span class="conv-ingroupchat-label">In Group Chat</span>'
-        +   (_gcCount ? '<span class="conv-ingroupchat-count">' + _gcCount + '</span>' : '')
-        +   '<button type="button" class="conv-ingroupchat-new-btn" data-role="ingroupchat-new" title="Create a new empty group chat — drag sessions in afterwards" aria-label="New group chat">+</button>'
-        + '</div>'
-        + (_gcCount ? '<div class="conv-ingroupchat-list">' + _gcRows + '</div>' : '')
-        + '</div>';
+      // Wrap rows in an opt-in container so the existing styles (which
+      // key off `.conv-ingroupchat-list`) keep applying without further
+      // edits. The wrapper appears INSIDE the In Progress section list
+      // when there are chats; otherwise we emit nothing at all.
+      _inGroupChatRowsHtml = _gcCount
+        ? '<div class="conv-ingroupchat-list conv-ingroupchat-list--inline">' + _gcRows + '</div>'
+        : '';
     }
-    // Order: In Group Chat (live) → GH Issues (to start) →
-    // Ready to merge (action) → In progress → Archived.
-    $convList.innerHTML = _inGroupChatHtml + _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
+    // Order: GH Issues (to start) → Ready to merge (action) → In
+    // progress (which now also contains the group-chat rows at the
+    // top) → Archived.
+    $convList.innerHTML = _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
     // Toggle handler for the Archived section header.
     const $archivedToggle = $convList.querySelector('[data-role="archived-toggle"]');
     if ($archivedToggle) {
@@ -7875,24 +7919,13 @@
       });
     }
 
-    // Toggle handler for the "In Group Chat" section header. Mirrors the
-    // Archived pattern. The "+" new-chat button is a sibling element inside
-    // the header; clicks on it must NOT trigger collapse, so we early-out
-    // when the target sits under [data-role="ingroupchat-new"].
-    const $igcToggle = $convList.querySelector('[data-role="ingroupchat-toggle"]');
-    if ($igcToggle) {
-      $igcToggle.addEventListener('click', (ev) => {
-        if (ev.target.closest('[data-role="ingroupchat-new"]')) return;
-        ev.stopPropagation();
-        const section = $igcToggle.closest('[data-role="ingroupchat-section"]');
-        if (!section) return;
-        const wasCollapsed = section.classList.toggle('collapsed');
-        localStorage.setItem('ccc-ingroupchat-collapsed', wasCollapsed ? '1' : '0');
-        const arrowEl = $igcToggle.querySelector('.conv-ingroupchat-arrow');
-        if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
-        $igcToggle.setAttribute('aria-expanded', String(!wasCollapsed));
-      });
-    }
+    // Note: the standalone "In Group Chat" section (and its own header
+    // toggle / inline "+" button) is gone — group chats now render
+    // inline at the top of the In Progress list. The sidebar's
+    // "+ New Group chat" button is the persistent affordance for
+    // creating an empty chat. Per-row handlers (click, archive,
+    // rename, clear, drag-drop) live below and key off
+    // data-role="ingroupchat-..." so they still match the rows.
     // Click handler for archived group chat rows — open the reader.
     $convList.querySelectorAll('[data-role="archived-gc-row"]').forEach(row => {
       row.addEventListener('click', (ev) => {
@@ -7979,17 +8012,9 @@
         addSessionToGroupChat(path, sid, displayName);
       });
     });
-    // "+" button on the section header — opens an empty chat. Defined
-    // alongside the other ingroupchat handlers so we don't fan out
-    // listener wiring across functions.
-    const $newChatBtn = $convList.querySelector('[data-role="ingroupchat-new"]');
-    if ($newChatBtn) {
-      $newChatBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        ev.preventDefault();
-        createEmptyGroupChat();
-      });
-    }
+    // (Old "+ new chat" button on the section header is gone — its
+    // role moved to the sidebar's "+ New Group chat" button, defined
+    // far below near the "+ New session" handler.)
     // Click an indented participant entry → jump to that session.
     $convList.querySelectorAll('[data-role="ingroupchat-participant"]').forEach(el => {
       el.addEventListener('click', (ev) => {
@@ -18150,6 +18175,20 @@
   const $sidebarNewBtn = document.getElementById('sidebarNewBtn');
   if ($sidebarNewBtn) {
     $sidebarNewBtn.addEventListener('click', () => enterNewSessionMode());
+  }
+
+  // ── Sidebar "+ New Group chat" button ──────────────────────────
+  // Creates an empty group chat (the user renames it via ✏️ on the
+  // row and drags sessions in to add participants). Same affordance
+  // as the inline "+" inside the In Progress section's group-chat
+  // header — duplicated up here so it's always visible without
+  // scrolling, mirroring the "+ New session" button.
+  const $sidebarNewGroupChatBtn = document.getElementById('sidebarNewGroupChatBtn');
+  if ($sidebarNewGroupChatBtn) {
+    $sidebarNewGroupChatBtn.addEventListener('click', () => {
+      try { createEmptyGroupChat(); }
+      catch (_) { /* function defined later in same scope; ignore early-click race */ }
+    });
   }
 
   // ── Spawn cwd picker (new-session mode) ──────────────────────────────
