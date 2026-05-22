@@ -353,6 +353,18 @@ def _resolve_open_target(target, *, session_id=None, cwd=None, repo_path=None):
     # exists on disk.
     if os.path.isabs(target) or target.startswith("~/") or target == "~":
         candidates.append(Path(target).expanduser())
+        # Inline transcript paths like `/growth-machine/content/landing/index.html`
+        # often *look* absolute but are actually project-relative — the user (or
+        # an LLM) wrote `/foo/bar` to mean "foo/bar under the project". The real
+        # FS-rooted candidate above wins when it exists; otherwise fall through
+        # to a relative interpretation against session cwd / repo root so the
+        # link opens what the writer meant.
+        if not target.startswith("~"):
+            relative = target.lstrip("/")
+            if relative:
+                for root in session_roots:
+                    candidates.append(root / relative)
+                candidates.append(repo_root / relative)
     else:
         for root in session_roots:
             candidates.append(root / target)

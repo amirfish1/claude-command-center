@@ -3125,11 +3125,22 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!data.ok) {
-        a.title = data.error || 'open failed';
+        const err = data.error || 'open failed';
+        a.title = err;
         a.style.color = 'var(--red)';
+        // Surface the failure — a brief opacity flicker alone is too easy
+        // to miss when nothing happens on disk. The path is included so it's
+        // obvious which link refused to open.
+        try {
+          const detail = err === 'not found' ? 'File not found: ' + p : 'Open failed: ' + err;
+          if (typeof showConvToast === 'function') showConvToast(detail);
+        } catch (_) {}
       }
     } catch (e) {
       a.title = String(e);
+      try {
+        if (typeof showConvToast === 'function') showConvToast('Open failed: ' + String(e));
+      } catch (_) {}
     } finally {
       setTimeout(() => { a.style.opacity = ''; }, 600);
     }

@@ -1,0 +1,1 @@
+Fix transcript file links that look absolute but are actually project-relative. Clicking a path like `/growth-machine/content/landing/index.html` inside a conversation now falls back to resolving against the session cwd and repo root when no filesystem-rooted match exists, and surfaces a toast when the file still can't be opened.

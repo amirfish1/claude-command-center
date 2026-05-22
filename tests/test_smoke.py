@@ -1819,6 +1819,35 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(result["session_file_sandbox"])
         self.assertTrue(server._open_launch_allowed(result))
 
+    def test_open_target_resolves_absolute_looking_project_relative(self):
+        """`/foo/bar` inside a transcript should fall back to repo-relative when no FS-root match exists."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        sid = "11111111-2222-3333-4444-555555555555"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            repo = root / "repo"
+            session_cwd = repo
+            session_cwd.mkdir(parents=True)
+            (repo / ".git").mkdir()
+            sub = repo / "growth-machine" / "content" / "landing"
+            sub.mkdir(parents=True)
+            target_file = sub / "index.html"
+            target_file.write_text("<!doctype html>\n")
+
+            with mock.patch.object(server, "find_session_cwd", return_value=str(session_cwd)):
+                result = server._resolve_open_target(
+                    "/growth-machine/content/landing/index.html",
+                    session_id=sid,
+                    cwd=str(session_cwd),
+                    repo_path=str(repo),
+                )
+
+        self.assertTrue(result["ok"], msg=result)
+        self.assertEqual(pathlib.Path(result["path"]), target_file.resolve())
+
     def test_open_target_allows_files_outside_sandbox(self):
         """Post-sandbox-removal: any resolvable path is allowed through /api/open."""
         for mod in ("server",):
