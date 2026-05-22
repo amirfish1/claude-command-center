@@ -11,8 +11,18 @@ One local dashboard for every **Claude Code**, **Codex**, and **Antigravity** se
 > the path here — see [`docs/hero-placeholder.md`](docs/hero-placeholder.md)
 > for the target shot.
 
+Install with curl:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
+```
+
+Or with Homebrew:
+
+```bash
+brew tap amirfish1/ccc
+brew install ccc
+ccc
 ```
 
 Try the read-only demo first: [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/) (or [amirfish1.github.io/claude-command-center/demo](https://amirfish1.github.io/claude-command-center/demo/)) - full kanban with seeded fake data, no install required.
@@ -71,13 +81,20 @@ that already exists.
 Requirements: macOS, Python 3, and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed.
 Optional: [`gh`](https://cli.github.com/) for GitHub integration, `vercel` for deploy status.
 
+**curl** — clones into `~/.ccc/claude-command-center` and runs in foreground. Re-running does a `git pull`.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
 ```
 
-The installer clones to `~/.ccc/claude-command-center`, verifies your
-`python3` and `claude` CLI, and launches the dashboard in the foreground.
-Re-running the same command does a `git pull` instead of a second clone.
+**Homebrew** — installs into the Cellar, puts `ccc` on `PATH`, pins a brew-managed Python. Upgrade via `brew upgrade ccc`.
+
+```bash
+brew tap amirfish1/ccc
+brew install ccc
+ccc                              # foreground
+brew services start ccc          # or run as a brew-managed background service
+```
 
 If you'd rather clone first and run the script directly, pass the channel as a flag instead: `./scripts/install.sh --from=readme`.
 
