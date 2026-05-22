@@ -1,0 +1,1 @@
+Group chats now live at the top of the In Progress section instead of their own section, and the sidebar splits the single "+ New session" button into "+ New session" and "+ New Group chat" — drag a session row onto a chat row or the open chat reader to add it as a participant.
