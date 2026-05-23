@@ -14421,6 +14421,8 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, model
     cli_log_path = Path(str(log_path) + ".agy.log")
     if not _antigravity_has_arg(user_args, "--log-file"):
         cmd.extend(["--log-file", str(cli_log_path)])
+    if model:
+        cmd.extend(["--model", model])
     cmd.extend(["-p", prompt])
 
     log_fh = open(log_path, "w")

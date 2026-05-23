@@ -12669,6 +12669,12 @@
       { id: 'gemini-2.5-pro',   label: 'gemini-2.5-pro' },
       { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash' },
     ],
+    antigravity: [
+      { id: 'gemini-3.5-flash-high', label: 'gemini-3.5-flash-high' },
+      { id: 'gemini-3.5-flash-medium', label: 'gemini-3.5-flash-medium' },
+      { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro' },
+      { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro' },
+    ],
   };
 
   function _normalizeModelId(s) {
@@ -16955,6 +16961,7 @@
   // setSpawnEngine() persists + propagates to both; getSpawnEngine()
   // is the canonical read used by every spawn handler.
   const $convInputEngineSelect = document.getElementById('convInputEngineSelect');
+  const $convInputModelSelect = document.getElementById('convInputModelSelect');
   const $kptToolbarEngineSelect = document.getElementById('kptToolbarEngineSelect');
   function getSpawnEngine() {
     try {
@@ -17006,7 +17013,32 @@
       }
     });
 
-
+    if (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect) {
+      const options = MODEL_OPTIONS_BY_ENGINE[engine] || [];
+      const defaultModel = _defaultModelsByEngine[engine] || '';
+      
+      $convInputModelSelect.innerHTML = '';
+      if (options.length === 0 && !defaultModel) {
+        $convInputModelSelect.style.display = 'none';
+      } else {
+        $convInputModelSelect.style.display = '';
+        const allModels = [...options];
+        if (defaultModel && !allModels.some(o => o.id === defaultModel)) {
+          allModels.unshift({ id: defaultModel, label: defaultModel + ' (default)' });
+        }
+        allModels.forEach(opt => {
+          const el = document.createElement('option');
+          el.value = opt.id;
+          el.textContent = opt.label || opt.id;
+          $convInputModelSelect.appendChild(el);
+        });
+        if (defaultModel) {
+          $convInputModelSelect.value = defaultModel;
+        } else if (allModels.length > 0) {
+          $convInputModelSelect.value = allModels[0].id;
+        }
+      }
+    }
   }
   function setSpawnEngine(v) {
     if (v !== 'claude' && v !== 'codex' && v !== 'gemini' && v !== 'antigravity') return;
@@ -19048,6 +19080,9 @@
       const useWorktree = !!($inlineWorktree && $inlineWorktree.checked);
       const spawnBody = { prompt, name: subject, cwd: launchCwd };
       if (repoPath) spawnBody.repo_path = repoPath;
+      if (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none' && $convInputModelSelect.value) {
+        spawnBody.model = $convInputModelSelect.value;
+      }
       if (spawnSupportsWorktree(engine)) spawnBody.worktree = useWorktree;
       const res = await fetch(endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},

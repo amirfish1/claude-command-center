@@ -1,0 +1,2 @@
+- Removed the modal-based "New Session" UI in favor of a purely inline experience.
+- Added an inline model picker next to the engine selector for `__new__` sessions, extending support to antigravity and other engines.
