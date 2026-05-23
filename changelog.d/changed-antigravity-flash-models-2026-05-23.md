@@ -1,0 +1,1 @@
+- Updated Antigravity model options to use `gemini-3.5-flash-high` and `gemini-3.5-flash-medium` instead of `gemini-3.5-pro`.

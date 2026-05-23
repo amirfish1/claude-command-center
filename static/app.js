@@ -16021,28 +16021,40 @@
     });
   }
 
+  // Dedupe concurrent /api/conversations/all fetches keyed by URL. Recovery,
+  // PR-hydration, and refresh paths all call loadArchiveAll independently;
+  // without this they fire 3+ parallel ~500KB requests for the same payload.
+  const _archiveAllInflight = new Map();
+
   async function loadArchiveAll(opts = {}) {
-    try {
-      const params = new URLSearchParams();
-      if (opts.staleOk !== false) {
-        params.set('stale_ok', '1');
-      }
-      if (opts.includePrs) {
-        params.set('include_prs', '1');
-        params.set('resolve_prs', '1');
-        params.set('resolve_effective', '1');
-        params.set('resolve_worktrees', '1');
-        params.set('background', '1');
-      }
-      const url = '/api/conversations/all' + (params.toString() ? '?' + params.toString() : '');
-      const r = await fetch(url);
-      if (!r.ok) return [];
-      const d = await r.json();
-      if (d && d.cached && d.stale && d.refreshing) {
-        _scheduleArchiveStaleRetry();
-      }
-      return Array.isArray(d.conversations) ? d.conversations : [];
-    } catch (_) { return []; }
+    const params = new URLSearchParams();
+    if (opts.staleOk !== false) {
+      params.set('stale_ok', '1');
+    }
+    if (opts.includePrs) {
+      params.set('include_prs', '1');
+      params.set('resolve_prs', '1');
+      params.set('resolve_effective', '1');
+      params.set('resolve_worktrees', '1');
+      params.set('background', '1');
+    }
+    const url = '/api/conversations/all' + (params.toString() ? '?' + params.toString() : '');
+    const pending = _archiveAllInflight.get(url);
+    if (pending) return pending;
+    const p = (async () => {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) return [];
+        const d = await r.json();
+        if (d && d.cached && d.stale && d.refreshing) {
+          _scheduleArchiveStaleRetry();
+        }
+        return Array.isArray(d.conversations) ? d.conversations : [];
+      } catch (_) { return []; }
+    })();
+    _archiveAllInflight.set(url, p);
+    p.finally(() => _archiveAllInflight.delete(url));
+    return p;
   }
 
   // Cross-repo open GH issues — populates the archive view's GH Issues

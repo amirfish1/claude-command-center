@@ -3597,6 +3597,60 @@ def _resolve_runtime_network(port):
     return bind_host, origins, info
 
 
+# Cache the healthcheck — it walks ~/.claude/projects and shells out to `gh`,
+# both of which are slow (multi-hundred-ms on a populated machine). The UI hits
+# this endpoint on every page load; without a cache it dominated the network
+# critical path. TTL is short so a failing dep still recovers within ~30s.
+_HEALTHCHECK_CACHE = {"ts": 0.0, "data": None}
+_HEALTHCHECK_TTL_SEC = 30.0
+
+# Separate longer cache for the `gh auth status` subprocess. Even after the
+# outer healthcheck cache expires, this avoids re-shelling out for 5 minutes.
+_GH_AUTH_CACHE = {"ts": 0.0, "check": None}
+_GH_AUTH_TTL_SEC = 300.0
+
+
+def _gh_auth_check_cached(gh_path):
+    now = time.monotonic()
+    if _GH_AUTH_CACHE["check"] is not None and now - _GH_AUTH_CACHE["ts"] < _GH_AUTH_TTL_SEC:
+        return _GH_AUTH_CACHE["check"]
+    try:
+        r = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode != 0:
+            check = {
+                "id": "gh_cli",
+                "label": "GitHub CLI",
+                "status": "warn",
+                "message": "`gh` installed but not authenticated",
+                "hint": "Run `gh auth login` in your terminal, then refresh.",
+            }
+        else:
+            user = ""
+            m = re.search(r"account\s+(\S+)", r.stderr or r.stdout or "")
+            if m:
+                user = m.group(1)
+            check = {
+                "id": "gh_cli",
+                "label": "GitHub CLI",
+                "status": "ok",
+                "message": f"Authenticated{f' as @{user}' if user else ''}",
+            }
+    except (subprocess.SubprocessError, OSError) as e:
+        check = {
+            "id": "gh_cli",
+            "label": "GitHub CLI",
+            "status": "error",
+            "message": f"`gh auth status` failed: {e}",
+            "hint": "Check `gh` install. Run `gh auth status` manually for details.",
+        }
+    _GH_AUTH_CACHE["ts"] = now
+    _GH_AUTH_CACHE["check"] = check
+    return check
+
+
 def _run_healthcheck():
     """Probe every external dependency and surface a structured diagnosis.
 
@@ -3608,6 +3662,17 @@ def _run_healthcheck():
     The UI renders a setup banner that lists only the failing checks.
     Empty UI without explanation is the worst first-run experience.
     """
+    now = time.monotonic()
+    cached = _HEALTHCHECK_CACHE["data"]
+    if cached is not None and now - _HEALTHCHECK_CACHE["ts"] < _HEALTHCHECK_TTL_SEC:
+        return cached
+    out = _build_healthcheck()
+    _HEALTHCHECK_CACHE["ts"] = now
+    _HEALTHCHECK_CACHE["data"] = out
+    return out
+
+
+def _build_healthcheck():
     out = {"checks": []}
 
     # ── claude CLI ────────────────────────────────────────────────────
@@ -3653,39 +3718,7 @@ def _run_healthcheck():
             "hint": "Install: `brew install gh`  (or see https://cli.github.com/)",
         })
     else:
-        try:
-            r = subprocess.run(
-                ["gh", "auth", "status"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if r.returncode != 0:
-                out["checks"].append({
-                    "id": "gh_cli",
-                    "label": "GitHub CLI",
-                    "status": "warn",
-                    "message": "`gh` installed but not authenticated",
-                    "hint": "Run `gh auth login` in your terminal, then refresh.",
-                })
-            else:
-                # Extract username from output like "Logged in to github.com account amirfish1 (...)"
-                user = ""
-                m = re.search(r"account\s+(\S+)", r.stderr or r.stdout or "")
-                if m:
-                    user = m.group(1)
-                out["checks"].append({
-                    "id": "gh_cli",
-                    "label": "GitHub CLI",
-                    "status": "ok",
-                    "message": f"Authenticated{f' as @{user}' if user else ''}",
-                })
-        except (subprocess.SubprocessError, OSError) as e:
-            out["checks"].append({
-                "id": "gh_cli",
-                "label": "GitHub CLI",
-                "status": "error",
-                "message": f"`gh auth status` failed: {e}",
-                "hint": "Check `gh` install. Run `gh auth status` manually for details.",
-            })
+        out["checks"].append(_gh_auth_check_cached(gh_path))
 
     # ── Repo list state ───────────────────────────────────────────────
     try:
