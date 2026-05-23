@@ -2,41 +2,51 @@
 
 This page is the planned home for the quarterly aggregate report —
 install counts by version, platform mix, engine mix, and active-day
-distribution. None of those numbers exist yet.
+distribution. The Worker is live; the first aggregate publishes at
+the next quarterly boundary once there is enough signal to be worth
+reading.
 
-## Status: collection not active
+## Status: collection live
 
-The Cloudflare Worker that receives the daily ping is **not yet
-deployed**. The default endpoint URL baked into `server.py` —
+| | |
+| --- | --- |
+| Endpoint | `https://telemetry.claude-command-center.workers.dev/v1/ping` |
+| Worker source SHA at deploy | [`064eb11`](https://github.com/amirfish1/claude-command-center/tree/064eb11/infra/telemetry-worker) |
+| Worker deployed | 2026-05-22 |
+| Collection started | 2026-05-22 |
+| Storage | Cloudflare D1 (`ccc-telemetry`), columns exactly as documented in [`telemetry.md`](telemetry.md) — no IP, no User-Agent, no derived fields |
 
+The IP-drop guarantee is in
+[`infra/telemetry-worker/index.js`](../infra/telemetry-worker/index.js)
+at the pinned SHA above: the Worker reads `CF-Connecting-IP` only to
+discard it, and the `pings` D1 table has no column for it. Re-check
+any time:
+
+```bash
+git show 064eb11:infra/telemetry-worker/index.js | grep -n CF-Connecting-IP
 ```
-https://telemetry.claude-command-center.workers.dev/v1/ping
-```
 
-— resolves to a hostname that does not currently exist, so DNS lookup
-fails and the client silently skips the ping (by design; see
-[`telemetry.md`](telemetry.md)).
+If you opted in, your daily ping now lands here. If you change your
+mind, the three kill switches in
+[`telemetry.md`](telemetry.md#kill-switches) all still work.
 
-This means:
+## First aggregate
 
-- Even opted-in clients are not transmitting data anywhere.
-- No aggregates can be produced until the Worker is live.
-- When the Worker is deployed, this page will publish the first
-  aggregate, the deploy commit SHA of the Worker, and the date the
-  collection started.
+Not yet published. The aggregate query in
+[`infra/telemetry-worker/README.md`](
+../infra/telemetry-worker/README.md) runs on a 90-day window and
+collapses every per-install row through `COUNT(DISTINCT install_id)`,
+so the page will show install counts, never individual rows.
 
-If you opted in expecting your ping to land somewhere useful: it
-isn't, yet. Sorry. This is honest pre-launch plumbing.
+Target cadence: quarterly. The first publish will include:
+
+- Install counts by date / version / platform.
+- A link to the raw aggregate JSON.
+- The exact SQL that produced it (copy-pasteable, so anyone can
+  verify the shape matches what's promised here).
 
 ## When this changes
 
-This file will be updated alongside the Worker deploy. Expect at
-minimum:
-
-- Deploy SHA of the Worker (so the IP-drop guarantee is auditable).
-- First-aggregate publish date.
-- Cadence (target: quarterly).
-- A link to the raw aggregate JSON.
-
-Until then, treat the telemetry feature as a contract being put in
-writing before any bytes flow.
+Any change to what the Worker stores, or to the endpoint URL the
+client posts to, is a contract change and lands here first — with a
+new deploy SHA pinned in the table above.
