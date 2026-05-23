@@ -9418,7 +9418,40 @@ def _parse_conversation_event(ev, line_num):
     ts = ev.get("timestamp", "") or ""
 
     # Skip non-message types
-    if ev_type in ("file-history-snapshot", "progress", "system"):
+    if ev_type in ("file-history-snapshot", "progress"):
+        return None
+
+    if ev_type == "system":
+        if ev.get("subtype") == "local_command":
+            content = ev.get("content", "")
+            if content.startswith("<local-command-stdout>"):
+                m = re.search(r"<local-command-stdout>(.*?)</local-command-stdout>", content, re.DOTALL)
+                text = m.group(1).strip() if m else content.strip()
+                return {
+                    "line": line_num,
+                    "ts": ts,
+                    "type": "assistant",
+                    "message_id": "local-cmd-out-" + ev.get("uuid", ""),
+                    "blocks": [{"kind": "text", "text": "🖥️ " + text}]
+                }
+            elif content.startswith("<local-command-stderr>"):
+                m = re.search(r"<local-command-stderr>(.*?)</local-command-stderr>", content, re.DOTALL)
+                text = m.group(1).strip() if m else content.strip()
+                return {
+                    "line": line_num,
+                    "ts": ts,
+                    "type": "assistant",
+                    "message_id": "local-cmd-err-" + ev.get("uuid", ""),
+                    "blocks": [{"kind": "text", "text": "⚠️ " + text}]
+                }
+            else:
+                return {
+                    "line": line_num,
+                    "ts": ts,
+                    "type": "user_text",
+                    "text": content,
+                    "images": []
+                }
         return None
 
     if ev_type == "user":
@@ -12396,6 +12429,9 @@ def _antigravity_transcript_path(session_id):
     if not _SESSION_UUID_RE.match(sid):
         return None
     for brain_root in (ANTIGRAVITY_BRAIN, ANTIGRAVITY_CLI_BRAIN):
+        full_transcript = brain_root / sid / ".system_generated" / "logs" / "transcript_full.jsonl"
+        if full_transcript.is_file():
+            return full_transcript
         transcript = brain_root / sid / ".system_generated" / "logs" / "transcript.jsonl"
         if transcript.is_file():
             return transcript
@@ -12434,11 +12470,13 @@ def _antigravity_transcript_paths():
             for brain_dir in brain_root.iterdir():
                 if not brain_dir.is_dir():
                     continue
+                full_transcript = brain_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
                 transcript = brain_dir / ".system_generated" / "logs" / "transcript.jsonl"
-                key = str(transcript)
-                if transcript.is_file() and key not in seen:
+                best_transcript = full_transcript if full_transcript.is_file() else transcript
+                key = str(best_transcript)
+                if best_transcript.is_file() and key not in seen:
                     seen.add(key)
-                    paths.append(transcript)
+                    paths.append(best_transcript)
     except OSError:
         return []
     try:
