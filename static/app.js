@@ -6337,6 +6337,12 @@
       hdr.addEventListener('dragend', () => hdr.classList.remove('dragging-header'));
     });
     targetEl.querySelectorAll('.kanban-card').forEach(card => {
+      card.addEventListener('mouseenter', () => {
+        _convPrefetchSchedule(card.dataset.id);
+      });
+      card.addEventListener('mouseleave', () => {
+        _convPrefetchCancel(card.dataset.id);
+      });
       card.addEventListener('click', (ev) => {
         if (ev.target.closest('[data-action]')) return;
         // Ctrl/Cmd/Shift click: toggle multi-select instead of opening
@@ -6878,7 +6884,16 @@
         const body = issueNum
           ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
           : cleanTitle;
-        openNewSessionModal(body, rowRepoPath(conv));
+        if (typeof enterNewSessionMode === 'function') enterNewSessionMode();
+        const $convInput = document.getElementById('convInput');
+        if ($convInput) {
+          $convInput.value = body;
+          setTimeout(() => {
+            $convInput.focus();
+            $convInput.style.height = 'auto';
+            $convInput.style.height = ($convInput.scrollHeight) + 'px';
+          }, 30);
+        }
       });
     });
     // ── Per-card AI-summarize a GH backlog card ──
@@ -8528,6 +8543,12 @@
     });
     $convList.querySelectorAll('.conv-item').forEach(el => {
       if (el.dataset.role === 'archived-gc-row' || !el.dataset.id) return;
+      el.addEventListener('mouseenter', () => {
+        _convPrefetchSchedule(el.dataset.id);
+      });
+      el.addEventListener('mouseleave', () => {
+        _convPrefetchCancel(el.dataset.id);
+      });
       el.addEventListener('click', (ev) => {
         // Ignore clicks that started the inline editor, archive button,
         // or that landed on the title (which now triggers rename instead
@@ -11538,6 +11559,39 @@
       + '<span style="margin-left:auto;font-family:var(--font-mono,monospace);">pid ' + escapeHtml(String(data.pid)) + '</span>'
       + '</div>';
     return '<div class="codex-log antigravity-log" style="padding:16px 20px;">' + headerHtml + bodyHtml + '</div>';
+  }
+
+  // Hover-prefetch: when the user's mouse lands on a card, fire a background
+  // fetch for that conversation's events. The server caches the parsed +
+  // serialized response in memory (~1 ms hit afterwards), so by the time
+  // the user clicks the cold parse (~300 ms for a 700 KB JSONL) is already
+  // done. Debounced so a mouse-pass over six cards doesn't fire six parses;
+  // deduped per-sid within a session because conv JSONLs append slowly and
+  // the server's mtime-keyed cache invalidates correctly when they do.
+  const _convPrefetched = new Set();
+  const _convPrefetchTimers = new Map();
+  function _convPrefetchSchedule(id) {
+    if (!id || _convPrefetched.has(id)) return;
+    if (id.startsWith('backlog-') || id.startsWith('spawning-')) return;
+    if (id.startsWith('pkood-') || id.startsWith('issue-')) return;
+    if (_convPrefetchTimers.has(id)) return;
+    const t = setTimeout(() => {
+      _convPrefetchTimers.delete(id);
+      _convPrefetched.add(id);
+      // Fire-and-forget. The browser may discard the response body, but
+      // the server-side response cache is now warm for the eventual click.
+      fetch('/api/conversations/' + encodeURIComponent(id) + '?after=0', {
+        cache: 'no-store',
+      }).catch(() => {});
+    }, 120);
+    _convPrefetchTimers.set(id, t);
+  }
+  function _convPrefetchCancel(id) {
+    const t = _convPrefetchTimers.get(id);
+    if (t) {
+      clearTimeout(t);
+      _convPrefetchTimers.delete(id);
+    }
   }
 
   async function fetchConversationEvents(paneId) {
@@ -16888,18 +16942,17 @@
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
   let _defaultModelsByEngine = { claude: 'opus' };
-  const $nsm = document.getElementById('newSessionModal');
-  const $nsmBody = document.getElementById('nsmBody');
-  const $nsmSubmit = document.getElementById('nsmSubmit');
-  const $nsmCancel = document.getElementById('nsmCancel');
-  const $nsmBackdrop = document.getElementById('nsmBackdrop');
-  const $nsmEngineSelect = document.getElementById('nsmEngineSelect');
-  const $nsmModelSelect = document.getElementById('nsmModelSelect');
-  const $nsmGallery = document.getElementById('nsmGallery');
-  // Spawn-engine state. Source of truth = localStorage. Three DOM nodes
+  // The "new session modal" was removed from index.html, but several call
+  // sites below (openNewSessionModal, template-apply, engine-change handler,
+  // boot-time initCustomEngineSelect) still reference these handles. Every
+  // usage already guards with `if ($nsm…)`, so resolving them to null is
+  // enough — what wasn't enough was leaving them *undeclared*, which
+  // throws ReferenceError on boot and breaks the whole app.
+
+  // Spawn-engine state. Source of truth = localStorage. Two DOM nodes
   // mirror it: the inline bottom-bar selector (new-session mode only),
-  // the Kanban toolbar selector, and the new-session modal selector.
-  // setSpawnEngine() persists + propagates to all three; getSpawnEngine()
+  // and the Kanban toolbar selector.
+  // setSpawnEngine() persists + propagates to both; getSpawnEngine()
   // is the canonical read used by every spawn handler.
   const $convInputEngineSelect = document.getElementById('convInputEngineSelect');
   const $kptToolbarEngineSelect = document.getElementById('kptToolbarEngineSelect');
@@ -16953,40 +17006,14 @@
       }
     });
 
-    if (typeof $nsmModelSelect !== 'undefined' && $nsmModelSelect) {
-      const options = MODEL_OPTIONS_BY_ENGINE[engine] || [];
-      const defaultModel = _defaultModelsByEngine[engine] || '';
-      
-      $nsmModelSelect.innerHTML = '';
-      if (options.length === 0 && !defaultModel) {
-        $nsmModelSelect.style.display = 'none';
-      } else {
-        $nsmModelSelect.style.display = '';
-        const allModels = [...options];
-        if (defaultModel && !allModels.some(o => o.id === defaultModel)) {
-          allModels.unshift({ id: defaultModel, label: defaultModel + ' (default)' });
-        }
-        allModels.forEach(opt => {
-          const el = document.createElement('option');
-          el.value = opt.id;
-          el.textContent = opt.label || opt.id;
-          $nsmModelSelect.appendChild(el);
-        });
-        if (defaultModel) {
-          $nsmModelSelect.value = defaultModel;
-        } else if (allModels.length > 0) {
-          $nsmModelSelect.value = allModels[0].id;
-        }
-      }
-    }
+
   }
   function setSpawnEngine(v) {
     if (v !== 'claude' && v !== 'codex' && v !== 'gemini' && v !== 'antigravity') return;
     try { localStorage.setItem('ccc.spawnEngine', v); } catch (_) {}
-    // $nsmEngineSelect is declared further down in this script; by the
-    // time any user interaction calls setSpawnEngine() it will exist.
-    [$convInputEngineSelect, $kptToolbarEngineSelect,
-     (typeof $nsmEngineSelect !== 'undefined' ? $nsmEngineSelect : null)]
+    // setSpawnEngine() persists + propagates to both; getSpawnEngine()
+    // is the canonical read used by every spawn handler.
+    [$convInputEngineSelect, $kptToolbarEngineSelect]
       .forEach(s => { if (s && s.value !== v) s.value = v; });
     syncSpawnEngineDependentUi();
     if (typeof updateInputBar === 'function') updateInputBar();
@@ -17016,8 +17043,7 @@
           _defaultModelsByEngine[engine] = d.model;
         }
         const reason = d.available ? '' : (d.reason || (label + ' CLI not found'));
-        const selectors = [$convInputEngineSelect, $kptToolbarEngineSelect,
-          (typeof $nsmEngineSelect !== 'undefined' ? $nsmEngineSelect : null)];
+        const selectors = [$convInputEngineSelect, $kptToolbarEngineSelect];
         selectors.forEach(sel => {
           const opt = sel && sel.querySelector('option[value="' + engine + '"]');
           if (!opt) return;
@@ -17328,471 +17354,6 @@
   // — keep it in module scope so reopening the modal doesn't refetch. If the
   // fetch fails (missing file, malformed JSON) we stash an empty array so we
   // don't retry on every reopen; the gallery just stays hidden.
-  let _nsmTemplatesCache = null;
-  async function _loadNsmTemplates() {
-    if (_nsmTemplatesCache !== null) return _nsmTemplatesCache;
-    try {
-      const res = await fetch('/static/templates.json', { cache: 'no-store' });
-      if (!res.ok) { _nsmTemplatesCache = []; return _nsmTemplatesCache; }
-      const data = await res.json();
-      const list = Array.isArray(data && data.templates) ? data.templates : [];
-      _nsmTemplatesCache = list.filter(t => t && typeof t.id === 'string' && typeof t.prompt === 'string');
-    } catch (err) {
-      console.warn('[New session] template gallery load failed', err);
-      _nsmTemplatesCache = [];
-    }
-    return _nsmTemplatesCache;
-  }
-
-  function _applyNsmTemplate(tpl) {
-    if (!tpl) return;
-    $nsmBody.value = tpl.prompt || '';
-    if (tpl.engine && $nsmEngineSelect) {
-      const valid = Array.from($nsmEngineSelect.options).some(o => o.value === tpl.engine);
-      if (valid) {
-        $nsmEngineSelect.value = tpl.engine;
-        // setSpawnEngine syncs the other engine selectors (inline, kanban
-        // toolbar) so the picker that opens next stays consistent.
-        if (typeof setSpawnEngine === 'function') setSpawnEngine(tpl.engine);
-      }
-    }
-    const $nsmWorktree = document.getElementById('nsmWorktree');
-    if ($nsmWorktree && typeof tpl.worktree === 'boolean') {
-      $nsmWorktree.checked = tpl.worktree;
-    }
-    // Mark the picked card so the user has a visual anchor for what they
-    // applied. Re-renderable on each open without leaking state — the class
-    // is reset every time the gallery is rebuilt.
-    if ($nsmGallery) {
-      const prev = $nsmGallery.querySelector('.nsm-gallery-card.is-selected');
-      if (prev) prev.classList.remove('is-selected');
-      const next = $nsmGallery.querySelector('[data-template-id="' + cssEscapeAttr(tpl.id) + '"]');
-      if (next) next.classList.add('is-selected');
-    }
-    // Drop focus into the body so the user can immediately edit the
-    // prefilled prompt. Caret at end so they can append context.
-    if ($nsmBody) {
-      $nsmBody.focus();
-      const len = $nsmBody.value.length;
-      try { $nsmBody.setSelectionRange(len, len); } catch (e) { /* old Safari */ }
-    }
-  }
-
-  // Lightweight CSS.escape fallback for the attribute selectors above —
-  // template ids are restricted but a stray quote shouldn't blow up the DOM.
-  function cssEscapeAttr(s) {
-    return String(s).replace(/["\\]/g, '\\$&');
-  }
-
-  function _nsmTemplateCardsHtml(templates) {
-    const blankCard = ''
-      + '<button type="button" class="nsm-gallery-card" data-template-action="blank">'
-      + '<div class="nsm-gallery-card-title">Blank session</div>'
-      + '<div class="nsm-gallery-card-desc">Start from an empty prompt and use the engine/cwd you already selected.</div>'
-      + '<div class="nsm-gallery-card-meta"><span class="nsm-gallery-chip">empty</span></div>'
-      + '</button>';
-    const editCard = ''
-      + '<button type="button" class="nsm-gallery-card" data-template-action="edit-templates">'
-      + '<div class="nsm-gallery-card-title">Add your own</div>'
-      + '<div class="nsm-gallery-card-desc">Open templates.json and add a reusable prompt by hand.</div>'
-      + '<div class="nsm-gallery-card-meta"><span class="nsm-gallery-chip">templates.json</span></div>'
-      + '</button>';
-    const templateCards = (templates || []).map(t => {
-      const id = escapeAttr(t.id);
-      const name = escapeHtml(t.name || t.id);
-      const desc = escapeHtml(t.description || '');
-      const engine = escapeHtml(t.engine || 'claude');
-      const wt = t.worktree ? '<span class="nsm-gallery-chip is-wt">🌿 worktree</span>' : '';
-      return ''
-        + '<button type="button" class="nsm-gallery-card" data-template-id="' + id + '">'
-        + '<div class="nsm-gallery-card-title">' + name + '</div>'
-        + '<div class="nsm-gallery-card-desc">' + desc + '</div>'
-        + '<div class="nsm-gallery-card-meta">'
-        +   '<span class="nsm-gallery-chip">' + engine + '</span>' + wt
-        + '</div>'
-        + '</button>';
-    }).join('');
-    return blankCard + templateCards + editCard;
-  }
-
-  async function openTemplateGallerySource() {
-    try {
-      await fetch('/api/template-gallery/open', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: '{}',
-      });
-    } catch (_) {}
-  }
-
-  function _clearNsmTemplateSelection(gallery) {
-    if (!gallery) return;
-    const prev = gallery.querySelector('.nsm-gallery-card.is-selected');
-    if (prev) prev.classList.remove('is-selected');
-  }
-
-  function _wireTemplateGalleryCards(gallery, applyTemplate, clearBlank) {
-    if (!gallery) return;
-    gallery.querySelectorAll('.nsm-gallery-card').forEach(el => {
-      el.addEventListener('click', () => {
-        const action = el.getAttribute('data-template-action');
-        if (action === 'blank') {
-          _clearNsmTemplateSelection(gallery);
-          el.classList.add('is-selected');
-          clearBlank();
-          return;
-        }
-        if (action === 'edit-templates') {
-          openTemplateGallerySource();
-          return;
-        }
-        const tplId = el.getAttribute('data-template-id');
-        const tpl = (_nsmTemplatesCache || []).find(t => t.id === tplId);
-        applyTemplate(tpl, el);
-      });
-    });
-  }
-
-  async function _renderNsmGallery() {
-    if (!$nsmGallery) return;
-    const templates = await _loadNsmTemplates();
-    if (!templates.length) {
-      $nsmGallery.style.display = 'none';
-      $nsmGallery.innerHTML = '';
-      return;
-    }
-    $nsmGallery.innerHTML = _nsmTemplateCardsHtml(templates);
-    $nsmGallery.style.display = '';
-    _wireTemplateGalleryCards(
-      $nsmGallery,
-      (tpl) => _applyNsmTemplate(tpl),
-      () => {
-        $nsmBody.value = '';
-        $nsmBody.focus();
-      },
-    );
-  }
-
-  async function renderInlineNewSessionTemplates() {
-    const gallery = document.getElementById('inlineNewSessionTemplates');
-    if (!gallery) return;
-    const templates = await _loadNsmTemplates();
-    if (currentConversation !== '__new__') return;
-    if (!templates.length) {
-      gallery.style.display = 'none';
-      gallery.innerHTML = '';
-      return;
-    }
-    gallery.innerHTML = _nsmTemplateCardsHtml(templates);
-    gallery.style.display = '';
-    _wireTemplateGalleryCards(
-      gallery,
-      (tpl, el) => {
-        if (!tpl) return;
-        _clearNsmTemplateSelection(gallery);
-        if (el) el.classList.add('is-selected');
-        if (tpl.engine) setSpawnEngine(tpl.engine);
-        const worktree = document.getElementById('inlineWorktreeToggle');
-        if (worktree && typeof tpl.worktree === 'boolean') worktree.checked = tpl.worktree;
-        const input = (typeof composerInputForPane === 'function' && composerInputForPane(activePaneId())) || $convInput;
-        if (input) {
-          input.value = tpl.prompt || '';
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.focus();
-          try { input.setSelectionRange(input.value.length, input.value.length); } catch (_) {}
-        }
-      },
-      () => {
-        const input = (typeof composerInputForPane === 'function' && composerInputForPane(activePaneId())) || $convInput;
-        if (input) {
-          input.value = '';
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.focus();
-        }
-      },
-    );
-  }
-  // Modal selector participates in the same shared-state sync as the
-  // inline ones — change it here and the inline selectors update too.
-  if ($nsmEngineSelect) {
-    $nsmEngineSelect.addEventListener('change', () => setSpawnEngine($nsmEngineSelect.value));
-  }
-
-  function getEngineSvg(engine) {
-    if (engine === 'codex') {
-      return '<svg class="engine-svg-icon" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">'
-          + '<path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z" />'
-          + '</svg>';
-    } else if (engine === 'gemini') {
-      return '<svg class="engine-svg-icon" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">'
-          + '<path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" />'
-          + '</svg>';
-    } else if (engine === 'antigravity') {
-      return '<svg class="engine-svg-icon" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">'
-          + '<path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" />'
-          + '</svg>';
-    } else {
-      return '<svg class="engine-svg-icon" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">'
-          + '<path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z" />'
-          + '</svg>';
-    }
-  }
-
-  function initCustomEngineSelect(selectEl) {
-    if (!selectEl) return;
-    if (selectEl.dataset.customInitialized) return;
-    selectEl.dataset.customInitialized = "true";
-
-    const initialDisplay = selectEl.style.display;
-
-    // Hide original select visually but let style.display be used for logical visibility
-    selectEl.style.position = 'absolute';
-    selectEl.style.opacity = '0';
-    selectEl.style.pointerEvents = 'none';
-    selectEl.style.width = '0';
-    selectEl.style.height = '0';
-    selectEl.style.margin = '0';
-    selectEl.style.padding = '0';
-    selectEl.style.border = 'none';
-
-    const container = document.createElement('div');
-    container.className = 'custom-select-container';
-    if (selectEl.id) {
-      container.id = selectEl.id + 'Custom';
-    }
-
-    const trigger = document.createElement('button');
-    trigger.type = 'button';
-    trigger.className = 'custom-select-trigger';
-    if (selectEl.title) trigger.title = selectEl.title;
-
-    const triggerContent = document.createElement('span');
-    triggerContent.className = 'custom-select-trigger-content';
-    trigger.appendChild(triggerContent);
-
-    const arrow = document.createElement('span');
-    arrow.className = 'custom-select-arrow';
-    arrow.innerHTML = '▾';
-    trigger.appendChild(arrow);
-
-    container.appendChild(trigger);
-
-    const menu = document.createElement('div');
-    menu.className = 'custom-select-menu';
-    container.appendChild(menu);
-
-    selectEl.parentNode.insertBefore(container, selectEl.nextSibling);
-
-    function renderOptions() {
-      menu.innerHTML = '';
-      Array.from(selectEl.options).forEach(opt => {
-        const item = document.createElement('div');
-        item.className = 'custom-select-option';
-        if (opt.value === selectEl.value) {
-          item.classList.add('selected');
-        }
-        if (opt.disabled) {
-          item.classList.add('disabled');
-        }
-        if (opt.title) {
-          item.title = opt.title;
-        }
-
-        const iconSpan = document.createElement('span');
-        iconSpan.className = 'custom-select-option-icon ' + opt.value;
-        iconSpan.innerHTML = getEngineSvg(opt.value);
-        item.appendChild(iconSpan);
-
-        const textSpan = document.createElement('span');
-        textSpan.className = 'custom-select-option-label';
-        textSpan.textContent = opt.textContent;
-        item.appendChild(textSpan);
-
-        if (opt.value === selectEl.value) {
-          const checkSpan = document.createElement('span');
-          checkSpan.className = 'custom-select-option-check';
-          checkSpan.textContent = '✓';
-          item.appendChild(checkSpan);
-        }
-
-        if (!opt.disabled) {
-          item.addEventListener('click', (e) => {
-            e.stopPropagation();
-            selectEl.value = opt.value;
-            selectEl.dispatchEvent(new Event('change'));
-            closeMenu();
-          });
-        }
-        menu.appendChild(item);
-      });
-    }
-
-    function updateTrigger() {
-      const selectedOpt = selectEl.options[selectEl.selectedIndex] || selectEl.options[0];
-      if (selectedOpt) {
-        const val = selectedOpt.value;
-        triggerContent.innerHTML = '<span class="custom-select-trigger-icon ' + val + '">' + getEngineSvg(val) + '</span>'
-          + '<span class="custom-select-trigger-label">' + selectedOpt.textContent + '</span>';
-      }
-    }
-
-    function openMenu() {
-      renderOptions();
-      container.classList.add('open');
-      document.addEventListener('click', outsideClickListener);
-    }
-
-    function closeMenu() {
-      container.classList.remove('open');
-      document.removeEventListener('click', outsideClickListener);
-    }
-
-    function outsideClickListener(e) {
-      if (!container.contains(e.target)) {
-        closeMenu();
-      }
-    }
-
-    trigger.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (container.classList.contains('open')) {
-        closeMenu();
-      } else {
-        document.querySelectorAll('.custom-select-container.open').forEach(c => {
-          if (c !== container) c.classList.remove('open');
-        });
-        openMenu();
-      }
-    });
-
-    selectEl.addEventListener('change', () => {
-      updateTrigger();
-    });
-
-    const observer = new MutationObserver(() => {
-      container.style.display = selectEl.style.display;
-      updateTrigger();
-    });
-    observer.observe(selectEl, { attributes: true });
-
-    updateTrigger();
-    if (initialDisplay === 'none') {
-      container.style.display = 'none';
-    } else {
-      container.style.display = initialDisplay;
-    }
-  }
-
-  initCustomEngineSelect($convInputEngineSelect);
-  initCustomEngineSelect($kptToolbarEngineSelect);
-  initCustomEngineSelect($nsmEngineSelect);
-  function openNewSessionModal(body = '', repoPath = '') {
-    if (!$nsm) return;
-    const targetRepoPath = repoPath || selectedRepoPath() || requireSelectedRepo('New session');
-    if (!targetRepoPath) return;
-    _clearNsmError();
-    $nsmBody.value = body || '';
-    $nsm.dataset.repoPath = targetRepoPath;
-    // Sync from shared state so the modal opens on the same engine the
-    // user just picked from any other selector.
-    if ($nsmEngineSelect) $nsmEngineSelect.value = getSpawnEngine();
-    const $nsmWorktree = document.getElementById('nsmWorktree');
-    const $kptWorktreeToggle = document.getElementById('kptWorktreeToggle');
-    if ($nsmWorktree && $kptWorktreeToggle) $nsmWorktree.checked = $kptWorktreeToggle.checked;
-    $nsm.style.display = 'flex';
-    // Render the template gallery (cards above the textarea). Fire-and-forget:
-    // the modal is usable immediately; cards appear once templates.json
-    // resolves. Failure leaves the gallery hidden — see _loadNsmTemplates.
-    // We only show the gallery when the body is empty so a pre-filled
-    // "edit prompt before launch" flow isn't visually crowded by cards.
-    if ($nsmGallery) {
-      if (!body) _renderNsmGallery();
-      else { $nsmGallery.style.display = 'none'; }
-    }
-    setTimeout(() => { $nsmBody.focus(); }, 30);
-  }
-  function closeNewSessionModal() {
-    if ($nsm) $nsm.style.display = 'none';
-    if ($kptNewSession) $kptNewSession.value = '';
-  }
-  async function submitNewSessionModal() {
-    const body = ($nsmBody.value || '').trim();
-    if (!body) return;
-    // Card title = first sentence (or line) of the prompt, capped at 120 chars.
-    function firstSentence(text) {
-      const chunks = text.split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
-      const first = chunks[0] || text.trim();
-      return first.length > 120 ? first.slice(0, 120).trim() + '...' : first;
-    }
-    const effectiveSubject = firstSentence(body);
-    const prompt = body;
-    const engine = ($nsmEngineSelect && $nsmEngineSelect.value) || 'claude';
-    const repoPath = ($nsm && $nsm.dataset.repoPath) || requireSelectedRepo('New session');
-    if (!repoPath) return;
-    const $nsmWorktree = document.getElementById('nsmWorktree');
-    const useWorktree = !!($nsmWorktree && $nsmWorktree.checked);
-    $nsmSubmit.disabled = true;
-    $nsmSubmit.textContent = 'Launching...';
-    const cardSource = spawnSourceForEngine(engine);
-    const tempPid = 'tmp-' + Date.now();
-    closeNewSessionModal();
-    insertPendingSpawnCard(tempPid, effectiveSubject, cardSource, null, {
-      first_message: body,
-      repo_path: repoPath,
-      folder_path: repoPath,
-      spawn_cwd: repoPath,
-      cwd: repoPath,
-      session_cwd: repoPath,
-      session_cwd_exists: true,
-    });
-    try {
-      const endpoint = spawnEndpointForEngine(engine);
-      const body = { prompt, name: effectiveSubject, repo_path: repoPath };
-      if (typeof $nsmModelSelect !== 'undefined' && $nsmModelSelect && $nsmModelSelect.value) {
-        body.model = $nsmModelSelect.value;
-      }
-      if (spawnSupportsWorktree(engine)) body.worktree = useWorktree;
-      const res = await fetch(endpoint, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(body),
-      });
-      const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
-      if (data.ok) {
-        const placeholder = adoptPendingSpawnPid(tempPid, data.pid, data.log);
-        if (placeholder && spawnUsesLogPlaceholder(engine) && typeof selectConversation === 'function') {
-          selectConversation(placeholder.id);
-        }
-        if (engine === 'antigravity') showOpToast('Antigravity headless run started.', 'ok');
-        // Tight poll schedule so the real card replaces the placeholder fast.
-        setTimeout(refreshConversationList, 600);
-        setTimeout(refreshConversationList, 1500);
-        setTimeout(refreshConversationList, 3000);
-      } else {
-        _removePendingSpawnCard(tempPid);
-        if ($nsm) $nsm.style.display = 'flex';
-        $nsmBody.value = body;
-        if ($nsm) $nsm.dataset.repoPath = repoPath;
-        _showNsmError('Spawn failed — status ' + res.status + '\n' + JSON.stringify(data, null, 2));
-        console.error('[New session] spawn failed', data);
-      }
-    } catch (err) {
-      _removePendingSpawnCard(tempPid);
-      if ($nsm) $nsm.style.display = 'flex';
-      $nsmBody.value = body;
-      if ($nsm) $nsm.dataset.repoPath = repoPath;
-      _showNsmError('Request error: ' + (err && err.message || 'network') + '\n' + (err && err.stack || ''));
-      console.error('[New session] submit error', err);
-    }
-    // Reset button label but keep any visible error until the user dismisses it.
-    setTimeout(() => { $nsmSubmit.disabled = false; $nsmSubmit.textContent = 'Launch'; }, 1500);
-  }
-  // Show/hide a persistent copyable error box inside the new-session modal.
-  function _showNsmError(text) {
-    const el = document.getElementById('nsmError');
-    if (!el) return;
-    el.textContent = text;
-    el.style.display = '';
-  }
   function _clearNsmError() {
     const el = document.getElementById('nsmError');
     if (el) { el.textContent = ''; el.style.display = 'none'; }
@@ -17856,23 +17417,28 @@
    document.getElementById('convInput')].forEach(attachImagePaste);
 
   if ($kptNewSession) {
-    // Open modal the moment the user starts typing (or focuses)
-    $kptNewSession.addEventListener('focus', () => openNewSessionModal($kptNewSession.value));
-    $kptNewSession.addEventListener('input', () => {
-      if (!$nsm || $nsm.style.display === 'none') openNewSessionModal($kptNewSession.value);
-    });
+    // Open new session mode the moment the user starts typing (or focuses)
+    function routeToNewSession() {
+      if (typeof enterNewSessionMode === 'function') enterNewSessionMode();
+      const $convInput = document.getElementById('convInput');
+      if ($convInput) {
+        if ($kptNewSession.value) {
+          $convInput.value = $kptNewSession.value;
+          $kptNewSession.value = '';
+        }
+        setTimeout(() => {
+          $convInput.focus();
+          $convInput.style.height = 'auto';
+          $convInput.style.height = ($convInput.scrollHeight) + 'px';
+        }, 30);
+      }
+    }
+    $kptNewSession.addEventListener('focus', routeToNewSession);
+    $kptNewSession.addEventListener('input', routeToNewSession);
     $kptNewSession.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); openNewSessionModal($kptNewSession.value); }
+      if (e.key === 'Enter') { e.preventDefault(); routeToNewSession(); }
     });
   }
-  if ($nsmCancel) $nsmCancel.addEventListener('click', closeNewSessionModal);
-  if ($nsmBackdrop) $nsmBackdrop.addEventListener('click', closeNewSessionModal);
-  if ($nsmSubmit) $nsmSubmit.addEventListener('click', submitNewSessionModal);
-  document.addEventListener('keydown', (e) => {
-    if (!$nsm || $nsm.style.display === 'none') return;
-    if (e.key === 'Escape') { e.preventDefault(); closeNewSessionModal(); }
-    else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submitNewSessionModal(); }
-  });
 
   // ── Split panel input bar send handler ──
   if ($cpSendBtn && $cpInput) {
