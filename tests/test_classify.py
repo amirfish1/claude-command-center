@@ -228,7 +228,7 @@ class TestTranscriptControlMessageFilter(unittest.TestCase):
             user_texts = [
                 ev["text"] for ev in parsed["events"] if ev["type"] == "user_text"
             ]
-            self.assertEqual(user_texts, [real_prompt])
+            self.assertEqual(user_texts, ["/resume", real_prompt])
         finally:
             if prev_home is None:
                 os.environ.pop("HOME", None)

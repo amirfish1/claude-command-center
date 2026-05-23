@@ -1295,7 +1295,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(hasattr(server, "spawn_session_codex"))
         import inspect
         sig = inspect.signature(server.spawn_session_codex)
-        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path"])
+        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "model"])
 
     def test_spawn_session_gemini_exists(self):
         """`spawn_session_gemini` must exist alongside the other engines
@@ -1306,7 +1306,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(hasattr(server, "spawn_session_gemini"))
         import inspect
         sig = inspect.signature(server.spawn_session_gemini)
-        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree"])
+        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model"])
 
     def test_record_spawn_to_registry_persists_engine(self):
         """The on-disk spawn registry must round-trip an `engine` field
