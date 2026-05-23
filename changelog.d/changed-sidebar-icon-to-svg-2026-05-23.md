@@ -1,0 +1,1 @@
+Replace the 502 KB `static/icon-app.png` sidebar header icon with the existing `static/icon.svg`. Drops a one-MB 1024×1024 raster that was being rendered at 26×26 in favour of the 374-byte vector — same visual identity, no scaling artifacts, and removes the largest single asset on the page. Also drops a stray `ccc-sidebar-icon.png` that was accidentally committed.
