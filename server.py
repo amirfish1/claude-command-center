@@ -3903,7 +3903,7 @@ NETWORK_CONFIG_FILE = COMMAND_CENTER_STATE_DIR / "network.json"
 # Persistent registry of spawned headless `claude -p` PIDs, so a server restart
 # can re-discover orphans instead of leaving them unreachable. See
 # _reattach_spawned_orphans() for the boot-time sweep. Schema is a list of
-# {pid, session_id, cwd, spawned_at, name, log, command_summary}.
+# {pid, session_id, cwd, spawned_at, name, log, command_summary, model}.
 SPAWNED_PIDS_FILE = COMMAND_CENTER_STATE_DIR / "spawned-pids.json"
 
 # Per-session model + context override. Set by the click-to-switch picker
@@ -3912,8 +3912,8 @@ SPAWNED_PIDS_FILE = COMMAND_CENTER_STATE_DIR / "spawned-pids.json"
 #                       "engine": "claude|codex|gemini|antigravity",
 #                       "set_at": "ISO-8601"} }
 # Sticky: stays until the user changes it again or hits "Reset to default".
-# Read by resume_session_{headless,codex,gemini} so a queued change actually
-# lands on the next ask.
+# Read by resume_session_{headless,codex,gemini,antigravity} so a queued
+# change actually lands on the next ask.
 SESSION_OVERRIDES_FILE = COMMAND_CENTER_STATE_DIR / "session-overrides.json"
 
 # {path: {mtime, custom_title, last_prompt, agent_name, ...}}
@@ -11748,6 +11748,7 @@ ANTIGRAVITY_HOME = GEMINI_HOME / "antigravity"
 ANTIGRAVITY_BRAIN = ANTIGRAVITY_HOME / "brain"
 ANTIGRAVITY_CONVERSATIONS = ANTIGRAVITY_HOME / "conversations"
 ANTIGRAVITY_CLI_HOME = GEMINI_HOME / "antigravity-cli"
+ANTIGRAVITY_CLI_SETTINGS = ANTIGRAVITY_CLI_HOME / "settings.json"
 ANTIGRAVITY_CLI_BRAIN = ANTIGRAVITY_CLI_HOME / "brain"
 ANTIGRAVITY_CLI_CONVERSATIONS = ANTIGRAVITY_CLI_HOME / "conversations"
 ANTIGRAVITY_MAIN_LOG = Path.home() / "Library" / "Logs" / "Antigravity" / "main.log"
@@ -11761,6 +11762,19 @@ GEMINI_CONTEXT_LIMIT = 1_000_000
 
 
 _antigravity_summary_cache = {"mtime": 0, "titles": {}}
+_antigravity_cli_settings_lock = threading.Lock()
+
+
+_ANTIGRAVITY_MODEL_LABELS = {
+    "gemini-3-5-flash-high": "Gemini 3.5 Flash (High)",
+    "gemini-3-5-flash-medium": "Gemini 3.5 Flash (Medium)",
+    "gemini-3-1-pro-high": "Gemini 3.1 Pro (High)",
+    "gemini-3-1-pro-low": "Gemini 3.1 Pro (Low)",
+    "gemini-3-1-pro": "Gemini 3.1 Pro (High)",
+    "claude-sonnet-4-6-thinking": "Claude Sonnet 4.6 (Thinking)",
+    "claude-opus-4-6-thinking": "Claude Opus 4.6 (Thinking)",
+    "gpt-oss-120b-medium": "GPT-OSS 120B (Medium)",
+}
 
 
 def _antigravity_read_varint(buf, pos):
@@ -11919,6 +11933,64 @@ def _antigravity_command_words(resolved):
 
 def _antigravity_shell_command(resolved):
     return " ".join(_shell_quote(word) for word in _antigravity_command_words(resolved))
+
+
+def _antigravity_model_settings_label(model):
+    text = str(model or "").strip()
+    if not text:
+        return ""
+    key = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return _ANTIGRAVITY_MODEL_LABELS.get(key, text)
+
+
+def _read_antigravity_cli_settings():
+    try:
+        with open(ANTIGRAVITY_CLI_SETTINGS, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return {}, None
+    except json.JSONDecodeError as exc:
+        return {}, f"Antigravity CLI settings.json is not valid JSON: {exc}"
+    except OSError as exc:
+        return {}, f"Could not read Antigravity CLI settings.json: {exc}"
+    if not isinstance(data, dict):
+        return {}, "Antigravity CLI settings.json must contain a JSON object"
+    return data, None
+
+
+def _write_antigravity_cli_settings(settings):
+    try:
+        ANTIGRAVITY_CLI_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ANTIGRAVITY_CLI_SETTINGS.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(settings, fh, indent=2)
+            fh.write("\n")
+        os.replace(tmp, ANTIGRAVITY_CLI_SETTINGS)
+    except OSError as exc:
+        return f"Could not write Antigravity CLI settings.json: {exc}"
+    return None
+
+
+def _antigravity_cli_configured_model():
+    settings, error = _read_antigravity_cli_settings()
+    if error:
+        return ""
+    return str(settings.get("model") or "").strip()
+
+
+def _set_antigravity_cli_model(model):
+    label = _antigravity_model_settings_label(model)
+    if not label:
+        return {"ok": True, "model": ""}
+    with _antigravity_cli_settings_lock:
+        settings, error = _read_antigravity_cli_settings()
+        if error:
+            return {"ok": False, "error": error, "code": "antigravity_settings_invalid"}
+        settings["model"] = label
+        error = _write_antigravity_cli_settings(settings)
+        if error:
+            return {"ok": False, "error": error, "code": "antigravity_settings_write_failed"}
+    return {"ok": True, "model": label}
 
 
 def _antigravity_has_arg(words, *names):
@@ -13337,7 +13409,7 @@ def _antigravity_spawn_pid_by_session_id():
             "alive": alive,
             "log": log,
             "prompt": s.get("prompt") or "",
-            "model": meta.get("model") or "",
+            "model": meta.get("model") or s.get("model") or "",
         }
     return out
 
@@ -14647,11 +14719,21 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, model
     session_name = _slugify(name or prompt) or "antigravity"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-antigravity-{session_name}-{timestamp}.log"
-    if model:
-        _set_session_model(log_filename[:-4], model, False)
     log_dir = repo_log_dir(ctx["repo_path"])
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
+
+    model_to_use = _antigravity_model_settings_label(
+        model or os.environ.get("CCC_ANTIGRAVITY_MODEL") or ""
+    )
+    if model_to_use:
+        settings_result = _set_antigravity_cli_model(model_to_use)
+        if not settings_result.get("ok"):
+            return {
+                **settings_result,
+                "via": "antigravity-spawn",
+            }
+        model_to_use = settings_result.get("model") or model_to_use
 
     cmd = _antigravity_command_words(resolved)
     user_args = cmd[1:]
@@ -14669,8 +14751,6 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, model
     cli_log_path = Path(str(log_path) + ".agy.log")
     if not _antigravity_has_arg(user_args, "--log-file"):
         cmd.extend(["--log-file", str(cli_log_path)])
-    if model:
-        cmd.extend(["--model", model])
     cmd.extend(["-p", prompt])
 
     log_fh = open(log_path, "w")
@@ -14686,6 +14766,23 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, model
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "via": "antigravity-spawn"}
+    time.sleep(0.15)
+    early_exit = proc.poll()
+    if early_exit is not None and early_exit != 0:
+        try:
+            log_fh.flush()
+        except OSError:
+            pass
+        log_fh.close()
+        detail = _antigravity_read_log_tail(log_path, max_bytes=4000).strip()
+        first_line = next((line.strip() for line in detail.splitlines() if line.strip()), "")
+        return {
+            "ok": False,
+            "error": first_line or f"AGY exited with code {early_exit}",
+            "exit_code": early_exit,
+            "log": str(log_path),
+            "via": "antigravity-spawn",
+        }
 
     entry = {
         "pid": proc.pid,
@@ -14698,6 +14795,7 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, model
         "fifo": None,
         "stdin_fd": None,
         "engine": "antigravity",
+        "model": model_to_use,
     }
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -14709,8 +14807,16 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, model
         command_summary=prompt[:200],
         fifo=None,
         engine="antigravity",
+        model=model_to_use,
     )
-    return {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "antigravity-spawn"}
+    return {
+        "ok": True,
+        "pid": proc.pid,
+        "name": session_name,
+        "log": str(log_path),
+        "via": "antigravity-spawn",
+        "model": model_to_use,
+    }
 
 
 def _resume_session_antigravity_app(session_id, text):
@@ -14794,6 +14900,21 @@ def resume_session_antigravity(session_id, text):
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
 
+    override = _get_session_override(session_id)
+    model_to_use = _antigravity_model_settings_label(
+        ((override or {}).get("model") if override else None)
+        or os.environ.get("CCC_ANTIGRAVITY_MODEL")
+        or ""
+    )
+    if model_to_use:
+        settings_result = _set_antigravity_cli_model(model_to_use)
+        if not settings_result.get("ok"):
+            return {
+                **settings_result,
+                "via": "antigravity-resume",
+            }
+        model_to_use = settings_result.get("model") or model_to_use
+
     cmd = _antigravity_command_words(resolved)
     user_args = cmd[1:]
     if (
@@ -14838,6 +14959,7 @@ def resume_session_antigravity(session_id, text):
         "fifo": None,
         "stdin_fd": None,
         "engine": "antigravity",
+        "model": model_to_use,
     }
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -14850,8 +14972,16 @@ def resume_session_antigravity(session_id, text):
         fifo=None,
         engine="antigravity",
         session_id=session_id,
+        model=model_to_use,
     )
-    return {"ok": True, "pid": proc.pid, "log": str(log_path), "resumed": True, "via": "antigravity-resume"}
+    return {
+        "ok": True,
+        "pid": proc.pid,
+        "log": str(log_path),
+        "resumed": True,
+        "via": "antigravity-resume",
+        "model": model_to_use,
+    }
 
 
 def launch_antigravity_terminal(prompt="", name=None, cwd=None, repo_path=None, terminal_app=None):
@@ -15698,7 +15828,7 @@ def _save_spawn_registry(entries):
 
 def _record_spawn_to_registry(
     pid, name, log_path, cwd, spawned_at, command_summary,
-    fifo=None, engine="claude", session_id=None,
+    fifo=None, engine="claude", session_id=None, model=None,
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -15722,6 +15852,7 @@ def _record_spawn_to_registry(
         "spawned_at": spawned_at,
         "command_summary": command_summary,
         "engine": engine,
+        "model": model or "",
     })
     _save_spawn_registry(entries)
 
@@ -15869,6 +16000,7 @@ def _reattach_spawned_orphans():
             "stdin_fd": stdin_fd,
             "reattached": True,
             "engine": engine,
+            "model": entry.get("model") or "",
         }
         if session_id:
             synthetic["resumed_sid"] = session_id
@@ -15883,6 +16015,7 @@ def _reattach_spawned_orphans():
             "spawned_at": entry.get("spawned_at"),
             "command_summary": entry.get("command_summary", ""),
             "engine": engine,
+            "model": entry.get("model") or "",
         })
         reattached += 1
 
@@ -16993,9 +17126,9 @@ def _set_session_model(session_id, model, context_1m):
     """Apply a model+context choice to a session.
 
     Live Claude (TTY or spawned) gets a real `/model <alias>[1m]` slash
-    command injected into the running process. Codex, Gemini, and dormant
-    Claude have no runtime-switch mechanism, so the choice is persisted to
-    the session-overrides sidecar and applied on the next resume.
+    command injected into the running process. Codex, Gemini, Antigravity, and
+    dormant Claude have no runtime-switch mechanism, so the choice is persisted
+    to the session-overrides sidecar and applied on the next resume.
 
     Always writes the override regardless — that way a refresh shows the
     new value even when the inject succeeded, and the next resume picks
@@ -17016,8 +17149,9 @@ def _set_session_model(session_id, model, context_1m):
         "engine": engine,
     }
     if engine != "claude":
-        # Codex/Gemini: no live-inject path. The next resume_session_<eng>
-        # call reads the override and passes --model to the CLI.
+        # Non-Claude engines have no live-inject path. The next
+        # resume_session_<eng> call reads the override and applies it through
+        # that CLI's supported model-selection mechanism.
         payload["applied"] = "queued"
         return payload
     # Claude: try to inject /model X[1m] into a live TTY or spawn. If
@@ -22238,6 +22372,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(info)
         elif path == "/api/sessions/spawn-antigravity/availability":
             info = _resolve_antigravity_bin()
+            info["model"] = _antigravity_cli_configured_model()
             info["headless"] = True
             info["print_mode"] = "-p"
             info["resume"] = "Use /resume inside AGY CLI for manual TUI resume."

@@ -2892,6 +2892,7 @@
   .conv-signal.activity-waiting { background: rgba(88,166,255,0.1); color: var(--accent); }
   .conv-signal.activity-idle { background: rgba(139,148,158,0.08); color: var(--text-muted); }
   .conv-signal.activity-blocked { background: rgba(248,81,73,0.15); color: var(--red); animation: pulse 2s infinite; }
+  .conv-signal.spawn-failed { background: rgba(248,81,73,0.15); color: var(--red); }
   .conv-signal.pkood-running { background: rgba(63,185,80,0.15); color: var(--green); }
   .conv-signal.pkood-idle { background: rgba(88,166,255,0.1); color: var(--accent); }
   .conv-signal.no-edits { background: rgba(88,166,255,0.1); color: var(--accent); }

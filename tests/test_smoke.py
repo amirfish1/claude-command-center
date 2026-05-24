@@ -2037,6 +2037,49 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn(str(self.repo), add_dirs)
         self.assertIn(str(paste_dir.resolve()), add_dirs)
 
+    def test_spawn_antigravity_writes_model_to_cli_settings(self):
+        """AGY print mode reads its model from settings.json, not argv."""
+        server = self.server
+        settings_path = server.ANTIGRAVITY_CLI_SETTINGS
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps({
+            "colorScheme": "dark",
+            "model": "Gemini 3.1 Pro (Low)",
+        }))
+        proc = mock.Mock(pid=4246)
+        proc.poll.return_value = None
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        try:
+            with mock.patch.object(
+                server,
+                "_resolve_antigravity_bin",
+                return_value={"available": True, "bin": "/usr/bin/agy-test"},
+            ), mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
+                 mock.patch.object(server, "_record_spawn_to_registry"):
+                result = server.spawn_session_antigravity(
+                    "hello from agy",
+                    name="agy model",
+                    repo_path=str(self.repo),
+                    model="gemini-3.5-flash-high",
+                )
+        finally:
+            for entry in server._spawned_sessions:
+                fh = entry.get("log_fh")
+                if fh:
+                    fh.close()
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["model"], "Gemini 3.5 Flash (High)")
+        settings = json.loads(settings_path.read_text())
+        self.assertEqual(settings["model"], "Gemini 3.5 Flash (High)")
+        self.assertEqual(settings["colorScheme"], "dark")
+        cmd = popen.call_args.args[0]
+        self.assertNotIn("--model", cmd)
+        self.assertIn("-p", cmd)
+
     def test_resume_antigravity_queues_when_resume_already_running(self):
         """A second AGY follow-up should queue instead of spawning parallel resumes."""
         server = self.server

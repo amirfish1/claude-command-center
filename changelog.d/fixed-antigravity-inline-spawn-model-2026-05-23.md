@@ -1,0 +1,1 @@
+- Fixed inline Antigravity session spawning so model choices are written to AGY CLI settings and failed launches no longer look like live WIP rows.

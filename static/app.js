@@ -3972,6 +3972,16 @@
     return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
   }
 
+  function previewRepeatsTitle(titleText, previewText) {
+    const title = normalizePendingPrompt(titleText).replace(/[.!?]+$/, '');
+    const preview = normalizePendingPrompt(previewText).replace(/[.!?]+$/, '');
+    if (!title || !preview) return false;
+    if (title === preview) return true;
+    if (title.length >= 32 && preview.startsWith(title)) return true;
+    if (preview.length >= 32 && title.startsWith(preview)) return true;
+    return false;
+  }
+
   function pendingSpawnMatchesRow(pid, placeholder, row) {
     if (!placeholder || !row) return false;
     if (row.spawn_pid && String(row.spawn_pid) === String(pid)) return true;
@@ -7207,8 +7217,10 @@
       let askHtml = '';
       if (c.last_assistant_text) {
         const raw = String(c.last_assistant_text).trim().slice(0, 140);
-        askHtml = '<div class="conv-last">' + escapeHtml(raw) + '</div>';
-      } else if (c.display_name && cleanFirst) {
+        if (!previewRepeatsTitle(rawTitle, raw)) {
+          askHtml = '<div class="conv-last">' + escapeHtml(raw) + '</div>';
+        }
+      } else if (c.display_name && cleanFirst && !previewRepeatsTitle(rawTitle, cleanFirst)) {
         askHtml = '<div class="conv-last">' + escapeHtml(cleanFirst.slice(0, 100)) + '</div>';
       }
       // _hideAskHtml is set by the archive renderer (#6) — subtitle is
@@ -7435,6 +7447,8 @@
         else if (ps === 'IDLE') signals += '<span class="conv-signal pkood-idle">idle</span>';
         else if (ps === 'BLOCKED') signals += '<span class="conv-signal pkood-blocked">blocked</span>';
         if (c.pkood_is_stuck) signals += '<span class="conv-signal pkood-stuck">stuck</span>';
+      } else if (c.spawn_failed) {
+        signals += '<span class="conv-signal spawn-failed" title="' + escapeHtml(c.spawn_error || 'Spawn process exited before a session was created') + '">failed</span>';
       } else if (isWorktree && c.worktree_dirty) {
         signals += '<span class="conv-signal uncommitted" title="git status: this worktree has uncommitted changes">uncommitted</span>';
       } else if (c.tail_pr_number) {
@@ -11359,6 +11373,24 @@
     }
   }
 
+  function markFireAndWatchSpawnFailed(card, data) {
+    const exitCode = Number(data && data.exit_code);
+    if (!card || !card.pending_spawn || !Number.isFinite(exitCode) || exitCode === 0) return;
+    card.pending_spawn = false;
+    card.is_live = false;
+    card.spawn_failed = true;
+    card.sidecar_status = '';
+    card.pending_tool = null;
+    card.last_event_type = 'result';
+    card.spawn_error = 'Process exited with code ' + exitCode + ' before a session was created.';
+    for (const [key, value] of Array.from(pendingSpawns.entries())) {
+      if (value === card || (value && value.id === card.id)) pendingSpawns.delete(key);
+    }
+    delete columnOverrides[card.id];
+    try { localStorage.setItem('ccc-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
+    renderSidebar(filterConversations($convSearch.value));
+  }
+
   // Render a codex spawn log into the right pane while the durable Codex
   // thread row is still materializing. Once /api/sessions returns a real
   // codex card, normal conversation rendering takes over.
@@ -11384,6 +11416,7 @@
         return;
       }
       const atBottom = isConversationAtBottom($view);
+      if (!data.running) markFireAndWatchSpawnFailed(card, data);
       $view.innerHTML = (data.engine === 'antigravity' || engine === 'antigravity')
         ? renderAntigravityLogHtml(data)
         : ((data.engine === 'gemini' || engine === 'gemini')
@@ -12670,10 +12703,13 @@
       { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash' },
     ],
     antigravity: [
-      { id: 'gemini-3.5-flash-high', label: 'gemini-3.5-flash-high' },
-      { id: 'gemini-3.5-flash-medium', label: 'gemini-3.5-flash-medium' },
-      { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro' },
-      { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro' },
+      { id: 'Gemini 3.5 Flash (High)', label: 'Gemini 3.5 Flash (High)' },
+      { id: 'Gemini 3.5 Flash (Medium)', label: 'Gemini 3.5 Flash (Medium)' },
+      { id: 'Gemini 3.1 Pro (High)', label: 'Gemini 3.1 Pro (High)' },
+      { id: 'Gemini 3.1 Pro (Low)', label: 'Gemini 3.1 Pro (Low)' },
+      { id: 'Claude Sonnet 4.6 (Thinking)', label: 'Claude Sonnet 4.6 (Thinking)' },
+      { id: 'Claude Opus 4.6 (Thinking)', label: 'Claude Opus 4.6 (Thinking)' },
+      { id: 'GPT-OSS 120B (Medium)', label: 'GPT-OSS 120B (Medium)' },
     ],
   };
 

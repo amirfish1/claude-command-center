@@ -1,1 +1,1 @@
-- Updated Antigravity model options to use `gemini-3.5-flash-high` and `gemini-3.5-flash-medium` instead of `gemini-3.5-pro`.
+- Antigravity new-session model choices now use AGY's supported settings path instead of a nonexistent `--model` flag.
