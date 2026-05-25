@@ -1138,6 +1138,49 @@ class TestShellCommandPreview(unittest.TestCase):
         self.assertNotIn("sk-ant-test-XXXXXXXXXXXXXXXX", block["command"])
 
 
+class TestAntigravityParsing(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = _fresh_server()
+
+    def test_embedded_system_task_message_is_not_assistant_text(self):
+        ev = {
+            "step_index": 242,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "created_at": "2026-05-24T23:54:20Z",
+            "content": (
+                "[Message] timestamp=2026-05-24T23:54:33Z sender=system "
+                "priority=MESSAGE_PRIORITY_LOW content=[Task "
+                "707a2446-4bcb-4b07-a697-6b8e7411b401/task-241] command: "
+                '"npx turbo build --filter=bookyourmat" finished, exit code: 0. Output:\n'
+                "Actual tasks: 2 / 2\n"
+                "_\n"
+                "</div>\n"
+            ),
+        }
+
+        parsed = self.server._parse_antigravity_event(ev, 304)
+
+        self.assertIsNone(parsed)
+
+    def test_regular_antigravity_planner_text_still_renders(self):
+        ev = {
+            "step_index": 243,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "created_at": "2026-05-24T23:55:05Z",
+            "content": "The build completed successfully.",
+        }
+
+        parsed = self.server._parse_antigravity_event(ev, 305)
+
+        self.assertEqual(parsed["type"], "assistant")
+        self.assertEqual(parsed["blocks"][0]["text"], "The build completed successfully.")
+
+
 class TestAddSidecarFields(unittest.TestCase):
     """_add_sidecar_fields() merges PreToolUse/PostToolUse hook output into
     a session card. The kanban relies on these fields (sidecar_status,

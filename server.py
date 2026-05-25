@@ -11858,6 +11858,12 @@ _ANTIGRAVITY_MODEL_LABELS = {
     "gpt-oss-120b-medium": "GPT-OSS 120B (Medium)",
 }
 
+_ANTIGRAVITY_EMBEDDED_MESSAGE_RE = re.compile(
+    r"^\[Message\]\s+timestamp=(?P<timestamp>\S+)\s+sender=(?P<sender>\S+)\s+"
+    r"priority=(?P<priority>\S+)\s+content=(?P<content>.*)\s*$",
+    re.S,
+)
+
 
 def _antigravity_read_varint(buf, pos):
     val = 0
@@ -13696,6 +13702,23 @@ def _antigravity_tool_detail(call):
     return ""
 
 
+def _antigravity_embedded_system_message(content):
+    """True when Antigravity smuggles an internal Message into model text."""
+    if not isinstance(content, str):
+        return False
+    m = _ANTIGRAVITY_EMBEDDED_MESSAGE_RE.match(content.strip())
+    if not m:
+        return False
+    sender = m.group("sender") or ""
+    priority = m.group("priority") or ""
+    body = (m.group("content") or "").strip()
+    if sender == "system":
+        return True
+    if priority.startswith("MESSAGE_PRIORITY_") and body.startswith("[Task "):
+        return True
+    return False
+
+
 def _antigravity_normalize_path(value):
     raw = _antigravity_unquote(value)
     if not isinstance(raw, str):
@@ -14239,6 +14262,8 @@ def _parse_antigravity_event(ev, line_num, usage_map=None):
             preview = thinking[:300] + ("..." if len(thinking) > 300 else "")
             blocks.append({"kind": "thinking", "text": preview})
         content = (ev.get("content") or "").strip()
+        if _antigravity_embedded_system_message(content):
+            content = ""
         if content:
             blocks.append({"kind": "text", "text": content})
         for call in ev.get("tool_calls") or []:
