@@ -9861,6 +9861,23 @@ def _parse_conversation_event(ev, line_num):
         return None
 
     if ev_type == "system":
+        if ev.get("subtype") == "compact_boundary":
+            meta = ev.get("compactMetadata")
+            if not isinstance(meta, dict):
+                meta = {}
+            return {
+                "line": line_num,
+                "ts": ts,
+                "type": "system",
+                "subtype": "compact_boundary",
+                "session": ev.get("sessionId", ""),
+                "compact": {
+                    "trigger": meta.get("trigger") or "",
+                    "pre_tokens": _codex_int(meta.get("preTokens")),
+                    "post_tokens": _codex_int(meta.get("postTokens")),
+                    "duration_ms": _codex_int(meta.get("durationMs")),
+                },
+            }
         if ev.get("subtype") == "local_command":
             content = ev.get("content", "")
             if content.startswith("<local-command-stdout>"):
@@ -20970,11 +20987,14 @@ def extract_session_usage(session_id):
     model = desktop_meta.get("model") or ""
     diagnostic_latest = 0
     diagnostic_peak = 0
+    max_observed_window = 0
     # `/compact` (manual or auto) emits a `{type: system, subtype: compact_boundary}`
     # event. Pre-compact assistant turns no longer contribute to the live
     # context window, so reset both latest and peak whenever we cross a
     # boundary — the displayed numbers reflect only the post-most-recent-
-    # compact segment, which matches what the user sees in the TUI.
+    # compact segment, which matches what the user sees in the TUI. Recent
+    # Claude Code builds also include `postTokens`; use that as the live value
+    # until the next assistant turn writes a normal `usage` block.
     compact_count = 0
     try:
         with open(jsonl, "r") as f:
@@ -20987,10 +21007,16 @@ def extract_session_usage(session_id):
                 except json.JSONDecodeError:
                     continue
                 if ev.get("type") == "system" and ev.get("subtype") == "compact_boundary":
-                    latest = 0
-                    peak = 0
-                    diagnostic_latest = 0
-                    diagnostic_peak = 0
+                    meta = ev.get("compactMetadata")
+                    if not isinstance(meta, dict):
+                        meta = {}
+                    pre_tokens = _codex_int(meta.get("preTokens"))
+                    post_tokens = _codex_int(meta.get("postTokens"))
+                    max_observed_window = max(max_observed_window, pre_tokens, post_tokens)
+                    latest = post_tokens
+                    peak = post_tokens
+                    diagnostic_latest = post_tokens
+                    diagnostic_peak = post_tokens
                     compact_count += 1
                     continue
                 if ev.get("type") != "assistant":
@@ -21006,6 +21032,7 @@ def extract_session_usage(session_id):
                 if diag_window:
                     diagnostic_latest = diag_window
                     diagnostic_peak = max(diagnostic_peak, diag_window)
+                    max_observed_window = max(max_observed_window, diag_window)
                 u = msg.get("usage") or {}
                 if not isinstance(u, dict):
                     continue
@@ -21018,6 +21045,7 @@ def extract_session_usage(session_id):
                     latest = window
                     if window > peak:
                         peak = window
+                    max_observed_window = max(max_observed_window, window)
                 if isinstance(ti, int):
                     total_in += ti
                 if isinstance(tcw, int):
@@ -21037,10 +21065,11 @@ def extract_session_usage(session_id):
     # Best-effort context limit. Claude Code's 1M-context variant uses a
     # `[1m]` suffix in some surfaces, but the JSONL strips it ("claude-
     # opus-4-7" either way), so the model name alone is unreliable.
-    # Fallback signal: if any observed turn used > 200k tokens, the
-    # session must be on the 1M variant (otherwise the API would have
-    # errored). Default to 200k when we have no positive evidence.
-    if "[1m]" in model.lower() or peak > 200_000:
+    # Fallback signal: if any observed turn or compact pre/post count used
+    # > 200k tokens, the session must be on the 1M variant (otherwise the API
+    # would have errored). Keep that session-level signal even though the
+    # displayed live peak resets at the most recent compact boundary.
+    if "[1m]" in model.lower() or max_observed_window > 200_000:
         limit = 1_000_000
     else:
         limit = 200_000

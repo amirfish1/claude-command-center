@@ -2576,6 +2576,106 @@ class TestModelPicker(unittest.TestCase):
         self.assertEqual(usage["peak_input_tokens"], 1_200 + 9_000)
         self.assertEqual(usage["compact_count"], 1)
 
+    def test_extract_session_usage_uses_compact_post_tokens_until_next_turn(self):
+        """A compact boundary is the first reliable post-compact signal.
+        Use its postTokens count immediately instead of leaving the footer
+        pinned to the pre-compact peak until another assistant turn lands."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+        sid = "11111111-2222-3333-4444-777777777777"
+        big_turn = {
+            "type": "assistant",
+            "sessionId": sid,
+            "isSidechain": False,
+            "message": {
+                "model": "claude-opus-4-7",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "before compact"}],
+                "usage": {
+                    "input_tokens": 260_000,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 210_000,
+                    "output_tokens": 500,
+                },
+            },
+        }
+        boundary = {
+            "type": "system",
+            "subtype": "compact_boundary",
+            "sessionId": sid,
+            "compactMetadata": {
+                "trigger": "manual",
+                "preTokens": 470_054,
+                "postTokens": 13_781,
+                "durationMs": 130_502,
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            project = root / "-tmp-project-compact-posttokens"
+            project.mkdir()
+            (project / f"{sid}.jsonl").write_text(
+                json.dumps(big_turn) + "\n"
+                + json.dumps(boundary) + "\n"
+            )
+            orig_root = server.PROJECTS_ROOT
+            server.PROJECTS_ROOT = root
+            try:
+                with mock.patch.object(server, "_is_codex_session", return_value=False), \
+                     mock.patch.object(server, "_is_gemini_session", return_value=False), \
+                     mock.patch.object(server, "_load_desktop_app_metadata", return_value={}):
+                    usage = server.extract_session_usage(sid)
+            finally:
+                server.PROJECTS_ROOT = orig_root
+
+        self.assertEqual(usage["latest_input_tokens"], 13_781)
+        self.assertEqual(usage["peak_input_tokens"], 13_781)
+        self.assertEqual(usage["compact_count"], 1)
+        self.assertEqual(usage["context_limit"], 1_000_000)
+
+    def test_parse_conversation_surfaces_compact_boundary(self):
+        """The transcript pane should show feedback when `/compact` finishes."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+        sid = "11111111-2222-3333-4444-888888888888"
+        boundary = {
+            "type": "system",
+            "subtype": "compact_boundary",
+            "sessionId": sid,
+            "timestamp": "2026-05-25T01:54:30.071Z",
+            "compactMetadata": {
+                "trigger": "manual",
+                "preTokens": 470_054,
+                "postTokens": 13_781,
+                "durationMs": 130_502,
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            project = root / "-tmp-project-compact-event"
+            project.mkdir()
+            (project / f"{sid}.jsonl").write_text(json.dumps(boundary) + "\n")
+            orig_root = server.PROJECTS_ROOT
+            server.PROJECTS_ROOT = root
+            try:
+                with mock.patch.object(server, "_is_codex_session", return_value=False), \
+                     mock.patch.object(server, "_is_gemini_session", return_value=False):
+                    result = server.parse_conversation(sid, use_cache=False)
+            finally:
+                server.PROJECTS_ROOT = orig_root
+
+        self.assertEqual(len(result["events"]), 1)
+        event = result["events"][0]
+        self.assertEqual(event["type"], "system")
+        self.assertEqual(event["subtype"], "compact_boundary")
+        self.assertEqual(event["session"], sid)
+        self.assertEqual(event["compact"]["trigger"], "manual")
+        self.assertEqual(event["compact"]["pre_tokens"], 470_054)
+        self.assertEqual(event["compact"]["post_tokens"], 13_781)
+        self.assertEqual(event["compact"]["duration_ms"], 130_502)
+
     def test_extract_antigravity_usage_rpc(self):
         for mod in ("server",):
             sys.modules.pop(mod, None)
@@ -2916,4 +3016,3 @@ class TestPendingInputs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

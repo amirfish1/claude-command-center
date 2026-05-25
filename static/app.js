@@ -2178,6 +2178,7 @@
       if ($input) $input.blur();
       return;
     }
+    const compactCommand = /^\/compact(?:\s|$)/i.test(text);
     $sendBtn.disabled = true;
     const flashRed = () => {
       $input.style.borderColor = 'var(--red)';
@@ -2209,7 +2210,9 @@
         showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
       } else if (res.ok && data.ok) {
         if (data.queued) {
-          showOpToast('Queued until the terminal session is idle.');
+          showOpToast(compactCommand
+            ? 'Queued /compact until the terminal session is idle.'
+            : 'Queued until the terminal session is idle.');
         } else if (data.via === 'antigravity-resume') {
           showOpToast('Antigravity headless follow-up started.');
           setTimeout(refreshConversationList, 1500);
@@ -2218,6 +2221,9 @@
           showOpToast('Sent to Antigravity app.');
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
+        } else if (compactCommand) {
+          showOpToast('Compact requested. Waiting for Claude to write the compact boundary.');
+          scheduleCompactUsageRefresh(sid);
         }
       } else {
         removePendingSendEcho(pendingSend);
@@ -12531,11 +12537,32 @@
     } catch (_) {}
   }
 
+  function scheduleCompactUsageRefresh(sid) {
+    if (!sid) return;
+    [1500, 5000, 15000, 45000, 90000, 150000].forEach((delay) => {
+      setTimeout(() => {
+        if (currentSession && currentSession.id === sid) {
+          fetchSessionUsage(sid);
+        }
+      }, delay);
+    });
+  }
+
   function _formatTokens(n) {
     if (!n) return '0';
     if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
     if (n >= 1_000) return Math.round(n / 1000) + 'k';
     return String(n);
+  }
+
+  function _formatCompactDuration(ms) {
+    ms = Number(ms) || 0;
+    if (!ms) return '';
+    const seconds = Math.round(ms / 1000);
+    if (seconds < 60) return seconds + 's';
+    const minutes = Math.floor(seconds / 60);
+    const rem = seconds % 60;
+    return minutes + 'm' + (rem ? ' ' + rem + 's' : '');
   }
 
   // Antigravity's own UI prints token counts as `11.2k`, `2.6k`, `847` —
@@ -12599,7 +12626,8 @@
       // 200k (only possible on the 1M variant). Non-Claude engines never
       // show the 1M pill.
       const ovrIsOneM = !!(ovr && ovr.context_1m);
-      const isOneM = engine === 'claude' && (ovrIsOneM || peak > 200000 || displayModel.toLowerCase().includes('[1m]'));
+      const serverLimitIsOneM = Number(u.context_limit || 0) >= 1000000;
+      const isOneM = engine === 'claude' && (ovrIsOneM || serverLimitIsOneM || peak > 200000 || displayModel.toLowerCase().includes('[1m]'));
       const shortModel = displayModel.replace(/^claude-/, '').replace(/\[1m\]/i, '').trim();
       const modelTip = displayModel
         + (isOneM ? '\n(1M context window — anthropic-beta: context-1m)' : '')
@@ -12648,7 +12676,7 @@
     if (pct >= 85) cls += ' wp-usage-hot';
     else if (pct >= 60) cls += ' wp-usage-warm';
     const peakNote = peak > latest
-      ? ' <span class="wp-usage-peak" title="Peak across the session">peak ' + _formatTokens(peak) + '</span>'
+      ? ' <span class="wp-usage-peak" title="Peak since the most recent compact">peak ' + _formatTokens(peak) + '</span>'
       : '';
     const overrideNote = override ? ' (override)' : '';
     const title = 'Latest assistant turn: ' + latest.toLocaleString() + ' tokens / '
@@ -13680,10 +13708,28 @@
       }
 
       if (ev.type === 'system') {
-        div.innerHTML = '<span class="label">System</span>'
-          + '<span class="line-num">L' + ev.line + '</span>'
-          + tsSpan(ev.ts)
-          + '<span>' + escapeHtml(ev.subtype || '') + (ev.model ? ' &middot; ' + escapeHtml(ev.model) : '') + (ev.session ? ' &middot; ' + escapeHtml(ev.session) : '') + '</span>';
+        if (ev.subtype === 'compact_boundary') {
+          const compact = ev.compact || {};
+          const preTokens = Number(compact.pre_tokens || 0);
+          const postTokens = Number(compact.post_tokens || 0);
+          const duration = _formatCompactDuration(compact.duration_ms);
+          const trigger = compact.trigger ? String(compact.trigger) : 'manual';
+          let compactText = 'Compacted context';
+          if (preTokens || postTokens) {
+            compactText += ': ' + _formatTokens(preTokens) + ' -> ' + _formatTokens(postTokens);
+          }
+          compactText += ' (' + trigger + (duration ? ', ' + duration : '') + ')';
+          div.classList.add('system-compact');
+          div.innerHTML = '<span class="label">System</span>'
+            + '<span class="line-num">L' + ev.line + '</span>'
+            + tsSpan(ev.ts)
+            + '<span class="system-compact-text">' + escapeHtml(compactText) + '</span>';
+        } else {
+          div.innerHTML = '<span class="label">System</span>'
+            + '<span class="line-num">L' + ev.line + '</span>'
+            + tsSpan(ev.ts)
+            + '<span>' + escapeHtml(ev.subtype || '') + (ev.model ? ' &middot; ' + escapeHtml(ev.model) : '') + (ev.session ? ' &middot; ' + escapeHtml(ev.session) : '') + '</span>';
+        }
       } else if (ev.type === 'user_text') {
         // If this matches an outstanding optimistic send, drop the pending stub
         // (the real event lands in its place below).
@@ -13929,6 +13975,11 @@
     // Re-anchor the inline live-tool indicator at the bottom; new events
     // just appended would otherwise push past it.
     if (typeof updateLiveToolStrip === 'function') updateLiveToolStrip();
+    const compactBoundary = events.find(e => e && e.type === 'system' && e.subtype === 'compact_boundary');
+    if (compactBoundary) {
+      const sid = compactBoundary.session || (currentSession && currentSession.id) || '';
+      if (sid && currentSession && currentSession.id === sid) fetchSessionUsage(sid);
+    }
     // Same story for the spawn-log streaming bubble — keep it pinned to
     // the tail so it doesn't end up sandwiched between older JSONL events
     // and newer ones.
