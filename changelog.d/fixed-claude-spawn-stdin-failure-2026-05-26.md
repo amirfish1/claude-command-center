@@ -1,1 +1,1 @@
-Claude spawns now fail closed if CCC cannot write the initial prompt to stdin, preventing live-but-empty sessions.
+Claude spawns now wait longer for large initial prompts to enter stdin and fail closed if that write still fails, preventing live-but-empty sessions.

@@ -16004,7 +16004,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     # Note: headless `claude -p` doesn't support TUI slash commands like /rename
     # or /color — they're treated as unknown skills. Tab naming/coloring only
     # happens when the user "jumps" into the TUI (see launch_terminal_for_session).
-    prompt_written = _write_stream_json_user_message(entry, prompt)
+    prompt_written = _write_stream_json_user_message(entry, prompt, timeout=30)
     if not prompt_written:
         message = "Claude Code started, but CCC could not write the initial prompt to stdin."
         _write_spawn_error_event(log_fh, "spawn_stdin_unavailable", message)
@@ -16331,10 +16331,10 @@ def _write_via_pipe(proc, line_bytes):
     return _write_fd_nonblocking(fd, line_bytes)
 
 
-def _write_via_spawn_fd(target, line):
+def _write_via_spawn_fd(target, line, timeout=0.25):
     fd = target.get("stdin_fd")
     if fd is not None:
-        if _write_fd_nonblocking(fd, line):
+        if _write_fd_nonblocking(fd, line, timeout=timeout):
             return True
         # Cached fd is either broken or not accepting input. Drop it so
         # the next attempt reopens the FIFO instead of wedging on the old fd.
@@ -16345,14 +16345,14 @@ def _write_via_spawn_fd(target, line):
     if fifo:
         new_fd = _open_fifo_writer(fifo)
         if new_fd is not None:
-            if _write_fd_nonblocking(new_fd, line):
+            if _write_fd_nonblocking(new_fd, line, timeout=timeout):
                 target["stdin_fd"] = new_fd
                 return True
             _close_fd_quiet(new_fd)
     return False
 
 
-def _write_stream_json_user_message(target, text):
+def _write_stream_json_user_message(target, text, timeout=0.25):
     """Emit a stream-json user message to a running headless claude.
 
     `target` can be:
@@ -16373,7 +16373,7 @@ def _write_stream_json_user_message(target, text):
     line = (json.dumps(msg) + "\n").encode("utf-8")
 
     if isinstance(target, dict):
-        if _write_via_spawn_fd(target, line):
+        if _write_via_spawn_fd(target, line, timeout=timeout):
             return True
         return _write_via_pipe(target.get("proc"), line)
 
@@ -16522,7 +16522,7 @@ def resume_session_headless(session_id, text):
         "fifo": fifo_path,
         "stdin_fd": stdin_fd,
     }
-    ok = _write_stream_json_user_message(entry, text)
+    ok = _write_stream_json_user_message(entry, text, timeout=30)
     if not ok:
         message = "Claude Code started, but CCC could not write the resume prompt to stdin."
         _write_spawn_error_event(log_fh, "spawn_stdin_unavailable", message)
