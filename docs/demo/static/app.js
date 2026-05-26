@@ -11755,6 +11755,98 @@
     return parts.slice(-2).join('/');
   }
 
+  function joinCompactList(items, maxItems) {
+    const unique = Array.from(new Set((items || []).filter(Boolean)));
+    const max = Math.max(1, Number(maxItems) || 3);
+    const visible = unique.slice(0, max);
+    const extra = unique.length - visible.length;
+    if (!visible.length) return '';
+    let text = '';
+    if (visible.length === 1) text = visible[0];
+    else if (visible.length === 2) text = visible[0] + ' and ' + visible[1];
+    else text = visible.slice(0, -1).join(', ') + ', and ' + visible[visible.length - 1];
+    return extra > 0 ? text + ' and ' + extra + ' more' : text;
+  }
+
+  function normalizedToolKey(name) {
+    return String(name || '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+  }
+
+  function toolActionKind(name) {
+    const key = normalizedToolKey(name);
+    if (['read', 'view_file', 'read_file', 'open_file'].includes(key)) return 'file-read';
+    if (['grep', 'grep_search', 'search', 'search_files', 'search_file_content', 'ripgrep', 'find_text'].includes(key)) return 'search';
+    if (['glob', 'glob_search', 'find_files', 'file_search'].includes(key)) return 'glob';
+    if (['list_dir', 'list_directory', 'ls', 'directory_list'].includes(key)) return 'list-dir';
+    if (['webfetch', 'web_fetch', 'fetch_url'].includes(key)) return 'web-fetch';
+    if (['websearch', 'web_search', 'search_web'].includes(key)) return 'web-search';
+    if (['todowrite', 'todo_write', 'update_todo', 'update_todos'].includes(key)) return 'todo';
+    if (['askuserquestion', 'ask_user_question'].includes(key)) return 'question';
+    if (['exitplanmode', 'exit_plan_mode'].includes(key)) return 'plan';
+    return '';
+  }
+
+  function uniqueToolDetails(calls) {
+    return Array.from(new Set((calls || []).map(tc => toolCallDetailText(tc)).filter(Boolean)));
+  }
+
+  function detailLooksLikePath(detail) {
+    return /[\/\\]/.test(String(detail || ''));
+  }
+
+  function detailLabel(detail) {
+    const value = String(detail || '').trim();
+    if (!value) return '';
+    return detailLooksLikePath(value) ? _pathBase(value) : value;
+  }
+
+  function summarizeToolActionCalls(kind, calls) {
+    const count = calls.length;
+    const details = uniqueToolDetails(calls);
+    const namedDetails = details.map(detailLabel).filter(Boolean);
+    const namedList = joinCompactList(namedDetails, 2);
+    if (kind === 'file-read') {
+      if (details.length === 1) return 'viewed ' + detailLabel(details[0]) + (count > 1 ? ' ' + count + ' times' : '');
+      if (details.length > 1) return 'viewed ' + details.length + ' files';
+      return count === 1 ? 'viewed a file' : 'viewed ' + count + ' files';
+    }
+    if (kind === 'search') {
+      if (details.length === 1) return 'searched ' + detailLabel(details[0]) + (count > 1 ? ' ' + count + ' times' : '');
+      return count === 1 ? 'searched code' : 'searched code ' + count + ' times';
+    }
+    if (kind === 'glob') return count === 1 ? 'matched files' : 'matched files ' + count + ' times';
+    if (kind === 'list-dir') {
+      if (namedList) return 'listed ' + namedList;
+      return count === 1 ? 'listed a folder' : 'listed ' + count + ' folders';
+    }
+    if (kind === 'web-fetch') return count === 1 ? 'fetched a URL' : 'fetched ' + count + ' URLs';
+    if (kind === 'web-search') return count === 1 ? 'searched the web' : 'searched the web ' + count + ' times';
+    if (kind === 'todo') return 'updated todos';
+    if (kind === 'question') return count === 1 ? 'asked a question' : 'asked ' + count + ' questions';
+    if (kind === 'plan') return 'updated plan state';
+    return '';
+  }
+
+  function readableToolName(name) {
+    return String(name || 'tool').replace(/_/g, ' ');
+  }
+
+  function summarizeNamedToolCalls(calls) {
+    const counts = {};
+    for (const tc of calls || []) {
+      const name = readableToolName(toolCallName(tc));
+      if (!name) continue;
+      counts[name] = (counts[name] || 0) + 1;
+    }
+    const labels = Object.keys(counts).sort().map(name => {
+      const n = counts[name];
+      return n > 1 ? String(n) + ' ' + name + ' calls' : name;
+    });
+    return labels.length ? 'used ' + joinCompactList(labels, 3) : '';
+  }
+
   function formatToolCallDetail(name, detail) {
     const full = String(detail || '').trim();
     if (!full) return { display: '', full: '', className: '' };
@@ -11959,9 +12051,27 @@
       if (commands.length) {
         parts.push(commands.length === 1 ? 'ran shell command' : 'ran ' + commands.length + ' shell commands');
       }
-      const accounted = edits.length + commands.length;
-      const other = Math.max(0, calls.length - accounted);
-      if (other) parts.push('ran ' + other + ' other tool' + (other === 1 ? '' : 's'));
+      const remaining = calls.filter(tc =>
+        !isEditToolName(toolCallName(tc))
+        && !isCommandActivityTool(toolCallName(tc))
+      );
+      const kindBuckets = {};
+      const namedRemainder = [];
+      for (const tc of remaining) {
+        const kind = toolActionKind(toolCallName(tc));
+        if (kind) {
+          if (!kindBuckets[kind]) kindBuckets[kind] = [];
+          kindBuckets[kind].push(tc);
+        } else {
+          namedRemainder.push(tc);
+        }
+      }
+      for (const kind of Object.keys(kindBuckets).sort()) {
+        const summary = summarizeToolActionCalls(kind, kindBuckets[kind]);
+        if (summary) parts.push(summary);
+      }
+      const namedSummary = summarizeNamedToolCalls(namedRemainder);
+      if (namedSummary) parts.push(namedSummary);
       label.textContent = parts.length ? parts.join('; ') : 'Ran ' + count + ' commands';
     } else {
       label.textContent = 'Ran ' + count + ' commands';

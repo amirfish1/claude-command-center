@@ -13922,6 +13922,97 @@
     return extra > 0 ? text + ' and ' + extra + ' more' : text;
   }
 
+  function normalizedToolKey(name) {
+    return toolDisplayName(name)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+  }
+
+  function toolActionKind(name) {
+    const key = normalizedToolKey(name);
+    if ([
+      'read', 'view_file', 'read_file', 'open_file',
+    ].includes(key)) return 'file-read';
+    if ([
+      'grep', 'grep_search', 'search', 'search_files', 'search_file_content',
+      'ripgrep', 'find_text',
+    ].includes(key)) return 'search';
+    if (['glob', 'glob_search', 'find_files', 'file_search'].includes(key)) return 'glob';
+    if (['list_dir', 'list_directory', 'ls', 'directory_list'].includes(key)) return 'list-dir';
+    if (['webfetch', 'web_fetch', 'fetch_url'].includes(key)) return 'web-fetch';
+    if (['websearch', 'web_search', 'search_web'].includes(key)) return 'web-search';
+    if (['todowrite', 'todo_write', 'update_todo', 'update_todos'].includes(key)) return 'todo';
+    if (['askuserquestion', 'ask_user_question'].includes(key)) return 'question';
+    if (['exitplanmode', 'exit_plan_mode'].includes(key)) return 'plan';
+    return '';
+  }
+
+  function uniqueToolDetails(calls) {
+    return Array.from(new Set((calls || []).map(tc => toolCallDetailText(tc)).filter(Boolean)));
+  }
+
+  function detailLooksLikePath(detail) {
+    return /[\/\\]/.test(String(detail || ''));
+  }
+
+  function detailLabel(detail) {
+    const value = String(detail || '').trim();
+    if (!value) return '';
+    return detailLooksLikePath(value) ? _pathBase(value) : value;
+  }
+
+  function summarizeToolActionCalls(kind, calls) {
+    const count = calls.length;
+    const details = uniqueToolDetails(calls);
+    const namedDetails = details.map(detailLabel).filter(Boolean);
+    const namedList = joinCompactList(namedDetails, 2);
+    if (kind === 'file-read') {
+      if (details.length === 1) return 'viewed ' + detailLabel(details[0]) + (count > 1 ? ' ' + count + ' times' : '');
+      if (details.length > 1) return 'viewed ' + details.length + ' files';
+      return count === 1 ? 'viewed a file' : 'viewed ' + count + ' files';
+    }
+    if (kind === 'search') {
+      if (details.length === 1) return 'searched ' + detailLabel(details[0]) + (count > 1 ? ' ' + count + ' times' : '');
+      return count === 1 ? 'searched code' : 'searched code ' + count + ' times';
+    }
+    if (kind === 'glob') {
+      return count === 1 ? 'matched files' : 'matched files ' + count + ' times';
+    }
+    if (kind === 'list-dir') {
+      if (namedList) return 'listed ' + namedList;
+      return count === 1 ? 'listed a folder' : 'listed ' + count + ' folders';
+    }
+    if (kind === 'web-fetch') {
+      return count === 1 ? 'fetched a URL' : 'fetched ' + count + ' URLs';
+    }
+    if (kind === 'web-search') {
+      return count === 1 ? 'searched the web' : 'searched the web ' + count + ' times';
+    }
+    if (kind === 'todo') return 'updated todos';
+    if (kind === 'question') return count === 1 ? 'asked a question' : 'asked ' + count + ' questions';
+    if (kind === 'plan') return 'updated plan state';
+    return '';
+  }
+
+  function readableToolName(name) {
+    return toolDisplayName(name).replace(/_/g, ' ');
+  }
+
+  function summarizeNamedToolCalls(calls) {
+    const counts = {};
+    for (const tc of calls || []) {
+      const name = readableToolName(toolCallName(tc));
+      if (!name) continue;
+      counts[name] = (counts[name] || 0) + 1;
+    }
+    const labels = Object.keys(counts).sort().map(name => {
+      const n = counts[name];
+      return n > 1 ? String(n) + ' ' + name + ' calls' : name;
+    });
+    return labels.length ? 'used ' + joinCompactList(labels, 3) : '';
+  }
+
   function _codeLangForPath(path) {
     const clean = String(path || '').split(/[?#]/)[0].toLowerCase();
     const m = /\.([a-z0-9]+)$/.exec(clean);
@@ -14060,9 +14151,28 @@
         const n = sourceCounts[source];
         parts.push('used ' + n + ' ' + source + ' tool' + (n === 1 ? '' : 's'));
       }
-      const accounted = edits.length + commands.length + sourcedTools.length;
-      const other = Math.max(0, calls.length - accounted);
-      if (other) parts.push('ran ' + other + ' other tool' + (other === 1 ? '' : 's'));
+      const categorizedTools = calls.filter(tc =>
+        !isEditToolName(toolCallName(tc))
+        && !isCommandActivityTool(toolCallName(tc))
+        && !toolCallSource(tc)
+      );
+      const kindBuckets = {};
+      const namedRemainder = [];
+      for (const tc of categorizedTools) {
+        const kind = toolActionKind(toolCallName(tc));
+        if (kind) {
+          if (!kindBuckets[kind]) kindBuckets[kind] = [];
+          kindBuckets[kind].push(tc);
+        } else {
+          namedRemainder.push(tc);
+        }
+      }
+      for (const kind of Object.keys(kindBuckets).sort()) {
+        const summary = summarizeToolActionCalls(kind, kindBuckets[kind]);
+        if (summary) parts.push(summary);
+      }
+      const namedSummary = summarizeNamedToolCalls(namedRemainder);
+      if (namedSummary) parts.push(namedSummary);
       const text = parts.length ? parts.join('; ') : 'Ran ' + count + ' commands';
       label.textContent = text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
     } else {
@@ -19190,9 +19300,9 @@
     const text = annContextForClipboard(ann);
     if (!text) return;
     try {
-      if (typeof closeFn === 'function') closeFn();
       if (typeof enterNewSessionMode !== 'function') throw new Error('new session mode is unavailable');
       enterNewSessionMode(text);
+      if (typeof closeFn === 'function') closeFn();
       showOpToast('Annotation loaded into new session', 'success');
     } catch (err) {
       if (errEl) {
@@ -19215,7 +19325,7 @@
       '<div class="ann-editor-error" hidden></div>' +
       '<div class="ann-editor-actions">' +
         '<button type="button" class="ann-btn" data-ann-cancel>Cancel</button>' +
-        '<button type="button" class="ann-btn" data-ann-open-session hidden>Open new session</button>' +
+        '<button type="button" class="ann-btn" data-ann-open-session>Open new session</button>' +
         '<button type="button" class="ann-btn ann-primary" data-ann-save>Save</button>' +
       '</div>';
     annotationState.overlay.appendChild(editor);
@@ -19237,21 +19347,19 @@
         errEl.hidden = false;
       }
     };
-    const save = async () => {
-      if (savedAnnotation) {
-        await copySaved();
-        return;
-      }
+    const persistAnnotation = async (busyLabel) => {
+      if (savedAnnotation) return savedAnnotation;
       const note = noteEl.value.trim();
       if (!note) {
         errEl.textContent = 'Note is required.';
         errEl.hidden = false;
         noteEl.focus();
-        return;
+        return null;
       }
       errEl.hidden = true;
       saveBtn.disabled = true;
-      saveBtn.textContent = 'Saving…';
+      if (openSessionBtn) openSessionBtn.disabled = true;
+      saveBtn.textContent = busyLabel || 'Saving…';
       if (annotationState && annotationState.overlay) {
         annotationState.overlay.classList.add('ann-capturing');
         await annNextPaint();
@@ -19267,24 +19375,37 @@
         savedAnnotation = data.annotation;
         noteEl.disabled = true;
         if (cancelBtn) cancelBtn.hidden = true;
-        if (openSessionBtn) openSessionBtn.hidden = false;
+        if (openSessionBtn) openSessionBtn.disabled = false;
         saveBtn.disabled = false;
         saveBtn.textContent = 'Copy';
         showOpToast('Annotation saved', 'success');
+        return savedAnnotation;
       } catch (err) {
         errEl.textContent = 'Save failed: ' + ((err && err.message) || 'unknown');
         errEl.hidden = false;
         saveBtn.disabled = false;
+        if (openSessionBtn) openSessionBtn.disabled = false;
         saveBtn.textContent = 'Save';
+        return null;
       } finally {
         if (annotationState && annotationState.overlay) {
           annotationState.overlay.classList.remove('ann-capturing');
         }
       }
     };
+    const save = async () => {
+      if (savedAnnotation) {
+        await copySaved();
+        return;
+      }
+      await persistAnnotation('Saving…');
+    };
     if (cancelBtn) cancelBtn.addEventListener('click', annStop);
     if (openSessionBtn) {
-      openSessionBtn.addEventListener('click', () => annOpenNewSessionWithContext(savedAnnotation, annStop, errEl));
+      openSessionBtn.addEventListener('click', async () => {
+        const ann = await persistAnnotation('Saving…');
+        if (ann) annOpenNewSessionWithContext(ann, annStop, errEl);
+      });
     }
     saveBtn.addEventListener('click', save);
     noteEl.addEventListener('keydown', (e) => {
@@ -19392,7 +19513,7 @@
         '<div class="ann-editor-error" hidden></div>' +
         '<div class="ann-editor-actions">' +
           '<button type="button" class="ann-btn" data-ann-screen-close data-ann-screen-cancel>Cancel</button>' +
-          '<button type="button" class="ann-btn" data-ann-screen-open-session hidden>Open new session</button>' +
+          '<button type="button" class="ann-btn" data-ann-screen-open-session>Open new session</button>' +
           '<button type="button" class="ann-btn ann-primary" data-ann-screen-save>Save</button>' +
         '</div>' +
       '</div>';
@@ -19417,21 +19538,19 @@
         errEl.hidden = false;
       }
     };
-    const save = async () => {
-      if (savedAnnotation) {
-        await copySaved();
-        return;
-      }
+    const persistAnnotation = async (busyLabel) => {
+      if (savedAnnotation) return savedAnnotation;
       const note = noteEl.value.trim();
       if (!note) {
         errEl.textContent = 'Note is required.';
         errEl.hidden = false;
         noteEl.focus();
-        return;
+        return null;
       }
       errEl.hidden = true;
       saveBtn.disabled = true;
-      saveBtn.textContent = 'Saving…';
+      if (openSessionBtn) openSessionBtn.disabled = true;
+      saveBtn.textContent = busyLabel || 'Saving…';
       const payload = {
         note,
         source: 'screen-capture',
@@ -19453,19 +19572,32 @@
         savedAnnotation = data.annotation;
         noteEl.disabled = true;
         if (cancelBtn) cancelBtn.hidden = true;
-        if (openSessionBtn) openSessionBtn.hidden = false;
+        if (openSessionBtn) openSessionBtn.disabled = false;
         saveBtn.disabled = false;
         saveBtn.textContent = 'Copy';
         showOpToast('Screen annotation saved', 'success');
+        return savedAnnotation;
       } catch (err) {
         errEl.textContent = 'Save failed: ' + ((err && err.message) || 'unknown');
         errEl.hidden = false;
         saveBtn.disabled = false;
+        if (openSessionBtn) openSessionBtn.disabled = false;
         saveBtn.textContent = 'Save';
+        return null;
       }
     };
+    const save = async () => {
+      if (savedAnnotation) {
+        await copySaved();
+        return;
+      }
+      await persistAnnotation('Saving…');
+    };
     if (openSessionBtn) {
-      openSessionBtn.addEventListener('click', () => annOpenNewSessionWithContext(savedAnnotation, close, errEl));
+      openSessionBtn.addEventListener('click', async () => {
+        const ann = await persistAnnotation('Saving…');
+        if (ann) annOpenNewSessionWithContext(ann, close, errEl);
+      });
     }
     saveBtn.addEventListener('click', save);
     noteEl.addEventListener('keydown', (e) => {
@@ -19513,6 +19645,8 @@
     if (ann.url) anchors.push('URL: ' + ann.url);
     if (ann.title) anchors.push('Title: ' + annClipText(ann.title, 160));
     if (ann.created_at) anchors.push('Created: ' + ann.created_at);
+    if (ann.session_id) anchors.push('Session ID: ' + ann.session_id);
+    if (ann.repo_path) anchors.push('Repo path: ' + ann.repo_path);
     if (element.selector) anchors.push('Selector: ' + annClipText(element.selector, 260));
     if (element.text) anchors.push('Element: ' + annClipText(element.text, 260));
     if (ann.rect && (ann.rect.width || ann.rect.height)) anchors.push('Viewport rect: ' + JSON.stringify(ann.rect));

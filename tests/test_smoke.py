@@ -172,6 +172,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("data-ann-open-session", app_js)
         self.assertIn("function annOpenNewSessionWithContext", app_js)
         self.assertIn("enterNewSessionMode(text)", app_js)
+        self.assertIn("Session ID: ", app_js)
+        self.assertIn("persistAnnotation", app_js)
+        self.assertNotIn("other tool", app_js.lower())
 
 
 class TestPrStateResolution(unittest.TestCase):
