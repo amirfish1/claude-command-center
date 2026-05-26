@@ -1,0 +1,1 @@
+- Automatically expand collapsed folder groups in the conversation list when a search query is active, ensuring matching sessions are not hidden.

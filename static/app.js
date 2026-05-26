@@ -8313,6 +8313,8 @@
     const _folderGroupStorageKey = (section, key) =>
       'ccc-folder-group-collapsed:' + section + ':' + String(key || '').slice(0, 180);
     const _isFolderGroupCollapsed = (section, key) => {
+      const qActive = !!(document.getElementById('convSearch')?.value || '').trim();
+      if (qActive) return false;
       try { return localStorage.getItem(_folderGroupStorageKey(section, key)) === '1'; }
       catch (_) { return false; }
     };
