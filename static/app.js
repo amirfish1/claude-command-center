@@ -7136,6 +7136,7 @@
   function renderConversationList(convs) {
     convs = filterGhIssues(convs);
     convs = (Array.isArray(convs) ? convs : []).filter(c => !_isOptimisticallyStartedIssueRow(c));
+    convs = _prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || '');
     _applyOptimisticTouches(convs);
     if (!convs.length) {
       $convList.innerHTML =
@@ -7188,8 +7189,15 @@
     const _ghIssueConvs = [];
     const _readyToMergeConvs = [];
     const _archivedConvs = [];
+    const _idSearchConvs = [];
     const _inGroupChatIds = new Set(_gcActiveChats.flatMap(c => c.session_ids || []));
     for (const c of convs) {
+      // A UUID/prefix/substring search is a direct lookup; keep it above
+      // pipeline sections and history-index matches.
+      if (Number.isFinite(c && c._idSearchRank)) {
+        _idSearchConvs.push(c);
+        continue;
+      }
       const col = classifyKanbanColumn(c);
       if (col === 'archived') { _archivedConvs.push(c); continue; }
       if (col === 'backlog') { _ghIssueConvs.push(c); continue; }
@@ -7802,6 +7810,9 @@
       return visibleCards.map(c => _renderRow(c, opts)).join('')
         + _ghIssueShowMoreHtml(key, hiddenCount, expanded);
     };
+    const _idSearchRowsHtml = _idSearchConvs.length
+      ? _idSearchConvs.map(c => _renderRow(c)).join('')
+      : '';
 
     // Group-chat ITEMS — each chat becomes one sortable item with its
     // own mtime, so the In Progress list can interleave chats with
@@ -8287,7 +8298,7 @@
         if (id) _flipBefore.set(id, row.getBoundingClientRect().top);
       }
     }
-    $convList.innerHTML = _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
+    $convList.innerHTML = _idSearchRowsHtml + _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
     if (_flipBefore.size > 0 && !document.hidden) {
       const _flipNewRows = $convList.querySelectorAll('[data-id]');
       const _flipMoves = [];
@@ -9231,6 +9242,49 @@
     if (!c || !c.pinned) return [1, 0];
     const rank = Number(c.pin_rank);
     return [0, Number.isFinite(rank) ? rank : 0];
+  }
+
+  function _uuidSearchNeedle(q) {
+    const raw = String(q || '').trim().toLowerCase();
+    if (raw.length < 4) return null;
+    const compact = raw.replace(/-/g, '');
+    if (compact.length < 4 || !/^[0-9a-f]+$/.test(compact)) return null;
+    return { raw, compact };
+  }
+
+  function _sessionIdSearchRank(c, needle) {
+    if (!c || !needle) return Infinity;
+    let best = Infinity;
+    for (const rawId of [c.session_id, c.id]) {
+      if (!rawId) continue;
+      const id = String(rawId).toLowerCase();
+      const compact = id.replace(/-/g, '');
+      if (id === needle.raw || compact === needle.compact) best = Math.min(best, 0);
+      else if (id.startsWith(needle.raw) || compact.startsWith(needle.compact)) best = Math.min(best, 1);
+      else if (id.includes(needle.raw) || compact.includes(needle.compact)) best = Math.min(best, 2);
+    }
+    return best;
+  }
+
+  function _prioritizeSessionIdMatches(data, qLower) {
+    const rows = Array.isArray(data) ? data : [];
+    const needle = _uuidSearchNeedle(qLower);
+    const ranked = rows.map((row, idx) => {
+      const rank = _sessionIdSearchRank(row, needle);
+      if (row) {
+        if (Number.isFinite(rank)) row._idSearchRank = rank;
+        else if (row._idSearchRank !== undefined) delete row._idSearchRank;
+      }
+      return { row, idx, rank };
+    });
+    if (!needle || !ranked.some(item => Number.isFinite(item.rank))) return rows;
+    ranked.sort((a, b) => {
+      const ar = Number.isFinite(a.rank) ? a.rank : Infinity;
+      const br = Number.isFinite(b.rank) ? b.rank : Infinity;
+      if (ar !== br) return ar - br;
+      return a.idx - b.idx;
+    });
+    return ranked.map(item => item.row);
   }
 
   function applyConvSort(data) {
@@ -14054,7 +14108,7 @@
         || (c.session_id || '').toLowerCase().includes(q)
         || (c.id || '').toLowerCase().includes(q);
     });
-    const sorted = applyConvSort(filtered);
+    const sorted = _prioritizeSessionIdMatches(applyConvSort(filtered), q);
     return _decorateWithHistoryMatches(sorted, q);
   }
 
@@ -14142,7 +14196,7 @@
     // History-only rows trail the local matches. Within themselves they
     // keep history-search BM25 order (already sorted by score in the
     // server response, so insertion order suffices).
-    return localSorted.concat(synthetic);
+    return _prioritizeSessionIdMatches(localSorted.concat(synthetic), qLower);
   }
 
   function _fetchHistoryAugment(query) {
@@ -16760,7 +16814,7 @@
     // Also keep conversationsData in sync so downstream code (selection
     // restore, etc.) sees a non-empty list while in archive mode. This
     // gets reset on toggle-off via loadConversationList().
-    conversationsData = applyConvSort(_applyOptimisticTouches(rowsForRender));
+    conversationsData = _prioritizeSessionIdMatches(applyConvSort(_applyOptimisticTouches(rowsForRender)), q);
 
     // Make sure the active sidebar mode stays active. Archive refreshes run on
     // search and on the 10s poll; if the board is open, refresh its cards
