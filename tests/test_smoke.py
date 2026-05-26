@@ -98,6 +98,78 @@ class TestServerImports(unittest.TestCase):
             self.assertFalse(server.MORNING_ENABLED,
                              "MORNING_ENABLED must be False when plugin missing")
 
+    def test_page_annotation_is_bounded_and_persisted(self):
+        """Browser annotations should store local context without requiring
+        screenshot support or touching the real user state directory."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server.ANNOTATIONS_FILE
+            old_dir = server.ANNOTATION_SCREENSHOT_DIR
+            server.ANNOTATIONS_FILE = pathlib.Path(td) / "annotations.json"
+            server.ANNOTATION_SCREENSHOT_DIR = pathlib.Path(td) / "annotation-screenshots"
+            try:
+                result = server.create_annotation({
+                    "note": "Check this button state",
+                    "url": "http://127.0.0.1:8090/",
+                    "title": "Claude Command Center",
+                    "rect": {"x": 10, "y": 20, "width": 120, "height": 32},
+                    "document_rect": {"x": 10, "y": 200, "width": 120, "height": 32},
+                    "viewport": {"width": 1440, "height": 900, "device_pixel_ratio": 2},
+                    "element": {
+                        "tag": "button",
+                        "selector": "#annotationStartBtn",
+                        "text": "Annotate",
+                    },
+                    "nearby_text": "surrounding context",
+                    "html_excerpt": "<button>" + ("x" * 9000) + "</button>",
+                    "capture_screen": False,
+                })
+                self.assertTrue(result["ok"])
+                saved = server.list_annotations(limit=10)
+                self.assertEqual(saved["count"], 1)
+                ann = saved["annotations"][0]
+                self.assertEqual(ann["note"], "Check this button state")
+                self.assertEqual(ann["element"]["selector"], "#annotationStartBtn")
+                self.assertLessEqual(len(ann["html_excerpt"]), 8001)
+                self.assertNotIn("screenshot_path", ann)
+            finally:
+                server.ANNOTATIONS_FILE = old_file
+                server.ANNOTATION_SCREENSHOT_DIR = old_dir
+
+    def test_screen_annotation_saves_local_screenshot(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server.ANNOTATIONS_FILE
+            old_dir = server.ANNOTATION_SCREENSHOT_DIR
+            server.ANNOTATIONS_FILE = pathlib.Path(td) / "annotations.json"
+            server.ANNOTATION_SCREENSHOT_DIR = pathlib.Path(td) / "annotation-screenshots"
+            try:
+                result = server.create_annotation({
+                    "note": "Look at this screen region",
+                    "source": "screen-capture",
+                    "screenshot_b64": "dGVzdC1pbWFnZS1ieXRlcw==",
+                })
+                self.assertTrue(result["ok"])
+                ann = result["annotation"]
+                self.assertEqual(ann["source"], "screen-capture")
+                shot = pathlib.Path(ann["screenshot_path"])
+                self.assertTrue(shot.is_file())
+                self.assertEqual(shot.read_bytes(), b"test-image-bytes")
+            finally:
+                server.ANNOTATIONS_FILE = old_file
+                server.ANNOTATION_SCREENSHOT_DIR = old_dir
+
+    def test_annotation_notes_render_screenshots(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("ann-note-shot", app_js)
+        self.assertIn("/api/local-image?path=", app_js)
+
 
 class TestPrStateResolution(unittest.TestCase):
     def setUp(self):

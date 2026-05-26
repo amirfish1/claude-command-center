@@ -18316,6 +18316,660 @@
     }
   });
 
+  // ── Page annotations ───────────────────────────────────────────
+  // Browser-page MVP: mark a region or element, write a local note, and
+  // persist URL/selector/rect/text anchors for agent handoff.
+  const $annotationStartBtn = document.getElementById('annotationStartBtn');
+  const $annotationScreenBtn = document.getElementById('annotationScreenBtn');
+  const $annotationNotesBtn = document.getElementById('annotationNotesBtn');
+  let annotationState = null;
+
+  function annCssEscape(value) {
+    const s = String(value == null ? '' : value);
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(s);
+    return s.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+  }
+
+  function annText(value, maxLen) {
+    const s = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+    if (!maxLen || s.length <= maxLen) return s;
+    return s.slice(0, maxLen).trim() + '…';
+  }
+
+  function annSelectorFor(el) {
+    if (!el || !el.tagName) return '';
+    if (el.id) return '#' + annCssEscape(el.id);
+    const parts = [];
+    let cur = el;
+    while (cur && cur.nodeType === 1 && cur !== document.body && cur !== document.documentElement && parts.length < 7) {
+      let part = cur.tagName.toLowerCase();
+      if (cur.classList && cur.classList.length) {
+        part += '.' + Array.from(cur.classList).slice(0, 2).map(annCssEscape).join('.');
+      }
+      const parent = cur.parentElement;
+      if (parent) {
+        const sameTag = Array.from(parent.children).filter(ch => ch.tagName === cur.tagName);
+        if (sameTag.length > 1) part += ':nth-of-type(' + (sameTag.indexOf(cur) + 1) + ')';
+      }
+      parts.unshift(part);
+      cur = parent;
+    }
+    return parts.join(' > ') || el.tagName.toLowerCase();
+  }
+
+  function annElementText(el) {
+    if (!el) return '';
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') {
+      return annText(el.value || el.getAttribute('placeholder') || '', 2000);
+    }
+    if (tag === 'select') {
+      return annText(el.options && el.selectedIndex >= 0 ? el.options[el.selectedIndex].text : '', 2000);
+    }
+    return annText(el.innerText || el.textContent || '', 2000);
+  }
+
+  function annRectObject(rect) {
+    return {
+      x: Math.round(rect.left * 100) / 100,
+      y: Math.round(rect.top * 100) / 100,
+      width: Math.round(rect.width * 100) / 100,
+      height: Math.round(rect.height * 100) / 100,
+    };
+  }
+
+  function annElementSummary(el) {
+    if (!el || !el.tagName) return {};
+    const rect = el.getBoundingClientRect();
+    return {
+      tag: el.tagName.toLowerCase(),
+      id: el.id || '',
+      class: el.className && typeof el.className === 'string' ? annText(el.className, 512) : '',
+      role: el.getAttribute('role') || '',
+      aria_label: el.getAttribute('aria-label') || '',
+      selector: annSelectorFor(el),
+      href: el.getAttribute('href') || '',
+      src: el.getAttribute('src') || '',
+      text: annElementText(el),
+      rect: annRectObject(rect),
+    };
+  }
+
+  function annNormalizeRect(a, b) {
+    const left = Math.max(0, Math.min(a.x, b.x));
+    const top = Math.max(0, Math.min(a.y, b.y));
+    const right = Math.min(window.innerWidth, Math.max(a.x, b.x));
+    const bottom = Math.min(window.innerHeight, Math.max(a.y, b.y));
+    return { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+  }
+
+  function annSelectionRectForElement(el, x, y) {
+    if (!el || !el.getBoundingClientRect || el === document.body || el === document.documentElement) {
+      return {
+        x: Math.max(0, x - 40),
+        y: Math.max(0, y - 24),
+        width: Math.min(80, window.innerWidth),
+        height: Math.min(48, window.innerHeight),
+      };
+    }
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) {
+      return { x: Math.max(0, x - 40), y: Math.max(0, y - 24), width: 80, height: 48 };
+    }
+    return {
+      x: Math.max(0, r.left),
+      y: Math.max(0, r.top),
+      width: Math.min(r.width, window.innerWidth - Math.max(0, r.left)),
+      height: Math.min(r.height, window.innerHeight - Math.max(0, r.top)),
+    };
+  }
+
+  function annIntersects(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
+
+  function annCollectNearbyText(rect) {
+    const region = {
+      left: Math.max(0, rect.x - 140),
+      top: Math.max(0, rect.y - 140),
+      right: Math.min(window.innerWidth, rect.x + rect.width + 140),
+      bottom: Math.min(window.innerHeight, rect.y + rect.height + 140),
+    };
+    const out = [];
+    const seen = new Set();
+    const nodes = Array.from(document.body ? document.body.querySelectorAll('a,button,input,textarea,select,label,p,h1,h2,h3,h4,li,td,th,[role],code,pre,.conv-title,.conv-last,.user-msg,.assistant-text') : []);
+    for (const el of nodes) {
+      if (annotationState && annotationState.overlay && annotationState.overlay.contains(el)) continue;
+      if (el.closest && el.closest('#annotationNotesModal,#annotationScreenModal,.ann-overlay')) continue;
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height || !annIntersects(region, r)) continue;
+      const text = annText(annElementText(el), 320);
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      out.push(text);
+      if (out.join('\n').length > 1400 || out.length > 12) break;
+    }
+    return out.join('\n');
+  }
+
+  function annElementAtPoint(x, y) {
+    if (!annotationState || !annotationState.overlay) return document.elementFromPoint(x, y);
+    const overlay = annotationState.overlay;
+    const prev = overlay.style.pointerEvents;
+    overlay.style.pointerEvents = 'none';
+    let el = null;
+    try { el = document.elementFromPoint(x, y); } finally { overlay.style.pointerEvents = prev; }
+    return el;
+  }
+
+  function annUpdateSelection(rect) {
+    if (!annotationState || !annotationState.selectionEl) return;
+    const el = annotationState.selectionEl;
+    el.style.left = rect.x + 'px';
+    el.style.top = rect.y + 'px';
+    el.style.width = rect.width + 'px';
+    el.style.height = rect.height + 'px';
+    el.hidden = false;
+  }
+
+  function annUpdateHoverLabel(rect, target) {
+    if (!annotationState || !annotationState.hoverLabelEl) return;
+    const labelEl = annotationState.hoverLabelEl;
+    if (!target || !target.tagName || annotationState.dragging || annotationState.editor) {
+      labelEl.hidden = true;
+      return;
+    }
+    const summary = annElementSummary(target);
+    const label = summary.selector || summary.tag || 'selected area';
+    labelEl.textContent = label.length > 90 ? label.slice(0, 89) + '…' : label;
+    const margin = 8;
+    let left = rect.x;
+    let top = rect.y - 28;
+    if (top < margin) top = rect.y + rect.height + margin;
+    const maxLeft = window.innerWidth - 280 - margin;
+    if (left > maxLeft) left = maxLeft;
+    if (left < margin) left = margin;
+    labelEl.style.left = left + 'px';
+    labelEl.style.top = top + 'px';
+    labelEl.hidden = false;
+  }
+
+  function annPreviewAtPoint(x, y) {
+    if (!annotationState || annotationState.dragging || annotationState.editor) return;
+    const target = annElementAtPoint(x, y);
+    const rect = annSelectionRectForElement(target, x, y);
+    annotationState.hoverElement = target;
+    annotationState.hoverRect = rect;
+    annUpdateSelection(rect);
+    annUpdateHoverLabel(rect, target);
+  }
+
+  function annEstimateScreenRect(rect) {
+    const outerW = window.outerWidth || window.innerWidth;
+    const outerH = window.outerHeight || window.innerHeight;
+    const borderX = Math.max(0, (outerW - window.innerWidth) / 2);
+    const chromeY = Math.max(0, (outerH - window.innerHeight) - borderX);
+    const sx = typeof window.screenX === 'number' ? window.screenX : (window.screenLeft || 0);
+    const sy = typeof window.screenY === 'number' ? window.screenY : (window.screenTop || 0);
+    return {
+      x: Math.round(sx + borderX + rect.x),
+      y: Math.round(sy + chromeY + rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      estimated: true,
+      window_screen_x: sx,
+      window_screen_y: sy,
+      outer_width: outerW,
+      outer_height: outerH,
+    };
+  }
+
+  function annBuildPayload(note) {
+    const rect = annotationState.rect;
+    const element = annotationState.element;
+    const docRect = {
+      x: Math.round((rect.x + window.scrollX) * 100) / 100,
+      y: Math.round((rect.y + window.scrollY) * 100) / 100,
+      width: Math.round(rect.width * 100) / 100,
+      height: Math.round(rect.height * 100) / 100,
+    };
+    const html = element && element.outerHTML ? annText(element.outerHTML, 8000) : '';
+    return {
+      note,
+      url: window.location.href,
+      title: document.title || '',
+      session_id: (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '',
+      repo_path: (typeof selectedRepoPath === 'function' && selectedRepoPath()) || '',
+      rect,
+      document_rect: docRect,
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        device_pixel_ratio: window.devicePixelRatio || 1,
+        scroll_x: window.scrollX,
+        scroll_y: window.scrollY,
+      },
+      screen: annEstimateScreenRect(rect),
+      element: annElementSummary(element),
+      selected_text: String(window.getSelection ? window.getSelection() : '').trim().slice(0, 2000),
+      nearby_text: annCollectNearbyText(rect),
+      html_excerpt: html,
+      capture_screen: true,
+    };
+  }
+
+  function annNextPaint() {
+    return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  }
+
+  function annStop() {
+    if (!annotationState) return;
+    if (annotationState.overlay) annotationState.overlay.remove();
+    document.removeEventListener('keydown', annHandleKeydown, true);
+    if ($annotationStartBtn) $annotationStartBtn.classList.remove('active');
+    annotationState = null;
+  }
+
+  function annPositionEditor(editor, rect) {
+    const margin = 12;
+    const w = Math.min(340, window.innerWidth - margin * 2);
+    editor.style.width = w + 'px';
+    let left = rect.x + rect.width + margin;
+    if (left + w > window.innerWidth - margin) left = Math.min(window.innerWidth - w - margin, rect.x);
+    if (left < margin) left = margin;
+    let top = rect.y + rect.height + margin;
+    const h = editor.offsetHeight || 220;
+    if (top + h > window.innerHeight - margin) top = Math.max(margin, rect.y - h - margin);
+    editor.style.left = left + 'px';
+    editor.style.top = top + 'px';
+  }
+
+  function annShowEditor() {
+    if (!annotationState || !annotationState.overlay) return;
+    if (annotationState.editor) annotationState.editor.remove();
+    const summary = annElementSummary(annotationState.element);
+    const editor = document.createElement('div');
+    editor.className = 'ann-editor';
+    editor.innerHTML =
+      '<div class="ann-editor-title">Annotation</div>' +
+      '<textarea class="ann-editor-note" rows="4" placeholder="Write a note for Claude…"></textarea>' +
+      '<div class="ann-editor-meta">' + escapeHtml(summary.selector || summary.tag || 'selected area') + '</div>' +
+      '<div class="ann-editor-error" hidden></div>' +
+      '<div class="ann-editor-actions">' +
+        '<button type="button" class="ann-btn" data-ann-cancel>Cancel</button>' +
+        '<button type="button" class="ann-btn ann-primary" data-ann-save>Save</button>' +
+      '</div>';
+    annotationState.overlay.appendChild(editor);
+    annotationState.editor = editor;
+    annPositionEditor(editor, annotationState.rect);
+    const noteEl = editor.querySelector('.ann-editor-note');
+    const errEl = editor.querySelector('.ann-editor-error');
+    const saveBtn = editor.querySelector('[data-ann-save]');
+    let savedAnnotation = null;
+    const copySaved = async () => {
+      if (!savedAnnotation) return;
+      try {
+        await navigator.clipboard.writeText(annContextForClipboard(savedAnnotation));
+        annStop();
+      } catch (_) {
+        errEl.textContent = 'Copy failed.';
+        errEl.hidden = false;
+      }
+    };
+    const save = async () => {
+      if (savedAnnotation) {
+        await copySaved();
+        return;
+      }
+      const note = noteEl.value.trim();
+      if (!note) {
+        errEl.textContent = 'Note is required.';
+        errEl.hidden = false;
+        noteEl.focus();
+        return;
+      }
+      errEl.hidden = true;
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+      if (annotationState && annotationState.overlay) {
+        annotationState.overlay.classList.add('ann-capturing');
+        await annNextPaint();
+      }
+      try {
+        const res = await fetch('/api/annotations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(annBuildPayload(note)),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+        savedAnnotation = data.annotation;
+        noteEl.disabled = true;
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Copy';
+        showOpToast('Annotation saved', 'success');
+      } catch (err) {
+        errEl.textContent = 'Save failed: ' + ((err && err.message) || 'unknown');
+        errEl.hidden = false;
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save';
+      } finally {
+        if (annotationState && annotationState.overlay) {
+          annotationState.overlay.classList.remove('ann-capturing');
+        }
+      }
+    };
+    editor.querySelector('[data-ann-cancel]').addEventListener('click', annStop);
+    saveBtn.addEventListener('click', save);
+    noteEl.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') save();
+      e.stopPropagation();
+    });
+    setTimeout(() => noteEl.focus(), 0);
+  }
+
+  function annPointerDown(e) {
+    if (!annotationState || e.target.closest('.ann-editor') || e.target.closest('.ann-hud')) return;
+    e.preventDefault();
+    annotationState.dragging = true;
+    annotationState.start = { x: e.clientX, y: e.clientY };
+    annotationState.rect = { x: e.clientX, y: e.clientY, width: 1, height: 1 };
+    if (annotationState.hoverLabelEl) annotationState.hoverLabelEl.hidden = true;
+    if (annotationState.editor) { annotationState.editor.remove(); annotationState.editor = null; }
+    annUpdateSelection(annotationState.rect);
+    try { annotationState.overlay.setPointerCapture(e.pointerId); } catch (_) {}
+  }
+
+  function annPointerMove(e) {
+    if (!annotationState) return;
+    if (!annotationState.dragging) {
+      if (e.target.closest('.ann-editor') || e.target.closest('.ann-hud')) return;
+      annPreviewAtPoint(e.clientX, e.clientY);
+      return;
+    }
+    e.preventDefault();
+    const rect = annNormalizeRect(annotationState.start, { x: e.clientX, y: e.clientY });
+    annotationState.rect = rect;
+    annUpdateSelection(rect);
+  }
+
+  function annPointerUp(e) {
+    if (!annotationState || !annotationState.dragging) return;
+    e.preventDefault();
+    annotationState.dragging = false;
+    const raw = annNormalizeRect(annotationState.start, { x: e.clientX, y: e.clientY });
+    const clicked = raw.width < 8 && raw.height < 8;
+    const target = annElementAtPoint(e.clientX, e.clientY);
+    annotationState.element = target;
+    annotationState.rect = clicked ? annSelectionRectForElement(target, e.clientX, e.clientY) : raw;
+    annUpdateSelection(annotationState.rect);
+    if (annotationState.hoverLabelEl) annotationState.hoverLabelEl.hidden = true;
+    annShowEditor();
+  }
+
+  function annHandleKeydown(e) {
+    if (e.key === 'Escape' && annotationState) {
+      e.preventDefault();
+      annStop();
+    }
+  }
+
+  function annStart() {
+    if (annotationState) { annStop(); return; }
+    const overlay = document.createElement('div');
+    overlay.className = 'ann-overlay';
+    overlay.innerHTML =
+      '<div class="ann-hud"><span>Mark area</span><button type="button" class="ann-hud-close" aria-label="Close annotation mode">&times;</button></div>' +
+      '<div class="ann-selection" hidden></div>' +
+      '<div class="ann-hover-label" hidden></div>';
+    document.body.appendChild(overlay);
+    annotationState = {
+      overlay,
+      selectionEl: overlay.querySelector('.ann-selection'),
+      hoverLabelEl: overlay.querySelector('.ann-hover-label'),
+      editor: null,
+      dragging: false,
+      start: null,
+      rect: null,
+      element: null,
+      hoverElement: null,
+      hoverRect: null,
+    };
+    overlay.addEventListener('pointerdown', annPointerDown);
+    overlay.addEventListener('pointermove', annPointerMove);
+    overlay.addEventListener('pointerup', annPointerUp);
+    overlay.querySelector('.ann-hud-close').addEventListener('click', annStop);
+    document.addEventListener('keydown', annHandleKeydown, true);
+    if ($annotationStartBtn) $annotationStartBtn.classList.add('active');
+  }
+
+  function annCloseScreenModal() {
+    const modal = document.getElementById('annotationScreenModal');
+    if (modal) modal.remove();
+  }
+
+  function annOpenScreenNote(capture) {
+    annCloseScreenModal();
+    const modal = document.createElement('div');
+    modal.id = 'annotationScreenModal';
+    modal.className = 'upd-overlay ann-screen-modal open';
+    const imgSrc = 'data:' + (capture.mime || 'image/png') + ';base64,' + capture.image_b64;
+    modal.innerHTML =
+      '<div class="upd-backdrop" data-ann-screen-close></div>' +
+      '<div class="upd-dialog ann-screen-dialog">' +
+        '<div class="ann-notes-header">' +
+          '<div class="upd-title">Screen Annotation</div>' +
+          '<button type="button" class="ann-icon-btn" data-ann-screen-close aria-label="Close screen annotation">&times;</button>' +
+        '</div>' +
+        '<img class="ann-screen-preview" alt="Selected screen region">' +
+        '<textarea class="ann-editor-note" rows="4" placeholder="Write a note for Claude…"></textarea>' +
+        '<div class="ann-editor-error" hidden></div>' +
+        '<div class="ann-editor-actions">' +
+          '<button type="button" class="ann-btn" data-ann-screen-close>Cancel</button>' +
+          '<button type="button" class="ann-btn ann-primary" data-ann-screen-save>Save</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    const previewImg = modal.querySelector('.ann-screen-preview');
+    if (previewImg) previewImg.src = imgSrc;
+    const noteEl = modal.querySelector('.ann-editor-note');
+    const errEl = modal.querySelector('.ann-editor-error');
+    const saveBtn = modal.querySelector('[data-ann-screen-save]');
+    const close = annCloseScreenModal;
+    modal.querySelectorAll('[data-ann-screen-close]').forEach(btn => btn.addEventListener('click', close));
+    let savedAnnotation = null;
+    const copySaved = async () => {
+      if (!savedAnnotation) return;
+      try {
+        await navigator.clipboard.writeText(annContextForClipboard(savedAnnotation));
+        close();
+      } catch (_) {
+        errEl.textContent = 'Copy failed.';
+        errEl.hidden = false;
+      }
+    };
+    const save = async () => {
+      if (savedAnnotation) {
+        await copySaved();
+        return;
+      }
+      const note = noteEl.value.trim();
+      if (!note) {
+        errEl.textContent = 'Note is required.';
+        errEl.hidden = false;
+        noteEl.focus();
+        return;
+      }
+      errEl.hidden = true;
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+      const payload = {
+        note,
+        source: 'screen-capture',
+        url: '',
+        title: 'Screen capture',
+        session_id: (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '',
+        repo_path: (typeof selectedRepoPath === 'function' && selectedRepoPath()) || '',
+        screenshot_b64: capture.image_b64,
+        nearby_text: 'Native screen capture annotation. Visual context is stored in screenshot_path.',
+      };
+      try {
+        const res = await fetch('/api/annotations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+        savedAnnotation = data.annotation;
+        noteEl.disabled = true;
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Copy';
+        showOpToast('Screen annotation saved', 'success');
+      } catch (err) {
+        errEl.textContent = 'Save failed: ' + ((err && err.message) || 'unknown');
+        errEl.hidden = false;
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save';
+      }
+    };
+    saveBtn.addEventListener('click', save);
+    noteEl.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') save();
+      e.stopPropagation();
+    });
+    setTimeout(() => noteEl.focus(), 0);
+  }
+
+  async function annCaptureScreen() {
+    if (!$annotationScreenBtn) return;
+    const oldText = $annotationScreenBtn.textContent;
+    $annotationScreenBtn.disabled = true;
+    $annotationScreenBtn.textContent = 'Drawing…';
+    try {
+      const res = await fetch('/api/annotations/capture-screen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ minimize: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.cancelled) return;
+      if (!res.ok || !data.ok || !data.image_b64) {
+        throw new Error((data && data.error) || 'screen capture failed');
+      }
+      annOpenScreenNote(data);
+    } catch (err) {
+      showOpToast('Screen capture failed: ' + ((err && err.message) || 'unknown'), 'error');
+    } finally {
+      $annotationScreenBtn.disabled = false;
+      $annotationScreenBtn.textContent = oldText;
+    }
+  }
+
+  function annClipText(value, maxLen) {
+    const s = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+    if (!s || !maxLen || s.length <= maxLen) return s;
+    return s.slice(0, maxLen).trim() + '…';
+  }
+
+  function annContextForClipboard(ann) {
+    const element = ann.element || {};
+    const lines = ['Annotation: ' + annClipText(ann.note || '', 600)];
+    const anchors = [];
+    if (ann.url) anchors.push('URL: ' + ann.url);
+    if (ann.title) anchors.push('Title: ' + annClipText(ann.title, 160));
+    if (ann.created_at) anchors.push('Created: ' + ann.created_at);
+    if (element.selector) anchors.push('Selector: ' + annClipText(element.selector, 260));
+    if (element.text) anchors.push('Element: ' + annClipText(element.text, 260));
+    if (ann.rect && (ann.rect.width || ann.rect.height)) anchors.push('Viewport rect: ' + JSON.stringify(ann.rect));
+    if (ann.screenshot_path) anchors.push('Screenshot: ' + ann.screenshot_path);
+    if (anchors.length) {
+      lines.push('', 'Anchors:', anchors.map(v => '- ' + v).join('\n'));
+    }
+    const nearby = annClipText(ann.nearby_text || '', 700);
+    if (nearby) lines.push('', 'Nearby:', nearby);
+    if (ann.html_excerpt) {
+      lines.push('', 'Full DOM excerpt is stored in the local annotation record.');
+    }
+    return lines.join('\n');
+  }
+
+  async function annOpenNotes() {
+    let modal = document.getElementById('annotationNotesModal');
+    if (modal) modal.remove();
+    modal = document.createElement('div');
+    modal.id = 'annotationNotesModal';
+    modal.className = 'upd-overlay ann-notes-modal open';
+    modal.innerHTML =
+      '<div class="upd-backdrop" data-ann-close></div>' +
+      '<div class="upd-dialog ann-notes-dialog">' +
+        '<div class="ann-notes-header">' +
+          '<div class="upd-title">Annotation Notes</div>' +
+          '<button type="button" class="ann-icon-btn" data-ann-close aria-label="Close annotation notes">&times;</button>' +
+        '</div>' +
+        '<div class="ann-notes-list"><div class="ann-notes-empty">Loading…</div></div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    const list = modal.querySelector('.ann-notes-list');
+    const close = () => modal.remove();
+    modal.querySelectorAll('[data-ann-close]').forEach(btn => btn.addEventListener('click', close));
+    try {
+      const res = await fetch('/api/annotations?limit=100', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+      const notes = Array.isArray(data.annotations) ? data.annotations : [];
+      if (!notes.length) {
+        list.innerHTML = '<div class="ann-notes-empty">No annotations yet.</div>';
+        return;
+      }
+      list.innerHTML = notes.map((ann) => {
+        const when = ann.created_at ? new Date(ann.created_at).toLocaleString() : '';
+        const selector = ann.element && ann.element.selector ? ann.element.selector : 'selected area';
+        const urlHtml = ann.url ? '<div class="ann-note-url">' + escapeHtml(ann.url || '') + '</div>' : '';
+        const shotUrl = ann.screenshot_path
+          ? '/api/local-image?path=' + encodeURIComponent(ann.screenshot_path)
+          : '';
+        const shot = ann.screenshot_path
+          ? '<div class="ann-note-shot">'
+            + '<img src="' + escapeAttr(shotUrl) + '" alt="Annotation screenshot" loading="lazy">'
+            + '<div class="ann-note-path">' + escapeHtml(ann.screenshot_path) + '</div>'
+            + '</div>'
+          : '';
+        return '<div class="ann-note-row" data-ann-id="' + escapeAttr(ann.id || '') + '">' +
+          '<div class="ann-note-main">' +
+            '<div class="ann-note-text">' + escapeHtml(ann.note || '') + '</div>' +
+            '<div class="ann-note-meta">' + escapeHtml(when) + ' · ' + escapeHtml(selector) + '</div>' +
+            urlHtml +
+            shot +
+          '</div>' +
+          '<button type="button" class="ann-btn" data-ann-copy="' + escapeAttr(ann.id || '') + '">Copy context</button>' +
+        '</div>';
+      }).join('');
+      const byId = new Map(notes.map(ann => [ann.id, ann]));
+      list.querySelectorAll('[data-ann-copy]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const ann = byId.get(btn.getAttribute('data-ann-copy'));
+          if (!ann) return;
+          try {
+            await navigator.clipboard.writeText(annContextForClipboard(ann));
+            btn.textContent = 'Copied';
+            setTimeout(() => { btn.textContent = 'Copy context'; }, 1200);
+          } catch (_) {
+            showOpToast('Copy failed', 'error');
+          }
+        });
+      });
+    } catch (err) {
+      list.innerHTML = '<div class="ann-notes-empty error">Failed to load annotations: ' + escapeHtml((err && err.message) || 'unknown') + '</div>';
+    }
+  }
+
+  if ($annotationStartBtn) $annotationStartBtn.addEventListener('click', annStart);
+  if ($annotationScreenBtn) $annotationScreenBtn.addEventListener('click', annCaptureScreen);
+  if ($annotationNotesBtn) $annotationNotesBtn.addEventListener('click', annOpenNotes);
+
   // ── In-app bug reporting ────────────────────────────────────────
   // Topbar link → modal → POST /api/bug-report → server shells out
   // to `gh issue create`. On gh failure the handler returns the

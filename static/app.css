@@ -3929,6 +3929,21 @@
     transition: background 0.12s ease-out, color 0.12s ease-out;
   }
   .bug-link:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+  .annotation-link {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 8px; margin-left: 4px;
+    background: transparent; color: var(--text-muted);
+    border: 1px solid transparent; border-radius: 999px;
+    font-size: 11px; font-family: inherit; cursor: pointer;
+    letter-spacing: 0.2px; white-space: nowrap;
+    transition: background 0.12s ease-out, color 0.12s ease-out, border-color 0.12s ease-out;
+  }
+  .annotation-link:hover,
+  .annotation-link.active {
+    background: rgba(57,210,192,0.12);
+    border-color: rgba(57,210,192,0.35);
+    color: var(--text);
+  }
   .bug-input { width: 100%; box-sizing: border-box;
     padding: 7px 10px; border-radius: 6px;
     border: 1px solid var(--border); background: var(--bg);
@@ -3998,6 +4013,151 @@
   }
   .bug-shot-preview-actions {
     display: flex; justify-content: flex-end; gap: 6px;
+  }
+
+  /* ── Page annotation overlay ────────────────────────────────── */
+  .ann-overlay {
+    position: fixed; inset: 0; z-index: 10020;
+    cursor: crosshair; background: rgba(13,17,23,0.08);
+    user-select: none;
+  }
+  .ann-overlay.ann-capturing {
+    opacity: 0;
+  }
+  .ann-hud {
+    position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-radius: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text); font-size: 12px; font-weight: 600;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.34);
+    cursor: default;
+  }
+  .ann-hud-close,
+  .ann-icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg);
+    color: var(--text-muted); font: inherit; cursor: pointer;
+  }
+  .ann-hud-close:hover,
+  .ann-icon-btn:hover { color: var(--text); background: var(--surface-2); }
+  .ann-selection {
+    position: fixed; pointer-events: none;
+    border: 2px solid var(--cyan);
+    background: rgba(57,210,192,0.12);
+    box-shadow: 0 0 0 9999px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.25) inset;
+  }
+  .ann-hover-label {
+    position: fixed; z-index: 10021; pointer-events: none;
+    max-width: 280px; padding: 4px 7px; border-radius: 6px;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text); font-size: 11px;
+    font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+  }
+  .ann-editor {
+    position: fixed; z-index: 10021;
+    display: flex; flex-direction: column; gap: 9px;
+    padding: 12px; border-radius: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    box-shadow: 0 18px 48px rgba(0,0,0,0.5);
+    cursor: default;
+  }
+  .ann-editor-title {
+    font-size: 13px; font-weight: 700; color: var(--text);
+  }
+  .ann-editor-note {
+    width: 100%; min-height: 96px; resize: vertical;
+    padding: 8px 9px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg);
+    color: var(--text); font: 13px/1.45 var(--font-ui);
+  }
+  .ann-editor-note:focus { border-color: var(--cyan); }
+  .ann-editor-meta,
+  .ann-note-meta,
+  .ann-note-url,
+  .ann-note-path {
+    font-size: 11px; color: var(--text-muted);
+    overflow-wrap: anywhere;
+  }
+  .ann-editor-error {
+    font-size: 12px; color: var(--red);
+    background: rgba(248,81,73,0.1);
+    border: 1px solid rgba(248,81,73,0.28);
+    border-radius: 6px; padding: 7px 8px;
+  }
+  .ann-editor-actions {
+    display: flex; justify-content: flex-end; gap: 7px;
+  }
+  .ann-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 30px; padding: 6px 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg);
+    color: var(--text); font: 12px var(--font-ui); cursor: pointer;
+    white-space: nowrap;
+  }
+  .ann-btn:hover { background: var(--surface-2); }
+  .ann-btn:disabled { opacity: 0.6; cursor: progress; }
+  .ann-primary {
+    background: var(--cyan); border-color: var(--cyan);
+    color: #061b1a; font-weight: 700;
+  }
+  .ann-primary:hover { background: var(--cyan); opacity: 0.9; }
+  .ann-notes-dialog {
+    width: min(760px, 94vw);
+    max-height: min(720px, 88vh);
+  }
+  .ann-screen-dialog {
+    width: min(640px, 94vw);
+    max-height: min(760px, 90vh);
+  }
+  .ann-screen-preview {
+    display: block; max-width: 100%; max-height: 320px;
+    object-fit: contain; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--bg);
+  }
+  .ann-notes-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .ann-notes-list {
+    display: flex; flex-direction: column; gap: 8px;
+    overflow: auto; max-height: 62vh; padding-right: 2px;
+  }
+  .ann-notes-empty {
+    border: 1px dashed var(--border); border-radius: 8px;
+    padding: 18px; color: var(--text-muted); font-size: 13px;
+    text-align: center; background: var(--bg);
+  }
+  .ann-notes-empty.error { color: var(--red); border-color: rgba(248,81,73,0.35); }
+  .ann-note-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px;
+    align-items: start; padding: 10px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg);
+  }
+  .ann-note-main { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .ann-note-text {
+    color: var(--text); font-size: 13px; line-height: 1.45;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .ann-note-shot {
+    display: flex; flex-direction: column; gap: 5px;
+    margin-top: 4px;
+  }
+  .ann-note-shot img {
+    display: block; max-width: min(420px, 100%); max-height: 220px;
+    object-fit: contain; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--surface);
+  }
+  .ann-note-url,
+  .ann-note-path {
+    font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
+  }
+  @media (max-width: 640px) {
+    .ann-note-row { grid-template-columns: minmax(0, 1fr); }
+    .ann-note-row .ann-btn { justify-self: start; }
   }
 
   /* Backlog column — no longer sticky, scrolls with the rest */
@@ -6495,6 +6655,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane > .status-rail-restore {
 .rail-actions .topbar-btn,
 .rail-actions .upd-pill,
 .rail-actions .bug-link,
+.rail-actions .annotation-link,
 .rail-actions .announce-btn-conv {
   display: inline-flex; align-items: center; justify-content: flex-start;
   width: auto;
@@ -6641,6 +6802,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane > .status-rail-restore {
 .settings-menu-slot > button,
 .settings-menu-slot > .topbar-btn,
 .settings-menu-slot > .bug-link,
+.settings-menu-slot > .annotation-link,
 .settings-menu-slot > .upd-pill,
 .settings-menu-slot > .hi-status-pill {
   display: flex; align-items: center; gap: 8px;
@@ -6698,7 +6860,8 @@ body.status-pos-right.status-rail-collapsed .conv-pane > .status-rail-restore {
 .sidebar-global-actions:empty { display: none; padding: 0; border-top: none; }
 .sidebar-global-actions > *,
 .sidebar-global-actions .topbar-btn,
-.sidebar-global-actions .bug-link {
+.sidebar-global-actions .bug-link,
+.sidebar-global-actions .annotation-link {
   display: inline-flex; align-items: center; justify-content: flex-start;
   gap: 6px;
   width: 100%;

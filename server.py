@@ -50,6 +50,9 @@ from pathlib import Path
 CCC_ROOT = Path(__file__).resolve().parent
 COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
 COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
+ANNOTATIONS_FILE = COMMAND_CENTER_STATE_DIR / "annotations.json"
+ANNOTATION_SCREENSHOT_DIR = COMMAND_CENTER_STATE_DIR / "annotation-screenshots"
+_ANNOTATIONS_LOCK = threading.Lock()
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 # User-picked repos that live outside the $HOME scan (e.g. ~/dev/foo, /workspaces/bar).
 # One absolute path per line. Written by /api/repo/add, read by load_known_repos.
@@ -3609,6 +3612,310 @@ def _reveal_bug_screenshot(path_str):
         return {"ok": True, "path": str(rp)}
     except OSError as e:
         return {"ok": False, "error": str(e)}
+
+
+# ── Page annotations ───────────────────────────────────────────────────
+# Local-only notes created from the browser overlay. Each annotation stores
+# the user's note plus enough page/element/viewport anchors for a later agent
+# to reopen the page and inspect the same visual area.
+
+def _annotation_text(value, max_len=4000):
+    s = "" if value is None else str(value)
+    s = s.replace("\x00", "").strip()
+    if len(s) > max_len:
+        return s[:max_len].rstrip() + "…"
+    return s
+
+
+def _annotation_number(value, default=0.0):
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return default
+    if n != n or n in (float("inf"), float("-inf")):
+        return default
+    if n < -1000000 or n > 1000000:
+        return default
+    return round(n, 2)
+
+
+def _annotation_rect(value):
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "x": _annotation_number(raw.get("x")),
+        "y": _annotation_number(raw.get("y")),
+        "width": max(0.0, _annotation_number(raw.get("width"))),
+        "height": max(0.0, _annotation_number(raw.get("height"))),
+    }
+
+
+def _annotation_viewport(value):
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "width": max(0.0, _annotation_number(raw.get("width"))),
+        "height": max(0.0, _annotation_number(raw.get("height"))),
+        "device_pixel_ratio": max(0.0, _annotation_number(raw.get("device_pixel_ratio"), 1.0)),
+        "scroll_x": _annotation_number(raw.get("scroll_x")),
+        "scroll_y": _annotation_number(raw.get("scroll_y")),
+    }
+
+
+def _annotation_screen(value):
+    raw = value if isinstance(value, dict) else {}
+    screen = _annotation_rect(raw)
+    screen["estimated"] = bool(raw.get("estimated"))
+    screen["window_screen_x"] = _annotation_number(raw.get("window_screen_x"))
+    screen["window_screen_y"] = _annotation_number(raw.get("window_screen_y"))
+    screen["outer_width"] = max(0.0, _annotation_number(raw.get("outer_width")))
+    screen["outer_height"] = max(0.0, _annotation_number(raw.get("outer_height")))
+    return screen
+
+
+def _annotation_element(value):
+    raw = value if isinstance(value, dict) else {}
+    rect = _annotation_rect(raw.get("rect"))
+    return {
+        "tag": _annotation_text(raw.get("tag"), 64).lower(),
+        "id": _annotation_text(raw.get("id"), 256),
+        "class": _annotation_text(raw.get("class"), 512),
+        "role": _annotation_text(raw.get("role"), 128),
+        "aria_label": _annotation_text(raw.get("aria_label"), 512),
+        "selector": _annotation_text(raw.get("selector"), 1200),
+        "href": _annotation_text(raw.get("href"), 2000),
+        "src": _annotation_text(raw.get("src"), 2000),
+        "text": _annotation_text(raw.get("text"), 2000),
+        "rect": rect,
+    }
+
+
+def _load_annotations():
+    try:
+        data = json.loads(ANNOTATIONS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return []
+    if isinstance(data, dict):
+        data = data.get("annotations", [])
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _write_annotations(items):
+    ANNOTATIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ANNOTATIONS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps({"annotations": items}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp, ANNOTATIONS_FILE)
+
+
+def _capture_annotation_screen_rect(screen_rect, annotation_id):
+    """Best-effort non-interactive capture of the selected screen rect.
+
+    Browser APIs can only estimate the viewport-to-screen transform. If that
+    estimate is off, the annotation still has URL/selector/rect/text anchors;
+    the screenshot path is an optional convenience.
+    """
+    if platform.system() != "Darwin":
+        return None
+    screencapture_bin = _resolve_screencapture_bin()
+    if not screencapture_bin:
+        return None
+    rect = _annotation_rect(screen_rect)
+    x = int(round(rect["x"]))
+    y = int(round(rect["y"]))
+    w = int(round(rect["width"]))
+    h = int(round(rect["height"]))
+    if w < 3 or h < 3 or w > 10000 or h > 10000:
+        return None
+    if x < -10000 or y < -10000 or x > 100000 or y > 100000:
+        return None
+    ANNOTATION_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    out = ANNOTATION_SCREENSHOT_DIR / f"{annotation_id}.png"
+    try:
+        proc = subprocess.run(
+            [screencapture_bin, "-x", "-R", f"{x},{y},{w},{h}", str(out)],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        try:
+            out.unlink()
+        except OSError:
+            pass
+        return None
+    try:
+        if out.stat().st_size <= 0:
+            out.unlink(missing_ok=True)
+            return None
+    except OSError:
+        return None
+    return str(out)
+
+
+def _save_annotation_screenshot_b64(image_b64, annotation_id):
+    try:
+        raw = base64.b64decode(str(image_b64 or ""), validate=True)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"invalid base64: {e}") from e
+    if not raw:
+        raise ValueError("empty screenshot")
+    if len(raw) > 25 * 1024 * 1024:
+        raise ValueError("screenshot too large")
+    ANNOTATION_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    out = ANNOTATION_SCREENSHOT_DIR / f"{annotation_id}.png"
+    out.write_bytes(raw)
+    return str(out)
+
+
+def _minimize_front_window_for_capture():
+    if platform.system() != "Darwin":
+        return None
+    script = r'''
+tell application "System Events"
+  set frontProc to first application process whose frontmost is true
+  set frontPid to unix id of frontProc
+  set frontName to name of frontProc
+  set actionTaken to "none"
+  try
+    if (count of windows of frontProc) > 0 then
+      set value of attribute "AXMinimized" of window 1 of frontProc to true
+      set actionTaken to "window"
+    end if
+  on error
+    try
+      set visible of frontProc to false
+      set actionTaken to "app"
+    end try
+  end try
+  return (frontPid as text) & tab & frontName & tab & actionTaken
+end tell
+'''
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    parts = (proc.stdout or "").strip().split("\t")
+    if len(parts) < 3:
+        return None
+    return {"pid": parts[0], "name": parts[1], "action": parts[2]}
+
+
+def _restore_window_after_capture(window_info):
+    if platform.system() != "Darwin" or not window_info:
+        return
+    pid = str(window_info.get("pid") or "").strip()
+    if not pid.isdigit():
+        return
+    script = f'''
+tell application "System Events"
+  set targetProc to first application process whose unix id is {pid}
+  set visible of targetProc to true
+  try
+    repeat with w in windows of targetProc
+      try
+        if (value of attribute "AXMinimized" of w) is true then
+          set value of attribute "AXMinimized" of w to false
+        end if
+      end try
+    end repeat
+  end try
+  set frontmost of targetProc to true
+end tell
+'''
+    try:
+        subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def capture_annotation_screen(minimize=True):
+    window_info = _minimize_front_window_for_capture() if minimize else None
+    if window_info:
+        time.sleep(0.25)
+    result = _capture_screenshot_native()
+    _restore_window_after_capture(window_info)
+    if window_info:
+        result["window_action"] = window_info.get("action")
+        result["window_app"] = window_info.get("name")
+    return result
+
+
+def list_annotations(limit=100):
+    try:
+        limit = int(limit or 100)
+    except (TypeError, ValueError):
+        limit = 100
+    limit = max(1, min(limit, 500))
+    with _ANNOTATIONS_LOCK:
+        items = _load_annotations()
+    return {"ok": True, "annotations": list(reversed(items[-limit:])), "count": len(items)}
+
+
+def create_annotation(payload):
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "expected JSON object"}
+    note = _annotation_text(payload.get("note"), 12000)
+    if not note:
+        return {"ok": False, "error": "note is required"}
+    created_at = datetime.now(tz=timezone.utc).isoformat()
+    annotation_id = f"ann-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}"
+    screen = _annotation_screen(payload.get("screen"))
+    annotation = {
+        "id": annotation_id,
+        "created_at": created_at,
+        "note": note,
+        "url": _annotation_text(payload.get("url"), 4000),
+        "title": _annotation_text(payload.get("title"), 1000),
+        "session_id": _annotation_text(payload.get("session_id"), 160),
+        "repo_path": _annotation_text(payload.get("repo_path"), 4000),
+        "rect": _annotation_rect(payload.get("rect")),
+        "document_rect": _annotation_rect(payload.get("document_rect")),
+        "viewport": _annotation_viewport(payload.get("viewport")),
+        "screen": screen,
+        "element": _annotation_element(payload.get("element")),
+        "selected_text": _annotation_text(payload.get("selected_text"), 2000),
+        "nearby_text": _annotation_text(payload.get("nearby_text"), 6000),
+        "html_excerpt": _annotation_text(payload.get("html_excerpt"), 8000),
+        "source": _annotation_text(payload.get("source"), 80) or "browser-page",
+    }
+    screenshot_b64 = _annotation_text(payload.get("screenshot_b64"), 40 * 1024 * 1024)
+    if screenshot_b64:
+        try:
+            annotation["screenshot_path"] = _save_annotation_screenshot_b64(
+                screenshot_b64, annotation_id
+            )
+        except ValueError:
+            pass
+    if payload.get("capture_screen"):
+        screenshot_path = _capture_annotation_screen_rect(screen, annotation_id)
+        if screenshot_path:
+            annotation["screenshot_path"] = screenshot_path
+    with _ANNOTATIONS_LOCK:
+        items = _load_annotations()
+        items.append(annotation)
+        # Keep the file bounded. The newest annotations are usually the only
+        # relevant ones for active agent handoff.
+        if len(items) > 500:
+            items = items[-500:]
+        _write_annotations(items)
+    return {"ok": True, "annotation": annotation}
 
 
 def _schedule_restart(delay=0.5):
@@ -22811,6 +23118,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(e.as_payload(), e.status)
         elif path == "/api/config":
             self.send_json(get_app_config())
+        elif path == "/api/annotations":
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                limit = int(qs.get("limit", ["100"])[0])
+            except (TypeError, ValueError):
+                limit = 100
+            self.send_json(list_annotations(limit=limit))
         elif path == "/api/telemetry/status":
             # Anonymous-telemetry opt-in state. Drives the dashboard bar:
             # only render when opt_in is null (never asked) AND not env-disabled.
@@ -24086,6 +24400,33 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 _schedule_restart()
+            return
+        if path == "/api/annotations":
+            # Save a browser-page annotation note. Same-origin gated; storage
+            # is local plaintext under ~/.claude/command-center/.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            result = create_annotation(payload)
+            self.send_json(result, 200 if result.get("ok") else 400)
+            return
+        if path == "/api/annotations/capture-screen":
+            # Native screen-region capture for annotations. The server first
+            # tries to minimize the front CCC window so the user can mark
+            # whatever was behind it, then restores that window after the
+            # macOS area picker completes.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            result = capture_annotation_screen(minimize=payload.get("minimize", True))
+            self.send_json(result)
             return
         if path == "/api/bug-report":
             # Submit a bug report as a GitHub issue against the CCC repo.
