@@ -11280,6 +11280,15 @@
             // shifts it.
             splitState.activeIndex = savedIdx;
           }
+          // Refresh the context / cost pills as new events stream in. The
+          // poll fallback (loadConvAfter) already does this; without the
+          // same call here the pills only update on reselect or refresh
+          // whenever the SSE path is the one delivering events. Usage
+          // rollups land sporadically across a turn, so we re-fetch on
+          // every event batch — fetchSessionUsage already bails out if the
+          // active session id has shifted.
+          const sid = (conversationsData.find(x => x.id === streamConvId) || {}).session_id || streamConvId;
+          fetchSessionUsage(sid);
         }
       } catch (err) {}
     };
