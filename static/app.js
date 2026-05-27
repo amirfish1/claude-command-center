@@ -20359,18 +20359,13 @@
 
   function annElementSummary(el) {
     if (!el || !el.tagName) return {};
-    const rect = el.getBoundingClientRect();
     return {
       tag: el.tagName.toLowerCase(),
       id: el.id || '',
-      class: el.className && typeof el.className === 'string' ? annText(el.className, 512) : '',
       role: el.getAttribute('role') || '',
-      aria_label: el.getAttribute('aria-label') || '',
       selector: annSelectorFor(el),
       href: el.getAttribute('href') || '',
-      src: el.getAttribute('src') || '',
-      text: annElementText(el),
-      rect: annRectObject(rect),
+      text: annText(annElementText(el), 200),
     };
   }
 
@@ -20401,36 +20396,6 @@
       width: Math.min(r.width, window.innerWidth - Math.max(0, r.left)),
       height: Math.min(r.height, window.innerHeight - Math.max(0, r.top)),
     };
-  }
-
-  function annIntersects(a, b) {
-    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-  }
-
-  function annCollectNearbyText(rect) {
-    const region = {
-      left: Math.max(0, rect.x - 140),
-      top: Math.max(0, rect.y - 140),
-      right: Math.min(window.innerWidth, rect.x + rect.width + 140),
-      bottom: Math.min(window.innerHeight, rect.y + rect.height + 140),
-    };
-    const out = [];
-    const seen = new Set();
-    const nodes = Array.from(document.body ? document.body.querySelectorAll('a,button,input,textarea,select,label,p,h1,h2,h3,h4,li,td,th,[role],code,pre,.conv-title,.conv-last,.user-msg,.assistant-text') : []);
-    for (const el of nodes) {
-      if (annotationState && annotationState.overlay && annotationState.overlay.contains(el)) continue;
-      if (el.closest && el.closest('#annotationNotesModal,#annotationScreenModal,.ann-overlay')) continue;
-      const style = window.getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
-      const r = el.getBoundingClientRect();
-      if (!r.width || !r.height || !annIntersects(region, r)) continue;
-      const text = annText(annElementText(el), 320);
-      if (!text || seen.has(text)) continue;
-      seen.add(text);
-      out.push(text);
-      if (out.join('\n').length > 1400 || out.length > 12) break;
-    }
-    return out.join('\n');
   }
 
   function annElementAtPoint(x, y) {
@@ -20508,13 +20473,6 @@
   function annBuildPayload(note) {
     const rect = annotationState.rect;
     const element = annotationState.element;
-    const docRect = {
-      x: Math.round((rect.x + window.scrollX) * 100) / 100,
-      y: Math.round((rect.y + window.scrollY) * 100) / 100,
-      width: Math.round(rect.width * 100) / 100,
-      height: Math.round(rect.height * 100) / 100,
-    };
-    const html = element && element.outerHTML ? annText(element.outerHTML, 8000) : '';
     return {
       note,
       url: window.location.href,
@@ -20522,19 +20480,8 @@
       session_id: (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '',
       repo_path: (typeof selectedRepoPath === 'function' && selectedRepoPath()) || '',
       rect,
-      document_rect: docRect,
-      viewport: {
-        width: window.innerWidth,
-        height: window.innerHeight,
-        device_pixel_ratio: window.devicePixelRatio || 1,
-        scroll_x: window.scrollX,
-        scroll_y: window.scrollY,
-      },
       screen: annEstimateScreenRect(rect),
       element: annElementSummary(element),
-      selected_text: String(window.getSelection ? window.getSelection() : '').trim().slice(0, 2000),
-      nearby_text: annCollectNearbyText(rect),
-      html_excerpt: html,
       capture_screen: true,
     };
   }
@@ -20879,7 +20826,6 @@
         session_id: (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '',
         repo_path: (typeof selectedRepoPath === 'function' && selectedRepoPath()) || '',
         screenshot_b64: capture.image_b64,
-        nearby_text: 'Native screen capture annotation. Visual context is stored in screenshot_path.',
       };
       try {
         const res = await fetch('/api/annotations', {
@@ -20968,24 +20914,15 @@
 
   function annContextForClipboard(ann) {
     const element = ann.element || {};
-    const lines = ['Annotation: ' + annClipText(ann.note || '', 600)];
+    const lines = ['Annotation: ' + annClipText(ann.note || '', 500)];
     const anchors = [];
-    if (ann.url) anchors.push('URL: ' + ann.url);
-    if (ann.title) anchors.push('Title: ' + annClipText(ann.title, 160));
-    if (ann.created_at) anchors.push('Created: ' + ann.created_at);
+    if (ann.url) anchors.push('URL: ' + annClipText(ann.url, 240));
     if (ann.session_id) anchors.push('Session ID: ' + ann.session_id);
-    if (ann.repo_path) anchors.push('Repo path: ' + ann.repo_path);
-    if (element.selector) anchors.push('Selector: ' + annClipText(element.selector, 260));
-    if (element.text) anchors.push('Element: ' + annClipText(element.text, 260));
-    if (ann.rect && (ann.rect.width || ann.rect.height)) anchors.push('Viewport rect: ' + JSON.stringify(ann.rect));
+    if (element.selector) anchors.push('Selector: ' + annClipText(element.selector, 200));
+    if (element.text) anchors.push('Element: ' + annClipText(element.text, 160));
     if (ann.screenshot_path) anchors.push('Screenshot: ' + ann.screenshot_path);
     if (anchors.length) {
       lines.push('', 'Anchors:', anchors.map(v => '- ' + v).join('\n'));
-    }
-    const nearby = annClipText(ann.nearby_text || '', 700);
-    if (nearby) lines.push('', 'Nearby:', nearby);
-    if (ann.html_excerpt) {
-      lines.push('', 'Full DOM excerpt is stored in the local annotation record.');
     }
     return lines.join('\n');
   }

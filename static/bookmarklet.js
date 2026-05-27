@@ -163,18 +163,6 @@
     return parts.join(' > ');
   }
 
-  function nearbyText(el) {
-    var parent = el.parentElement || el;
-    var text = (parent.innerText || parent.textContent || '').trim().replace(/\s+/g, ' ');
-    return text.slice(0, 400);
-  }
-
-  function htmlExcerpt(el) {
-    var s = el.outerHTML || '';
-    if (s.length > 1200) s = s.slice(0, 1200) + '…';
-    return s;
-  }
-
   function showToast(msg, isErr) {
     var t = document.createElement('div');
     t.className = 'ccc-bm-toast' + (isErr ? ' err' : '');
@@ -206,29 +194,14 @@
   function capture(el) {
     var note = window.prompt('Annotation note (what should we fix?):', '');
     if (note === null) return;
-    var r = rectOf(el);
     var sel = buildSelector(el);
     var lines = [
-      'Annotation: ' + (note || '(no note)'),
+      'Annotation: ' + (note || '(no note)').slice(0, 500),
       '',
       'Anchors:',
-      '- URL: ' + window.location.href,
-      '- Title: ' + (document.title || ''),
-      '- Created: ' + new Date().toISOString(),
-      '- Selector: ' + sel,
-      '- Element: ' + summarize(el),
-      '- Viewport rect: ' + JSON.stringify({
-        x: Math.round(r.x * 100) / 100,
-        y: Math.round(r.y * 100) / 100,
-        width: Math.round(r.width * 100) / 100,
-        height: Math.round(r.height * 100) / 100,
-      }),
-      '',
-      'Nearby text:',
-      nearbyText(el),
-      '',
-      'HTML excerpt:',
-      htmlExcerpt(el),
+      '- URL: ' + window.location.href.slice(0, 240),
+      '- Selector: ' + sel.slice(0, 200),
+      '- Element: ' + summarize(el).slice(0, 160),
     ];
     var text = lines.join('\n');
     copyText(text).then(function () {

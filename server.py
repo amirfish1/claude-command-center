@@ -3677,17 +3677,6 @@ def _annotation_rect(value):
     }
 
 
-def _annotation_viewport(value):
-    raw = value if isinstance(value, dict) else {}
-    return {
-        "width": max(0.0, _annotation_number(raw.get("width"))),
-        "height": max(0.0, _annotation_number(raw.get("height"))),
-        "device_pixel_ratio": max(0.0, _annotation_number(raw.get("device_pixel_ratio"), 1.0)),
-        "scroll_x": _annotation_number(raw.get("scroll_x")),
-        "scroll_y": _annotation_number(raw.get("scroll_y")),
-    }
-
-
 def _annotation_screen(value):
     raw = value if isinstance(value, dict) else {}
     screen = _annotation_rect(raw)
@@ -3701,18 +3690,13 @@ def _annotation_screen(value):
 
 def _annotation_element(value):
     raw = value if isinstance(value, dict) else {}
-    rect = _annotation_rect(raw.get("rect"))
     return {
         "tag": _annotation_text(raw.get("tag"), 64).lower(),
         "id": _annotation_text(raw.get("id"), 256),
-        "class": _annotation_text(raw.get("class"), 512),
         "role": _annotation_text(raw.get("role"), 128),
-        "aria_label": _annotation_text(raw.get("aria_label"), 512),
-        "selector": _annotation_text(raw.get("selector"), 1200),
-        "href": _annotation_text(raw.get("href"), 2000),
-        "src": _annotation_text(raw.get("src"), 2000),
-        "text": _annotation_text(raw.get("text"), 2000),
-        "rect": rect,
+        "selector": _annotation_text(raw.get("selector"), 400),
+        "href": _annotation_text(raw.get("href"), 400),
+        "text": _annotation_text(raw.get("text"), 200),
     }
 
 
@@ -3899,7 +3883,7 @@ def list_annotations(limit=100):
 def create_annotation(payload):
     if not isinstance(payload, dict):
         return {"ok": False, "error": "expected JSON object"}
-    note = _annotation_text(payload.get("note"), 12000)
+    note = _annotation_text(payload.get("note"), 2000)
     if not note:
         return {"ok": False, "error": "note is required"}
     created_at = datetime.now(tz=timezone.utc).isoformat()
@@ -3909,18 +3893,13 @@ def create_annotation(payload):
         "id": annotation_id,
         "created_at": created_at,
         "note": note,
-        "url": _annotation_text(payload.get("url"), 4000),
-        "title": _annotation_text(payload.get("title"), 1000),
+        "url": _annotation_text(payload.get("url"), 1000),
+        "title": _annotation_text(payload.get("title"), 200),
         "session_id": _annotation_text(payload.get("session_id"), 160),
-        "repo_path": _annotation_text(payload.get("repo_path"), 4000),
+        "repo_path": _annotation_text(payload.get("repo_path"), 500),
         "rect": _annotation_rect(payload.get("rect")),
-        "document_rect": _annotation_rect(payload.get("document_rect")),
-        "viewport": _annotation_viewport(payload.get("viewport")),
         "screen": screen,
         "element": _annotation_element(payload.get("element")),
-        "selected_text": _annotation_text(payload.get("selected_text"), 2000),
-        "nearby_text": _annotation_text(payload.get("nearby_text"), 6000),
-        "html_excerpt": _annotation_text(payload.get("html_excerpt"), 8000),
         "source": _annotation_text(payload.get("source"), 80) or "browser-page",
     }
     screenshot_b64 = _annotation_text(payload.get("screenshot_b64"), 40 * 1024 * 1024)

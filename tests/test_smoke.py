@@ -111,20 +111,23 @@ class TestServerImports(unittest.TestCase):
             server.ANNOTATIONS_FILE = pathlib.Path(td) / "annotations.json"
             server.ANNOTATION_SCREENSHOT_DIR = pathlib.Path(td) / "annotation-screenshots"
             try:
+                # html_excerpt / nearby_text / selected_text / document_rect
+                # used to be persisted alongside each annotation. They were
+                # dropped because the screenshot + selector + note are enough
+                # for Claude to act, and the raw outerHTML / surrounding
+                # paragraphs added kilobytes of noise to every wire payload.
                 result = server.create_annotation({
                     "note": "Check this button state",
                     "url": "http://127.0.0.1:8090/",
                     "title": "Claude Command Center",
                     "rect": {"x": 10, "y": 20, "width": 120, "height": 32},
-                    "document_rect": {"x": 10, "y": 200, "width": 120, "height": 32},
-                    "viewport": {"width": 1440, "height": 900, "device_pixel_ratio": 2},
                     "element": {
                         "tag": "button",
                         "selector": "#annotationStartBtn",
                         "text": "Annotate",
                     },
-                    "nearby_text": "surrounding context",
                     "html_excerpt": "<button>" + ("x" * 9000) + "</button>",
+                    "nearby_text": "surrounding context",
                     "capture_screen": False,
                 })
                 self.assertTrue(result["ok"])
@@ -133,7 +136,10 @@ class TestServerImports(unittest.TestCase):
                 ann = saved["annotations"][0]
                 self.assertEqual(ann["note"], "Check this button state")
                 self.assertEqual(ann["element"]["selector"], "#annotationStartBtn")
-                self.assertLessEqual(len(ann["html_excerpt"]), 8001)
+                self.assertNotIn("html_excerpt", ann)
+                self.assertNotIn("nearby_text", ann)
+                self.assertNotIn("selected_text", ann)
+                self.assertNotIn("document_rect", ann)
                 self.assertNotIn("screenshot_path", ann)
             finally:
                 server.ANNOTATIONS_FILE = old_file
