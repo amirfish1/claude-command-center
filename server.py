@@ -17883,7 +17883,7 @@ def _valid_group_chat_uuid(value: str) -> bool:
         return False
 
 
-def _ensure_group_chat_uuid(chat_path: str, meta: dict | None = None) -> str:
+def _ensure_group_chat_uuid(chat_path: str, meta: "dict | None" = None) -> str:
     """Return a stable UUID for a group chat, backfilling old sidecars.
 
     Early group-chat sidecars were identified only by their markdown path.
