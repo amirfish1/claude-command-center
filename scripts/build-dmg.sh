@@ -19,8 +19,15 @@
 # All three paths share scripts/install.sh, so behaviour stays consistent.
 #
 # Usage:
-#   ./scripts/build-dmg.sh                # version pulled from pyproject.toml
+#   ./scripts/build-dmg.sh                # full release build (sign + notarize + staple)
 #   ./scripts/build-dmg.sh 4.3.1          # explicit version
+#   ./scripts/build-dmg.sh --fast         # adhoc-sign only, skip notarization
+#   ./scripts/build-dmg.sh --fast 4.3.1   # both
+#
+# --fast skips: Developer ID codesign, DMG-level codesign, Apple notarization,
+# stapler staple. Produces an adhoc-signed DMG in ~10 seconds instead of
+# ~3 minutes. Users will see the macOS "unidentified developer" prompt —
+# fine for local smoke testing, NOT for release.
 #
 # Requirements: macOS Command Line Tools (swiftc, hdiutil, sips, iconutil,
 # plutil, lipo). All ship with Xcode CLT — no full Xcode app needed.
@@ -36,15 +43,31 @@ if [ "$(uname -s)" != "Darwin" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Parse flags
+# ---------------------------------------------------------------------------
+FAST_MODE=0
+VERSION=""
+for arg in "$@"; do
+  case "$arg" in
+    --fast)        FAST_MODE=1 ;;
+    --help|-h)     sed -n '1,20p' "$0"; exit 0 ;;
+    -*)            echo "build-dmg: unknown flag: $arg" >&2; exit 1 ;;
+    *)             VERSION="$arg" ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
 # Resolve version
 # ---------------------------------------------------------------------------
-VERSION="${1:-}"
 if [ -z "$VERSION" ]; then
   VERSION="$(grep -E '^version *= *"' "$REPO_ROOT/pyproject.toml" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
 fi
 if [ -z "$VERSION" ]; then
   echo "build-dmg: could not resolve version (pass as arg or set in pyproject.toml)" >&2
   exit 1
+fi
+if [ "$FAST_MODE" = "1" ]; then
+  echo "build-dmg: --fast mode (adhoc-sign, skip notarization)"
 fi
 echo "build-dmg: version = $VERSION"
 
@@ -57,14 +80,19 @@ VOL_NAME="CCC v${VERSION}"
 # ---------------------------------------------------------------------------
 WORK_DIR="$(mktemp -d -t ccc-dmg-build)"
 trap 'rm -rf "$WORK_DIR"' EXIT
-APP_DIR="$WORK_DIR/CCC.app"
+# The bundle's filesystem name is what Finder displays in the DMG and
+# in /Applications (CFBundleDisplayName is a softer hint that Finder
+# often ignores for .app bundles). So we name the bundle the long
+# descriptive name on disk.
+APP_BUNDLE_NAME="Command Center for Claude, Codex, Antigravity.app"
+APP_DIR="$WORK_DIR/$APP_BUNDLE_NAME"
 STAGING_DIR="$WORK_DIR/staging"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$STAGING_DIR"
 
 # ---------------------------------------------------------------------------
 # Icon: convert _assets/Claude Command Center.png to .icns
 # ---------------------------------------------------------------------------
-SRC_ICON="$REPO_ROOT/_assets/Claude Command Center.png"
+SRC_ICON="$REPO_ROOT/_assets/ccc-icon-v2.png"
 if [ -f "$SRC_ICON" ]; then
   echo "build-dmg: rendering icon from $SRC_ICON"
   ICONSET="$WORK_DIR/CCC.iconset"
@@ -99,12 +127,12 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
-  <key>CFBundleDisplayName</key><string>Claude Command Center</string>
+  <key>CFBundleDisplayName</key><string>Command Center for Claude, Codex, Antigravity</string>
   <key>CFBundleExecutable</key><string>CCC</string>
   <key>CFBundleIconFile</key><string>CCC</string>
   <key>CFBundleIdentifier</key><string>com.github.claude-command-center</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleName</key><string>CCC</string>
+  <key>CFBundleName</key><string>Command Center for Claude+</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
@@ -146,11 +174,51 @@ echo "build-dmg: binary = ${BIN_SIZE_KB} KB (universal)"
 xattr -cr "$APP_DIR" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# Ad-hoc codesign — does not satisfy notarization but does prevent the
-# "App is damaged" error after quarantine on Apple Silicon. Optional; the
-# DMG still works without it, the user just has to right-click → Open.
+# Code signing
+#
+# Auto-detects whether a "Developer ID Application" cert is in the Keychain.
+#   - Present  → real codesign with hardened runtime + secure timestamp.
+#                Sets SIGNED=1 so the DMG step also submits for notarization.
+#   - Missing  → ad-hoc sign. DMG ships but users see the "unidentified
+#                developer" Gatekeeper prompt (right-click → Open dance).
 # ---------------------------------------------------------------------------
-if command -v codesign >/dev/null 2>&1; then
+DEVELOPER_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+                 | awk -F\" '/Developer ID Application/ {print $2; exit}')"
+SIGNED=0
+
+# --fast skips Developer ID entirely. Useful for iterating without
+# burning 3 min per build on Apple's notarization queue.
+if [ "$FAST_MODE" = "1" ]; then
+  DEVELOPER_ID=""
+fi
+
+if [ -n "$DEVELOPER_ID" ]; then
+  echo "build-dmg: codesigning with: $DEVELOPER_ID"
+
+  # Minimal entitlements — hardened runtime alone is enough for a WKWebView
+  # shell that spawns Apple-signed child processes (bash, python3).
+  ENTITLEMENTS="$WORK_DIR/CCC.entitlements"
+  cat > "$ENTITLEMENTS" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+</dict>
+</plist>
+PLIST
+
+  codesign --force --deep --sign "$DEVELOPER_ID" \
+           --options runtime \
+           --timestamp \
+           --entitlements "$ENTITLEMENTS" \
+           "$APP_DIR"
+
+  # Sanity check the signature before we go further
+  codesign --verify --deep --strict --verbose=2 "$APP_DIR" 2>&1 | tail -5
+  SIGNED=1
+else
+  echo "build-dmg: no Developer ID Application cert in Keychain — using ad-hoc sign"
+  echo "build-dmg: (DMG will still work; users will see the Gatekeeper 'unidentified developer' prompt)"
   codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || \
     echo "build-dmg: ad-hoc codesign failed (non-fatal)"
 fi
@@ -161,18 +229,29 @@ fi
 cp -R "$APP_DIR" "$STAGING_DIR/"
 ln -s /Applications "$STAGING_DIR/Applications"
 
-# Drop a small README the user sees if they explore the DMG
-cat > "$STAGING_DIR/README.txt" <<EOF
-Claude Command Center — v${VERSION}
+# Drop a small README the user sees if they explore the DMG.
+# Wording depends on whether we signed with a real Developer ID — once
+# we're signed + notarized there's no right-click → Open dance to explain.
+if [ "${SIGNED:-0}" = "1" ]; then
+  GATEKEEPER_NOTE='Signed with a Developer ID and notarized by Apple — opens
+with a single double-click. No "unidentified developer" prompt.'
+else
+  GATEKEEPER_NOTE='First launch: macOS may say "CCC is from an unidentified
+developer". Right-click CCC.app in Applications → Open → Open. This only
+happens once. (Will be eliminated in the next release once Apple
+notarization is in place.)'
+fi
 
-1. Drag CCC.app onto the Applications folder.
+cat > "$STAGING_DIR/README.txt" <<EOF
+Command Center for Claude, Codex, Antigravity — v${VERSION}
+One inbox for all your AI agents.
+
+1. Drag "${APP_BUNDLE_NAME%.app}" onto the Applications folder.
 2. Open CCC from Launchpad or /Applications.
 3. CCC opens as a native Mac window. The dashboard runs locally on
    your machine; nothing leaves your computer.
 
-First launch: macOS may say "CCC is from an unidentified developer".
-Right-click CCC.app in Applications → Open → Open. This only happens
-once. CCC is open source and unsigned (no Apple developer account).
+${GATEKEEPER_NOTE}
 
 First launch only: CCC needs to clone its source into ~/.ccc and
 verify the Claude Code CLI is installed. A short Terminal window
@@ -195,6 +274,54 @@ hdiutil create \
 
 SIZE_KB="$(du -k "$DMG_PATH" | awk '{print $1}')"
 echo "build-dmg: wrote $DMG_PATH (${SIZE_KB} KB)"
+
+# ---------------------------------------------------------------------------
+# Notarize + staple (only when we signed with a real Developer ID)
+#
+# Apple validates the .app inside the DMG, sends a "ticket" we staple onto
+# the DMG. With the ticket stapled, Gatekeeper trusts the DMG offline —
+# users get a single double-click open with no "unidentified developer"
+# prompt and no right-click → Open dance.
+#
+# Requires `xcrun notarytool store-credentials ccc-notary ...` to have been
+# run once with the user's Apple ID + Team ID + app-specific password.
+# ---------------------------------------------------------------------------
+if [ "${SIGNED:-0}" = "1" ]; then
+  echo "build-dmg: signing the DMG itself"
+  codesign --force --sign "$DEVELOPER_ID" --timestamp "$DMG_PATH"
+
+  # Check the notarytool keychain profile exists; if not, skip with a hint.
+  if xcrun notarytool history --keychain-profile ccc-notary >/dev/null 2>&1; then
+    echo "build-dmg: submitting to Apple for notarization (2-15 min typical)"
+    SUBMIT_LOG="$WORK_DIR/notarize-submit.txt"
+    if xcrun notarytool submit "$DMG_PATH" \
+         --keychain-profile ccc-notary \
+         --wait \
+         --timeout 30m 2>&1 | tee "$SUBMIT_LOG"; then
+
+      # notarytool exits 0 even on rejected status; double-check the log
+      if grep -q "status: Accepted" "$SUBMIT_LOG"; then
+        echo "build-dmg: stapling notarization ticket onto DMG"
+        xcrun stapler staple "$DMG_PATH"
+
+        echo "build-dmg: gatekeeper assessment —"
+        /usr/sbin/spctl --assess --type install --verbose=2 "$DMG_PATH" 2>&1 | sed 's/^/  /'
+        xcrun stapler validate "$DMG_PATH" 2>&1 | sed 's/^/  /'
+      else
+        SUBMISSION_ID="$(awk '/id:/ {print $2; exit}' "$SUBMIT_LOG")"
+        echo "build-dmg: notarization NOT accepted." >&2
+        echo "build-dmg: log: xcrun notarytool log $SUBMISSION_ID --keychain-profile ccc-notary" >&2
+      fi
+    else
+      echo "build-dmg: notarytool submit failed — see $SUBMIT_LOG" >&2
+    fi
+  else
+    echo "build-dmg: notarytool profile 'ccc-notary' not found in Keychain."
+    echo "build-dmg: run once: xcrun notarytool store-credentials ccc-notary --apple-id <email> --team-id <TEAMID> --password <app-specific-pw>"
+    echo "build-dmg: DMG is signed but not notarized. Users will still get the Gatekeeper prompt."
+  fi
+fi
+
 echo "build-dmg: next steps —"
 echo "  open '$DMG_PATH'                       # smoke test locally"
-echo "  gh release upload v${VERSION} '$DMG_PATH'   # publish to GitHub release"
+echo "  gh release upload v${VERSION} '$DMG_PATH' --clobber   # publish to GitHub release"

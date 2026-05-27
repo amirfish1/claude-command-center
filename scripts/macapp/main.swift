@@ -64,7 +64,7 @@ func runAppleScript(_ source: String) {
 
 // MARK: - App Delegate
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
     var window: NSWindow!
     var webView: WKWebView!
     var loadingLabel: NSTextField!
@@ -102,14 +102,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     func buildMenuBar() {
         let mainMenu = NSMenu()
 
-        // App menu (shows as "CCC")
+        // App menu (label comes from CFBundleName — see Info.plist)
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About CCC",
+        appMenu.addItem(withTitle: "About Command Center",
                         action: #selector(showAbout),
                         keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "Hide CCC",
+        appMenu.addItem(withTitle: "Check for Updates…",
+                        action: #selector(checkForUpdates),
+                        keyEquivalent: "")
+        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(withTitle: "Hide Command Center",
                         action: #selector(NSApplication.hide(_:)),
                         keyEquivalent: "h")
         let hideOthers = appMenu.addItem(withTitle: "Hide Others",
@@ -120,11 +124,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
                         action: #selector(NSApplication.unhideAllApplications(_:)),
                         keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "Quit CCC",
+        appMenu.addItem(withTitle: "Quit Command Center",
                         action: #selector(NSApplication.terminate(_:)),
                         keyEquivalent: "q")
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
+
+        // Edit menu — gives WKWebView the standard text-editing shortcuts
+        // (⌘V paste, ⌘C copy, ⌘X cut, ⌘A select-all, ⌘Z undo, ⌘⇧Z redo).
+        // Actions are dispatched through the responder chain so WKWebView
+        // receives them automatically.
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo",
+                         action: Selector(("undo:")),
+                         keyEquivalent: "z")
+        let redoItem = editMenu.addItem(withTitle: "Redo",
+                                        action: Selector(("redo:")),
+                                        keyEquivalent: "z")
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(withTitle: "Cut",
+                         action: #selector(NSText.cut(_:)),
+                         keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy",
+                         action: #selector(NSText.copy(_:)),
+                         keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste",
+                         action: #selector(NSText.paste(_:)),
+                         keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All",
+                         action: #selector(NSResponder.selectAll(_:)),
+                         keyEquivalent: "a")
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
 
         // View menu
         let viewMenuItem = NSMenuItem()
@@ -168,13 +201,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         NSApp.windowsMenu = windowMenu
     }
 
+    @objc func checkForUpdates() {
+        // Lightweight check: hit GitHub's latest-release API, compare tags.
+        // If newer, prompt to open the release page. No auto-install yet —
+        // for that we'd need Sparkle (planned for a later release).
+        DispatchQueue.global().async {
+            let urlStr = "https://api.github.com/repos/amirfish1/claude-command-center/releases/latest"
+            guard let url = URL(string: urlStr),
+                  let data = try? Data(contentsOf: url),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = json["tag_name"] as? String,
+                  let pageURLStr = json["html_url"] as? String else {
+                DispatchQueue.main.async {
+                    let alert = NSAlert()
+                    alert.messageText = "Couldn't check for updates"
+                    alert.informativeText = "Try again later, or visit github.com/amirfish1/claude-command-center/releases manually."
+                    alert.runModal()
+                }
+                return
+            }
+            let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+            let current = CCC_BUNDLE_VERSION
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                if latest.compare(current, options: .numeric) == .orderedDescending {
+                    alert.messageText = "Update available"
+                    alert.informativeText = "You have v\(current). Latest is v\(latest)."
+                    alert.addButton(withTitle: "Open Release Page")
+                    alert.addButton(withTitle: "Later")
+                    if alert.runModal() == .alertFirstButtonReturn,
+                       let pageURL = URL(string: pageURLStr) {
+                        NSWorkspace.shared.open(pageURL)
+                    }
+                } else {
+                    alert.messageText = "You're up to date"
+                    alert.informativeText = "v\(current) is the latest release."
+                    alert.runModal()
+                }
+            }
+        }
+    }
+
     @objc func showAbout() {
         let alert = NSAlert()
-        alert.messageText = "Claude Command Center"
+        alert.messageText = "Command Center for Claude, Codex, Antigravity"
         alert.informativeText = """
-        v\(CCC_BUNDLE_VERSION)
+        One inbox for all your AI agents.
 
-        One local dashboard for every Claude Code, Codex, and Antigravity session on your Mac.
+        v\(CCC_BUNDLE_VERSION)
 
         github.com/amirfish1/claude-command-center
         """
@@ -211,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "CCC"
+        window.title = "Command Center for Claude, Codex, Antigravity — v\(CCC_BUNDLE_VERSION)"
         window.minSize = NSSize(width: 900, height: 600)
         window.center()
         window.setFrameAutosaveName("CCCMainWindow")
@@ -227,6 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         webView = WKWebView(frame: window.contentView!.bounds, configuration: config)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
         window.contentView!.addSubview(webView)
 
@@ -374,6 +449,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     }
 
     // MARK: WKNavigationDelegate
+
+    // Route any navigation outside the local CCC dashboard to the system
+    // browser. Without this, an `<a href="https://...">` inside assistant
+    // text would replace the dashboard with that page; `target="_blank"`
+    // links would silently no-op because WKWebView has no concept of
+    // opening a new window unless the UI delegate handles it.
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.allow)
+            return
+        }
+        if isLocalDashboardURL(url) {
+            decisionHandler(.allow)
+        } else {
+            NSWorkspace.shared.open(url)
+            decisionHandler(.cancel)
+        }
+    }
+
+    func isLocalDashboardURL(_ url: URL) -> Bool {
+        let scheme = (url.scheme ?? "").lowercased()
+        if scheme == "about" || scheme == "data" || scheme == "blob" { return true }
+        if scheme != "http" && scheme != "https" { return false }
+        let host = (url.host ?? "").lowercased()
+        return host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0"
+    }
+
+    // MARK: WKUIDelegate
+
+    // Fired for `target="_blank"` and `window.open(...)`. Returning nil tells
+    // WKWebView "I handled it; don't create a child view." We open the URL
+    // in the user's default browser instead.
+    func webView(_ webView: WKWebView,
+                 createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction,
+                 windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if let url = navigationAction.request.url {
+            NSWorkspace.shared.open(url)
+        }
+        return nil
+    }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         loadingLabel.isHidden = false
