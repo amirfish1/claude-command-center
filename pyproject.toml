@@ -1,6 +1,6 @@
 [project]
 name = "claude-command-center"
-version = "4.3.2"
+version = "4.3.2.1"
 description = "A local command center for Claude Code that doesn't care how your agents were launched."
 readme = "README.md"
 requires-python = ">=3.10"

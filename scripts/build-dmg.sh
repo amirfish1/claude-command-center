@@ -192,7 +192,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
        (label "Private key for signing Sparkle updates"). Losing the
        private key means rotating to a new keypair, which breaks
        auto-update for every user still on the old key. -->
-  <key>SUFeedURL</key><string>https://amirfish1.github.io/claude-command-center/appcast.xml</string>
+  <key>SUFeedURL</key><string>https://ccc.amirfish.ai/appcast.xml</string>
   <key>SUPublicEDKey</key><string>+oU5VeStRaidpogMHUktYpr/JxKuSn9wY1xEgN106lY=</string>
   <key>SUEnableInstallerLauncherService</key><true/>
   <key>SUEnableAutomaticChecks</key><true/>

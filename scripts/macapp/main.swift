@@ -176,6 +176,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         editMenu.addItem(withTitle: "Select All",
                          action: #selector(NSResponder.selectAll(_:)),
                          keyEquivalent: "a")
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(withTitle: "Find…",
+                         action: #selector(focusFind),
+                         keyEquivalent: "f")
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
 
@@ -189,6 +193,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                                            action: #selector(forceReload),
                                            keyEquivalent: "r")
         forceReload.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(NSMenuItem.separator())
+        let backItem = viewMenu.addItem(withTitle: "Back",
+                                        action: #selector(goBack),
+                                        keyEquivalent: "[")
+        backItem.keyEquivalentModifierMask = [.command]
+        let forwardItem = viewMenu.addItem(withTitle: "Forward",
+                                           action: #selector(goForward),
+                                           keyEquivalent: "]")
+        forwardItem.keyEquivalentModifierMask = [.command]
         viewMenu.addItem(NSMenuItem.separator())
         let zoomIn = viewMenu.addItem(withTitle: "Zoom In",
                                       action: #selector(zoomIn(_:)),
@@ -214,6 +227,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         windowMenu.addItem(withTitle: "Zoom",
                            action: #selector(NSWindow.performZoom(_:)),
                            keyEquivalent: "")
+        windowMenu.addItem(withTitle: "Close Window",
+                           action: #selector(NSWindow.performClose(_:)),
+                           keyEquivalent: "w")
         windowMenuItem.submenu = windowMenu
         mainMenu.addItem(windowMenuItem)
 
@@ -253,6 +269,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     @objc func zoomReset(_ sender: Any?) {
         webView.pageZoom = 1.0
+    }
+
+    @objc func goBack() {
+        if webView.canGoBack { webView.goBack() }
+    }
+
+    @objc func goForward() {
+        if webView.canGoForward { webView.goForward() }
+    }
+
+    @objc func focusFind() {
+        // ⌘F: focus the dashboard's conversation search input. Falls back to
+        // ⌘K command palette if the dedicated search isn't on the page yet.
+        let js = """
+        (function(){
+          var el = document.getElementById('convSearch')
+               || document.querySelector('.conv-search-input')
+               || document.getElementById('cmdkInput');
+          if (el) { el.focus(); el.select(); return true; }
+          return false;
+        })();
+        """
+        webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
     // MARK: Window

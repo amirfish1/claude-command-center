@@ -1,6 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Claude Command Center">
-  <rect width="512" height="512" rx="112" fill="#0d1117"/>
-  <text x="256" y="368" text-anchor="middle"
-        font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif"
-        font-size="320" font-weight="700" fill="#d97757">⌘</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Command Center for Claude, Codex, Antigravity">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="55%" r="70%">
+      <stop offset="0%" stop-color="#1e2632"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </radialGradient>
+    <radialGradient id="node">
+      <stop offset="0%" stop-color="#ffd1a6"/>
+      <stop offset="55%" stop-color="#e07655"/>
+      <stop offset="100%" stop-color="#a04830"/>
+    </radialGradient>
+    <radialGradient id="centerGlow">
+      <stop offset="0%" stop-color="#ffe2b8" stop-opacity="0.9"/>
+      <stop offset="35%" stop-color="#ff8855" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#ff5530" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="256" cy="288" r="170" fill="url(#centerGlow)"/>
+  <g stroke="#e07655" stroke-width="7" stroke-linecap="round" opacity="0.95" fill="none">
+    <line x1="256" y1="142" x2="138" y2="376"/>
+    <line x1="138" y1="376" x2="374" y2="376"/>
+    <line x1="374" y1="376" x2="256" y2="142"/>
+  </g>
+  <circle cx="256" cy="142" r="28" fill="url(#node)"/>
+  <circle cx="138" cy="376" r="28" fill="url(#node)"/>
+  <circle cx="374" cy="376" r="28" fill="url(#node)"/>
+  <circle cx="256" cy="288" r="20" fill="#ffe2b8"/>
 </svg>
