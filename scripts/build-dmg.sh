@@ -4,23 +4,26 @@
 # Output: ccc-v<version>.dmg in the repo root.
 #
 # The DMG contains:
-#   - CCC.app           — a thin AppleScript/bash launcher that wraps
-#                         scripts/install.sh. Drag this to /Applications.
+#   - CCC.app           — a native Cocoa/WKWebView shell (Swift, ~150KB
+#                         universal binary) that hosts the localhost
+#                         dashboard inside a real Mac window. Compiled
+#                         from scripts/macapp/main.swift.
 #   - Applications      — symlink target so the user can drag CCC.app onto it.
 #
 # CCC.app does NOT bundle Python or the Claude CLI. It expects them on PATH
-# (same prereqs as curl install). If they are missing, the launcher pops a
-# friendly dialog pointing to docs.claude.com.
+# (same prereqs as curl install). On first launch (no ~/.ccc/claude-command-center
+# on disk) it spawns a Terminal window with the bundled install.sh — same
+# UX as the curl install, since we need user consent to clone into $HOME.
 #
 # This is the "click-to-install" path, alongside curl-bash and brew tap.
-# All three paths share the same install.sh, so behaviour stays consistent.
+# All three paths share scripts/install.sh, so behaviour stays consistent.
 #
 # Usage:
 #   ./scripts/build-dmg.sh                # version pulled from pyproject.toml
 #   ./scripts/build-dmg.sh 4.3.1          # explicit version
 #
-# Requirements: macOS (uses hdiutil, sips, iconutil, plutil). All are
-# system-provided on every Mac.
+# Requirements: macOS Command Line Tools (swiftc, hdiutil, sips, iconutil,
+# plutil, lipo). All ship with Xcode CLT — no full Xcode app needed.
 
 set -euo pipefail
 
@@ -105,7 +108,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
-  <key>LSMinimumSystemVersion</key><string>10.15</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>LSUIElement</key><false/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>MIT — github.com/amirfish1/claude-command-center</string>
@@ -115,78 +118,27 @@ EOF
 plutil -lint "$APP_DIR/Contents/Info.plist" >/dev/null
 
 # ---------------------------------------------------------------------------
-# Launcher: Contents/MacOS/CCC
+# Executable: compile main.swift to a universal (arm64 + x86_64) binary
 # ---------------------------------------------------------------------------
-cat > "$APP_DIR/Contents/MacOS/CCC" <<'LAUNCHER_EOF'
-#!/bin/bash
-# CCC.app launcher.
-#
-# Fast path: if CCC is already running on :8090, just open the browser.
-# Slow path: spawn Terminal.app and run the bundled install.sh with
-# CCC_FROM=dmg. The user sees familiar install output and the script
-# either drops them into ./run.sh foreground or installs as a launchd
-# service (their choice — install.sh asks).
-set -euo pipefail
-
-PORT=8090
-URL="http://localhost:${PORT}"
-
-# Resolve bundle layout
-APP_BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
-RESOURCES_DIR="$(cd "$APP_BIN_DIR/../Resources" && pwd)"
-INSTALL_SCRIPT="$RESOURCES_DIR/install.sh"
-
-# LaunchServices strips PATH to a minimal default when a .app is
-# double-clicked. Add the common spots `claude`, `git`, `python3` live:
-#   ~/.local/bin    Anthropic native installer default for claude
-#   /opt/homebrew   Homebrew on Apple Silicon
-#   /usr/local      Homebrew on Intel / traditional
-#   ~/.bun/bin      Bun (some users install claude via bun)
-#   /usr/bin:/bin   System binaries (python3, git from Xcode CLT)
-export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
-
-# Fast path: server already up
-if (echo > "/dev/tcp/127.0.0.1/${PORT}") >/dev/null 2>&1; then
-  open "$URL" >/dev/null 2>&1 || true
-  exit 0
+SWIFT_SRC="$REPO_ROOT/scripts/macapp/main.swift"
+if [ ! -f "$SWIFT_SRC" ]; then
+  echo "build-dmg: $SWIFT_SRC not found" >&2
+  exit 1
 fi
-
-# Sanity: bundled installer present
-if [ ! -f "$INSTALL_SCRIPT" ]; then
-  osascript -e 'display alert "CCC installer missing" message "This DMG is missing scripts/install.sh. Re-download from github.com/amirfish1/claude-command-center/releases or try the curl install."' >/dev/null 2>&1 || true
+if ! command -v swiftc >/dev/null 2>&1; then
+  echo "build-dmg: swiftc not found. Install Xcode CLT: xcode-select --install" >&2
   exit 1
 fi
 
-# Prereq: claude CLI. python3 + git are checked again by install.sh, but
-# claude is the one most likely missing on a fresh Mac and the error there
-# is less recoverable, so warn early.
-if ! command -v claude >/dev/null 2>&1; then
-  osascript <<APPLESCRIPT >/dev/null 2>&1 || true
-set claudeURL to "https://docs.claude.com/en/docs/claude-code"
-set dialogResult to display alert "Claude CLI not found" message "CCC needs the Claude Code CLI on your PATH. Install it from Anthropic's docs, then re-launch CCC." buttons {"Cancel", "Open docs"} default button "Open docs"
-if button returned of dialogResult is "Open docs" then
-  do shell script "open " & quoted form of claudeURL
-end if
-APPLESCRIPT
-  exit 1
-fi
-
-# Copy installer to /tmp so Terminal can read it without bundle-quarantine drama
-TMP_SCRIPT="$(mktemp -t ccc-install).sh"
-cp "$INSTALL_SCRIPT" "$TMP_SCRIPT"
-chmod +x "$TMP_SCRIPT"
-
-# Open Terminal with the installer
-osascript <<APPLESCRIPT >/dev/null 2>&1
-tell application "Terminal"
-  activate
-  do script "clear; echo '→ Claude Command Center installer (DMG path)'; echo; CCC_FROM=dmg bash '${TMP_SCRIPT}'; echo; echo '(You can close this window once CCC is running.)'"
-end tell
-APPLESCRIPT
-
-exit 0
-LAUNCHER_EOF
+echo "build-dmg: compiling main.swift (arm64 + x86_64 universal)"
+ARM_BIN="$WORK_DIR/CCC-arm64"
+X86_BIN="$WORK_DIR/CCC-x86_64"
+swiftc -O -target arm64-apple-macos11.0 -o "$ARM_BIN" "$SWIFT_SRC"
+swiftc -O -target x86_64-apple-macos11.0 -o "$X86_BIN" "$SWIFT_SRC"
+lipo -create "$ARM_BIN" "$X86_BIN" -output "$APP_DIR/Contents/MacOS/CCC"
 chmod +x "$APP_DIR/Contents/MacOS/CCC"
+BIN_SIZE_KB="$(du -k "$APP_DIR/Contents/MacOS/CCC" | awk '{print $1}')"
+echo "build-dmg: binary = ${BIN_SIZE_KB} KB (universal)"
 
 # ---------------------------------------------------------------------------
 # Strip extended attributes that Gatekeeper sometimes chokes on
@@ -215,13 +167,16 @@ Claude Command Center — v${VERSION}
 
 1. Drag CCC.app onto the Applications folder.
 2. Open CCC from Launchpad or /Applications.
-3. The installer opens a Terminal window. Approve the prereqs, then
-   the dashboard opens at http://localhost:8090.
+3. CCC opens as a native Mac window. The dashboard runs locally on
+   your machine; nothing leaves your computer.
 
 First launch: macOS may say "CCC is from an unidentified developer".
 Right-click CCC.app in Applications → Open → Open. This only happens
-once. CCC is open source; the project is unsigned by choice (no Apple
-developer account).
+once. CCC is open source and unsigned (no Apple developer account).
+
+First launch only: CCC needs to clone its source into ~/.ccc and
+verify the Claude Code CLI is installed. A short Terminal window
+appears for this; close it once the CCC window loads.
 
 Curl and Homebrew install paths are also available — see
 https://github.com/amirfish1/claude-command-center
