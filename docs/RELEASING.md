@@ -83,13 +83,41 @@ EOF
 )"
 ```
 
-## 6. Verify
+## 6. Build + ship the macOS DMG (Sparkle auto-update)
+
+```bash
+# Builds, codesigns with Developer ID, notarizes, then EdDSA-signs the
+# DMG and updates docs/appcast.xml in one shot:
+./scripts/release-dmg.sh X.Y.Z
+
+# Upload to the GitHub release:
+gh release upload vX.Y.Z ccc-vX.Y.Z.dmg
+
+# Publish the appcast so users on older versions see the update:
+git commit --only docs/appcast.xml -m "chore(release): publish vX.Y.Z appcast"
+git push origin main
+```
+
+For local iteration without notarization (~10s build):
+
+```bash
+./scripts/build-dmg.sh --fast X.Y.Z
+```
+
+The Sparkle EdDSA private key lives in the maintainer's macOS login
+keychain (account = `+oU5VeStRaidpogMHUktYpr/JxKuSn9wY1xEgN106lY=`, label
+"Private key for signing Sparkle updates"). Lose that keychain entry and
+you lose the ability to ship auto-updates to users on the current public
+key — they'll have to download a fresh DMG with a new `SUPublicEDKey`.
+
+## 7. Verify
 
 - CI is green: `gh run list --limit 3`
 - Release page looks right: `gh release view vX.Y.Z --web`
 - `/api/version` reports the new number: `curl -s localhost:$PORT/api/version`
+- Appcast is live: `curl -s https://amirfish1.github.io/claude-command-center/appcast.xml | grep sparkle:version`
 
-## If something goes wrong
+## 8. If something goes wrong
 
 - **Wrong tag pushed:** delete locally and remotely, then redo.
   ```bash

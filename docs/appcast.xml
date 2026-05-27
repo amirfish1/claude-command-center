@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>Claude Command Center — Updates</title>
+        <link>https://amirfish1.github.io/claude-command-center/appcast.xml</link>
+        <description>Sparkle update feed for CCC.app.</description>
+        <language>en</language>
+        <item>
+            <title>v4.3.2</title>
+            <pubDate>Wed, 27 May 2026 22:49:13 +0000</pubDate>
+            <sparkle:version>4.3.2</sparkle:version>
+            <sparkle:shortVersionString>4.3.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>https://github.com/amirfish1/claude-command-center/releases/tag/v4.3.2</sparkle:releaseNotesLink>
+            <enclosure
+                url="https://github.com/amirfish1/claude-command-center/releases/download/v4.3.2/ccc-v4.3.2.dmg"
+                length="994364"
+                type="application/octet-stream"
+                sparkle:edSignature="VDonj0tFy6ckLIJNQFqT5jhnBYPkug+Ou63VJ9JPLcy02/jvwWaYocoFIHQMaoSEOwd6861eYOJ9uqVaiPaCBQ==" />
+        </item>
+    </channel>
+</rss>

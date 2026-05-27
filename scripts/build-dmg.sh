@@ -21,16 +21,23 @@
 # Usage:
 #   ./scripts/build-dmg.sh                # full release build (sign + notarize + staple)
 #   ./scripts/build-dmg.sh 4.3.1          # explicit version
-#   ./scripts/build-dmg.sh --fast         # adhoc-sign only, skip notarization
-#   ./scripts/build-dmg.sh --fast 4.3.1   # both
+#   ./scripts/build-dmg.sh --fast         # ad-hoc sign, skip notarization
+#   ./scripts/build-dmg.sh --fast 4.3.1
 #
-# --fast skips: Developer ID codesign, DMG-level codesign, Apple notarization,
-# stapler staple. Produces an adhoc-signed DMG in ~10 seconds instead of
-# ~3 minutes. Users will see the macOS "unidentified developer" prompt —
-# fine for local smoke testing, NOT for release.
+# --fast mode produces a usable local DMG (ad-hoc codesign, no Developer ID,
+# no notarization) in ~10 seconds. Use for iteration. The DMG will trigger
+# the standard "unidentified developer" Gatekeeper warning.
+#
+# Full mode (default) signs with the bundled Developer ID Application
+# identity, embeds Sparkle.framework, signs every nested helper (Autoupdate,
+# Updater.app, XPCServices) with hardened runtime + timestamp, then submits
+# the DMG to Apple notarytool using the `ccc-notary` keychain profile and
+# staples the ticket. Takes ~5 minutes (notarization queue).
 #
 # Requirements: macOS Command Line Tools (swiftc, hdiutil, sips, iconutil,
 # plutil, lipo). All ship with Xcode CLT — no full Xcode app needed.
+# Sparkle.framework lives in scripts/macapp/vendor/Sparkle.framework
+# (vendored from sparkle-project.org/Sparkle/releases).
 
 set -euo pipefail
 
@@ -43,16 +50,29 @@ if [ "$(uname -s)" != "Darwin" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Parse flags
+# Flags + positional args
 # ---------------------------------------------------------------------------
 FAST_MODE=0
 VERSION=""
 for arg in "$@"; do
   case "$arg" in
-    --fast)        FAST_MODE=1 ;;
-    --help|-h)     sed -n '1,20p' "$0"; exit 0 ;;
-    -*)            echo "build-dmg: unknown flag: $arg" >&2; exit 1 ;;
-    *)             VERSION="$arg" ;;
+    --fast) FAST_MODE=1 ;;
+    -h|--help)
+      sed -n '2,30p' "$0"
+      exit 0
+      ;;
+    -*)
+      echo "build-dmg: unknown flag: $arg" >&2
+      exit 1
+      ;;
+    *)
+      if [ -z "$VERSION" ]; then
+        VERSION="$arg"
+      else
+        echo "build-dmg: unexpected arg: $arg" >&2
+        exit 2
+      fi
+      ;;
   esac
 done
 
@@ -66,10 +86,37 @@ if [ -z "$VERSION" ]; then
   echo "build-dmg: could not resolve version (pass as arg or set in pyproject.toml)" >&2
   exit 1
 fi
-if [ "$FAST_MODE" = "1" ]; then
-  echo "build-dmg: --fast mode (adhoc-sign, skip notarization)"
+echo "build-dmg: version = $VERSION  mode = $([ $FAST_MODE -eq 1 ] && echo fast || echo full)"
+
+# ---------------------------------------------------------------------------
+# Sparkle vendor — fail fast if the framework isn't on disk
+# ---------------------------------------------------------------------------
+SPARKLE_VENDOR="$REPO_ROOT/scripts/macapp/vendor/Sparkle.framework"
+if [ ! -d "$SPARKLE_VENDOR" ]; then
+  echo "build-dmg: Sparkle.framework not vendored at $SPARKLE_VENDOR" >&2
+  echo "build-dmg: download Sparkle-2.x.x.tar.xz from" >&2
+  echo "  https://github.com/sparkle-project/Sparkle/releases" >&2
+  echo "  and extract Sparkle.framework + bin/ into scripts/macapp/vendor/" >&2
+  exit 1
 fi
-echo "build-dmg: version = $VERSION"
+
+# ---------------------------------------------------------------------------
+# Resolve signing identity (full mode only)
+# ---------------------------------------------------------------------------
+SIGN_IDENTITY=""
+if [ $FAST_MODE -eq 0 ]; then
+  # Pull the first Developer ID Application identity from the keychain.
+  # Override with DEVELOPER_ID env var if multiple are installed.
+  SIGN_IDENTITY="${DEVELOPER_ID:-$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep -E '"Developer ID Application:' | head -1 \
+    | sed -E 's/.*"(Developer ID Application:[^"]+)".*/\1/')}"
+  if [ -z "$SIGN_IDENTITY" ]; then
+    echo "build-dmg: no 'Developer ID Application' identity in keychain." >&2
+    echo "build-dmg: install one or pass --fast for an ad-hoc build." >&2
+    exit 1
+  fi
+  echo "build-dmg: signing identity = $SIGN_IDENTITY"
+fi
 
 DMG_NAME="ccc-v${VERSION}.dmg"
 DMG_PATH="$REPO_ROOT/$DMG_NAME"
@@ -140,6 +187,16 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
   <key>LSUIElement</key><false/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>MIT — github.com/amirfish1/claude-command-center</string>
+  <!-- Sparkle auto-update. Public EdDSA key verifies update signatures;
+       its matching private key lives in the maintainer's macOS keychain
+       (label "Private key for signing Sparkle updates"). Losing the
+       private key means rotating to a new keypair, which breaks
+       auto-update for every user still on the old key. -->
+  <key>SUFeedURL</key><string>https://amirfish1.github.io/claude-command-center/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>+oU5VeStRaidpogMHUktYpr/JxKuSn9wY1xEgN106lY=</string>
+  <key>SUEnableInstallerLauncherService</key><true/>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUScheduledCheckInterval</key><integer>86400</integer>
 </dict>
 </plist>
 EOF
@@ -161,12 +218,29 @@ fi
 echo "build-dmg: compiling main.swift (arm64 + x86_64 universal)"
 ARM_BIN="$WORK_DIR/CCC-arm64"
 X86_BIN="$WORK_DIR/CCC-x86_64"
-swiftc -O -target arm64-apple-macos11.0 -o "$ARM_BIN" "$SWIFT_SRC"
-swiftc -O -target x86_64-apple-macos11.0 -o "$X86_BIN" "$SWIFT_SRC"
+# -F  adds the vendor dir to the framework search path so `import Sparkle`
+#     resolves at compile time.
+# -rpath @executable_path/../Frameworks tells dyld where to find
+#     Sparkle.framework at runtime (the .app's Frameworks directory).
+SPARKLE_VENDOR_DIR="$(dirname "$SPARKLE_VENDOR")"
+SWIFTC_FLAGS=(-O -F "$SPARKLE_VENDOR_DIR" -Xlinker -rpath -Xlinker "@executable_path/../Frameworks")
+swiftc "${SWIFTC_FLAGS[@]}" -target arm64-apple-macos11.0  -o "$ARM_BIN" "$SWIFT_SRC"
+swiftc "${SWIFTC_FLAGS[@]}" -target x86_64-apple-macos11.0 -o "$X86_BIN" "$SWIFT_SRC"
 lipo -create "$ARM_BIN" "$X86_BIN" -output "$APP_DIR/Contents/MacOS/CCC"
 chmod +x "$APP_DIR/Contents/MacOS/CCC"
 BIN_SIZE_KB="$(du -k "$APP_DIR/Contents/MacOS/CCC" | awk '{print $1}')"
 echo "build-dmg: binary = ${BIN_SIZE_KB} KB (universal)"
+
+# ---------------------------------------------------------------------------
+# Copy Sparkle.framework into the bundle BEFORE codesign.
+# Sparkle ships as a versioned framework; preserve symlinks (cp -R follows
+# the Versions/Current/Sparkle and Versions/B/Sparkle structure correctly).
+# We need to copy without dereferencing the symlinks so codesign sees the
+# canonical Versions/B layout it expects.
+# ---------------------------------------------------------------------------
+mkdir -p "$APP_DIR/Contents/Frameworks"
+cp -R "$SPARKLE_VENDOR" "$APP_DIR/Contents/Frameworks/"
+echo "build-dmg: bundled Sparkle.framework ($(du -sh "$APP_DIR/Contents/Frameworks/Sparkle.framework" | awk '{print $1}'))"
 
 # ---------------------------------------------------------------------------
 # Strip extended attributes that Gatekeeper sometimes chokes on
@@ -174,54 +248,74 @@ echo "build-dmg: binary = ${BIN_SIZE_KB} KB (universal)"
 xattr -cr "$APP_DIR" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# Code signing
+# Codesign.
 #
-# Auto-detects whether a "Developer ID Application" cert is in the Keychain.
-#   - Present  → real codesign with hardened runtime + secure timestamp.
-#                Sets SIGNED=1 so the DMG step also submits for notarization.
-#   - Missing  → ad-hoc sign. DMG ships but users see the "unidentified
-#                developer" Gatekeeper prompt (right-click → Open dance).
+# Sparkle has several nested signed-helper-blobs (Autoupdate, Updater.app,
+# XPCServices). Each one needs its own valid signature with the same
+# identity, and the framework Versions/B itself must be signed too.
+# Sign deepest-first (helpers, then the framework, then the .app) — codesign
+# refuses to overwrite a child signature when the parent is already sealed.
+#
+# Fast mode uses an ad-hoc identity ("-") and skips hardened runtime,
+# matching the previous behaviour. This is the iteration path; the result
+# DMG is not notarizable, and Gatekeeper will prompt the user.
+#
+# Full mode uses the Developer ID Application identity with hardened
+# runtime + secure timestamp — required for notarytool to accept it.
 # ---------------------------------------------------------------------------
-DEVELOPER_ID="$(security find-identity -v -p codesigning 2>/dev/null \
-                 | awk -F\" '/Developer ID Application/ {print $2; exit}')"
-SIGNED=0
+SPARKLE_FW="$APP_DIR/Contents/Frameworks/Sparkle.framework"
 
-# --fast skips Developer ID entirely. Useful for iterating without
-# burning 3 min per build on Apple's notarization queue.
-if [ "$FAST_MODE" = "1" ]; then
-  DEVELOPER_ID=""
-fi
-
-if [ -n "$DEVELOPER_ID" ]; then
-  echo "build-dmg: codesigning with: $DEVELOPER_ID"
-
-  # Minimal entitlements — hardened runtime alone is enough for a WKWebView
-  # shell that spawns Apple-signed child processes (bash, python3).
-  ENTITLEMENTS="$WORK_DIR/CCC.entitlements"
-  cat > "$ENTITLEMENTS" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-</dict>
-</plist>
-PLIST
-
-  codesign --force --deep --sign "$DEVELOPER_ID" \
-           --options runtime \
-           --timestamp \
-           --entitlements "$ENTITLEMENTS" \
-           "$APP_DIR"
-
-  # Sanity check the signature before we go further
-  codesign --verify --deep --strict --verbose=2 "$APP_DIR" 2>&1 | tail -5
-  SIGNED=1
+if [ $FAST_MODE -eq 1 ]; then
+  echo "build-dmg: ad-hoc codesign (fast mode)"
+  CODESIGN_FLAGS=(--force --sign -)
 else
-  echo "build-dmg: no Developer ID Application cert in Keychain — using ad-hoc sign"
-  echo "build-dmg: (DMG will still work; users will see the Gatekeeper 'unidentified developer' prompt)"
-  codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || \
-    echo "build-dmg: ad-hoc codesign failed (non-fatal)"
+  echo "build-dmg: codesign with hardened runtime + timestamp (full mode)"
+  CODESIGN_FLAGS=(--force --options runtime --timestamp --sign "$SIGN_IDENTITY")
 fi
+
+# Sign Sparkle helpers from the inside out. The exact set of nested
+# signables in Sparkle 2.x:
+#   Versions/B/XPCServices/Downloader.xpc
+#   Versions/B/XPCServices/Installer.xpc
+#   Versions/B/Updater.app
+#   Versions/B/Autoupdate            (executable inside Updater.app or root)
+# We just walk the directory and sign anything that looks signable.
+sign_target() {
+  local target="$1"
+  if [ ! -e "$target" ]; then return 0; fi
+  codesign "${CODESIGN_FLAGS[@]}" "$target" >/dev/null 2>&1 || {
+    echo "build-dmg: codesign failed for $target" >&2
+    return 1
+  }
+}
+
+# 1. XPC services (must be sealed before their parent Updater.app).
+for xpc in "$SPARKLE_FW/Versions/B/XPCServices/"*.xpc; do
+  [ -e "$xpc" ] || continue
+  sign_target "$xpc"
+done
+# 2. Updater.app (uses XPCs as siblings inside the framework, not nested).
+sign_target "$SPARKLE_FW/Versions/B/Updater.app"
+# 3. Autoupdate binary lives under Versions/B/Autoupdate in Sparkle 2.x.
+sign_target "$SPARKLE_FW/Versions/B/Autoupdate"
+# 4. Versions/B (the actual versioned framework directory).
+sign_target "$SPARKLE_FW/Versions/B"
+# 5. Top-level Sparkle.framework (sealing the Versions symlink).
+sign_target "$SPARKLE_FW"
+
+# 6. The .app itself, deep so any other nested helpers we missed get sealed.
+codesign "${CODESIGN_FLAGS[@]}" --deep "$APP_DIR" >/dev/null 2>&1 || {
+  echo "build-dmg: codesign of $APP_DIR failed" >&2
+  exit 1
+}
+
+# Validate the chain before we bother building the DMG / submitting to Apple.
+if ! codesign --verify --deep --strict --verbose=2 "$APP_DIR" 2>&1 | grep -q "satisfies its Designated Requirement"; then
+  echo "build-dmg: codesign --verify --deep --strict failed:" >&2
+  codesign --verify --deep --strict --verbose=2 "$APP_DIR" >&2 || true
+  exit 1
+fi
+echo "build-dmg: codesign chain verified clean"
 
 # ---------------------------------------------------------------------------
 # Stage + build DMG
@@ -276,52 +370,49 @@ SIZE_KB="$(du -k "$DMG_PATH" | awk '{print $1}')"
 echo "build-dmg: wrote $DMG_PATH (${SIZE_KB} KB)"
 
 # ---------------------------------------------------------------------------
-# Notarize + staple (only when we signed with a real Developer ID)
+# Notarize + staple (full mode only).
 #
-# Apple validates the .app inside the DMG, sends a "ticket" we staple onto
-# the DMG. With the ticket stapled, Gatekeeper trusts the DMG offline —
-# users get a single double-click open with no "unidentified developer"
-# prompt and no right-click → Open dance.
+# The `ccc-notary` keychain profile holds the Apple ID + app-specific
+# password + team ID. Set it up once with:
+#   xcrun notarytool store-credentials ccc-notary \
+#     --apple-id <apple-id> --team-id N6VV8ZKSJS --password <app-pw>
 #
-# Requires `xcrun notarytool store-credentials ccc-notary ...` to have been
-# run once with the user's Apple ID + Team ID + app-specific password.
+# Notarytool waits synchronously when --wait is passed. After a successful
+# response we staple the ticket onto the DMG so the .app survives offline
+# Gatekeeper checks too.
 # ---------------------------------------------------------------------------
-if [ "${SIGNED:-0}" = "1" ]; then
-  echo "build-dmg: signing the DMG itself"
-  codesign --force --sign "$DEVELOPER_ID" --timestamp "$DMG_PATH"
+if [ $FAST_MODE -eq 0 ]; then
+  echo "build-dmg: codesigning DMG itself"
+  codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG_PATH"
 
-  # Check the notarytool keychain profile exists; if not, skip with a hint.
-  if xcrun notarytool history --keychain-profile ccc-notary >/dev/null 2>&1; then
-    echo "build-dmg: submitting to Apple for notarization (2-15 min typical)"
-    SUBMIT_LOG="$WORK_DIR/notarize-submit.txt"
-    if xcrun notarytool submit "$DMG_PATH" \
-         --keychain-profile ccc-notary \
-         --wait \
-         --timeout 30m 2>&1 | tee "$SUBMIT_LOG"; then
-
-      # notarytool exits 0 even on rejected status; double-check the log
-      if grep -q "status: Accepted" "$SUBMIT_LOG"; then
-        echo "build-dmg: stapling notarization ticket onto DMG"
-        xcrun stapler staple "$DMG_PATH"
-
-        echo "build-dmg: gatekeeper assessment —"
-        /usr/sbin/spctl --assess --type install --verbose=2 "$DMG_PATH" 2>&1 | sed 's/^/  /'
-        xcrun stapler validate "$DMG_PATH" 2>&1 | sed 's/^/  /'
-      else
-        SUBMISSION_ID="$(awk '/id:/ {print $2; exit}' "$SUBMIT_LOG")"
-        echo "build-dmg: notarization NOT accepted." >&2
-        echo "build-dmg: log: xcrun notarytool log $SUBMISSION_ID --keychain-profile ccc-notary" >&2
-      fi
+  echo "build-dmg: submitting $DMG_NAME to notarytool (2-15 min typical)…"
+  SUBMIT_LOG="$WORK_DIR/notarize-submit.txt"
+  if xcrun notarytool submit "$DMG_PATH" \
+       --keychain-profile ccc-notary \
+       --wait \
+       --timeout 30m 2>&1 | tee "$SUBMIT_LOG"; then
+    # notarytool exits 0 even on rejected status; check the log to confirm.
+    if grep -q "status: Accepted" "$SUBMIT_LOG"; then
+      echo "build-dmg: stapling notarization ticket"
+      xcrun stapler staple "$DMG_PATH"
+      echo "build-dmg: gatekeeper assessment —"
+      /usr/sbin/spctl --assess --type install --verbose=2 "$DMG_PATH" 2>&1 | sed 's/^/  /'
+      xcrun stapler validate "$DMG_PATH" 2>&1 | sed 's/^/  /'
     else
-      echo "build-dmg: notarytool submit failed — see $SUBMIT_LOG" >&2
+      SUBMISSION_ID="$(awk '/id:/ {print $2; exit}' "$SUBMIT_LOG")"
+      echo "build-dmg: notarization NOT accepted." >&2
+      echo "build-dmg: full log: xcrun notarytool log $SUBMISSION_ID --keychain-profile ccc-notary" >&2
+      exit 1
     fi
   else
-    echo "build-dmg: notarytool profile 'ccc-notary' not found in Keychain."
-    echo "build-dmg: run once: xcrun notarytool store-credentials ccc-notary --apple-id <email> --team-id <TEAMID> --password <app-specific-pw>"
-    echo "build-dmg: DMG is signed but not notarized. Users will still get the Gatekeeper prompt."
+    echo "build-dmg: notarytool submit failed — see $SUBMIT_LOG" >&2
+    exit 1
   fi
 fi
 
 echo "build-dmg: next steps —"
-echo "  open '$DMG_PATH'                       # smoke test locally"
-echo "  gh release upload v${VERSION} '$DMG_PATH' --clobber   # publish to GitHub release"
+echo "  open '$DMG_PATH'                            # smoke test locally"
+if [ $FAST_MODE -eq 0 ]; then
+  echo "  scripts/release-dmg.sh ${VERSION}           # sign DMG for Sparkle + update appcast"
+  echo "  gh release upload v${VERSION} '$DMG_PATH' --clobber   # publish to GitHub release"
+fi

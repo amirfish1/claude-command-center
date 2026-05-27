@@ -12,6 +12,7 @@
 
 import Cocoa
 import WebKit
+import Sparkle
 
 // MARK: - Constants
 
@@ -70,8 +71,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var loadingLabel: NSTextField!
     var serverProcess: Process?
     var pollTimer: Timer?
+    // Sparkle drives "Check for Updates…" via the appcast at SUFeedURL in
+    // Info.plist. Public EdDSA key (SUPublicEDKey) verifies the DMG signature.
+    // startingUpdater: true means Sparkle will run its scheduled background
+    // check (interval and "automatically check" flag are controlled by the
+    // user via the standard Sparkle update prompt the first time it runs).
+    var updaterController: SPUStandardUpdaterController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
         buildMenuBar()
         buildWindow()
         bootstrap()
@@ -109,9 +121,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                         action: #selector(showAbout),
                         keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "Check for Updates…",
-                        action: #selector(checkForUpdates),
-                        keyEquivalent: "")
+        // Sparkle's standard updater controller handles validation of the
+        // -checkForUpdates: selector — when it's wired to updaterController
+        // as the target, the menu item auto-disables while a check is in
+        // flight. No keyEquivalent: macOS HIG says updates aren't a hotkey.
+        let updatesItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        updatesItem.target = updaterController
+        appMenu.addItem(updatesItem)
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Hide Command Center",
                         action: #selector(NSApplication.hide(_:)),
@@ -199,47 +219,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
-    }
-
-    @objc func checkForUpdates() {
-        // Lightweight check: hit GitHub's latest-release API, compare tags.
-        // If newer, prompt to open the release page. No auto-install yet —
-        // for that we'd need Sparkle (planned for a later release).
-        DispatchQueue.global().async {
-            let urlStr = "https://api.github.com/repos/amirfish1/claude-command-center/releases/latest"
-            guard let url = URL(string: urlStr),
-                  let data = try? Data(contentsOf: url),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tag = json["tag_name"] as? String,
-                  let pageURLStr = json["html_url"] as? String else {
-                DispatchQueue.main.async {
-                    let alert = NSAlert()
-                    alert.messageText = "Couldn't check for updates"
-                    alert.informativeText = "Try again later, or visit github.com/amirfish1/claude-command-center/releases manually."
-                    alert.runModal()
-                }
-                return
-            }
-            let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
-            let current = CCC_BUNDLE_VERSION
-            DispatchQueue.main.async {
-                let alert = NSAlert()
-                if latest.compare(current, options: .numeric) == .orderedDescending {
-                    alert.messageText = "Update available"
-                    alert.informativeText = "You have v\(current). Latest is v\(latest)."
-                    alert.addButton(withTitle: "Open Release Page")
-                    alert.addButton(withTitle: "Later")
-                    if alert.runModal() == .alertFirstButtonReturn,
-                       let pageURL = URL(string: pageURLStr) {
-                        NSWorkspace.shared.open(pageURL)
-                    }
-                } else {
-                    alert.messageText = "You're up to date"
-                    alert.informativeText = "v\(current) is the latest release."
-                    alert.runModal()
-                }
-            }
-        }
     }
 
     @objc func showAbout() {
