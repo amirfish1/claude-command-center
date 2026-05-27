@@ -321,6 +321,8 @@
           Last updated <span id="cccLastUpdated">…</span>
           <span class="sh-meta-sep">·</span>
           <a href="#" class="sh-check-updates" id="cccCheckUpdatesLink" title="Check GitHub for a newer release">check for updates</a>
+          <span class="sh-meta-sep">·</span>
+          <a href="#" class="sh-whats-new-link" id="cccWhatsNewLink" title="View what is new in this version">what's new</a>
         </span>
         <a class="sh-repo-link" id="cccRepoLink" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Open the repo on GitHub">git: amirfish1/claude-command-center</a>
       </div>
@@ -813,6 +815,39 @@
       <div class="upd-actions">
         <button type="button" class="upd-btn" id="updLaterBtn">Later</button>
         <button type="button" class="upd-btn upd-primary" id="updNowBtn">Update now</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- What's New modal. Opened automatically when a new version is detected
+       or manually from the sidebar header. -->
+  <div id="whatsNewModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="whatsNewTitle">
+    <div class="upd-backdrop" id="whatsNewBackdrop"></div>
+    <div class="whats-new-dialog">
+      <button type="button" class="whats-new-close" id="whatsNewCloseX" title="Dismiss modal" aria-label="Close modal">&times;</button>
+      <div class="whats-new-layout">
+        <div class="whats-new-sidebar">
+          <div class="whats-new-brand">
+            <span class="whats-new-dot"></span>
+            <span>What's New</span>
+          </div>
+          <div class="whats-new-menu" id="whatsNewMenu" role="tablist">
+            <!-- Populated dynamically via app.js -->
+          </div>
+        </div>
+        <div class="whats-new-content" id="whatsNewContent">
+          <!-- Populated dynamically via app.js -->
+        </div>
+      </div>
+      <div class="whats-new-footer">
+        <label class="whats-new-checkbox" title="Hide this window automatically on future startups until the next version upgrade">
+          <input type="checkbox" id="whatsNewDontShowAgain">
+          <span>Don't show on startup</span>
+        </label>
+        <div class="whats-new-footer-actions">
+          <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md" class="whats-new-changelog-link" target="_blank" rel="noopener">See full changelog &rarr;</a>
+          <button type="button" class="upd-btn upd-primary" id="whatsNewExploreBtn">Let's go!</button>
+        </div>
       </div>
     </div>
   </div>

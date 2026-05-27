@@ -1,0 +1,1 @@
+Interactive "What's New" modal showcasing key features (Antigravity engine support, Flow view, Page annotations, Group chats, Row pinning) on first load after a version bump, or manually via a "what's new" link in the sidebar brand header.

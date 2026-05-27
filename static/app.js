@@ -6981,7 +6981,7 @@
       // so the "In Group Chat" section appears right after creation rather
       // than waiting up to 15s for the next pollGcActive tick.
       try { pollGcActive(); } catch (_) {}
-      openGroupChatReader(result.chat_path, topic, mode, includeHuman);
+      openGroupChatReader(result.chat_path, topic, mode, includeHuman, result.uuid || result.id || null);
     } catch (err) {
       if (errorEl) { errorEl.textContent = 'Request failed: ' + err.message; errorEl.classList.add('visible'); }
     } finally {
@@ -6991,6 +6991,7 @@
 
   let _gcReaderInterval = null;
   let _gcReaderPath = null;
+  let _gcReaderId = null;
   let _gcLastMtime = null;
   let _gcPollFailCount = 0;
   let _gcLastNudgeTime = 0;
@@ -7003,6 +7004,7 @@
   function stopGroupChatReader(opts = {}) {
     if (_gcReaderInterval) { clearInterval(_gcReaderInterval); _gcReaderInterval = null; }
     _gcReaderPath = null;
+    _gcReaderId = null;
     _gcLastMtime = null;
     _gcPollFailCount = 0;
     if (_gcReaderHiddenInputBar) {
@@ -7056,8 +7058,9 @@
     return html;
   }
 
-  function openGroupChatReader(chatPath, topic, mode, includeHuman) {
+  function openGroupChatReader(chatPath, topic, mode, includeHuman, chatId) {
     _gcReaderPath = chatPath;
+    _gcReaderId = chatId || null;
     _gcLastMtime = null;
     _gcPollFailCount = 0;
     _gcLastNudgeTime = 0;
@@ -7225,7 +7228,7 @@
         }
         const sid = (draggedConv && (draggedConv.session_id || draggedConv.id)) || dragSourceId;
         const displayName = draggedConv ? (draggedConv.display_name || '') : '';
-        addSessionToGroupChat(_gcReaderPath, sid, displayName);
+        addSessionToGroupChat(_gcReaderPath, sid, displayName, _gcReaderId);
       });
     }
   }
@@ -7260,11 +7263,14 @@
   }
 
   async function pollGroupChatReader() {
-    if (!_gcReaderPath) return;
+    if (!_gcReaderPath && !_gcReaderId) return;
     const body = document.getElementById('gcReaderBody');
     if (!body) return;
     try {
-      const res = await fetch('/api/group-chat/read?path=' + encodeURIComponent(_gcReaderPath));
+      const params = new URLSearchParams();
+      if (_gcReaderPath) params.set('path', _gcReaderPath);
+      if (_gcReaderId) params.set('id', _gcReaderId);
+      const res = await fetch('/api/group-chat/read?' + params.toString());
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       _gcPollFailCount = 0;
@@ -7282,7 +7288,10 @@
           const now = Date.now();
           if (now - _gcLastNudgeTime > 15000) {
             _gcLastNudgeTime = now;
-            ccPostJson('/api/group-chat/nudge', { path: _gcReaderPath }).catch(() => {});
+            ccPostJson('/api/group-chat/nudge', {
+              path: _gcReaderPath,
+              id: _gcReaderId,
+            }).catch(() => {});
           }
         }
       }
@@ -7301,12 +7310,12 @@
   }
 
   async function sendHumanGcPost() {
-    if (!_gcReaderPath) return;
+    if (!_gcReaderPath && !_gcReaderId) return;
     const input = document.getElementById('gcHumanInput');
     const text = input ? input.value.trim() : '';
     if (!text) return;
     try {
-      await ccPostJson('/api/group-chat/post', { path: _gcReaderPath, text });
+      await ccPostJson('/api/group-chat/post', { path: _gcReaderPath, id: _gcReaderId, text });
       if (input) input.value = '';
       await pollGroupChatReader();
     } catch (err) {
@@ -9593,6 +9602,7 @@
     // ended up in the DOM.
     const _gcItems = (_gcActiveChats || []).map(chat => {
         const isClosed = chat.status === 'closed';
+        const chatId = chat.uuid || chat.id || '';
         const topicLabel = chat.topic ? escapeHtml(chat.topic.slice(0, 80)) : '(untitled)';
         const partSids = chat.session_ids || [];
         const nameMap = chat.name_map || {};
@@ -9652,6 +9662,7 @@
             +   '<span class="conv-ingroupchat-participant-hash" title="Session ID prefix used in chat message headers">' + escapeHtml(shortHash) + '</span>'
             +   '<button type="button" class="conv-ingroupchat-participant-remove"'
             +     ' data-role="ingroupchat-participant-remove"'
+            +     ' data-gc-id="' + escapeHtml(chatId) + '"'
             +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
             +     ' data-session-id="' + escapeHtml(sid) + '"'
             +     ' title="Remove this session from the chat">×</button>'
@@ -9696,9 +9707,11 @@
           }
         }
         const isActiveChat = _gcReaderPath && (_gcReaderPath === chat.path || _gcReaderPath === chat.path_tilde);
+        const isActiveChatById = _gcReaderId && chatId && _gcReaderId === chatId;
         const _chatHtml = '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + '">'
-          + '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + (isActiveChat ? ' active' : '') + '"'
+          + '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + (isActiveChat || isActiveChatById ? ' active' : '') + '"'
           +   ' data-role="ingroupchat-row"'
+          +   ' data-gc-id="' + escapeHtml(chatId) + '"'
           +   ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
           +   ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
           +   ' data-gc-mode="' + escapeHtml(chat.mode || 'topic') + '"'
@@ -9710,16 +9723,19 @@
           +   chatAge
           +   '<button type="button" class="conv-ingroupchat-rename-btn"'
           +     ' data-role="ingroupchat-rename"'
+          +     ' data-gc-id="' + escapeHtml(chatId) + '"'
           +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
           +     ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
           +     ' title="Rename this group chat">✏️</button>'
           +   '<button type="button" class="conv-ingroupchat-clear-btn"'
           +     ' data-role="ingroupchat-clear"'
+          +     ' data-gc-id="' + escapeHtml(chatId) + '"'
           +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
           +     ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
           +     ' title="Clear chat content (header + participants kept; participants re-engaged)">🧹</button>'
           +   '<button type="button" class="conv-ingroupchat-archive-btn"'
           +     ' data-role="ingroupchat-archive"'
+          +     ' data-gc-id="' + escapeHtml(chatId) + '"'
           +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
           +     ' title="Archive this group chat">&#128229;</button>'
           + '</div>'
@@ -10002,6 +10018,7 @@
     }
     if (Array.isArray(_archivedGroupChats) && _archivedGroupChats.length) {
       for (const gc of _archivedGroupChats) {
+        const gcId = gc.uuid || gc.id || '';
         const topic = gc.topic ? escapeHtml(gc.topic.slice(0, 80)) : '(untitled)';
         const ago = (gc.archived_at || gc.closed_at || gc.last_mtime) || 0;
         const partCount = (gc.session_ids || []).length;
@@ -10010,6 +10027,7 @@
           : '';
         const html =
           '<div class="conv-item conv-item-archived-gc" data-role="archived-gc-row"'
+          + ' data-gc-id="' + escapeHtml(gcId) + '"'
           + ' data-gc-path="' + escapeHtml(gc.path_tilde) + '"'
           + ' data-gc-topic="' + escapeHtml(gc.topic || '') + '"'
           + ' data-gc-mode="' + escapeHtml(gc.mode || 'topic') + '"'
@@ -10131,9 +10149,10 @@
         ev.stopImmediatePropagation();
         ev.stopPropagation();
         const path = row.dataset.gcPath;
+        const chatId = row.dataset.gcId || null;
         const topic = row.dataset.gcTopic || '';
         const mode = row.dataset.gcMode || 'topic';
-        if (path) openGroupChatReader(path, topic, mode, true);
+        if (path || chatId) openGroupChatReader(path, topic, mode, true, chatId);
       });
     });
     // Click handlers for In Group Chat rows. Row click → open the reader
@@ -10145,9 +10164,10 @@
         if (ev.target.closest('[data-role="ingroupchat-rename"]')) return;
         if (ev.target.closest('[data-role="ingroupchat-clear"]')) return;
         const path = row.dataset.gcPath;
+        const chatId = row.dataset.gcId || null;
         const topic = row.dataset.gcTopic || '';
         const mode = row.dataset.gcMode || 'topic';
-        if (path) openGroupChatReader(path, topic, mode, true);
+        if (path || chatId) openGroupChatReader(path, topic, mode, true, chatId);
       });
     });
     $convList.querySelectorAll('[data-role="ingroupchat-archive"]').forEach(btn => {
@@ -10155,7 +10175,8 @@
         ev.stopPropagation();
         ev.preventDefault();
         const path = btn.dataset.gcPath;
-        if (path) archiveGroupChat(path);
+        const chatId = btn.dataset.gcId || null;
+        if (path || chatId) archiveGroupChat(path, chatId);
       });
     });
     $convList.querySelectorAll('[data-role="ingroupchat-rename"]').forEach(btn => {
@@ -10163,8 +10184,9 @@
         ev.stopPropagation();
         ev.preventDefault();
         const path = btn.dataset.gcPath;
+        const chatId = btn.dataset.gcId || null;
         const currentTopic = btn.dataset.gcTopic || '';
-        if (path) renameGroupChat(path, currentTopic);
+        if (path || chatId) renameGroupChat(path, currentTopic, chatId);
       });
     });
     $convList.querySelectorAll('[data-role="ingroupchat-clear"]').forEach(btn => {
@@ -10172,8 +10194,9 @@
         ev.stopPropagation();
         ev.preventDefault();
         const path = btn.dataset.gcPath;
+        const chatId = btn.dataset.gcId || null;
         const topic = btn.dataset.gcTopic || '';
-        if (path) clearGroupChat(path, topic);
+        if (path || chatId) clearGroupChat(path, topic, chatId);
       });
     });
     // Drop target: drag a conv-list row onto a chat row to add the
@@ -10196,7 +10219,8 @@
         ev.preventDefault();
         row.classList.remove('gc-drop-target');
         const path = row.dataset.gcPath;
-        if (!path || !dragSourceId) return;
+        const chatId = row.dataset.gcId || null;
+        if ((!path && !chatId) || !dragSourceId) return;
         const draggedConv = (conversationsData || []).find(c => c.id === dragSourceId);
         // Backlog rows are draggable for kanban purposes but they don't
         // represent real Claude sessions — adding their fake session_id
@@ -10207,7 +10231,7 @@
         }
         const sid = (draggedConv && (draggedConv.session_id || draggedConv.id)) || dragSourceId;
         const displayName = draggedConv ? (draggedConv.display_name || '') : '';
-        addSessionToGroupChat(path, sid, displayName);
+        addSessionToGroupChat(path, sid, displayName, chatId);
       });
     });
     // (Old "+ new chat" button on the section header is gone — its
@@ -10243,8 +10267,9 @@
         ev.stopPropagation();
         ev.preventDefault();
         const path = btn.dataset.gcPath;
+        const chatId = btn.dataset.gcId || null;
         const sid = btn.dataset.sessionId;
-        if (path && sid) removeSessionFromGroupChat(path, sid);
+        if ((path || chatId) && sid) removeSessionFromGroupChat(path, sid, chatId);
       });
     });
     // Toggle handler for the GH Issues section header.
@@ -17808,22 +17833,28 @@
   // topbar badge uses the .status field to count active-only; the sidebar
   // section renders both, ghosting the closed ones.
   let _gcActiveChats = [];
-  // Compute a stable key that captures BOTH the chat set and each chat's
-  // status — so a transition from active → closed for the same path
-  // triggers a re-render even though the path set didn't change.
+  // Compute a stable key for row identity plus visible metadata. Topic,
+  // participants, mtime, and waiting-on changes need to redraw the row
+  // even when the chat count and status stay unchanged.
   function _gcChatsKey(chats) {
     return (chats || [])
-      .map(c => (c.path || c.path_tilde || '') + ':' + (c.status || ''))
+      .map(c => JSON.stringify([
+        c.uuid || c.id || c.path || c.path_tilde || '',
+        c.status || '',
+        c.topic || '',
+        c.last_mtime || 0,
+        c.message_count || 0,
+        (c.session_ids || []).join(','),
+        (c.waiting_on_hashes || []).join(','),
+      ]))
       .sort()
       .join('|');
   }
   async function pollGcActive() {
     try {
       const data = await fetch('/api/group-chats/active').then(r => r.json());
-      // Compare by path+status set, not just length — a brand-new chat
-      // with the same count as before (rare, but possible if one ended in
-      // the same tick) and a status flip on the same path both need to
-      // trigger a re-render.
+      // Compare a metadata key, not just length, so renames, participant
+      // changes, and activity updates redraw the group-chat rows.
       const prevKey = _gcChatsKey(_gcActiveChats);
       _gcActiveChats = (data.chats || []);
       const nextKey = _gcChatsKey(_gcActiveChats);
@@ -17852,23 +17883,23 @@
       // Topbar button: only meaningful while at least one chat is active.
       const activeChats = _gcActiveChats.filter(c => c.status === 'active');
       if (!activeChats.length) return;
-      if (_gcReaderPath) {
+      if (_gcReaderPath || _gcReaderId) {
         closeGroupChatReader();
       } else {
         const c = activeChats[0];
-        openGroupChatReader(c.path_tilde, c.topic, c.mode, true);
+        openGroupChatReader(c.path_tilde, c.topic, c.mode, true, c.uuid || c.id || null);
       }
     });
   }
 
   // Archive-the-current-group-chat handler. Used by per-row Archive button.
-  async function archiveGroupChat(chatPath) {
-    if (!chatPath) return;
+  async function archiveGroupChat(chatPath, chatId) {
+    if (!chatPath && !chatId) return;
     try {
       const res = await fetch('/api/group-chats/archive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: chatPath }),
+        body: JSON.stringify({ path: chatPath || '', id: chatId || '' }),
       });
       const data = await res.json().catch(() => ({}));
       if (!data || !data.ok) {
@@ -17887,13 +17918,13 @@
     }
   }
 
-  async function removeSessionFromGroupChat(chatPath, sessionId) {
-    if (!chatPath || !sessionId) return;
+  async function removeSessionFromGroupChat(chatPath, sessionId, chatId) {
+    if ((!chatPath && !chatId) || !sessionId) return;
     try {
       const res = await fetch('/api/group-chats/remove-participant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: chatPath, session_id: sessionId }),
+        body: JSON.stringify({ path: chatPath || '', id: chatId || '', session_id: sessionId }),
       });
       const data = await res.json().catch(() => ({}));
       if (!data || !data.ok) {
@@ -17907,14 +17938,14 @@
     }
   }
 
-  async function addSessionToGroupChat(chatPath, sessionId, displayName) {
-    if (!chatPath || !sessionId) return;
+  async function addSessionToGroupChat(chatPath, sessionId, displayName, chatId) {
+    if ((!chatPath && !chatId) || !sessionId) return;
     try {
       const res = await fetch('/api/group-chats/add-participant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          path: chatPath, session_id: sessionId, display_name: displayName || '',
+          path: chatPath || '', id: chatId || '', session_id: sessionId, display_name: displayName || '',
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -17956,22 +17987,22 @@
       try { await pollGcActive(); } catch (_) {}
       showOpToast?.('Empty chat created — click ✏️ to rename, drag sessions in to add them');
       if (data.chat_path) {
-        try { openGroupChatReader(data.chat_path, topic, 'topic', true); } catch (_) {}
+        try { openGroupChatReader(data.chat_path, topic, 'topic', true, data.uuid || data.id || null); } catch (_) {}
       }
     } catch (err) {
       showOpToast?.('Could not create chat: ' + ((err && err.message) || 'network error'), 'error');
     }
   }
 
-  async function clearGroupChat(chatPath, topic) {
-    if (!chatPath) return;
+  async function clearGroupChat(chatPath, topic, chatId) {
+    if (!chatPath && !chatId) return;
     const label = topic ? `"${topic}"` : 'this chat';
     if (!confirm(`Clear all messages from ${label}?\n\nThe header and participants will be kept; everyone will be re-pinged with a fresh whiteboard. This is not undoable.`)) return;
     try {
       const res = await fetch('/api/group-chats/clear', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: chatPath }),
+        body: JSON.stringify({ path: chatPath || '', id: chatId || '' }),
       });
       const data = await res.json().catch(() => ({}));
       if (!data || !data.ok) {
@@ -17986,8 +18017,8 @@
     }
   }
 
-  async function renameGroupChat(chatPath, currentTopic) {
-    if (!chatPath) return;
+  async function renameGroupChat(chatPath, currentTopic, chatId) {
+    if (!chatPath && !chatId) return;
     let topic = '';
     try { topic = (window.prompt('New topic for this chat:', currentTopic || '') || '').trim(); } catch (_) {}
     if (!topic || topic === currentTopic) return;
@@ -17995,7 +18026,7 @@
       const res = await fetch('/api/group-chats/rename', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: chatPath, topic }),
+        body: JSON.stringify({ path: chatPath || '', id: chatId || '', topic }),
       });
       const data = await res.json().catch(() => ({}));
       if (!data || !data.ok) {
@@ -20136,6 +20167,150 @@
       }
     });
   }
+
+  // ── What's New Feature Showcasing ──────────────────────────────
+  const $whatsNewModal = document.getElementById('whatsNewModal');
+  const $whatsNewBackdrop = document.getElementById('whatsNewBackdrop');
+  const $whatsNewCloseX = document.getElementById('whatsNewCloseX');
+  const $whatsNewExploreBtn = document.getElementById('whatsNewExploreBtn');
+  const $whatsNewMenu = document.getElementById('whatsNewMenu');
+  const $whatsNewContent = document.getElementById('whatsNewContent');
+  const $whatsNewDontShowAgain = document.getElementById('whatsNewDontShowAgain');
+  const $cccWhatsNewLink = document.getElementById('cccWhatsNewLink');
+
+  const WHATS_NEW_FEATURES = [
+    {
+      id: 'antigravity-engine',
+      title: 'Antigravity Engine',
+      date: 'May 21, 2026',
+      tag: 'Engine',
+      desc: '<p>CCC now fully integrates Google\'s <strong>Antigravity (AGY) SDK</strong> as a first-class citizen alongside Claude Code and Codex.</p><p>This integration lets you run, monitor, and coordinate both standard AGY CLI sessions and macOS-native app sessions using a unified dashboard, enabling token tracking, status indicators, and follow-ups over local RPC.</p>',
+      mockup: '<div class="mockup-agy-container"><div class="mockup-agy-header"><span class="mockup-agy-badge"><span class="mockup-agy-logo"></span><span>antigravity-app-session</span></span><span class="mockup-agy-status"><span class="mockup-agy-pulse"></span><span>Active</span></span></div><div class="mockup-agy-code">// AGY cascade execution\nresult = await agy.cascade_rpc(\n    session_id="strategy-session",\n    prompt="execute sub-task A"\n)</div></div>'
+    },
+    {
+      id: 'flow-view',
+      title: 'Panoramic Flow Map',
+      date: 'May 25, 2026',
+      tag: 'Visualization',
+      desc: '<p>Visualize your concurrent agent sessions as an interactive flow map. Easily track the hierarchy and lineage of spawned sub-sessions.</p><p>Includes support for <strong>pinch zoom/pan</strong>, drag-to-select multiple nodes, quick session actions, and spawning new child nodes directly from parents.</p>',
+      mockup: '<div class="mockup-flow-canvas"><svg class="mockup-flow-svg" style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;"><path d="M 90 60 C 130 60, 130 25, 175 25" stroke="var(--border)" stroke-width="1.5" fill="none"></path><path d="M 90 60 C 130 60, 130 90, 175 90" stroke="var(--border)" stroke-width="1.5" fill="none"></path></svg><div class="mockup-flow-node root"><span class="node-title">Strategy (main)</span><span class="node-meta">AGY · active</span></div><div class="mockup-flow-node child-a"><span class="node-title">Parser tests</span><span class="node-meta">Claude · active</span></div><div class="mockup-flow-node child-b"><span class="node-title">DOM picking</span><span class="node-meta">Codex · idle</span></div></div>'
+    },
+    {
+      id: 'annotations',
+      title: 'Page & Screen Annotations',
+      date: 'May 26, 2026',
+      tag: 'Context',
+      desc: '<p>Provide rich context to your agents by attaching screenshots or specific DOM nodes to a session.</p><p>Use the new <strong>Annotation Bookmarklet</strong> to select and pick target DOM elements from any external website, instantly delivering them as clean payloads directly to your active sessions.</p>',
+      mockup: '<div class="mockup-browser"><div class="mockup-browser-bar"><div class="mockup-browser-dots"><span class="mockup-browser-dot"></span><span class="mockup-browser-dot"></span><span class="mockup-browser-dot"></span></div><span class="mockup-browser-address">https://ccc.amirfish.ai</span></div><div class="mockup-browser-viewport"><div class="mockup-browser-element"><span class="mockup-browser-element-label">div#whats-new</span><span>Click element to pick & annotate</span></div><svg class="mockup-browser-cursor" viewBox="0 0 24 24" fill="none" style="position: absolute; width: 14px; height: 14px; left: 60%; top: 50%; pointer-events: none;"><path d="M4.5 3V17L9 13.5L14 21L17.5 19L12.5 11.5L18.5 11.5L4.5 3Z" fill="#fff" stroke="#000" stroke-width="1.5"></path></svg></div></div>'
+    },
+    {
+      id: 'group-chats',
+      title: 'Multi-Agent Room Chats',
+      date: 'May 26, 2026',
+      tag: 'Orchestration',
+      desc: '<p>Drag different agent sessions into shared room headers to let them <strong>collaborate and coordinate</strong> on complex tasks.</p><p>Watch them discuss strategies, share files, and divide execution automatically with real-time wake/sleep indicators and interleave settings.</p>',
+      mockup: '<div class="mockup-chat-room"><div class="mockup-chat-header"><span class="mockup-chat-room-title">Feature Handoff Room</span><div class="mockup-chat-participants"><span class="mockup-chat-avatar cl" title="Claude">C</span><span class="mockup-chat-avatar cx" title="Codex">X</span><span class="mockup-chat-avatar ag" title="Antigravity">A</span></div></div><div class="mockup-chat-message-list"><div class="mockup-chat-message"><span class="msg-sender" style="color:#6366f1;">Claude</span><span class="msg-text">I\'ve implemented the API endpoint in server.py.</span></div><div class="mockup-chat-message"><span class="msg-sender" style="color:#f59e0b;">AGY</span><span class="msg-text">Understood. I will verify it with the swift test suite.</span></div></div><span class="mockup-chat-typing">AGY is running tests...</span></div>'
+    },
+    {
+      id: 'pinning',
+      title: 'Row Pinning & UI Polish',
+      date: 'May 22, 2026',
+      tag: 'Layout',
+      desc: '<p>Pin critical strategy sessions to the top of your sidebar list to keep them visible while execution sub-sessions scroll below.</p><p>Includes a clean <strong>SF Pro / Outfit typography upgrade</strong>, real-time token tracking in footer pills, and smooth transition animations.</p>',
+      mockup: '<div class="mockup-pinning-sidebar"><div class="mockup-pinning-header"><span>📌 PINNED SESSIONS</span></div><div class="mockup-pinning-row"><span class="mockup-pinning-name">🎯 architecture-planning</span><span class="mockup-pinning-icon">★ Pinned</span></div><div class="mockup-pinning-row"><span class="mockup-pinning-name">📝 release-notes-v4</span><span class="mockup-pinning-icon">★ Pinned</span></div></div>'
+    }
+  ];
+
+  let whatsNewActiveId = WHATS_NEW_FEATURES[0].id;
+  let whatsNewVersion = '';
+
+  function whatsNewRenderMenu() {
+    if (!$whatsNewMenu) return;
+    $whatsNewMenu.innerHTML = WHATS_NEW_FEATURES.map(f => {
+      const activeClass = f.id === whatsNewActiveId ? ' active' : '';
+      return '<button class="whats-new-menu-item' + activeClass + '" data-id="' + f.id + '" type="button" role="tab" aria-selected="' + (f.id === whatsNewActiveId) + '">' +
+        '<span class="menu-item-title">' + f.title + '</span>' +
+        '<span class="menu-item-date">' + f.date + '</span>' +
+        '</button>';
+    }).join('');
+
+    // Add click listeners to menu items
+    const items = $whatsNewMenu.querySelectorAll('.whats-new-menu-item');
+    items.forEach(el => {
+      el.addEventListener('click', () => {
+        whatsNewActiveId = el.getAttribute('data-id');
+        whatsNewRenderMenu();
+        whatsNewRenderFeature(whatsNewActiveId);
+      });
+    });
+  }
+
+  function whatsNewRenderFeature(id) {
+    if (!$whatsNewContent) return;
+    const f = WHATS_NEW_FEATURES.find(item => item.id === id);
+    if (!f) return;
+
+    $whatsNewContent.innerHTML = 
+      '<div class="whats-new-header-row">' +
+        '<span class="whats-new-pill">' + f.tag + '</span>' +
+        '<span class="whats-new-feature-date">' + f.date + '</span>' +
+      '</div>' +
+      '<h2 class="whats-new-feature-title" id="whatsNewTitle">' + f.title + '</h2>' +
+      '<div class="whats-new-feature-desc">' + f.desc + '</div>' +
+      '<div class="whats-new-preview-box">' + f.mockup + '</div>';
+  }
+
+  function whatsNewOpenModal() {
+    if (!$whatsNewModal) return;
+    whatsNewActiveId = WHATS_NEW_FEATURES[0].id;
+    whatsNewRenderMenu();
+    whatsNewRenderFeature(whatsNewActiveId);
+    if ($whatsNewDontShowAgain) $whatsNewDontShowAgain.checked = false;
+    $whatsNewModal.classList.add('open');
+  }
+
+  function whatsNewCloseModal() {
+    if (!$whatsNewModal) return;
+    $whatsNewModal.classList.remove('open');
+    if (whatsNewVersion) {
+      localStorage.setItem('ccc-last-seen-version', whatsNewVersion);
+      if ($whatsNewDontShowAgain && $whatsNewDontShowAgain.checked) {
+        localStorage.setItem('ccc-whats-new-dismissed-version', whatsNewVersion);
+      }
+    }
+  }
+
+  if ($whatsNewCloseX) $whatsNewCloseX.addEventListener('click', whatsNewCloseModal);
+  if ($whatsNewExploreBtn) $whatsNewExploreBtn.addEventListener('click', whatsNewCloseModal);
+  if ($whatsNewBackdrop) $whatsNewBackdrop.addEventListener('click', whatsNewCloseModal);
+  if ($cccWhatsNewLink) {
+    $cccWhatsNewLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      whatsNewOpenModal();
+    });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $whatsNewModal && $whatsNewModal.classList.contains('open')) {
+      whatsNewCloseModal();
+    }
+  });
+
+  // Fetch version and optionally show popup
+  (async () => {
+    try {
+      const r = await fetch('/api/version', { cache: 'no-store' });
+      const d = await r.json();
+      if (d && d.version) {
+        whatsNewVersion = String(d.version);
+        const lastSeen = localStorage.getItem('ccc-last-seen-version');
+        const dismissedVer = localStorage.getItem('ccc-whats-new-dismissed-version');
+        if (lastSeen !== whatsNewVersion && dismissedVer !== whatsNewVersion && !CONV_POPOUT_MODE) {
+          whatsNewOpenModal();
+        }
+      }
+    } catch (_) {}
+  })();
 
   // ── Manual server restart ─────────────────────────────────────
   // Settings menu → POST /api/restart → wait for the same port to answer.
