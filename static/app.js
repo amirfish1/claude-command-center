@@ -2760,6 +2760,23 @@
     });
     $convInput.addEventListener('focus', () => refreshSlashCommandMenu($convInput));
     $convInput.addEventListener('click', () => refreshSlashCommandMenu($convInput));
+    // Clicking anywhere in the input bar — the padding, the gap above/below
+    // the textarea, or the empty stretch of the bottom selector row — should
+    // drop the caret in the composer. Without this, only a direct hit on the
+    // 1-row textarea glyph area focuses it, so the bar feels "dead" on the
+    // first click (you click, no caret; you have to click again, on the text).
+    if ($convInputBar) {
+      $convInputBar.addEventListener('mousedown', (e) => {
+        if (e.target === $convInput) return;  // native caret placement
+        // Don't steal clicks from real controls (send/esc/tts buttons, the
+        // engine/model/issue selects, custom-select menus, links, the badge).
+        if (e.target.closest && e.target.closest(
+              'button, select, a, input, textarea, [role="button"], '
+              + '.custom-select-container, .custom-select-menu')) return;
+        e.preventDefault();  // stop the caret being dropped on a non-focusable node
+        try { $convInput.focus({ preventScroll: true }); } catch (_) { $convInput.focus(); }
+      });
+    }
     $convInput.addEventListener('keydown', (e) => {
       if (handleSlashCommandKeydown($convInput, e)) return;
       // Enter sends, Shift+Enter inserts a newline. Same as Claude Desktop,
@@ -2881,6 +2898,16 @@
       let src = '';
       if (img.kind === 'path' && img.session_id && img.filename) {
         src = '/image-cache/' + encodeURIComponent(img.session_id) + '/' + encodeURIComponent(img.filename);
+      } else if (img.kind === 'base64' && img.line != null && img.data == null) {
+        // Lazy reference: the server stripped the base64 body out of the
+        // payload and gave us a (line, idx) pointer. Fetch on demand via
+        // /api/conv-image — loading="lazy" now does real work because the
+        // src is a URL, not a megabyte data: URI inlined into the DOM.
+        if (currentConversation) {
+          src = '/api/conv-image?conversation_id=' + encodeURIComponent(currentConversation)
+              + '&line=' + encodeURIComponent(img.line)
+              + '&idx=' + encodeURIComponent(img.idx != null ? img.idx : 0);
+        }
       } else if (img.kind === 'base64' && img.data) {
         src = 'data:' + (img.media_type || 'image/png') + ';base64,' + img.data;
       }
