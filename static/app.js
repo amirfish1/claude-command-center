@@ -1488,6 +1488,10 @@
     requestAnimationFrame(apply);
   }
 
+  // Tracks whether the live-tool indicator is currently in the DOM, so the
+  // 1s ticker can skip ALL work (no querySelectorAll, no innerHTML) on the
+  // common idle path where no session is live.
+  let _liveStripShown = false;
   function updateLiveToolStrip() {
     // Skip while the user is typing into a textarea / text input. This
     // runs on a 1s ticker; each pass does a document.querySelectorAll
@@ -1500,6 +1504,19 @@
     }
     const $view = (typeof getConvView === 'function') ? getConvView() : null;
     if (!$view) return;
+    // Idle fast-path: nothing is live, so there's nothing to show. Bail
+    // before the per-second document.querySelectorAll + innerHTML below —
+    // on a deep conversation that's pure waste when no session is running.
+    // Tear the indicator down once on the live->idle transition, then do
+    // zero DOM work each tick until a session goes live again.
+    if (!liveStatus.live) {
+      if (_liveStripShown) {
+        document.querySelectorAll('.conv-live-tool-strip, .conv-live-tool-inline:not(.optimistic)').forEach(n => n.remove());
+        updateLiveStripOffset($view, null);
+        _liveStripShown = false;
+      }
+      return;
+    }
     document.querySelectorAll('.conv-live-tool-strip, .conv-live-tool-inline:not(.optimistic)').forEach(node => {
       if (node.parentElement !== $view) node.remove();
     });
@@ -1517,6 +1534,7 @@
     if (!shouldShow) {
       if (inline) inline.remove();
       updateLiveStripOffset($view, null);
+      _liveStripShown = false;
       return;
     }
     // Real data arrived — drop the optimistic placeholder (right pane)
@@ -1556,6 +1574,7 @@
     if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
       $view.appendChild(inline);
     }
+    _liveStripShown = true;
   }
 
   const $convSessionId = document.getElementById('convSessionId');

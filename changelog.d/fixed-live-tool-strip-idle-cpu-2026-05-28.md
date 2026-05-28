@@ -1,0 +1,1 @@
+- Stop the live tool-activity strip from doing per-second DOM work when no session is live. The 1s ticker now bails immediately on the idle path instead of running a document-wide `querySelectorAll` plus an `innerHTML` write on every tick, which was wasting CPU while a deep conversation sat open with nothing running.
