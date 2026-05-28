@@ -1,0 +1,1 @@
+Pin the conversation background-color palette to the very bottom of the right rail in any rail-visible body mode (was relying on a `body.status-pos-right`-scoped rule that didn't fire for the `.conv-pane.has-conv-bg` layout, so the palette floated near the top of the rail instead).

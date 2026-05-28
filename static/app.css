@@ -6710,6 +6710,32 @@
   opacity: 1; color: var(--orange); background: rgba(255,166,87,0.12);
 }
 
+/* Enable/disable knob. Hover-reveal like its siblings, but stays visible when
+   the chat is disabled so the row carries an obvious "click to re-enable". */
+#convList .conv-ingroupchat-pause-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 12px; padding: 2px 4px; opacity: 0;
+  color: var(--text-muted); flex-shrink: 0;
+  border-radius: 3px;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+#convList .conv-ingroupchat-row:hover .conv-ingroupchat-pause-btn { opacity: 0.7; }
+#convList .conv-ingroupchat-pause-btn:hover {
+  opacity: 1; color: var(--red); background: rgba(248,81,73,0.12);
+}
+#convList .conv-ingroupchat-pause-btn.is-paused {
+  opacity: 0.95; color: var(--green);
+}
+#convList .conv-ingroupchat-pause-btn.is-paused:hover {
+  opacity: 1; color: var(--green); background: rgba(63,185,80,0.14);
+}
+/* Disabled chats: dim the row and badge it, distinct from a closed chat. */
+#convList .conv-ingroupchat-row-paused { opacity: 0.6; }
+#convList .conv-ingroupchat-status-pill.is-paused {
+  background: rgba(248,81,73,0.12); border-color: rgba(248,81,73,0.5);
+  color: var(--red);
+}
+
 /* "+" affordance on the section header — create an empty chat. */
 #convList .conv-ingroupchat-new-btn {
   margin-left: auto; background: transparent; border: 1px solid var(--border);
@@ -7117,11 +7143,18 @@ body.status-pos-right .conv-pane > .status-rail {
   overflow-y: auto;
   min-height: 0;
 }
-body.status-pos-right .status-rail .conv-bg-palette {
-  align-self: flex-end;
-  margin: auto 12px 12px auto;
-  padding: 10px 0 0;
+/* Pin the bg-palette to the very bottom of the rail (whichever rail-
+   visible body mode is active). margin-top: auto in a flex column pushes
+   the item past anything that doesn't have its own auto margin —
+   reliable even when files-panel / file-viewer are hidden and there's no
+   sticky-meta to anchor against. */
+.status-rail .conv-bg-palette {
+  margin-top: auto !important;
+  margin-bottom: 12px;
+  padding: 10px 12px 0;
   border-top: 1px solid var(--border);
+  justify-self: end;
+  align-self: stretch;
   justify-content: end;
 }
 /* Default (top mode): rail completely hidden. JS also moves its children
@@ -8617,6 +8650,40 @@ body.status-pos-right .conv-sticky-header .csh-col-ask {
   cursor: help;
   border-bottom: 1px dotted var(--border-light);
 }
+
+/* Active-work section — surfaces what's burning CPU/tokens + a kill switch. */
+.gco-active-section { gap: 7px; }
+.gco-active-status {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 500; line-height: 1.35;
+}
+.gco-active-status.is-active { color: var(--green, #3fb950); }
+.gco-active-status.is-paused { color: var(--red, #f85149); }
+.gco-active-status.is-idle   { color: var(--fg-muted); }
+.gco-active-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: var(--green, #3fb950);
+  box-shadow: 0 0 5px var(--green, #3fb950);
+  animation: live-refresh-pulse 1.6s ease-in-out infinite;
+}
+.gco-power-btn {
+  margin-top: 4px; align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  padding: 5px 11px; border-radius: 6px;
+  border: 1px solid var(--border);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.gco-power-btn.gco-stop {
+  color: #fff; background: rgba(185,28,28,0.92);
+  border-color: rgba(248,113,113,0.85);
+}
+.gco-power-btn.gco-stop:hover { background: rgba(220,38,38,0.96); }
+.gco-power-btn.gco-enable {
+  color: var(--green, #3fb950); background: transparent;
+  border-color: rgba(63,185,80,0.55);
+}
+.gco-power-btn.gco-enable:hover { background: rgba(63,185,80,0.14); }
 
 /* Click-to-select identifiers (chat ID, chat file path) in the orchestrator
    panel — `user-select: all` highlights the whole value with a single click

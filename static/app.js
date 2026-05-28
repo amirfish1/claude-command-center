@@ -7668,6 +7668,35 @@
       html += '</div>';
     }
 
+    // ── Active work — exactly what is consuming CPU/tokens for this chat, with
+    // a one-click kill switch. The orchestration loop wakes live participant
+    // sessions on a timer; that's the cost the user wants visibility into.
+    const _gcPaused = data.status === 'paused' || !!data.paused;
+    const _gcActiveNow = data.status === 'active';
+    const _gcLive = data.participant_live_count || 0;
+    const _gcParts = data.participant_count || sids.length;
+    const _gcPoll = data.orchestrator_poll_interval || 30;
+    const _gcNudge = data.orchestrator_nudge_interval || 60;
+    html += '<div class="gco-section gco-active-section"><div class="gco-title">Active work</div>';
+    if (_gcPaused) {
+      html += '<div class="gco-active-status is-paused">⏸ Disabled — no nudges, no token use.</div>';
+      html += `<button type="button" class="gco-power-btn gco-enable" data-gc-enable data-gc-path="${escapeAttr(chatPath)}" data-gc-id="${escapeAttr(chatId)}">▶ Enable orchestration</button>`;
+    } else if (_gcActiveNow) {
+      html += '<div class="gco-active-status is-active"><span class="gco-active-dot"></span> Running — waking participants on a timer.</div>';
+      html += `<div class="gco-row"><span class="gco-label">Auto-nudge:</span> <span class="gco-val">checks every ${_gcPoll}s, nudges ≤ every ${_gcNudge}s</span></div>`;
+      const _gcLastNudge = data.orchestrator_last_nudge_at ? timeAgo(data.orchestrator_last_nudge_at * 1000) : 'not yet';
+      html += `<div class="gco-row"><span class="gco-label">Last nudge:</span> <span class="gco-val">${escapeHtml(_gcLastNudge)}</span></div>`;
+      const _gcTargets = (data.orchestrator_last_reminder_targets || []).map(renderNameHtml);
+      if (_gcTargets.length) {
+        html += `<div class="gco-row"><span class="gco-label">Last targets:</span> <span class="gco-val">${_gcTargets.join(', ')}</span></div>`;
+      }
+      html += `<div class="gco-row"><span class="gco-label">Live sessions:</span> <span class="gco-val">${_gcLive} of ${_gcParts} — these run on each nudge</span></div>`;
+      html += `<button type="button" class="gco-power-btn gco-stop" data-gc-stop data-gc-path="${escapeAttr(chatPath)}" data-gc-id="${escapeAttr(chatId)}">■ Stop orchestration</button>`;
+    } else {
+      html += '<div class="gco-active-status is-idle">Idle — no active orchestration.</div>';
+    }
+    html += '</div>';
+
     html += '<div class="gco-section"><div class="gco-title">Orchestrator</div>';
 
     html += `<div class="gco-row"><span class="gco-label">Timer Active:</span> <span class="gco-val">${data.orchestrator_timer_active ? 'Yes' : 'No'}</span></div>`;
@@ -7704,6 +7733,19 @@
     html += '</div>';
 
     panel.innerHTML = html;
+
+    const stopBtn = panel.querySelector('[data-gc-stop]');
+    if (stopBtn) {
+      stopBtn.addEventListener('click', () => {
+        setGroupChatPaused(stopBtn.dataset.gcPath || '', stopBtn.dataset.gcId || '', true);
+      });
+    }
+    const enableBtn = panel.querySelector('[data-gc-enable]');
+    if (enableBtn) {
+      enableBtn.addEventListener('click', () => {
+        setGroupChatPaused(enableBtn.dataset.gcPath || '', enableBtn.dataset.gcId || '', false);
+      });
+    }
   }
 
   // Parses the timestamp formats CCC writes into chat files
@@ -10142,6 +10184,7 @@
     // ended up in the DOM.
     const _gcItems = (_gcActiveChats || []).map(chat => {
         const isClosed = chat.status === 'closed';
+        const isPaused = chat.status === 'paused' || !!chat.paused;
         const chatId = chat.uuid || chat.id || '';
         const topicLabel = chat.topic ? escapeHtml(chat.topic.slice(0, 80)) : '(untitled)';
         const partSids = chat.session_ids || [];
@@ -10153,6 +10196,9 @@
           : '';
         const closedPill = isClosed
           ? '<span class="conv-ingroupchat-status-pill" title="Coordination ended">closed</span>'
+          : '';
+        const pausedPill = isPaused
+          ? '<span class="conv-ingroupchat-status-pill is-paused" title="Orchestration disabled — no nudges, no token use">disabled</span>'
           : '';
         // Indented participant list under the chat row. Click to jump
         // to that session in the conv pane (selectConversation handles
@@ -10249,7 +10295,7 @@
         const isActiveChat = _gcReaderPath && (_gcReaderPath === chat.path || _gcReaderPath === chat.path_tilde);
         const isActiveChatById = _gcReaderId && chatId && _gcReaderId === chatId;
         const _chatHtml = '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + '">'
-          + '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + (isActiveChat || isActiveChatById ? ' active' : '') + '"'
+          + '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + (isPaused ? ' conv-ingroupchat-row-paused' : '') + (isActiveChat || isActiveChatById ? ' active' : '') + '"'
           +   ' data-role="ingroupchat-row"'
           +   ' data-gc-id="' + escapeHtml(chatId) + '"'
           +   ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
@@ -10259,8 +10305,18 @@
           +   '<span class="conv-ingroupchat-row-icon">💬</span>'
           +   '<span class="conv-ingroupchat-row-topic">' + topicLabel + '</span>'
           +   closedPill
+          +   pausedPill
           +   partLabel
           +   chatAge
+          +   '<button type="button" class="conv-ingroupchat-pause-btn' + (isPaused ? ' is-paused' : '') + '"'
+          +     ' data-role="ingroupchat-pause"'
+          +     ' data-gc-id="' + escapeHtml(chatId) + '"'
+          +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+          +     ' data-gc-paused="' + (isPaused ? '1' : '0') + '"'
+          +     ' title="' + (isPaused
+                  ? 'Enable orchestration — resume nudging participants'
+                  : 'Disable orchestration — stop nudges and token use for this chat') + '">'
+          +     (isPaused ? '▶' : '⏸') + '</button>'
           +   '<button type="button" class="conv-ingroupchat-rename-btn"'
           +     ' data-role="ingroupchat-rename"'
           +     ' data-gc-id="' + escapeHtml(chatId) + '"'
@@ -10722,6 +10778,7 @@
         if (ev.target.closest('[data-role="ingroupchat-archive"]')) return;
         if (ev.target.closest('[data-role="ingroupchat-rename"]')) return;
         if (ev.target.closest('[data-role="ingroupchat-clear"]')) return;
+        if (ev.target.closest('[data-role="ingroupchat-pause"]')) return;
         const path = row.dataset.gcPath;
         const chatId = row.dataset.gcId || null;
         const topic = row.dataset.gcTopic || '';
@@ -10736,6 +10793,16 @@
         const path = btn.dataset.gcPath;
         const chatId = btn.dataset.gcId || null;
         if (path || chatId) archiveGroupChat(path, chatId);
+      });
+    });
+    $convList.querySelectorAll('[data-role="ingroupchat-pause"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const path = btn.dataset.gcPath;
+        const chatId = btn.dataset.gcId || null;
+        const pause = btn.dataset.gcPaused !== '1'; // currently enabled → pause it
+        if (path || chatId) setGroupChatPaused(path, chatId, pause);
       });
     });
     $convList.querySelectorAll('[data-role="ingroupchat-rename"]').forEach(btn => {
@@ -18406,7 +18473,18 @@
   }
 
   const $gcActiveBtn = document.getElementById('gcActiveBtn');
-  const $activeGroupChatPill = document.getElementById('activeGroupChatPill');
+  // The bottom-left "Active Group chat" pill lives near the end of <body>,
+  // AFTER this <script> tag, so it is NOT in the DOM yet when this module first
+  // evaluates — a plain getElementById() here returns null and the pill would
+  // stay hidden forever (the orchestration loop runs with no visible warning).
+  // Resolve it lazily on first use instead so it's found once the body parses.
+  let _activeGroupChatPillEl = null;
+  function getActiveGroupChatPillEl() {
+    if (!_activeGroupChatPillEl) {
+      _activeGroupChatPillEl = document.getElementById('activeGroupChatPill');
+    }
+    return _activeGroupChatPillEl;
+  }
   const GC_ACTIVE_TRIGGER_RECENT_MS = 60 * 1000;
   // _gcActiveChats now contains active + closed (unarchived) chats. The
   // topbar badge uses the .status field to count active-only; the sidebar
@@ -18461,6 +18539,7 @@
   }
 
   function updateActiveGroupChatPill() {
+    const $activeGroupChatPill = getActiveGroupChatPillEl();
     if (!$activeGroupChatPill) return;
     const chat = activeGroupChatPillTarget();
     if (!chat) {
@@ -18470,9 +18549,22 @@
     }
     const chatId = chat.uuid || chat.id || '';
     const topic = chat.topic || 'Group chat';
+    // Count every active orchestration, not just the one we link to, so the
+    // pill makes the token-burn surface obvious: N loops are running right now.
+    const now = Date.now();
+    const activeCount = (_gcActiveChats || []).filter(c => gcShouldShowActivePill(c, now)).length;
+    const label = $activeGroupChatPill.querySelector('.active-group-chat-label');
+    if (label) {
+      label.textContent = activeCount > 1
+        ? activeCount + ' Active Group chats'
+        : 'Active Group chat';
+    }
     $activeGroupChatPill.hidden = false;
     if (chatId) $activeGroupChatPill.dataset.chatId = chatId;
-    $activeGroupChatPill.title = 'Active group-chat orchestration: ' + topic + '. Click to open the latest active chat.';
+    $activeGroupChatPill.title = (activeCount > 1
+      ? activeCount + ' active group-chat orchestrations are looping (tokens in use). Latest: ' + topic
+      : 'Active group-chat orchestration: ' + topic)
+      + '. Click to open the latest active chat.';
   }
 
   function markActiveGroupChatTrigger(chatPath, chatId, topic, mode) {
@@ -18571,11 +18663,42 @@
       }
     });
   }
-  if ($activeGroupChatPill) {
-    $activeGroupChatPill.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      openActiveGroupChatPillTarget();
-    });
+  // Delegated so it works regardless of when #activeGroupChatPill is parsed
+  // (the element follows this script in the document — see getActiveGroupChatPillEl).
+  document.addEventListener('click', (ev) => {
+    const pill = ev.target && ev.target.closest && ev.target.closest('#activeGroupChatPill');
+    if (!pill) return;
+    ev.preventDefault();
+    openActiveGroupChatPillTarget();
+  });
+
+  // Enable/disable orchestration for a group chat. paused=true halts the
+  // server's nudge loop (token use) for the chat; false re-arms it. Used by the
+  // per-row knob and the orchestrator panel's Stop/Enable button.
+  async function setGroupChatPaused(chatPath, chatId, paused) {
+    if (!chatPath && !chatId) return;
+    try {
+      const res = await fetch('/api/group-chats/pause', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: chatPath || '', id: chatId || '', paused: !!paused }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data || !data.ok) {
+        showOpToast?.('Could not ' + (paused ? 'disable' : 'enable') + ' group chat: ' + ((data && data.error) || 'unknown'), 'error');
+        return;
+      }
+      try { await pollGcActive(); } catch (_) {}
+      const $s = document.getElementById('convSearch');
+      renderArchiveList($s ? $s.value : '');
+      // If this chat's reader is open, refresh its orchestrator panel.
+      if ((_gcReaderPath && (_gcReaderPath === chatPath)) || (_gcReaderId && chatId && _gcReaderId === chatId)) {
+        try { pollGroupChatReader(); } catch (_) {}
+      }
+      showOpToast?.(paused ? 'Orchestration disabled — no more nudges' : 'Orchestration enabled');
+    } catch (err) {
+      showOpToast?.('Could not update group chat: ' + ((err && err.message) || 'network error'), 'error');
+    }
   }
 
   // Archive-the-current-group-chat handler. Used by per-row Archive button.
@@ -21352,9 +21475,44 @@
     };
   }
 
+  // Walk up the DOM until we find an ancestor at least ~1.8x the area of
+  // the annotated element (or +4000px²) so the screenshot includes enough
+  // context to recognize where the element sits — a tight 14×14 swatch on
+  // its own is meaningless. Cap at 4 levels and clamp to the viewport with
+  // a small visual padding so the parent's border is visible.
+  function annContextRect(element, rect) {
+    if (!element || !rect) return rect;
+    const elArea = Math.max(1, rect.width * rect.height);
+    let node = element.parentElement;
+    let chosen = null;
+    let depth = 0;
+    while (node && node !== document.body && depth < 4) {
+      const pr = node.getBoundingClientRect();
+      const prArea = pr.width * pr.height;
+      if (prArea >= Math.max(elArea * 1.8, elArea + 4000)) {
+        chosen = pr;
+        break;
+      }
+      node = node.parentElement;
+      depth++;
+    }
+    if (!chosen && element.parentElement) chosen = element.parentElement.getBoundingClientRect();
+    if (!chosen) return rect;
+    const pad = 8;
+    const x = Math.max(0, Math.floor(chosen.left - pad));
+    const y = Math.max(0, Math.floor(chosen.top - pad));
+    const width = Math.max(rect.width, Math.min(window.innerWidth - x, Math.ceil(chosen.width + pad * 2)));
+    const height = Math.max(rect.height, Math.min(window.innerHeight - y, Math.ceil(chosen.height + pad * 2)));
+    return { x, y, width, height };
+  }
+
   function annBuildPayload(note) {
     const rect = annotationState.rect;
     const element = annotationState.element;
+    // Use the element's tight rect for selector / positioning data, but
+    // capture the screenshot over a wider context rect so the reader can
+    // see where the element lives in the page.
+    const contextRect = annContextRect(element, rect);
     return {
       note,
       url: window.location.href,
@@ -21362,7 +21520,7 @@
       session_id: (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '',
       repo_path: (typeof selectedRepoPath === 'function' && selectedRepoPath()) || '',
       rect,
-      screen: annEstimateScreenRect(rect),
+      screen: annEstimateScreenRect(contextRect),
       element: annElementSummary(element),
       capture_screen: true,
     };

@@ -1,0 +1,1 @@
+Annotation screenshots now capture a wider parent/grandparent region around the picked element instead of the bare element rect, so reviewers can see where the element sits in the page (a tight 14×14 color swatch alone is meaningless). The DOM selector and element rect in the payload still anchor to the actual annotated element.
