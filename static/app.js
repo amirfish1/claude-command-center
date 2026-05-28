@@ -3264,12 +3264,23 @@
       }
       // Regular text line (preserve as-is with <br>)
       if (line.trim() === '') {
-        out.push('<br>');
+        // Collapse consecutive blank lines: markdown semantics treat them as
+        // a single paragraph break, but the old "always push <br>" rule
+        // stacked one <br> per blank line — three blank lines became three
+        // visual line-heights of empty space, which is what made the group-
+        // chat transcript look broken when the orchestrator dumped a wad of
+        // "system: removed X" entries with blank gaps between them.
+        if (out.length && out[out.length - 1] !== '<br>') out.push('<br>');
       } else {
         out.push('<div>' + renderInline(line) + '</div>');
       }
       i++;
     }
+    // Trim leading/trailing blank-line <br>s so a body that starts or ends
+    // with whitespace doesn't render the gap. Inner runs are already
+    // collapsed to a single <br> by the loop above.
+    while (out.length && out[0] === '<br>') out.shift();
+    while (out.length && out[out.length - 1] === '<br>') out.pop();
     return out.join('');
   }
 
@@ -4620,6 +4631,7 @@
         restoreLastConversation();
       }
     } catch (err) {
+      _convListRenderSig = null;
       $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Failed to load sessions: ' + escapeHtml(err.message) + '</div>';
       hideLoadingOverlay();  // even on error — don't leave the user stuck on a spinner
       _markFirstSessionsLoaded();  // even on error — don't pin the archive load
@@ -7138,22 +7150,36 @@
     }
   }
 
-  // Tag rendered blockquotes whose first text line is "<ts> — system: …" so
-  // CSS can mute them. These are the orchestrator's lifecycle log entries
-  // (pinged, removed, re-injected) that get appended to the prior message
-  // instead of being their own heading — without this hook they read at the
-  // same weight as real conversation.
+  // Tag any rendered fragment whose first text line is "<ts> — system: …" so
+  // CSS can mute it. The orchestrator's lifecycle log entries (pinged,
+  // removed, re-injected) get appended to the prior message in two shapes
+  // depending on how the orchestrator wrote them:
+  //   1. blockquote — `> _<ts> — system: …_`
+  //   2. plain italic paragraph — `_<ts> — system: …_` on its own line,
+  //      which our markdown renderer wraps as `<div><em>…</em></div>`
+  // Without catching both, big runs of removals dominate the transcript.
   function markSystemBlockquotes(html) {
-    if (!html || html.indexOf('<blockquote') === -1) return html;
-    return html.replace(/<blockquote\b([^>]*)>([\s\S]*?)<\/blockquote>/g, (full, attrs, inner) => {
-      const flat = inner.replace(/<[^>]+>/g, '').trim();
-      if (!/—\s*system[:\s]/i.test(flat)) return full;
-      const cls = / class="([^"]*)"/.exec(attrs);
-      const newAttrs = cls
-        ? attrs.replace(/ class="([^"]*)"/, ' class="$1 gc-system-note"')
-        : attrs + ' class="gc-system-note"';
-      return `<blockquote${newAttrs}>${inner}</blockquote>`;
-    });
+    if (!html) return html;
+    let out = html;
+    if (out.indexOf('<blockquote') !== -1) {
+      out = out.replace(/<blockquote\b([^>]*)>([\s\S]*?)<\/blockquote>/g, (full, attrs, inner) => {
+        const flat = inner.replace(/<[^>]+>/g, '').trim();
+        if (!/—\s*system[:\s]/i.test(flat)) return full;
+        const cls = / class="([^"]*)"/.exec(attrs);
+        const newAttrs = cls
+          ? attrs.replace(/ class="([^"]*)"/, ' class="$1 gc-system-note"')
+          : attrs + ' class="gc-system-note"';
+        return `<blockquote${newAttrs}>${inner}</blockquote>`;
+      });
+    }
+    if (out.indexOf('<div>') !== -1) {
+      out = out.replace(/<div>(\s*<em>[\s\S]*?<\/em>\s*)<\/div>/g, (full, inner) => {
+        const flat = inner.replace(/<[^>]+>/g, '').trim();
+        if (!/—\s*system[:\s]/i.test(flat)) return full;
+        return `<div class="gc-system-note">${inner}</div>`;
+      });
+    }
+    return out;
   }
 
   function renderGroupChatMarkdown(content) {
@@ -9356,12 +9382,20 @@
     }
   }
 
+  // Markup of the last committed conversation-list render. Used to skip a
+  // wholesale innerHTML rebuild when the freshly-built rows are byte-identical
+  // to what's already on screen (see the no-op guard before the commit below).
+  // Cleared (null) by every path that wipes $convList to an empty/error state,
+  // so a later identical render after a wipe still commits.
+  let _convListRenderSig = null;
+
   function renderConversationList(convs) {
     convs = filterGhIssues(convs);
     convs = (Array.isArray(convs) ? convs : []).filter(c => !_isOptimisticallyStartedIssueRow(c));
     convs = _prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || '');
     _applyOptimisticTouches(convs);
     if (!convs.length) {
+      _convListRenderSig = null;
       $convList.innerHTML =
         '<div class="empty-state first-run" style="height:auto;padding:28px 20px;font-size:13px;flex-direction:column;gap:10px;align-items:flex-start;color:var(--text-muted);">'
         + '<div style="font-size:14px;color:var(--text);font-weight:600;">No sessions yet</div>'
@@ -10514,6 +10548,21 @@
     // Order: GH Issues (to start) → Ready to merge (action) → In
     // progress (which now also contains the group-chat rows at the
     // top) → Archived.
+    const _convListHtml = _idSearchRowsHtml + _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
+    // No-op guard against the periodic flicker. The 10s bulk-sessions poll and
+    // the 5s live-status tick both re-run this render even when nothing about
+    // the rows changed; the wholesale innerHTML reset below then tears down and
+    // rebuilds every row, which the user sees as the whole list flickering (and
+    // it silently drops :hover, focus, in-flight CSS animations, and any
+    // already-painted lazy content). When the new markup is byte-identical to
+    // what's committed, the existing DOM — and its already-attached per-row
+    // handlers — are still correct, so return without touching it. Live pills
+    // and relative-time labels are baked into the row markup, so genuine updates
+    // change the string and fall through to a real render.
+    if (_convListRenderSig === _convListHtml && $convList.childElementCount > 0) {
+      return;
+    }
+    _convListRenderSig = _convListHtml;
     //
     // FLIP-style reorder animation: capture each existing row's top
     // BEFORE the innerHTML reset, then on the new DOM, translate
@@ -10537,7 +10586,7 @@
         if (id) _flipBefore.set(id, row.getBoundingClientRect().top);
       }
     }
-    $convList.innerHTML = _idSearchRowsHtml + _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
+    $convList.innerHTML = _convListHtml;
     if (_flipBefore.size > 0 && !document.hidden) {
       const _flipNewRows = $convList.querySelectorAll('[data-id]');
       const _flipMoves = [];
@@ -19150,6 +19199,7 @@
         conversationsData = [];
         renderFlowSidebar([]);
       } else {
+        _convListRenderSig = null;
         $list.innerHTML = html;
       }
       _finishArchiveRender();
