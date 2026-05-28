@@ -1466,6 +1466,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 name=None,
                 cwd=None,
                 repo_path=None,
+                worktree=False,
                 model="gpt-test",
             )
         finally:
@@ -1641,7 +1642,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(hasattr(server, "spawn_session_codex"))
         import inspect
         sig = inspect.signature(server.spawn_session_codex)
-        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "model"])
+        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model"])
 
     def test_spawn_session_gemini_exists(self):
         """`spawn_session_gemini` must exist alongside the other engines

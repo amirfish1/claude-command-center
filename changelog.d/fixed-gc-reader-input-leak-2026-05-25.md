@@ -1,0 +1,1 @@
+**Group chat reader no longer leaks events from the previous conversation.** Opening a group chat now stops the active conversation/spawn SSE streams; otherwise in-flight events kept appending below the reader's input row, looking like content "from another conversation" slipping into the bottom of the input box.

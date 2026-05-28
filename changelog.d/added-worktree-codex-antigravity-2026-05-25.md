@@ -1,0 +1,1 @@
+**Worktree spawns for Codex and Antigravity.** The `🌿 worktree` toggle is now enabled for every engine in the new-session row (previously only Claude and Gemini). `/api/sessions/spawn[-codex|-antigravity]` accept a `worktree` boolean; when set, a fresh `feat/<slug>` worktree is created off the launch cwd and the engine runs there.

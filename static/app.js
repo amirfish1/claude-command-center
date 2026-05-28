@@ -7077,6 +7077,13 @@
       renderSidebar(filterConversations($convSearch.value));
     }
 
+    // Stop the conv/spawn SSE streams for the previous conversation. They
+    // append into #conversationsView — the same node the reader mounts into
+    // — so any in-flight event would land below the reader's input row and
+    // look like content "from another conversation" leaking in.
+    try { if (typeof stopConvStream === 'function') stopConvStream(); } catch (_) {}
+    try { if (typeof stopSpawnStream === 'function') stopSpawnStream(); } catch (_) {}
+
     const view = document.getElementById('conversationsView');
     if (!view) return;
 
@@ -19427,7 +19434,9 @@
     return '/api/sessions/spawn';
   }
   function spawnSupportsWorktree(engine) {
-    return engine === 'claude' || engine === 'gemini';
+    // pkood orchestrates remote agents and has its own workspace contract,
+    // so it doesn't participate in the CCC-managed git-worktree flow.
+    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'antigravity';
   }
   function spawnUsesLogPlaceholder(engine) {
     return engine === 'codex' || engine === 'gemini' || engine === 'antigravity';
