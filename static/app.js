@@ -9952,13 +9952,26 @@
       // can persist on an idle session for days — so it's surfaced as a
       // calmer separate chip below instead of dressing the row up like
       // live work.
+      //
+      // Active-sidecar branch: cap at 30 min of staleness. The old
+      // `_isActiveSidecar && (_activityAge < 300 || _midTurn || !c.sidecar_ts)`
+      // form let WIP stick *indefinitely* on a session whose sidecar
+      // got wedged in `active` and whose last event was an assistant
+      // turn (`_midTurn` is true for any completed turn). Once nothing
+      // has happened for half an hour, the sidecar is stale and the
+      // session is not working — drop WIP regardless of midTurn /
+      // missing sidecar_ts.
+      const _CLAUDE_WIP_MAX_AGE = 30 * 60;
+      const _claudeWipFromSidecar = _isActiveSidecar
+        && _activityAge < _CLAUDE_WIP_MAX_AGE
+        && (_activityAge < 300 || _midTurn || !c.sidecar_ts);
       const _isWip = !!c.pending_spawn
         || _hasLivePendingTool
         || _isWaitingForUser
         || _codexOpenTurn
         || _geminiOpenTurn
         || _antigravityOpenTurn
-        || (_isActiveSidecar && (_activityAge < 300 || _midTurn || !c.sidecar_ts));
+        || _claudeWipFromSidecar;
       if (_isWip && !liveToolHtml) {
         const wipTitle = _knownActivityTool
           ? ((c.sidecar_in_flight ? 'Currently running' : 'Last known tool') + ': ' + _knownActivityTool)
