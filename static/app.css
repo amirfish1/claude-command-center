@@ -2423,7 +2423,16 @@
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.12s ease;
-    background: inherit;  /* hide the time underneath when actions show */
+    /* Solid hover bg + soft fade-out on the left edge so the actions
+       fully mask the branch badge / context chips when the overlay
+       extends past .conv-row-end's 36px min-width — without this the
+       branch pill (e.g. "main") sat ON TOP of the merge button and
+       intercepted the click. background: inherit alone wasn't enough
+       because the chips have their own non-transparent backgrounds. */
+    background: var(--surface-2);
+    padding: 2px 4px;
+    border-radius: 4px;
+    box-shadow: -8px 0 10px -2px var(--surface-2);
     z-index: 5;
   }
   .conv-item .conv-row-actions:empty { display: none; }
