@@ -9111,6 +9111,25 @@ def _read_in_flight_state(session_id):
     return None
 
 
+def _live_in_flight_or_none(session_id, inflight):
+    """Drop a stale AskUserQuestion in-flight marker.
+
+    A declined or interrupted AskUserQuestion (user hits Esc → the tool
+    returns a tool_result with is_error and "Answer questions?") never
+    fires PostToolUse, so pre-tool-use.py's in-flight marker is never
+    cleared and lingers forever — the UI then shows a phantom "waiting for
+    answer" box even though the agent already moved on. The transcript is
+    authoritative: if the latest AskUserQuestion already has a matching
+    tool_result it is no longer waiting, so the marker is stale and should
+    be ignored. The scan only runs when an AskUserQuestion marker is
+    present (rare), so this stays cheap on the per-poll read path.
+    """
+    if (inflight and inflight.get("tool") == "AskUserQuestion"
+            and not _pending_ask_user_question_for_session(session_id)):
+        return None
+    return inflight
+
+
 def _read_notification_state(session_id):
     """Return the Notification hook marker for a session, or None.
 
@@ -9287,7 +9306,7 @@ def _add_sidecar_fields(entry):
     sid = entry.get("session_id", "")
     is_live = entry.get("is_live")
     sc = _read_sidecar_state(sid) if is_live else None
-    inflight = _read_in_flight_state(sid) if is_live else None
+    inflight = _live_in_flight_or_none(sid, _read_in_flight_state(sid)) if is_live else None
     notif = _read_notification_state(sid) if is_live else None
     entry["sidecar_status"] = sc.get("status") if sc else None
     entry["sidecar_has_writes"] = sc.get("has_writes", False) if sc else False
@@ -18268,7 +18287,7 @@ def _group_chat_participant_meta(session_id: str) -> dict:
     # Sidecar fields — only meaningful when live.
     if meta["is_live"]:
         sc = _read_sidecar_state(session_id) or {}
-        inflight = _read_in_flight_state(session_id) or {}
+        inflight = _live_in_flight_or_none(session_id, _read_in_flight_state(session_id)) or {}
         notif = _read_notification_state(session_id) or {}
         meta["sidecar_status"] = sc.get("status") if sc else None
         meta["pending_tool"] = (inflight or sc).get("tool")
@@ -24433,7 +24452,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 status.update(_antigravity_activity_fields_from_tail(tail, status.get("live")))
             else:
                 sc = _read_sidecar_state(sid) if sid else None
-                inflight = _read_in_flight_state(sid) if sid else None
+                inflight = _live_in_flight_or_none(sid, _read_in_flight_state(sid)) if sid else None
                 ask_payload = None
                 if inflight:
                     tool = inflight.get("tool")

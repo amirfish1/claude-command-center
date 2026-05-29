@@ -4794,25 +4794,27 @@
   .conv-live-tool-strip .cl-question-header,
   .conv-live-tool-inline .cl-question-header {
     color: var(--accent);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     line-height: 1.25;
-    margin-bottom: 2px;
+    margin-bottom: 3px;
+    letter-spacing: 0.02em;
   }
   .conv-live-tool-strip .cl-question-preamble,
   .conv-live-tool-inline .cl-question-preamble {
     color: var(--text-muted);
-    font-size: 12px;
-    line-height: 1.4;
-    margin-bottom: 7px;
+    font-size: 13px;
+    line-height: 1.45;
+    margin-bottom: 8px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
   .conv-live-tool-strip .cl-question-text,
   .conv-live-tool-inline .cl-question-text {
     color: var(--text);
-    font-size: 13px;
-    line-height: 1.4;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.45;
     white-space: normal;
     overflow-wrap: anywhere;
   }
@@ -4835,8 +4837,8 @@
     border-radius: 5px;
     background: rgba(88,166,255,0.08);
     color: var(--text);
-    font-size: 12px;
-    line-height: 1.25;
+    font-size: 13px;
+    line-height: 1.3;
   }
   .conv-live-tool-strip .cl-question-option-btn,
   .conv-live-tool-inline .cl-question-option-btn {
@@ -4883,6 +4885,8 @@
     display: block;
     margin-top: 2px;
     color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.35;
     overflow-wrap: anywhere;
   }
   /* When the live-tool strip is present above the sticky header, push the

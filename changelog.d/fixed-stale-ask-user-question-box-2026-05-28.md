@@ -1,0 +1,1 @@
+- Fixed a phantom "waiting for answer" box that lingered after a question was declined. A dismissed AskUserQuestion (Esc in the terminal) never clears its in-flight marker, so the dashboard kept showing the prompt even after the agent moved on; the transcript is now treated as the source of truth. Also enlarged the question-box fonts for readability.

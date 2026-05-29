@@ -1179,13 +1179,17 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertIsNone(self.server._pending_ask_user_question_for_session(sid))
 
-    def test_inflight_ask_user_question_marks_row_waiting(self):
-        sid = "00000000-0000-4000-8000-000000000100"
+    def _write_ask_question_session(self, sid, *, answered):
+        """Write a transcript whose last assistant turn asks a question.
+
+        When ``answered`` is True a matching tool_result is appended,
+        simulating a question the user already answered or declined.
+        """
         self.server.SIDECAR_STATE_DIR.mkdir(parents=True, exist_ok=True)
         project_dir = pathlib.Path(self.tmp_home, ".claude", "projects", "-demo-repo")
-        project_dir.mkdir(parents=True)
+        project_dir.mkdir(parents=True, exist_ok=True)
         jsonl = project_dir / f"{sid}.jsonl"
-        jsonl.write_text(json.dumps({
+        events = [{
             "type": "assistant",
             "timestamp": "2026-05-15T00:00:00Z",
             "message": {
@@ -1195,7 +1199,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                     "text": "Locked in. Back to the key flow question.",
                 }],
             },
-        }) + "\n" + json.dumps({
+        }, {
             "type": "assistant",
             "timestamp": "2026-05-15T00:00:00Z",
             "message": {
@@ -1216,18 +1220,26 @@ class TestRepoContextHelpers(unittest.TestCase):
                     },
                 }],
             },
-        }) + "\n" + json.dumps({
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": "toolu-question",
-                    "is_error": True,
-                    "content": "<tool_use_error>validation failed</tool_use_error>",
-                }],
-            },
-        }) + "\n", encoding="utf-8")
+        }]
+        if answered:
+            # User hit Esc on the prompt — Claude Code returns an error
+            # tool_result and never fires PostToolUse, so the in-flight
+            # marker lingers. This must NOT keep the row "waiting".
+            events.append({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "toolu-question",
+                        "is_error": True,
+                        "content": "Answer questions?",
+                    }],
+                },
+            })
+        jsonl.write_text(
+            "\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8"
+        )
         marker = {
             "session_id": sid,
             "tool": "AskUserQuestion",
@@ -1247,6 +1259,10 @@ class TestRepoContextHelpers(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def test_inflight_ask_user_question_marks_row_waiting(self):
+        sid = "00000000-0000-4000-8000-000000000100"
+        self._write_ask_question_session(sid, answered=False)
+
         entry = {"session_id": sid, "is_live": True}
         self.server._add_sidecar_fields(entry)
 
@@ -1255,6 +1271,20 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(entry["question_text"], "How automated do you want this?")
         self.assertEqual(entry["question_preamble"], "Locked in. Back to the key flow question.")
         self.assertEqual(entry["question_option_details"][0]["description"], "Ask before destructive steps.")
+
+    def test_declined_ask_user_question_does_not_mark_row_waiting(self):
+        # Regression: a declined AskUserQuestion (is_error tool_result, no
+        # PostToolUse) leaves a stale in-flight marker. The transcript is
+        # authoritative — the row must not show a phantom "waiting" box.
+        sid = "00000000-0000-4000-8000-000000000101"
+        self._write_ask_question_session(sid, answered=True)
+
+        entry = {"session_id": sid, "is_live": True}
+        self.server._add_sidecar_fields(entry)
+
+        self.assertFalse(entry["question_waiting"])
+        self.assertFalse(entry["sidecar_in_flight"])
+        self.assertNotEqual(entry.get("sidecar_tool"), "AskUserQuestion")
 
     def test_spawn_session_preflights_missing_claude_cli(self):
         with mock.patch.object(
