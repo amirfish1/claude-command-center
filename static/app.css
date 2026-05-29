@@ -2596,11 +2596,13 @@
     gap: 0;
   }
   .conv-folder-group .conv-item.is-grouped-row {
-    /* Grouped project lists need to stay dense; the folder header already
-       provides the visual break, so rows should not carry extra air. */
-    padding-top: 4px;
-    padding-bottom: 4px;
-    border-radius: 4px;
+    /* Parity with "by time" rows — same vertical padding (6px) and same
+       border-radius (6px). The original tightening (4px / 4px) made the
+       by-project view feel cramped vs. by-time. The folder header still
+       provides visual grouping; the rows themselves should feel identical
+       between modes. Keep the tree-line indicator below so the project
+       hierarchy is still legible. */
+    border-radius: 6px;
   }
   .conv-folder-group:not(.collapsed) .conv-item.is-grouped-row::before {
     content: '';
@@ -2612,16 +2614,10 @@
     background: var(--folder-tree-color);
     pointer-events: none;
   }
-  .conv-folder-group .conv-item.is-grouped-row .conv-title {
-    flex: 0 1 auto;
-    line-height: 1.15;
-  }
-  .conv-folder-group .conv-item.is-grouped-row .conv-main-row {
-    gap: 3px;
-  }
-  .conv-folder-group .conv-item.is-grouped-row .conv-row-meta {
-    margin-left: 6px;
-  }
+  /* Keep min-width: 0 on the inline meta so the right-side chip cluster
+     can shrink/wrap inside the narrower grouped-row width without forcing
+     horizontal overflow. Everything else inherits the same .conv-main-row /
+     .conv-title styling as the by-time view. */
   .conv-folder-group .conv-item.is-grouped-row .conv-meta-inline {
     min-width: 0;
   }

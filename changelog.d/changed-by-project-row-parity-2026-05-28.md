@@ -1,0 +1,1 @@
+"By project" sidebar view now uses the same row padding, gap, and title styling as "by time" so rows feel identical between the two grouping modes. Previously the by-project rows were ~33% tighter (4px vertical padding + smaller gaps + tighter line-height), which made the by-project view feel cramped. Folder grouping cues (project header + tree-line indicator) are preserved.
