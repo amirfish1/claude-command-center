@@ -13696,7 +13696,13 @@
       img.alt = row.label;
       img.loading = 'lazy';
       const sid = sessionIdByConv[currentConversation] || (currentSession && currentSession.id) || '';
-      img.src = '/api/pasted-image?path=' + encodeURIComponent(row.target) + (sid ? '&session_id=' + encodeURIComponent(sid) : '');
+      // Remote URLs (e.g. an image link pasted into the chat) can't go through
+      // /api/pasted-image — that route only serves local sandboxed files, so it
+      // 404s and spams the console. Load those directly; the proxy is only for
+      // CCC's local pasted-image files. onerror below still falls back to 📷.
+      img.src = /^https?:\/\//i.test(row.target)
+        ? row.target
+        : '/api/pasted-image?path=' + encodeURIComponent(row.target) + (sid ? '&session_id=' + encodeURIComponent(sid) : '');
       img.onerror = () => {
         const placeholder = document.createElement('div');
         placeholder.className = 'sidebar-file-icon-placeholder';

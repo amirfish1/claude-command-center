@@ -1,0 +1,1 @@
+Fixed console 404 spam and missing thumbnails for remote image links (e.g. URLs pasted into a chat): the session file sidebar now loads `http(s)` image targets directly instead of routing them through the local-only pasted-image proxy.
