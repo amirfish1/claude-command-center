@@ -60,7 +60,7 @@
   // (from the call stack) which timer/handler triggered the re-render. Silence
   // with window.__logReshuffle = false.
   window.__reshuffleCount = 0;
-  function _logReshuffle(moves) {
+  function _logReshuffle(moves, bulkSuppressed) {
     if (window.__logReshuffle === false) return;
     try {
       window.__reshuffleCount++;
@@ -71,8 +71,9 @@
       });
       const frames = (new Error().stack || '').split('\n').map(s => s.trim()).filter(Boolean);
       const trigger = (frames.find(s => /refreshLiveStatus|pollGcActive|loadConversationList|issuesPoll|_hiRefresh|loadArchive|refreshArchive|renderSidebar|pollGroupChatReader|\btick\b/.test(s)) || frames[3] || frames[2] || '?').replace(/^at\s+/, '').slice(0, 80);
-      console.groupCollapsed('%c[RESHUFFLE #' + window.__reshuffleCount + ']%c ' + moves.length + ' rows moved — trigger: ' + trigger,
-        'color:#fff;background:#c0392b;padding:1px 5px;border-radius:3px;font-weight:700', 'color:#999');
+      const tag = bulkSuppressed ? ' — BULK LAYOUT SHIFT (slide suppressed)' : ' — reorder (animated)';
+      console.groupCollapsed('%c[RESHUFFLE #' + window.__reshuffleCount + ']%c ' + moves.length + ' rows moved' + tag + ' — trigger: ' + trigger,
+        'color:#fff;background:' + (bulkSuppressed ? '#555' : '#c0392b') + ';padding:1px 5px;border-radius:3px;font-weight:700', 'color:#999');
       top.forEach(t => console.log('  ' + t));
       console.log('  stack:\n' + frames.slice(2, 11).join('\n'));
       console.groupEnd();
@@ -10928,27 +10929,41 @@
         _flipMoves.push({ row, delta });
       }
       if (_flipMoves.length > 0) {
-        _logReshuffle(_flipMoves);
-        for (const m of _flipMoves) {
-          m.row.style.transition = 'none';
-          m.row.style.transform = `translateY(${m.delta}px)`;
-        }
-        // Force a single style flush so the browser commits the
-        // translate before we replace it with the animated 0.
-        // eslint-disable-next-line no-unused-expressions
-        $convList.offsetHeight;
-        requestAnimationFrame(() => {
+        // A real reorder slides a FEW rows past each other. When content is
+        // inserted/removed ABOVE the list (a group chat appears, PR/worktree
+        // rows hydrate on load), every row below shifts by the SAME delta —
+        // that's a layout shift, not a reorder. Animating it slides the whole
+        // list at once (the "reshuffle"). Detect the bulk case (many rows
+        // dominated by one common delta) and skip the slide entirely: the rows
+        // are already at their final DOM positions, and the scroll anchor
+        // (_restoreArchiveListScroll) keeps the viewport put.
+        const _deltaMode = new Map();
+        for (const m of _flipMoves) { const k = Math.round(m.delta); _deltaMode.set(k, (_deltaMode.get(k) || 0) + 1); }
+        let _modeN = 0; for (const v of _deltaMode.values()) if (v > _modeN) _modeN = v;
+        const _isBulkShift = _flipMoves.length >= 12 && _modeN >= _flipMoves.length * 0.5;
+        _logReshuffle(_flipMoves, _isBulkShift);
+        if (!_isBulkShift) {
           for (const m of _flipMoves) {
-            m.row.style.transition = 'transform 280ms cubic-bezier(0.2, 0.7, 0.3, 1)';
-            m.row.style.transform = '';
-            const _cleanup = (ev) => {
-              if (ev.propertyName !== 'transform') return;
-              m.row.style.transition = '';
-              m.row.removeEventListener('transitionend', _cleanup);
-            };
-            m.row.addEventListener('transitionend', _cleanup);
+            m.row.style.transition = 'none';
+            m.row.style.transform = `translateY(${m.delta}px)`;
           }
-        });
+          // Force a single style flush so the browser commits the
+          // translate before we replace it with the animated 0.
+          // eslint-disable-next-line no-unused-expressions
+          $convList.offsetHeight;
+          requestAnimationFrame(() => {
+            for (const m of _flipMoves) {
+              m.row.style.transition = 'transform 280ms cubic-bezier(0.2, 0.7, 0.3, 1)';
+              m.row.style.transform = '';
+              const _cleanup = (ev) => {
+                if (ev.propertyName !== 'transform') return;
+                m.row.style.transition = '';
+                m.row.removeEventListener('transitionend', _cleanup);
+              };
+              m.row.addEventListener('transitionend', _cleanup);
+            }
+          });
+        }
       }
     }
     // Toggle handler for the Archived section header.
