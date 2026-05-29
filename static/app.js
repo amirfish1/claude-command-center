@@ -4091,6 +4091,46 @@
         el.classList.toggle('active', el.dataset.id === convId);
       });
     }
+    try { updateSubagentsPanel(convId); } catch (_) { /* defensive — panel is non-critical */ }
+  }
+
+  // Populate the status-rail Subagents panel from the active conversation's
+  // row data. Shows the last 8 Task spawns (parser cap) with description,
+  // optional subagent_type, and a status pill. Hidden when the session has
+  // no spawns or no row data — keeps the rail compact for plain sessions.
+  function updateSubagentsPanel(convId) {
+    const panel = document.getElementById('subagentsPanel');
+    if (!panel) return;
+    const countEl = document.getElementById('subagentsCount');
+    const listEl = document.getElementById('subagentsList');
+    if (!listEl || !countEl) return;
+    const row = (conversationsData || []).find(c => c.id === convId);
+    const recent = row && Array.isArray(row.subagent_recent) ? row.subagent_recent : [];
+    const total = row ? Number(row.subagent_count || 0) : 0;
+    const inFlight = row ? Number(row.subagent_in_flight_count || 0) : 0;
+    if (!recent.length) {
+      panel.style.display = 'none';
+      listEl.innerHTML = '';
+      countEl.textContent = '';
+      return;
+    }
+    panel.style.display = '';
+    countEl.textContent = inFlight > 0 ? (inFlight + ' / ' + total) : String(total);
+    countEl.title = inFlight > 0
+      ? (inFlight + ' running, ' + total + ' total spawned this session')
+      : (total + ' subagent' + (total === 1 ? '' : 's') + ' spawned this session');
+    listEl.innerHTML = recent.map(t => {
+      const status = (t && t.status) === 'in-flight' ? 'in-flight' : 'done';
+      const desc = escapeHtml(String((t && t.description) || '(unnamed task)'));
+      const type = t && t.subagent_type
+        ? '<span class="subagent-type">' + escapeHtml(t.subagent_type) + '</span>'
+        : '';
+      return '<div class="subagent-row is-' + status + '" title="' + escapeAttr(desc) + '">'
+        + '<span class="subagent-status">' + (status === 'in-flight' ? '▶' : '✓') + '</span>'
+        + '<span class="subagent-desc">' + desc + '</span>'
+        + type
+        + '</div>';
+    }).join('');
   }
   function setActivePaneById(paneId, activeConvId) {
     const idx = paneIndexByPaneId(paneId);
@@ -9931,6 +9971,21 @@
       if (_rowSid && _inGroupChatIds.has(_rowSid)) {
         signals += '<span class="conv-signal in-group-chat" title="This session is participating in a group chat">💬 IN GROUP CHAT</span>';
       }
+      // Subagent chip — surfaces Claude Code Task tool spawns. Shows total
+      // count plus an `▶ N` suffix when any spawn is still in flight, so
+      // the user can tell at a glance whether the session is fanning out
+      // work. Hidden when subagent_count == 0 (every row).
+      const _subCount = Number(c.subagent_count || 0);
+      const _subInFlight = Number(c.subagent_in_flight_count || 0);
+      if (_subCount > 0) {
+        const _subTip = _subInFlight > 0
+          ? (_subInFlight + ' subagent' + (_subInFlight === 1 ? '' : 's') + ' running · ' + _subCount + ' total')
+          : (_subCount + ' subagent' + (_subCount === 1 ? '' : 's') + ' total');
+        const _subInner = _subInFlight > 0
+          ? ('🤖 ' + _subCount + ' <span class="conv-signal-sub-flight">▶ ' + _subInFlight + '</span>')
+          : ('🤖 ' + _subCount);
+        signals += '<span class="conv-signal subagents' + (_subInFlight > 0 ? ' in-flight' : '') + '" title="' + escapeAttr(_subTip) + '">' + _subInner + '</span>';
+      }
       const _activityAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
       const _rowActivityTs = c.sidecar_ts || c.last_interacted || c.modified || 0;
       const _rowActivityAge = _rowActivityTs ? Math.max(0, Math.floor(Date.now() / 1000 - _rowActivityTs)) : 9999;
@@ -10951,6 +11006,10 @@
     // teardown, no flicker) and bail. Any real change alters the structural sig
     // and falls through to a normal rebuild.
     const _structSig = _convListHtml.replace(_VOLATILE_TIME_RE, '$1$3');
+    // Refresh the Subagents rail panel each tick so spawn count + running
+    // status reflect the latest /api/sessions data even when the conv-list
+    // structure is otherwise unchanged (we short-circuit below in that case).
+    try { updateSubagentsPanel(currentConversation); } catch (_) {}
     if (_convListRenderSig === _structSig && $convList.childElementCount > 0) {
       _patchVolatileTimes(_convListHtml);
       return;

@@ -594,6 +594,18 @@
             </div>
             <div class="files-list" id="sidebarFilesList"></div>
           </div>
+          <!-- Subagents panel — surfaces Claude Code Task tool spawns for
+               the currently selected session. Populated by
+               updateSubagentsPanel() in app.js whenever the active
+               conv changes or its row data refreshes. Hidden when the
+               session has no subagent spawns. -->
+          <div class="subagents-panel" id="subagentsPanel" style="display: none;">
+            <div class="subagents-header">
+              <span class="subagents-title">Subagents</span>
+              <span class="subagents-count" id="subagentsCount"></span>
+            </div>
+            <div class="subagents-list" id="subagentsList"></div>
+          </div>
           <div class="status-rail-file-viewer" id="statusRailFileViewer" style="display: none;">
             <div class="file-viewer-header">
               <div class="file-viewer-title-group">

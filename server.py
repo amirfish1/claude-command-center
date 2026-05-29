@@ -4815,6 +4815,14 @@ def _extract_tail_meta(path):
         # has nothing to find — caller can skip the JSONL re-walk + git
         # subprocesses for this row.
         "has_external_cd": False,
+        # Subagent visibility — Claude Code's Task tool spawns child agents.
+        # We count both total Task tool_use blocks ever issued and how many
+        # are still in flight (no matching tool_result yet). subagent_recent
+        # surfaces the last 8 with their description + status for the
+        # status-rail panel.
+        "subagent_count": 0,
+        "subagent_in_flight_count": 0,
+        "subagent_recent": [],
     }
     # Regexes compiled once per call; order matters — earlier = higher confidence.
     _gh_issue_cmd_re = re.compile(r'gh\s+issue\s+(?:view|edit|close|comment|reopen|create)\s+(?:.*?)(?<!\d)(\d{1,6})(?!\d)')
@@ -4822,6 +4830,11 @@ def _extract_tail_meta(path):
     _gh_url_re = re.compile(r'github\.com/[^/\s]+/[^/\s]+/issues/(\d{1,6})')
     _gh_pr_url_re = re.compile(r'github\.com/([^/\s]+/[^/\s]+)/pull/(\d{1,7})')
     _pending_pr_ids = set()
+    # Per-Task tracking: id → {description, status, ts_pos}. We mutate this
+    # in place when a tool_result for the same tool_use_id lands, then
+    # serialize the last 8 into meta["subagent_recent"] at the end.
+    _subagent_by_id = {}
+    _subagent_order = []  # insertion order so we can pull the last N
     _pos = 0
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -4941,6 +4954,21 @@ def _extract_tail_meta(path):
                         if name in ("Edit", "Write", "NotebookEdit"):
                             meta["has_edit"] = True
                             meta["last_edit_pos"] = _pos
+                        elif name == "Task":
+                            tu_id = block.get("id")
+                            if tu_id:
+                                desc = (inp.get("description") or "").strip()[:80]
+                                subagent = (inp.get("subagent_type") or "").strip()[:40]
+                                entry = {
+                                    "id": tu_id,
+                                    "description": desc or "(unnamed task)",
+                                    "subagent_type": subagent,
+                                    "status": "in-flight",
+                                    "pos": _pos,
+                                }
+                                _subagent_by_id[tu_id] = entry
+                                _subagent_order.append(tu_id)
+                                meta["subagent_count"] += 1
                         elif name == "Bash":
                             cmd = inp.get("command", "")
                             signals = _shell_command_signals(cmd)
@@ -4975,15 +5003,23 @@ def _extract_tail_meta(path):
                         meta["pending_tool"] = last_tool_name
                         meta["pending_file"] = last_tool_file
                 # Tool results land as a user-role event; scan for PR URLs
-                # only when we're matching a `gh pr create` we already saw.
-                elif t == "user" and _pending_pr_ids:
+                # when we're matching a `gh pr create` we already saw, and
+                # flip any Task tool_result we're tracking from in-flight
+                # → done so subagent_in_flight_count stays accurate.
+                elif t == "user" and (_pending_pr_ids or _subagent_by_id):
                     msg_content = ev.get("message", {}).get("content")
                     if isinstance(msg_content, list):
                         for sub in msg_content:
                             if not isinstance(sub, dict) or sub.get("type") != "tool_result":
                                 continue
                             tu_id = sub.get("tool_use_id", "")
-                            if not tu_id or tu_id not in _pending_pr_ids:
+                            if not tu_id:
+                                continue
+                            if tu_id in _subagent_by_id:
+                                entry = _subagent_by_id[tu_id]
+                                if entry.get("status") == "in-flight":
+                                    entry["status"] = "done"
+                            if tu_id not in _pending_pr_ids:
                                 continue
                             _pending_pr_ids.discard(tu_id)
                             rc = sub.get("content")
@@ -5004,6 +5040,21 @@ def _extract_tail_meta(path):
                                 )
     except OSError:
         pass
+    # Finalize subagent meta now that we've walked the file: count what's
+    # still in-flight and snapshot the most recent 8 for the rail panel.
+    if _subagent_by_id:
+        meta["subagent_in_flight_count"] = sum(
+            1 for e in _subagent_by_id.values() if e.get("status") == "in-flight"
+        )
+        last_ids = _subagent_order[-8:]
+        meta["subagent_recent"] = [
+            {
+                "description": _subagent_by_id[tid]["description"],
+                "subagent_type": _subagent_by_id[tid]["subagent_type"],
+                "status": _subagent_by_id[tid]["status"],
+            }
+            for tid in last_ids if tid in _subagent_by_id
+        ]
     global _conv_meta_cache_dirty
     with _conv_meta_cache_lock:
         _conv_meta_cache[str(path)] = meta
@@ -8938,6 +8989,12 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "tail_issue_number": tail_meta.get("tail_issue_number"),
             "tail_pr_number": tail_meta.get("tail_pr_number"),
             "tail_pr_url": tail_meta.get("tail_pr_url"),
+            # Subagent visibility — Task tool spawn counts + last few entries.
+            # The list is capped to 8 entries on the parser side; the count
+            # fields cover total / still-in-flight for the row chip.
+            "subagent_count": tail_meta.get("subagent_count", 0),
+            "subagent_in_flight_count": tail_meta.get("subagent_in_flight_count", 0),
+            "subagent_recent": tail_meta.get("subagent_recent", []),
             # Resolved PR state — filled in below via a parallel prime
             # pass. See find_all_conversations for the broader rationale.
             "pr_state": None,
