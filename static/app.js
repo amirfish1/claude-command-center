@@ -11735,7 +11735,18 @@
     return ranked.map(item => item.row);
   }
 
-  function applyConvSort(data) {
+  // Row-order hysteresis. Mirrors the folder-group hysteresis
+  // (_FOLDER_ORDER_HYSTERESIS_S) one layer down: rows whose recency scores are
+  // within this window keep their previous relative order instead of
+  // reshuffling. Without it, any background-active session (e.g. a group-chat
+  // participant getting nudged) keeps bumping its last_interacted/modified and
+  // leapfrogs to the top of its group every poll — the list visibly jumps under
+  // a user who's just watching. A genuine recency gap (> window) still promotes
+  // the fresher row, so "freshest first" holds at the minute scale.
+  const _ROW_ORDER_HYSTERESIS_S = 5 * 60;
+  const _ROW_ORDER_KEY = 'ccc-row-stable-order';
+
+  function applyConvSort(data, opts) {
     if (convAlphaSort) {
       return [...data].sort((a, b) => {
         const pa = _pinSortKey(a);
@@ -11752,15 +11763,39 @@
     if (convSortMode === 'recent') {
       // Sort by whichever is later: the user's last UI interaction or the
       // session's last meaningful event. Keeps the just-typed card on top
-      // even before Claude responds.
+      // even before Claude responds. Near-tie scores fall back to the prior
+      // render's order (hysteresis) so the list doesn't jitter — see
+      // _ROW_ORDER_HYSTERESIS_S.
       const score = (c) => c.last_interacted || c.modified || 0;
-      return [...data].sort((a, b) => {
+      const idOf = (c) => c.session_id || c.id || '';
+      let prevOrder = {};
+      try { prevOrder = JSON.parse(localStorage.getItem(_ROW_ORDER_KEY) || '{}'); } catch (_) { /* corrupt/missing */ }
+      const sorted = [...data].sort((a, b) => {
         const pa = _pinSortKey(a);
         const pb = _pinSortKey(b);
         if (pa[0] !== pb[0]) return pa[0] - pb[0];
         if (pa[1] !== pb[1]) return pa[1] - pb[1];
-        return score(b) - score(a);
+        const sa = score(a), sb = score(b);
+        if (Math.abs(sa - sb) < _ROW_ORDER_HYSTERESIS_S) {
+          // Both rows were in the prior render and held a definite order →
+          // keep it. A brand-new row (no prev index) still sorts by score so
+          // it enters at its natural spot.
+          const ia = prevOrder[idOf(a)];
+          const ib = prevOrder[idOf(b)];
+          if (ia !== undefined && ib !== undefined && ia !== ib) return ia - ib;
+        }
+        return sb - sa;
       });
+      // Persist the committed order only on the real render pass — the search
+      // filter sorts a subset and must not clobber the full-list memory.
+      if (opts && opts.persist) {
+        try {
+          const next = {};
+          sorted.forEach((c, i) => { const k = idOf(c); if (k) next[k] = i; });
+          localStorage.setItem(_ROW_ORDER_KEY, JSON.stringify(next));
+        } catch (_) { /* quota/disabled — degrade to no hysteresis */ }
+      }
+      return sorted;
     }
     return data; // custom/default order from server
   }
@@ -19630,7 +19665,7 @@
     // Also keep conversationsData in sync so downstream code (selection
     // restore, etc.) sees a non-empty list while in archive mode. This
     // gets reset on toggle-off via loadConversationList().
-    conversationsData = _prioritizeSessionIdMatches(applyConvSort(_applyOptimisticTouches(rowsForRender)), q);
+    conversationsData = _prioritizeSessionIdMatches(applyConvSort(_applyOptimisticTouches(rowsForRender), { persist: true }), q);
 
     // Make sure the active sidebar mode stays active. Archive refreshes run on
     // search and on the 10s poll; if the board is open, refresh its cards

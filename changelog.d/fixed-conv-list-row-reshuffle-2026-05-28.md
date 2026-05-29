@@ -1,0 +1,1 @@
+Fixed conversation-list rows jumping around while idle. Session rows now keep their position instead of reshuffling every poll when a background-active session's timestamp ticks; a row only moves once it's meaningfully newer (5-min hysteresis), matching the existing project-group order behavior.
