@@ -1,4 +1,26 @@
 (function() {
+  // ── Poller kill-switch harness (debug) ──────────────────────────────────
+  // Every periodic timer below is wrapped with _gated(name, fn) or guarded by
+  // `if (_pollerOff('name')) return;`. Flip any off live from the console:
+  //   window.__pollersOff.liveStatus = true   // stop one
+  //   cccPollers.list()                        // names + on/off state
+  //   cccPollers.off('liveStatus') / .on(...)  // toggle helpers
+  // Disabling a poller is a pure no-op (timer keeps firing, callback returns
+  // early), so it's instant and reversible with zero teardown.
+  window.__pollersOff = window.__pollersOff || {};
+  function _pollerOff(name) { return !!(window.__pollersOff && window.__pollersOff[name]); }
+  function _gated(name, fn) {
+    return function () { if (_pollerOff(name)) return; return fn.apply(this, arguments); };
+  }
+  window.cccPollers = {
+    names: ['liveStatus','liveToolStrip','gcReader','pkoodTail','codexLog','worktreesBadge','hiStatus','issues','archiveProgress','gcActive','peer','sessionsList','vercelDeploy','localhost'],
+    off(n) { window.__pollersOff[n] = true; return this.list(); },
+    on(n) { delete window.__pollersOff[n]; return this.list(); },
+    allOff() { this.names.forEach(n => window.__pollersOff[n] = true); return this.list(); },
+    allOn() { window.__pollersOff = {}; return this.list(); },
+    list() { return this.names.map(n => (_pollerOff(n) ? 'OFF ' : 'on  ') + n); },
+  };
+
   // ── Demo mode (GH Pages, issue #49) ─────────────────────────────────────
   // When the demo flag is set, every `fetch('/api/...')` and `new EventSource(
   // '/api/...')` is routed to a static JSON fixture under ./api/<path>.json
@@ -1182,8 +1204,8 @@
     if (liveStatusTimer) clearInterval(liveStatusTimer);
     if (liveStatusRenderTicker) clearInterval(liveStatusRenderTicker);
     refreshLiveStatus();
-    liveStatusTimer = setInterval(refreshLiveStatus, 5000);
-    liveStatusRenderTicker = setInterval(updateLiveToolStrip, 1000);
+    liveStatusTimer = setInterval(_gated('liveStatus', refreshLiveStatus), 5000);
+    liveStatusRenderTicker = setInterval(_gated('liveToolStrip', updateLiveToolStrip), 1000);
   }
 
   // Render a live "what's running right now" indicator at the bottom of the
@@ -7388,7 +7410,7 @@
 
     if (_gcReaderInterval) clearInterval(_gcReaderInterval);
     pollGroupChatReader();
-    _gcReaderInterval = setInterval(pollGroupChatReader, 3000);
+    _gcReaderInterval = setInterval(_gated('gcReader', pollGroupChatReader), 3000);
 
     // Scroll listener for dynamic "Viewing Poster" update
     const gcBody = document.getElementById('gcReaderBody');
@@ -13265,7 +13287,7 @@
           };
         }
         await loadPkoodTail(agentId);
-        pkoodTailPoller = setInterval(() => loadPkoodTail(agentId), 2000);
+        pkoodTailPoller = setInterval(_gated('pkoodTail', () => loadPkoodTail(agentId)), 2000);
       } else {
         stopPkoodTailPoller();
         if ($pkoodKillBtn) $pkoodKillBtn.style.display = 'none';
@@ -14428,7 +14450,7 @@
       if (c && (c.source === 'codex' || c.source === 'gemini' || c.source === 'antigravity') && typeof c.spawn_pid === 'number') {
         await loadCodexLog(c);
         stopCodexLogPoller();
-        codexLogPoller = setInterval(() => {
+        codexLogPoller = setInterval(() => { if (_pollerOff('codexLog')) return;
           if (currentConversation !== id) { stopCodexLogPoller(); return; }
           loadCodexLog(c);
         }, 1500);
@@ -15085,7 +15107,7 @@
   }
   if (!CONV_POPOUT_MODE) {
     refreshWorktreesBadge();
-    setInterval(refreshWorktreesBadge, 60000);
+    setInterval(_gated('worktreesBadge', refreshWorktreesBadge), 60000);
   }
 
   // ── Usage stats overlay ────────────────────────────────────────────
@@ -17168,7 +17190,7 @@
     _hiRefreshStatus();
     if (_hiPollTimer) clearInterval(_hiPollTimer);
     // 8s during indexing, 60s otherwise — adaptive interval set after each tick.
-    _hiPollTimer = setInterval(() => {
+    _hiPollTimer = setInterval(() => { if (_pollerOff('hiStatus')) return;
       const st = window._historyIndexStatus;
       const fast = st && (st.indexing || st.embedding);
       _hiRefreshStatus();
@@ -17176,7 +17198,7 @@
       if ((fast && _hiPollTimer.__cadence !== 'fast')
           || (!fast && _hiPollTimer.__cadence !== 'slow')) {
         clearInterval(_hiPollTimer);
-        _hiPollTimer = setInterval(() => _hiRefreshStatus(), fast ? 4000 : 60000);
+        _hiPollTimer = setInterval(_gated('hiStatus', () => _hiRefreshStatus()), fast ? 4000 : 60000);
         _hiPollTimer.__cadence = fast ? 'fast' : 'slow';
       }
     }, 8000);
@@ -17941,7 +17963,7 @@
   // Start polling issues + log list every 10s for real-time status
   function startIssuesPolling() {
     if (issuesPolling) return;
-    issuesPolling = setInterval(() => {
+    issuesPolling = setInterval(() => { if (_pollerOff('issues')) return;
       loadIssues();
     }, 10000);
   }
@@ -19532,7 +19554,7 @@
       } catch (_) { /* polling is best-effort; ignore */ }
     };
     tick();  // immediate first paint
-    _archiveProgressPollId = setInterval(tick, 250);
+    _archiveProgressPollId = setInterval(_gated('archiveProgress', tick), 250);
   }
   function _stopArchiveProgressPoll() {
     if (_archiveProgressPollId) {
@@ -19988,7 +20010,7 @@
   (function wireGroupChatPolling() {
     if (CONV_POPOUT_MODE) return;
     try { pollGcActive(); } catch (_) {}
-    setInterval(() => { try { pollGcActive(); } catch (_) {} }, 15000);
+    setInterval(_gated('gcActive', () => { try { pollGcActive(); } catch (_) {} }), 15000);
   })();
 
   // ── Legacy repo-list (used by the modal + custom-repos browser) ─────────
@@ -20059,7 +20081,7 @@
     let _peerPollId = null;
     const _peerStartPoll = () => {
       if (_peerPollId) return;
-      _peerPollId = setInterval(async () => {
+      _peerPollId = setInterval(async () => { if (_pollerOff('peer')) return;
         await loadPeerRegistry();
         renderPeerPickerSelect();
       }, 10000);
@@ -20982,7 +21004,7 @@
   // divergence here was what caused new-session rows to flicker.
   if (!CONV_POPOUT_MODE) {
 	  setInterval(async () => {
-		    if (activeTab !== 'sessions') return;
+		    if (_pollerOff('sessionsList')) return; if (activeTab !== 'sessions') return;
 		    if (isInlineRenameInProgress()) return;
         if (deferSidebarRenderIfDragging()) return;
 		    if (conversationPaneLoading) return;
@@ -24016,8 +24038,8 @@
 
   if (!CONV_POPOUT_MODE) {
     pollVercelDeploy();
-    setInterval(pollVercelDeploy, 15000);
+    setInterval(_gated('vercelDeploy', pollVercelDeploy), 15000);
     pollLocalhost();
-    setInterval(pollLocalhost, 15000);
+    setInterval(_gated('localhost', pollLocalhost), 15000);
   }
 })();
