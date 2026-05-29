@@ -7686,12 +7686,23 @@
     const shortToName = {};
     for (const [fullSid, name] of Object.entries(nameMap)) {
       const short = fullSid.substring(0, 8).toLowerCase();
-      shortToName[short] = name;
+      // Skip name_map entries whose "name" is just the full session UUID —
+      // those are placeholder names from sessions that never picked up a
+      // friendly label. Falling back to the 8-char hash reads much better
+      // than `@32bf4a17-3d9e-4243-9dc8-c60e2f1495bc`. Same for the
+      // "hash: <uuid>" form some skill messages emit.
+      const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(name).trim());
+      const looksLikeHashUuid = /^[0-9a-f]{8}:\s*[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(name).trim());
+      shortToName[short] = (looksLikeUuid || looksLikeHashUuid) ? short : name;
     }
     const shortIds = Object.keys(shortToName);
     if (!shortIds.length) return;
 
-    const regexStr = '(?:@)?\\b(' + shortIds.join('|') + ')\\b';
+    // Match either the short 8-char hash or the full UUID form, so a
+    // speaker heading like `— 32bf4a17-3d9e-...` collapses to a single
+    // mention pill instead of `@<name>-3d9e-4243-9dc8-...` with the
+    // trailing hex chunk dangling outside the span.
+    const regexStr = '(?:@)?\\b(' + shortIds.join('|') + ')(?:-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\\b';
     const regex = new RegExp(regexStr, 'gi');
 
     const walker = document.createTreeWalker(

@@ -1,0 +1,1 @@
+Group-chat mention pills no longer render as `@<full-uuid>` when a participant's name_map entry is itself just the session UUID. Fall back to the 8-char hash (`@32bf4a17`) for those cases and extend the mention regex to consume an optional trailing `-xxxx-xxxx-xxxx-xxxxxxxxxxxx` so the trailing hex chunk no longer dangles outside the pill.
