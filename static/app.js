@@ -5787,9 +5787,16 @@
     const rawFirst = (!isBacklog && c && c.first_message)
       ? firstSentenceOf(cleanIssuePrompt(c.first_message), 90)
       : '';
+    // Same precedence as _renderRow: a /rename in the terminal sets
+    // display_name (custom_title) above ai_title server-side, so a
+    // display_name that diverges from ai_title is a user rename and
+    // should win over the auto ai_title.
+    const _flowDispIsRename = c && c.display_name && c.display_name !== c.ai_title;
     let rawTitle = c && (c.name_overridden || c.spawn_named) && c.display_name
       ? c.display_name
-      : (c && (c.ai_title || rawFirst || c.display_name)) || '(untitled)';
+      : _flowDispIsRename
+        ? c.display_name
+        : (c && (c.ai_title || rawFirst || c.display_name)) || '(untitled)';
     if (c && (c.backlog_type === 'github' || c.issue_number || c.linked_issue)) {
       rawTitle = stripGhIssueProjectTag(rawTitle);
     }
@@ -8493,8 +8500,11 @@
           }
         }
         // Prefer first_message for the title unless the user explicitly renamed it
-        // or CCC launched Claude with a stable --name.
-        // Auto-generated display_names (from claude /rename) tend to be awkwardly truncated.
+        // or CCC launched Claude with a stable --name. A /rename in the
+        // terminal writes a custom-title event which the server's
+        // display_name chain picks up ahead of ai_title; treat a
+        // display_name that diverges from ai_title as that rename and
+        // surface it here too.
         // For backlog cards, `first_message` is the issue body (which often
         // starts with a markdown heading like "## Feature request"), so using
         // it as a title fallback produces garbage. Prefer display_name there.
@@ -8502,11 +8512,14 @@
         const rawFirst = (!isBacklog && c.first_message)
           ? firstSentenceOf(cleanIssuePrompt(c.first_message), 90)
           : '';
+        const _kbDispIsRename = c.display_name && c.display_name !== c.ai_title;
         let rawTitle = (c.name_overridden || c.spawn_named) && c.display_name
           ? c.display_name
           : (isBacklog
               ? (c.display_name || rawFirst || '(untitled)')
-              : (c.ai_title || rawFirst || c.display_name || '(untitled)'));
+              : (_kbDispIsRename
+                  ? c.display_name
+                  : (c.ai_title || rawFirst || c.display_name || '(untitled)')));
         if (c.backlog_type === 'github' || c.issue_number || c.linked_issue) {
           rawTitle = stripGhIssueProjectTag(rawTitle);
         }
@@ -9776,13 +9789,19 @@
       if ((c.name_overridden || c.spawn_named) && c.display_name) {
         rawTitle = c.display_name;
         titleSource = c.name_overridden ? 'user' : 'spawn';
+      } else if (c.display_name && c.display_name !== c.ai_title) {
+        // Server-side display_name diverged from ai_title — typically a
+        // user /rename in the terminal (Claude Code writes that as a
+        // custom-title event, which the server's display_name chain
+        // picks up ahead of ai_title). Prefer it over the auto ai_title
+        // so renames from the terminal actually surface here. Without
+        // this we'd fall through to ai_title and the rename would be
+        // silently ignored.
+        rawTitle = c.display_name;
       } else if (c.ai_title) {
         rawTitle = c.ai_title;
         titleSource = 'ai';
       } else if (c.display_name) {
-        // Non-rename server-side display_name (e.g. /api/sessions chains in
-        // custom_title / agent_name before falling through). No glyph —
-        // these aren't "user chose this" the way a rename is.
         rawTitle = c.display_name;
       } else if (cleanFirst) {
         rawTitle = firstSentenceOf(cleanFirst, 60);
