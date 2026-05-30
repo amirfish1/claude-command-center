@@ -10066,14 +10066,15 @@
       if (!liveToolHtml && _isWaitingForUser && !_isAgentRunning) {
         // Agent has stopped and is blocked on user input — distinct
         // chip + tooltip + class so it doesn't masquerade as live work.
-        // Question wins the QUESTION label; explicit approval prompt
-        // gets APPROVE?; generic waiting falls through to WAITING.
+        // Only AskUserQuestion gets the louder QUESTION label; every
+        // other "needs_approval" case is just generic "Claude is
+        // waiting for your input" (the sidecar type is usually empty),
+        // so labeling them APPROVE? was misleading — the agent isn't
+        // asking for tool permission, it's asking "what next?".
         const waitTitle = c.question_text
           ? c.question_text
           : (c.needs_approval_message || c.sidecar_file || 'Agent is paused waiting for your input');
-        const waitLabel = _isQuestionWaiting
-          ? 'QUESTION'
-          : (c.needs_approval ? 'APPROVE?' : 'WAITING');
+        const waitLabel = _isQuestionWaiting ? 'QUESTION' : 'WAITING';
         signals += '<span class="conv-signal activity-waiting" title="' + escapeHtml(waitTitle) + '">' + escapeHtml(waitLabel) + '</span>';
       } else if (_isAgentRunning && !liveToolHtml) {
         const wipTitle = _knownActivityTool

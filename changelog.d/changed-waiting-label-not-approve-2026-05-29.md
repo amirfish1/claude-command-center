@@ -1,0 +1,1 @@
+Renamed the `APPROVE?` waiting chip to `WAITING`. The sidecar's `_needs_approval.json` is set for every "Claude is waiting for your input" state (the `type` field is almost always empty), not just tool-approval prompts — so calling it `APPROVE?` was misleading. Only `AskUserQuestion` still gets the distinct `QUESTION` label.
