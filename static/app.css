@@ -2925,6 +2925,17 @@
   .conv-signal.pr-note { background: rgba(251,202,4,0.15); color: #FBCA04; }
   .conv-signal.pr-note-danger { background: rgba(248,81,73,0.16); color: var(--red); }
   .conv-signal.activity-working { background: rgba(251,202,4,0.15); color: #FBCA04; animation: pulse 2s infinite; }
+  /* Distinct from .activity-working — cyan, no pulse. Surfaces "agent
+     has stopped and is blocked on the user" (QUESTION, APPROVE?,
+     WAITING). Previously these all rendered as yellow pulsing WIP and
+     read as "the agent is still doing something", which was the
+     conflation the user kept hitting. */
+  .conv-signal.activity-waiting {
+    background: rgba(56,189,248,0.14);
+    color: #38bdf8;
+    border: 1px solid rgba(56,189,248,0.35);
+    font-weight: 700;
+  }
   .conv-signal.activity-waiting { background: rgba(88,166,255,0.1); color: var(--accent); }
   .conv-signal.activity-idle { background: rgba(139,148,158,0.08); color: var(--text-muted); }
   .conv-signal.activity-blocked { background: rgba(248,81,73,0.15); color: var(--red); animation: pulse 2s infinite; }

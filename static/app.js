@@ -10051,22 +10051,35 @@
       const _claudeWipFromSidecar = _isActiveSidecar
         && _activityAge < _CLAUDE_WIP_MAX_AGE
         && (_activityAge < 300 || _midTurn || !c.sidecar_ts);
-      const _isWip = !!c.pending_spawn
+      // Distinguish "agent is actively running" from "agent paused
+      // waiting for the user". They render very differently — running
+      // is the yellow pulsing WIP chip, waiting is a calm cyan WAITING /
+      // QUESTION / APPROVE? chip with no pulse. Conflating them made
+      // idle sessions blocked on the human read as "the agent is still
+      // doing something", which is the bug the user kept reporting.
+      const _isAgentRunning = !!c.pending_spawn
         || _hasLivePendingTool
-        || _isWaitingForUser
         || _codexOpenTurn
         || _geminiOpenTurn
         || _antigravityOpenTurn
         || _claudeWipFromSidecar;
-      if (_isWip && !liveToolHtml) {
+      if (!liveToolHtml && _isWaitingForUser && !_isAgentRunning) {
+        // Agent has stopped and is blocked on user input — distinct
+        // chip + tooltip + class so it doesn't masquerade as live work.
+        // Question wins the QUESTION label; explicit approval prompt
+        // gets APPROVE?; generic waiting falls through to WAITING.
+        const waitTitle = c.question_text
+          ? c.question_text
+          : (c.needs_approval_message || c.sidecar_file || 'Agent is paused waiting for your input');
+        const waitLabel = _isQuestionWaiting
+          ? 'QUESTION'
+          : (c.needs_approval ? 'APPROVE?' : 'WAITING');
+        signals += '<span class="conv-signal activity-waiting" title="' + escapeHtml(waitTitle) + '">' + escapeHtml(waitLabel) + '</span>';
+      } else if (_isAgentRunning && !liveToolHtml) {
         const wipTitle = _knownActivityTool
           ? ((c.sidecar_in_flight ? 'Currently running' : 'Last known tool') + ': ' + _knownActivityTool)
-          : (_isWaitingForUser
-              ? (c.needs_approval_message || c.sidecar_file || c.question_text || 'Agent is waiting for your input')
-              : (isCodexRow ? 'Codex is working' : (isGeminiRow ? 'Gemini is working' : (isAntigravityRow ? 'Antigravity is working' : 'Agent is working'))));
-        const wipLabel = _isQuestionWaiting
-          ? 'QUESTION'
-          : ((_codexOpenTurn || _geminiOpenTurn || _antigravityOpenTurn || _isWaitingForUser) ? 'WIP' : (_knownActivityTool || 'WIP'));
+          : (isCodexRow ? 'Codex is working' : (isGeminiRow ? 'Gemini is working' : (isAntigravityRow ? 'Antigravity is working' : 'Agent is working')));
+        const wipLabel = (_codexOpenTurn || _geminiOpenTurn || _antigravityOpenTurn) ? 'WIP' : (_knownActivityTool || 'WIP');
         signals += '<span class="conv-signal activity-working" title="' + escapeHtml(wipTitle) + '">' + escapeHtml(wipLabel) + '</span>';
       } else if (c.gh_in_progress && !liveToolHtml) {
         // Calmer "issue is in progress" chip — distinct from live WIP so
