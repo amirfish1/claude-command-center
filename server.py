@@ -4962,7 +4962,12 @@ def _extract_tail_meta(path):
                         if name in ("Edit", "Write", "NotebookEdit"):
                             meta["has_edit"] = True
                             meta["last_edit_pos"] = _pos
-                        elif name == "Task":
+                        elif name == "Task" or name == "Agent":
+                            # Claude Code calls the subagent-spawn tool "Task"
+                            # in its current tool list, but the on-disk JSONL
+                            # records the name as "Agent" (legacy alias kept
+                            # for transcript compatibility). Catch both so
+                            # counts work across sessions of any age.
                             tu_id = block.get("id")
                             if tu_id:
                                 desc = (inp.get("description") or "").strip()[:80]
