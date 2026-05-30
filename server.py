@@ -1713,6 +1713,143 @@ def _normalize_orchestration_spawn_engine(value):
     return _ORCHESTRATION_SPAWN_ENGINE_ALIASES.get(raw)
 
 
+def _clean_spawn_default_model(value):
+    if value is None:
+        return ""
+    # Model labels can contain spaces/parentheses (Antigravity), but never
+    # need embedded newlines. Collapse whitespace before persisting or
+    # passing through to CLI args.
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def _spawn_fallback_model_for_engine(engine):
+    if engine == "claude":
+        return "opus"
+    if engine == "codex":
+        return os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
+    if engine == "antigravity":
+        return os.environ.get("CCC_ANTIGRAVITY_MODEL") or _antigravity_cli_configured_model()
+    return ""
+
+
+def _load_spawn_defaults():
+    """Return the server-backed defaults used by new-session spawns.
+
+    These defaults are intentionally server-side rather than localStorage so
+    ccc-orchestration and other scripted callers see the same values as the UI.
+    Missing file means the historical behavior: Claude + opus, Codex env/gpt,
+    and Antigravity's configured CLI model when one exists.
+    """
+    defaults = {
+        "engine": "claude",
+        "models": {
+            engine: _spawn_fallback_model_for_engine(engine)
+            for engine in _ORCHESTRATION_SPAWN_ENGINES
+        },
+    }
+    try:
+        raw = json.loads(SPAWN_DEFAULTS_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return defaults
+    if not isinstance(raw, dict):
+        return defaults
+
+    engine = _normalize_orchestration_spawn_engine(raw.get("engine"))
+    if engine not in _ORCHESTRATION_SPAWN_ENGINES:
+        engine = defaults["engine"]
+
+    models = dict(defaults["models"])
+    raw_models = raw.get("models")
+    if isinstance(raw_models, dict):
+        for key, value in raw_models.items():
+            norm = _normalize_orchestration_spawn_engine(key)
+            if norm not in _ORCHESTRATION_SPAWN_ENGINES:
+                continue
+            model = _clean_spawn_default_model(value)
+            if len(model) <= 200:
+                models[norm] = model
+    for required in ("claude", "codex"):
+        if not models.get(required):
+            models[required] = defaults["models"].get(required) or _spawn_fallback_model_for_engine(required)
+    return {"engine": engine, "models": models}
+
+
+def _save_spawn_defaults(config):
+    if not isinstance(config, dict):
+        return {"ok": False, "error": "expected JSON object"}
+    current = _load_spawn_defaults()
+    if "engine" in config:
+        engine = _normalize_orchestration_spawn_engine(config.get("engine"))
+        if engine not in _ORCHESTRATION_SPAWN_ENGINES:
+            return {
+                "ok": False,
+                "error": f"unsupported engine: {config.get('engine')}",
+                "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
+            }
+        current["engine"] = engine
+
+    raw_models = config.get("models")
+    if raw_models is not None and not isinstance(raw_models, dict):
+        return {"ok": False, "error": "models must be an object"}
+    if isinstance(raw_models, dict):
+        for key, value in raw_models.items():
+            engine = _normalize_orchestration_spawn_engine(key)
+            if engine not in _ORCHESTRATION_SPAWN_ENGINES:
+                return {
+                    "ok": False,
+                    "error": f"unsupported model engine: {key}",
+                    "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
+                }
+            model = _clean_spawn_default_model(value)
+            if len(model) > 200:
+                return {"ok": False, "error": f"{engine} model is too long"}
+            if engine in ("claude", "codex") and not model:
+                model = _spawn_fallback_model_for_engine(engine)
+            current["models"][engine] = model
+
+    payload = {
+        "engine": current["engine"],
+        "models": {
+            engine: current["models"].get(engine, "")
+            for engine in _ORCHESTRATION_SPAWN_ENGINES
+        },
+    }
+    COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = SPAWN_DEFAULTS_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+        f.write("\n")
+    tmp.replace(SPAWN_DEFAULTS_FILE)
+    return {"ok": True, **payload}
+
+
+def _spawn_model_for_engine(engine, explicit_model=None):
+    model = _clean_spawn_default_model(explicit_model)
+    if model:
+        return model
+    defaults = _load_spawn_defaults()
+    model = _clean_spawn_default_model((defaults.get("models") or {}).get(engine))
+    if model:
+        return model
+    return _spawn_fallback_model_for_engine(engine)
+
+
+def _spawn_request_engine_and_model(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    defaults = _load_spawn_defaults()
+    engine_raw = payload.get("engine")
+    has_engine = isinstance(engine_raw, str) and bool(engine_raw.strip())
+    engine = _normalize_orchestration_spawn_engine(engine_raw) if has_engine else defaults["engine"]
+    if engine not in _ORCHESTRATION_SPAWN_ENGINES:
+        return None, None
+    model = _clean_spawn_default_model(payload.get("model"))
+    if not model:
+        model = _clean_spawn_default_model((defaults.get("models") or {}).get(engine))
+    if not model:
+        model = _spawn_fallback_model_for_engine(engine)
+    return engine, model or None
+
+
 # Archive view delegates all per-session JSONL inspection to the
 # canonical _extract_tail_meta() (defined later in the file), which is
 # already mtime-cached and is the same source of truth /api/sessions
@@ -4395,6 +4532,12 @@ MORNING_ENABLED = (
 )
 
 PORT = int(os.environ.get("PORT", 8090))
+# Slow-request threshold (ms). Requests taking at least this long get a single
+# [SLOW] line on stdout; everything faster stays silent. Tune via CCC_SLOW_REQ_MS.
+try:
+    SLOW_REQ_MS = float(os.environ.get("CCC_SLOW_REQ_MS", "500"))
+except (TypeError, ValueError):
+    SLOW_REQ_MS = 500.0
 # Set in main() after _resolve_runtime_network. Module-level so functions
 # called at runtime can reach it without threading the value through every
 # call site.
@@ -4529,6 +4672,10 @@ FIX_DEPLOY_SPAWNED_FILE = COMMAND_CENTER_STATE_DIR / "fix-deploy-spawned.json"  
 # every restart. Empty/missing = loopback-only (the safe default). Loaded by
 # `_load_network_config`, written by `_save_network_config`. See SECURITY.md.
 NETWORK_CONFIG_FILE = COMMAND_CENTER_STATE_DIR / "network.json"
+# Server-side defaults for new sessions spawned from the UI or by
+# ccc-orchestration. Kept out of browser localStorage so scripted callers
+# inherit the same engine/model choices the UI shows.
+SPAWN_DEFAULTS_FILE = COMMAND_CENTER_STATE_DIR / "spawn-defaults.json"
 # Persistent registry of spawned headless `claude -p` PIDs, so a server restart
 # can re-discover orphans instead of leaving them unreachable. See
 # _reattach_spawned_orphans() for the boot-time sweep. Schema is a list of
@@ -16059,7 +16206,7 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     log_path = log_dir / log_filename
 
     model_to_use = _antigravity_model_settings_label(
-        model or os.environ.get("CCC_ANTIGRAVITY_MODEL") or ""
+        _spawn_model_for_engine("antigravity", model) or ""
     )
     if model_to_use:
         settings_result = _set_antigravity_cli_model(model_to_use)
@@ -16490,11 +16637,12 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             "code": claude_bin.get("code", "claude_unavailable"),
         }
 
+    model_to_use = _spawn_model_for_engine("claude", model) or "opus"
     cmd = [
         claude_bin["bin"], "-p", "--verbose",
         "--input-format", "stream-json",
         "--output-format", "stream-json",
-        "--model", model or "opus",
+        "--model", model_to_use,
         "--dangerously-skip-permissions",
         "--name", session_name,
     ]
@@ -16638,7 +16786,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         session_name = "unnamed"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-codex-{session_name}-{timestamp}.log"
-    model_to_use = model or os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
+    model_to_use = _spawn_model_for_engine("codex", model) or os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
     if model_to_use:
         _set_session_model(log_filename[:-4], model_to_use, False)
     log_dir = repo_log_dir(ctx["repo_path"])
@@ -25160,6 +25308,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 },
                 "tailnet": tailnet,
             })
+        elif path == "/api/spawn-defaults":
+            defaults = _load_spawn_defaults()
+            self.send_json({
+                "ok": True,
+                **defaults,
+                "stored": SPAWN_DEFAULTS_FILE.exists(),
+                "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
+            })
         elif path == "/api/repo/list":
             # List of repos the picker offers. There is no server-active repo.
             repos = load_known_repos()
@@ -25350,6 +25506,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             }, 404)
             return
 
+        if path == "/api/client-log":
+            # Beacon sink for client-side perf warnings (poller overrun,
+            # longtask). The Mac app is a WKWebView with no inspector, so
+            # console.warn is invisible there — the client POSTs warnings here
+            # and they land in the same service.out.log as [SLOW], one tail to
+            # watch. Threshold-gated on the client; this just echoes.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                msg = str(data.get("msg", ""))[:500]
+                if msg:
+                    print(f"[CLIENT] {msg}", flush=True)
+                self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 400)
+            return
+
         if path == "/api/ingest/gemini":
             try:
                 import uuid
@@ -25491,6 +25665,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
             _schedule_restart()
+            return
+        if path == "/api/spawn-defaults":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            saved = _save_spawn_defaults(payload)
+            if not saved.get("ok"):
+                self.send_json(saved, 400)
+                return
+            self.send_json({
+                **saved,
+                "stored": True,
+                "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
+            })
             return
         if path == "/api/telemetry/opt-in":
             # User clicked Enable / Skip / toggled from Settings. Persists
@@ -26136,7 +26328,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             prompt = (payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             engine_raw = payload.get("engine")
-            engine = _normalize_orchestration_spawn_engine(engine_raw)
+            engine, model = _spawn_request_engine_and_model(payload)
             cwd_raw = payload.get("cwd")
             cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
             cwd_resolved = None
@@ -26168,7 +26360,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             else:
                                 cwd_resolved = candidate
             worktree_flag = bool(payload.get("worktree"))
-            model = payload.get("model")
             if not prompt:
                 self.send_json({"ok": False, "error": "missing prompt"}, 400)
             elif engine is None:
@@ -28082,10 +28273,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # Same disconnect-while-writing guard at the request-handler level
         # so any other endpoint (not just send_json) doesn't dump a
         # traceback when the client bails on us mid-response.
+        _t0 = time.time()
         try:
             super().handle_one_request()
         except (BrokenPipeError, ConnectionResetError):
             self.close_connection = True
+        finally:
+            # Threshold-gated slow-request log. Fast requests stay silent;
+            # only the hot endpoints surface, e.g.:
+            #   [SLOW] GET /api/group-chat/active 1840ms
+            # Tunable via CCC_SLOW_REQ_MS (default 500). Lands in
+            # ~/.claude/command-center/logs/service.out.log under launchd.
+            try:
+                _ms = (time.time() - _t0) * 1000.0
+                if _ms >= SLOW_REQ_MS:
+                    _p = getattr(self, "path", "?").split("?", 1)[0]
+                    print(f"[SLOW] {getattr(self, 'command', '?')} {_p} {_ms:.0f}ms",
+                          flush=True)
+            except Exception:
+                pass
 
     def log_message(self, format, *args):
         # Quieter logging — only errors

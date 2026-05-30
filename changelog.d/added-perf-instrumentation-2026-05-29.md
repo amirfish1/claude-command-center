@@ -1,0 +1,1 @@
+Added threshold-gated perf instrumentation: slow requests log `[SLOW] <method> <path> <ms>` to the server log (tunable via `CCC_SLOW_REQ_MS`, default 500ms), and client-side poller overruns / >200ms longtasks beacon to `/api/client-log` so they surface in the same `service.out.log` — useful in the Mac app where there's no devtools console.

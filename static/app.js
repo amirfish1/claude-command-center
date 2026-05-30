@@ -21,9 +21,71 @@
   function _pollerSkip(name) {
     return _pollerOff(name) || (_PAUSE_WHEN_HIDDEN.has(name) && document.hidden);
   }
-  function _gated(name, fn) {
-    return function () { if (_pollerSkip(name)) return; return fn.apply(this, arguments); };
+  // ── Perf instrumentation (threshold-gated, no spam) ─────────────────────
+  // The Mac app is a WKWebView with no devtools, so console.warn is invisible
+  // there. We mirror perf warnings to the server (/api/client-log) so they land
+  // in the SAME service.out.log as the server-side [SLOW] lines — one tail to
+  // watch. Identical messages (numbers collapsed) are deduped for 5s so a
+  // recurring overrun logs once per window, not every tick.
+  const _clientLogLast = {};
+  function _clientLog(msg) {
+    try { console.warn(msg); } catch (_) {}
+    try {
+      const now = (window.performance && performance.now) ? performance.now() : Date.now();
+      const key = String(msg).replace(/\d+/g, '#');
+      if (_clientLogLast[key] && now - _clientLogLast[key] < 5000) return;
+      _clientLogLast[key] = now;
+      fetch('/api/client-log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ msg: String(msg) }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch (_) {}
   }
+  window._clientLog = _clientLog;
+  // Known poll periods — an overrun (callback wall-time >= its own interval)
+  // means the next tick may fire before this one drained: pile-up risk.
+  const _POLLER_INTERVAL_MS = {
+    liveStatus: 5000, liveToolStrip: 1000, gcReader: 3000, pkoodTail: 2000,
+    worktreesBadge: 60000, hiStatus: 4000, issues: 60000, gcActive: 15000,
+    sessionsList: 10000, vercelDeploy: 15000, localhost: 15000, archiveProgress: 250,
+  };
+  function _timePoller(name, run) {
+    const t0 = (window.performance && performance.now) ? performance.now() : Date.now();
+    const done = () => {
+      const ms = ((window.performance && performance.now) ? performance.now() : Date.now()) - t0;
+      const budget = _POLLER_INTERVAL_MS[name] || 0;
+      if (budget && ms >= budget) {
+        _clientLog('[POLLER] ' + name + ' ' + Math.round(ms) + 'ms (>= ' + budget + 'ms interval)');
+      }
+    };
+    let r;
+    try { r = run(); } catch (e) { done(); throw e; }
+    if (r && typeof r.then === 'function') r.then(done, done); else done();
+    return r;
+  }
+  function _gated(name, fn) {
+    return function () {
+      if (_pollerSkip(name)) return;
+      const self = this, args = arguments;
+      return _timePoller(name, () => fn.apply(self, args));
+    };
+  }
+  // Catch-all for client-side jank that no single poller owns (render/reshuffle
+  // thrash, GC pauses): any main-thread block >= 200ms surfaces once per 5s.
+  try {
+    if (typeof PerformanceObserver === 'function') {
+      const _ltObs = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (entry.duration >= 200) {
+            _clientLog('[LONGTASK] ' + Math.round(entry.duration) + 'ms blocking frame');
+          }
+        }
+      });
+      _ltObs.observe({ entryTypes: ['longtask'] });
+    }
+  } catch (_) {}
   // Back to the foreground → refresh the paused background pollers once rather
   // than waiting up to a full interval for fresh data. The heavy sessions/
   // issues pollers catch up on their own next tick.
@@ -20677,7 +20739,24 @@
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
-  let _defaultModelsByEngine = { claude: 'opus' };
+  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'antigravity'];
+  const SPAWN_DEFAULT_OTHER = '__other__';
+  function normalizeSpawnDefaultEngine(v) {
+    if (v === 'gemini') return 'antigravity';
+    return SPAWN_DEFAULT_ENGINES.includes(v) ? v : 'claude';
+  }
+  function readLegacySpawnEnginePref() {
+    try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
+    catch (_) { return 'claude'; }
+  }
+  let _defaultModelsByEngine = { claude: 'opus', codex: 'gpt-5.5', antigravity: '' };
+  let _spawnDefaultsLoaded = false;
+  let _spawnDefaultsSaveTimer = null;
+  let _spawnDefaultsSaving = false;
+  let spawnDefaultsState = {
+    engine: readLegacySpawnEnginePref(),
+    models: Object.assign({}, _defaultModelsByEngine),
+  };
   // The "new session modal" was removed from index.html, but several call
   // sites below (openNewSessionModal, template-apply, engine-change handler,
   // boot-time initCustomEngineSelect) still reference these handles. Every
@@ -20685,20 +20764,16 @@
   // enough — what wasn't enough was leaving them *undeclared*, which
   // throws ReferenceError on boot and breaks the whole app.
 
-  // Spawn-engine state. Source of truth = localStorage. Two DOM nodes
-  // mirror it: the inline bottom-bar selector (new-session mode only),
-  // and the Kanban toolbar selector.
+  // Spawn-engine state. Source of truth = /api/spawn-defaults. Two DOM
+  // nodes mirror it: the inline bottom-bar selector (new-session mode
+  // only), and the Kanban toolbar selector.
   // setSpawnEngine() persists + propagates to both; getSpawnEngine()
   // is the canonical read used by every spawn handler.
   const $convInputEngineSelect = document.getElementById('convInputEngineSelect');
   const $convInputModelSelect = document.getElementById('convInputModelSelect');
   const $kptToolbarEngineSelect = document.getElementById('kptToolbarEngineSelect');
   function getSpawnEngine() {
-    try {
-      const v = localStorage.getItem('ccc.spawnEngine');
-      if (v === 'claude' || v === 'codex' || v === 'gemini' || v === 'antigravity') return v;
-    } catch (_) {}
-    return 'claude';
+    return normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
   }
   function spawnEngineLabel(engine) {
     if (engine === 'codex') return 'Codex';
@@ -20729,6 +20804,106 @@
   function spawnUsesLogPlaceholder(engine) {
     return engine === 'codex' || engine === 'gemini' || engine === 'antigravity';
   }
+
+  function modelOptionsForSpawnEngine(engine, currentModel, includeOther) {
+    engine = normalizeSpawnDefaultEngine(engine);
+    const base = MODEL_OPTIONS_BY_ENGINE[engine] || [];
+    const out = [];
+    const seen = new Set();
+    const add = (id, label) => {
+      const key = String(id == null ? '' : id);
+      const dedupe = key.toLowerCase();
+      if (seen.has(dedupe)) return;
+      seen.add(dedupe);
+      out.push({ id: key, label: label || key });
+    };
+    if (engine === 'antigravity') add('', 'Use AGY configured model');
+    const cur = String(currentModel == null ? '' : currentModel).trim();
+    if (cur && !base.some(o => _normalizeModelId(o.id) === _normalizeModelId(cur))) {
+      add(cur, cur + ' (default)');
+    }
+    base.forEach(opt => add(opt.id, opt.label || opt.id));
+    if (includeOther) add(SPAWN_DEFAULT_OTHER, 'Other...');
+    return out;
+  }
+
+  function spawnDefaultsPayload() {
+    return {
+      engine: getSpawnEngine(),
+      models: Object.assign({}, spawnDefaultsState.models || {}),
+    };
+  }
+
+  function mergeSpawnDefaults(data) {
+    if (!data || typeof data !== 'object') return;
+    spawnDefaultsState.engine = normalizeSpawnDefaultEngine(data.engine);
+    const incoming = data.models && typeof data.models === 'object' ? data.models : {};
+    SPAWN_DEFAULT_ENGINES.forEach(engine => {
+      if (Object.prototype.hasOwnProperty.call(incoming, engine)) {
+        const model = String(incoming[engine] == null ? '' : incoming[engine]).trim();
+        spawnDefaultsState.models[engine] = model;
+        _defaultModelsByEngine[engine] = model;
+      }
+    });
+    try { localStorage.setItem('ccc.spawnEngine', spawnDefaultsState.engine); } catch (_) {}
+  }
+
+  async function saveSpawnDefaultsNow() {
+    if (!_spawnDefaultsLoaded || _spawnDefaultsSaving) return;
+    _spawnDefaultsSaving = true;
+    try {
+      const res = await fetch('/api/spawn-defaults', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(spawnDefaultsPayload()),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.ok) {
+        mergeSpawnDefaults(data);
+        syncSpawnEngineDependentUi();
+      } else {
+        showOpToast('Spawn defaults save failed: ' + ((data && data.error) || ('HTTP ' + res.status)), 'error');
+      }
+    } catch (err) {
+      showOpToast('Spawn defaults save failed: ' + ((err && err.message) || 'network'), 'error');
+    } finally {
+      _spawnDefaultsSaving = false;
+    }
+  }
+
+  function scheduleSpawnDefaultsSave() {
+    if (!_spawnDefaultsLoaded) return;
+    clearTimeout(_spawnDefaultsSaveTimer);
+    _spawnDefaultsSaveTimer = setTimeout(saveSpawnDefaultsNow, 250);
+  }
+
+  function setSpawnDefaultModel(engine, model, opts = {}) {
+    engine = normalizeSpawnDefaultEngine(engine);
+    let value = String(model == null ? '' : model).trim();
+    if (engine === 'claude' && !value) value = 'opus';
+    if (engine === 'codex' && !value) value = 'gpt-5.5';
+    spawnDefaultsState.models[engine] = value;
+    _defaultModelsByEngine[engine] = value;
+    syncSpawnEngineDependentUi();
+    if (opts.persist !== false) scheduleSpawnDefaultsSave();
+  }
+
+  async function loadSpawnDefaults() {
+    try {
+      const res = await fetch('/api/spawn-defaults', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.ok) {
+        mergeSpawnDefaults(data);
+        _spawnDefaultsLoaded = true;
+        syncSpawnEngineDependentUi();
+        return data;
+      }
+    } catch (_) {}
+    _spawnDefaultsLoaded = true;
+    syncSpawnEngineDependentUi();
+    return null;
+  }
+
   function syncSpawnEngineDependentUi() {
     const engine = getSpawnEngine();
     const worktreeSupported = spawnSupportsWorktree(engine);
@@ -20746,19 +20921,15 @@
     });
 
     if (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect) {
-      const options = MODEL_OPTIONS_BY_ENGINE[engine] || [];
       const defaultModel = _defaultModelsByEngine[engine] || '';
+      const allModels = modelOptionsForSpawnEngine(engine, defaultModel, false);
       
       $convInputModelSelect.innerHTML = '';
       const isNewSession = (typeof currentConversation !== 'undefined' && currentConversation === '__new__');
-      if (!isNewSession || (options.length === 0 && !defaultModel)) {
+      if (!isNewSession || allModels.length === 0) {
         $convInputModelSelect.style.display = 'none';
       } else {
         $convInputModelSelect.style.display = '';
-        const allModels = [...options];
-        if (defaultModel && !allModels.some(o => o.id === defaultModel)) {
-          allModels.unshift({ id: defaultModel, label: defaultModel + ' (default)' });
-        }
         allModels.forEach(opt => {
           const el = document.createElement('option');
           el.value = opt.id;
@@ -20773,8 +20944,10 @@
       }
     }
   }
-  function setSpawnEngine(v) {
-    if (v !== 'claude' && v !== 'codex' && v !== 'gemini' && v !== 'antigravity') return;
+  function setSpawnEngine(v, opts = {}) {
+    v = normalizeSpawnDefaultEngine(v);
+    if (!SPAWN_DEFAULT_ENGINES.includes(v)) return;
+    spawnDefaultsState.engine = v;
     try { localStorage.setItem('ccc.spawnEngine', v); } catch (_) {}
     // setSpawnEngine() persists + propagates to both; getSpawnEngine()
     // is the canonical read used by every spawn handler.
@@ -20785,12 +20958,19 @@
     if (currentConversation === '__new__' && typeof enterNewSessionMode === 'function') {
       enterNewSessionMode();
     }
+    if (opts.persist !== false) scheduleSpawnDefaultsSave();
   }
   [$convInputEngineSelect, $kptToolbarEngineSelect].forEach(sel => {
     if (!sel) return;
     sel.value = getSpawnEngine();
     sel.addEventListener('change', () => setSpawnEngine(sel.value));
   });
+  if ($convInputModelSelect) {
+    $convInputModelSelect.addEventListener('change', () => {
+      setSpawnDefaultModel(getSpawnEngine(), $convInputModelSelect.value);
+    });
+  }
+  const spawnDefaultsReady = loadSpawnDefaults();
   syncSpawnEngineDependentUi();
   { const $ia = document.getElementById('convInputIssueAction');
     if ($ia) $ia.addEventListener('change', () => updateInputBar()); }
@@ -20804,8 +20984,9 @@
       try {
         const r = await fetch(endpoint);
         const d = await r.json();
-        if (d.model) {
+        if (d.model && (!_spawnDefaultsLoaded || !_defaultModelsByEngine[engine])) {
           _defaultModelsByEngine[engine] = d.model;
+          if (!_spawnDefaultsLoaded) spawnDefaultsState.models[engine] = d.model;
         }
         const reason = d.available ? '' : (d.reason || (label + ' CLI not found'));
         const selectors = [$convInputEngineSelect, $kptToolbarEngineSelect];
@@ -20832,7 +21013,7 @@
     } catch (_) {}
   }
   if (!CONV_POPOUT_MODE) {
-    refreshCodexAvailability();
+    spawnDefaultsReady.finally(refreshCodexAvailability);
     window.addEventListener('focus', refreshCodexAvailability);
   }
   // Hide-descriptions toggle
@@ -22933,6 +23114,139 @@
       if ($bugCopyBtn) { $bugCopyBtn.textContent = 'Copied'; setTimeout(() => { if ($bugCopyBtn) $bugCopyBtn.textContent = 'Copy markdown'; }, 1500); }
     } catch (_) {
       try { showOpToast('Copy failed — select the text and copy manually', 'error'); } catch (__) {}
+    }
+  });
+
+  // Spawn defaults modal — one server-backed source of truth shared by
+  // Settings, New session, and ccc-orchestration.
+  const $spawnDefaultsBtn = document.getElementById('spawnDefaultsBtn');
+  const $spawnDefaultsModal = document.getElementById('spawnDefaultsModal');
+  const $spawnDefaultsBackdrop = document.getElementById('spawnDefaultsBackdrop');
+  const $spawnDefaultsEngine = document.getElementById('spawnDefaultsEngine');
+  const $spawnDefaultsModel = document.getElementById('spawnDefaultsModel');
+  const $spawnDefaultsOtherModel = document.getElementById('spawnDefaultsOtherModel');
+  const $spawnDefaultsError = document.getElementById('spawnDefaultsError');
+  const $spawnDefaultsCancelBtn = document.getElementById('spawnDefaultsCancelBtn');
+  const $spawnDefaultsSaveBtn = document.getElementById('spawnDefaultsSaveBtn');
+  let spawnDefaultsDraft = null;
+
+  function cloneSpawnDefaults() {
+    return {
+      engine: getSpawnEngine(),
+      models: Object.assign({}, spawnDefaultsState.models || {}),
+    };
+  }
+  function spawnDefaultsModalError(text) {
+    if (!$spawnDefaultsError) return;
+    $spawnDefaultsError.textContent = text || '';
+    $spawnDefaultsError.classList.toggle('visible', !!text);
+  }
+  function renderSpawnDefaultsModelDraft() {
+    if (!$spawnDefaultsModel || !spawnDefaultsDraft) return;
+    const engine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
+    const currentModel = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
+    const options = modelOptionsForSpawnEngine(engine, currentModel, true);
+    $spawnDefaultsModel.innerHTML = '';
+    options.forEach(opt => {
+      const el = document.createElement('option');
+      el.value = opt.id;
+      el.textContent = opt.label || opt.id;
+      $spawnDefaultsModel.appendChild(el);
+    });
+    const hasCurrent = options.some(opt => opt.id === currentModel);
+    $spawnDefaultsModel.value = hasCurrent ? currentModel : SPAWN_DEFAULT_OTHER;
+    if ($spawnDefaultsOtherModel) {
+      const other = $spawnDefaultsModel.value === SPAWN_DEFAULT_OTHER;
+      $spawnDefaultsOtherModel.style.display = other ? '' : 'none';
+      $spawnDefaultsOtherModel.value = other ? currentModel : '';
+    }
+  }
+  function renderSpawnDefaultsDraft() {
+    if (!spawnDefaultsDraft) return;
+    if ($spawnDefaultsEngine) $spawnDefaultsEngine.value = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
+    renderSpawnDefaultsModelDraft();
+  }
+  async function openSpawnDefaultsModal() {
+    if (!$spawnDefaultsModal) return;
+    spawnDefaultsModalError('');
+    if ($spawnDefaultsSaveBtn) { $spawnDefaultsSaveBtn.disabled = false; $spawnDefaultsSaveBtn.textContent = 'Save'; }
+    try { await spawnDefaultsReady; } catch (_) {}
+    spawnDefaultsDraft = cloneSpawnDefaults();
+    renderSpawnDefaultsDraft();
+    $spawnDefaultsModal.classList.add('open');
+  }
+  function closeSpawnDefaultsModal() {
+    if ($spawnDefaultsModal) $spawnDefaultsModal.classList.remove('open');
+    spawnDefaultsDraft = null;
+  }
+  function updateSpawnDefaultsDraftModelFromControls() {
+    if (!spawnDefaultsDraft || !$spawnDefaultsModel) return;
+    const engine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
+    let model = $spawnDefaultsModel.value;
+    if (model === SPAWN_DEFAULT_OTHER) {
+      model = ($spawnDefaultsOtherModel && $spawnDefaultsOtherModel.value || '').trim();
+    }
+    if (engine === 'claude' && !model) model = 'opus';
+    if (engine === 'codex' && !model) model = 'gpt-5.5';
+    spawnDefaultsDraft.models[engine] = model;
+  }
+  async function saveSpawnDefaultsDraft() {
+    if (!$spawnDefaultsSaveBtn || !spawnDefaultsDraft) return;
+    updateSpawnDefaultsDraftModelFromControls();
+    spawnDefaultsModalError('');
+    const engine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
+    const model = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
+    if ((engine === 'claude' || engine === 'codex') && !model) {
+      spawnDefaultsModalError('Claude and Codex need an explicit default model.');
+      return;
+    }
+    $spawnDefaultsSaveBtn.disabled = true;
+    $spawnDefaultsSaveBtn.textContent = 'Saving...';
+    try {
+      const res = await fetch('/api/spawn-defaults', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(spawnDefaultsDraft),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+      mergeSpawnDefaults(data);
+      _spawnDefaultsLoaded = true;
+      syncSpawnEngineDependentUi();
+      if (typeof updateInputBar === 'function') updateInputBar();
+      closeSpawnDefaultsModal();
+      showOpToast('Spawn defaults saved', 'ok');
+    } catch (err) {
+      spawnDefaultsModalError((err && err.message) || 'Save failed.');
+      $spawnDefaultsSaveBtn.disabled = false;
+      $spawnDefaultsSaveBtn.textContent = 'Save';
+    }
+  }
+
+  if ($spawnDefaultsBtn) $spawnDefaultsBtn.addEventListener('click', () => {
+    if ($settingsPopover) $settingsPopover.classList.remove('open');
+    openSpawnDefaultsModal();
+  });
+  if ($spawnDefaultsBackdrop) $spawnDefaultsBackdrop.addEventListener('click', closeSpawnDefaultsModal);
+  if ($spawnDefaultsCancelBtn) $spawnDefaultsCancelBtn.addEventListener('click', closeSpawnDefaultsModal);
+  if ($spawnDefaultsSaveBtn) $spawnDefaultsSaveBtn.addEventListener('click', saveSpawnDefaultsDraft);
+  if ($spawnDefaultsEngine) $spawnDefaultsEngine.addEventListener('change', () => {
+    if (!spawnDefaultsDraft) return;
+    updateSpawnDefaultsDraftModelFromControls();
+    spawnDefaultsDraft.engine = normalizeSpawnDefaultEngine($spawnDefaultsEngine.value);
+    renderSpawnDefaultsModelDraft();
+  });
+  if ($spawnDefaultsModel) $spawnDefaultsModel.addEventListener('change', () => {
+    if ($spawnDefaultsOtherModel) {
+      $spawnDefaultsOtherModel.style.display = $spawnDefaultsModel.value === SPAWN_DEFAULT_OTHER ? '' : 'none';
+      if ($spawnDefaultsModel.value === SPAWN_DEFAULT_OTHER) $spawnDefaultsOtherModel.focus();
+    }
+    updateSpawnDefaultsDraftModelFromControls();
+  });
+  if ($spawnDefaultsOtherModel) $spawnDefaultsOtherModel.addEventListener('input', updateSpawnDefaultsDraftModelFromControls);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $spawnDefaultsModal && $spawnDefaultsModal.classList.contains('open')) {
+      closeSpawnDefaultsModal();
     }
   });
 
