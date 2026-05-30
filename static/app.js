@@ -49,20 +49,19 @@
   // and a one-line description for the transparency strip. ms:null = cadence
   // varies (driven by external state), so no overrun check and "~" in the UI.
   const _POLLER_META = {
-    liveToolStrip:  { ms: 1000,  label: 'tools',   desc: 'Live tool-activity strip (top bar).' },
-    pkoodTail:      { ms: 2000,  label: 'pkood',   desc: 'Tail of the pkood agent log (open agent only).' },
-    gcReader:       { ms: 3000,  label: 'gc-read', desc: 'Group-chat transcript reader (open chat only).' },
-    hiStatus:       { ms: 4000,  label: 'hist-ix', desc: 'History-index progress (4s while indexing, else 60s).' },
-    liveStatus:     { ms: 5000,  label: 'status',  desc: 'Session statuses — the live row dots + state.' },
-    issues:         { ms: 10000, label: 'issues',  desc: 'GitHub issues for the active repo.' },
-    sessionsList:   { ms: 10000, label: 'sessions',desc: 'Sessions-tab list refetch (~3MB).' },
-    gcActive:       { ms: 15000, label: 'gc-live', desc: 'Active group-chat coordinations badge.' },
-    vercelDeploy:   { ms: 15000, label: 'vercel',  desc: 'Latest Vercel deploy status.' },
-    localhost:      { ms: 15000, label: 'localhost',desc: 'Localhost dev-server reachability probe.' },
-    worktreesBadge: { ms: 60000, label: 'worktrees',desc: 'Git worktree count badge.' },
-    peer:           { ms: null,  label: 'peer',    desc: 'Peer-session registry (peer picker open).' },
-    codexLog:       { ms: null,  label: 'codex',   desc: 'Codex session log (open codex convo only).' },
-    archiveProgress:{ ms: 250,   label: 'archive', desc: 'Archive load progress bar (transient, self-clears).' },
+    liveToolStrip:  { ms: 1000,  label: 'tools',   surface: 'Top bar — live tool-activity strip',          desc: 'Live tool-activity strip (top bar).' },
+    gcReader:       { ms: 3000,  label: 'gc-read', surface: 'Open group-chat transcript pane',             desc: 'Group-chat transcript reader (open chat only).' },
+    hiStatus:       { ms: 4000,  label: 'hist-ix', surface: 'History/search index progress indicator',     desc: 'History-index progress (4s while indexing, else 60s).' },
+    liveStatus:     { ms: 5000,  label: 'status',  surface: 'Sidebar conversation rows (status dots + state)', desc: 'Session statuses — the live row dots + state.' },
+    issues:         { ms: 10000, label: 'issues',  surface: 'GitHub Issues section in the sidebar',        desc: 'GitHub issues for the active repo.' },
+    sessionsList:   { ms: 10000, label: 'sessions',surface: 'Sessions tab — the full session list',        desc: 'Sessions-tab list refetch (~3MB).' },
+    gcActive:       { ms: 15000, label: 'gc-live', surface: 'Bottom-left active-group-chat pill',          desc: 'Active group-chat coordinations badge.' },
+    vercelDeploy:   { ms: 15000, label: 'vercel',  surface: 'Vercel deploy badge (top bar)',               desc: 'Latest Vercel deploy status.' },
+    localhost:      { ms: 15000, label: 'localhost',surface: 'Localhost status pill (top bar)',            desc: 'Localhost dev-server reachability probe.' },
+    worktreesBadge: { ms: 60000, label: 'worktrees',surface: 'Worktrees button badge (top bar)',           desc: 'Git worktree count badge.' },
+    peer:           { ms: null,  label: 'peer',    surface: 'Peer-session picker dropdown',                desc: 'Peer-session registry (peer picker open).' },
+    codexLog:       { ms: null,  label: 'codex',   surface: 'Open Codex session log pane',                 desc: 'Codex session log (open codex convo only).' },
+    archiveProgress:{ ms: 250,   label: 'archive', surface: 'Archive list loading bar',                    desc: 'Archive load progress bar (transient, self-clears).' },
   };
   // Per-trigger runtime stats for the strip: last-fired epoch + total ticks.
   const _pollerStats = {};
@@ -202,7 +201,8 @@
         }
         chip.title = meta.label + ' · ' + (meta.ms ? 'every ' + (meta.ms >= 1000 ? (meta.ms / 1000) + 's' : meta.ms + 'ms') : 'variable') +
           (s ? ' · ' + s.count + ' fires · last ' + _agoStr(ago) + ' ago' : ' · idle') +
-          (off ? ' · OFF (click to enable)' : ' · click to disable') + '\n' + meta.desc;
+          (off ? ' · OFF (click to enable)' : ' · click to disable') +
+          '\nSurface: ' + (meta.surface || '—') + '\n' + meta.desc;
       });
     }
     // Blink on real fire.
