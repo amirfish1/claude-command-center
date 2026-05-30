@@ -44,18 +44,42 @@
     } catch (_) {}
   }
   window._clientLog = _clientLog;
-  // Known poll periods — an overrun (callback wall-time >= its own interval)
-  // means the next tick may fire before this one drained: pile-up risk.
-  const _POLLER_INTERVAL_MS = {
-    liveStatus: 5000, liveToolStrip: 1000, gcReader: 3000, pkoodTail: 2000,
-    worktreesBadge: 60000, hiStatus: 4000, issues: 60000, gcActive: 15000,
-    sessionsList: 10000, vercelDeploy: 15000, localhost: 15000, archiveProgress: 250,
+  // Single source of truth for every periodic trigger: poll period (ms, used
+  // for the overrun check below + the strip's interval label), a short label
+  // and a one-line description for the transparency strip. ms:null = cadence
+  // varies (driven by external state), so no overrun check and "~" in the UI.
+  const _POLLER_META = {
+    liveToolStrip:  { ms: 1000,  label: 'tools',   desc: 'Live tool-activity strip (top bar).' },
+    pkoodTail:      { ms: 2000,  label: 'pkood',   desc: 'Tail of the pkood agent log (open agent only).' },
+    gcReader:       { ms: 3000,  label: 'gc-read', desc: 'Group-chat transcript reader (open chat only).' },
+    hiStatus:       { ms: 4000,  label: 'hist-ix', desc: 'History-index progress (4s while indexing, else 60s).' },
+    liveStatus:     { ms: 5000,  label: 'status',  desc: 'Session statuses — the live row dots + state.' },
+    issues:         { ms: 10000, label: 'issues',  desc: 'GitHub issues for the active repo.' },
+    sessionsList:   { ms: 10000, label: 'sessions',desc: 'Sessions-tab list refetch (~3MB).' },
+    gcActive:       { ms: 15000, label: 'gc-live', desc: 'Active group-chat coordinations badge.' },
+    vercelDeploy:   { ms: 15000, label: 'vercel',  desc: 'Latest Vercel deploy status.' },
+    localhost:      { ms: 15000, label: 'localhost',desc: 'Localhost dev-server reachability probe.' },
+    worktreesBadge: { ms: 60000, label: 'worktrees',desc: 'Git worktree count badge.' },
+    peer:           { ms: null,  label: 'peer',    desc: 'Peer-session registry (peer picker open).' },
+    codexLog:       { ms: null,  label: 'codex',   desc: 'Codex session log (open codex convo only).' },
+    archiveProgress:{ ms: 250,   label: 'archive', desc: 'Archive load progress bar (transient, self-clears).' },
   };
+  // Per-trigger runtime stats for the strip: last-fired epoch + total ticks.
+  const _pollerStats = {};
+  let _onPollerTick = null;  // set by the strip renderer once the DOM exists
+  function _pollerTick(name) {
+    const now = Date.now();
+    const s = _pollerStats[name] || (_pollerStats[name] = { last: 0, count: 0 });
+    s.last = now; s.count++;
+    if (_onPollerTick) { try { _onPollerTick(name); } catch (_) {} }
+  }
+  window._pollerStats = _pollerStats;
   function _timePoller(name, run) {
+    _pollerTick(name);
     const t0 = (window.performance && performance.now) ? performance.now() : Date.now();
     const done = () => {
       const ms = ((window.performance && performance.now) ? performance.now() : Date.now()) - t0;
-      const budget = _POLLER_INTERVAL_MS[name] || 0;
+      const budget = (_POLLER_META[name] || {}).ms || 0;
       if (budget && ms >= budget) {
         _clientLog('[POLLER] ' + name + ' ' + Math.round(ms) + 'ms (>= ' + budget + 'ms interval)');
       }
@@ -65,6 +89,7 @@
     if (r && typeof r.then === 'function') r.then(done, done); else done();
     return r;
   }
+  window._pollerTickManual = _pollerTick;  // for inline-guarded pollers
   function _gated(name, fn) {
     return function () {
       if (_pollerSkip(name)) return;
@@ -86,6 +111,127 @@
       _ltObs.observe({ entryTypes: ['longtask'] });
     }
   } catch (_) {}
+
+  // ── Periodic-trigger transparency strip ─────────────────────────────────
+  // A live chip per poller in the bottom-left footer. Each chip blinks the
+  // instant its poller fires (_pollerTick), shows its interval, and counts up
+  // "time since last fire" so a frozen trigger is obvious at a glance. Click a
+  // chip to toggle that trigger on/off. This is the antidote to the black box:
+  // you can SEE the 1s/5s/15s cadences, see when something stops (kill-switch,
+  // visibility-pause, typing-mute), and see which one is hot.
+  function _agoStr(ms) {
+    if (!ms) return '—';
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + 'm';
+    return Math.floor(m / 60) + 'h';
+  }
+  function _initPollerStrip() {
+    const footer = document.querySelector('.sidebar-footer');
+    if (!footer) { setTimeout(_initPollerStrip, 400); return; }
+    if (document.getElementById('pollerStrip')) return;
+    // One-time styles (blink keyframe + chip look). Kept inline so the single-
+    // file app stays self-contained.
+    if (!document.getElementById('__pollerStripStyle')) {
+      const st = document.createElement('style');
+      st.id = '__pollerStripStyle';
+      st.textContent =
+        '#pollerStrip{display:flex;gap:5px;align-items:center;flex:1 1 auto;min-width:0;' +
+        'overflow-x:auto;overflow-y:hidden;scrollbar-width:none;padding:0 6px;}' +
+        '#pollerStrip::-webkit-scrollbar{display:none;}' +
+        '.pstrip-chip{display:inline-flex;align-items:center;gap:4px;flex:0 0 auto;cursor:pointer;' +
+        'font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-secondary,#9aa);' +
+        'padding:2px 5px;border-radius:5px;border:1px solid transparent;white-space:nowrap;' +
+        'user-select:none;transition:background .12s,opacity .12s;}' +
+        '.pstrip-chip:hover{background:var(--hover-bg,rgba(127,127,127,.14));}' +
+        '.pstrip-chip.off{opacity:.4;text-decoration:line-through;}' +
+        '.pstrip-dot{width:6px;height:6px;border-radius:50%;background:#5a6;flex:0 0 auto;' +
+        'box-shadow:0 0 0 0 rgba(90,170,100,.6);}' +
+        '.pstrip-chip.off .pstrip-dot{background:#888;}' +
+        '.pstrip-chip.stale .pstrip-dot{background:#c84;}' +
+        '.pstrip-dot.blink{animation:pstripBlink .5s ease-out;}' +
+        '@keyframes pstripBlink{0%{box-shadow:0 0 0 0 rgba(90,170,100,.7);background:#7e9;}' +
+        '100%{box-shadow:0 0 0 6px rgba(90,170,100,0);background:#5a6;}}' +
+        '.pstrip-ago{opacity:.7;}';
+      document.head.appendChild(st);
+    }
+    const strip = document.createElement('div');
+    strip.id = 'pollerStrip';
+    strip.title = 'Periodic triggers — blink = fired, number = time since last fire. Click to toggle.';
+    const chips = {};
+    Object.keys(_POLLER_META).forEach((name) => {
+      const meta = _POLLER_META[name];
+      const chip = document.createElement('div');
+      chip.className = 'pstrip-chip';
+      chip.dataset.name = name;
+      const ivl = meta.ms ? (meta.ms >= 1000 ? (meta.ms / 1000) + 's' : meta.ms + 'ms') : '~';
+      chip.innerHTML = '<span class="pstrip-dot"></span><span class="pstrip-label">' +
+        meta.label + '</span><span class="pstrip-ago">' + ivl + '</span>';
+      chip.onclick = () => {
+        if (_pollerOff(name)) window.cccPollers.on(name); else window.cccPollers.off(name);
+        _refreshStripState();
+      };
+      chips[name] = chip;
+      strip.appendChild(chip);
+    });
+    // Insert just after the active-group-chat pill, before the spacer, so it
+    // fills the footer's empty middle and the gear stays pinned right.
+    const spacer = footer.querySelector('.sidebar-footer-spacer');
+    if (spacer) footer.insertBefore(strip, spacer); else footer.appendChild(strip);
+
+    function _refreshStripState() {
+      const now = Date.now();
+      Object.keys(chips).forEach((name) => {
+        const chip = chips[name];
+        const off = _pollerOff(name);
+        chip.classList.toggle('off', off);
+        const s = _pollerStats[name];
+        const meta = _POLLER_META[name];
+        const ago = s && s.last ? now - s.last : 0;
+        const agoEl = chip.querySelector('.pstrip-ago');
+        if (s && s.last) {
+          agoEl.textContent = _agoStr(ago);
+          // Stale = past 2.5× its own interval without firing (and not off).
+          const stale = !off && meta.ms && ago > meta.ms * 2.5;
+          chip.classList.toggle('stale', !!stale);
+        } else {
+          // Never fired this session — show its interval, no stale flag.
+          agoEl.textContent = off ? 'off' : (meta.ms ? (meta.ms >= 1000 ? (meta.ms / 1000) + 's' : meta.ms + 'ms') : '~');
+          chip.classList.remove('stale');
+        }
+        chip.title = meta.label + ' · ' + (meta.ms ? 'every ' + (meta.ms >= 1000 ? (meta.ms / 1000) + 's' : meta.ms + 'ms') : 'variable') +
+          (s ? ' · ' + s.count + ' fires · last ' + _agoStr(ago) + ' ago' : ' · idle') +
+          (off ? ' · OFF (click to enable)' : ' · click to disable') + '\n' + meta.desc;
+      });
+    }
+    // Blink on real fire.
+    _onPollerTick = (name) => {
+      const chip = chips[name];
+      if (!chip) return;
+      const dot = chip.querySelector('.pstrip-dot');
+      dot.classList.remove('blink');
+      void dot.offsetWidth;  // restart animation
+      dot.classList.add('blink');
+      const agoEl = chip.querySelector('.pstrip-ago');
+      if (agoEl) agoEl.textContent = '0s';
+      chip.classList.remove('stale');
+    };
+    // 1s "ago" counter. setTimeout is NOT muted-while-typing (only setInterval
+    // is wrapped), so the strip keeps counting up even with a field focused —
+    // which is exactly when you want to see that the timers went quiet.
+    (function _tickLabels() {
+      _refreshStripState();
+      setTimeout(_tickLabels, 1000);
+    })();
+    window.__refreshPollerStrip = _refreshStripState;
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _initPollerStrip);
+  } else {
+    _initPollerStrip();
+  }
+
   // Back to the foreground → refresh the paused background pollers once rather
   // than waiting up to a full interval for fresh data. The heavy sessions/
   // issues pollers catch up on their own next tick.
@@ -139,6 +285,7 @@
       try { localStorage.setItem('ccc-pollers-off', '1'); } catch (_) {}
       _cccPollerToast('⏸ Periodic triggers: ALL OFF (14)');
     }
+    try { if (window.__refreshPollerStrip) window.__refreshPollerStrip(); } catch (_) {}
   });
 
   // Reshuffle logger — called from the conv-list FLIP block whenever rows
@@ -14806,6 +14953,7 @@
         stopCodexLogPoller();
         codexLogPoller = setInterval(() => { if (_pollerOff('codexLog')) return;
           if (currentConversation !== id) { stopCodexLogPoller(); return; }
+          _pollerTick('codexLog');
           loadCodexLog(c);
         }, 1500);
         return;
@@ -18332,6 +18480,7 @@
   function startIssuesPolling() {
     if (issuesPolling) return;
     issuesPolling = setInterval(() => { if (_pollerSkip('issues')) return;
+      _pollerTick('issues');
       loadIssues();
     }, 10000);
   }
@@ -20486,6 +20635,7 @@
     const _peerStartPoll = () => {
       if (_peerPollId) return;
       _peerPollId = setInterval(async () => { if (_pollerOff('peer')) return;
+        _pollerTick('peer');
         await loadPeerRegistry();
         renderPeerPickerSelect();
       }, 10000);
@@ -21528,6 +21678,7 @@
   if (!CONV_POPOUT_MODE) {
 	  setInterval(async () => {
 		    if (_pollerSkip('sessionsList')) return; if (activeTab !== 'sessions') return;
+			    _pollerTick('sessionsList');
 		    if (isInlineRenameInProgress()) return;
         if (deferSidebarRenderIfDragging()) return;
 		    if (conversationPaneLoading) return;
