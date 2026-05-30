@@ -49,19 +49,19 @@
   // and a one-line description for the transparency strip. ms:null = cadence
   // varies (driven by external state), so no overrun check and "~" in the UI.
   const _POLLER_META = {
-    liveToolStrip:  { ms: 1000,  label: 'tools',   surface: 'Top bar — live tool-activity strip',          desc: 'Live tool-activity strip (top bar).' },
-    gcReader:       { ms: 3000,  label: 'gc-read', surface: 'Open group-chat transcript pane',             desc: 'Group-chat transcript reader (open chat only).' },
-    hiStatus:       { ms: 4000,  label: 'hist-ix', surface: 'History/search index progress indicator',     desc: 'History-index progress (4s while indexing, else 60s).' },
-    liveStatus:     { ms: 5000,  label: 'status',  surface: 'Sidebar conversation rows (status dots + state)', desc: 'Session statuses — the live row dots + state.' },
-    issues:         { ms: 10000, label: 'issues',  surface: 'GitHub Issues section in the sidebar',        desc: 'GitHub issues for the active repo.' },
-    sessionsList:   { ms: 10000, label: 'sessions',surface: 'Sessions tab — the full session list',        desc: 'Sessions-tab list refetch (~3MB).' },
-    gcActive:       { ms: 15000, label: 'gc-live', surface: 'Bottom-left active-group-chat pill',          desc: 'Active group-chat coordinations badge.' },
-    vercelDeploy:   { ms: 15000, label: 'vercel',  surface: 'Vercel deploy badge (top bar)',               desc: 'Latest Vercel deploy status.' },
-    localhost:      { ms: 15000, label: 'localhost',surface: 'Localhost status pill (top bar)',            desc: 'Localhost dev-server reachability probe.' },
-    worktreesBadge: { ms: 60000, label: 'worktrees',surface: 'Worktrees button badge (top bar)',           desc: 'Git worktree count badge.' },
-    peer:           { ms: null,  label: 'peer',    surface: 'Peer-session picker dropdown',                desc: 'Peer-session registry (peer picker open).' },
-    codexLog:       { ms: null,  label: 'codex',   surface: 'Open Codex session log pane',                 desc: 'Codex session log (open codex convo only).' },
-    archiveProgress:{ ms: 250,   label: 'archive', surface: 'Archive list loading bar',                    desc: 'Archive load progress bar (transient, self-clears).' },
+    liveToolStrip:  { ms: 1000,  label: 'tools',   surface: 'Open conversation pane — inline tool activity', desc: 'Live tool-activity indicator at the bottom of the open transcript.' },
+    gcReader:       { ms: 3000,  label: 'gc-read', surface: 'Open conversation pane — group-chat transcript', desc: 'Group-chat transcript reader (open chat only).' },
+    hiStatus:       { ms: 4000,  label: 'hist-ix', surface: 'Top bar — history/search index pill',         desc: 'History-index progress (4s while indexing, else 60s).' },
+    liveStatus:     { ms: 5000,  label: 'status',  surface: 'Sidebar — conversation row status',           desc: 'Session statuses — the live row dots + state.' },
+    issues:         { ms: 10000, label: 'issues',  surface: 'Sidebar — GitHub Issues section',             desc: 'GitHub issues for the active repo.' },
+    sessionsList:   { ms: 10000, label: 'sessions',surface: 'Sidebar — session list',                      desc: 'Session list refetch (~3MB).' },
+    gcActive:       { ms: 15000, label: 'gc-live', surface: 'Sidebar — active-group-chat footer pill',     desc: 'Active group-chat coordinations badge.' },
+    vercelDeploy:   { ms: 15000, label: 'vercel',  surface: 'Top bar — Vercel deploy badge',               desc: 'Latest Vercel deploy status.' },
+    localhost:      { ms: 15000, label: 'localhost',surface: 'Top bar — localhost pill',                   desc: 'Localhost dev-server reachability probe.' },
+    worktreesBadge: { ms: 60000, label: 'worktrees',surface: 'Top bar — worktrees badge',                  desc: 'Git worktree count badge.' },
+    peer:           { ms: null,  label: 'peer',    surface: 'Sidebar — repo/peer picker',                  desc: 'Peer-session registry (picker open).' },
+    codexLog:       { ms: null,  label: 'codex',   surface: 'Open conversation pane — codex log',          desc: 'Codex session log (open codex convo only).' },
+    archiveProgress:{ ms: 250,   label: 'archive', surface: 'Sidebar — archive loading bar',               desc: 'Archive load progress bar (transient, self-clears).' },
   };
   // Per-trigger runtime stats for the strip: last-fired epoch + total ticks.
   const _pollerStats = {};
