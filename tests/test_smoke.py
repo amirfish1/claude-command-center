@@ -1485,6 +1485,13 @@ class TestRepoContextHelpers(unittest.TestCase):
             missing.exception.close()
             self.assertIn("repo_required", missing_body)
 
+            with self.assertRaises(urllib.error.HTTPError) as conv_missing:
+                urllib.request.urlopen(base + "/api/conversations", timeout=5)
+            self.assertEqual(conv_missing.exception.code, 400)
+            conv_missing_body = conv_missing.exception.read().decode("utf-8")
+            conv_missing.exception.close()
+            self.assertIn("repo_required", conv_missing_body)
+
             with urllib.request.urlopen(
                 base + "/api/term/cwd?repo_path=" + urllib.parse.quote(str(self.repo)),
                 timeout=5,
@@ -1504,6 +1511,35 @@ class TestRepoContextHelpers(unittest.TestCase):
             gone_body = gone.exception.read().decode("utf-8")
             gone.exception.close()
             self.assertIn("repo_switch_removed", gone_body)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_sessions_all_endpoint_returns_archive_and_spawned_payload(self):
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            with mock.patch.object(
+                self.server,
+                "_build_archive_conversations",
+                return_value=[{"session_id": "codex-1", "engine": "codex"}],
+            ), mock.patch.object(
+                self.server,
+                "list_spawned_sessions",
+                return_value=[{"spawn_id": "123", "engine": "codex"}],
+            ):
+                with urllib.request.urlopen(base + "/api/sessions?all=1&engine=codex", timeout=5) as res:
+                    body = json.loads(res.read().decode("utf-8"))
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["count"], 1)
+            self.assertEqual(body["sessions"][0]["engine"], "codex")
+            self.assertEqual(body["spawned"][0]["spawn_id"], "123")
         finally:
             httpd.shutdown()
             httpd.server_close()
@@ -1548,6 +1584,12 @@ class TestRepoContextHelpers(unittest.TestCase):
             httpd.shutdown()
             httpd.server_close()
             thread.join(timeout=5)
+
+    def test_write_port_file_never_publishes_wildcard_bind_address(self):
+        url = self.server.write_port_file("0.0.0.0")
+        self.assertEqual(url, f"http://127.0.0.1:{self.server.PORT}")
+        port_file = self.server.COMMAND_CENTER_STATE_DIR / "port.txt"
+        self.assertEqual(port_file.read_text().strip(), url)
 
     def test_resolve_codex_bin_prefers_env_override(self):
         """`_resolve_codex_bin` must honour CCC_CODEX_BIN when it points
@@ -1763,6 +1805,39 @@ class TestRepoContextHelpers(unittest.TestCase):
                 self.assertEqual(rows[-1]["session_id"], "known-session-id")
             finally:
                 server.SPAWNED_PIDS_FILE = orig
+
+    def test_list_spawned_sessions_exposes_correlation_fields(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        proc = mock.Mock(pid=4242)
+        proc.poll.return_value = None
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions[:] = [{
+            "pid": 4242,
+            "name": "reviewer",
+            "log": "/tmp/reviewer.log",
+            "prompt": "review this",
+            "started": "20260530T120000",
+            "proc": proc,
+            "engine": "codex",
+            "session_id": "codex-thread-1",
+            "cwd": "/tmp/repo",
+            "repo_path": "/tmp/repo",
+            "model": "gpt-test",
+        }]
+        try:
+            rows = server.list_spawned_sessions()
+        finally:
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertEqual(rows[0]["spawn_id"], "4242")
+        self.assertEqual(rows[0]["session_id"], "codex-thread-1")
+        self.assertFalse(rows[0]["session_id_pending"])
+        self.assertEqual(rows[0]["engine"], "codex")
+        self.assertEqual(rows[0]["repo_path"], "/tmp/repo")
+        self.assertTrue(rows[0]["running"])
 
     def test_pid_is_engine_process_recognises_codex_and_gemini(self):
         """`_pid_is_engine_process` must accept an `engine` arg and match
@@ -2505,6 +2580,11 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["model"], "Gemini 3.5 Flash (High)")
+        self.assertEqual(result["engine"], "antigravity")
+        self.assertEqual(result["repo_path"], str(self.repo))
+        self.assertEqual(result["cwd"], str(self.repo))
+        self.assertRegex(result["session_id"], r"^[0-9a-f-]{36}$")
+        self.assertFalse(result["session_id_pending"])
         settings = json.loads(settings_path.read_text())
         self.assertEqual(settings["model"], "Gemini 3.5 Flash (High)")
         self.assertEqual(settings["colorScheme"], "dark")

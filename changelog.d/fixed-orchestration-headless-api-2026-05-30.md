@@ -1,0 +1,1 @@
+- Fixed CCC orchestration spawn/list/ask correlation for headless multi-engine callers.

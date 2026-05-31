@@ -1216,6 +1216,14 @@ def _detect_session_engine(session_id):
     stores; everything else is treated as `claude`."""
     if not session_id:
         return "claude"
+    for s in _spawned_sessions:
+        if s.get("session_id") == session_id or s.get("resumed_sid") == session_id:
+            engine = s.get("engine")
+            if engine in ("claude", "codex", "gemini", "antigravity"):
+                return engine
+    spawned = _spawn_registry_entry_for_session(session_id)
+    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "antigravity"):
+        return spawned.get("engine")
     if _is_codex_session(session_id):
         return "codex"
     if _is_antigravity_session(session_id):
@@ -1605,6 +1613,12 @@ def repo_from_session(session_id):
                 cwd = row.get("cwd")
             except Exception:
                 cwd = None
+    if not cwd:
+        try:
+            spawned = _spawn_registry_entry_for_session(sid) or {}
+            cwd = spawned.get("cwd")
+        except Exception:
+            cwd = None
     if not cwd:
         raise RepoContextError("repo_required", f"could not derive repo context for session {sid}")
     return _resolve_cwd_context(cwd)
@@ -2593,6 +2607,8 @@ def find_all_conversations(
             row_mtime = tail_meta.get("last_meaningful_ts") or stat.st_mtime
             out.append({
                 "session_id": session_id,
+                "source": "interactive",
+                "engine": "claude",
                 "jsonl_path": str(f),
                 "slug": slug,
                 "folder_label": row_folder_label,
@@ -9089,6 +9105,8 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
         conversations.append({
             "id": conv_id,
             "session_id": sid,
+            "source": "interactive",
+            "engine": "claude",
             "timestamp": timestamp or "",
             "branch": git_branch or "",
             "first_message": (first_message or "")[:200],
@@ -11968,7 +11986,16 @@ def _codex_spawn_pid_by_thread_id():
                     alive = _poll_spawn_entry(s) is None
                 except Exception:
                     alive = False
-                out[sid] = {"pid": s.get("pid"), "alive": alive}
+                out[sid] = {
+                    "pid": s.get("pid"),
+                    "alive": alive,
+                    "log": s.get("log"),
+                    "cwd": s.get("cwd") or "",
+                    "repo_path": s.get("repo_path") or "",
+                    "spawned_at": s.get("started") or "",
+                    "prompt": s.get("prompt") or "",
+                    "model": s.get("model") or "",
+                }
     return out
 
 
@@ -12958,7 +12985,8 @@ def resume_session_codex(session_id, text):
             except Exception:
                 pass
     row = _codex_thread_row(session_id) or {}
-    cwd = row.get("cwd") or find_session_cwd(session_id)
+    spawned_ctx = _spawn_registry_entry_for_session(session_id, "codex") or {}
+    cwd = row.get("cwd") or spawned_ctx.get("cwd") or find_session_cwd(session_id)
     if not cwd or not Path(cwd).is_dir():
         try:
             cwd = repo_from_session(session_id)["cwd"]
@@ -12966,7 +12994,8 @@ def resume_session_codex(session_id, text):
             return e.as_payload()
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"resume-codex-{session_id[:8]}-{timestamp}.log"
-    log_dir = repo_log_dir(_git_toplevel_for_existing_dir(cwd) or cwd)
+    repo_for_logs = _git_toplevel_for_existing_dir(cwd) or cwd
+    log_dir = repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
     # Per-session override (set via the click-to-switch picker) wins over
@@ -13009,6 +13038,9 @@ def resume_session_codex(session_id, text):
         "fifo": None,
         "stdin_fd": None,
         "engine": "codex",
+        "cwd": cwd,
+        "repo_path": repo_for_logs,
+        "model": model,
     }
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -13021,6 +13053,8 @@ def resume_session_codex(session_id, text):
         fifo=None,
         engine="codex",
         session_id=session_id,
+        repo_path=repo_for_logs,
+        model=model,
     )
     return {"ok": True, "pid": proc.pid, "log": str(log_path), "resumed": True, "via": "codex-resume"}
 
@@ -13662,6 +13696,11 @@ def _gemini_spawn_pid_by_session_id():
                     "pid": s.get("pid"),
                     "alive": alive,
                     "log": s.get("log"),
+                    "cwd": s.get("cwd") or "",
+                    "repo_path": s.get("repo_path") or "",
+                    "spawned_at": s.get("started") or "",
+                    "prompt": s.get("prompt") or "",
+                    "model": s.get("model") or "",
                 }
     return out
 
@@ -14121,7 +14160,8 @@ def find_gemini_conversations(
         if not cli_conversation or not cli_conversation.is_file():
             continue
         scanned += 1
-        cwd = meta.get("cwd") or ""
+        spawn_info = antigravity_spawn_by_sid.get(sid) or {}
+        cwd = meta.get("cwd") or spawn_info.get("cwd") or ""
         pinned = repo_pins.get(sid)
         pinned_repo = False
         if repo_only:
@@ -14158,7 +14198,6 @@ def find_gemini_conversations(
             folder_label = _resolve_dir_case(_git_root or folder_path)
         else:
             folder_label = "Antigravity CLI"
-        spawn_info = antigravity_spawn_by_sid.get(sid) or {}
         spawn_pid = spawn_info.get("pid")
         spawn_alive = bool(spawn_info.get("alive"))
         is_live = spawn_alive if spawn_pid else (time.time() - modified) < _ANTIGRAVITY_LIVE_WINDOW_S
@@ -14862,6 +14901,9 @@ def _antigravity_spawn_pid_by_session_id():
                     "pid": s.get("pid"),
                     "alive": alive,
                     "log": log,
+                    "cwd": s.get("cwd") or "",
+                    "repo_path": s.get("repo_path") or "",
+                    "spawned_at": s.get("started") or "",
                     "prompt": s.get("prompt") or "",
                     "model": meta.get("model") or s.get("model") or "",
                 }
@@ -15273,6 +15315,9 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                 ts_epoch = _antigravity_event_epoch(ev)
                 if ts_epoch:
                     meta["last_meaningful_ts"] = ts_epoch
+                event_cwd = ev.get("cwd")
+                if isinstance(event_cwd, str) and event_cwd.strip():
+                    meta["cwd"] = event_cwd.strip()
                 cwd_candidates.extend(_antigravity_event_path_candidates(ev))
                 ev_type = ev.get("type") or ""
                 source = ev.get("source") or ""
@@ -15346,7 +15391,7 @@ def _extract_antigravity_tail_meta(path_or_session_id):
     except OSError:
         return {}
 
-    meta["cwd"] = _antigravity_infer_cwd_from_candidates(cwd_candidates)
+    meta["cwd"] = meta.get("cwd") or _antigravity_infer_cwd_from_candidates(cwd_candidates)
     if not meta.get("last_meaningful_ts"):
         meta["last_meaningful_ts"] = mtime
     global _conv_meta_cache_dirty
@@ -15478,11 +15523,12 @@ def find_antigravity_conversations(
         except OSError:
             continue
         tail = _extract_antigravity_tail_meta(path) or {}
+        spawn_info = spawn_by_sid.get(sid) or {}
         cli_meta = {}
-        cwd = tail.get("cwd") or ""
+        cwd = tail.get("cwd") or spawn_info.get("cwd") or ""
         if not cwd or not tail.get("model"):
             cli_meta = cli_meta_by_sid.get(sid, {})
-            cwd = cwd or cli_meta.get("cwd") or ""
+            cwd = cwd or cli_meta.get("cwd") or spawn_info.get("cwd") or ""
         pinned = repo_pins.get(sid)
         pinned_repo = False
         if repo_only:
@@ -15492,7 +15538,6 @@ def find_antigravity_conversations(
                 pinned_repo = True
             elif not _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
                 continue
-        spawn_info = spawn_by_sid.get(sid) or {}
         spawn_pid = spawn_info.get("pid")
         spawn_alive = bool(spawn_info.get("alive"))
         modified = tail.get("last_meaningful_ts") or st.st_mtime
@@ -16057,12 +16102,14 @@ def resume_session_gemini(session_id, text):
                     }
             except Exception:
                 pass
-    cwd = find_session_cwd(session_id) or str(Path.cwd())
+    spawned_ctx = _spawn_registry_entry_for_session(session_id, "gemini") or {}
+    cwd = spawned_ctx.get("cwd") or find_session_cwd(session_id) or str(Path.cwd())
     if not Path(cwd).is_dir():
         cwd = str(Path.cwd())
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"resume-gemini-{session_id[:8]}-{timestamp}.log"
-    log_dir = repo_log_dir(_git_toplevel_for_existing_dir(cwd) or cwd)
+    repo_for_logs = _git_toplevel_for_existing_dir(cwd) or cwd
+    log_dir = repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
     cmd = [resolved["bin"], "--approval-mode", os.environ.get("CCC_GEMINI_APPROVAL_MODE", "yolo"),
@@ -16102,6 +16149,9 @@ def resume_session_gemini(session_id, text):
         "fifo": None,
         "stdin_fd": None,
         "engine": "gemini",
+        "cwd": cwd,
+        "repo_path": repo_for_logs,
+        "model": model or "",
     }
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -16114,6 +16164,8 @@ def resume_session_gemini(session_id, text):
         fifo=None,
         engine="gemini",
         session_id=session_id,
+        repo_path=repo_for_logs,
+        model=model,
     )
     return {"ok": True, "pid": proc.pid, "log": str(log_path), "resumed": True, "via": "gemini-resume"}
 
@@ -16126,12 +16178,13 @@ def spawn_session_gemini(prompt, name=None, cwd=None, repo_path=None, worktree=F
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
     ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
     spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
     session_name = _slugify(name or prompt) or "unnamed"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-gemini-{session_name}-{timestamp}.log"
     if model:
         _set_session_model(log_filename[:-4], model, False)
-    log_dir = repo_log_dir(ctx["repo_path"])
+    log_dir = repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
     cmd = [
@@ -16158,6 +16211,11 @@ def spawn_session_gemini(prompt, name=None, cwd=None, repo_path=None, worktree=F
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "via": "gemini-spawn"}
+    failure = _spawn_early_failure_payload(
+        proc, log_path, log_fh, engine="gemini", via="gemini-spawn",
+    )
+    if failure:
+        return failure
     entry = {
         "pid": proc.pid,
         "name": session_name,
@@ -16169,6 +16227,9 @@ def spawn_session_gemini(prompt, name=None, cwd=None, repo_path=None, worktree=F
         "fifo": None,
         "stdin_fd": None,
         "engine": "gemini",
+        "cwd": spawn_cwd,
+        "repo_path": repo_for_logs,
+        "model": model_to_use or "",
     }
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -16180,8 +16241,14 @@ def spawn_session_gemini(prompt, name=None, cwd=None, repo_path=None, worktree=F
         command_summary=prompt[:200],
         fifo=None,
         engine="gemini",
+        repo_path=repo_for_logs,
+        model=model_to_use,
     )
-    return {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)}
+    return _finalize_spawn_response(
+        {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)},
+        entry,
+        ctx,
+    )
 
 
 def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None):
@@ -16198,10 +16265,11 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
     ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
     spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
     session_name = _slugify(name or prompt) or "antigravity"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-antigravity-{session_name}-{timestamp}.log"
-    log_dir = repo_log_dir(ctx["repo_path"])
+    log_dir = repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
 
@@ -16232,6 +16300,7 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     user_args = cmd[1:]
     
     session_id = str(uuid.uuid4())
+    brain_dir = None
     try:
         brain_dir = Path.home() / ".gemini" / "antigravity-cli" / "brain" / session_id
         logs_dir = brain_dir / ".system_generated" / "logs"
@@ -16242,6 +16311,8 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
                 "type": "USER_INPUT",
                 "source": "USER_EXPLICIT",
                 "content": prompt,
+                "cwd": spawn_cwd,
+                "repo_path": repo_for_logs,
                 "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
             }) + "\n")
     except Exception as e:
@@ -16288,14 +16359,21 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
         except OSError:
             pass
         log_fh.close()
+        if brain_dir:
+            try:
+                shutil.rmtree(brain_dir, ignore_errors=True)
+            except OSError:
+                pass
         detail = _antigravity_read_log_tail(log_path, max_bytes=4000).strip()
         first_line = next((line.strip() for line in detail.splitlines() if line.strip()), "")
         return {
             "ok": False,
             "error": first_line or f"AGY exited with code {early_exit}",
+            "code": "antigravity_launch_failed",
             "exit_code": early_exit,
             "log": str(log_path),
             "via": "antigravity-spawn",
+            "engine": "antigravity",
         }
 
     entry = {
@@ -16309,6 +16387,9 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
         "fifo": None,
         "stdin_fd": None,
         "engine": "antigravity",
+        "session_id": session_id,
+        "cwd": spawn_cwd,
+        "repo_path": repo_for_logs,
         "model": model_to_use,
     }
     _spawned_sessions.append(entry)
@@ -16321,6 +16402,8 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
         command_summary=prompt[:200],
         fifo=None,
         engine="antigravity",
+        session_id=session_id,
+        repo_path=repo_for_logs,
         model=model_to_use,
     )
     resp = {
@@ -16334,7 +16417,7 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     if worktree_path:
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
-    return resp
+    return _finalize_spawn_response(resp, entry, ctx, wait_for_session_id=False)
 
 
 def _resume_session_antigravity_app(session_id, text):
@@ -16411,12 +16494,14 @@ def resume_session_antigravity(session_id, text):
                     }
             except Exception:
                 pass
-    cwd = find_session_cwd(session_id) or str(Path.cwd())
+    spawned_ctx = _spawn_registry_entry_for_session(session_id, "antigravity") or {}
+    cwd = spawned_ctx.get("cwd") or find_session_cwd(session_id) or str(Path.cwd())
     if not Path(cwd).is_dir():
         cwd = str(Path.cwd())
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"resume-antigravity-{session_id[:8]}-{timestamp}.log"
-    log_dir = repo_log_dir(_git_toplevel_for_existing_dir(cwd) or cwd)
+    repo_for_logs = _git_toplevel_for_existing_dir(cwd) or cwd
+    log_dir = repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
 
@@ -16479,6 +16564,8 @@ def resume_session_antigravity(session_id, text):
         "fifo": None,
         "stdin_fd": None,
         "engine": "antigravity",
+        "cwd": cwd,
+        "repo_path": repo_for_logs,
         "model": model_to_use,
     }
     _spawned_sessions.append(entry)
@@ -16492,6 +16579,7 @@ def resume_session_antigravity(session_id, text):
         fifo=None,
         engine="antigravity",
         session_id=session_id,
+        repo_path=repo_for_logs,
         model=model_to_use,
     )
     return {
@@ -16602,6 +16690,113 @@ def _write_spawn_error_event(log_fh, code, message):
         pass
 
 
+def _spawn_early_failure_payload(proc, log_path, log_fh, *, engine, via, delay=0.15):
+    """Return an error payload when a just-spawned engine exits non-zero fast.
+
+    A resolver can prove the binary exists, but auth/config/runtime failures
+    often only show up after `Popen`. Catching the immediate non-zero case
+    keeps `/api/sessions/spawn` from reporting success for a process that
+    already died before callers could discover it.
+    """
+    try:
+        time.sleep(delay)
+        exit_code = proc.poll()
+    except Exception:
+        return None
+    if exit_code is None:
+        return None
+    # Bare Mock.poll() returns another Mock; ignore non-real values so tests
+    # and unusual Popen stand-ins keep behaving like a live child.
+    if not isinstance(exit_code, int):
+        return None
+    if exit_code == 0:
+        return None
+    try:
+        log_fh.flush()
+    except OSError:
+        pass
+    try:
+        log_fh.close()
+    except OSError:
+        pass
+    detail = _antigravity_read_log_tail(log_path, max_bytes=4000).strip()
+    first_line = next((line.strip() for line in detail.splitlines() if line.strip()), "")
+    return {
+        "ok": False,
+        "error": first_line or f"{engine} exited with code {exit_code}",
+        "code": f"{engine}_launch_failed",
+        "exit_code": exit_code,
+        "log": str(log_path),
+        "via": via,
+        "engine": engine,
+    }
+
+
+def _spawn_session_id_from_entry(entry):
+    """Best-effort native session id resolver for a CCC-owned spawn entry."""
+    if not isinstance(entry, dict):
+        return None
+    sid = entry.get("session_id") or entry.get("resumed_sid")
+    if sid:
+        return sid
+    log = entry.get("log")
+    engine = entry.get("engine") or "claude"
+    if engine == "codex":
+        sid = _extract_codex_thread_id_from_log(log)
+    elif engine == "gemini":
+        sid = _extract_gemini_session_id_from_log(log)
+    elif engine == "antigravity":
+        meta = {}
+        if log:
+            meta = _antigravity_cli_log_meta(str(log) + ".agy.log")
+            if not meta.get("session_id"):
+                meta = _antigravity_cli_log_meta(log)
+        sid = meta.get("session_id") or None
+    else:
+        sid = extract_session_id(log)
+    if sid:
+        entry["session_id"] = sid
+        _update_spawn_session_id_in_registry(entry.get("pid"), sid)
+    return sid
+
+
+def _wait_for_spawn_session_id(entry, timeout_s=0.75):
+    deadline = time.monotonic() + max(0.0, float(timeout_s or 0))
+    sid = _spawn_session_id_from_entry(entry)
+    while not sid and time.monotonic() < deadline:
+        time.sleep(0.05)
+        sid = _spawn_session_id_from_entry(entry)
+    return sid
+
+
+def _finalize_spawn_response(resp, entry, ctx, *, wait_for_session_id=True):
+    """Attach correlation and placement fields to a successful spawn response."""
+    resp = dict(resp or {})
+    pid = entry.get("pid") if isinstance(entry, dict) else resp.get("pid")
+    if pid is not None:
+        resp.setdefault("pid", pid)
+        resp["spawn_id"] = str(pid)
+    engine = (entry.get("engine") if isinstance(entry, dict) else None) or resp.get("engine") or "claude"
+    resp["engine"] = engine
+    if isinstance(ctx, dict):
+        if ctx.get("repo_path"):
+            resp["repo_path"] = ctx["repo_path"]
+        if ctx.get("cwd") and not resp.get("cwd"):
+            resp["cwd"] = ctx["cwd"]
+    if isinstance(entry, dict):
+        if entry.get("repo_path"):
+            resp["repo_path"] = entry["repo_path"]
+        if entry.get("cwd"):
+            resp["cwd"] = entry["cwd"]
+    sid = (
+        _wait_for_spawn_session_id(entry)
+        if wait_for_session_id else _spawn_session_id_from_entry(entry)
+    )
+    resp["session_id"] = sid
+    resp["session_id_pending"] = not bool(sid)
+    return resp
+
+
 def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None):
     """Spawn a headless Claude Code session and return tracking info.
 
@@ -16701,6 +16896,10 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         "log_fh": log_fh,
         "fifo": fifo_path,
         "stdin_fd": stdin_fd,
+        "engine": "claude",
+        "cwd": spawn_cwd,
+        "repo_path": ctx["repo_path"],
+        "model": model_to_use,
     }
     # Write the initial prompt as the first stream-json user message.
     # Note: headless `claude -p` doesn't support TUI slash commands like /rename
@@ -16731,6 +16930,8 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         command_summary=prompt[:200],
         fifo=fifo_path,
         engine="claude",
+        repo_path=ctx["repo_path"],
+        model=model_to_use,
     )
     # Cwd determines the ~/.claude/projects/ bucket the new session
     # logs to, which is how the kanban groups it by repo. Print it so
@@ -16748,7 +16949,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     if worktree_path:
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
-    return resp
+    return _finalize_spawn_response(resp, entry, ctx)
 
 
 def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None):
@@ -16780,6 +16981,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     bin_path = resolved["bin"]
     ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
     spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
 
     session_name = _slugify(name or prompt)
     if not session_name:
@@ -16789,7 +16991,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     model_to_use = _spawn_model_for_engine("codex", model) or os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
     if model_to_use:
         _set_session_model(log_filename[:-4], model_to_use, False)
-    log_dir = repo_log_dir(ctx["repo_path"])
+    log_dir = repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
 
@@ -16819,14 +17021,23 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     log_fh = open(log_path, "w")
     if worktree_path:
         _run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.DEVNULL,
-        stdout=log_fh,
-        stderr=subprocess.STDOUT,
-        cwd=spawn_cwd,
-        start_new_session=True,
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            cwd=spawn_cwd,
+            start_new_session=True,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log_fh.close()
+        return {"ok": False, "error": str(e), "code": "codex_launch_failed", "via": "codex-spawn"}
+    failure = _spawn_early_failure_payload(
+        proc, log_path, log_fh, engine="codex", via="codex-spawn",
     )
+    if failure:
+        return failure
 
     entry = {
         "pid": proc.pid,
@@ -16839,6 +17050,9 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         "fifo": None,         # Codex exec is one-shot; no inject FIFO.
         "stdin_fd": None,
         "engine": "codex",
+        "cwd": spawn_cwd,
+        "repo_path": repo_for_logs,
+        "model": model_to_use or "",
     }
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -16850,13 +17064,21 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         command_summary=prompt[:200],
         fifo=None,
         engine="codex",
+        repo_path=repo_for_logs,
+        model=model_to_use,
     )
 
-    resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)}
+    resp = {
+        "ok": True,
+        "pid": proc.pid,
+        "name": session_name,
+        "log": str(log_path),
+        "via": "codex-spawn",
+    }
     if worktree_path:
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
-    return resp
+    return _finalize_spawn_response(resp, entry, ctx)
 
 
 _COLOR_PALETTE = [
@@ -17243,6 +17465,9 @@ def resume_session_headless(session_id, text):
         "resumed_sid": session_id,
         "fifo": fifo_path,
         "stdin_fd": stdin_fd,
+        "engine": "claude",
+        "cwd": cwd,
+        "repo_path": ctx["repo_path"],
     }
     ok = _write_stream_json_user_message(entry, text, timeout=30)
     if not ok:
@@ -17267,6 +17492,8 @@ def resume_session_headless(session_id, text):
         command_summary=text[:200],
         fifo=fifo_path,
         engine="claude",
+        session_id=session_id,
+        repo_path=ctx["repo_path"],
     )
     return {
         "ok": True,
@@ -17421,7 +17648,7 @@ def _save_spawn_registry(entries):
 
 def _record_spawn_to_registry(
     pid, name, log_path, cwd, spawned_at, command_summary,
-    fifo=None, engine="claude", session_id=None, model=None,
+    fifo=None, engine="claude", session_id=None, model=None, repo_path=None,
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -17442,6 +17669,7 @@ def _record_spawn_to_registry(
         "log": str(log_path),
         "fifo": str(fifo) if fifo else None,
         "cwd": str(cwd),
+        "repo_path": str(repo_path or ""),
         "spawned_at": spawned_at,
         "command_summary": command_summary,
         "engine": engine,
@@ -17611,9 +17839,12 @@ def _reattach_spawned_orphans():
             "stdin_fd": stdin_fd,
             "reattached": True,
             "engine": engine,
+            "cwd": entry.get("cwd") or "",
+            "repo_path": entry.get("repo_path") or "",
             "model": entry.get("model") or "",
         }
         if session_id:
+            synthetic["session_id"] = session_id
             synthetic["resumed_sid"] = session_id
         _spawned_sessions.append(synthetic)
         survivors.append({
@@ -17623,6 +17854,7 @@ def _reattach_spawned_orphans():
             "log": log_path,
             "fifo": fifo_path,
             "cwd": entry.get("cwd"),
+            "repo_path": entry.get("repo_path") or "",
             "spawned_at": entry.get("spawned_at"),
             "command_summary": entry.get("command_summary", ""),
             "engine": engine,
@@ -17642,12 +17874,25 @@ def list_spawned_sessions():
     result = []
     for s in _spawned_sessions:
         poll = _poll_spawn_entry(s)
+        sid = _spawn_session_id_from_entry(s)
+        pid = s["pid"]
         result.append({
-            "pid": s["pid"],
+            "pid": pid,
+            "spawn_id": str(pid),
+            "session_id": sid,
+            "session_id_pending": not bool(sid),
             "name": s["name"],
             "log": s["log"],
             "prompt": s.get("prompt", ""),
             "started": s.get("started", ""),
+            "spawned_at": s.get("started", ""),
+            "engine": s.get("engine", "claude"),
+            "cwd": s.get("cwd") or "",
+            "repo_path": s.get("repo_path") or "",
+            "model": s.get("model") or "",
+            "command_summary": s.get("prompt", ""),
+            "running": poll is None,
+            "exit_code": poll,
             "status": "running" if poll is None else f"finished (exit {poll})",
         })
     return result
@@ -19405,6 +19650,199 @@ def ask_session_via_live_tail(session_id, text, timeout_ms, status):
                 pass
 
 
+def _text_from_engine_stream_value(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                parts.append(_text_from_engine_stream_value(
+                    item.get("text") or item.get("content") or item.get("message")
+                ))
+        return "".join(p for p in parts if p)
+    if isinstance(value, dict):
+        for key in ("text", "content", "message", "output", "result", "last_agent_message"):
+            text = _text_from_engine_stream_value(value.get(key))
+            if text:
+                return text
+    return ""
+
+
+def _engine_stream_event_text(engine, ev):
+    if not isinstance(ev, dict):
+        return ""
+    if engine == "codex":
+        payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+        if ev.get("type") == "event_msg" and payload.get("type") == "agent_message":
+            return (payload.get("message") or "").strip()
+        if ev.get("type") == "event_msg" and payload.get("type") == "task_complete":
+            return (payload.get("last_agent_message") or payload.get("message") or "").strip()
+        return ""
+    if engine == "gemini":
+        if ev.get("type") == "message" and ev.get("role") == "assistant":
+            return _text_from_engine_stream_value(
+                ev.get("content") or ev.get("message") or ev.get("text")
+            ).strip()
+        return ""
+    if engine == "antigravity":
+        if ev.get("type") == "PLANNER_RESPONSE":
+            return (ev.get("content") or "").strip()
+        return _text_from_engine_stream_value(
+            ev.get("content") or ev.get("message") or ev.get("text")
+        ).strip()
+    return ""
+
+
+def _engine_stream_event_done(engine, ev):
+    if not isinstance(ev, dict):
+        return False
+    if engine == "codex":
+        payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+        return ev.get("type") == "event_msg" and payload.get("type") == "task_complete"
+    if engine == "gemini":
+        return ev.get("type") == "result"
+    return False
+
+
+def _latest_resume_spawn_entry(session_id, engine):
+    for s in reversed(_spawned_sessions):
+        if s.get("engine") != engine:
+            continue
+        if s.get("resumed_sid") == session_id or s.get("session_id") == session_id:
+            return s
+    return None
+
+
+def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
+    if engine == "codex":
+        spawn_result = resume_session_codex(session_id, text)
+    elif engine == "gemini":
+        spawn_result = resume_session_gemini(session_id, text)
+    elif engine == "antigravity":
+        spawn_result = resume_session_antigravity(session_id, text)
+    else:
+        return {"ok": False, "error": f"unsupported ask engine: {engine}", "source": "engine-resume"}
+    source = f"{engine}-resume"
+    if not spawn_result.get("ok"):
+        spawn_result.setdefault("source", source)
+        return spawn_result
+    if spawn_result.get("queued"):
+        return {
+            "ok": False,
+            "error": "session is busy; message was queued but no synchronous reply is available yet",
+            "queued": True,
+            "pid": spawn_result.get("pid"),
+            "source": source,
+        }
+    if spawn_result.get("via") == "antigravity-app":
+        return {
+            "ok": False,
+            "error": "Antigravity app resume is asynchronous; synchronous /api/ask requires an AGY CLI conversation.",
+            "source": source,
+            "via": "antigravity-app",
+        }
+    entry = _latest_resume_spawn_entry(session_id, engine)
+    if entry is None:
+        return {"ok": False, "error": "spawned subprocess but lost track of it", "source": source}
+
+    log_path = entry.get("log")
+    deadline = time.monotonic() + max(0.5, timeout_ms / 1000.0)
+    text_chunks = []
+    raw_chunks = []
+    pending = b""
+    fh = None
+    started = time.monotonic()
+    try:
+        wait_until = time.monotonic() + 2.0
+        while log_path and not os.path.exists(log_path) and time.monotonic() < wait_until:
+            time.sleep(0.05)
+        try:
+            fh = open(log_path, "rb")
+        except OSError as e:
+            return {"ok": False, "error": f"could not open log: {e}", "source": source}
+        while time.monotonic() < deadline:
+            chunk = fh.read()
+            if chunk:
+                pending += chunk
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        ev = json.loads(stripped)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        raw = stripped.decode("utf-8", "replace")
+                        if engine == "antigravity":
+                            raw_chunks.append(raw)
+                        continue
+                    text_piece = _engine_stream_event_text(engine, ev)
+                    if text_piece:
+                        text_chunks.append(text_piece)
+                    if _engine_stream_event_done(engine, ev):
+                        return {
+                            "ok": True,
+                            "text": "\n".join(text_chunks).strip(),
+                            "duration_ms": int((time.monotonic() - started) * 1000),
+                            "num_turns": 1,
+                            "cost_usd": None,
+                            "source": source,
+                        }
+            else:
+                poll = _poll_spawn_entry(entry)
+                if poll is not None:
+                    final = fh.read()
+                    if final:
+                        pending += final
+                    for raw_line in pending.split(b"\n"):
+                        stripped = raw_line.strip()
+                        if not stripped:
+                            continue
+                        try:
+                            ev = json.loads(stripped)
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            if engine == "antigravity":
+                                raw_chunks.append(stripped.decode("utf-8", "replace"))
+                            continue
+                        text_piece = _engine_stream_event_text(engine, ev)
+                        if text_piece:
+                            text_chunks.append(text_piece)
+                    text_out = "\n".join(text_chunks).strip()
+                    if not text_out and engine == "antigravity":
+                        text_out = "\n".join(raw_chunks).strip()
+                    if poll == 0:
+                        return {
+                            "ok": True,
+                            "text": text_out,
+                            "duration_ms": int((time.monotonic() - started) * 1000),
+                            "num_turns": 1,
+                            "cost_usd": None,
+                            "source": source,
+                        }
+                    return {
+                        "ok": False,
+                        "error": f"subprocess exited (code {poll}) before reply completed",
+                        "partial": text_out,
+                        "source": source,
+                    }
+                time.sleep(0.1)
+        return {
+            "ok": False,
+            "error": "timeout",
+            "partial": "\n".join(text_chunks).strip(),
+            "source": source,
+        }
+    finally:
+        if fh is not None:
+            try:
+                fh.close()
+            except OSError:
+                pass
+
+
 def ask_session_and_wait(session_id, text, timeout_ms=30000):
     """Synchronously inject `text` into a session and wait for its reply.
 
@@ -19427,6 +19865,10 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000):
     """
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
+
+    engine = _detect_session_engine(session_id)
+    if engine in ("codex", "gemini", "antigravity"):
+        return ask_engine_session_and_wait(session_id, text, timeout_ms, engine)
 
     # Live-tail short-circuit: if the target session has a running `claude`
     # process with a usable tty, drive it via keystroke + jsonl tail. This
@@ -24441,8 +24883,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 days = 30
             self.send_json(compute_global_stats(days=days))
-        elif path == "/api/sessions/spawned":
-            self.send_json(list_spawned_sessions())
+        elif path in ("/api/sessions/spawned", "/api/spawned"):
+            qs = urllib.parse.parse_qs(parsed.query)
+            rows = list_spawned_sessions()
+            engine_filter = (qs.get("engine", [""])[0] or "").strip().lower()
+            if engine_filter:
+                rows = [r for r in rows if (r.get("engine") or "").lower() == engine_filter]
+            self.send_json(rows)
         elif re.match(r"^/api/sessions/spawned/\d+/log$", path):
             try:
                 pid = int(path.split("/")[-2])
@@ -24519,6 +24966,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(_archive_load_snapshot())
         elif path == "/api/sessions":
             qs = urllib.parse.parse_qs(parsed.query)
+            if qs.get("all", ["0"])[0] in ("1", "true"):
+                engine_filter = (qs.get("engine", [""])[0] or "").strip().lower()
+                rows = _build_archive_conversations(
+                    include_prs=qs.get("include_prs", ["0"])[0] in ("1", "true"),
+                    resolve_pr_states=qs.get("resolve_prs", ["0"])[0] in ("1", "true"),
+                    resolve_effective=qs.get("resolve_effective", ["0"])[0] in ("1", "true"),
+                    resolve_worktree_dirty=qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
+                )
+                spawned = list_spawned_sessions()
+                if engine_filter:
+                    rows = [r for r in rows if (r.get("engine") or r.get("source") or "").lower() == engine_filter]
+                    spawned = [r for r in spawned if (r.get("engine") or "").lower() == engine_filter]
+                _save_conv_meta_cache()
+                self.send_json({
+                    "ok": True,
+                    "sessions": rows,
+                    "conversations": rows,
+                    "spawned": spawned,
+                    "count": len(rows),
+                })
+                return
             include_old = qs.get("include_old", ["0"])[0] in ("1", "true")
             try:
                 ctx = require_repo_context(query=qs, allow_session=False)
@@ -24540,6 +25008,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(rows)
         elif path == "/api/conversations":
             qs = urllib.parse.parse_qs(parsed.query)
+            if qs.get("all", ["0"])[0] in ("1", "true"):
+                engine_filter = (qs.get("engine", [""])[0] or "").strip().lower()
+                rows = _build_archive_conversations(
+                    include_prs=qs.get("include_prs", ["0"])[0] in ("1", "true"),
+                    resolve_pr_states=qs.get("resolve_prs", ["0"])[0] in ("1", "true"),
+                    resolve_effective=qs.get("resolve_effective", ["0"])[0] in ("1", "true"),
+                    resolve_worktree_dirty=qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
+                )
+                spawned = list_spawned_sessions()
+                if engine_filter:
+                    rows = [r for r in rows if (r.get("engine") or r.get("source") or "").lower() == engine_filter]
+                    spawned = [r for r in spawned if (r.get("engine") or "").lower() == engine_filter]
+                _save_conv_meta_cache()
+                self.send_json({
+                    "ok": True,
+                    "conversations": rows,
+                    "sessions": rows,
+                    "spawned": spawned,
+                    "count": len(rows),
+                })
+                return
             try:
                 ctx = require_repo_context(query=qs, allow_session=False)
                 convs = find_conversations(ctx["repo_path"]) or []
@@ -26404,7 +26893,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     if result.get("code") in (
                         "claude_unavailable",
                         "codex_unavailable",
+                        "codex_launch_failed",
+                        "gemini_unavailable",
+                        "gemini_launch_failed",
                         "antigravity_unavailable",
+                        "antigravity_launch_failed",
                     ):
                         self.send_json(result, 503)
                     else:
@@ -26467,7 +26960,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # misconfigured) carry a stable `"code": "codex_unavailable"`
                     # so the frontend can render an install hint without
                     # parsing the human-readable error text.
-                    if result.get("code") == "codex_unavailable":
+                    if result.get("code") in ("codex_unavailable", "codex_launch_failed"):
                         self.send_json(result, 503)
                     else:
                         self.send_json(result)
@@ -26523,7 +27016,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         repo_path=payload.get("repo_path"),
                         worktree=bool(payload.get("worktree")),
                     )
-                    if result.get("code") == "gemini_unavailable":
+                    if result.get("code") in ("gemini_unavailable", "gemini_launch_failed"):
                         self.send_json(result, 503)
                     else:
                         self.send_json(result)
@@ -26581,7 +27074,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         worktree=bool(payload.get("worktree")),
                         model=model,
                     )
-                    if result.get("code") == "antigravity_unavailable":
+                    if result.get("code") in ("antigravity_unavailable", "antigravity_launch_failed"):
                         self.send_json(result, 503)
                     else:
                         self.send_json(result)
@@ -28863,7 +29356,17 @@ def write_port_file(bind_host):
     ccc-orchestration skill (and any other scripted caller) can find this
     server without hardcoding the port. Single line, format
     `http://<host>:<port>`. Best-effort — failures are logged and ignored."""
-    display_host = "127.0.0.1" if bind_host in ("127.0.0.1", "localhost", "::1") else bind_host
+    # Bind addresses like 0.0.0.0/:: are not reliable dial targets. The
+    # skill runs locally, so always publish a loopback URL for wildcard or
+    # loopback binds and reserve the configured host only for explicit
+    # network addresses.
+    display_host = (
+        "127.0.0.1"
+        if bind_host in ("", "0.0.0.0", "::", "127.0.0.1", "localhost", "::1")
+        else bind_host
+    )
+    if ":" in display_host and not display_host.startswith("["):
+        display_host = f"[{display_host}]"
     url = f"http://{display_host}:{PORT}"
     port_file = COMMAND_CENTER_STATE_DIR / "port.txt"
     try:

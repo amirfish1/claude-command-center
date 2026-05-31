@@ -222,14 +222,21 @@ plain HTTP. On startup the server copies the skill to
 `~/.claude/command-center/port.txt` so the skill can discover the running
 instance without hardcoding a port.
 
-Spawn calls may pass `engine: "claude" | "codex" | "antigravity"` to
-`/api/sessions/spawn`; omitted means Claude Code for backwards compatibility.
-Legacy `engine: "gemini"` maps to Antigravity.
+Spawn calls pass `repo_path` (or `cwd`) plus optional
+`engine: "claude" | "codex" | "antigravity"` to `/api/sessions/spawn`;
+omitted engine/model values use the server-side defaults from the dashboard.
+Legacy `engine: "gemini"` maps to Antigravity. Successful spawns return
+`spawn_id`, `engine`, `repo_path`, `cwd`, and `session_id` when the native
+engine has emitted one; callers can poll `/api/sessions/spawned` if
+`session_id_pending` is true.
 
 Once installed, a Claude session can run e.g.:
 
 ```bash
 CCC_URL="$(cat ~/.claude/command-center/port.txt)"
+REPO_PATH="$(pwd -P)"
+curl -s "$CCC_URL/api/sessions?repo_path=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$REPO_PATH")"
+
 curl -s -X POST "$CCC_URL/api/ask" \
   -H "Content-Type: application/json" \
   -d '{"session_id": "<uuid>", "text": "What is 2+2?", "timeout_ms": 30000}'
