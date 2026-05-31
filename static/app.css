@@ -1545,18 +1545,35 @@
     text-overflow: ellipsis;
   }
   /* Progressive drop-out as the strip narrows so the model pill
-     (rightmost, most-valued slot) stops getting clipped:
-       <= 700px: hide the "⚠ N other sessions here" warning (low-
+     (rightmost, most-valued slot) stops getting clipped. Original
+     thresholds (700 / 580) were too low — at 720px the screenshot
+     still hid cost+model because total intrinsic width was already
+     past viewport, but the strip was wide enough that SHARED CLONE
+     was still rendering and the cotenants block (when present)
+     hadn't dropped. Raised thresholds so trims kick in sooner and
+     the rightmost items survive.
+       <= 900px: hide the "⚠ N other sessions here" warning (low-
                  priority; still visible on the sidebar row + tooltip
                  on the kind pill).
-       <= 580px: hide the SHARED CLONE / WORKTREE kind chip (always
-                 nice-to-have, not load-bearing).
+       <= 800px: hide the SHARED CLONE / WORKTREE kind chip and
+                 the "in sync" status (always nice-to-have, not
+                 load-bearing).
        Below that: path keeps ellipsifying via the wp-path rule above. */
-  @container conv-ctx (max-width: 700px) {
+  @container conv-ctx (max-width: 900px) {
     .conv-input-context .wp-cotenants { display: none; }
   }
-  @container conv-ctx (max-width: 580px) {
-    .conv-input-context .wp-kind { display: none; }
+  @container conv-ctx (max-width: 800px) {
+    .conv-input-context .wp-kind,
+    .conv-input-context .wp-sync { display: none; }
+  }
+  /* And cap the path so it actively ellipsifies in narrow panes
+     instead of waiting for the layout to overflow. ch units scale
+     with the font so this holds across font-size changes. */
+  @container conv-ctx (max-width: 800px) {
+    .conv-input-context .wp-path { max-width: 28ch; }
+  }
+  @container conv-ctx (max-width: 600px) {
+    .conv-input-context .wp-path { max-width: 18ch; }
   }
   .conv-input-context.visible { display: flex; }
   .conv-input-context .wp-icon { opacity: 0.7; font-size: 11px; }

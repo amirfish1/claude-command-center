@@ -1,0 +1,1 @@
+Tune the `#convInputContext` progressive-trim breakpoints — cotenants warning now hides at ≤ 900px, SHARED CLONE chip + "in sync" status at ≤ 800px, and the repo path actively caps at 28ch (≤ 800px) / 18ch (≤ 600px) so it ellipsifies before the strip's overflow:hidden swallows the cost + model pills on the right.
