@@ -1,0 +1,1 @@
+Move the model pill back to the rightmost slot in the conv input-context strip, matching the Claude Desktop convention. The chevron-cover root cause is already mitigated by the 40px right padding added in `c87c467`; the prior reorder-first-to-survive-clipping defense is reverted because the user prefers the familiar rightmost placement.

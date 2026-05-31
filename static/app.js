@@ -16109,17 +16109,17 @@
           + escapeHtml(totalsTip) + '">' + escapeHtml(totalsText) + '</span>';
       }
     }
-    // Model pill is rendered FIRST in the wp-usage cluster so that when
-    // the parent .conv-input-context strip overflows (path + branch +
-    // tokens + cost all together can exceed a narrow pane) the model
-    // name survives the right-edge clip. Was previously the rightmost
-    // child — first thing to disappear when space ran out.
-    uSlot.innerHTML = modelPill
-      + ' <span class="' + cls + '" title="' + escapeHtml(title) + '">'
+    // Model pill renders LAST in the wp-usage cluster — rightmost slot,
+    // matching the Claude Desktop convention users expect. The chevron
+    // cover bug (#convInputContext right edge covered by .status-rail-
+    // restore in collapsed-rail mode) is handled via the 40px right
+    // padding rule in app.css; narrow-pane overflow clipping is the
+    // remaining risk and only manifests in thin split panes.
+    uSlot.innerHTML = '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
       + sourceLabel + ' ' + _formatTokens(displayTokens) + ' / ' + _formatTokens(limit)
       + ' <span class="wp-usage-pct">(' + calcPct + '%)</span>'
       + slashContextText
-      + '</span>' + peakNote + costPill + antigravityTotalsPill;
+      + '</span>' + peakNote + costPill + antigravityTotalsPill + modelPill;
     syncInputContextVisibility(slot);
     scheduleInputContextFit();
     const pill = uSlot.querySelector('.wp-usage-clickable');
