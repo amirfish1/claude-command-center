@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- `interactive-widget=resizes-content` asks the browser to shrink the
+     layout viewport when the on-screen keyboard opens, so the bottom
+     composer rides above it (Chrome Android honours this). iOS Safari /
+     WKWebView ignore it — there we drive body height from
+     `visualViewport` in app.js instead. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230d1117'/><text x='32' y='48' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='44' font-weight='700' fill='%23d97757'>%E2%8C%98</text></svg>">
 <!-- Installable-app metadata. The manifest + service worker turn CCC into a
      PWA so users can "Add to Dock" (Safari) or "Install app" (Chrome/Edge)
@@ -635,7 +640,7 @@
         </button>
         <div class="conv-input-bar" id="convInputBar">
           <div class="conv-input-row-top">
-            <textarea id="convInput" rows="1" placeholder="Send to terminal..." autocomplete="off" spellcheck="false"></textarea>
+            <textarea id="convInput" rows="1" placeholder="Send to terminal..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="send" inputmode="text"></textarea>
           </div>
           <div class="conv-input-row-bottom">
             <div class="conv-input-selectors">
@@ -745,7 +750,7 @@
       </div>
       <div class="conv-panel-input" id="convPanelInput">
         <div class="cpi-wrap">
-          <textarea id="cpInput" rows="1" placeholder="Send to terminal…" autocomplete="off" spellcheck="false"></textarea>
+          <textarea id="cpInput" rows="1" placeholder="Send to terminal…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="send" inputmode="text"></textarea>
           <button class="cpi-send" id="cpSendBtn" type="button" title="Send (Enter)" aria-label="Send" disabled>
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M5 12 L19 12 M13 6 L19 12 L13 18"></path>

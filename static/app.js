@@ -13360,6 +13360,29 @@
     restoreConversationBottomAnchors(captureConversationBottomAnchors());
   });
 
+  // Native-app typing: pin the fixed app shell to the *visual* viewport on
+  // touch devices so the bottom composer rides above the on-screen keyboard
+  // instead of hiding behind it. iOS Safari/WKWebView don't shrink the
+  // layout viewport when the keyboard opens (and ignore the viewport
+  // `interactive-widget` hint), so we feed `visualViewport.height` into the
+  // `--app-vh` custom property that `body` reads. Wired up only under a
+  // coarse pointer — desktop keeps the plain `100vh` fallback untouched.
+  if (window.visualViewport && window.matchMedia('(pointer: coarse)').matches) {
+    const vv = window.visualViewport;
+    let _vvRaf = 0;
+    const syncVisualViewport = () => {
+      _vvRaf = 0;
+      document.documentElement.style.setProperty('--app-vh', vv.height + 'px');
+    };
+    const queueVisualViewportSync = () => {
+      if (_vvRaf) return;
+      _vvRaf = requestAnimationFrame(syncVisualViewport);
+    };
+    vv.addEventListener('resize', queueVisualViewportSync);
+    vv.addEventListener('scroll', queueVisualViewportSync);
+    syncVisualViewport();
+  }
+
   const STICKY_HEADER_HEIGHT_KEY = 'ccc-sticky-header-height';
   const STICKY_HEADER_MIN_PX = 90;
 

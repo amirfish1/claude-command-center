@@ -57,7 +57,12 @@
        by half a hair to match the Omnara-style density. */
     letter-spacing: -0.005em;
     background: var(--bg); color: var(--text);
-    display: flex; height: 100vh; overflow: hidden;
+    /* `--app-vh` is set from `visualViewport.height` on touch devices so the
+       fixed app shell tracks the *visual* viewport — when the iOS keyboard
+       opens, the shell shrinks and the bottom composer stays visible above
+       it. Desktop and non-touch devices never set the var and fall back to
+       `100vh`. */
+    display: flex; height: var(--app-vh, 100vh); overflow: hidden;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
@@ -3155,6 +3160,24 @@
     overflow-y: auto;
     min-height: 24px;
     max-height: 240px;
+  }
+  /* Native-app typing on touch devices. iOS Safari/WKWebView auto-zoom the
+     page whenever a focused input renders below 16px — the single biggest
+     "this is a web page" tell. Bump the composers to 16px on coarse
+     pointers only (desktop keeps the denser 15px) and pad the bottom past
+     the home indicator so the bar clears it in standalone PWA mode. */
+  @media (pointer: coarse) {
+    .conv-input-bar input,
+    .conv-input-bar textarea,
+    #cpInput {
+      font-size: 16px;
+    }
+    .conv-input-bar {
+      padding-bottom: max(14px, env(safe-area-inset-bottom));
+    }
+    .conv-panel-input {
+      padding-bottom: max(0px, env(safe-area-inset-bottom));
+    }
   }
   .conv-pane.has-conv-bg .conv-input-bar input,
   .conv-pane.has-conv-bg .conv-input-bar textarea {
