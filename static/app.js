@@ -226,10 +226,57 @@
     })();
     window.__refreshPollerStrip = _refreshStripState;
   }
+  // ── Frame-health / jank monitor (engine-agnostic) ───────────────────────
+  // requestAnimationFrame runs in every engine including WKWebView (where the
+  // Mac app has NO devtools), so this quantifies real jank with zero server or
+  // console dependency. Tracks the worst frame interval over a rolling window
+  // and shows it in the footer: ~16ms = 60fps; sustained >50ms means something
+  // is repainting/reflowing too much. Tags each long frame with whether a text
+  // field was focused, so we can tell typing-jank from idle-jank — exactly the
+  // app-vs-Chrome question we can't answer without devtools.
+  function _initFrameMonitor() {
+    const footer = document.querySelector('.sidebar-footer');
+    if (!footer) { setTimeout(_initFrameMonitor, 400); return; }
+    if (document.getElementById('frameHealth')) return;
+    const el = document.createElement('div');
+    el.id = 'frameHealth';
+    el.style.cssText = 'flex:0 0 auto;font:600 10px/1 ui-monospace,Menlo,monospace;' +
+      'color:var(--text-secondary,#9aa);padding:2px 6px;border-radius:5px;white-space:nowrap;cursor:default;';
+    footer.insertBefore(el, footer.lastElementChild);
+    const _isTyping = () => {
+      const ae = document.activeElement;
+      return !!ae && (ae.tagName === 'TEXTAREA' || (ae.tagName === 'INPUT' &&
+        /^(text|search|email|url|tel|password)$/i.test(ae.type || 'text')));
+    };
+    let last = 0, worst = 0, longFrames = 0, worstTyping = false;
+    function _frame(t) {
+      if (last) {
+        const dt = t - last;
+        if (dt > worst) { worst = dt; worstTyping = _isTyping(); }
+        if (dt > 50) {
+          longFrames++;
+          if (dt > 120) _clientLog('[FRAME] ' + Math.round(dt) + 'ms ' + (_isTyping() ? '(typing)' : '(idle)'));
+        }
+      }
+      last = t;
+      requestAnimationFrame(_frame);
+    }
+    requestAnimationFrame(_frame);
+    (function _report() {
+      const w = Math.round(worst);
+      el.textContent = '▢ ' + w + 'ms';
+      el.style.color = w >= 100 ? '#f85149' : (w >= 50 ? '#d29922' : '#3fb950');
+      el.title = 'Worst frame over last ~1.5s: ' + w + 'ms' + (worstTyping ? ' (while typing)' : '') +
+        ' · long frames(>50ms): ' + longFrames + '\n~16ms = 60fps. Amber = sluggish, red = jank.';
+      worst = 0; longFrames = 0; worstTyping = false;
+      setTimeout(_report, 1500);
+    })();
+  }
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', _initPollerStrip);
+    document.addEventListener('DOMContentLoaded', () => { _initPollerStrip(); _initFrameMonitor(); });
   } else {
     _initPollerStrip();
+    _initFrameMonitor();
   }
 
   // Back to the foreground → refresh the paused background pollers once rather

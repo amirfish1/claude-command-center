@@ -1,0 +1,1 @@
+Added an engine-agnostic frame-health readout to the footer: shows the worst frame interval over the last ~1.5s (green ~16ms / amber / red), so jank is visible in the Mac app where there's no devtools console. Long frames are tagged typing vs idle to localize the cause.
