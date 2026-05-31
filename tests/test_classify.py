@@ -22,6 +22,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -725,7 +726,8 @@ class TestCodexConversationAdapter(unittest.TestCase):
                     first_user_message TEXT NOT NULL DEFAULT '',
                     model TEXT,
                     reasoning_effort TEXT,
-                    git_branch TEXT
+                    git_branch TEXT,
+                    thread_source TEXT
                 )
                 """
             )
@@ -806,6 +808,62 @@ class TestCodexConversationAdapter(unittest.TestCase):
             sys.modules.pop(mod, None)
         shutil.rmtree(cls.tmp_home, ignore_errors=True)
 
+    def _set_codex_thread_source(self, session_id, thread_source):
+        db_path = Path(self.tmp_home) / ".codex" / "state_5.sqlite"
+        con = sqlite3.connect(db_path)
+        try:
+            con.execute(
+                "UPDATE threads SET thread_source = ? WHERE id = ?",
+                (thread_source, session_id),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    def _codex_thread_source(self, session_id):
+        db_path = Path(self.tmp_home) / ".codex" / "state_5.sqlite"
+        con = sqlite3.connect(db_path)
+        try:
+            row = con.execute(
+                "SELECT thread_source FROM threads WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            return row[0] if row else None
+        finally:
+            con.close()
+
+    def _set_codex_source(self, session_id, source):
+        db_path = Path(self.tmp_home) / ".codex" / "state_5.sqlite"
+        con = sqlite3.connect(db_path)
+        try:
+            con.execute(
+                "UPDATE threads SET source = ? WHERE id = ?",
+                (source, session_id),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    def _codex_source(self, session_id):
+        db_path = Path(self.tmp_home) / ".codex" / "state_5.sqlite"
+        con = sqlite3.connect(db_path)
+        try:
+            row = con.execute(
+                "SELECT source FROM threads WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            return row[0] if row else None
+        finally:
+            con.close()
+
+    def _codex_rollout_meta(self):
+        with self.rollout.open(encoding="utf-8") as fh:
+            for line in fh:
+                obj = json.loads(line)
+                if obj.get("type") == "session_meta":
+                    return obj.get("payload") or {}
+        return {}
+
     def test_codex_thread_is_discovered_as_session_card(self):
         cards = self.server.find_codex_conversations(str(self.fake_repo))
         card = next(c for c in cards if c["session_id"] == CODEX_SESSION_ID)
@@ -825,6 +883,203 @@ class TestCodexConversationAdapter(unittest.TestCase):
         self.assertEqual(card["folder_path"], str(self.fake_repo))
         self.assertEqual(card["session_cwd"], str(self.fake_worktree))
         self.assertTrue(card["session_cwd_is_worktree"])
+
+    def test_codex_visibility_stamp_marks_exec_thread_as_user(self):
+        self._set_codex_thread_source(CODEX_SESSION_ID, None)
+        self._set_codex_source(CODEX_SESSION_ID, "exec")
+
+        result = self.server._mark_codex_thread_user_visible(CODEX_SESSION_ID)
+
+        self.assertTrue(result)
+        self.assertEqual(self._codex_thread_source(CODEX_SESSION_ID), "user")
+        self.assertEqual(self._codex_source(CODEX_SESSION_ID), "vscode")
+        meta = self._codex_rollout_meta()
+        self.assertEqual(meta.get("thread_source"), "user")
+        self.assertEqual(meta.get("source"), "vscode")
+
+    def test_codex_visibility_stamp_repairs_user_exec_thread(self):
+        self._set_codex_thread_source(CODEX_SESSION_ID, "user")
+        self._set_codex_source(CODEX_SESSION_ID, "exec")
+
+        result = self.server._mark_codex_thread_user_visible(CODEX_SESSION_ID)
+
+        self.assertTrue(result)
+        self.assertEqual(self._codex_thread_source(CODEX_SESSION_ID), "user")
+        self.assertEqual(self._codex_source(CODEX_SESSION_ID), "vscode")
+
+    def test_codex_spawn_id_resolution_marks_thread_user_visible(self):
+        self._set_codex_thread_source(CODEX_SESSION_ID, None)
+        self._set_codex_source(CODEX_SESSION_ID, "exec")
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "type": "thread.started",
+                "thread_id": CODEX_SESSION_ID,
+            }) + "\n")
+            fh.flush()
+            entry = {
+                "engine": "codex",
+                "pid": 9090,
+                "log": fh.name,
+            }
+            with mock.patch.object(
+                self.server,
+                "_update_spawn_session_id_in_registry",
+            ) as update_registry:
+                sid = self.server._spawn_session_id_from_entry(entry)
+
+        self.assertEqual(sid, CODEX_SESSION_ID)
+        self.assertEqual(entry["session_id"], CODEX_SESSION_ID)
+        self.assertEqual(self._codex_thread_source(CODEX_SESSION_ID), "user")
+        self.assertEqual(self._codex_source(CODEX_SESSION_ID), "vscode")
+        update_registry.assert_called_once_with(9090, CODEX_SESSION_ID)
+
+    def test_codex_sidebar_backfill_marks_recent_ccc_logs_only(self):
+        self._set_codex_thread_source(CODEX_SESSION_ID, None)
+        self._set_codex_thread_source(CODEX_TRAILER_SESSION_ID, None)
+        self._set_codex_source(CODEX_SESSION_ID, "exec")
+        self._set_codex_source(CODEX_TRAILER_SESSION_ID, "exec")
+        log_dir = self.fake_repo / ".claude" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "spawn-codex-readme-20260502T000000.log"
+        log_path.write_text(
+            json.dumps({
+                "type": "thread.started",
+                "thread_id": CODEX_SESSION_ID,
+            }) + "\n",
+            encoding="utf-8",
+        )
+        now = time.time()
+        os.utime(log_path, (now, now))
+
+        with mock.patch.object(
+            self.server,
+            "_append_codex_sidebar_project_roots",
+            return_value=0,
+        ):
+            result = self.server.backfill_codex_sidebar_visibility(
+                days=7,
+                repo_paths=[str(self.fake_repo)],
+                now=now,
+            )
+
+        self.assertEqual(result["found"], 1)
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(self._codex_thread_source(CODEX_SESSION_ID), "user")
+        self.assertEqual(self._codex_source(CODEX_SESSION_ID), "vscode")
+        self.assertIsNone(self._codex_thread_source(CODEX_TRAILER_SESSION_ID))
+        self.assertEqual(self._codex_source(CODEX_TRAILER_SESSION_ID), "exec")
+
+    def test_codex_sidebar_backfill_scans_recent_codex_cwds(self):
+        self._set_codex_thread_source(CODEX_SESSION_ID, None)
+        self._set_codex_source(CODEX_SESSION_ID, "exec")
+        log_dir = self.fake_repo / ".claude" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "spawn-codex-cwd-derived-20260502T000000.log"
+        log_path.write_text(
+            json.dumps({
+                "type": "thread.started",
+                "thread_id": CODEX_SESSION_ID,
+            }) + "\n",
+            encoding="utf-8",
+        )
+        now = 1777680100
+        os.utime(log_path, (now, now))
+
+        with mock.patch.object(self.server, "_known_repo_paths", return_value=[]), \
+             mock.patch.object(
+                 self.server,
+                 "_append_codex_sidebar_project_roots",
+                 return_value=0,
+             ):
+            result = self.server.backfill_codex_sidebar_visibility(days=7, now=now)
+
+        self.assertEqual(result["found"], 1)
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(self._codex_thread_source(CODEX_SESSION_ID), "user")
+        self.assertEqual(self._codex_source(CODEX_SESSION_ID), "vscode")
+
+    def test_codex_sidebar_backfill_adds_project_roots(self):
+        self._set_codex_thread_source(CODEX_SESSION_ID, None)
+        self._set_codex_source(CODEX_SESSION_ID, "exec")
+        log_dir = self.fake_repo / ".claude" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "spawn-codex-project-root-20260502T000000.log"
+        log_path.write_text(
+            json.dumps({
+                "type": "thread.started",
+                "thread_id": CODEX_SESSION_ID,
+            }) + "\n",
+            encoding="utf-8",
+        )
+        now = time.time()
+        os.utime(log_path, (now, now))
+
+        with mock.patch.object(
+            self.server,
+            "_append_codex_sidebar_project_roots",
+            return_value=1,
+        ) as add_projects:
+            result = self.server.backfill_codex_sidebar_visibility(
+                days=7,
+                repo_paths=[str(self.fake_repo)],
+                now=now,
+            )
+
+        self.assertEqual(result["projects_added"], 1)
+        add_projects.assert_called_once_with([str(self.fake_repo)])
+
+    def test_codex_sidebar_project_roots_write_offline_state(self):
+        state_path = Path(self.tmp_home) / ".codex" / ".codex-global-state.json"
+        state_path.write_text(
+            json.dumps({
+                "electron-saved-workspace-roots": [str(self.fake_worktree)],
+                "project-order": [str(self.fake_worktree)],
+                "active-workspace-roots": [str(self.fake_worktree)],
+            }),
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(
+            self.server,
+            "_codex_desktop_app_is_running",
+            return_value=False,
+        ):
+            added = self.server._append_codex_sidebar_project_roots([str(self.fake_repo)])
+
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(added, 1)
+        self.assertEqual(data["electron-saved-workspace-roots"][0], str(self.fake_repo))
+        self.assertEqual(data["project-order"][0], str(self.fake_repo))
+
+    def test_codex_sidebar_project_roots_use_deeplink_when_running(self):
+        state_path = Path(self.tmp_home) / ".codex" / ".codex-global-state.json"
+        state_path.write_text(
+            json.dumps({
+                "electron-saved-workspace-roots": [],
+                "project-order": [],
+                "active-workspace-roots": [str(self.fake_worktree)],
+            }),
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(
+            self.server,
+            "_codex_desktop_app_is_running",
+            return_value=True,
+        ), mock.patch.object(
+            self.server,
+            "_open_codex_workspace_root_deeplink",
+            return_value=True,
+        ) as open_link, mock.patch.object(
+            self.server,
+            "_wait_for_codex_workspace_roots",
+            return_value={str(self.fake_repo)},
+        ):
+            added = self.server._append_codex_sidebar_project_roots([str(self.fake_repo)])
+
+        self.assertEqual(added, 1)
+        open_link.assert_any_call(str(self.fake_repo))
+        open_link.assert_any_call(str(self.fake_worktree))
 
     def test_codex_session_state_instruction_is_not_title_text(self):
         cards = self.server.find_codex_conversations(str(self.fake_repo))

@@ -1,0 +1,1 @@
+- Mark CCC-spawned Codex exec threads and their repos as Codex-IDE-visible in Codex's local stores and rollout metadata, including a bounded recent-log backfill, so they appear in the Codex app sidebar.

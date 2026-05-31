@@ -11484,6 +11484,146 @@ def _codex_state_db_candidates():
     return [p for p in candidates if p.is_file()]
 
 
+def _jsonl_line_ending(line):
+    if line.endswith("\r\n"):
+        return "\r\n"
+    if line.endswith("\n"):
+        return "\n"
+    return ""
+
+
+def _mark_codex_rollout_user_visible(thread_id, rollout_path):
+    sid = str(thread_id or "").strip()
+    if not sid or not rollout_path:
+        return False
+    try:
+        path = Path(rollout_path).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    if not path.is_file():
+        return False
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    except OSError:
+        return False
+
+    changed = False
+    for idx, line in enumerate(lines):
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("type") != "session_meta":
+            continue
+        payload = obj.get("payload")
+        if not isinstance(payload, dict):
+            return False
+        meta_id = str(payload.get("id") or "").strip()
+        if meta_id and meta_id != sid:
+            return False
+        source = payload.get("source")
+        thread_source = payload.get("thread_source")
+        if source and source not in ("exec", "cli", "vscode"):
+            return False
+        if thread_source and thread_source != "user":
+            return False
+        if source != "vscode":
+            payload["source"] = "vscode"
+            changed = True
+        if thread_source != "user":
+            payload["thread_source"] = "user"
+            changed = True
+        if not changed:
+            return True
+        ending = _jsonl_line_ending(line)
+        lines[idx] = json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + ending
+        break
+    else:
+        return False
+
+    try:
+        tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+        tmp.write_text("".join(lines), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    return True
+
+
+def _mark_codex_thread_user_visible(thread_id, update_rollout=True):
+    """Mark a CCC-created Codex exec thread as visible in Codex.app.
+
+    Codex Desktop starts sidebar-visible threads with `thread_source='user'`.
+    Its sidebar also treats IDE-originated rows as `source='vscode'`; plain
+    `codex exec` rows can otherwise stay hidden. Codex can rebuild SQLite from
+    the rollout JSONL, so we patch the rollout metadata when it is safe too.
+    """
+    sid = str(thread_id or "").strip()
+    if not sid:
+        return False
+    for db in _codex_state_db_candidates():
+        con = None
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=rw", uri=True, timeout=0.25)
+            cols = {
+                row[1]
+                for row in con.execute("PRAGMA table_info(threads)").fetchall()
+            }
+            if "id" not in cols or "thread_source" not in cols:
+                continue
+            selected = ["thread_source"]
+            if "source" in cols:
+                selected.append("source")
+            if "rollout_path" in cols:
+                selected.append("rollout_path")
+            row = con.execute(
+                f"SELECT {', '.join(selected)} FROM threads WHERE id = ?",
+                (sid,),
+            ).fetchone()
+            if not row:
+                continue
+            values_by_col = dict(zip(selected, row))
+            current = values_by_col.get("thread_source")
+            source = values_by_col.get("source", "vscode")
+            if current and current != "user":
+                return False
+            if source and source not in ("exec", "cli", "vscode"):
+                return False
+            if update_rollout:
+                _mark_codex_rollout_user_visible(
+                    sid,
+                    values_by_col.get("rollout_path"),
+                )
+            assignments = []
+            values = []
+            if current != "user":
+                assignments.append("thread_source = ?")
+                values.append("user")
+            if "source" in cols and source != "vscode":
+                assignments.append("source = ?")
+                values.append("vscode")
+            if assignments:
+                values.append(sid)
+                con.execute(
+                    f"UPDATE threads SET {', '.join(assignments)} WHERE id = ?",
+                    tuple(values),
+                )
+                con.commit()
+            return True
+        except sqlite3.Error:
+            continue
+        finally:
+            if con is not None:
+                try:
+                    con.close()
+                except sqlite3.Error:
+                    pass
+    return False
+
+
 def _codex_fetch_threads(where="", params=(), limit=None):
     """Read rows from Codex's local thread index without creating files.
 
@@ -11511,6 +11651,7 @@ def _codex_fetch_threads(where="", params=(), limit=None):
                 "archived_at", "git_sha", "git_branch", "git_origin_url",
                 "cli_version", "first_user_message", "agent_nickname",
                 "agent_role", "memory_mode", "model", "reasoning_effort",
+                "thread_source",
             ]
             selected = [c for c in wanted if c in cols]
             if "id" not in selected:
@@ -11971,6 +12112,416 @@ def _extract_codex_thread_id_from_log(log_path):
     return None
 
 
+def _codex_sidebar_backfill_window_days():
+    raw = os.environ.get("CCC_CODEX_SIDEBAR_BACKFILL_DAYS", "7")
+    try:
+        days = float(raw)
+    except (TypeError, ValueError):
+        days = 7.0
+    return days if days > 0 else 7.0
+
+
+def _codex_registry_entry_epoch(entry):
+    raw = (entry or {}).get("spawned_at") or (entry or {}).get("started")
+    if not raw:
+        return 0.0
+    text = str(raw).strip()
+    try:
+        return datetime.strptime(text, "%Y%m%dT%H%M%S").timestamp()
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _recent_codex_thread_repo_paths(days=None, now=None, limit=1000):
+    if days is None:
+        days = _codex_sidebar_backfill_window_days()
+    try:
+        now = float(now if now is not None else time.time())
+    except (TypeError, ValueError):
+        now = time.time()
+    cutoff = now - (float(days) * 86400.0)
+    out = []
+    rows = _codex_fetch_threads(limit=limit)
+    for row in rows:
+        ts = _codex_ts_seconds(row, "updated") or _codex_ts_seconds(row, "created")
+        if ts and ts < cutoff:
+            break
+        cwd = row.get("cwd") or ""
+        if not cwd:
+            continue
+        try:
+            repo = (
+                _git_toplevel_for_existing_dir(cwd)
+                or _nearest_marked_repo_dir(cwd)
+                or str(Path(cwd).expanduser().resolve())
+            )
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if repo:
+            out.append(repo)
+    return out
+
+
+def _recent_codex_ccc_log_paths(repo_paths=None, days=None, now=None, max_logs=2000):
+    """Recent CCC Codex spawn/resume logs, bounded to known repos."""
+    if days is None:
+        days = _codex_sidebar_backfill_window_days()
+    try:
+        max_logs = max(1, int(max_logs or 2000))
+    except (TypeError, ValueError):
+        max_logs = 2000
+    try:
+        now = float(now if now is not None else time.time())
+    except (TypeError, ValueError):
+        now = time.time()
+    cutoff = now - (float(days) * 86400.0)
+    raw_paths = []
+    try:
+        for entry in _load_spawn_registry():
+            if entry.get("engine") == "codex" and entry.get("log"):
+                raw_paths.append(entry.get("log"))
+    except Exception:
+        pass
+    if repo_paths is None:
+        try:
+            repo_paths = [
+                *_known_repo_paths(),
+                *_recent_codex_thread_repo_paths(days=days, now=now),
+            ]
+        except Exception:
+            repo_paths = []
+    for repo_path in repo_paths or []:
+        try:
+            log_dir = repo_log_dir(repo_path)
+        except Exception:
+            continue
+        if not log_dir.is_dir():
+            continue
+        for pattern in ("spawn-codex-*.log", "resume-codex-*.log"):
+            try:
+                raw_paths.extend(log_dir.glob(pattern))
+            except OSError:
+                continue
+
+    seen = set()
+    recent = []
+    for raw in raw_paths:
+        try:
+            p = Path(raw).expanduser().resolve()
+            key = str(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            st = p.stat()
+        except (OSError, ValueError, RuntimeError):
+            continue
+        if st.st_mtime < cutoff:
+            continue
+        recent.append((st.st_mtime, p))
+    recent.sort(key=lambda item: item[0], reverse=True)
+    return [p for _, p in recent[:max_logs]]
+
+
+def _codex_sidebar_project_root_for_thread(row):
+    cwd = (row or {}).get("cwd") or ""
+    if not cwd:
+        return None
+    try:
+        root = (
+            _git_toplevel_for_existing_dir(cwd)
+            or _nearest_marked_repo_dir(cwd)
+            or str(Path(cwd).expanduser().resolve())
+        )
+    except (OSError, RuntimeError, ValueError):
+        return None
+    try:
+        p = Path(root).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return str(p) if p.is_dir() else None
+
+
+def _codex_sidebar_project_roots_from_values(repo_paths):
+    roots = []
+    seen = set()
+    for repo in repo_paths or []:
+        try:
+            root = str(Path(repo).expanduser().resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if root in seen or not Path(root).is_dir():
+            continue
+        seen.add(root)
+        roots.append(root)
+    return roots
+
+
+def _codex_global_state_path():
+    return Path.home() / ".codex" / ".codex-global-state.json"
+
+
+def _read_codex_global_state():
+    try:
+        data = json.loads(_codex_global_state_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _codex_global_state_string_list(data, key):
+    values = (data or {}).get(key)
+    if not isinstance(values, list):
+        return []
+    return [str(x) for x in values if isinstance(x, str) and x.strip()]
+
+
+def _codex_saved_workspace_roots():
+    return _codex_global_state_string_list(
+        _read_codex_global_state(),
+        "electron-saved-workspace-roots",
+    )
+
+
+def _codex_desktop_app_is_running():
+    if platform.system() != "Darwin":
+        return False
+    try:
+        proc = subprocess.run(
+            ["ps", "-axo", "command"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if proc.returncode != 0:
+        return False
+    for line in proc.stdout.splitlines():
+        if ".app/Contents/MacOS/Codex" in line:
+            return True
+    return False
+
+
+def _open_codex_workspace_root_deeplink(root):
+    if platform.system() != "Darwin" or not shutil.which("open"):
+        return False
+    url = "codex://new?path=" + urllib.parse.quote(str(root), safe="")
+    try:
+        proc = subprocess.run(
+            ["open", url],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def _wait_for_codex_workspace_roots(roots, timeout_s=2.0):
+    wanted = set(roots or [])
+    if not wanted:
+        return set()
+    deadline = time.monotonic() + max(0.0, float(timeout_s or 0))
+    present = set(_codex_saved_workspace_roots())
+    while not wanted.issubset(present) and time.monotonic() < deadline:
+        time.sleep(0.1)
+        present = set(_codex_saved_workspace_roots())
+    return present
+
+
+def _register_codex_sidebar_project_roots_live(roots):
+    current = set(_codex_saved_workspace_roots())
+    missing = [root for root in roots if root not in current]
+    if not missing:
+        return 0
+    data = _read_codex_global_state() or {}
+    active_roots = _codex_global_state_string_list(data, "active-workspace-roots")
+    for root in missing:
+        _open_codex_workspace_root_deeplink(root)
+    if active_roots:
+        active = active_roots[0]
+        try:
+            if Path(active).expanduser().is_dir():
+                _open_codex_workspace_root_deeplink(active)
+        except (OSError, RuntimeError, ValueError):
+            pass
+    present = _wait_for_codex_workspace_roots(missing)
+    return sum(1 for root in missing if root in present)
+
+
+def _append_codex_project_roots_to_global_state(roots):
+    state_path = _codex_global_state_path()
+    data = _read_codex_global_state()
+    if data is None:
+        return 0
+
+    saved_before = set(_codex_global_state_string_list(
+        data,
+        "electron-saved-workspace-roots",
+    ))
+    changed = False
+    for key in ("electron-saved-workspace-roots", "project-order"):
+        current = _codex_global_state_string_list(data, key)
+        present = set(current)
+        added = [root for root in roots if root not in present]
+        if not added:
+            data[key] = current
+            continue
+        data[key] = added + current
+        changed = True
+
+    if not changed:
+        return 0
+    try:
+        tmp = state_path.with_name(f"{state_path.name}.tmp-{os.getpid()}")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp, state_path)
+    except OSError:
+        return 0
+    saved_after = set(_codex_saved_workspace_roots())
+    return sum(1 for root in roots if root not in saved_before and root in saved_after)
+
+
+def _append_codex_sidebar_project_roots(repo_paths):
+    """Add CCC-proven Codex repos to Codex Desktop's project sidebar state."""
+    roots = _codex_sidebar_project_roots_from_values(repo_paths)
+    if not roots:
+        return 0
+    if _read_codex_global_state() is None:
+        return 0
+
+    if _codex_desktop_app_is_running():
+        return _register_codex_sidebar_project_roots_live(roots)
+    return _append_codex_project_roots_to_global_state(roots)
+
+
+def backfill_codex_sidebar_visibility(days=None, repo_paths=None, now=None, max_logs=2000):
+    """Mark recent CCC-spawned Codex threads as Codex Desktop sidebar-visible."""
+    if days is None:
+        days = _codex_sidebar_backfill_window_days()
+    try:
+        now = float(now if now is not None else time.time())
+    except (TypeError, ValueError):
+        now = time.time()
+    cutoff = now - (float(days) * 86400.0)
+    ids = []
+    seen_ids = set()
+
+    def add_sid(sid):
+        sid = str(sid or "").strip()
+        if sid and sid not in seen_ids:
+            seen_ids.add(sid)
+            ids.append(sid)
+
+    log_paths = _recent_codex_ccc_log_paths(
+        repo_paths=repo_paths,
+        days=days,
+        now=now,
+        max_logs=max_logs,
+    )
+    for path in log_paths:
+        add_sid(_extract_codex_thread_id_from_log(path))
+
+    try:
+        registry_entries = _load_spawn_registry()
+    except Exception:
+        registry_entries = []
+    for entry in registry_entries:
+        if entry.get("engine") != "codex":
+            continue
+        entry_epoch = _codex_registry_entry_epoch(entry)
+        if entry_epoch and entry_epoch < cutoff:
+            continue
+        log_path = entry.get("log")
+        if log_path and not entry_epoch:
+            try:
+                if Path(log_path).expanduser().stat().st_mtime < cutoff:
+                    continue
+            except OSError:
+                continue
+        if not entry_epoch and not log_path:
+            continue
+        add_sid(entry.get("session_id") or entry.get("resumed_sid"))
+        if log_path:
+            add_sid(_extract_codex_thread_id_from_log(log_path))
+
+    updated = 0
+    already_visible = 0
+    skipped = 0
+    project_roots = []
+    for sid in ids:
+        before_row = _codex_thread_row(sid) or {}
+        ok = _mark_codex_thread_user_visible(sid)
+        after_row = _codex_thread_row(sid) or {}
+        root = _codex_sidebar_project_root_for_thread(after_row)
+        if root:
+            project_roots.append(root)
+        after_thread_source = after_row.get("thread_source")
+        after_source = after_row.get("source")
+        if ok and after_thread_source == "user" and (after_source in (None, "vscode")):
+            if (
+                before_row.get("thread_source") == "user"
+                and before_row.get("source") in (None, "vscode")
+            ):
+                already_visible += 1
+            else:
+                updated += 1
+        else:
+            skipped += 1
+    projects_added = _append_codex_sidebar_project_roots(project_roots)
+    return {
+        "ok": True,
+        "days": days,
+        "scanned_logs": len(log_paths),
+        "found": len(ids),
+        "updated": updated,
+        "already_visible": already_visible,
+        "skipped": skipped,
+        "projects_added": projects_added,
+    }
+
+
+def _codex_sidebar_visibility_backfill_once():
+    try:
+        result = backfill_codex_sidebar_visibility()
+    except Exception as e:
+        print(f"  [codex-sidebar] backfill skipped ({e})")
+        return
+    if result.get("updated"):
+        print(
+            "  [codex-sidebar] marked "
+            f"{result['updated']} recent CCC Codex thread(s) as IDE-visible"
+        )
+    if result.get("projects_added"):
+        print(
+            "  [codex-sidebar] registered "
+            f"{result['projects_added']} recent CCC Codex project(s) with Codex Desktop"
+        )
+
+
+def _register_codex_sidebar_project_for_spawn_entry(entry, sid=None):
+    if not isinstance(entry, dict):
+        return 0
+    root = None
+    for key in ("repo_path", "cwd"):
+        root = _codex_sidebar_project_root_for_thread({"cwd": entry.get(key) or ""})
+        if root:
+            break
+    if not root and sid:
+        root = _codex_sidebar_project_root_for_thread(_codex_thread_row(sid))
+    if not root:
+        return 0
+    return _append_codex_sidebar_project_roots([root])
+
+
 def _codex_spawn_pid_by_thread_id():
     out = {}
     for s in _spawned_sessions:
@@ -11978,14 +12529,16 @@ def _codex_spawn_pid_by_thread_id():
             continue
         sid = s.get("session_id") or s.get("resumed_sid") or _extract_codex_thread_id_from_log(s.get("log"))
         if sid:
+            try:
+                alive = _poll_spawn_entry(s) is None
+            except Exception:
+                alive = False
+            _mark_codex_thread_user_visible(sid, update_rollout=not alive)
+            _register_codex_sidebar_project_for_spawn_entry(s, sid)
             if not s.get("session_id"):
                 s["session_id"] = sid
                 _update_spawn_session_id_in_registry(s.get("pid"), sid)
             if sid not in out:
-                try:
-                    alive = _poll_spawn_entry(s) is None
-                except Exception:
-                    alive = False
                 out[sid] = {
                     "pid": s.get("pid"),
                     "alive": alive,
@@ -16738,6 +17291,9 @@ def _spawn_session_id_from_entry(entry):
         return None
     sid = entry.get("session_id") or entry.get("resumed_sid")
     if sid:
+        if entry.get("engine") == "codex":
+            _mark_codex_thread_user_visible(sid, update_rollout=False)
+            _register_codex_sidebar_project_for_spawn_entry(entry, sid)
         return sid
     log = entry.get("log")
     engine = entry.get("engine") or "claude"
@@ -16757,6 +17313,9 @@ def _spawn_session_id_from_entry(entry):
     if sid:
         entry["session_id"] = sid
         _update_spawn_session_id_in_registry(entry.get("pid"), sid)
+        if engine == "codex":
+            _mark_codex_thread_user_visible(sid, update_rollout=False)
+            _register_codex_sidebar_project_for_spawn_entry(entry, sid)
     return sid
 
 
@@ -29812,6 +30371,11 @@ def main():
     ensure_hooks_installed()
     install_orchestration_skill()
     _reattach_spawned_orphans()
+    threading.Thread(
+        target=_codex_sidebar_visibility_backfill_once,
+        daemon=True,
+        name="ccc-codex-sidebar-backfill",
+    ).start()
     _load_conv_meta_cache()
     try:
         _SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
