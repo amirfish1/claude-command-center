@@ -3140,6 +3140,16 @@
     caret-color: currentColor;
     font-size: 15px; font-weight: 500; font-family: inherit;
   }
+  /* Native auto-grow for the composer. field-sizing lets the browser size the
+     textarea to its content with zero JS — no per-keystroke style.height='auto'
+     + scrollHeight read, which on a large DOM forces a synchronous reflow that
+     is cheap in Blink but ~45-86ms in WebKit (the Mac app), making typing lag.
+     The JS autosize (_autosizeConvInput) feature-detects this and no-ops when
+     supported (WebKit 17.4+/Chrome 123+), falling back to JS otherwise. */
+  .conv-input-bar textarea {
+    field-sizing: content;
+    max-height: 240px;
+  }
   /* Belt-and-braces accent caret on focus — also helps in WKWebView
      where the default ~1px caret over the dark bar can be lost. */
   .conv-input-bar input:focus,

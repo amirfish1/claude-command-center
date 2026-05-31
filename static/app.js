@@ -3152,8 +3152,15 @@
   // Textarea autosize: grow up to ~10 rows then scroll. Reset to one row
   // on every input so deletions shrink the box too. Mirrors Omnara's
   // behavior — typing more than one line expands the composer in place.
+  // Browsers with CSS field-sizing (WebKit 17.4+, Chrome 123+) auto-grow the
+  // textarea natively — no JS reflow needed. Detect once; when supported, the
+  // autosize below is a no-op (the CSS `field-sizing: content` handles it),
+  // eliminating the per-keystroke forced reflow that lags typing in WebKit.
+  const _hasFieldSizing = (typeof CSS !== 'undefined' && CSS.supports &&
+    (CSS.supports('field-sizing', 'content') || CSS.supports('field-sizing: content')));
   let _autosizeRaf = 0;
   function _autosizeConvInput() {
+    if (_hasFieldSizing) return;
     if (!$convInput || $convInput.tagName !== 'TEXTAREA') return;
     // Deferred to the next animation frame. The 'auto' write + scrollHeight
     // read is a forced synchronous reflow; doing it inline on every keystroke
