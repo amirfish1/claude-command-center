@@ -262,6 +262,7 @@
         /^(text|search|email|url|tel|password)$/i.test(ae.type || 'text')));
     };
     let last = 0, worst = 0, longFrames = 0, worstTyping = false;
+    let _fmRunning = false, _lastActivity = 0;
     function _frame(t) {
       if (last) {
         const dt = t - last;
@@ -272,9 +273,24 @@
         }
       }
       last = t;
-      requestAnimationFrame(_frame);
+      // Keep sampling ONLY while the user is interacting. When idle, stop the
+      // loop — otherwise this probe's own rAF forces continuous render/paint
+      // every frame, which pegs CPU in WebKit (the observer effect we chased).
+      // Resumes on the next input/scroll via _fmPing. Measurement now focuses
+      // on interaction, where jank actually matters.
+      if (performance.now() - _lastActivity < 1500) {
+        requestAnimationFrame(_frame);
+      } else {
+        _fmRunning = false; last = 0;
+      }
     }
-    requestAnimationFrame(_frame);
+    function _fmPing() {
+      _lastActivity = performance.now();
+      if (!_fmRunning) { _fmRunning = true; last = 0; requestAnimationFrame(_frame); }
+    }
+    ['keydown', 'pointerdown', 'pointermove', 'wheel', 'scroll'].forEach(function (ev) {
+      window.addEventListener(ev, _fmPing, { passive: true, capture: true });
+    });
     (function _report() {
       const w = Math.round(worst);
       const paused = document.documentElement.classList.contains('ccc-anim-off');

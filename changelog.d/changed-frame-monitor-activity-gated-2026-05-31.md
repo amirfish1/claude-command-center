@@ -1,0 +1,1 @@
+The footer frame-health probe now samples only during interaction (typing/scroll/pointer) and stops when idle, instead of running a requestAnimationFrame loop every frame forever. The perpetual loop was forcing continuous render/paint and pegging CPU in the Mac app's WebKit — an observer effect that inflated "idle" readings.
