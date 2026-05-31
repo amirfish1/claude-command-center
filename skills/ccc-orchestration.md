@@ -18,7 +18,7 @@ All operations (except List) use `curl -s -X POST "$CCC_URL<endpoint>" -H "Conte
 - **List (GET):** `/api/conversations`
   *Returns session list. Always check if a session for your topic exists before spawning!*
 - **Spawn:** `/api/sessions/spawn` 
-  *Payload:* `{"prompt": "...", "engine": "claude|codex|antigravity"}`. `engine` is optional and defaults to `claude`; legacy `gemini` maps to `antigravity`. Poll List to get the new `session_id`.
+  *Payload:* `{"prompt": "...", "engine": "claude|codex|antigravity", "model": "..."}`. `engine` and `model` are optional; when omitted, CCC uses the server-side defaults from **Settings → Spawn defaults…**. Legacy `gemini` maps to `antigravity`. Poll List to get the new `session_id`.
 - **Inject (Fire & Forget):** `/api/inject-input`
   *Payload:* `{"session_id": "<uuid>", "text": "..."}`. CCC detects the target session's engine.
 - **Ask (Sync/Wait):** `/api/ask`

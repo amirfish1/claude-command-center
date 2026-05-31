@@ -85,6 +85,51 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".claude/logs/*.stdin", args[1])
         self.assertIn("<session-state>", args[1])
 
+    def test_spawn_defaults_drive_omitted_spawn_engine_and_model(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server.SPAWN_DEFAULTS_FILE
+            server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
+            try:
+                with mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                    saved = server._save_spawn_defaults({
+                        "engine": "codex",
+                        "models": {
+                            "claude": "sonnet-4-6",
+                            "codex": "gpt-5-codex",
+                            "antigravity": "",
+                        },
+                    })
+                    self.assertTrue(saved["ok"])
+
+                    engine, model = server._spawn_request_engine_and_model({})
+                    self.assertEqual(engine, "codex")
+                    self.assertEqual(model, "gpt-5-codex")
+
+                    engine, model = server._spawn_request_engine_and_model({"engine": "claude"})
+                    self.assertEqual(engine, "claude")
+                    self.assertEqual(model, "sonnet-4-6")
+
+                    engine, model = server._spawn_request_engine_and_model({
+                        "engine": "claude",
+                        "model": "opus-4-7",
+                    })
+                    self.assertEqual(engine, "claude")
+                    self.assertEqual(model, "opus-4-7")
+
+                    engine, model = server._spawn_request_engine_and_model({"engine": "gemini"})
+                    self.assertEqual(engine, "antigravity")
+                    self.assertIsNone(model)
+
+                    engine, model = server._spawn_request_engine_and_model({"engine": "bogus"})
+                    self.assertIsNone(engine)
+                    self.assertIsNone(model)
+            finally:
+                server.SPAWN_DEFAULTS_FILE = old_file
+
     def test_morning_disabled_when_plugin_absent(self):
         """If morning.py isn't importable, MORNING_ENABLED must be False
         no matter what CCC_ENABLE_MORNING says."""

@@ -443,6 +443,7 @@
                the items get the .pop-item style via the menu wrapper. -->
           <div class="settings-menu-slot" id="settingsMenuSlot" data-role="settings-menu-slot"></div>
           <div class="pop-divider"></div>
+          <button class="pop-item" type="button" id="spawnDefaultsBtn"><span class="pop-icon">&#9673;</span><span>Spawn defaults…</span></button>
           <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
           <button class="pop-item" type="button" id="restartServerBtn"><span class="pop-icon">&#8635;</span><span id="restartServerLabel">Restart server</span></button>
           <a class="pop-item" href="https://github.com/amirfish1/claude-command-center#readme" target="_blank" rel="noopener"><span class="pop-icon">?</span><span>Get help</span></a>
@@ -646,7 +647,6 @@
                 <option value="claude">claude</option>
                 <option value="codex">codex</option>
                 <option value="antigravity">antigravity</option>
-                <option value="gemini">gemini</option>
               </select>
               <select id="convInputModelSelect" class="model-select" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
                 <!-- Populated dynamically via app.js -->
@@ -949,6 +949,42 @@
         <button type="button" class="upd-btn" id="bugReportCancelBtn">Cancel</button>
         <button type="button" class="upd-btn" id="bugReportCopyBtn" style="display:none;">Copy markdown</button>
         <button type="button" class="upd-btn upd-primary" id="bugReportSubmitBtn">Send report</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Spawn-defaults modal. These values are server-side so the New
+       session UI and ccc-orchestration use the same engine/model when a
+       caller does not pass explicit spawn choices. -->
+  <div id="spawnDefaultsModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="spawnDefaultsTitle">
+    <div class="upd-backdrop" id="spawnDefaultsBackdrop"></div>
+    <div class="upd-dialog" style="width:min(560px,94vw);">
+      <div class="upd-title" id="spawnDefaultsTitle">Spawn defaults</div>
+      <div class="upd-versions">
+        Used by New session and by ccc-orchestration when engine or model is omitted.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;">
+        <div>
+          <label class="bug-label" for="spawnDefaultsEngine">Default engine</label>
+          <select id="spawnDefaultsEngine" class="bug-input">
+            <option value="claude">Claude</option>
+            <option value="codex">Codex</option>
+            <option value="antigravity">Antigravity</option>
+          </select>
+        </div>
+        <div>
+          <label class="bug-label" for="spawnDefaultsModel">Default model</label>
+          <select id="spawnDefaultsModel" class="bug-input"></select>
+          <input id="spawnDefaultsOtherModel" class="bug-input" type="text" style="display:none;margin-top:8px;" placeholder="Model id or Antigravity label">
+          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
+            The New session model picker mirrors this value. Explicit API payloads still win.
+          </div>
+        </div>
+      </div>
+      <div class="upd-error" id="spawnDefaultsError"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="spawnDefaultsCancelBtn">Cancel</button>
+        <button type="button" class="upd-btn upd-primary" id="spawnDefaultsSaveBtn">Save</button>
       </div>
     </div>
   </div>
