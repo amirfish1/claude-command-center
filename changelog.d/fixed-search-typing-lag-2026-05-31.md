@@ -1,0 +1,1 @@
+Fixed laggy typing in the conversation search box. Each keystroke re-rendered the entire sidebar (filter + render over hundreds of rows, ~15ms) synchronously, delaying when the typed character painted. The local filter render is now debounced ~70ms, so fast typing stays responsive (measured ~15ms/keystroke → ~1-3ms) and the list filters once you pause.

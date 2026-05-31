@@ -18270,11 +18270,26 @@
   }
 
   // Conversation search filter
+  // Debounce the local filter re-render. Rendering the full sidebar
+  // (filterConversations + renderSidebar over hundreds of rows) costs ~15ms+
+  // synchronously, and doing it on every keystroke blocked the paint so typed
+  // characters appeared ~15ms late ("typing feels laggy"). Coalesce into one
+  // render ~70ms after the last keystroke — imperceptible on a pause, but
+  // keeps the input thread free while typing fast. setTimeout (not setInterval)
+  // is not muted-while-typing, so this still fires.
+  let _convSearchRenderTimer = null;
+  function _scheduleConvSearchRender() {
+    if (_convSearchRenderTimer) clearTimeout(_convSearchRenderTimer);
+    _convSearchRenderTimer = setTimeout(() => {
+      _convSearchRenderTimer = null;
+      renderSidebar(filterConversations($convSearch.value));
+    }, 70);
+  }
   $convSearch.addEventListener('input', () => {
     updateConversationSearchClear();
-    // Re-render immediately with the local filter — instant response,
-    // no waiting on the network.
-    renderSidebar(filterConversations($convSearch.value));
+    // Filter render is debounced (see _scheduleConvSearchRender) so fast typing
+    // doesn't block the paint; the input field itself updates natively/instantly.
+    _scheduleConvSearchRender();
     // OOBE: first-time search with no index → offer to build one. Only
     // fires when the user actually typed something (not on focus / clear).
     if ($convSearch.value.trim().length >= 2) {
