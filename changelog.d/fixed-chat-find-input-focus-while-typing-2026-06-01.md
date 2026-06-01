@@ -1,0 +1,1 @@
+Fixed Cmd+F find bar losing focus after the first typed character in the Mac app. `window.find()` was running on every key and moving focus into the transcript; find is now debounced until typing pauses, and focus stays in the find modal while it is open.

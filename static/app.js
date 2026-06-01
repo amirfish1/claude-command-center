@@ -26074,8 +26074,15 @@
     // WebKit focus shift. If selection was inside the input, also
     // collapse it to the caret so the user's next keystroke replaces
     // nothing.
+    const $chatFindModal = document.getElementById('chatFindModal');
+
+    function findModalIsOpen() {
+      return !!($chatFindModal && $chatFindModal.style.display !== 'none');
+    }
+
     function refocusFindInputAfterMatch() {
       const restore = () => {
+        if (!findModalIsOpen()) return;
         if (document.activeElement === $chatFindInput) return;
         try {
           const len = $chatFindInput.value.length;
@@ -26085,28 +26092,28 @@
       };
       // WebKit moves focus to the matched element on a later tick than
       // rAF — likely after the layout-commit phase. Stack three restore
-      // attempts so we catch whichever frame the focus shift lands on:
-      //   queueMicrotask : immediate-next task (catches sync moves)
-      //   requestAnimationFrame : next paint (catches reflow moves)
-      //   setTimeout 60ms : after WebKit's deferred commit-phase work
-      // Each call is no-op if focus is already on the input. Total
-      // overhead is ~3 focus calls per find — trivial.
+      // attempts so we catch whichever frame the focus shift lands on.
       queueMicrotask(restore);
       requestAnimationFrame(restore);
       setTimeout(restore, 60);
-      _findFocusGuardUntil = Date.now() + 300;
     }
-    let _findFocusGuardUntil = 0;
+
+    // While the find bar is open, window.find() steals focus into the
+    // transcript on every match. Pull focus back into the modal unless
+    // the user intentionally focused another control inside it (Prev/Next).
     document.addEventListener('focusin', (e) => {
-      if (Date.now() > _findFocusGuardUntil) return;
-      if (e.target === $chatFindInput) return;
-      const modal = document.getElementById('chatFindModal');
-      if (!modal || modal.style.display === 'none') return;
-      try {
-        const len = $chatFindInput.value.length;
-        $chatFindInput.focus({ preventScroll: true });
-        $chatFindInput.setSelectionRange(len, len);
-      } catch (_) {}
+      if (!findModalIsOpen()) return;
+      if ($chatFindModal.contains(e.target)) return;
+      requestAnimationFrame(() => {
+        if (!findModalIsOpen()) return;
+        const ae = document.activeElement;
+        if (ae && $chatFindModal.contains(ae)) return;
+        try {
+          const len = $chatFindInput.value.length;
+          $chatFindInput.focus({ preventScroll: true });
+          $chatFindInput.setSelectionRange(len, len);
+        } catch (_) {}
+      });
     }, true);
     $chatFindInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') {
@@ -26137,19 +26144,41 @@
       }
     });
     let _lastFind = '';
+    let _findDebounceTimer = 0;
+    // Do not call window.find() on every key — it moves focus into the
+    // transcript mid-word. Debounce until typing pauses (same pattern as
+    // sidebar search); Enter / arrows still find immediately.
     $chatFindInput.addEventListener('input', () => {
-      const text = $chatFindInput.value;
-      if (!text || text === _lastFind) return;
-      if (text.startsWith(_lastFind)) {
-        const sel = window.getSelection();
-        if (sel.rangeCount > 0) sel.collapseToStart();
-      }
-      _lastFind = text;
-      doFind(false);
-      refocusFindInputAfterMatch();
+      if (_findDebounceTimer) clearTimeout(_findDebounceTimer);
+      _findDebounceTimer = setTimeout(() => {
+        _findDebounceTimer = 0;
+        const text = $chatFindInput.value;
+        if (!text) {
+          _lastFind = '';
+          return;
+        }
+        if (text === _lastFind) return;
+        if (text.startsWith(_lastFind)) {
+          const sel = window.getSelection();
+          if (sel.rangeCount > 0) sel.collapseToStart();
+        }
+        _lastFind = text;
+        doFind(false);
+        refocusFindInputAfterMatch();
+      }, 200);
     });
-    if ($chatFindNext) $chatFindNext.addEventListener('click', () => doFind(false));
-    if ($chatFindPrev) $chatFindPrev.addEventListener('click', () => doFind(true));
+    if ($chatFindNext) {
+      $chatFindNext.addEventListener('click', () => {
+        doFind(false);
+        refocusFindInputAfterMatch();
+      });
+    }
+    if ($chatFindPrev) {
+      $chatFindPrev.addEventListener('click', () => {
+        doFind(true);
+        refocusFindInputAfterMatch();
+      });
+    }
     if ($chatFindClose) $chatFindClose.addEventListener('click', () => document.getElementById('chatFindModal').style.display = 'none');
   }
 
