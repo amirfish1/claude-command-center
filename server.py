@@ -11916,6 +11916,13 @@ def _run_worktree_init_hook(worktree_path, parent_repo, session_name, log_fh):
 CODEX_APP_BUNDLE_PATH = "/Applications/Codex.app/Contents/Resources/codex"
 CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
+_CODEX_APP_SERVER_LOCK = threading.Condition()
+_CODEX_APP_SERVER_PROC = None
+_CODEX_APP_SERVER_READER = None
+_CODEX_APP_SERVER_INITIALIZED = False
+_CODEX_APP_SERVER_INITIALIZING = False
+_CODEX_APP_SERVER_NEXT_ID = 1
+_CODEX_APP_SERVER_RESPONSES = {}
 
 
 def _resolve_codex_bin():
@@ -11956,6 +11963,316 @@ def _resolve_codex_bin():
             "`npm i -g @openai/codex`, or set CCC_CODEX_BIN."
         ),
     }
+
+
+def _codex_app_server_reader(proc):
+    """Collect JSON-RPC responses from the long-lived Codex app-server."""
+    global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_INITIALIZED, _CODEX_APP_SERVER_INITIALIZING
+    try:
+        for line in proc.stdout:
+            line = (line or "").strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "id" not in payload:
+                continue
+            with _CODEX_APP_SERVER_LOCK:
+                _CODEX_APP_SERVER_RESPONSES[payload.get("id")] = payload
+                _CODEX_APP_SERVER_LOCK.notify_all()
+    finally:
+        with _CODEX_APP_SERVER_LOCK:
+            if _CODEX_APP_SERVER_PROC is proc:
+                _CODEX_APP_SERVER_PROC = None
+                _CODEX_APP_SERVER_INITIALIZED = False
+                _CODEX_APP_SERVER_INITIALIZING = False
+            _CODEX_APP_SERVER_LOCK.notify_all()
+
+
+def _codex_app_server_request_to_proc(proc, method, params=None, timeout=20):
+    """Send one JSON-RPC request to an already-started Codex app-server."""
+    with _CODEX_APP_SERVER_LOCK:
+        global _CODEX_APP_SERVER_NEXT_ID
+        req_id = _CODEX_APP_SERVER_NEXT_ID
+        _CODEX_APP_SERVER_NEXT_ID += 1
+        try:
+            proc.stdin.write(json.dumps({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "method": method,
+                "params": params or {},
+            }) + "\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError) as e:
+            return {"ok": False, "error": str(e), "fallback": "exec"}
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            response = _CODEX_APP_SERVER_RESPONSES.pop(req_id, None)
+            if response is not None:
+                return response
+            remaining = max(0.05, deadline - time.time())
+            _CODEX_APP_SERVER_LOCK.wait(min(0.5, remaining))
+        return {
+            "ok": False,
+            "error": f"Codex app-server request timed out: {method}",
+            "fallback": "exec",
+        }
+
+
+def _codex_app_server_request(method, params=None, timeout=20):
+    """Send one JSON-RPC request to Codex app-server.
+
+    The app-server is the only local Codex interface that can append input to
+    a loaded thread; `codex exec resume` can only start a one-shot process.
+    """
+    proc = _ensure_codex_app_server()
+    if proc is None:
+        return {
+            "ok": False,
+            "error": "Codex app-server is unavailable",
+            "fallback": "exec",
+        }
+    return _codex_app_server_request_to_proc(proc, method, params=params, timeout=timeout)
+
+
+def _ensure_codex_app_server():
+    """Start and initialize a persistent Codex app-server if needed."""
+    global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_READER
+    global _CODEX_APP_SERVER_INITIALIZED, _CODEX_APP_SERVER_INITIALIZING
+    with _CODEX_APP_SERVER_LOCK:
+        while _CODEX_APP_SERVER_INITIALIZING:
+            _CODEX_APP_SERVER_LOCK.wait(0.5)
+            proc = _CODEX_APP_SERVER_PROC
+            if proc is not None and proc.poll() is None and _CODEX_APP_SERVER_INITIALIZED:
+                return proc
+            if not _CODEX_APP_SERVER_INITIALIZING:
+                break
+        proc = _CODEX_APP_SERVER_PROC
+        if proc is not None and proc.poll() is None and _CODEX_APP_SERVER_INITIALIZED:
+            return proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+        _CODEX_APP_SERVER_PROC = None
+        _CODEX_APP_SERVER_INITIALIZED = False
+        _CODEX_APP_SERVER_INITIALIZING = False
+
+        resolved = _resolve_codex_bin()
+        if not resolved.get("available"):
+            return None
+        try:
+            proc = subprocess.Popen(
+                [resolved["bin"], "app-server", "--listen", "stdio://"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+                start_new_session=True,
+            )
+        except (FileNotFoundError, OSError):
+            return None
+        _CODEX_APP_SERVER_PROC = proc
+        _CODEX_APP_SERVER_INITIALIZING = True
+        _CODEX_APP_SERVER_READER = threading.Thread(
+            target=_codex_app_server_reader,
+            args=(proc,),
+            daemon=True,
+            name="codex-app-server-reader",
+        )
+        _CODEX_APP_SERVER_READER.start()
+
+    init = _codex_app_server_request_to_proc(
+        proc,
+        "initialize",
+        {
+            "clientInfo": {
+                "name": "claude-command-center",
+                "title": "Claude Command Center",
+                "version": __version__,
+            },
+            "capabilities": {"experimentalApi": True},
+        },
+        timeout=10,
+    )
+    if init.get("result") is not None:
+        with _CODEX_APP_SERVER_LOCK:
+            if _CODEX_APP_SERVER_PROC is proc and proc.poll() is None:
+                _CODEX_APP_SERVER_INITIALIZED = True
+                _CODEX_APP_SERVER_INITIALIZING = False
+                _CODEX_APP_SERVER_LOCK.notify_all()
+                return proc
+    try:
+        proc.terminate()
+    except OSError:
+        pass
+    with _CODEX_APP_SERVER_LOCK:
+        if _CODEX_APP_SERVER_PROC is proc:
+            _CODEX_APP_SERVER_PROC = None
+            _CODEX_APP_SERVER_INITIALIZED = False
+            _CODEX_APP_SERVER_INITIALIZING = False
+        _CODEX_APP_SERVER_LOCK.notify_all()
+    return None
+
+
+def _codex_app_server_shutdown():
+    """Terminate the CCC-owned Codex app-server process on server exit."""
+    global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_INITIALIZED, _CODEX_APP_SERVER_INITIALIZING
+    with _CODEX_APP_SERVER_LOCK:
+        proc = _CODEX_APP_SERVER_PROC
+        _CODEX_APP_SERVER_PROC = None
+        _CODEX_APP_SERVER_INITIALIZED = False
+        _CODEX_APP_SERVER_INITIALIZING = False
+        _CODEX_APP_SERVER_LOCK.notify_all()
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+
+
+def _codex_user_input(text, image_paths=None):
+    items = [{"type": "text", "text": str(text or "")}]
+    for image_path in image_paths or []:
+        if image_path:
+            items.append({"type": "localImage", "path": str(image_path)})
+    return items
+
+
+def _codex_latest_active_turn(thread):
+    turns = (thread or {}).get("turns") or []
+    for turn in reversed(turns):
+        if isinstance(turn, dict) and turn.get("status") == "inProgress" and turn.get("id"):
+            return turn
+    return None
+
+
+def _codex_error_text(response):
+    if not isinstance(response, dict):
+        return "Codex app-server returned no response"
+    err = response.get("error")
+    if not isinstance(err, dict):
+        return ""
+    message = str(err.get("message") or "Codex app-server request failed")
+    data = err.get("data")
+    if data is not None:
+        return f"{message}: {data}"
+    return message
+
+
+def _codex_error_is_not_steerable(response):
+    text = _codex_error_text(response)
+    return "activeTurnNotSteerable" in text or "not steerable" in text.lower()
+
+
+def _codex_response_succeeded(response):
+    return isinstance(response, dict) and "result" in response and not response.get("error")
+
+
+def _codex_turn_params(thread_id, text, cwd=None, model=None, image_paths=None):
+    params = {
+        "threadId": thread_id,
+        "input": _codex_user_input(text, image_paths=image_paths),
+    }
+    if cwd:
+        params["cwd"] = cwd
+        params["runtimeWorkspaceRoots"] = [cwd]
+    if model:
+        params["model"] = model
+    # Match the existing `codex exec --dangerously-bypass-approvals-and-sandbox`
+    # behavior used by CCC-spawned Codex runs.
+    params["approvalPolicy"] = "never"
+    params["sandboxPolicy"] = {"type": "dangerFullAccess"}
+    return params
+
+
+def _codex_resume_or_steer_via_app_server(
+    session_id,
+    text,
+    cwd=None,
+    model=None,
+    image_paths=None,
+    allow_start=True,
+):
+    if os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() in ("0", "false", "no"):
+        return {"ok": False, "fallback": "exec", "error": "Codex app-server disabled"}
+    resume_params = {
+        "threadId": session_id,
+        "excludeTurns": False,
+    }
+    if cwd:
+        resume_params["cwd"] = cwd
+    if model:
+        resume_params["model"] = model
+    resumed = _codex_app_server_request("thread/resume", resume_params, timeout=20)
+    if resumed.get("error"):
+        return {"ok": False, "fallback": "exec", "error": _codex_error_text(resumed)}
+    thread = ((resumed.get("result") or {}).get("thread") or {})
+    active_turn = _codex_latest_active_turn(thread)
+    status = (thread.get("status") or {}).get("type")
+    if status == "active" and active_turn:
+        started = _codex_app_server_request(
+            "turn/start",
+            {
+                "threadId": session_id,
+                "input": _codex_user_input(text, image_paths=image_paths),
+            },
+            timeout=20,
+        )
+        if _codex_response_succeeded(started):
+            turn = ((started.get("result") or {}).get("turn") or {})
+            return {
+                "ok": True,
+                "queued": True,
+                "via": "codex-app-queued",
+                "turn_id": turn.get("id"),
+                "session_id": session_id,
+            }
+        if _codex_error_is_not_steerable(started):
+            return {
+                "ok": False,
+                "fallback": "queue",
+                "error": _codex_error_text(started),
+            }
+        return {"ok": False, "fallback": "exec", "error": _codex_error_text(started)}
+    if status == "active":
+        return {
+            "ok": False,
+            "fallback": "queue",
+            "error": "Codex app-server reports an active turn without a steerable turn id",
+        }
+    if not allow_start:
+        return {
+            "ok": False,
+            "fallback": "queue",
+            "error": "Codex CLI resume is still running and app-server did not expose a steerable turn",
+        }
+
+    started = _codex_app_server_request(
+        "turn/start",
+        _codex_turn_params(session_id, text, cwd=cwd, model=model, image_paths=image_paths),
+        timeout=20,
+    )
+    if _codex_response_succeeded(started):
+        turn = ((started.get("result") or {}).get("turn") or {})
+        return {
+            "ok": True,
+            "via": "codex-app-turn",
+            "turn_id": turn.get("id"),
+            "session_id": session_id,
+        }
+    if _codex_error_is_not_steerable(started):
+        return {
+            "ok": False,
+            "fallback": "queue",
+            "error": _codex_error_text(started),
+        }
+    return {"ok": False, "fallback": "exec", "error": _codex_error_text(started)}
 
 
 def _codex_state_db_candidates():
@@ -14248,6 +14565,20 @@ def _start_resume_queue_watcher() -> None:
     threading.Thread(target=_watcher, daemon=True, name="resume-queue-watcher").start()
 
 
+def _queue_codex_resume(session_id, text, pid=None):
+    with _pending_resume_lock:
+        _pending_resume_queue.setdefault(session_id, []).append(text)
+    _save_pending_inputs()
+    payload = {
+        "ok": True,
+        "queued": True,
+        "via": "codex-resume-queued",
+    }
+    if pid is not None:
+        payload["pid"] = pid
+    return payload
+
+
 
 def resume_session_codex(session_id, text):
     """Resume a dormant Codex thread with a new prompt via `codex exec resume`."""
@@ -14258,41 +14589,61 @@ def resume_session_codex(session_id, text):
     resolved = _resolve_codex_bin()
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    active_resume_entry = None
     for s in _spawned_sessions:
         if s.get("engine") == "codex" and s.get("resumed_sid") == session_id:
             try:
                 if _poll_spawn_entry(s) is None:
-                    with _pending_resume_lock:
-                        _pending_resume_queue.setdefault(session_id, []).append(text)
-                    _save_pending_inputs()
-                    return {
-
-                        "ok": True,
-                        "queued": True,
-                        "pid": s.get("pid"),
-                        "via": "codex-resume-queued",
-                    }
+                    active_resume_entry = s
+                    break
             except Exception:
                 pass
     row = _codex_thread_row(session_id) or {}
     spawned_ctx = _spawn_registry_entry_for_session(session_id, "codex") or {}
-    cwd = row.get("cwd") or spawned_ctx.get("cwd") or find_session_cwd(session_id)
+    cwd = (
+        row.get("cwd")
+        or spawned_ctx.get("cwd")
+        or (active_resume_entry or {}).get("cwd")
+        or find_session_cwd(session_id)
+    )
+    cwd_error = None
     if not cwd or not Path(cwd).is_dir():
         try:
             cwd = repo_from_session(session_id)["cwd"]
         except RepoContextError as e:
-            return e.as_payload()
+            cwd_error = e
+            cwd = None
+    # Per-session override (set via the click-to-switch picker) wins over
+    # the env-var default and the previous run's recorded model.
+    override = _get_session_override(session_id)
+    override_model = (override or {}).get("model") if override else None
+    model = override_model or os.environ.get("CCC_CODEX_MODEL") or row.get("model") or "gpt-5.5"
+    app_result = _codex_resume_or_steer_via_app_server(
+        session_id,
+        text,
+        cwd=cwd,
+        model=model,
+        image_paths=image_paths,
+        allow_start=active_resume_entry is None,
+    )
+    if app_result.get("ok"):
+        return app_result
+    if app_result.get("fallback") == "queue":
+        return _queue_codex_resume(
+            session_id,
+            text,
+            pid=(active_resume_entry or {}).get("pid"),
+        )
+    if active_resume_entry is not None:
+        return _queue_codex_resume(session_id, text, pid=active_resume_entry.get("pid"))
+    if cwd_error is not None:
+        return cwd_error.as_payload()
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"resume-codex-{session_id[:8]}-{timestamp}.log"
     repo_for_logs = _git_toplevel_for_existing_dir(cwd) or cwd
     log_dir = repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
-    # Per-session override (set via the click-to-switch picker) wins over
-    # the env-var default and the previous run's recorded model.
-    override = _get_session_override(session_id)
-    override_model = (override or {}).get("model") if override else None
-    model = override_model or os.environ.get("CCC_CODEX_MODEL") or row.get("model") or "gpt-5.5"
     cmd = [
         resolved["bin"], "exec", "resume",
         "--json",
@@ -17591,22 +17942,6 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     
     session_id = str(uuid.uuid4())
     brain_dir = None
-    try:
-        brain_dir = Path.home() / ".gemini" / "antigravity-cli" / "brain" / session_id
-        logs_dir = brain_dir / ".system_generated" / "logs"
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        transcript_path = logs_dir / "transcript.jsonl"
-        with open(transcript_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({
-                "type": "USER_INPUT",
-                "source": "USER_EXPLICIT",
-                "content": prompt,
-                "cwd": spawn_cwd,
-                "repo_path": repo_for_logs,
-                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-            }) + "\n")
-    except Exception as e:
-        print(f"  [antigravity-spawn] Failed to inject transcript for {session_id}: {e}", file=sys.stderr)
 
     if (
         os.environ.get("CCC_ANTIGRAVITY_SKIP_PERMISSIONS", "1").strip().lower()
@@ -20634,9 +20969,12 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False):
     tty = status.get("tty")
     term_app = status.get("terminal_app")
     has_tty = bool(tty) and tty != "??"
+    is_codex = _is_codex_session(session_id)
     if status.get("live") and has_tty:
         if not _from_terminal_queue:
             if _terminal_input_queue_has_pending(session_id) or _session_status_is_busy(status):
+                if is_codex:
+                    return resume_session_codex(session_id, text)
                 return _queue_terminal_input(session_id, text, status)
         return inject_input_via_keystroke(tty, term_app or "Terminal", text)
     if status.get("live") and status.get("kind") == "bg":
@@ -20647,7 +20985,7 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False):
                 return _queue_terminal_input(session_id, text, queued_status)
         worker = _find_live_bg_agent_entry_for_session(session_id)
         return _inject_bg_agent_via_pty_socket(worker, text)
-    if _is_codex_session(session_id):
+    if is_codex:
         return resume_session_codex(session_id, text)
     if _is_gemini_session(session_id):
         return resume_session_gemini(session_id, text)
@@ -22748,6 +23086,7 @@ def _nextjs_shutdown_all():
 
 
 import atexit as _atexit
+_atexit.register(_codex_app_server_shutdown)
 _atexit.register(_nextjs_shutdown_all)
 
 
