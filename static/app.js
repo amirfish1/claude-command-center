@@ -6371,11 +6371,85 @@
     const board = targetEl || document.getElementById('flowBoard');
     if (!board) return;
     const world = board.querySelector('.flow-world') || board.querySelector('.flow-canvas');
-    if (!world) return;
+    const canvas = board.querySelector('.flow-canvas');
+    if (!world || !canvas) return;
     const convsById = {};
     if (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData)) {
       conversationsData.forEach(c => { if (c && c.id) convsById[c.id] = c; });
     }
+    // First pass: bring out-of-frame parents (repo + object nodes) into the
+    // currently visible viewport. In-frame parents are left exactly where
+    // they are — we only condense the ones that are off-screen.
+    const zoom = flowZoom || 1;
+    const vpL = Math.max(0, (board.scrollLeft - canvas.offsetLeft)) / zoom;
+    const vpT = Math.max(0, (board.scrollTop - canvas.offsetTop)) / zoom;
+    const vpR = vpL + (board.clientWidth || window.innerWidth || 1200) / zoom;
+    const vpB = vpT + (board.clientHeight || window.innerHeight || 800) / zoom;
+    const rectsOverlap = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    const SESSION_RESERVE_BELOW = 140;
+    const PARENT_PAD = 16;
+    const PARENT_STEP_X = 320;
+    const PARENT_STEP_Y = 130;
+    const parentNodes = [];
+    world.querySelectorAll('.flow-node').forEach(node => {
+      const kind = node.dataset.flowKind;
+      if (kind === 'object' || kind === 'repo') parentNodes.push(node);
+    });
+    const inFrameParents = [];
+    const outOfFrameParents = [];
+    parentNodes.forEach(p => {
+      const rect = {
+        el: p,
+        left: p.offsetLeft,
+        top: p.offsetTop,
+        right: p.offsetLeft + p.offsetWidth,
+        bottom: p.offsetTop + p.offsetHeight,
+        width: p.offsetWidth,
+        height: p.offsetHeight,
+      };
+      const visible = rect.left < vpR && rect.right > vpL && rect.top < vpB && rect.bottom > vpT;
+      (visible ? inFrameParents : outOfFrameParents).push(rect);
+    });
+    const occupied = inFrameParents.map(r => ({
+      left: r.left,
+      top: r.top,
+      right: r.right,
+      bottom: r.bottom + SESSION_RESERVE_BELOW,
+    }));
+    let fallbackStack = 0;
+    outOfFrameParents.forEach(r => {
+      let placed = null;
+      outer:
+      for (let py = Math.max(0, vpT + PARENT_PAD); py + r.height <= vpB - PARENT_PAD; py += PARENT_STEP_Y) {
+        for (let px = Math.max(0, vpL + PARENT_PAD); px + r.width <= vpR - PARENT_PAD; px += PARENT_STEP_X) {
+          const cand = { left: px, top: py, right: px + r.width, bottom: py + r.height + SESSION_RESERVE_BELOW };
+          if (!occupied.some(o => rectsOverlap(o, cand))) {
+            placed = cand;
+            break outer;
+          }
+        }
+      }
+      if (!placed) {
+        placed = {
+          left: Math.max(0, vpL + PARENT_PAD),
+          top: Math.max(0, vpT + PARENT_PAD + fallbackStack * PARENT_STEP_Y),
+          right: 0,
+          bottom: 0,
+        };
+        fallbackStack += 1;
+      }
+      const newLeft = Math.round(placed.left);
+      const newTop = Math.round(placed.top);
+      r.el.style.left = newLeft + 'px';
+      r.el.style.top = newTop + 'px';
+      flowNodePositions[r.el.dataset.flowNodeId] = { x: newLeft, y: newTop };
+      occupied.push({
+        left: newLeft,
+        top: newTop,
+        right: newLeft + r.width,
+        bottom: newTop + r.height + SESSION_RESERVE_BELOW,
+      });
+    });
     const childrenByParent = new Map();
     world.querySelectorAll('.flow-node').forEach(node => {
       const kind = node.dataset.flowKind;
@@ -6385,7 +6459,7 @@
       if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
       childrenByParent.get(parentId).push(node);
     });
-    if (!childrenByParent.size) {
+    if (!childrenByParent.size && !outOfFrameParents.length) {
       if (typeof showOpToast === 'function') showOpToast('Nothing to organize.', 'info');
       return;
     }
