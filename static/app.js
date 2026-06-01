@@ -6395,98 +6395,88 @@
     if (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData)) {
       conversationsData.forEach(c => { if (c && c.id) convsById[c.id] = c; });
     }
-    // First pass: bring out-of-frame parents (repo + object nodes) into the
-    // currently visible viewport. In-frame parents are left exactly where
-    // they are — we only condense the ones that are off-screen.
     const zoom = flowZoom || 1;
     const vpL = Math.max(0, (board.scrollLeft - canvas.offsetLeft)) / zoom;
     const vpT = Math.max(0, (board.scrollTop - canvas.offsetTop)) / zoom;
     const vpR = vpL + (board.clientWidth || window.innerWidth || 1200) / zoom;
     const vpB = vpT + (board.clientHeight || window.innerHeight || 800) / zoom;
     const rectsOverlap = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-    const SESSION_RESERVE_BELOW = 140;
     const PARENT_PAD = 16;
     const PARENT_STEP_X = 320;
-    const PARENT_STEP_Y = 130;
+    const PARENT_STEP_Y = 140;
+    const SESSION_GAP_BELOW_PARENT = 16;
+    const CHILD_GAP_X = 16;
+    const CHILD_GAP_Y = 12;
+    const MAX_COLS = 4;
+
     const parentNodes = [];
-    world.querySelectorAll('.flow-node').forEach(node => {
-      const kind = node.dataset.flowKind;
-      if (kind === 'object' || kind === 'repo') parentNodes.push(node);
-    });
-    const inFrameParents = [];
-    const outOfFrameParents = [];
-    parentNodes.forEach(p => {
-      const rect = {
-        el: p,
-        left: p.offsetLeft,
-        top: p.offsetTop,
-        right: p.offsetLeft + p.offsetWidth,
-        bottom: p.offsetTop + p.offsetHeight,
-        width: p.offsetWidth,
-        height: p.offsetHeight,
-      };
-      const visible = rect.left < vpR && rect.right > vpL && rect.top < vpB && rect.bottom > vpT;
-      (visible ? inFrameParents : outOfFrameParents).push(rect);
-    });
-    const occupied = inFrameParents.map(r => ({
-      left: r.left,
-      top: r.top,
-      right: r.right,
-      bottom: r.bottom + SESSION_RESERVE_BELOW,
-    }));
-    let fallbackStack = 0;
-    outOfFrameParents.forEach(r => {
-      let placed = null;
-      outer:
-      for (let py = Math.max(0, vpT + PARENT_PAD); py + r.height <= vpB - PARENT_PAD; py += PARENT_STEP_Y) {
-        for (let px = Math.max(0, vpL + PARENT_PAD); px + r.width <= vpR - PARENT_PAD; px += PARENT_STEP_X) {
-          const cand = { left: px, top: py, right: px + r.width, bottom: py + r.height + SESSION_RESERVE_BELOW };
-          if (!occupied.some(o => rectsOverlap(o, cand))) {
-            placed = cand;
-            break outer;
-          }
-        }
-      }
-      if (!placed) {
-        placed = {
-          left: Math.max(0, vpL + PARENT_PAD),
-          top: Math.max(0, vpT + PARENT_PAD + fallbackStack * PARENT_STEP_Y),
-          right: 0,
-          bottom: 0,
-        };
-        fallbackStack += 1;
-      }
-      const newLeft = Math.round(placed.left);
-      const newTop = Math.round(placed.top);
-      r.el.style.left = newLeft + 'px';
-      r.el.style.top = newTop + 'px';
-      flowNodePositions[r.el.dataset.flowNodeId] = { x: newLeft, y: newTop };
-      occupied.push({
-        left: newLeft,
-        top: newTop,
-        right: newLeft + r.width,
-        bottom: newTop + r.height + SESSION_RESERVE_BELOW,
-      });
-    });
     const childrenByParent = new Map();
     world.querySelectorAll('.flow-node').forEach(node => {
       const kind = node.dataset.flowKind;
-      if (kind !== 'session' && kind !== 'draft-session') return;
-      const parentId = node.dataset.flowParent || flowNodeParents[node.dataset.flowNodeId] || '';
-      if (!parentId) return;
-      if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
-      childrenByParent.get(parentId).push(node);
+      if (kind === 'object' || kind === 'repo') {
+        parentNodes.push(node);
+      } else if (kind === 'session' || kind === 'draft-session') {
+        const parentId = node.dataset.flowParent || flowNodeParents[node.dataset.flowNodeId] || '';
+        if (!parentId) return;
+        if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+        childrenByParent.get(parentId).push(node);
+      }
     });
-    if (!childrenByParent.size && !outOfFrameParents.length) {
+    if (!parentNodes.length && !childrenByParent.size) {
       if (typeof showOpToast === 'function') showOpToast('Nothing to organize.', 'info');
       return;
     }
-    const H_STEP = 292;
-    const V_STEP = 116;
-    const PARENT_GAP_Y = 24;
-    childrenByParent.forEach((children, parentId) => {
-      const parentEl = findFlowNodeElement(parentId);
-      if (!parentEl) return;
+
+    // Pre-pass: snap out-of-frame parents to tentative slots inside the
+    // viewport. Their final positions are settled in the collision pass.
+    let oofIndex = 0;
+    parentNodes.forEach(node => {
+      const left = node.offsetLeft;
+      const top = node.offsetTop;
+      const right = left + node.offsetWidth;
+      const bottom = top + node.offsetHeight;
+      const inFrame = left < vpR && right > vpL && top < vpB && bottom > vpT;
+      if (inFrame) return;
+      const vpWidth = Math.max(PARENT_STEP_X, vpR - vpL - PARENT_PAD * 2);
+      const cols = Math.max(1, Math.floor(vpWidth / PARENT_STEP_X));
+      const col = oofIndex % cols;
+      const row = Math.floor(oofIndex / cols);
+      node.style.left = Math.round(Math.max(0, vpL + PARENT_PAD + col * PARENT_STEP_X)) + 'px';
+      node.style.top = Math.round(Math.max(0, vpT + PARENT_PAD + row * PARENT_STEP_Y)) + 'px';
+      oofIndex++;
+    });
+
+    // Process parents in current top-to-bottom, left-to-right order so the
+    // result preserves the user's spatial intuition wherever possible.
+    parentNodes.sort((a, b) => {
+      const dy = a.offsetTop - b.offsetTop;
+      if (dy !== 0) return dy;
+      return a.offsetLeft - b.offsetLeft;
+    });
+
+    const occupied = [];
+    parentNodes.forEach(parent => {
+      const pw = parent.offsetWidth;
+      const ph = parent.offsetHeight;
+      let pLeft = parent.offsetLeft;
+      let pTop = parent.offsetTop;
+      let pRect = { left: pLeft, top: pTop, right: pLeft + pw, bottom: pTop + ph };
+      // Push the parent strictly downward until it clears every previously
+      // placed rect. Vertical-only push preserves horizontal columns the
+      // user set up — we move the whole object only as much as needed.
+      let safety = 400;
+      while (occupied.some(o => rectsOverlap(o, pRect)) && safety-- > 0) {
+        pTop += PARENT_STEP_Y;
+        pRect = { left: pLeft, top: pTop, right: pLeft + pw, bottom: pTop + ph };
+      }
+      parent.style.left = Math.round(pLeft) + 'px';
+      parent.style.top = Math.round(pTop) + 'px';
+      flowNodePositions[parent.dataset.flowNodeId] = { x: Math.round(pLeft), y: Math.round(pTop) };
+      occupied.push(pRect);
+
+      const parentId = parent.dataset.flowNodeId;
+      const children = childrenByParent.get(parentId) || [];
+      if (!children.length) return;
       children.sort((a, b) => {
         const ra = convsById[a.dataset.id] || {};
         const rb = convsById[b.dataset.id] || {};
@@ -6494,22 +6484,42 @@
         const sb = rb.last_interacted || rb.modified || rb.mtime || 0;
         return sb - sa;
       });
-      const startX = parentEl.offsetLeft;
-      const startY = parentEl.offsetTop + parentEl.offsetHeight + PARENT_GAP_Y;
-      const cols = Math.min(4, Math.max(1, children.length));
-      children.forEach((child, idx) => {
-        const col = idx % cols;
-        const row = Math.floor(idx / cols);
-        const x = Math.round(startX + col * H_STEP);
-        const y = Math.round(startY + row * V_STEP);
-        child.style.left = x + 'px';
-        child.style.top = y + 'px';
-        flowNodePositions[child.dataset.flowNodeId] = { x, y };
+      const baseY = pRect.bottom + SESSION_GAP_BELOW_PARENT;
+      children.forEach(child => {
+        const cw = child.offsetWidth;
+        const ch = child.offsetHeight;
+        const colStep = cw + CHILD_GAP_X;
+        const rowStep = ch + CHILD_GAP_Y;
+        let placed = null;
+        for (let row = 0; row < 400 && !placed; row++) {
+          for (let col = 0; col < MAX_COLS; col++) {
+            const x = pRect.left + col * colStep;
+            const y = baseY + row * rowStep;
+            const cand = { left: x, top: y, right: x + cw, bottom: y + ch };
+            if (!occupied.some(o => rectsOverlap(o, cand))) {
+              placed = cand;
+              break;
+            }
+          }
+        }
+        if (!placed) {
+          let stackY = baseY;
+          occupied.forEach(o => { if (o.bottom + CHILD_GAP_Y > stackY) stackY = o.bottom + CHILD_GAP_Y; });
+          placed = { left: pRect.left, top: stackY, right: pRect.left + cw, bottom: stackY + ch };
+        }
+        child.style.left = Math.round(placed.left) + 'px';
+        child.style.top = Math.round(placed.top) + 'px';
+        flowNodePositions[child.dataset.flowNodeId] = {
+          x: Math.round(placed.left),
+          y: Math.round(placed.top),
+        };
+        occupied.push(placed);
       });
     });
+
     persistFlowNodePositions();
     redrawFlowLinks(board);
-    if (typeof showOpToast === 'function') showOpToast('Sessions organized by recency.', 'info');
+    if (typeof showOpToast === 'function') showOpToast('Organized — no overlaps.', 'info');
   }
 
   function flowDraftPositionForParent(parentNodeId, repoPath) {
