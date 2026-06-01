@@ -6454,37 +6454,53 @@
       return a.offsetLeft - b.offsetLeft;
     });
 
-    const occupied = [];
+    // Each completed cluster (parent + all its descendants) contributes one
+    // bounding rectangle to `clusterRects`. Subsequent parents and sessions
+    // must never land inside any of those rectangles — that's the "cluster
+    // exclusion zone" constraint.
+    const clusterRects = [];
+    const CLUSTER_PAD = 12;
     parentNodes.forEach(parent => {
       const pw = parent.offsetWidth;
       const ph = parent.offsetHeight;
       let pLeft = parent.offsetLeft;
       let pTop = parent.offsetTop;
       let pRect = { left: pLeft, top: pTop, right: pLeft + pw, bottom: pTop + ph };
-      // Push the parent strictly downward until it clears every previously
-      // placed rect. Vertical-only push preserves horizontal columns the
-      // user set up — we move the whole object only as much as needed.
+      // Push the parent strictly downward until it clears every prior
+      // cluster's bounding rect. Vertical-only push preserves horizontal
+      // columns the user set up — the whole object moves only as much as
+      // needed to escape an existing cluster's zone.
       let safety = 400;
-      while (occupied.some(o => rectsOverlap(o, pRect)) && safety-- > 0) {
+      while (clusterRects.some(o => rectsOverlap(o, pRect)) && safety-- > 0) {
         pTop += PARENT_STEP_Y;
         pRect = { left: pLeft, top: pTop, right: pLeft + pw, bottom: pTop + ph };
       }
       parent.style.left = Math.round(pLeft) + 'px';
       parent.style.top = Math.round(pTop) + 'px';
       flowNodePositions[parent.dataset.flowNodeId] = { x: Math.round(pLeft), y: Math.round(pTop) };
-      occupied.push(pRect);
 
       const parentId = parent.dataset.flowNodeId;
       const children = childrenByParent.get(parentId) || [];
-      if (!children.length) return;
-      children.sort((a, b) => {
-        const ra = convsById[a.dataset.id] || {};
-        const rb = convsById[b.dataset.id] || {};
-        const sa = ra.last_interacted || ra.modified || ra.mtime || 0;
-        const sb = rb.last_interacted || rb.modified || rb.mtime || 0;
-        return sb - sa;
-      });
+      if (children.length) {
+        children.sort((a, b) => {
+          const ra = convsById[a.dataset.id] || {};
+          const rb = convsById[b.dataset.id] || {};
+          const sa = ra.last_interacted || ra.modified || ra.mtime || 0;
+          const sb = rb.last_interacted || rb.modified || rb.mtime || 0;
+          return sb - sa;
+        });
+      }
       const baseY = pRect.bottom + SESSION_GAP_BELOW_PARENT;
+      // Track this cluster's growing bounding rect — used so children of the
+      // same cluster don't overlap each other (they're laid out in a grid,
+      // but we also use this rect to compute the final cluster zone).
+      let clusterBounds = {
+        left: pRect.left,
+        top: pRect.top,
+        right: pRect.right,
+        bottom: pRect.bottom,
+      };
+      const placedChildRects = [];
       children.forEach(child => {
         const cw = child.offsetWidth;
         const ch = child.offsetHeight;
@@ -6496,15 +6512,23 @@
             const x = pRect.left + col * colStep;
             const y = baseY + row * rowStep;
             const cand = { left: x, top: y, right: x + cw, bottom: y + ch };
-            if (!occupied.some(o => rectsOverlap(o, cand))) {
+            // Avoid (1) prior clusters' zones, (2) this cluster's already
+            // placed children, (3) this cluster's parent rect.
+            const collides = clusterRects.some(o => rectsOverlap(o, cand))
+              || placedChildRects.some(o => rectsOverlap(o, cand))
+              || rectsOverlap(pRect, cand);
+            if (!collides) {
               placed = cand;
               break;
             }
           }
         }
         if (!placed) {
+          // Fallback: stack at parent's column below everything we've placed.
           let stackY = baseY;
-          occupied.forEach(o => { if (o.bottom + CHILD_GAP_Y > stackY) stackY = o.bottom + CHILD_GAP_Y; });
+          [...clusterRects, ...placedChildRects, pRect].forEach(o => {
+            if (o.bottom + CHILD_GAP_Y > stackY) stackY = o.bottom + CHILD_GAP_Y;
+          });
           placed = { left: pRect.left, top: stackY, right: pRect.left + cw, bottom: stackY + ch };
         }
         child.style.left = Math.round(placed.left) + 'px';
@@ -6513,7 +6537,17 @@
           x: Math.round(placed.left),
           y: Math.round(placed.top),
         };
-        occupied.push(placed);
+        placedChildRects.push(placed);
+        if (placed.left < clusterBounds.left) clusterBounds.left = placed.left;
+        if (placed.top < clusterBounds.top) clusterBounds.top = placed.top;
+        if (placed.right > clusterBounds.right) clusterBounds.right = placed.right;
+        if (placed.bottom > clusterBounds.bottom) clusterBounds.bottom = placed.bottom;
+      });
+      clusterRects.push({
+        left: clusterBounds.left - CLUSTER_PAD,
+        top: clusterBounds.top - CLUSTER_PAD,
+        right: clusterBounds.right + CLUSTER_PAD,
+        bottom: clusterBounds.bottom + CLUSTER_PAD,
       });
     });
 
