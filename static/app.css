@@ -2659,6 +2659,12 @@
     background: rgba(88,166,255,0.12);
     border-left-color: rgba(88,166,255,0.7);
   }
+  .conv-item .conv-live-tool.stale {
+    color: var(--red);
+    background: rgba(248,81,73,0.12);
+    border-left-color: rgba(248,81,73,0.65);
+    animation: none;
+  }
   /* Compact rows — toggle on the conv list. Forces every card to a
      single line: truncate the title with ellipsis and hide the ask
      preview. Meta + signals stay so you can still scan state. The
@@ -2763,6 +2769,7 @@
   .conv-item:hover .conv-edit-btn { opacity: 0.7; }
   .conv-item .conv-edit-btn:hover { opacity: 1; color: var(--accent); background: rgba(88,166,255,0.12); }
   .conv-item .conv-pin-btn,
+  .conv-item .conv-wake-btn,
   .conv-item .conv-archive-btn {
     opacity: 0; font-size: 13px; cursor: pointer;
     background: none; border: none; color: var(--text-muted);
@@ -2772,10 +2779,15 @@
   .conv-item:hover .conv-pin-btn,
   .conv-item.active .conv-pin-btn,
   .conv-item .conv-pin-btn:focus-visible,
+  .conv-item:hover .conv-wake-btn,
+  .conv-item.active .conv-wake-btn,
+  .conv-item .conv-wake-btn:focus-visible,
   .conv-item:hover .conv-archive-btn,
   .conv-item.active .conv-archive-btn,
   .conv-item .conv-archive-btn:focus-visible { opacity: 0.7; }
   .conv-item .conv-pin-btn:hover { opacity: 1; color: var(--accent); background: rgba(88,166,255,0.12); }
+  .conv-item .conv-wake-btn:hover { opacity: 1; color: var(--red); background: rgba(248,81,73,0.12); }
+  .conv-item .conv-wake-btn:disabled { cursor: progress; opacity: 0.55; }
   .conv-item .conv-pin-btn.is-unpin { color: var(--accent); }
   .conv-item.is-pinned:not(:hover):not(:focus-within) .conv-pin-btn.is-unpin { opacity: 0.9; }
   .conv-item .conv-pin-btn .conv-pin-glyph { position: relative; display: inline-block; line-height: 1; }
@@ -3028,6 +3040,7 @@
   .conv-signal.read-only { background: rgba(139,148,158,0.12); color: var(--text-muted); }
   .conv-signal.pkood-blocked { background: rgba(248,81,73,0.15); color: var(--red); animation: pulse 2s infinite; }
   .conv-signal.pkood-stuck { background: rgba(248,81,73,0.25); color: var(--red); font-weight: 700; }
+  .conv-signal.codex-stuck { background: rgba(248,81,73,0.20); color: var(--red); font-weight: 700; }
   /* "#N" issue-link chip on sidebar rows tied to a GH issue. Muted on
    * purpose — it's an identifier, not a state — so it doesn't compete
    * with the lifecycle chip (committed/pushed/PR/uncommitted) on the
@@ -3731,6 +3744,40 @@
   .flow-node-session.is-read-only,
   .flow-node-session.is-no-edits,
   .flow-node-session.is-idle { border-left-color: var(--accent); }
+  .flow-node-chips {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    margin-top: 6px;
+  }
+  .flow-chip {
+    display: inline-flex; align-items: center;
+    font-size: 10px; line-height: 1; letter-spacing: 0.02em;
+    padding: 3px 6px; border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-2, var(--text));
+    white-space: nowrap;
+  }
+  .flow-chip.working {
+    background: rgba(242, 204, 96, 0.18);
+    color: #f2cc60; border-color: rgba(242, 204, 96, 0.45);
+    animation: ccc-flow-chip-pulse 1.6s ease-in-out infinite;
+  }
+  .flow-chip.waiting {
+    background: rgba(80, 200, 220, 0.15);
+    color: var(--cyan); border-color: rgba(80, 200, 220, 0.4);
+  }
+  .flow-chip.uncommitted { color: var(--orange); border-color: rgba(255, 165, 0, 0.45); }
+  .flow-chip.pushed      { color: var(--cyan);   border-color: rgba(80, 200, 220, 0.4); }
+  .flow-chip.committed   { color: var(--cyan);   border-color: rgba(80, 200, 220, 0.4); }
+  .flow-chip.no-edits    { color: var(--text-2); }
+  .flow-chip.pr-open     { color: var(--cyan);   border-color: rgba(80, 200, 220, 0.4); }
+  .flow-chip.pr-merged   { color: var(--purple); border-color: rgba(168, 102, 232, 0.45); }
+  .flow-chip.pr-closed   { color: var(--text-2); }
+  .flow-chip.counter     { color: var(--text-2); }
+  @keyframes ccc-flow-chip-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
+  }
   /* Archived sessions: muted colors + check badge.
      IMPORTANT: keep the node fully opaque so connector lines (z-index 0)
      stay hidden BEHIND the node. Using opacity on the node lets the lines
@@ -4021,6 +4068,8 @@
     transition: color 0.15s, background 0.15s;
   }
   .kanban-card .kanban-action-btn:hover { color: var(--text); background: var(--border); }
+  .kanban-card .kanban-action-btn.is-wake { color: var(--red); }
+  .kanban-card .kanban-action-btn.is-wake:hover { background: rgba(248,81,73,0.12); }
   .kanban-card .kanban-card-meta {
     font-size: 11px; color: var(--text-muted); margin-top: 3px;
   }
@@ -4900,6 +4949,12 @@
     background: rgba(88,166,255,0.10);
     border-left-color: rgba(88,166,255,0.6);
     animation: pulse 1.2s infinite;
+  }
+  .kanban-live-tool.stale {
+    color: var(--red);
+    background: rgba(248,81,73,0.12);
+    border-left-color: rgba(248,81,73,0.65);
+    animation: none;
   }
   /* Live "what's running" strip in the conversation detail pane.
      Background layers the yellow/blue tint over an opaque `--bg` so

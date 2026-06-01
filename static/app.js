@@ -989,13 +989,75 @@
   let sessionSourceByConv = {}; // {convId: 'interactive'|'pkood'|'task'}
   let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
   // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
-  let liveStatus = { live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+  let liveStatus = { live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
   let liveStatusTimer = null;
+  const CODEX_WAKE_TEXT = 'Status check: your last tool call has not returned for a while. If you are stuck, say what you were waiting on, stop polling that command, and continue with the next concrete step.';
   // Separate 1s tick that just re-renders the live-tool strip + inline
   // indicator from the cached liveStatus. The 5s poller refreshes the
   // *data*; this ticker keeps the "running 3s / 4s / 5s" age label
   // changing every second so the user sees motion.
   let liveStatusRenderTicker = null;
+  // Freshest live-work fields per session_id. Survives renderArchiveList
+  // rebuilds from cached /api/conversations/all data (and 304 reuse) so WIP
+  // chips and bash-command pills keep updating between archive scans.
+  const _sessionLiveOverlay = new Map();
+  const _LIVE_OVERLAY_KEYS = [
+    'is_live', 'sidecar_status', 'sidecar_has_writes', 'sidecar_tool', 'sidecar_file',
+    'sidecar_ts', 'sidecar_in_flight', 'pending_tool', 'pending_file', 'last_event_type',
+    'needs_approval', 'needs_approval_message', 'question_waiting', 'question_text',
+    'question_header', 'question_preamble', 'question_options', 'question_option_details',
+  ];
+
+  function _liveOverlayFieldsFromRow(c) {
+    if (!c) return null;
+    const out = {};
+    for (const k of _LIVE_OVERLAY_KEYS) {
+      if (c[k] !== undefined) out[k] = c[k];
+    }
+    return out;
+  }
+
+  function _rememberLiveOverlay(sessionId, fields) {
+    if (!sessionId || !fields) return;
+    const prev = _sessionLiveOverlay.get(sessionId) || {};
+    _sessionLiveOverlay.set(sessionId, Object.assign({}, prev, fields));
+  }
+
+  function _applyLiveOverlayToRow(c) {
+    if (!c) return c;
+    const sid = c.session_id || c.id;
+    if (!sid) return c;
+    const ov = _sessionLiveOverlay.get(sid);
+    if (!ov || !ov.is_live) return c;
+    const merged = Object.assign({}, c);
+    const ovTs = ov.sidecar_ts || 0;
+    const rowTs = merged.sidecar_ts || 0;
+    if (ovTs >= rowTs || !merged.is_live) {
+      for (const k of _LIVE_OVERLAY_KEYS) {
+        if (ov[k] !== undefined) merged[k] = ov[k];
+      }
+    }
+    return merged;
+  }
+
+  async function refreshLiveSessionsActivity() {
+    try {
+      const res = await fetch('/api/sessions/live-activity?_=' + Date.now());
+      if (!res.ok) return;
+      const data = await res.json();
+      const sessions = (data && data.sessions) || {};
+      const liveIds = new Set(Object.keys(sessions));
+      for (const [sid, fields] of Object.entries(sessions)) {
+        _rememberLiveOverlay(sid, fields);
+      }
+      for (const sid of Array.from(_sessionLiveOverlay.keys())) {
+        if (!liveIds.has(sid)) _sessionLiveOverlay.delete(sid);
+      }
+      if (archiveLoaded && typeof _scheduleSidebarRender === 'function') {
+        _scheduleSidebarRender();
+      }
+    } catch (_) { /* best-effort */ }
+  }
 
   const $jumpBtnConv = document.getElementById('jumpBtnConv');
   const $launchWrapConv = document.getElementById('launchWrapConv');
@@ -1510,7 +1572,7 @@
 
   async function refreshLiveStatus() {
     if (!currentSession.id) {
-      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
       updateJumpButton();
       updateInputBar();
       return;
@@ -1534,6 +1596,8 @@
         sidecarStatus: data.sidecar_status || null,
         sidecarTs: data.sidecar_ts || 0,
         sidecarInFlight: !!data.sidecar_in_flight,
+        staleToolCall: !!data.stale_tool_call,
+        staleToolAgeS: data.stale_tool_age_s || 0,
         questionWaiting: !!data.question_waiting,
         questionText: data.question_text || '',
         questionHeader: data.question_header || '',
@@ -1559,19 +1623,40 @@
           row.sidecar_status = data.sidecar_status || null;
           row.sidecar_ts = data.sidecar_ts || 0;
           row.sidecar_in_flight = !!data.sidecar_in_flight;
+          row.pending_tool = Object.prototype.hasOwnProperty.call(data, 'pending_tool') ? (data.pending_tool || null) : (row.pending_tool || null);
+          row.pending_file = Object.prototype.hasOwnProperty.call(data, 'pending_file') ? (data.pending_file || null) : (row.pending_file || null);
+          row.pending_tool_ts = Object.prototype.hasOwnProperty.call(data, 'pending_tool_ts') ? (data.pending_tool_ts || 0) : (row.pending_tool_ts || 0);
+          row.stale_tool_call = !!data.stale_tool_call;
+          row.stale_tool_age_s = data.stale_tool_age_s || 0;
+          row.stale_tool_threshold_s = data.stale_tool_threshold_s || row.stale_tool_threshold_s || 0;
           row.question_waiting = !!data.question_waiting;
           row.question_text = data.question_text || '';
           row.question_header = data.question_header || '';
           row.question_preamble = data.question_preamble || '';
           row.question_options = Array.isArray(data.question_options) ? data.question_options : [];
           row.question_option_details = Array.isArray(data.question_option_details) ? data.question_option_details : [];
+          _rememberLiveOverlay(currentSession.id, _liveOverlayFieldsFromRow(row));
           if (typeof renderSidebar === 'function' && typeof filterConversations === 'function' && typeof $convSearch !== 'undefined' && $convSearch) {
             _scheduleSidebarRender();
           }
         }
       }
+      _rememberLiveOverlay(currentSession.id, {
+        is_live: !!data.live,
+        sidecar_tool: data.sidecar_tool || null,
+        sidecar_file: data.sidecar_file || null,
+        sidecar_status: data.sidecar_status || null,
+        sidecar_ts: data.sidecar_ts || 0,
+        sidecar_in_flight: !!data.sidecar_in_flight,
+        question_waiting: !!data.question_waiting,
+        question_text: data.question_text || '',
+        question_header: data.question_header || '',
+        question_preamble: data.question_preamble || '',
+        question_options: Array.isArray(data.question_options) ? data.question_options : [],
+        question_option_details: Array.isArray(data.question_option_details) ? data.question_option_details : [],
+      });
     } catch (err) {
-      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
     }
     updateJumpButton();
     updateInputBar();
@@ -1583,7 +1668,11 @@
     if (liveStatusTimer) clearInterval(liveStatusTimer);
     if (liveStatusRenderTicker) clearInterval(liveStatusRenderTicker);
     refreshLiveStatus();
-    liveStatusTimer = setInterval(_gated('liveStatus', refreshLiveStatus), 5000);
+    refreshLiveSessionsActivity();
+    liveStatusTimer = setInterval(_gated('liveStatus', () => {
+      refreshLiveStatus();
+      refreshLiveSessionsActivity();
+    }), 5000);
     liveStatusRenderTicker = setInterval(_gated('liveToolStrip', updateLiveToolStrip), 1000);
   }
 
@@ -2073,7 +2162,7 @@
       // Pkood sessions don't need live status polling or resume button
       if (liveStatusTimer) { clearInterval(liveStatusTimer); liveStatusTimer = null; }
       if (liveStatusRenderTicker) { clearInterval(liveStatusRenderTicker); liveStatusRenderTicker = null; }
-      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
       updateResumeButton();
       updateAnnounceButton();
       updateJumpButton();
@@ -2680,14 +2769,24 @@
   });
   window.addEventListener('resize', () => positionSlashCommandMenu(_slashMenuInput));
 
-  function appendPendingSendEcho(text, sid) {
+  function syncPendingSendsMapForConv(pane, convId) {
+    if (!pane || !convId) return;
+    if (!pane.pendingSendsByConv) pane.pendingSendsByConv = {};
+    if (!_pendingSends.length) {
+      delete pane.pendingSendsByConv[convId];
+      return;
+    }
+    pane.pendingSendsByConv[convId] = _pendingSends.map(p => ({ text: p.text }));
+  }
+
+  function appendPendingSendEcho(text, sid, paneId) {
     const pending = { text, sid, element: null, list: null, entry: null };
-    const $view = getConvView();
+    const $view = getConvViewForPane(paneId) || getConvView();
     if ($view) {
       const pendingDiv = document.createElement('div');
       pendingDiv.className = 'event user_text pending';
       pendingDiv.innerHTML = '<span class="label">User</span>'
-        + '<div class="user-msg">' + escapeHtml(text) + '</div>';
+        + '<div class="user-msg" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>';
       $view.appendChild(pendingDiv);
       showOptimisticAgentIndicator($view);
       scrollConversationToEnd($view);
@@ -2697,6 +2796,9 @@
       pending.list = _pendingSends;
       pending.entry = entry;
       pending.list.push(entry);
+      const convId = currentConversation;
+      const pane = paneByPaneId(paneId || activePaneId());
+      if (convId && pane) syncPendingSendsMapForConv(pane, convId);
     }
     if (sid) markSessionSending(sid);
     return pending;
@@ -2712,6 +2814,35 @@
       if (idx >= 0) pending.list.splice(idx, 1);
     }
     if (pending.sid) clearSessionSending(pending.sid);
+    const convId = currentConversation;
+    const pane = paneByPaneId(activePaneId());
+    if (convId && pane) syncPendingSendsMapForConv(pane, convId);
+  }
+
+  function restorePendingSendEchoes(convId, paneId) {
+    const pane = paneByPaneId(paneId);
+    if (!pane || !convId) return;
+    const saved = pane.pendingSendsByConv && pane.pendingSendsByConv[convId];
+    if (!saved || !saved.length) return;
+    const $view = getConvViewForPane(paneId);
+    if (!$view) return;
+    const sid = sessionIdByConv[convId] || convId;
+    for (const row of saved) {
+      const text = row && row.text;
+      if (!text) continue;
+      const normed = _normSend(text);
+      let alreadyShown = false;
+      for (const el of $view.querySelectorAll('.event.user_text')) {
+        const userMsg = el.querySelector('.user-msg');
+        if (!userMsg) continue;
+        const raw = userMsg.getAttribute('data-raw-text') || userMsg.textContent;
+        if (_normSend(raw) === normed) {
+          alreadyShown = true;
+          break;
+        }
+      }
+      if (!alreadyShown) appendPendingSendEcho(text, sid, paneId);
+    }
   }
 
   function restoreInputAfterSendFailure($input, text) {
@@ -2786,7 +2917,7 @@
     // TTS, the inject-input fetch) happens after — previously an in-flight TTS
     // teardown was awaited before this line, so sends during playback felt laggy
     // ("sometimes ok" = only when TTS was off).
-    const pendingSend = appendPendingSendEcho(text, sid);
+    const pendingSend = appendPendingSendEcho(text, sid, paneId || activePaneId());
     $input.value = '';
     clearInputDraftForConversation(draftConversation);
     if (_ttsActive) await stopTextToSpeech();
@@ -4331,6 +4462,7 @@
       lastLine: 0,
       eventSource: null,
       pendingSends: [],
+      pendingSendsByConv: {},
       firstUserMsgRendered: false,
       currentToolGroup: null,
       currentToolCount: 0,
@@ -6216,7 +6348,9 @@
     const isQuestionWaiting = c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion'));
     if (isQuestionWaiting) return { key: 'waiting', label: 'QUESTION' };
     if (c.needs_approval) return { key: 'waiting', label: 'needs approval' };
+    if (c.stale_tool_call) return { key: 'attention', label: 'stuck' };
     const codexOpenTurn = isCodexRow && !c.sidecar_status
+      && !c.stale_tool_call
       && (!!c.pending_tool || ((c.last_event_type === 'user' || c.last_event_type === 'assistant') && rowActivityAge < 30 * 60));
     const geminiOpenTurn = isGeminiRow && !c.sidecar_status
       && (!!c.pending_tool || ((c.last_event_type === 'user' || c.last_event_type === 'assistant') && rowActivityAge < 30 * 60));
@@ -6243,6 +6377,56 @@
     if (hasReadOnlyWork(c)) return { key: 'read-only', label: 'read-only' };
     if (hasNoEdits(c)) return { key: 'no-edits', label: 'no edits' };
     return { key: '', label: '' };
+  }
+
+  // Compact chip strip for a session in the flow board — mirrors (a
+  // subset of) the lifecycle chips in the regular conv list:
+  //   pushed | committed | no-edits | PR # | uncommitted
+  // Plus a live activity chip (tool name or WIP) when the agent is
+  // actively running, and a numeric counter chip when a commit count is
+  // available. Returns an HTML string ready to drop into the node body.
+  function flowSessionChipsHtml(c) {
+    if (!c) return '';
+    const chips = [];
+    const isWorktree = (c.worktree_label || c.session_cwd_is_worktree || c.effective_kind === 'worktree');
+    // Live activity wins visually — show first.
+    const liveTool = c.is_live && (c.pending_tool || c.sidecar_tool || '');
+    const wipActive = c.is_live && (
+      !!c.pending_spawn || !!c.pending_tool || !!c.sidecar_in_flight
+        || c.sidecar_status === 'active'
+    );
+    if (c.needs_approval || c.question_waiting) {
+      chips.push('<span class="flow-chip waiting" title="Paused waiting for your input">WAITING</span>');
+    } else if (wipActive) {
+      const label = liveTool ? String(liveTool).slice(0, 16) : 'WIP';
+      chips.push('<span class="flow-chip working" title="Agent is working' + (liveTool ? ' — ' + escapeAttr(String(liveTool)) : '') + '">' + escapeHtml(label) + '</span>');
+    }
+    // Single lifecycle chip — priority matches conv-list _renderRow.
+    if (isWorktree && c.worktree_dirty) {
+      chips.push('<span class="flow-chip uncommitted" title="Worktree has uncommitted changes">uncommitted</span>');
+    } else if (c.tail_pr_number) {
+      const ps = String(c.pr_state || '').toUpperCase();
+      let cls = 'pr-open', glyph = '↗ ', tip = 'PR open';
+      if (ps === 'MERGED') { cls = 'pr-merged'; glyph = '✓ '; tip = 'PR merged'; }
+      else if (ps === 'CLOSED') { cls = 'pr-closed'; glyph = '× '; tip = 'PR closed'; }
+      else if (!ps) { cls = 'pushed'; glyph = ''; tip = 'PR opened'; }
+      chips.push('<span class="flow-chip ' + cls + '" title="' + tip + '">' + glyph + 'PR #' + escapeHtml(String(c.tail_pr_number)) + '</span>');
+    } else if (c.has_push) {
+      chips.push('<span class="flow-chip pushed" title="Pushed to remote">pushed</span>');
+    } else if (c.has_commit) {
+      chips.push('<span class="flow-chip committed" title="Has commits, not pushed">committed</span>');
+    } else if (c.has_edit === false) {
+      chips.push('<span class="flow-chip no-edits" title="No file edits in this session">no edits</span>');
+    }
+    // Numeric counter chip when server exposes one. commit_count is
+    // intentionally optional — falls back to a qualitative chip above
+    // when the server-side count isn't populated.
+    const commitsN = Number(c.commit_count || 0);
+    if (commitsN > 0) {
+      chips.push('<span class="flow-chip counter" title="' + commitsN + ' commit' + (commitsN === 1 ? '' : 's') + ' made in this session">' + commitsN + ' commit' + (commitsN === 1 ? '' : 's') + '</span>');
+    }
+    if (!chips.length) return '';
+    return '<div class="flow-node-chips">' + chips.join('') + '</div>';
   }
 
   function flowSessionStatus(c) {
@@ -6435,9 +6619,9 @@
     const vpR = vpL + (board.clientWidth || window.innerWidth || 1200) / zoom;
     const PARENT_PAD = 20;
     const CLUSTER_MARGIN = 20;
-    const SESSION_GAP_BELOW_PARENT = 14;
-    const CHILD_GAP_X = 14;
-    const CHILD_GAP_Y = 10;
+    const SESSION_GAP_BELOW_PARENT = 18;
+    const CHILD_GAP_X = 18;
+    const CHILD_GAP_Y = 16;
     const CHILD_INDENT_X = 10;     // R5
     const NESTED_GAP_X = 24;       // R7
     const MAX_COLS = 4;
@@ -7057,6 +7241,7 @@
           title: flowRowTitle(row),
           kicker: row.source || row.engine || 'session',
           meta,
+          chipsHtml: flowSessionChipsHtml(row),
           className: 'flow-node-session is-' + status.key + worktree + (currentConversation === row.id ? ' active' : '') + (row.archived ? ' is-archived' : ''),
         });
       });
@@ -7111,7 +7296,8 @@
           + '<div class="flow-node-meta">' + escapeHtml(rec.meta || '') + '</div>'
           + '<button type="button" class="flow-draft-play" data-flow-action="play-draft-session" title="Start session" aria-label="Start session">&#9654;</button>'
         : '<div class="flow-node-title">' + escapeHtml(rec.title) + '</div>'
-          + '<div class="flow-node-meta">' + escapeHtml(rec.meta || '') + '</div>';
+          + '<div class="flow-node-meta">' + escapeHtml(rec.meta || '') + '</div>'
+          + (rec.chipsHtml || '');
       const selectedClass = flowSelectedNodes[rec.id] ? ' selected' : '';
       return '<div class="flow-node ' + escapeAttr(rec.className) + selectedClass + '" data-flow-kind="' + escapeAttr(rec.kind) + '"'
         + ' data-flow-node-id="' + escapeAttr(rec.id) + '"' + dataParent + dataRow + dataSession + dataObject + dataDraft + dataRepoPath
@@ -8938,6 +9124,7 @@
     // archived session shouldn't get pinned to Waiting because a stale
     // _needs_approval marker is still on disk; otherwise the row-list
     // archive button toggles its icon but the row never leaves "In progress".
+    if (c && c.stale_tool_call && !c.archived && !c.verified) return 'needs-attention';
     if (c && (c.needs_approval || c.question_waiting || (c.is_live && c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion')) && !c.archived && !c.verified) return 'waiting';
     const raw = _classifyKanbanColumnNatural(c);
     return _applyFreshSessionSticky(c, raw);
@@ -9095,7 +9282,7 @@
       { key: 'backlog',         label: 'GH Issues',       defaultExpanded: true,
         hint: 'Open GitHub issues and TODO.md / PARKING_LOT items with no session yet.' },
       { key: 'needs-attention', label: 'Needs attention', defaultExpanded: true,
-        hint: 'Issues labeled `needs-attention` on GitHub — you flagged them for triage.' },
+        hint: 'Issues labeled `needs-attention`, or Codex sessions with stale tool calls that need a wake.' },
       { key: 'icebox',          label: 'Icebox',          defaultExpanded: true,
         hint: 'Parked. The `icebox` GitHub label is set, or you dragged it here. Active intent: don\'t work on this right now.' },
       { key: 'working',         label: 'In progress',     defaultExpanded: true,
@@ -9371,7 +9558,7 @@
         const _isKanbanCursor = c.source === 'cursor' || c.engine === 'cursor';
         const _isKanbanAntigravity = c.source === 'antigravity' || c.engine === 'antigravity';
         const _kanbanActivityAge = c.sidecar_ts ? (Date.now() / 1000 - c.sidecar_ts) : (c.last_interacted ? (Date.now() / 1000 - c.last_interacted) : 9999);
-        const _codexKanbanWip = _isKanbanCodex && c.is_live && !c.sidecar_status && (!!c.pending_tool || ((c.last_event_type === 'user' || c.last_event_type === 'assistant') && _kanbanActivityAge < 30 * 60));
+        const _codexKanbanWip = _isKanbanCodex && c.is_live && !c.sidecar_status && !c.stale_tool_call && (!!c.pending_tool || ((c.last_event_type === 'user' || c.last_event_type === 'assistant') && _kanbanActivityAge < 30 * 60));
         const _geminiKanbanWip = _isKanbanGemini && c.is_live && (c.last_event_type === 'user' || c.last_event_type === 'assistant') && _kanbanActivityAge < 30 * 60;
         const _cursorKanbanWip = _isKanbanCursor && c.is_live && (c.last_event_type === 'user' || c.last_event_type === 'assistant') && _kanbanActivityAge < 30 * 60;
         const _antigravityKanbanWip = _isKanbanAntigravity && c.is_live && (c.last_event_type === 'user' || c.last_event_type === 'assistant') && _kanbanActivityAge < 30 * 60;
@@ -9388,6 +9575,10 @@
         const createIssueBtn = linkedIssue
           ? ''
           : '<button class="kanban-action-btn" data-action="create-issue" title="Create GitHub issue">&#128221;</button>';
+        const isCardCodex = c.source === 'codex' || c.engine === 'codex';
+        const wakeBtn = (isCardCodex && c.stale_tool_call && !c.archived && !c.verified)
+          ? '<button class="kanban-action-btn is-wake" data-action="wake-codex" title="Wake Codex with a status check">&#8635;</button>'
+          : '';
         // Persistent per-card ✨: show on every card that has a first_message
         // (both un-summarized AND user-renamed). A user who rename-regretted
         // otherwise has no way back to an AI title short of clearing the
@@ -9402,6 +9593,7 @@
           }
         }
         html += '<div class="kanban-card-actions">'
+          + wakeBtn
           + summarizeBtn
           + createIssueBtn
           + '<button class="kanban-action-btn" data-action="archive" title="' + archiveTitle + '">' + archiveIcon + '</button>'
@@ -9494,7 +9686,19 @@
         // Live "what's running right now" \u2014 render whenever sidecar shows
         // active work and the data is fresh (<5 min). Closes the Working
         // column gap where the card showed nothing while Claude was busy.
-        if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion') {
+        if (c.stale_tool_call) {
+          const staleTool = c.pending_tool || c.sidecar_tool || 'tool';
+          const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts) : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
+          const staleDetail = c.pending_file || c.sidecar_file || '';
+          const staleTitle = 'Codex has not logged a result for ' + staleTool
+            + (staleAge ? ' for ' + staleAge : '')
+            + (staleDetail ? ': ' + staleDetail : '');
+          html += '<div class="kanban-live-tool stale" title="' + escapeAttr(staleTitle) + '">'
+            + '<span class="kanban-live-name">Stuck</span>'
+            + ' <span class="kanban-live-file">' + escapeHtml(liveActivityToolLabel(staleTool)) + '</span>'
+            + (staleAge ? '<span class="kanban-live-age">' + escapeHtml(staleAge) + '</span>' : '')
+            + '</div>';
+        } else if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion') {
           const sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
           if (sidecarAge < 300) {
             const rawDetail = c.sidecar_file || '';
@@ -9869,6 +10073,15 @@
         } catch (err) {
           showOpToast('Archive failed (' + err.message + ')', 'error');
         }
+      });
+    });
+    targetEl.querySelectorAll('[data-action="wake-codex"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const card = btn.closest('.kanban-card');
+        const sid = card && card.dataset.sessionId;
+        if (!sid) return;
+        await wakeCodexSession(sid, btn);
       });
     });
     targetEl.querySelectorAll('.kanban-show-all').forEach(link => {
@@ -10292,16 +10505,25 @@
     });
   }
 
+  async function postInjectInput(sessionId, text, mode) {
+    const payload = { session_id: sessionId, text };
+    if (mode) payload.mode = mode;
+    const res = await fetch('/api/inject-input', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    let data = {};
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok && !data.error) data.error = 'HTTP ' + res.status;
+    return data;
+  }
+
   // Shared helper: inject text to a session via API
-  async function injectToSession(sessionId, text, feedbackEl, clearInput) {
+  async function injectToSession(sessionId, text, feedbackEl, clearInput, opts) {
     markSessionSending(sessionId);
     try {
-      const res = await fetch('/api/inject-input', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ session_id: sessionId, text }),
-      });
-      const data = await res.json();
+      const data = await postInjectInput(sessionId, text, opts && opts.mode);
       if (data.ok) {
         // Optimistic: bump local last_interacted so the card jumps to the top
         // and the "Last interacted just now" line appears without a refresh.
@@ -10331,6 +10553,50 @@
     } catch (e) {
       clearSessionSending(sessionId);
       showInjectError(clearInput, feedbackEl, String(e && e.message || e));
+    }
+  }
+
+  async function wakeCodexSession(sessionId, feedbackEl) {
+    if (!sessionId) return;
+    const originalText = feedbackEl ? feedbackEl.textContent : '';
+    const originalTitle = feedbackEl ? feedbackEl.title : '';
+    if (feedbackEl) {
+      feedbackEl.disabled = true;
+      feedbackEl.textContent = '...';
+    }
+    markSessionSending(sessionId);
+    try {
+      let data = await postInjectInput(sessionId, CODEX_WAKE_TEXT, 'steer');
+      if (!data.ok && (
+        data.code === 'codex_no_active_turn'
+        || data.code === 'codex_steer_unavailable'
+        || data.code === 'codex_steer_failed'
+      )) {
+        data = await postInjectInput(sessionId, CODEX_WAKE_TEXT, 'send');
+      }
+      if (!data.ok) throw new Error(data.error || 'wake failed');
+      touchSessionOptimistically(sessionId);
+      showOpToast(data.via === 'codex-steer' ? 'Wake sent to running Codex turn.' : 'Wake sent to Codex.');
+      setTimeout(refreshConversationList, 1500);
+      setTimeout(refreshConversationList, 3500);
+      if (feedbackEl) {
+        feedbackEl.textContent = '✓';
+        feedbackEl.style.color = 'var(--green)';
+        setTimeout(() => {
+          feedbackEl.textContent = originalText;
+          feedbackEl.style.color = '';
+          feedbackEl.disabled = false;
+          feedbackEl.title = originalTitle;
+        }, 1200);
+      }
+    } catch (err) {
+      clearSessionSending(sessionId);
+      showOpToast('Wake failed: ' + (err.message || 'unknown'), 'error');
+      if (feedbackEl) {
+        feedbackEl.textContent = originalText;
+        feedbackEl.disabled = false;
+        feedbackEl.title = originalTitle;
+      }
     }
   }
 
@@ -10383,7 +10649,7 @@
 
   function renderConversationList(convs) {
     convs = filterGhIssues(convs);
-    convs = (Array.isArray(convs) ? convs : []).filter(c => !_isOptimisticallyStartedIssueRow(c));
+    convs = (Array.isArray(convs) ? convs : []).filter(c => !_isOptimisticallyStartedIssueRow(c)).map(_applyLiveOverlayToRow);
     convs = _prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || '');
     _applyOptimisticTouches(convs);
     if (!convs.length) {
@@ -10577,6 +10843,17 @@
         liveToolHtml = '<span class="conv-live-tool sending" title="Sending — waiting for the first response from the agent">'
           + '<span class="conv-live-name">● Sending&hellip;</span>'
           + '</span>';
+      } else if (c.stale_tool_call) {
+        const staleTool = c.pending_tool || c.sidecar_tool || 'tool';
+        const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts) : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
+        const staleDetail = c.pending_file || c.sidecar_file || '';
+        const staleTitle = 'Codex has not logged a result for ' + staleTool
+          + (staleAge ? ' for ' + staleAge : '')
+          + (staleDetail ? ': ' + staleDetail : '');
+        liveToolHtml = '<span class="conv-live-tool stale" title="' + escapeAttr(staleTitle) + '">'
+          + '<span class="conv-live-name">Stuck</span>'
+          + '<span class="conv-live-file">' + escapeHtml(liveActivityCompactToolLabel(staleTool)) + '</span>'
+          + '</span>';
       } else if (c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion'))) {
         const q = c.sidecar_file || c.question_text || 'Claude is asking a question';
         liveToolHtml = '<span class="conv-live-tool is-question" title="' + escapeHtml(q) + '">'
@@ -10743,7 +11020,8 @@
       const _isQuestionWaiting = c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion'));
       const _isWaitingForUser = c.is_live && (c.needs_approval || _isQuestionWaiting);
       const _knownActivityTool = c.sidecar_tool || c.pending_tool || '';
-      const _hasLivePendingTool = c.is_live && !!c.pending_tool;
+      const _hasStaleToolCall = !!c.stale_tool_call;
+      const _hasLivePendingTool = c.is_live && !!c.pending_tool && !_hasStaleToolCall;
       // 30-min open-turn window was too generous — flagged a session as
       // "working" for up to half an hour after the user last typed, even
       // when the agent had clearly stopped. 5 min is enough to bridge a
@@ -10753,6 +11031,7 @@
       const _codexOpenTurn = isCodexRow
         && c.is_live
         && !c.sidecar_status
+        && !_hasStaleToolCall
         && (_codexHasOpenTool
           || (!!(c.last_event_type === 'user' || c.last_event_type === 'assistant')
             && _rowActivityAge < _OPEN_TURN_FRESH_S));
@@ -10812,7 +11091,14 @@
       if (_isAgentRunning) {
         rel = c.sidecar_ts ? relativeTime(c.sidecar_ts) : 'now';
       }
-      if (!liveToolHtml && _isWaitingForUser && !_isAgentRunning) {
+      if (_hasStaleToolCall && !liveToolHtml) {
+        const stuckTool = _knownActivityTool || 'tool call';
+        const stuckAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts) : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
+        const stuckTitle = 'Codex has not logged a result for ' + stuckTool
+          + (stuckAge ? ' for ' + stuckAge : '')
+          + '. Use Wake to nudge it.';
+        signals += '<span class="conv-signal codex-stuck" title="' + escapeHtml(stuckTitle) + '">stuck</span>';
+      } else if (!liveToolHtml && _isWaitingForUser && !_isAgentRunning) {
         // Agent has stopped and is blocked on user input — distinct
         // chip + tooltip + class so it doesn't masquerade as live work.
         // Only AskUserQuestion gets the louder QUESTION label; every
@@ -10896,6 +11182,9 @@
         : 'Squash-merge PR for ' + branchValue;
       const mergeBtn = _showMerge
         ? '<button class="conv-merge-btn" data-role="merge" title="' + escapeHtml(_mergeTitle) + '">&#128256;</button>'
+        : '';
+      const wakeBtn = (isCodexRow && c.stale_tool_call && !c.archived && !c.verified)
+        ? '<button class="conv-wake-btn" data-role="wake-codex" title="Wake Codex with a status check" aria-label="Wake Codex">&#8635;</button>'
         : '';
 
       let startBtn = '';
@@ -10992,7 +11281,7 @@
             // states (CSS uses `position: absolute` for one of them).
             + '<span class="conv-row-end">'
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
-            +   '<span class="conv-row-actions">' + mergeBtn + startBtn + pinBtn + archiveBtn + '</span>'
+            +   '<span class="conv-row-actions">' + wakeBtn + mergeBtn + startBtn + pinBtn + archiveBtn + '</span>'
             + '</span>'
           + '</div>'
         + '</div>'
@@ -12238,7 +12527,7 @@
         // Ignore clicks that started the inline editor, archive button,
         // or that landed on the title (which now triggers rename instead
         // of opening the conversation — the pencil's job moved here).
-        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="pin"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
+        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="pin"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="wake-codex"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
         if (ev.metaKey || ev.ctrlKey || ev.shiftKey) {
           ev.preventDefault();
           if (selectedListIds.has(el.dataset.id)) {
@@ -12442,6 +12731,16 @@
         } catch (err) {
           showOpToast('Archive failed (' + err.message + ')', 'error');
         }
+      });
+    });
+    $convList.querySelectorAll('.conv-wake-btn').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const item = btn.closest('.conv-item');
+        const sid = item && item.dataset.sessionId;
+        if (!sid) return;
+        await wakeCodexSession(sid, btn);
       });
     });
     // Start button on backlog rows — mirrors .kanban-start-btn so the same
@@ -14183,6 +14482,10 @@
     paneId = paneId || activePaneId();
     const pane = paneByPaneId(paneId);
     if (!pane) return;
+    const previousConvId = pane.conversationId;
+    if (previousConvId && previousConvId !== id) {
+      syncPendingSendsMapForConv(pane, previousConvId);
+    }
     if (typeof ffcUpdateSidebar === 'function') ffcUpdateSidebar(null);
     if (typeof closeStatusRailFileViewer === 'function') closeStatusRailFileViewer();
     const selectedConv = (conversationsData || []).find(x => x.id === id) || {};
@@ -14221,7 +14524,9 @@
     _dynamicAskState = null;  // sticky-header scroll tracker — repopulated when the new sticky is built
     _currentToolGroup = null;
     _currentToolCount = 0;
-    _pendingSends = [];  // drop any optimistic sends from the previous conv
+    // Detach in-memory pending echoes for the outgoing conv; they are
+    // restored from pendingSendsByConv when this pane re-opens that conv.
+    _pendingSends = [];
     const selectedRow = conversationsData.find(x => x.id === id) || null;
     updatePaneHeader(paneId, selectedRow || Object.assign({ id, source }, selectedConv || {}));
     if (selectedRow && selectedRow.source === 'backlog' && selectedRow.issue_number) {
@@ -15464,7 +15769,12 @@
       if (typeof ev.text === 'string') return [{ type: 'text', text: ev.text }];
       return [];
     };
+    const cursorVisibleText = (text) => {
+      if (!text) return '';
+      return String(text).split(/\r?\n/).filter(line => line.trim().toLowerCase() !== '[redacted]').join('\n').trim();
+    };
     const appendAssistant = (text) => {
+      text = cursorVisibleText(text);
       if (!text) return;
       const last = messages[messages.length - 1];
       if (last && last.role === 'assistant') last.text += text;
@@ -15488,7 +15798,7 @@
             }
           }
         } else if (role === 'user') {
-          const userText = blocks.map(b => b.type === 'text' ? (b.text || '') : '').join('\n').trim();
+          const userText = cursorVisibleText(blocks.map(b => b.type === 'text' ? (b.text || '') : '').join('\n'));
           if (userText) messages.push({ role: 'user', text: userText });
         } else if (ev.type === 'tool_use') {
           const detail = ev.command || ev.description || ev.path || ev.query || '';
@@ -15657,6 +15967,7 @@
         }
         renderConversationEvents(data.events, fetchPaneId);
         convLastLine = data.last_line;
+        restorePendingSendEchoes(id, fetchPaneId);
       } finally {
         splitState.activeIndex = savedIdx;
       }
@@ -17850,6 +18161,8 @@
           const p = _pendingSends[pIdx];
           if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
           _pendingSends.splice(pIdx, 1);
+          const pane = paneByPaneId(paneId);
+          if (pane && currentConversation) syncPendingSendsMapForConv(pane, currentConversation);
         }
         const pendingDivs = $view.querySelectorAll('.event.user_text.pending');
         for (const pDiv of pendingDivs) {
@@ -20666,7 +20979,13 @@
         // caller re-renders, but the flicker guard skips the rebuild since the
         // structural signature is unchanged.
         if (r.status === 304) {
-          return (_archiveAllData.get(url) || []).slice();
+          const cached = (_archiveAllData.get(url) || []).slice();
+          // Archive body unchanged, but live tool/WIP chips still move —
+          // refresh the cheap overlay and let the next render merge it in.
+          if (typeof refreshLiveSessionsActivity === 'function') {
+            refreshLiveSessionsActivity();
+          }
+          return cached;
         }
         if (!r.ok) return [];
         const etag = r.headers.get('ETag');
@@ -20989,6 +21308,10 @@
     // pill code paths quiet; when a peer server is later running for one
     // of these folders, supercharging the row with live data is just a
     // matter of merging the peer's session record into this shape.
+    for (const prev of (conversationsData || [])) {
+      const sid = prev.session_id || prev.id;
+      if (sid && prev.is_live) _rememberLiveOverlay(sid, _liveOverlayFieldsFromRow(prev));
+    }
     const shaped = rows.map(c => {
       if (c.source === 'backlog') {
         const folderOrphan = !c.folder_path;
@@ -21086,6 +21409,10 @@
         sidecar_has_writes: !!c.sidecar_has_writes,
         pending_tool: c.pending_tool || null,
         pending_file: c.pending_file || null,
+        pending_tool_ts: c.pending_tool_ts || 0,
+        stale_tool_call: !!c.stale_tool_call,
+        stale_tool_age_s: c.stale_tool_age_s || 0,
+        stale_tool_threshold_s: c.stale_tool_threshold_s || 0,
         last_event_type: c.last_event_type || null,
         needs_approval: !!c.needs_approval,
         needs_approval_message: c.needs_approval_message || '',
@@ -21129,7 +21456,7 @@
         pinned: !!c.pinned,
         pin_rank: Number.isFinite(Number(c.pin_rank)) ? Number(c.pin_rank) : null,
       };
-    });
+    }).map(_applyLiveOverlayToRow);
 
     // History-augmentation: badge + snippet for archive entries that the
     // indexer matched for this same query. The conv-item template reads
@@ -22293,7 +22620,7 @@
         $cpInput.style.borderColor = 'var(--red)';
         setTimeout(() => { $cpInput.style.borderColor = ''; }, 1500);
       };
-      const pendingSend = appendPendingSendEcho(text, sid);
+      const pendingSend = appendPendingSendEcho(text, sid, activePaneId());
       const draftConversation = currentConversation;
       $cpInput.value = '';
       clearInputDraftForConversation(draftConversation);
