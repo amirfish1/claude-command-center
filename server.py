@@ -10883,12 +10883,13 @@ _CONV_PATH_CACHE_LOCK = threading.Lock()
 
 
 def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
-    """Return the mtime of the JSONL backing this conversation, or 0 if we
-    can't resolve it. The resolver itself walks ~/.claude/projects/ to find
-    the slug — measured at ~125 ms per call on a populated home dir — so
-    we cache (sid → path) and only re-stat the file on each call. The stat
-    is the freshness signal; the cached path stays valid as long as the
-    file exists, and we invalidate on miss.
+    """Return a (mtime_ns, size) tuple for the JSONL backing this
+    conversation, or (0, 0) if we can't resolve it. Used as a cache key;
+    nanosecond precision + size catches the case where a new event lands
+    in the same second as a cache write (st_mtime float has 1s resolution
+    on macOS/Linux, which let pre-baked response bytes from before the
+    final event be served back, dropping the trailing message). The (sid
+    → path) cache is preserved across calls; only the stat is re-run.
     """
     try:
         with _CONV_PATH_CACHE_LOCK:
@@ -10896,7 +10897,8 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
         if path is not None:
             p = Path(path)
             try:
-                return p.stat().st_mtime
+                st = p.stat()
+                return (st.st_mtime_ns, st.st_size)
             except OSError:
                 # File moved/deleted — drop the stale entry and re-resolve.
                 with _CONV_PATH_CACHE_LOCK:
@@ -10913,10 +10915,11 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
         if resolved and Path(resolved).is_file():
             with _CONV_PATH_CACHE_LOCK:
                 _CONV_PATH_CACHE[conversation_id] = str(resolved)
-            return Path(resolved).stat().st_mtime
+            st = Path(resolved).stat()
+            return (st.st_mtime_ns, st.st_size)
     except Exception:
         pass
-    return 0.0
+    return (0, 0)
 
 
 def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=True):
@@ -10928,7 +10931,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     """
     if use_cache:
         mtime = _conv_parse_jsonl_mtime(conversation_id, repo_path=repo_path)
-        if mtime > 0:
+        if mtime[0] > 0:
             key = (conversation_id, int(after_line), mtime)
             with _CONV_PARSE_CACHE_LOCK:
                 hit = _CONV_PARSE_CACHE.get(key)
@@ -11007,7 +11010,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
 def _conv_parse_cache_put(conversation_id, after_line, repo_path, result):
     """Stash a parse result under (sid, after_line, current jsonl mtime)."""
     mtime = _conv_parse_jsonl_mtime(conversation_id, repo_path=repo_path)
-    if mtime <= 0:
+    if mtime[0] <= 0:
         return
     key = (conversation_id, int(after_line), mtime)
     with _CONV_PARSE_CACHE_LOCK:
@@ -11048,7 +11051,7 @@ def _session_has_pending_input(session_id):
 
 def _conv_response_bytes_get(conversation_id, after_line):
     mtime = _conv_parse_jsonl_mtime(conversation_id)
-    if mtime <= 0:
+    if mtime[0] <= 0:
         return None
     # Queued injects are not in the JSONL yet; a pre-baked response from
     # before the queue grew would omit them until mtime changes.
@@ -11061,7 +11064,7 @@ def _conv_response_bytes_get(conversation_id, after_line):
 
 def _conv_response_bytes_put(conversation_id, after_line, raw, gz):
     mtime = _conv_parse_jsonl_mtime(conversation_id)
-    if mtime <= 0:
+    if mtime[0] <= 0:
         return
     key = (conversation_id, int(after_line), mtime)
     with _CONV_BYTES_CACHE_LOCK:
