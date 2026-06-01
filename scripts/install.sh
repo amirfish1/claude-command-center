@@ -91,10 +91,16 @@ require_python3() {
   fi
 }
 
-require_claude_cli() {
+warn_if_no_claude_cli() {
+  # Don't hard-exit if `claude` isn't installed: CCC also drives Codex,
+  # Gemini, and Antigravity sessions, and the dashboard itself is useful
+  # without any engine on PATH (the user gets a clear in-UI hint to
+  # install). Hard-exiting here used to silently drop DMG users who
+  # downloaded out of curiosity without a Claude Code install — install.sh
+  # would print to a Terminal they already closed and the .app's only
+  # signal was a "didn't start in 60s" fatal.
   if ! command -v claude >/dev/null 2>&1; then
-    err "claude CLI not found on PATH. Install from https://docs.claude.com/en/docs/claude-code"
-    exit 1
+    err "claude CLI not on PATH — install from https://docs.claude.com/en/docs/claude-code if you want Claude Code sessions. CCC will still start; Codex / Gemini / Antigravity sessions don't need it."
   fi
 }
 
@@ -177,7 +183,7 @@ main() {
   require_macos
   require_git
   require_python3
-  require_claude_cli
+  warn_if_no_claude_cli
 
   local channel
   channel="$(parse_channel "$@")"

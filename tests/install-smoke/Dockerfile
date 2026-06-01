@@ -11,9 +11,9 @@
 # fails CI when the installer regresses.
 #
 # Caveats vs. a real macOS install:
-#   - The installer is macOS-only (require_macos / require_claude_cli /
+#   - The installer is macOS-only (require_macos / warn_if_no_claude_cli /
 #     git clone of a public URL). We stub uname to report Darwin, stub
-#     `claude` as a no-op so the prereq check passes, and stub `git` so
+#     `claude` as a no-op so warn_if_no_claude_cli stays silent, and stub `git` so
 #     `git pull --ff-only` against the pre-staged checkout is a no-op
 #     (we already COPYed the repo in, so there's nothing to fetch).
 #   - This means we exercise everything in scripts/install.sh that runs
@@ -58,8 +58,8 @@ COPY . /repo
 #
 # 1. uname -> always returns "Darwin" for `uname -s`. The installer's
 #    require_macos check is `[ "$uname_s" != "Darwin" ] && exit 2`.
-# 2. claude -> no-op. require_claude_cli is `command -v claude`; the stub
-#    just has to exist + be executable.
+# 2. claude -> no-op. warn_if_no_claude_cli probes `command -v claude`; the
+#    stub just has to exist + be executable so the warn line stays silent.
 # 3. git -> wrapper that intercepts `pull` and `clone` (the only network
 #    calls in scripts/install.sh) and no-ops them. Everything else falls
 #    through to the real /usr/bin/git so any future installer logic that
@@ -75,7 +75,7 @@ RUN set -eux; \
     chmod +x /usr/local/sbin/uname; \
     { \
       echo '#!/usr/bin/env bash'; \
-      echo '# Test stub: no-op claude CLI so install.sh require_claude_cli passes.'; \
+      echo '# Test stub: no-op claude CLI so install.sh warn_if_no_claude_cli stays silent.'; \
       echo 'exit 0'; \
     } > /usr/local/sbin/claude; \
     chmod +x /usr/local/sbin/claude; \
