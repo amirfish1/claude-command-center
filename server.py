@@ -17219,7 +17219,15 @@ def _ensure_cursor_session_visible(session_id, spawn_entry=None):
             conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
             
             row = conn.execute("SELECT value FROM meta WHERE key = '0'").fetchone()
-            existing = json.loads(row[0]) if row else {}
+            existing = {}
+            if row and row[0]:
+                try:
+                    existing = json.loads(bytes.fromhex(row[0]).decode("utf-8"))
+                except Exception:
+                    try:
+                        existing = json.loads(row[0])
+                    except Exception:
+                        pass
             
             payload = dict(existing)
             payload.update({
@@ -17232,9 +17240,12 @@ def _ensure_cursor_session_visible(session_id, spawn_entry=None):
             if "latestRootBlobId" not in payload:
                 payload["latestRootBlobId"] = ""
                 
+            json_str = json.dumps(payload, ensure_ascii=False)
+            hex_str = json_str.encode("utf-8").hex()
+            
             conn.execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES ('0', ?)",
-                (json.dumps(payload, ensure_ascii=False),)
+                (hex_str,)
             )
             conn.commit()
         finally:

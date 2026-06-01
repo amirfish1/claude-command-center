@@ -382,7 +382,7 @@ class TestServerImports(unittest.TestCase):
                 row = conn.execute("SELECT value FROM meta WHERE key = '0'").fetchone()
                 conn.close()
                 self.assertIsNotNone(row)
-                data = json.loads(row[0])
+                data = json.loads(bytes.fromhex(row[0]).decode("utf-8"))
                 self.assertEqual(data["agentId"], sid)
                 self.assertEqual(data["name"], "Test Cursor Session")
 
