@@ -567,6 +567,20 @@
     }
   })();
 
+  // Pause periodic sidebar/poller work while the user is in a text field or
+  // the Cmd+F find bar is open (find steals focus into the transcript when
+  // pollers re-render the list mid-search).
+  function shouldPausePeriodicUiWork() {
+    const findModal = document.getElementById('chatFindModal');
+    if (findModal && findModal.style.display !== 'none') return true;
+    const ae = document.activeElement;
+    if (!ae) return false;
+    if (ae.tagName === 'TEXTAREA') return true;
+    if (ae.tagName !== 'INPUT') return false;
+    const t = (ae.type || 'text').toLowerCase();
+    return /^(text|search|email|url|tel|password)$/.test(t);
+  }
+
   // ── DEBUG: mute every setInterval callback while user is typing ──────
   // Wrap window.setInterval so any timer-driven work CCC registers from
   // this point on bails out when a TEXTAREA or text-style INPUT is
@@ -581,21 +595,13 @@
     if (window.__cccTickerMuteInstalled) return;
     window.__cccTickerMuteInstalled = true;
     const _origSetInterval = window.setInterval;
-    const _isTyping = () => {
-      const ae = document.activeElement;
-      if (!ae) return false;
-      if (ae.tagName === 'TEXTAREA') return true;
-      if (ae.tagName !== 'INPUT') return false;
-      const t = (ae.type || 'text').toLowerCase();
-      return /^(text|search|email|url|tel|password)$/.test(t);
-    };
     window.setInterval = function patchedSetInterval(fn, delay) {
       if (typeof fn !== 'function') {
         return _origSetInterval.apply(this, arguments);
       }
       const extra = Array.prototype.slice.call(arguments, 2);
       const wrapped = function() {
-        if (_isTyping()) return;
+        if (shouldPausePeriodicUiWork()) return;
         return fn.apply(this, arguments);
       };
       return _origSetInterval.call(this, wrapped, delay, ...extra);
@@ -2831,7 +2837,7 @@
       const pendingDiv = document.createElement('div');
       pendingDiv.className = 'event user_text pending';
       pendingDiv.innerHTML = '<span class="label">User</span>'
-        + '<div class="user-msg" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>';
+        + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>';
       $view.appendChild(pendingDiv);
       showOptimisticAgentIndicator($view);
       scrollConversationToEnd($view);
@@ -4004,7 +4010,17 @@
     // collapsed to a single <br> by the loop above.
     while (out.length && out[0] === '<br>') out.shift();
     while (out.length && out[out.length - 1] === '<br>') out.pop();
-    return out.join('');
+    // RTL: tag every block-level element with dir="auto" so each
+    // paragraph picks its own direction from its first strong
+    // directional character. `unicode-bidi: plaintext` in CSS handles
+    // the bidi algorithm but doesn't flip text-align — only an actual
+    // `dir` attribute does, and `dir="auto"` makes the browser detect
+    // per element instead of inheriting from <html>. Skip tags we
+    // never want to flip (pre/code stay LTR via CSS).
+    return out.join('').replace(
+      /<(p|li|blockquote|h[1-6]|td|th|dt|dd)(\s|>)/g,
+      '<$1 dir="auto"$2'
+    );
   }
 
   // ── Fenced-code-block rendering + tokenizer ─────────────────────────────
@@ -5044,7 +5060,7 @@
       : escapeHtml(card.display_name || 'New session');
     $view.innerHTML = '<div class="event user_text pending">'
       + '<span class="label">User</span>'
-      + '<div class="user-msg" data-raw-text="' + escapeAttr(prompt || card.display_name || 'New session') + '">' + promptHtml + '</div>'
+      + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(prompt || card.display_name || 'New session') + '">' + promptHtml + '</div>'
       + (meta ? '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">' + escapeHtml(meta) + '</div>' : '')
       + (card.source === 'antigravity' ? '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">Antigravity is running headless with AGY print mode. Use Launch on a completed row for manual /resume in the TUI.</div>' : '')
       + '</div>';
@@ -7911,6 +7927,7 @@
   function renderSidebar(convs) {
     if (_renameInProgress) return;
     if (deferSidebarRenderIfDragging()) return;
+    if (shouldPausePeriodicUiWork()) return;
     const $kanbanBoard = document.getElementById('kanbanBoard');
     const $flow = document.getElementById('flowBoard');
     const $convList = document.getElementById('convList');
@@ -7935,10 +7952,26 @@
   // (and computes fresh convs at flush time). User-initiated renders still call
   // renderSidebar / renderArchiveList directly so they stay immediate.
   let _sidebarRenderRaf = 0;
+  let _sidebarRenderPendingWhilePaused = false;
+  function _flushDeferredSidebarRenderIfAny() {
+    if (!_sidebarRenderPendingWhilePaused) return;
+    if (shouldPausePeriodicUiWork()) return;
+    _sidebarRenderPendingWhilePaused = false;
+    _scheduleSidebarRender();
+  }
   function _scheduleSidebarRender() {
+    if (shouldPausePeriodicUiWork()) {
+      _sidebarRenderPendingWhilePaused = true;
+      return;
+    }
     if (_sidebarRenderRaf) return;
     _sidebarRenderRaf = requestAnimationFrame(() => {
       _sidebarRenderRaf = 0;
+      if (shouldPausePeriodicUiWork()) {
+        _sidebarRenderPendingWhilePaused = true;
+        return;
+      }
+      _sidebarRenderPendingWhilePaused = false;
       try {
         const $s = document.getElementById('convSearch');
         const convs = (typeof filterConversations === 'function')
@@ -8425,7 +8458,7 @@
       if (origEl && lastEl && metaWrap) {
         metaWrap.style.display = 'none';
       }
-      return '<div class="assistant-text gc-chat-doc">' + renderMarkdown(text) + '</div>';
+      return '<div class="assistant-text gc-chat-doc" dir="auto">' + renderMarkdown(text) + '</div>';
     }
 
     let html = '';
@@ -9049,7 +9082,7 @@
       _gcPollFailCount = 0;
       const errBanner = body.querySelector('.gc-poll-error');
       if (errBanner) errBanner.remove();
-      if (!data.ok) { body.innerHTML = '<div class="assistant-text gc-chat-doc">' + renderMarkdown(data.error || 'File not found.') + '</div>'; return; }
+      if (!data.ok) { body.innerHTML = '<div class="assistant-text gc-chat-doc" dir="auto">' + renderMarkdown(data.error || 'File not found.') + '</div>'; return; }
       if (data.mtime !== _gcLastMtime) {
         const isFirstLoad = _gcLastMtime === null;
         _gcLastMtime = data.mtime;
@@ -14480,7 +14513,7 @@
         html += '<span data-close-status style="font-size:12px;color:var(--text-muted);align-self:center;"></span>';
         html += '</div>';
       }
-      html += '<div class="assistant-text" style="font-size:14px;line-height:1.55;">' + renderIssueMarkdown(issue.body || '') + '</div>';
+      html += '<div class="assistant-text" dir="auto" style="font-size:14px;line-height:1.55;">' + renderIssueMarkdown(issue.body || '') + '</div>';
       const comments = issue.comments || [];
       html += '<div style="margin:24px 0 0;padding-top:16px;border-top:1px solid var(--border);">';
       html += '<div style="font-size:12px;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;">All comments (' + comments.length + ')</div>';
@@ -14491,7 +14524,7 @@
           const when = cm.createdAt ? new Date(cm.createdAt).toLocaleString() : '';
           html += '<div style="padding:12px;border:1px solid var(--border);border-radius:6px;">';
           html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">' + escapeHtml(who) + ' &middot; ' + escapeHtml(when) + '</div>';
-          html += '<div class="assistant-text" style="font-size:13px;line-height:1.5;">' + renderIssueMarkdown(cm.body || '') + '</div>';
+          html += '<div class="assistant-text" dir="auto" style="font-size:13px;line-height:1.5;">' + renderIssueMarkdown(cm.body || '') + '</div>';
           html += '</div>';
         }
         html += '</div>';
@@ -14533,7 +14566,7 @@
         const urlSafe = escapeHtml(url || '');
         let inner =
           '<div class="label">Issue</div>' +
-          '<div class="user-msg">' +
+          '<div class="user-msg" dir="auto">' +
             '<div class="ask-first">' + titleSafe + ' <span class="issue-num">#' + numSafe + '</span></div>';
         if (urlSafe) {
           inner += '<a class="ask-rest" href="' + urlSafe + '" target="_blank" rel="noopener">Open on GitHub &#x2197;</a>';
@@ -16407,7 +16440,7 @@
     html += '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">' + sourceLabel + '</div>';
     html += '<h1 style="margin:0 0 12px;font-size:20px;line-height:1.3;">' + escapeHtml(title) + '</h1>';
     if (body) {
-      html += '<div class="assistant-text" style="font-size:14px;line-height:1.55;white-space:pre-wrap;">' + escapeHtml(body) + '</div>';
+      html += '<div class="assistant-text" dir="auto" style="font-size:14px;line-height:1.55;white-space:pre-wrap;">' + escapeHtml(body) + '</div>';
     }
     html += '<div style="margin-top:20px;color:var(--text-muted);font-size:13px;">No conversation yet — tap <strong>Start session</strong> on the card to spawn one.</div>';
     html += '</div>';
@@ -18137,7 +18170,7 @@
 
   function renderConversationEvents(events, paneId) {
     if (!Array.isArray(events)) return;  // defensive: backlog/unknown responses
-    if (_isComposerFocused()) {
+    if (_isComposerFocused() || shouldPausePeriodicUiWork()) {
       _deferredStreamBatches.push({ events, paneId: paneId || activePaneId() });
       return;
     }
@@ -18218,7 +18251,7 @@
                       const cleaned = cleanIssuePrompt(ev.text);
                       const parts = splitFirstSentence(cleaned);
                       const imagesHtml = renderImageDescriptors(ev.images);
-                      let h = '<div class="user-msg">';
+                      let h = '<div class="user-msg" dir="auto">';
                       h += '<span class="ask-first">' + linkifyPastedImages(escapeHtml(parts[0])) + '</span>';
                       h += '<span class="ask-rest"' + (parts[1] ? '' : ' style="display:none"') + '>' + linkifyPastedImages(escapeHtml(parts[1] || '')) + '</span>';
                       h += imagesHtml;
@@ -18228,7 +18261,7 @@
             +     '</div>'
             +     '<div class="csh-ask-earlier" data-earlier-block>'
             +       '<div class="label">Earlier ask</div>'
-            +       '<div class="user-msg"><span class="earlier-first" data-earlier-first></span></div>'
+            +       '<div class="user-msg" dir="auto"><span class="earlier-first" data-earlier-first></span></div>'
             +     '</div>'
             +   '</div>'
             +   '<div class="csh-col csh-col-activity">'
@@ -18392,7 +18425,7 @@
         const textHtml = notification
           ? renderTaskNotificationBlock(notification, cleanedText, true)
           : cleanedText
-          ? '<div class="user-msg" data-raw-text="' + escapeAttr(cleanedText) + '">' + linkifyPastedImages(escapeHtml(cleanedText)) + '</div>'
+          ? '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + linkifyPastedImages(escapeHtml(cleanedText)) + '</div>'
           : '';
         div.innerHTML = '<span class="label">User</span>'
           + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
@@ -18459,7 +18492,7 @@
               + commandDisclosure
               + '</div>';
           } else if (b.kind === 'text') {
-            html += '<div class="assistant-text">' + renderMarkdown(b.text) + '</div>';
+            html += '<div class="assistant-text" dir="auto">' + renderMarkdown(b.text) + '</div>';
             hasNonTool = true;
           } else if (b.kind === 'thinking') {
             html += '<div class="thinking-block" style="display:none"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">Thinking</span><div class="t-body">' + escapeHtml(b.text) + '</div></div>';
@@ -21441,6 +21474,7 @@
     if (!$list) return;
     if (_renameInProgress) return;
     if (deferSidebarRenderIfDragging()) return;
+    if (shouldPausePeriodicUiWork()) return;
     const q = (filter || '').trim().toLowerCase();
     const scrollState = _captureArchiveListScroll(q, $list);
     const _finishArchiveRender = () => {
@@ -26023,6 +26057,9 @@
   }
   if ($cmdkBackdrop) $cmdkBackdrop.addEventListener('click', closeCmdk);
 
+  // Cmd+F in-conversation find (assigned when chat find UI initializes).
+  let refreshChatFind = function() {};
+
   // ── Global keyboard shortcuts ─────────────────────────────────
   // ⌘K / ⌘P → open search; ⌘\ → toggle conversation pane; ⌘N → new session.
   document.addEventListener('keydown', (e) => {
@@ -26049,6 +26086,7 @@
         modal.style.display = 'flex';
         input.focus();
         input.select();
+        requestAnimationFrame(() => refreshChatFind({ rebuild: true }));
       }
       return;
     }
@@ -26059,127 +26097,158 @@
   const $chatFindPrev = document.getElementById('chatFindPrev');
   const $chatFindClose = document.getElementById('chatFindClose');
   if ($chatFindInput) {
-    function doFind(backward) {
-      const text = $chatFindInput.value;
-      if (!text) return;
-      if (typeof window.find === 'function') {
-        window.find(text, false, backward, true, false, false, false);
+    const $chatFindModal = document.getElementById('chatFindModal');
+    let _chatFindRanges = [];
+    let _chatFindMatchIndex = 0;
+    let _chatFindLastBuiltQuery = '';
+
+    function chatFindGetRoot() {
+      try {
+        return (typeof getConvView === 'function' ? getConvView() : null)
+          || document.getElementById('conversationsView');
+      } catch (_) {
+        return document.getElementById('conversationsView');
       }
     }
-    // Restore focus to the find input AFTER WebKit's layout settles —
-    // window.find() moves focus to the matched DOM element on a later
-    // tick (post-reflow), so a synchronous .focus() right after doFind
-    // beats the focus move and loses. Schedule the restore on a
-    // microtask + the next animation frame so we land after the
-    // WebKit focus shift. If selection was inside the input, also
-    // collapse it to the caret so the user's next keystroke replaces
-    // nothing.
-    const $chatFindModal = document.getElementById('chatFindModal');
 
-    function findModalIsOpen() {
-      return !!($chatFindModal && $chatFindModal.style.display !== 'none');
+    function chatFindClear() {
+      _chatFindRanges = [];
+      _chatFindMatchIndex = 0;
+      _chatFindLastBuiltQuery = '';
+      try {
+        if (window.CSS && CSS.highlights) {
+          if (CSS.highlights.has('chat-find')) CSS.highlights.delete('chat-find');
+          if (CSS.highlights.has('chat-find-active')) CSS.highlights.delete('chat-find-active');
+        }
+      } catch (_) {}
     }
 
-    function refocusFindInputAfterMatch() {
-      const restore = () => {
-        if (!findModalIsOpen()) return;
-        if (document.activeElement === $chatFindInput) return;
-        try {
-          const len = $chatFindInput.value.length;
-          $chatFindInput.focus({ preventScroll: true });
-          $chatFindInput.setSelectionRange(len, len);
-        } catch (_) { /* defensive */ }
-      };
-      // WebKit moves focus to the matched element on a later tick than
-      // rAF — likely after the layout-commit phase. Stack three restore
-      // attempts so we catch whichever frame the focus shift lands on.
-      queueMicrotask(restore);
-      requestAnimationFrame(restore);
-      setTimeout(restore, 60);
+    function chatFindCollectRanges(root, query) {
+      const ranges = [];
+      if (!root || !query) return ranges;
+      const needle = query.toLowerCase();
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        const parent = node.parentElement;
+        if (!parent) continue;
+        if (parent.closest(
+          '#chatFindModal, script, style, textarea, input, select, button, .conv-input-bar'
+        )) continue;
+        const hay = node.nodeValue || '';
+        if (!hay) continue;
+        const hayLower = hay.toLowerCase();
+        let from = 0;
+        for (;;) {
+          const at = hayLower.indexOf(needle, from);
+          if (at < 0) break;
+          try {
+            const r = document.createRange();
+            r.setStart(node, at);
+            r.setEnd(node, at + query.length);
+            ranges.push(r);
+          } catch (_) {}
+          from = at + needle.length;
+        }
+      }
+      return ranges;
     }
 
-    // While the find bar is open, window.find() steals focus into the
-    // transcript on every match. Pull focus back into the modal unless
-    // the user intentionally focused another control inside it (Prev/Next).
-    document.addEventListener('focusin', (e) => {
-      if (!findModalIsOpen()) return;
-      if ($chatFindModal.contains(e.target)) return;
-      requestAnimationFrame(() => {
-        if (!findModalIsOpen()) return;
-        const ae = document.activeElement;
-        if (ae && $chatFindModal.contains(ae)) return;
+    function chatFindScrollToRange(range) {
+      if (!range) return;
+      let el = range.startContainer;
+      if (el.nodeType === Node.TEXT_NODE) el = el.parentElement;
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'auto' });
+    }
+
+    function chatFindPaint() {
+      try {
+        if (window.CSS && CSS.highlights) {
+          if (CSS.highlights.has('chat-find')) CSS.highlights.delete('chat-find');
+          if (CSS.highlights.has('chat-find-active')) CSS.highlights.delete('chat-find-active');
+        }
+      } catch (_) {}
+      if (!_chatFindRanges.length) return;
+      const idx = Math.max(0, Math.min(_chatFindMatchIndex, _chatFindRanges.length - 1));
+      _chatFindMatchIndex = idx;
+      if (typeof Highlight !== 'undefined' && window.CSS && CSS.highlights) {
         try {
-          const len = $chatFindInput.value.length;
-          $chatFindInput.focus({ preventScroll: true });
-          $chatFindInput.setSelectionRange(len, len);
+          CSS.highlights.set('chat-find', new Highlight(..._chatFindRanges));
+          CSS.highlights.set('chat-find-active', new Highlight(_chatFindRanges[idx]));
         } catch (_) {}
-      });
-    }, true);
+      }
+      chatFindScrollToRange(_chatFindRanges[idx]);
+    }
+
+    // DOM + CSS Highlight search — never calls window.find(), so WebKit
+    // cannot move focus or selection out of the find field.
+    function chatFindStep(opts) {
+      opts = opts || {};
+      const query = $chatFindInput.value;
+      if (!query) {
+        chatFindClear();
+        return;
+      }
+      const root = chatFindGetRoot();
+      if (!root) return;
+
+      if (opts.rebuild || query !== _chatFindLastBuiltQuery) {
+        _chatFindRanges = chatFindCollectRanges(root, query);
+        _chatFindLastBuiltQuery = query;
+        _chatFindMatchIndex = opts.backward ? Math.max(0, _chatFindRanges.length - 1) : 0;
+      } else if (_chatFindRanges.length) {
+        if (opts.backward) {
+          _chatFindMatchIndex = (_chatFindMatchIndex - 1 + _chatFindRanges.length) % _chatFindRanges.length;
+        } else {
+          _chatFindMatchIndex = (_chatFindMatchIndex + 1) % _chatFindRanges.length;
+        }
+      }
+      chatFindPaint();
+    }
+    refreshChatFind = chatFindStep;
+
+    function closeChatFindModal() {
+      if ($chatFindModal) $chatFindModal.style.display = 'none';
+      chatFindClear();
+      _flushDeferredSidebarRenderIfAny();
+      if (typeof _flushComposerDeferredUpdates === 'function' && !_isComposerFocused()) {
+        _flushComposerDeferredUpdates();
+      }
+    }
+
     $chatFindInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        doFind(e.shiftKey);
-        refocusFindInputAfterMatch();
+        chatFindStep({ backward: e.shiftKey });
       }
       if (e.key === 'ArrowDown') {
-        // Down arrow cycles forward through matches. The browser's
-        // window.find wrapAround flag (4th arg in doFind) already
-        // wraps; explicitly bind ArrowUp to backward so the up arrow
-        // is symmetrical — previously only forward had a key binding,
-        // which is why up "wasn't cyclical".
         e.preventDefault();
-        doFind(false);
-        refocusFindInputAfterMatch();
+        chatFindStep({ backward: false });
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        doFind(true);
-        refocusFindInputAfterMatch();
+        chatFindStep({ backward: true });
       }
       if (e.key === 'Escape') {
-        document.getElementById('chatFindModal').style.display = 'none';
-        // Return focus to conversation input if open
+        closeChatFindModal();
         const cpInput = document.getElementById('cpInput');
         if (cpInput) cpInput.focus();
       }
     });
-    let _lastFind = '';
-    let _findDebounceTimer = 0;
-    // Do not call window.find() on every key — it moves focus into the
-    // transcript mid-word. Debounce until typing pauses (same pattern as
-    // sidebar search); Enter / arrows still find immediately.
     $chatFindInput.addEventListener('input', () => {
-      if (_findDebounceTimer) clearTimeout(_findDebounceTimer);
-      _findDebounceTimer = setTimeout(() => {
-        _findDebounceTimer = 0;
-        const text = $chatFindInput.value;
-        if (!text) {
-          _lastFind = '';
-          return;
-        }
-        if (text === _lastFind) return;
-        if (text.startsWith(_lastFind)) {
-          const sel = window.getSelection();
-          if (sel.rangeCount > 0) sel.collapseToStart();
-        }
-        _lastFind = text;
-        doFind(false);
-        refocusFindInputAfterMatch();
-      }, 200);
+      if (!$chatFindInput.value) {
+        chatFindClear();
+        return;
+      }
+      chatFindStep({ rebuild: true });
     });
     if ($chatFindNext) {
-      $chatFindNext.addEventListener('click', () => {
-        doFind(false);
-        refocusFindInputAfterMatch();
-      });
+      $chatFindNext.addEventListener('click', () => chatFindStep({ backward: false }));
     }
     if ($chatFindPrev) {
-      $chatFindPrev.addEventListener('click', () => {
-        doFind(true);
-        refocusFindInputAfterMatch();
-      });
+      $chatFindPrev.addEventListener('click', () => chatFindStep({ backward: true }));
     }
-    if ($chatFindClose) $chatFindClose.addEventListener('click', () => document.getElementById('chatFindModal').style.display = 'none');
+    if ($chatFindClose) $chatFindClose.addEventListener('click', () => closeChatFindModal());
   }
 
   // Settings popover: clicking the ⌘K row also opens the search modal.
