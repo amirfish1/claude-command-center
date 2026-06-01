@@ -1439,7 +1439,8 @@
         btn.style.display = 'inline-flex';
         btn.title = isCodex ? 'Open a Terminal window and run codex resume'
           : (isGemini ? 'Open a Terminal window and run gemini --resume'
-            : (isAntigravity ? 'Open AGY in Terminal; use /resume inside the TUI' : 'Open a Terminal window and run claude --resume'));
+            : (isCursor ? 'Open a Terminal window and run cursor-agent --resume'
+              : (isAntigravity ? 'Open AGY in Terminal; use /resume inside the TUI' : 'Open a Terminal window and run claude --resume')));
         btn.querySelector('.jump-label').textContent = 'Launch';
         renderLaunchChoiceMenu($launchChoiceMenuConv);
       } else {
@@ -10350,7 +10351,10 @@
       // Prefer "last interacted" (the user's last UI action) over "last
       // event" (which includes Claude's autonomous responses) so the row
       // time mirrors the user's mental model: when did *I* last touch this?
-      const rel = relativeTime(c.last_interacted || c.modified);
+      // Overridden below to "now" when the agent is actively running — an
+      // 11h-old user message is a misleading clock when the session is
+      // mid-Grep right now.
+      let rel = relativeTime(c.last_interacted || c.modified);
       const active = currentConversation === c.id ? ' active' : '';
 
       // Session signals: additive context chips followed by exactly one
@@ -10479,6 +10483,9 @@
         || _cursorOpenTurn
         || _antigravityOpenTurn
         || _claudeWipFromSidecar;
+      if (_isAgentRunning) {
+        rel = c.sidecar_ts ? relativeTime(c.sidecar_ts) : 'now';
+      }
       if (!liveToolHtml && _isWaitingForUser && !_isAgentRunning) {
         // Agent has stopped and is blocked on user input — distinct
         // chip + tooltip + class so it doesn't masquerade as live work.
@@ -12914,6 +12921,7 @@
     const source = (row && row.source) || '';
     if (source === 'codex') return 'codex';
     if (source === 'gemini') return 'gemini';
+    if (source === 'cursor') return 'cursor';
     if (source === 'antigravity') return 'antigravity';
     if (source === 'pkood') return 'pkood';
     if (source === 'backlog') return row && row.issue_number ? 'issue' : 'backlog';
@@ -14927,21 +14935,38 @@
     renderSidebar(filterConversations($convSearch.value));
   }
 
-  // Render a codex spawn log into the right pane while the durable Codex
-  // thread row is still materializing. Once /api/sessions returns a real
-  // codex card, normal conversation rendering takes over.
+  function getEngineSvg(engine) {
+    if (engine === 'codex') {
+      return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">'
+        + '<path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z" />'
+        + '</svg>';
+    }
+    if (engine === 'cursor') {
+      return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="M4.5 3.5 19 12l-6.2 1.2L10.8 20 4.5 3.5Z" />'
+        + '<path d="m12.5 13.5 4 4" />'
+        + '</svg>';
+    }
+    return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">'
+      + '<path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" />'
+      + '</svg>';
+  }
+
+  // Render a headless agent spawn log into the right pane while the durable
+  // engine-native row is still materializing. Once /api/sessions returns a
+  // real card, normal conversation rendering takes over.
   async function loadCodexLog(card) {
     if (!card || typeof card.spawn_pid !== 'number') {
       // Pre-swap (toolbar Run): spawn_pid is still 'tmp-...'. Show a
       // placeholder until the spawn POST returns and re-selects this card.
       const $view = getConvView();
-      const engine = card && card.source === 'gemini' ? 'gemini' : (card && card.source === 'antigravity' ? 'antigravity' : 'codex');
+      const engine = card && card.source === 'gemini' ? 'gemini' : (card && card.source === 'cursor' ? 'cursor' : (card && card.source === 'antigravity' ? 'antigravity' : 'codex'));
       $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Spawning ' + engine + ' run…</div>';
       updateConversationEndAffordance($view);
       return;
     }
     const $view = getConvView();
-    const engine = card.source === 'gemini' ? 'gemini' : (card.source === 'antigravity' ? 'antigravity' : 'codex');
+    const engine = card.source === 'gemini' ? 'gemini' : (card.source === 'cursor' ? 'cursor' : (card.source === 'antigravity' ? 'antigravity' : 'codex'));
     try {
       const res = await fetch('/api/sessions/spawned/' + encodeURIComponent(card.spawn_pid) + '/log?_=' + Date.now());
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
@@ -14957,7 +14982,9 @@
         ? renderAntigravityLogHtml(data)
         : ((data.engine === 'gemini' || engine === 'gemini')
           ? renderGeminiLogHtml(data)
-          : renderCodexLogHtml(data));
+          : ((data.engine === 'cursor' || engine === 'cursor')
+            ? renderCursorLogHtml(data)
+            : renderCodexLogHtml(data)));
       if (atBottom) scrollConversationToEnd($view);
       else updateConversationEndAffordance($view);
       // Process exited — stop polling. Final render already in place.
@@ -15097,6 +15124,85 @@
     return '<div class="codex-log gemini-log" style="padding:16px 20px;">' + headerHtml + msgsHtml + usageHtml + stderrHtml + '</div>';
   }
 
+  function renderCursorLogHtml(data) {
+    const lines = (data.text || '').split('\n').filter(Boolean);
+    const messages = [];
+    let sessionId = '';
+    let model = data.model || '';
+    const stderrLines = [];
+    const contentBlocks = (ev) => {
+      const msg = ev && typeof ev.message === 'object' ? ev.message : null;
+      const content = msg && Object.prototype.hasOwnProperty.call(msg, 'content') ? msg.content : ev.content;
+      if (typeof content === 'string') return [{ type: 'text', text: content }];
+      if (Array.isArray(content)) return content.filter(b => b && typeof b === 'object');
+      if (typeof ev.text === 'string') return [{ type: 'text', text: ev.text }];
+      return [];
+    };
+    const appendAssistant = (text) => {
+      if (!text) return;
+      const last = messages[messages.length - 1];
+      if (last && last.role === 'assistant') last.text += text;
+      else messages.push({ role: 'assistant', text });
+    };
+    for (const line of lines) {
+      try {
+        const ev = JSON.parse(line);
+        sessionId = sessionId || ev.chatId || ev.chat_id || ev.session_id || ev.conversationId || ev.conversation_id || '';
+        model = model || ev.model || '';
+        const role = ev.role || (ev.message && ev.message.role) || '';
+        const blocks = contentBlocks(ev);
+        if (role === 'assistant' || ev.type === 'assistant' || ev.type === 'message') {
+          for (const block of blocks) {
+            if (block.type === 'text' && block.text) {
+              appendAssistant(block.text);
+            } else if (block.type === 'tool_use') {
+              const args = block.input || block.args || {};
+              const detail = args.command || args.path || args.file_path || args.query || args.description || '';
+              messages.push({ role: 'system', text: '[' + (block.name || block.tool_name || 'tool') + (detail ? ': ' + String(detail).slice(0, 180) : '') + ']' });
+            }
+          }
+        } else if (role === 'user') {
+          const userText = blocks.map(b => b.type === 'text' ? (b.text || '') : '').join('\n').trim();
+          if (userText) messages.push({ role: 'user', text: userText });
+        } else if (ev.type === 'tool_use') {
+          const detail = ev.command || ev.description || ev.path || ev.query || '';
+          messages.push({ role: 'system', text: '[' + (ev.tool_name || ev.name || 'tool') + (detail ? ': ' + String(detail).slice(0, 180) : '') + ']' });
+        } else if ((ev.type === 'result' || ev.type === 'done') && ev.usage) {
+          model = model || ev.usage.model || '';
+        }
+      } catch (_) {
+        stderrLines.push(line);
+      }
+    }
+    const status = data.running
+      ? '<span class="codex-status running" style="color:var(--green);">running</span>'
+      : ('<span class="codex-status finished" style="color:var(--text-muted);">finished' + (data.exit_code != null ? ' (exit ' + data.exit_code + ')' : '') + '</span>');
+    const msgsHtml = messages.length
+      ? messages.map(m => {
+          if (m.role === 'assistant') {
+            return '<div class="codex-msg assistant" style="margin-bottom:14px;padding:10px 12px;background:rgba(226,104,64,0.07);border-left:2px solid #e26840;border-radius:4px;white-space:pre-wrap;line-height:1.55;">' + escapeHtml(m.text) + '</div>';
+          }
+          if (m.role === 'user') {
+            return '<div class="codex-msg user" style="margin-bottom:10px;padding:8px 10px;background:rgba(139,148,158,0.08);border-radius:4px;white-space:pre-wrap;line-height:1.45;color:var(--text-muted);">' + escapeHtml(m.text) + '</div>';
+          }
+          return '<div class="codex-msg system" style="margin-bottom:6px;font-size:12px;color:var(--text-muted);font-family:var(--font-mono,monospace);">' + escapeHtml(m.text) + '</div>';
+        }).join('')
+      : '<div class="empty-state" style="height:auto;padding:24px;color:var(--text-muted);">cursor is thinking…</div>';
+    const stderrHtml = stderrLines.length
+      ? ('<details style="margin-top:14px;font-size:12px;color:var(--text-muted);"><summary style="cursor:pointer;">cursor stderr (' + stderrLines.length + ' line' + (stderrLines.length === 1 ? '' : 's') + ')</summary>'
+        + '<pre style="margin:8px 0 0;padding:8px;background:rgba(139,148,158,0.08);border-radius:4px;white-space:pre-wrap;font-family:var(--font-mono,monospace);">' + escapeHtml(stderrLines.join('\n')) + '</pre>'
+        + '</details>')
+      : '';
+    const headerHtml = '<div class="codex-header" style="display:flex;align-items:center;gap:10px;padding-bottom:10px;margin-bottom:14px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text-muted);">'
+      + '<span class="source-badge cursor" style="display:inline-flex;align-items:center;gap:4px;background:rgba(226,104,64,0.16);color:#f08a6b;padding:2px 8px;border-radius:10px;font-weight:600;"><span style="width:12px;height:12px;display:flex;">' + getEngineSvg('cursor') + '</span>cursor</span>'
+      + status
+      + (sessionId ? '<span style="font-family:var(--font-mono,monospace);">chat ' + escapeHtml(sessionId.slice(0, 8)) + '…</span>' : '')
+      + (model ? '<span style="font-family:var(--font-mono,monospace);">' + escapeHtml(model) + '</span>' : '')
+      + '<span style="margin-left:auto;font-family:var(--font-mono,monospace);">pid ' + escapeHtml(String(data.pid)) + '</span>'
+      + '</div>';
+    return '<div class="codex-log cursor-log" style="padding:16px 20px;">' + headerHtml + msgsHtml + stderrHtml + '</div>';
+  }
+
   function renderAntigravityLogHtml(data) {
     const text = (data.text || '').trim();
     const debugText = (data.debug_text || '').trim();
@@ -15191,7 +15297,7 @@
     if (id.startsWith('spawning-')) {
       const c = (conversationsData || []).find(x => x.id === id);
       if (!c) return;
-      if (c && (c.source === 'codex' || c.source === 'gemini' || c.source === 'antigravity') && typeof c.spawn_pid === 'number') {
+      if (c && (c.source === 'codex' || c.source === 'gemini' || c.source === 'cursor' || c.source === 'antigravity') && typeof c.spawn_pid === 'number') {
         await loadCodexLog(c);
         stopCodexLogPoller();
         codexLogPoller = setInterval(() => { if (_pollerOff('codexLog')) return;
@@ -16325,6 +16431,10 @@
       { id: 'gpt-5-codex',  label: 'gpt-5-codex' },
       { id: 'o3',           label: 'o3' },
       { id: 'o3-mini',      label: 'o3-mini' },
+    ],
+    cursor: [
+      { id: 'composer-2.5-fast', label: 'composer-2.5-fast (default)' },
+      { id: 'composer-2.5',      label: 'composer-2.5' },
     ],
     gemini: [
       { id: 'gemini-2.5-pro',   label: 'gemini-2.5-pro' },
@@ -21185,7 +21295,7 @@
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
-  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'antigravity'];
+  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity'];
   const SPAWN_DEFAULT_OTHER = '__other__';
   function normalizeSpawnDefaultEngine(v) {
     if (v === 'gemini') return 'antigravity';
@@ -21195,7 +21305,7 @@
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: 'opus', codex: 'gpt-5.5', antigravity: '' };
+  let _defaultModelsByEngine = { claude: 'opus', codex: 'gpt-5.5', cursor: 'composer-2.5-fast', antigravity: '' };
   let _spawnDefaultsLoaded = false;
   let _spawnDefaultsSaveTimer = null;
   let _spawnDefaultsSaving = false;
@@ -21224,6 +21334,7 @@
   function spawnEngineLabel(engine) {
     if (engine === 'codex') return 'Codex';
     if (engine === 'gemini') return 'Gemini';
+    if (engine === 'cursor') return 'Cursor';
     if (engine === 'antigravity') return 'Antigravity';
     if (engine === 'pkood') return 'pkood';
     return 'Claude';
@@ -21231,6 +21342,7 @@
   function spawnSourceForEngine(engine) {
     if (engine === 'codex') return 'codex';
     if (engine === 'gemini') return 'gemini';
+    if (engine === 'cursor') return 'cursor';
     if (engine === 'antigravity') return 'antigravity';
     if (engine === 'pkood') return 'pkood';
     return 'interactive';
@@ -21239,16 +21351,17 @@
     if (engine === 'pkood') return '/api/pkood/spawn';
     if (engine === 'codex') return '/api/sessions/spawn-codex';
     if (engine === 'gemini') return '/api/sessions/spawn-gemini';
+    if (engine === 'cursor') return '/api/sessions/spawn-cursor';
     if (engine === 'antigravity') return '/api/sessions/spawn-antigravity';
     return '/api/sessions/spawn';
   }
   function spawnSupportsWorktree(engine) {
     // pkood orchestrates remote agents and has its own workspace contract,
     // so it doesn't participate in the CCC-managed git-worktree flow.
-    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'antigravity';
+    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'cursor' || engine === 'antigravity';
   }
   function spawnUsesLogPlaceholder(engine) {
-    return engine === 'codex' || engine === 'gemini' || engine === 'antigravity';
+    return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity';
   }
 
   function modelOptionsForSpawnEngine(engine, currentModel, includeOther) {
@@ -21328,6 +21441,7 @@
     let value = String(model == null ? '' : model).trim();
     if (engine === 'claude' && !value) value = 'opus';
     if (engine === 'codex' && !value) value = 'gpt-5.5';
+    if (engine === 'cursor' && !value) value = 'composer-2.5-fast';
     spawnDefaultsState.models[engine] = value;
     _defaultModelsByEngine[engine] = value;
     syncSpawnEngineDependentUi();
@@ -21449,6 +21563,7 @@
     await Promise.all([
       probe('codex', '/api/sessions/spawn-codex/availability', 'Codex'),
       probe('gemini', '/api/sessions/spawn-gemini/availability', 'Gemini'),
+      probe('cursor', '/api/sessions/spawn-cursor/availability', 'Cursor'),
       probe('antigravity', '/api/sessions/spawn-antigravity/availability', 'Antigravity'),
     ]);
     syncSpawnEngineDependentUi();
@@ -21672,7 +21787,7 @@
       $kptRunBtn.textContent = engine === 'antigravity' ? 'Starting...' : 'Spawning...';
       try {
         const endpoint = spawnEndpointForEngine(engine);
-        // pkood, codex, and antigravity don't support CCC-managed worktrees.
+        // Engines with native long-running app sessions can opt out of CCC-managed worktrees.
         const body = spawnSupportsWorktree(engine)
           ? { prompt, repo_path: repoPath, worktree: useWorktree }
           : { prompt, repo_path: repoPath };
@@ -21863,6 +21978,7 @@
           currentSession.spawnPid
           && currentSession.source !== 'codex'
           && currentSession.source !== 'gemini'
+          && currentSession.source !== 'cursor'
           && currentSession.source !== 'antigravity'
         ) {
           // Headless session we spawned — push via stdin pipe
@@ -21896,6 +22012,14 @@
             setTimeout(refreshConversationList, 3500);
           } else if (data.via === 'codex-app-turn') {
             showOpToast('Codex follow-up started.');
+            setTimeout(refreshConversationList, 1500);
+            setTimeout(refreshConversationList, 3500);
+          } else if (data.via === 'cursor-resume') {
+            showOpToast('Cursor follow-up started.');
+            setTimeout(refreshConversationList, 1500);
+            setTimeout(refreshConversationList, 3500);
+          } else if (data.via === 'cursor-resume-queued') {
+            showOpToast('Queued until the Cursor follow-up finishes.');
             setTimeout(refreshConversationList, 1500);
             setTimeout(refreshConversationList, 3500);
           } else if (data.via === 'antigravity-resume') {
@@ -23647,6 +23771,7 @@
     }
     if (engine === 'claude' && !model) model = 'opus';
     if (engine === 'codex' && !model) model = 'gpt-5.5';
+    if (engine === 'cursor' && !model) model = 'composer-2.5-fast';
     spawnDefaultsDraft.models[engine] = model;
   }
   async function saveSpawnDefaultsDraft() {
@@ -23655,8 +23780,8 @@
     spawnDefaultsModalError('');
     const engine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
     const model = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
-    if ((engine === 'claude' || engine === 'codex') && !model) {
-      spawnDefaultsModalError('Claude and Codex need an explicit default model.');
+    if ((engine === 'claude' || engine === 'codex' || engine === 'cursor') && !model) {
+      spawnDefaultsModalError('Claude, Codex, and Cursor need an explicit default model.');
       return;
     }
     $spawnDefaultsSaveBtn.disabled = true;
