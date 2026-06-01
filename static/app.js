@@ -7088,6 +7088,35 @@
     svg.innerHTML = paths.join('');
   }
 
+  function startFlowPan(ev, targetEl) {
+    if (!targetEl) return;
+    if (ev.button !== undefined && ev.button !== 0) return;
+    if (ev.target.closest('.flow-node,button,input,textarea,a')) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    beginSidebarDrag();
+    const startX = ev.clientX;
+    const startY = ev.clientY;
+    const startScrollLeft = targetEl.scrollLeft;
+    const startScrollTop = targetEl.scrollTop;
+    const prevCursor = targetEl.style.cursor;
+    targetEl.style.cursor = 'grabbing';
+    const onMove = moveEv => {
+      targetEl.scrollLeft = startScrollLeft - (moveEv.clientX - startX);
+      targetEl.scrollTop = startScrollTop - (moveEv.clientY - startY);
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+      targetEl.style.cursor = prevCursor;
+      endSidebarDrag();
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  }
+
   function startFlowRangeSelection(ev, targetEl, canvas, world) {
     if (!targetEl || !canvas || !world) return;
     if (ev.button !== undefined && ev.button !== 0) return;
@@ -7206,7 +7235,10 @@
       });
     }
     if (!canvas || !world) return;
-    world.addEventListener('pointerdown', ev => startFlowRangeSelection(ev, targetEl, canvas, world));
+    world.addEventListener('pointerdown', ev => {
+      if (ev.altKey) startFlowRangeSelection(ev, targetEl, canvas, world);
+      else startFlowPan(ev, targetEl);
+    });
     world.querySelectorAll('.flow-node').forEach(node => {
       const collapseBtn = node.querySelector('[data-flow-action="toggle-collapse"]');
       if (collapseBtn) {

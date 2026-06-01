@@ -1,0 +1,1 @@
+Dragging the empty flow-board background now pans the canvas (matches Figma/Miro). Hold Alt while dragging the background to fall back to the previous behavior — rectangular area-select. Node drag is unchanged; only the background gesture is rerouted.
