@@ -4519,22 +4519,36 @@ class TestPendingInputs(unittest.TestCase):
     def test_conv_bytes_cache_misses_when_pending_input_queued(self):
         """Pre-serialized /api/conversations bodies must not hide queued injects."""
         sid = "cache-pending-test-session"
-        proj = self.server.PROJECTS_ROOT / "-cache-pending"
-        proj.mkdir(parents=True, exist_ok=True)
-        jsonl = proj / f"{sid}.jsonl"
-        jsonl.write_text(
-            json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n",
-            encoding="utf-8",
-        )
-        result = self.server.parse_conversation(sid, after_line=0, use_cache=False)
-        raw = json.dumps(result).encode()
-        self.server._conv_response_bytes_put(sid, 0, raw, None)
-        self.assertIsNotNone(self.server._conv_response_bytes_get(sid, 0))
-        with self.server._pending_terminal_input_lock:
-            self.server._pending_terminal_input_queue[sid] = ["still waiting"]
-        self.assertIsNone(self.server._conv_response_bytes_get(sid, 0))
-        with self.server._pending_terminal_input_lock:
-            self.server._pending_terminal_input_queue.clear()
+        # Mock PROJECTS_ROOT to a tmp dir so the test fixture doesn't leak
+        # into the user's real `~/.claude/projects` and surface as a ghost
+        # session row in the live CCC UI. The previous version of this test
+        # only mocked PENDING_INPUTS_FILE in setUp and used the real
+        # PROJECTS_ROOT here, which left
+        # `~/.claude/projects/-cache-pending/cache-pending-test-session.jsonl`
+        # on disk after every run.
+        tmp_projects = tempfile.mkdtemp(prefix="ccc-cache-pending-proj-")
+        prev_projects_root = self.server.PROJECTS_ROOT
+        self.server.PROJECTS_ROOT = pathlib.Path(tmp_projects)
+        try:
+            proj = self.server.PROJECTS_ROOT / "-cache-pending"
+            proj.mkdir(parents=True, exist_ok=True)
+            jsonl = proj / f"{sid}.jsonl"
+            jsonl.write_text(
+                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n",
+                encoding="utf-8",
+            )
+            result = self.server.parse_conversation(sid, after_line=0, use_cache=False)
+            raw = json.dumps(result).encode()
+            self.server._conv_response_bytes_put(sid, 0, raw, None)
+            self.assertIsNotNone(self.server._conv_response_bytes_get(sid, 0))
+            with self.server._pending_terminal_input_lock:
+                self.server._pending_terminal_input_queue[sid] = ["still waiting"]
+            self.assertIsNone(self.server._conv_response_bytes_get(sid, 0))
+            with self.server._pending_terminal_input_lock:
+                self.server._pending_terminal_input_queue.clear()
+        finally:
+            self.server.PROJECTS_ROOT = prev_projects_root
+            shutil.rmtree(tmp_projects, ignore_errors=True)
 
 
 class TestSessionUsageDedup(unittest.TestCase):
