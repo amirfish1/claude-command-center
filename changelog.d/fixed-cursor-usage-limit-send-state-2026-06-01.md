@@ -1,0 +1,1 @@
+Fixed Cursor follow-ups that immediately fail (for example usage-limit errors) so they surface as send failures instead of leaving the conversation pane stuck on an optimistic "sending" echo. Non-live Cursor rows also stop carrying stale pending-tool state from the last transcript event.

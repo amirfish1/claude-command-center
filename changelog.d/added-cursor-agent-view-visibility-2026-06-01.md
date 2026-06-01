@@ -1,0 +1,1 @@
+Added Cursor IDE agent view visibility integration. Spawned and resumed Cursor CLI sessions now automatically appear in the Cursor IDE agent view by writing workspace metadata databases directly under `~/.cursor/chats/<project_md5>/<session_id>/store.db`, with a background backfill scan at server startup to ensure existing recent sessions are also registered.

@@ -11,7 +11,7 @@ Usage:
     PORT=9000 ./run.sh       # custom port
 """
 
-__version__ = "4.4.0"
+__version__ = "4.5.0"
 
 import ast
 import base64
@@ -17136,6 +17136,7 @@ def _cursor_spawn_pid_by_session_id():
             if not s.get("session_id"):
                 s["session_id"] = sid
                 _update_spawn_session_id_in_registry(s.get("pid"), sid)
+            _ensure_cursor_session_visible(sid, spawn_entry=s)
             if sid not in out:
                 try:
                     alive = _poll_spawn_entry(s) is None
@@ -17152,6 +17153,203 @@ def _cursor_spawn_pid_by_session_id():
                     "model": s.get("model") or "",
                 }
     return out
+
+
+def _ensure_cursor_session_visible(session_id, spawn_entry=None):
+    """Create or refresh Cursor's workspace metadata/store.db for a CLI session."""
+    sid = str(session_id or "").strip()
+    if not sid or not _SESSION_UUID_RE.match(sid):
+        return False
+
+    cwd = None
+    if spawn_entry:
+        cwd = spawn_entry.get("cwd") or spawn_entry.get("repo_path")
+    if not cwd:
+        path = _cursor_transcript_path(sid)
+        if path:
+            tail = _extract_cursor_tail_meta(path) or {}
+            cwd = tail.get("cwd") or _cursor_cwd_from_transcript_path(path)
+    if not cwd:
+        return False
+
+    try:
+        resolved = Path(cwd).expanduser().resolve(strict=False)
+    except Exception:
+        resolved = Path(str(cwd))
+    project_hash = hashlib.md5(str(resolved).encode("utf-8")).hexdigest()
+    
+    db_dir = Path.home() / ".cursor" / "chats" / project_hash / sid
+    db_path = db_dir / "store.db"
+
+    title = None
+    if spawn_entry:
+        title = spawn_entry.get("name")
+    if not title:
+        path = _cursor_transcript_path(sid)
+        if path:
+            tail = _extract_cursor_tail_meta(path) or {}
+            title = tail.get("first_message") or tail.get("title")
+    if not title and spawn_entry:
+        title = spawn_entry.get("prompt")
+    if not title:
+        title = "New Agent"
+
+    if title:
+        title = title.split("\n")[0].strip()
+        if len(title) > 120:
+            title = title[:120] + "..."
+
+    created_at = None
+    if spawn_entry:
+        started_str = spawn_entry.get("started")
+        if started_str:
+            try:
+                t_struct = time.strptime(started_str, "%Y%m%dT%H%M%S")
+                created_at = int(time.mktime(t_struct) * 1000)
+            except Exception:
+                pass
+    if not created_at:
+        created_at = int(time.time() * 1000)
+
+    try:
+        db_dir.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path), timeout=1.0)
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS blobs (id TEXT PRIMARY KEY, data BLOB)")
+            conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+            
+            row = conn.execute("SELECT value FROM meta WHERE key = '0'").fetchone()
+            existing = json.loads(row[0]) if row else {}
+            
+            payload = dict(existing)
+            payload.update({
+                "agentId": sid,
+                "name": title or existing.get("name") or "New Agent",
+                "createdAt": created_at or existing.get("createdAt") or int(time.time() * 1000),
+                "mode": existing.get("mode") or "default",
+                "isRunEverything": existing.get("isRunEverything") if "isRunEverything" in existing else True
+            })
+            if "latestRootBlobId" not in payload:
+                payload["latestRootBlobId"] = ""
+                
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('0', ?)",
+                (json.dumps(payload, ensure_ascii=False),)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return True
+    except Exception as e:
+        print(f"  [cursor-visible] failed to make {sid} visible: {e}")
+        return False
+
+
+def backfill_cursor_sidebar_visibility(days=None, repo_paths=None, now=None, max_logs=2000):
+    """Create Cursor Agent sidebar metadata/store.db for recent CCC-spawned Cursor sessions."""
+    if days is None:
+        days = 7
+    try:
+        now = float(now if now is not None else time.time())
+    except (TypeError, ValueError):
+        now = time.time()
+    cutoff = now - (float(days) * 86400.0)
+    ids = []
+    seen_ids = set()
+    entries_by_sid = {}
+
+    def add_sid(sid, entry=None):
+        sid = str(sid or "").strip()
+        if not sid or not _SESSION_UUID_RE.match(sid):
+            return
+        if entry and sid not in entries_by_sid:
+            entries_by_sid[sid] = entry
+        if sid not in seen_ids:
+            seen_ids.add(sid)
+            ids.append(sid)
+
+    try:
+        registry_entries = _load_spawn_registry()
+    except Exception:
+        registry_entries = []
+    for entry in registry_entries:
+        engine = entry.get("engine")
+        if engine != "cursor":
+            continue
+        entry_epoch = _spawn_registry_entry_epoch(entry)
+        if entry_epoch and entry_epoch < cutoff:
+            continue
+        log_path = entry.get("log")
+        if log_path and not entry_epoch:
+            try:
+                if Path(log_path).expanduser().stat().st_mtime < cutoff:
+                    continue
+            except OSError:
+                continue
+        if not entry_epoch and not log_path:
+            continue
+        sid = entry.get("session_id") or entry.get("resumed_sid")
+        if not sid and log_path:
+            sid = _extract_cursor_chat_id_from_log(log_path) or _cursor_session_id_for_spawn_entry(entry)
+        if sid:
+            add_sid(sid, entry)
+
+    updated = 0
+    already_visible = 0
+    skipped = 0
+    for sid in ids:
+        cwd = None
+        entry = entries_by_sid.get(sid)
+        if entry:
+            cwd = entry.get("cwd") or entry.get("repo_path")
+        if not cwd:
+            path = _cursor_transcript_path(sid)
+            if path:
+                tail = _extract_cursor_tail_meta(path) or {}
+                cwd = tail.get("cwd") or _cursor_cwd_from_transcript_path(path)
+        if not cwd:
+            skipped += 1
+            continue
+
+        try:
+            resolved = Path(cwd).expanduser().resolve(strict=False)
+        except Exception:
+            resolved = Path(str(cwd))
+        project_hash = hashlib.md5(str(resolved).encode("utf-8")).hexdigest()
+        db_path = Path.home() / ".cursor" / "chats" / project_hash / sid / "store.db"
+        
+        before_exists = db_path.is_file()
+        ok = _ensure_cursor_session_visible(sid, spawn_entry=entry)
+        if ok:
+            if before_exists:
+                already_visible += 1
+            else:
+                updated += 1
+        else:
+            skipped += 1
+
+    return {
+        "ok": True,
+        "days": days,
+        "found": len(ids),
+        "updated": updated,
+        "already_visible": already_visible,
+        "skipped": skipped,
+    }
+
+
+def _cursor_sidebar_visibility_backfill_once():
+    try:
+        result = backfill_cursor_sidebar_visibility()
+    except Exception as e:
+        print(f"  [cursor-sidebar] backfill skipped ({e})")
+        return
+    if result.get("updated"):
+        print(
+            "  [cursor-sidebar] marked "
+            f"{result['updated']} recent CCC Cursor session(s) as IDE-visible"
+        )
+
 
 
 def find_cursor_conversations(
@@ -17259,6 +17457,8 @@ def find_cursor_conversations(
         is_live = spawn_alive
         activity_tail = tail
         cursor_activity = _cursor_activity_fields_from_tail(activity_tail, is_live)
+        pending_tool = tail.get("pending_tool") if is_live else None
+        pending_file = tail.get("pending_file") if is_live else None
         branch = tail.get("tail_branch") or _git_branch_for_cwd(effective_cwd)
         out.append({
             "id": sid,
@@ -17298,8 +17498,8 @@ def find_cursor_conversations(
             "last_commit_pos": tail.get("last_commit_pos", 0),
             "last_push_pos": tail.get("last_push_pos", 0),
             "last_event_type": tail.get("last_event_type"),
-            "pending_tool": tail.get("pending_tool"),
-            "pending_file": tail.get("pending_file"),
+            "pending_tool": pending_tool,
+            "pending_file": pending_file,
             "last_assistant_text": tail.get("last_assistant_text"),
             "tail_issue_number": None,
             "tail_pr_number": tail.get("tail_pr_number"),
@@ -19368,6 +19568,11 @@ def resume_session_cursor(session_id, text):
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "via": "cursor-resume"}
+    failure = _cursor_early_failure_payload(
+        proc, log_path, log_fh, via="cursor-resume",
+    )
+    if failure:
+        return failure
     entry = {
         "pid": proc.pid,
         "name": f"resume-cursor-{session_id[:8]}",
@@ -19467,9 +19672,14 @@ def spawn_session_cursor(prompt, name=None, cwd=None, repo_path=None, worktree=F
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "code": "cursor_launch_failed", "via": "cursor-spawn"}
-    failure = _spawn_early_failure_payload(
-        proc, log_path, log_fh, engine="cursor", via="cursor-spawn",
+    failure = _cursor_early_failure_payload(
+        proc, log_path, log_fh, via="cursor-spawn",
     )
+    if failure is None:
+        failure = _spawn_early_failure_payload(
+            proc, log_path, log_fh, engine="cursor", via="cursor-spawn",
+            delay=0,
+        )
     if failure:
         return failure
 
@@ -19981,6 +20191,56 @@ def _spawn_early_failure_payload(proc, log_path, log_fh, *, engine, via, delay=0
     }
 
 
+def _cursor_log_failure_message(text):
+    """Human-facing Cursor Agent failure from stream-json/plain log output."""
+    detail = str(text or "")
+    if not detail.strip():
+        return ""
+    lines = [line.strip() for line in detail.splitlines() if line.strip()]
+    for line in lines:
+        lowered = line.lower()
+        if "usage limit" in lowered or "get cursor pro" in lowered:
+            return line.removeprefix("S:").strip()
+        if "named models unavailable" in lowered:
+            return line.removeprefix("S:").strip()
+        if "not authenticated" in lowered or "login" in lowered and "cursor" in lowered:
+            return line.removeprefix("S:").strip()
+    return ""
+
+
+def _cursor_early_failure_payload(proc, log_path, log_fh, *, via, delay=0.5):
+    """Return a failure when Cursor Agent starts then immediately refuses work."""
+    try:
+        time.sleep(delay)
+        exit_code = proc.poll()
+    except Exception:
+        return None
+    if exit_code is None or not isinstance(exit_code, int):
+        return None
+    try:
+        log_fh.flush()
+    except OSError:
+        pass
+    detail = _antigravity_read_log_tail(log_path, max_bytes=4000).strip()
+    message = _cursor_log_failure_message(detail)
+    if exit_code == 0 and not message:
+        return None
+    try:
+        log_fh.close()
+    except OSError:
+        pass
+    first_line = next((line.strip() for line in detail.splitlines() if line.strip()), "")
+    return {
+        "ok": False,
+        "error": message or first_line or f"Cursor exited with code {exit_code}",
+        "code": "cursor_launch_failed",
+        "exit_code": exit_code,
+        "log": str(log_path),
+        "via": via,
+        "engine": "cursor",
+    }
+
+
 def _spawn_session_id_from_entry(entry):
     """Best-effort native session id resolver for a CCC-owned spawn entry."""
     if not isinstance(entry, dict):
@@ -19994,6 +20254,8 @@ def _spawn_session_id_from_entry(entry):
         elif engine == "codex":
             _mark_codex_thread_user_visible(sid, update_rollout=False)
             _register_codex_sidebar_project_for_spawn_entry(entry, sid)
+        elif engine == "cursor":
+            _ensure_cursor_session_visible(sid, spawn_entry=entry)
         return sid
     log = entry.get("log")
     if engine == "codex":
@@ -20020,6 +20282,8 @@ def _spawn_session_id_from_entry(entry):
         elif engine == "codex":
             _mark_codex_thread_user_visible(sid, update_rollout=False)
             _register_codex_sidebar_project_for_spawn_entry(entry, sid)
+        elif engine == "cursor":
+            _ensure_cursor_session_visible(sid, spawn_entry=entry)
     return sid
 
 
@@ -33303,6 +33567,11 @@ def main():
         target=_codex_sidebar_visibility_backfill_once,
         daemon=True,
         name="ccc-codex-sidebar-backfill",
+    ).start()
+    threading.Thread(
+        target=_cursor_sidebar_visibility_backfill_once,
+        daemon=True,
+        name="ccc-cursor-sidebar-backfill",
     ).start()
     _load_conv_meta_cache()
     try:

@@ -475,7 +475,12 @@
     background: rgba(56, 139, 253, 0.08); border-left-color: var(--accent);
     font-size: 13px; color: var(--text-muted);
   }
+  .event.system.send-failure {
+    background: rgba(248, 81, 73, 0.1); border-left-color: var(--red);
+    color: var(--text);
+  }
   .event.system .label { color: var(--accent); font-weight: 600; text-transform: uppercase; font-size: 11px; }
+  .event.system.send-failure .label { color: var(--red); }
 
   .event.assistant { background: rgba(188, 140, 255, 0.06); border-left-color: var(--purple); }
   .event.tool_result { display: none; } /* hide tool results - they're noise */

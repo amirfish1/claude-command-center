@@ -271,7 +271,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("flowHasCollapsedAncestor(nodeId, repoId)", app_js)
         self.assertIn("function flowIsVisibleSession", app_js)
         self.assertIn("if (col === 'backlog') return false;", app_js)
-        self.assertIn("if (col === 'archived' && !flowIncludeArchived) return false;", app_js)
+        self.assertIn("if (col === 'archived' && !flowIncludeArchived && !pinnedInFlow) return false;", app_js)
         self.assertIn("flow_parent_node_id", app_js)
         self.assertIn("return ts ? relativeTime(ts) : '';", app_js)
         self.assertIn("const next = sidebarViewMode === 'list' ? 'flow' : 'list';", app_js)
@@ -337,7 +337,54 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Auto (default)", app_js)
         self.assertIn("composer-2.5-fast", app_js)
         self.assertIn("renderCursorLogHtml", app_js)
+        self.assertIn("function isCursorUsageLimitFailure", app_js)
+        self.assertIn("Cursor usage limit hit. Cursor says:", app_js)
         self.assertIn(".source-badge.cursor", app_css)
+        self.assertIn(".event.system.send-failure", app_css)
+
+    def test_cursor_sidebar_visibility_rejects_bad_input(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        
+        # Empty session id
+        self.assertFalse(server._ensure_cursor_session_visible(""))
+        
+        # Non-UUID session id
+        self.assertFalse(server._ensure_cursor_session_visible("not-a-uuid"))
+        
+        # Valid UUID but no cwd/spawn_entry
+        self.assertFalse(server._ensure_cursor_session_visible("00000000-0000-4000-8000-000000000001"))
+
+    def test_ensure_cursor_session_visible_creates_store_db(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.object(server.Path, "home", return_value=pathlib.Path(td)):
+                sid = "00000000-0000-4000-8000-000000000001"
+                spawn_entry = {
+                    "cwd": td,
+                    "name": "Test Cursor Session",
+                    "started": "20260601T120000",
+                }
+                res = server._ensure_cursor_session_visible(sid, spawn_entry=spawn_entry)
+                self.assertTrue(res)
+                
+                import hashlib
+                project_hash = hashlib.md5(str(pathlib.Path(td).resolve()).encode("utf-8")).hexdigest()
+                db_path = pathlib.Path(td) / ".cursor" / "chats" / project_hash / sid / "store.db"
+                self.assertTrue(db_path.is_file())
+                
+                import sqlite3
+                conn = sqlite3.connect(str(db_path))
+                row = conn.execute("SELECT value FROM meta WHERE key = '0'").fetchone()
+                conn.close()
+                self.assertIsNotNone(row)
+                data = json.loads(row[0])
+                self.assertEqual(data["agentId"], sid)
+                self.assertEqual(data["name"], "Test Cursor Session")
 
 
 class TestPrStateResolution(unittest.TestCase):
@@ -2787,6 +2834,45 @@ class TestRepoContextHelpers(unittest.TestCase):
         cmd = popen.call_args.args[0]
         self.assertEqual(cmd[cmd.index("--model") + 1], "auto")
 
+    def test_resume_cursor_reports_immediate_usage_limit_failure(self):
+        server = self.server
+        sid = "00000000-0000-4000-8000-000000000008"
+        proc = mock.Mock(pid=4250)
+        proc.poll.return_value = 0
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        try:
+            with mock.patch.object(
+                server,
+                "_resolve_cursor_bin",
+                return_value={"available": True, "bin": "/usr/bin/cursor-agent-test"},
+            ), mock.patch.object(
+                server,
+                "_spawn_registry_entry_for_session",
+                return_value={"cwd": str(self.repo), "model": "auto"},
+            ), mock.patch.object(server, "_cursor_transcript_path", return_value=None), \
+                 mock.patch.object(server, "_git_toplevel_for_existing_dir", return_value=str(self.repo)), \
+                 mock.patch.object(server.subprocess, "Popen", return_value=proc), \
+                 mock.patch.object(server.time, "sleep"), \
+                 mock.patch.object(
+                     server,
+                     "_antigravity_read_log_tail",
+                     return_value="S: You've hit your usage limit Get Cursor Pro for more Agent usage.",
+                 ), mock.patch.object(server, "_record_spawn_to_registry") as record:
+                result = server.resume_session_cursor(sid, "second")
+        finally:
+            for entry in server._spawned_sessions:
+                fh = entry.get("log_fh")
+                if fh:
+                    fh.close()
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["via"], "cursor-resume")
+        self.assertIn("usage limit", result["error"])
+        record.assert_not_called()
+
     def test_resolve_cursor_bin_uses_local_bin_candidate(self):
         server = self.server
         cursor_bin = pathlib.Path(self.tmp_home, ".local", "bin", "cursor-agent")
@@ -2897,7 +2983,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         parsed = server.parse_conversation(sid, use_cache=False)
 
         self.assertIsNone(row["last_assistant_text"])
-        self.assertEqual(row["pending_tool"], "Grep")
+        self.assertIsNone(row["pending_tool"])
         self.assertEqual(parsed["events"][1]["blocks"][0]["kind"], "tool_use")
         self.assertNotIn("[REDACTED]", json.dumps(parsed["events"]))
 
