@@ -44,6 +44,8 @@ Patch for bug fixes. Minor for new features. Major for breaking `/api/*` contrac
 
 Tag as `vX.Y.Z`. `gh release create` with release notes copied from the CHANGELOG section.
 
+**Cutting a release: run `./scripts/cut-release.sh X.Y.Z`.** One command does the whole sequence — changelog rollup, version bump (both files), tag + push, GitHub release, notarized DMG + Sparkle appcast, and the Homebrew formula bump (auto-computes the sha256). Always `--dry-run` first. Full reference and prereqs in `docs/RELEASING.md`. Don't hand-run the 8 steps unless the wrapper can't (the manual path is the fallback).
+
 ## API contracts
 
 `/api/*` endpoints are the stable surface external tooling (Claude Code hooks, the browser UI, pkood integration) binds to. Treat them like public API:

@@ -1,0 +1,1 @@
+Added `scripts/cut-release.sh` — a single command that cuts a full release (changelog rollup, version bump, tag, GitHub release, notarized DMG + Sparkle appcast, and Homebrew formula bump with auto-computed sha256), with `--dry-run`, `--skip-dmg`, and `--notes-file` options.

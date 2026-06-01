@@ -2,6 +2,21 @@
 
 Short, copy-pasteable checklist for cutting a new version. Not a policy doc — the policy lives in `CLAUDE.md`.
 
+## TL;DR — one command
+
+```bash
+./scripts/cut-release.sh X.Y.Z                      # full release: changelog, tag, GH release, DMG, appcast, brew
+./scripts/cut-release.sh X.Y.Z --dry-run            # print every step, change nothing (do this first)
+./scripts/cut-release.sh X.Y.Z --notes-file notes.md  # hand-written release notes (else uses the CHANGELOG section)
+./scripts/cut-release.sh X.Y.Z --skip-dmg           # source/brew only (no notarized DMG / Sparkle update)
+```
+
+`cut-release.sh` orchestrates the whole sequence below, fails loud on the first error, auto-computes the Homebrew sha256, and verifies at the end. **Always `--dry-run` first.** Prereqs are the same as the manual steps (Developer ID cert, `ccc-notary` notarytool profile, Sparkle EdDSA key in login keychain, `gh` logged in, Homebrew tap at `~/Apps/homebrew-ccc` or `$CCC_BREW_TAP`).
+
+The manual steps below are the fallback / reference for what the wrapper does.
+
+---
+
 ## Pick a version
 
 SemVer. Look at what's under `## [Unreleased]` in `CHANGELOG.md`:
