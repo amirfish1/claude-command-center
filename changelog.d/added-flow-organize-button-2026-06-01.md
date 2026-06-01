@@ -1,0 +1,1 @@
+New "Organize" button in the flow toolbar. Keeps every parent (repo + object) exactly where it is, then lays out each parent's session children in a tidy grid right under it — most recent session leftmost, descending recency rightward and downward. Useful after a drag-and-drop session that left children scattered.

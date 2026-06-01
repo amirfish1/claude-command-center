@@ -2827,6 +2827,14 @@
           showOpToast('Codex follow-up started.');
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
+        } else if (data.via === 'cursor-resume') {
+          showOpToast('Cursor follow-up started.');
+          setTimeout(refreshConversationList, 1500);
+          setTimeout(refreshConversationList, 3500);
+        } else if (data.via === 'cursor-resume-queued') {
+          showOpToast('Queued until the Cursor follow-up finishes.');
+          setTimeout(refreshConversationList, 1500);
+          setTimeout(refreshConversationList, 3500);
         } else if (data.via === 'antigravity-resume') {
           showOpToast('Antigravity headless follow-up started.');
           setTimeout(refreshConversationList, 1500);
@@ -5894,6 +5902,7 @@
       + '<div class="flow-toolbar-group" role="group" aria-label="Flow collapse controls">'
       + '<button type="button" class="flow-toolbar-btn" data-flow-action="collapse-all">Collapse all</button>'
       + '<button type="button" class="flow-toolbar-btn" data-flow-action="expand-all">Expand all</button>'
+      + '<button type="button" class="flow-toolbar-btn" data-flow-action="organize" title="Keep all objects in place, line up session children below each parent — most recent leftmost.">Organize</button>'
       + '</div>'
       + '<div class="flow-toolbar-spacer"></div>'
       + '<div class="flow-zoom-controls" role="group" aria-label="Flow zoom">'
@@ -6333,6 +6342,59 @@
       parentId = (parentEl && parentEl.dataset.flowParent) || flowNodeParents[parentId] || '';
     }
     return flowCurrentRepoForDraft();
+  }
+
+  function organizeFlowSessions(targetEl) {
+    const board = targetEl || document.getElementById('flowBoard');
+    if (!board) return;
+    const world = board.querySelector('.flow-world') || board.querySelector('.flow-canvas');
+    if (!world) return;
+    const convsById = {};
+    if (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData)) {
+      conversationsData.forEach(c => { if (c && c.id) convsById[c.id] = c; });
+    }
+    const childrenByParent = new Map();
+    world.querySelectorAll('.flow-node').forEach(node => {
+      const kind = node.dataset.flowKind;
+      if (kind !== 'session' && kind !== 'draft-session') return;
+      const parentId = node.dataset.flowParent || flowNodeParents[node.dataset.flowNodeId] || '';
+      if (!parentId) return;
+      if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+      childrenByParent.get(parentId).push(node);
+    });
+    if (!childrenByParent.size) {
+      if (typeof showOpToast === 'function') showOpToast('Nothing to organize.', 'info');
+      return;
+    }
+    const H_STEP = 292;
+    const V_STEP = 116;
+    const PARENT_GAP_Y = 24;
+    childrenByParent.forEach((children, parentId) => {
+      const parentEl = findFlowNodeElement(parentId);
+      if (!parentEl) return;
+      children.sort((a, b) => {
+        const ra = convsById[a.dataset.id] || {};
+        const rb = convsById[b.dataset.id] || {};
+        const sa = ra.last_interacted || ra.modified || ra.mtime || 0;
+        const sb = rb.last_interacted || rb.modified || rb.mtime || 0;
+        return sb - sa;
+      });
+      const startX = parentEl.offsetLeft;
+      const startY = parentEl.offsetTop + parentEl.offsetHeight + PARENT_GAP_Y;
+      const cols = Math.min(4, Math.max(1, children.length));
+      children.forEach((child, idx) => {
+        const col = idx % cols;
+        const row = Math.floor(idx / cols);
+        const x = Math.round(startX + col * H_STEP);
+        const y = Math.round(startY + row * V_STEP);
+        child.style.left = x + 'px';
+        child.style.top = y + 'px';
+        flowNodePositions[child.dataset.flowNodeId] = { x, y };
+      });
+    });
+    persistFlowNodePositions();
+    redrawFlowLinks(board);
+    if (typeof showOpToast === 'function') showOpToast('Sessions organized by recency.', 'info');
   }
 
   function flowDraftPositionForParent(parentNodeId, repoPath) {
@@ -7002,6 +7064,8 @@
     if (expandBtn) expandBtn.addEventListener('click', () => setFlowExpanded(!flowExpanded));
     if (collapseAllBtn) collapseAllBtn.addEventListener('click', () => setFlowAllNodesCollapsed(true, targetEl));
     if (expandAllBtn) expandAllBtn.addEventListener('click', () => setFlowAllNodesCollapsed(false, targetEl));
+    const organizeBtn = targetEl && targetEl.querySelector('[data-flow-action="organize"]');
+    if (organizeBtn) organizeBtn.addEventListener('click', () => organizeFlowSessions(targetEl));
     if (targetEl) {
       targetEl.querySelectorAll('[data-flow-recency]').forEach(btn => {
         btn.addEventListener('click', ev => {
