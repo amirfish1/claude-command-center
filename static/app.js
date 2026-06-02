@@ -6869,6 +6869,14 @@
   //     archived sessions; within each group, sort reverse-
   //     chronological (most recent first). Archived sessions only
   //     appear when "Include archived" is on.
+  // R9. Manual parent connections (set by drag-onto-object) are
+  //     authoritative. Pre-pass re-syncs every visible node's
+  //     `data-flow-parent` from the `flowNodeParents` map (in case
+  //     the DOM attribute is stale from a render-before-drop), and
+  //     session bucketing reads `flowNodeParents[id]` first, the
+  //     DOM attribute second. A full sidebar re-render at the end
+  //     rebuilds the DOM from the source-of-truth maps so connector
+  //     lines and parent links survive Organize.
   // ──────────────────────────────────────────────────────────────────
   function organizeFlowSessions(targetEl) {
     const board = targetEl || document.getElementById('flowBoard');
@@ -6894,6 +6902,21 @@
     const MAX_COLS = 4;
     const MIN_ROW_WIDTH = 720;
 
+    // R9 (pre-pass): re-sync `data-flow-parent` on every visible node
+    // from the source-of-truth `flowNodeParents` map. The user can drag
+    // a session onto an object and then run Organize before the next
+    // full re-render; the in-DOM attribute would still point at the old
+    // parent (the repo) and Organize would silently ignore the user's
+    // manual connection. Pulling from the persisted map first keeps
+    // manual connections honored regardless of when Organize runs.
+    world.querySelectorAll('.flow-node').forEach(node => {
+      const id = node.dataset.flowNodeId;
+      const mapped = id && flowNodeParents[id];
+      if (mapped && node.dataset.flowParent !== mapped) {
+        node.dataset.flowParent = mapped;
+      }
+    });
+
     const parentNodes = [];
     const parentNodeIds = new Set();
     const childrenByParent = new Map();
@@ -6903,7 +6926,13 @@
         parentNodes.push(node);
         parentNodeIds.add(node.dataset.flowNodeId);
       } else if (kind === 'session' || kind === 'draft-session') {
-        const parentId = node.dataset.flowParent || flowNodeParents[node.dataset.flowNodeId] || '';
+        // Map first (manual connection), DOM attribute second (default
+        // parent from last render). Earlier the order was reversed,
+        // which let a stale data-flow-parent attribute override the
+        // user's latest manual link from flowNodeParents.
+        const parentId = (node.dataset.flowNodeId && flowNodeParents[node.dataset.flowNodeId])
+          || node.dataset.flowParent
+          || '';
         if (!parentId) return;
         if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
         childrenByParent.get(parentId).push(node);
@@ -7046,6 +7075,23 @@
     });
 
     persistFlowNodePositions();
+    // R9 (post-pass): force a full sidebar re-render so the DOM rebuilds
+    // from the source-of-truth maps (`flowNodePositions` + `flowNodeParents`
+    // via flowParentMapFor). This guarantees:
+    //  - manual parent connections survive Organize (re-resolved from
+    //    flowNodeParents on every record, not just visible attributes);
+    //  - connector lines redraw against the freshly-synced parent map;
+    //  - any stale layout state from before the user's last drag is wiped.
+    // The render is cheap: ~50ms for a typical board. Without this, we
+    // were relying on a future poll-driven re-render to fix any drift,
+    // which left a visible window where manual connections looked lost.
+    try {
+      const $s = document.getElementById('convSearch');
+      const convs = (typeof filterConversations === 'function')
+        ? filterConversations($s ? $s.value : '')
+        : (conversationsData || []);
+      if (typeof renderSidebar === 'function') renderSidebar(convs);
+    } catch (_) { /* fall back to in-place redraw below */ }
     redrawFlowLinks(board);
     if (typeof showOpToast === 'function') showOpToast('Organized — tight pack.', 'info');
   }
@@ -13299,6 +13345,25 @@
     return ',left=' + left + ',top=' + top + ',screenX=' + left + ',screenY=' + top;
   }
 
+  function isCccMacApp() {
+    return window.__CCC_MAC_APP__ === true;
+  }
+
+  function tryOpenNativeMacPopout(url) {
+    if (!isCccMacApp()) return false;
+    const bridge = window.webkit
+      && window.webkit.messageHandlers
+      && window.webkit.messageHandlers.cccNative;
+    if (!bridge || typeof bridge.postMessage !== 'function') return false;
+    try {
+      bridge.postMessage({ action: 'openPopout', url: url });
+      showOpToast('Conversation opened in a new window');
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function openConversationPopout(convId, repoPath, anchor) {
     if (!convId) return false;
     const row = rowForConversationId(convId);
@@ -13316,6 +13381,7 @@
       return true;
     }
     const url = conversationPopoutUrl(convId, repoPathForConversationPopout(convId, repoPath));
+    if (tryOpenNativeMacPopout(url)) return true;
     const name = 'ccc-conversation-' + String(convId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
     const width = 920;
     const height = 900;
@@ -13325,8 +13391,12 @@
     const popup = window.open(url, name, features);
     if (popup) {
       try { popup.focus(); } catch (_) {}
-      showOpToast('Conversation opened in a pop-up');
+      showOpToast(isCccMacApp() ? 'Conversation opened in a new window' : 'Conversation opened in a pop-up');
       return true;
+    }
+    if (isCccMacApp()) {
+      showOpToast('Could not open a new Command Center window', 'error');
+      return false;
     }
     fetch('/api/open-browser', {
       method: 'POST',
