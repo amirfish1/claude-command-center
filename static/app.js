@@ -12979,6 +12979,12 @@
         ev.stopPropagation();
         _startShipPushAll(repo);
       });
+      // Click the status chip to (re)open the last ship log — survives refresh.
+      const statusEl = box.querySelector('[data-role="ship-status"]');
+      if (statusEl) statusEl.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        _openShipLog(repo);
+      });
       _refreshShipStatus(repo);
     });
     $convList.querySelectorAll('.conv-item').forEach(el => {
@@ -20334,7 +20340,7 @@
     return document.querySelector('.conv-folder-ship[data-ship-repo="' + sel + '"]');
   }
 
-  const _SHIP_DONE_PHASES = ['pushed', 'deployed', 'error', 'stalled', 'deploy_error'];
+  const _SHIP_DONE_PHASES = ['pushed', 'deployed', 'error', 'needs_you', 'deploy_error', 'diverged'];
 
   function _shipDismissLog() {
     _shipLogActive = false;
@@ -20360,7 +20366,7 @@
     const phase = job.phase || '';
     const done = !job.running;
     const phaseCls = job.running ? 'is-busy'
-      : (['error', 'stalled', 'deploy_error'].indexOf(phase) >= 0 ? 'is-error' : 'is-ok');
+      : (['error', 'deploy_error', 'needs_you', 'diverged'].indexOf(phase) >= 0 ? 'is-error' : 'is-ok');
     const lines = (job.log || []).map(e => {
       const d = new Date((e.t || 0) * 1000);
       const ts = [d.getHours(), d.getMinutes(), d.getSeconds()]
@@ -20369,6 +20375,25 @@
         + '<span class="ship-log-ts">' + ts + '</span>'
         + '<span class="ship-log-txt">' + escapeHtml(e.text || '') + '</span></div>';
     }).join('');
+    // Approve/Reject action rows (build 3) — only when the run is done.
+    const actions = (!job.running && Array.isArray(job.actions)) ? job.actions : [];
+    const actionsHtml = actions.length
+      ? '<div class="ship-actions">'
+        + actions.map(a => {
+            const canDo = a.kind === 'commit' || a.kind === 'drop';
+            return '<div class="ship-action" data-action-id="' + escapeHtml(a.id) + '">'
+              + '<div class="ship-action-text">'
+                + '<span class="ship-action-label">' + escapeHtml(a.label || a.id) + '</span>'
+                + (a.detail ? '<span class="ship-action-detail">' + escapeHtml(a.detail) + '</span>' : '')
+              + '</div>'
+              + '<div class="ship-action-btns">'
+                + (canDo ? '<button type="button" class="ship-act-approve" data-act="approve" data-id="' + escapeHtml(a.id) + '">Approve</button>' : '')
+                + '<button type="button" class="ship-act-reject" data-act="reject" data-id="' + escapeHtml(a.id) + '">'
+                + (canDo ? 'Skip' : 'Dismiss') + '</button>'
+              + '</div></div>';
+          }).join('')
+        + '</div>'
+      : '';
     $list.innerHTML =
       '<div class="ship-log">'
       + '<div class="ship-log-head">'
@@ -20377,6 +20402,7 @@
         + '<span class="ship-log-phase ' + phaseCls + '">' + escapeHtml(phase) + '</span>'
         + (done ? '<button type="button" class="ship-log-dismiss" data-role="ship-log-dismiss">✕ close</button>' : '')
       + '</div>'
+      + actionsHtml
       + '<div class="ship-log-body" id="shipLogBody">' + (lines || '<div class="ship-log-line info"><span class="ship-log-txt">…</span></div>') + '</div>'
       + '</div>';
     if ($count) $count.textContent = '';
@@ -20384,11 +20410,36 @@
     if (body) body.scrollTop = body.scrollHeight;
     const dz = $list.querySelector('[data-role="ship-log-dismiss"]');
     if (dz) dz.addEventListener('click', (e) => { e.stopPropagation(); _shipDismissLog(); });
+    $list.querySelectorAll('.ship-act-approve, .ship-act-reject').forEach(b => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        b.disabled = true;
+        _applyShipAction(repo, b.getAttribute('data-id'), b.getAttribute('data-act'));
+      });
+    });
+  }
+
+  async function _applyShipAction(repo, id, decision) {
+    if (!repo || !id) return;
+    try {
+      const res = await fetch('/api/repo/ship/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_path: repo, id: id, decision: decision }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.job) _renderShipLogPanel(repo, data);
+      else await _openShipLog(repo);
+      _refreshShipStatus(repo);   // update the folder chip too
+    } catch (_) {
+      await _openShipLog(repo);
+    }
   }
 
   const _SHIP_PHASE_LABELS = {
-    starting: 'Starting…', nudging: 'Nudging…', waiting_commits: 'Waiting commits…',
-    pulling: 'Pulling…', pushing: 'Pushing…', deploying: 'Deploying…',
+    starting: 'Starting…', triaging: 'Triaging…', nudging: 'Nudging…',
+    waiting_commits: 'Waiting commits…', pulling: 'Pulling…', pushing: 'Pushing…',
+    deploying: 'Deploying…',
   };
 
   function _renderShipStatus(box, data) {
@@ -20407,10 +20458,18 @@
     if (btn) btn.disabled = false;
     let cls = 'conv-folder-ship-status', txt = '', title = '';
     const phase = job && job.phase;
-    if (phase === 'error' || phase === 'stalled' || phase === 'deploy_error') {
-      cls += ' is-error';
-      txt = phase === 'stalled' ? 'Stalled' : (phase === 'deploy_error' ? 'Deploy failed' : 'Failed');
-      title = (job && job.message) || '';
+    // A terminal phase is only worth showing while it's still true. If the repo
+    // has since gone clean (you committed the files), don't show a stale
+    // "Needs you" — fall through to the live clean/last-ship signal.
+    const phaseStillRelevant = data && data.dirty !== false;
+    if (phaseStillRelevant &&
+        (phase === 'error' || phase === 'needs_you' || phase === 'deploy_error' || phase === 'diverged')) {
+      cls += ' is-error has-log';
+      txt = phase === 'needs_you' ? 'Needs you'
+        : phase === 'deploy_error' ? 'Deploy failed'
+        : phase === 'diverged' ? 'Diverged'
+        : 'Failed';
+      title = ((job && job.message) || '') + ' — click to view log';
     } else if (data && data.dirty === true) {
       cls += ' is-dirty';
       txt = 'dirty';
@@ -20427,6 +20486,15 @@
     statusEl.className = cls;
     statusEl.textContent = txt;
     statusEl.title = title;
+  }
+
+  async function _openShipLog(repo) {
+    // Re-show the (persisted) log feed for a repo on demand — e.g. after a page
+    // refresh, when the chip shows "Needs you" and you want the steps back.
+    if (!repo) return;
+    _shipLogRepo = repo;
+    const data = await _refreshShipStatus(repo);
+    if (data && data.job) _renderShipLogPanel(repo, data);
   }
 
   async function _refreshShipStatus(repo, box) {

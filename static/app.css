@@ -5472,6 +5472,7 @@
     max-width: 130px;
     color: var(--text-muted);
   }
+  .conv-folder-ship-status.has-log { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
   .conv-folder-ship-status.is-dirty { color: #d29922; }
   .conv-folder-ship-status.is-clean { color: var(--text-muted); opacity: 0.7; }
   .conv-folder-ship-status.is-ok { color: #3fb950; }
@@ -5562,6 +5563,43 @@
   .ship-log-line.warn .ship-log-txt { color: #d29922; }
   .ship-log-line.error .ship-log-txt { color: #f85149; }
   .ship-log-line.ok .ship-log-txt { color: #3fb950; }
+  /* Approve/Reject action rows (build 3) */
+  .ship-actions {
+    flex: none;
+    border-bottom: 1px solid var(--border);
+    padding: 4px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 38%;
+    overflow-y: auto;
+  }
+  .ship-action {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: rgba(139,148,158,0.05);
+  }
+  .ship-action-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+  .ship-action-label { font-size: 12px; font-weight: 600; color: var(--text); }
+  .ship-action-detail { font-size: 10.5px; color: var(--text-muted); }
+  .ship-action-btns { flex: none; display: flex; gap: 6px; }
+  .ship-act-approve, .ship-act-reject {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+  }
+  .ship-act-approve { color: #3fb950; border-color: rgba(63,185,80,0.45); }
+  .ship-act-approve:hover:not(:disabled) { background: rgba(63,185,80,0.16); color: #56d364; }
+  .ship-act-reject:hover:not(:disabled) { background: rgba(139,148,158,0.14); color: var(--text); }
+  .ship-act-approve:disabled, .ship-act-reject:disabled { opacity: 0.4; cursor: default; }
   #convList .conv-folder-group.collapsed > .conv-item,
   #convList .conv-folder-group.collapsed > .conv-gap-separator,
   #convList .conv-folder-group.collapsed > .conv-ghissues-more { display: none; }

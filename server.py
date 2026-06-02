@@ -24346,6 +24346,783 @@ def vercel_deploy_status_with_autofix(repo_path):
     return status
 
 
+# ── Repo "Push all" ship flow ────────────────────────────────────────────────
+# The conversation-list folder header exposes a "Push all" control that
+# orchestrates a repo-wide ship for that repo's main checkout:
+#
+#   nudging → waiting_commits → pulling → pushing → pushed → deploying → deployed
+#
+# Step 1 asks the sessions that likely own uncommitted work to commit (Tier-A
+# nudge, via the same fall-through as /api/inject-input — works on live AND
+# dormant Claude/Codex/Gemini/Cursor). Step 2 polls `git status --porcelain`
+# until the worktree goes clean (capped). Then pull --rebase + push, persist
+# last_ship_at/sha, and — when the repo is a Vercel project — poll the
+# production deploy until it goes READY.
+#
+# The flow runs in a daemon thread per repo; the UI starts it via
+# POST /api/repo/ship and polls GET /api/repo/ship/status for the live phase.
+# Best-effort by design: it never force-pushes and it nudges sessions rather
+# than committing on their behalf (hunk-level attribution is out of scope).
+
+REPO_SHIP_STATE_FILE = COMMAND_CENTER_STATE_DIR / "repo-ship-state.json"
+SHIP_JOBS_FILE = COMMAND_CENTER_STATE_DIR / "ship-jobs.json"  # last job+log per repo (survives refresh/restart)
+
+SHIP_COMMIT_WAIT_CAP = 180   # max seconds to wait for sessions to commit
+SHIP_POLL_INTERVAL = 4       # seconds between porcelain polls
+SHIP_DEPLOY_WAIT_CAP = 180   # max seconds to wait for Vercel production READY
+SHIP_DEPLOY_POLL_INTERVAL = 6
+SHIP_ACK_TTL = 1200          # don't re-nudge a session that answered <20min ago
+SHIP_ACKS_FILE = COMMAND_CENTER_STATE_DIR / "ship-acks.json"
+
+
+def _load_ship_acks():
+    """{session_id: epoch} of recent replies, pruned to the TTL. Persisted so
+    repeated 'Push all' runs skip already-answered sessions even across a
+    server restart (the in-memory cache alone reset every restart)."""
+    try:
+        data = json.loads(SHIP_ACKS_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    now = time.time()
+    return {k: float(v) for k, v in data.items()
+            if isinstance(k, str) and isinstance(v, (int, float)) and (now - v) < SHIP_ACK_TTL}
+
+
+def _save_ship_acks(acks):
+    try:
+        SHIP_ACKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SHIP_ACKS_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(acks, indent=2))
+        os.replace(tmp, SHIP_ACKS_FILE)
+    except OSError:
+        pass
+
+
+# session_id -> epoch of last reply during a ship (see above). Loaded from disk.
+_ship_recent_acks = _load_ship_acks()
+
+
+def _record_ship_ack(sid):
+    _ship_recent_acks[sid] = time.time()
+    _save_ship_acks(_ship_recent_acks)
+
+
+def _ship_session_label(sid, names):
+    """Human name for a session: user override → JSONL-derived title → short id."""
+    n = (names.get(sid) or "").strip()
+    if n:
+        return n
+    try:
+        p = _find_session_jsonl(sid)
+        if p:
+            meta = _conv_meta_cache.get(str(p)) or {}
+            for k in ("custom_title", "ai_title", "last_prompt"):
+                v = (meta.get(k) or "").strip()
+                if v:
+                    return v[:60]
+    except Exception:
+        pass
+    return sid[:8]
+
+TIER_A_COMMIT_NUDGE = (
+    "Push-all in progress for this repo. Commit ONLY the paths you changed: "
+    "`git commit --only <paths> -m 'type(area): subject'` "
+    "(never `git add -A` / `git add .` / `git commit -a` — that sweeps in "
+    "sibling sessions' work). When you're done — committed, or nothing of "
+    "yours to commit — reply DONE."
+)
+
+_ship_jobs = {}                       # repo_path -> live job dict
+_ship_jobs_lock = threading.Lock()
+
+
+def _load_repo_ship_state():
+    try:
+        data = json.loads(REPO_SHIP_STATE_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_repo_ship_state(state):
+    REPO_SHIP_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = REPO_SHIP_STATE_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True))
+    os.replace(tmp, REPO_SHIP_STATE_FILE)
+
+
+def _record_repo_ship(repo_path, sha, branch):
+    state = _load_repo_ship_state()
+    state[repo_path] = {
+        "last_ship_at": time.time(),
+        "last_ship_sha": (sha or "")[:12],
+        "last_ship_branch": branch,
+    }
+    _save_repo_ship_state(state)
+
+
+def _persist_ship_job(repo_path, job):
+    """Save a finished job (+log) to disk so the UI can reopen it after a page
+    refresh or a server restart. Log capped to keep the file small."""
+    try:
+        data = json.loads(SHIP_JOBS_FILE.read_text())
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    j = dict(job)
+    if isinstance(j.get("log"), list) and len(j["log"]) > 120:
+        j["log"] = j["log"][-120:]
+    data[repo_path] = j
+    SHIP_JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SHIP_JOBS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, SHIP_JOBS_FILE)
+
+
+def _load_ship_job(repo_path):
+    """Last persisted job for a repo, or None."""
+    try:
+        data = json.loads(SHIP_JOBS_FILE.read_text())
+        return data.get(repo_path) if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _ship_candidate_sessions(repo_path):
+    """Live session ids whose cwd is inside this repo.
+
+    Deliberately built from the CHEAP live-id set (`_discover_live_session_ids`
+    — Claude registry + engine resume ids + sidecar `*_writes` markers), NOT
+    the full `find_all_sessions` archive scan. That scan does git/gh probes per
+    session and, run from this background thread, took >60s on a big monorepo
+    and held the sessions singleflight, hanging the sidebar too. Live sessions
+    in a dirty repo are exactly who owns the uncommitted work; asking one that
+    has nothing to commit is harmless (it just replies DONE).
+
+    Sessions living in a NESTED git worktree (e.g. `<repo>/.claude/worktrees/*`)
+    are excluded: they commit to their own feature branch and can never clean
+    the main checkout, so nudging them is pure noise. Sibling worktrees
+    (`<repo>-wt-*`) already fall outside repo_root and never match.
+    """
+    try:
+        live_ids = _discover_live_session_ids()
+    except Exception:
+        live_ids = set()
+    try:
+        repo_root = str(Path(repo_path).resolve())
+    except (OSError, ValueError):
+        repo_root = repo_path
+    seen, out = set(), []
+    for sid in live_ids:
+        if not sid or sid.startswith("backlog-") or sid in seen:
+            continue
+        try:
+            cwd = find_session_cwd(sid)
+        except Exception:
+            cwd = None
+        if not cwd:
+            continue
+        try:
+            cwd_res = str(Path(cwd).resolve())
+        except (OSError, ValueError):
+            cwd_res = cwd
+        if not (cwd_res == repo_root or cwd_res.startswith(repo_root + os.sep)):
+            continue
+        # A cwd deeper than repo_root might be a nested worktree, not the main
+        # checkout. Confirm its git top-level IS repo_root before nudging.
+        if cwd_res != repo_root:
+            rc, top, _ = _git(["rev-parse", "--show-toplevel"], cwd_res, timeout=3)
+            if rc == 0:
+                try:
+                    top_res = str(Path(top.strip()).resolve())
+                except (OSError, ValueError):
+                    top_res = top.strip()
+                if top_res != repo_root:
+                    continue
+        seen.add(sid)
+        out.append(sid)
+    return out
+
+
+def _append_ship_log(job, text, level):
+    """Append one terminal-style line to a job. Caller holds _ship_jobs_lock."""
+    log = job.setdefault("log", [])
+    log.append({"t": time.time(), "text": text, "level": level})
+    if len(log) > 200:
+        del log[: len(log) - 200]
+
+
+def _ship_log(repo_path, text, level="info"):
+    """Append a standalone log line (no phase change)."""
+    with _ship_jobs_lock:
+        job = _ship_jobs.get(repo_path)
+        if job is not None:
+            _append_ship_log(job, text, level)
+
+
+def _ship_update(repo_path, phase, message, *, running=True, log=True, level="info", **extra):
+    with _ship_jobs_lock:
+        job = _ship_jobs.setdefault(repo_path, {})
+        job["phase"] = phase
+        job["message"] = message
+        job["running"] = running
+        job["updated_at"] = time.time()
+        if not running:
+            job["finished_at"] = time.time()
+        job.update(extra)
+        if log and message:
+            lvl = level
+            if level == "info" and phase in ("error", "deploy_error"):
+                lvl = "error"
+            elif level == "info" and phase in ("needs_you", "diverged"):
+                lvl = "warn"   # handoff, not a failure
+            elif level == "info" and phase in ("pushed", "deployed"):
+                lvl = "ok"
+            _append_ship_log(job, message, lvl)
+        snapshot = dict(job)
+    # Persist terminal jobs so the log survives a page refresh / restart.
+    if not running:
+        try:
+            _persist_ship_job(repo_path, snapshot)
+        except OSError:
+            pass
+    return snapshot
+
+
+def _ship_read_reply(jsonl_path, start_offset, since_epoch):
+    """Return assistant text written to a transcript after the nudge, or None.
+
+    Closes the loop on the otherwise one-way nudge: we snapshot the transcript
+    size at inject time, then read forward for the session's assistant reply
+    (e.g. "DONE — nothing of mine is uncommitted"). Claude transcripts only —
+    other engines return None (their reply isn't tracked, only git status is).
+    """
+    if not jsonl_path:
+        return None
+    try:
+        with open(jsonl_path, "rb") as fh:
+            if start_offset:
+                fh.seek(start_offset)
+            data = fh.read()
+    except OSError:
+        return None
+    out = []
+    for line in data.split(b"\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(ev, dict) or ev.get("type") != "assistant":
+            continue
+        ts = _iso_to_epoch(ev.get("timestamp"))
+        if ts is not None and ts < since_epoch:
+            continue
+        msg = ev.get("message") or {}
+        for block in (msg.get("content") or []):
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text") or ""
+                if t.strip():
+                    out.append(t)
+    return ("".join(out)).strip() or None
+
+
+_SHIP_JUNK_MARKERS = ("__pycache__/", ".claude/annotations/", ".DS_Store")
+
+
+def _ship_is_junk(path):
+    """Untracked cruft that should be gitignored, never committed."""
+    return path.endswith((".pyc", ".DS_Store")) or any(m in path for m in _SHIP_JUNK_MARKERS)
+
+
+def _ship_porcelain_paths(repo_path):
+    """[(xy, path)] from `git status --porcelain`, or None on failure."""
+    rc, out, _ = _git(["status", "--porcelain"], repo_path)
+    if rc != 0:
+        return None
+    paths = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        xy, p = line[:2], line[3:]
+        if " -> " in p:          # rename: keep the destination path
+            p = p.split(" -> ")[-1]
+        paths.append((xy, p))
+    return paths
+
+
+def _ship_safe_restore_ref(repo_path, path):
+    """If `path`'s current working+staged content is byte-identical to a commit
+    that exists on SOME ref, return a short ref label; else None.
+
+    When this returns truthy, `git restore` is provably non-destructive — the
+    exact content already lives in a committed object (origin/main, a feature
+    branch, etc.), so discarding the working copy loses nothing. This is how
+    hand-copied dirt ("pulled PR #336 into the shared clone") gets auto-cleared.
+    """
+    rc, sha, _ = _git(["log", "-1", "--all", "--format=%H", "--", path], repo_path, timeout=8)
+    sha = (sha or "").strip()
+    if rc != 0 or not sha:
+        return None  # untracked-everywhere / no history → not safe to restore
+    rc, diff, _ = _git(["diff", sha, "--", path], repo_path, timeout=8)
+    if rc != 0 or diff.strip():
+        return None  # differs from that commit → real divergent work, keep it
+    rc, brs, _ = _git(["branch", "-a", "--contains", sha], repo_path, timeout=8)
+    ref = None
+    for b in (brs or "").splitlines():
+        b = b.strip().lstrip("*+ ").strip()
+        if not b or "HEAD" in b:
+            continue
+        if "origin/main" in b or b == "main":
+            return "origin/main"
+        ref = ref or b
+    return ref or sha[:8]
+
+
+def _ship_triage_restore(repo_path):
+    """Auto-resolve dirt whose content is already preserved in git.
+
+    Restores files byte-identical to a committed version on any ref (provably
+    safe). Returns {restored: [(path, ref)], junk: [path], remaining: [path]}.
+    Never deletes untracked files and never commits.
+    """
+    restored, junk, remaining = [], [], []
+    for xy, p in (_ship_porcelain_paths(repo_path) or []):
+        if _ship_is_junk(p):
+            junk.append(p)
+            continue
+        ref = _ship_safe_restore_ref(repo_path, p)
+        if ref:
+            rc, _, _ = _git(["restore", "--staged", "--worktree", "--", p], repo_path, timeout=10)
+            if rc == 0:
+                restored.append((p, ref))
+                continue
+        remaining.append(p)
+    return {"restored": restored, "junk": junk, "remaining": remaining}
+
+
+def _ship_classify_remaining(path):
+    """'infra' = safe to bulk-commit (docs/config/scripts, near-zero blast
+    radius). 'review' = app/deploy code that ships to prod on push — eyeball
+    the diff first. Unknown defaults to 'review' (conservative)."""
+    if path.startswith(("apps/", "packages/")):
+        return "review"
+    base = path.rsplit("/", 1)[-1]
+    if base in ("next.config.js", "vercel.json", "package.json", "package-lock.json"):
+        return "review"
+    if path.startswith(("docs/", ".claude/", "scripts/")):
+        return "infra"
+    if base in (".gitignore", "CLAUDE.md", "AGENTS.md", "README.md") or base.endswith(".md"):
+        return "infra"
+    return "review"
+
+
+def _run_ship_flow(repo_path, branch):
+    try:
+        _ship_update(repo_path, "nudging", "Checking for uncommitted work…")
+        rc, out, err = _git(["status", "--porcelain"], repo_path)
+        if rc != 0:
+            _ship_update(repo_path, "error", f"git status failed: {err or rc}", running=False)
+            return
+        dirty = bool(out.strip())
+        was_dirty = dirty
+        if dirty:
+            n_dirt = len([l for l in out.splitlines() if l.strip()])
+            _ship_log(repo_path, f"{n_dirt} uncommitted path(s) in {branch}", "warn")
+            # Triage: auto-clear dirt whose content is already safe in git
+            # (hand-copied PR work, behind-origin/main, etc.). Provably
+            # non-destructive — we only restore byte-identical-to-a-commit files.
+            _ship_update(repo_path, "triaging",
+                         "Triaging — restoring files already saved in git…")
+            tri = _ship_triage_restore(repo_path)
+            for p, ref in tri["restored"]:
+                _ship_log(repo_path, f"↩ restored {p} (already on {ref})", "ok")
+            if tri["restored"]:
+                _ship_log(repo_path,
+                          f"auto-restored {len(tri['restored'])} file(s) already preserved in git",
+                          "ok")
+            for p in tri["junk"]:
+                _ship_log(repo_path, f"junk (gitignore?): {p}", "warn")
+            rc, out, err = _git(["status", "--porcelain"], repo_path)
+            dirty = bool(out.strip()) if rc == 0 else dirty
+            if not dirty:
+                _ship_log(repo_path, "worktree clean after triage ✓", "ok")
+        if dirty:
+            candidates = _ship_candidate_sessions(repo_path)
+            try:
+                names = _load_session_name_overrides()
+            except Exception:
+                names = {}
+
+            def _label(sid):
+                return _ship_session_label(sid, names)
+
+            # Idempotent: skip sessions that already answered this ship within
+            # the TTL, so repeated "Push all" runs don't spam the same sessions
+            # (the "3 in ZOOM" problem). Stale/never-asked sessions still get it.
+            now = time.time()
+            fresh, skipped = [], 0
+            for sid in candidates:
+                last = _ship_recent_acks.get(sid)
+                if last and (now - last) < SHIP_ACK_TTL:
+                    skipped += 1
+                    _ship_log(repo_path,
+                              f"↩ skipped {_label(sid)} (answered {int((now - last) / 60)}m ago)",
+                              "info")
+                else:
+                    fresh.append(sid)
+            _ship_update(repo_path, "nudging",
+                         f"Asking {len(fresh)} session(s) to commit"
+                         + (f" ({skipped} already answered)" if skipped else "") + "…")
+            nudged = []
+            acks = []   # two-way: track each nudged session's transcript reply
+            for sid in fresh:
+                name = _label(sid)
+                jsonl = _find_session_jsonl(sid)
+                offset = None
+                if jsonl is not None:
+                    try:
+                        offset = jsonl.stat().st_size
+                    except OSError:
+                        offset = None
+                try:
+                    res = _inject_text_into_session(sid, TIER_A_COMMIT_NUDGE)
+                    if res.get("ok"):
+                        nudged.append(sid)
+                        via = res.get("via") or ("resumed" if res.get("resumed") else "sent")
+                        _ship_log(repo_path, f"→ nudged {name} ({via})", "info")
+                        acks.append({"sid": sid, "name": name, "jsonl": jsonl,
+                                     "offset": offset, "since": time.time() - 1.0,
+                                     "acked": False})
+                        if jsonl is None:
+                            # Non-Claude (no readable transcript): we can't hear
+                            # the reply, so treat the nudge itself as the
+                            # "don't re-bug for a while" marker.
+                            _record_ship_ack(sid)
+                    else:
+                        _ship_log(repo_path, f"✗ {name}: {res.get('error') or 'no route'}", "warn")
+                except Exception as e:
+                    _ship_log(repo_path, f"✗ {name}: {e}", "warn")
+            trackable = [a for a in acks if a["jsonl"] is not None]
+            # No new nudges → nothing to wait for. Otherwise wait the full cap
+            # only when there's a reply we can actually read; a short grace
+            # suffices when every nudge went to a non-readable engine.
+            wait_cap = 0 if not nudged else (SHIP_COMMIT_WAIT_CAP if trackable else 15)
+            _ship_update(repo_path, "waiting_commits",
+                         f"Waiting for {len(nudged)} session(s) to reply…",
+                         nudged=nudged)
+            deadline = time.time() + wait_cap
+            last_remaining = None
+            while time.time() < deadline:
+                # Listen for each session's reply (the missing back-channel).
+                for a in trackable:
+                    if a["acked"]:
+                        continue
+                    reply = _ship_read_reply(a["jsonl"], a["offset"], a["since"])
+                    if reply:
+                        a["acked"] = True
+                        _record_ship_ack(a["sid"])   # remember: don't re-nudge soon
+                        first = reply.splitlines()[0][:140]
+                        lvl = "ok" if "DONE" in reply[:40].upper() else "info"
+                        _ship_log(repo_path, f"✓ {a['name']}: {first}", lvl)
+                rc, out, err = _git(["status", "--porcelain"], repo_path)
+                if rc == 0 and not out.strip():
+                    dirty = False
+                    _ship_log(repo_path, "worktree clean ✓", "ok")
+                    break
+                remaining = len([l for l in out.splitlines() if l.strip()]) if rc == 0 else None
+                if remaining is not None and remaining != last_remaining:
+                    _ship_log(repo_path, f"… {remaining} path(s) still uncommitted", "info")
+                    last_remaining = remaining
+                # Everyone we can hear from has answered and it's still dirty →
+                # the remaining dirt is unclaimed; stop waiting the full cap.
+                if trackable and all(a["acked"] for a in trackable):
+                    _ship_log(repo_path, "all nudged sessions replied", "info")
+                    break
+                time.sleep(SHIP_POLL_INTERVAL)
+            # Final source-of-truth check (covers the wait_cap==0 skip path too).
+            rc, out, _ = _git(["status", "--porcelain"], repo_path)
+            dirty = bool(out.strip()) if rc == 0 else dirty
+            if dirty:
+                # Categorize what's left for the human. We will NOT auto-commit:
+                # there's a push-to-prod behind this, and this is a shared clone.
+                paths = [p for _, p in (_ship_porcelain_paths(repo_path) or [])]
+                junk = [p for p in paths if _ship_is_junk(p)]
+                rest = [p for p in paths if not _ship_is_junk(p)]
+                infra = [p for p in rest if _ship_classify_remaining(p) == "infra"]
+                review = [p for p in rest if _ship_classify_remaining(p) == "review"]
+                if infra:
+                    _ship_log(repo_path, f"safe to bulk-commit — docs/infra ({len(infra)}):", "info")
+                    for p in infra[:12]:
+                        _ship_log(repo_path, f"  • {p}", "info")
+                if review:
+                    _ship_log(repo_path, f"review before commit — app/deploy code ({len(review)}):", "warn")
+                    for p in review[:12]:
+                        _ship_log(repo_path, f"  ⚠ {p}", "warn")
+                if junk:
+                    _ship_log(repo_path, f"junk to gitignore ({len(junk)})", "warn")
+                # Spell out exactly what a human needs to do to finish.
+                _ship_log(repo_path, "— to finish —", "info")
+                if infra:
+                    _ship_log(repo_path,
+                              f"1. commit the {len(infra)} infra file(s): "
+                              "git commit --only <paths> -m 'chore: …'", "info")
+                if review:
+                    _ship_log(repo_path,
+                              f"2. review the {len(review)} app/deploy file(s) "
+                              "(git diff) — they ship to prod — then commit or restore", "warn")
+                if junk:
+                    _ship_log(repo_path, f"3. gitignore/delete the {len(junk)} junk file(s)", "warn")
+                # Cheap divergence pre-check so the handoff shows the whole path
+                # to green (the push will also need this resolved).
+                _git(["fetch", "origin", branch], repo_path, timeout=30)
+                rc_a, ah, _ = _git(["rev-list", "--count", f"origin/{branch}..HEAD"], repo_path)
+                rc_b, bh, _ = _git(["rev-list", "--count", f"HEAD..origin/{branch}"], repo_path)
+                ahead = int((ah or "0").strip() or 0) if rc_a == 0 else 0
+                behind = int((bh or "0").strip() or 0) if rc_b == 0 else 0
+                if ahead and behind:
+                    _ship_log(repo_path,
+                              f"4. branch diverged (ahead {ahead}, behind {behind}) — after the "
+                              f"tree is clean, reconcile from a clean worktree off origin/{branch}, "
+                              "then push (Push all won't rebase a shared clone)", "warn")
+                # Structured actions the UI offers Approve/Reject on (build 3).
+                ship_actions = []
+                if infra:
+                    ship_actions.append({
+                        "id": "commit-infra", "kind": "commit",
+                        "label": f"Commit {len(infra)} infra file(s)",
+                        "detail": "docs / config / scripts — low blast radius",
+                        "paths": infra,
+                        "message": "chore: commit infra (docs/config/scripts)",
+                    })
+                if junk:
+                    ship_actions.append({
+                        "id": "drop-junk", "kind": "drop",
+                        "label": f"Delete {len(junk)} junk file(s)",
+                        "detail": "untracked cruft (__pycache__, .DS_Store, …)",
+                        "paths": junk,
+                    })
+                if review:
+                    ship_actions.append({
+                        "id": "review", "kind": "review",
+                        "label": f"{len(review)} app/deploy file(s) — review by hand",
+                        "detail": "these ship to prod; open the diffs yourself",
+                        "paths": review,
+                    })
+                acked_n = sum(1 for a in acks if a["acked"])
+                _ship_update(repo_path, "needs_you",
+                             f"Needs you: {len(infra)} infra (safe to commit), "
+                             f"{len(review)} app/deploy (review — ships to prod), "
+                             f"{len(junk)} junk"
+                             + (f"; branch diverged (ahead {ahead}/behind {behind})" if ahead and behind else "")
+                             + ". Won't auto-commit behind a push.",
+                             running=False, actions=ship_actions)
+                return
+        if not was_dirty:
+            _ship_log(repo_path, "worktree already clean ✓", "ok")
+
+        # Integrate remote SAFELY. Never `rebase` a shared clone in place: a
+        # mid-rebase conflict leaves every session's checkout broken. Fetch,
+        # then only fast-forward. If the branch has diverged (local ahead AND
+        # behind), refuse and hand off to a clean-worktree reconcile.
+        _ship_update(repo_path, "pulling", f"$ git fetch origin {branch}")
+        rc, _, err = _git(["fetch", "origin", branch], repo_path, timeout=60)
+        if rc != 0:
+            _ship_update(repo_path, "error", f"git fetch failed: {err or rc}", running=False)
+            return
+        rc_a, ahead_s, _ = _git(["rev-list", "--count", f"origin/{branch}..HEAD"], repo_path)
+        rc_b, behind_s, _ = _git(["rev-list", "--count", f"HEAD..origin/{branch}"], repo_path)
+        ahead = int((ahead_s or "0").strip() or 0) if rc_a == 0 else 0
+        behind = int((behind_s or "0").strip() or 0) if rc_b == 0 else 0
+        _ship_log(repo_path, f"local {branch}: ahead {ahead}, behind {behind}", "info")
+        if ahead and behind:
+            _ship_update(repo_path, "diverged",
+                         f"Diverged: ahead {ahead}, behind {behind}. Refusing to rebase "
+                         "a shared clone in place — a mid-rebase conflict would break "
+                         "every session here. Reconcile from a clean worktree off "
+                         f"origin/{branch} (cherry-pick the {ahead} local commit(s)), then push.",
+                         running=False)
+            return
+        if behind:
+            rc, out, err = _git(["merge", "--ff-only", f"origin/{branch}"], repo_path, timeout=60)
+            if rc != 0:
+                _ship_update(repo_path, "error",
+                             f"fast-forward failed: {err or out.strip() or rc}", running=False)
+                return
+            _ship_log(repo_path, f"fast-forwarded {behind} commit(s) from origin", "ok")
+        if not ahead:
+            _ship_update(repo_path, "pushed", "Up to date — nothing to push.", running=False)
+            return
+
+        _ship_update(repo_path, "pushing", f"$ git push origin {branch} ({ahead} commit(s))")
+        rc, out, err = _git(["push", "origin", branch], repo_path, timeout=120)
+        if rc != 0:
+            _ship_update(repo_path, "error",
+                         f"git push failed: {err or out.strip() or rc}",
+                         running=False)
+            return
+
+        rc, sha, _ = _git(["rev-parse", "HEAD"], repo_path)
+        sha = (sha or "").strip()
+        _record_repo_ship(repo_path, sha, branch)
+
+        if not _resolve_vercel_project(repo_path):
+            _ship_update(repo_path, "pushed", f"Pushed {sha[:7]} to {branch}.",
+                         running=False, sha=sha[:12])
+            return
+
+        _ship_update(repo_path, "deploying",
+                     "Pushed. Waiting for Vercel production deploy…", sha=sha[:12])
+        target = sha[:7] if sha else ""
+        last_state = None
+        deadline = time.time() + SHIP_DEPLOY_WAIT_CAP
+        while time.time() < deadline:
+            status = vercel_deploy_status(repo_path)
+            state = (status.get("state") or "").upper()
+            is_ours = (not target) or status.get("commit_sha") == target
+            if state and state != last_state:
+                tag = "" if is_ours else " (prev deploy)"
+                _ship_log(repo_path, f"vercel: {state}{tag}", "info")
+                last_state = state
+            if state == "READY" and is_ours:
+                _ship_update(repo_path, "deployed", "Successfully deployed.",
+                             running=False, sha=sha[:12], deploy=status)
+                return
+            if state == "ERROR" and is_ours:
+                _ship_update(repo_path, "deploy_error",
+                             "Pushed, but Vercel deploy failed.",
+                             running=False, sha=sha[:12], deploy=status)
+                return
+            time.sleep(SHIP_DEPLOY_POLL_INTERVAL)
+        _ship_update(repo_path, "pushed",
+                     "Pushed. Deploy still building — check Vercel.",
+                     running=False, sha=sha[:12])
+    except Exception as e:
+        _ship_update(repo_path, "error", f"ship flow crashed: {e}", running=False)
+
+
+def start_repo_ship(repo_path):
+    """Kick off (or no-op rejoin) the ship flow for a repo. Returns the job."""
+    repo_path = resolve_repo_path(repo_path)
+    rc, branch, _ = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_path)
+    branch = (branch or "").strip() or "main"
+    with _ship_jobs_lock:
+        existing = _ship_jobs.get(repo_path)
+        if existing and existing.get("running"):
+            return dict(existing, already_running=True)
+        job = {
+            "phase": "starting",
+            "message": "Starting ship…",
+            "running": True,
+            "branch": branch,
+            "nudged": [],
+            "started_at": time.time(),
+            "updated_at": time.time(),
+            "log": [],
+        }
+        _append_ship_log(job, f"Push all → {Path(repo_path).name} ({branch})", "info")
+        _ship_jobs[repo_path] = job
+        snapshot = dict(job)
+    threading.Thread(
+        target=_run_ship_flow, args=(repo_path, branch), daemon=True
+    ).start()
+    return snapshot
+
+
+def repo_ship_status(repo_path):
+    """Current ship phase + persisted last-ship + live dirty/clean for a repo."""
+    repo_path = resolve_repo_path(repo_path)
+    with _ship_jobs_lock:
+        job = dict(_ship_jobs.get(repo_path) or {}) or None
+    if job is None:                       # in-memory gone (refresh/restart) → disk
+        job = _load_ship_job(repo_path)
+    persisted = _load_repo_ship_state().get(repo_path) or {}
+    rc, out, _ = _git(["status", "--porcelain"], repo_path)
+    dirty = bool(out.strip()) if rc == 0 else None
+    return {
+        "ok": True,
+        "repo_path": repo_path,
+        "dirty": dirty,
+        "job": job,
+        "last_ship_at": persisted.get("last_ship_at"),
+        "last_ship_sha": persisted.get("last_ship_sha"),
+        "vercel": bool(_resolve_vercel_project(repo_path)),
+    }
+
+
+def _execute_ship_action(repo_path, action):
+    """Run one approved handoff action. Scoped to the action's explicit paths;
+    commits only those (race-safe), deletes only junk-classified untracked
+    files, never touches review/app code."""
+    kind = action.get("kind")
+    paths = [p for p in (action.get("paths") or []) if p]
+    if kind == "commit":
+        if not paths:
+            return {"ok": False, "log": "nothing to commit", "level": "warn"}
+        untracked = [p for p in paths
+                     if _git(["ls-files", "--error-unmatch", "--", p], repo_path)[0] != 0]
+        if untracked:
+            _git(["add", "--", *untracked], repo_path)
+        msg = action.get("message") or "chore: commit infra"
+        rc, out, err = _git(["commit", "--only", "-m", msg, "--", *paths], repo_path, timeout=30)
+        if rc != 0:
+            return {"ok": False, "log": f"commit failed: {err or out.strip() or rc}", "level": "error"}
+        return {"ok": True, "log": f"✓ committed {len(paths)} file(s): {msg}", "level": "ok"}
+    if kind == "drop":
+        removed = 0
+        for p in paths:
+            if not _ship_is_junk(p):       # safety: only ever delete junk
+                continue
+            fp = (Path(repo_path) / p).resolve()
+            if not str(fp).startswith(str(Path(repo_path).resolve()) + os.sep):
+                continue                   # path-escape guard
+            try:
+                if fp.is_dir():
+                    shutil.rmtree(fp); removed += 1
+                elif fp.exists():
+                    fp.unlink(); removed += 1
+            except OSError:
+                pass
+        return {"ok": True, "log": f"✓ deleted {removed} junk path(s)", "level": "ok"}
+    if kind == "review":
+        return {"ok": False, "log": "review must be done by hand (ships to prod)", "level": "warn"}
+    return {"ok": False, "log": "unknown action", "level": "warn"}
+
+
+def apply_ship_action(repo_path, action_id, decision):
+    """Approve/reject one handoff action (build 3). Returns updated status."""
+    repo_path = resolve_repo_path(repo_path)
+    with _ship_jobs_lock:
+        job = _ship_jobs.get(repo_path) or _load_ship_job(repo_path) or {}
+        action = next((a for a in (job.get("actions") or []) if a.get("id") == action_id), None)
+    if not action:
+        return {"ok": False, "error": "unknown or expired action"}
+    decision = (decision or "").lower()
+    if decision == "reject":
+        result = {"ok": True, "log": f"✗ skipped: {action.get('label')}", "level": "info"}
+    elif decision == "approve":
+        result = _execute_ship_action(repo_path, action)
+    else:
+        return {"ok": False, "error": "decision must be 'approve' or 'reject'"}
+    with _ship_jobs_lock:
+        job = _ship_jobs.get(repo_path) or _load_ship_job(repo_path) or {}
+        # Drop the action only if it succeeded (or was rejected); keep on failure
+        # so the user can retry after fixing.
+        if result.get("ok") or decision == "reject":
+            job["actions"] = [a for a in (job.get("actions") or []) if a.get("id") != action_id]
+        _append_ship_log(job, result.get("log") or decision, result.get("level", "info"))
+        job["updated_at"] = time.time()
+        _ship_jobs[repo_path] = job
+        snapshot = dict(job)
+    _persist_ship_job(repo_path, snapshot)
+    return {"ok": result.get("ok", True), "job": snapshot, "message": result.get("log")}
+
+
 # ── Next.js dev server (localhost pill) ──────────────────────────────────────
 # One tracked dev server per repo. Started on demand from the localhost pill,
 # polled by /api/nextjs/status, opens http://localhost:<port> on click.
@@ -28565,6 +29342,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(vercel_deploy_status_with_autofix(ctx["repo_path"]))
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
+        elif path == "/api/repo/ship/status":
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                ctx = require_repo_context(query=qs, allow_session=False)
+                self.send_json(repo_ship_status(ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
         elif path == "/api/nextjs/status":
             qs = urllib.parse.parse_qs(parsed.query)
             try:
@@ -30074,6 +30858,39 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             self.send_json({"ok": True, "path": resolved, "repos": load_known_repos()})
             return
+        if path == "/api/repo/ship":
+            # "Push all" for a repo's main checkout: nudge sessions to commit,
+            # wait for clean, pull --rebase, push, then poll Vercel. Runs in a
+            # background thread; poll GET /api/repo/ship/status for the phase.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            try:
+                ctx = require_repo_context(payload, allow_session=False)
+                self.send_json(start_repo_ship(ctx["repo_path"]))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+            return
+        if path == "/api/repo/ship/action":
+            # Approve/reject one handoff action (commit infra / drop junk).
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            try:
+                ctx = require_repo_context(payload, allow_session=False)
+                self.send_json(apply_ship_action(
+                    ctx["repo_path"], payload.get("id"), payload.get("decision")))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+            return
         if path == "/api/repo/pin":
             # Visual-only "this session belongs under repo X" override.
             # Body: {session_id, path}. Empty/missing path clears the pin.
@@ -30489,8 +31306,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     port = self.server.server_address[1]
                     target_url = f"http://127.0.0.1:{port}{target_url}"
                 try:
-                    subprocess.Popen(["open", target_url])
-                    self.send_json({"ok": True})
+                    if _is_local_ccc_popout_url(target_url) and _try_open_in_ccc_mac_app(target_url):
+                        self.send_json({"ok": True, "via": "ccc-app"})
+                    else:
+                        subprocess.Popen(["open", target_url])
+                        self.send_json({"ok": True})
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/open":

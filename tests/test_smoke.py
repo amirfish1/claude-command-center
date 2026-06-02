@@ -73,6 +73,26 @@ class TestServerImports(unittest.TestCase):
             self.assertIn("error", r)
             popen.assert_not_called()
 
+    def test_repo_ship_flow_is_wired(self):
+        """The "Push all" ship flow exposes its server helpers and the static
+        UI carries the control + endpoints. Import-level only — no git runs."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        for name in ("start_repo_ship", "repo_ship_status",
+                     "_ship_candidate_sessions", "_run_ship_flow"):
+            self.assertTrue(hasattr(server, name), name)
+        # The Tier-A nudge must steer sessions toward path-scoped commits and
+        # away from the index-sweeping forms that clobber sibling sessions.
+        self.assertIn("--only", server.TIER_A_COMMIT_NUDGE)
+        self.assertIn("git add -A", server.TIER_A_COMMIT_NUDGE)
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn('data-role="ship-push-all"', app_js)
+        self.assertIn("/api/repo/ship", app_js)
+        self.assertIn("_startShipPushAll", app_js)
+        self.assertIn(".conv-folder-ship", app_css)
+
     def test_claude_append_prompt_discourages_blocking_recursive_grep(self):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
