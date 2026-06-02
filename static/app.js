@@ -11041,7 +11041,15 @@
     // folders' max-modified timestamps differ by less than this, the
     // previous-render order is kept so the list doesn't reshuffle on
     // every poll tick.
-    const _FOLDER_ORDER_HYSTERESIS_S = 5 * 60;
+    // Bumped from 5min to 60min after user feedback that the In Progress
+    // list felt jittery while actively cross-working two repos — both
+    // were "fresh" enough that the prior 5min check usually held, but
+    // any pause longer than 5min in one repo let the other displace it
+    // on a single keystroke. 60min covers a typical multi-repo working
+    // session without locking in stale state (a repo dormant for >1h
+    // can still be promoted by fresh activity, which is the user's
+    // explicit "OK to bring up from below the fold" exception).
+    const _FOLDER_ORDER_HYSTERESIS_S = 60 * 60;
     const _FOLDER_ORDER_KEY = 'ccc-folder-stable-order';
     const _gapLabel = (newer, older) => {
       const gapH = (newer - older) / 3600;
