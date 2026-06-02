@@ -11,12 +11,15 @@ These tests build a real FTS5 index matching the production schema and hammer
 `search_conversation_history` / `get_history_message` from many threads at once.
 Before the fix (no `_history_query_lock`), this reliably raised InterfaceError
 inside one of the worker threads. After the fix, all calls return clean results.
+
+Written in stdlib `unittest` (no pytest) so it runs under CI's
+`python -m unittest discover` — CCC keeps the runtime and its CI stdlib-only.
 """
 import sqlite3
+import tempfile
 import threading
+import unittest
 from pathlib import Path
-
-import pytest
 
 import server
 
@@ -59,22 +62,8 @@ def _build_index(db_path: Path, n_docs: int = 400) -> None:
     con.close()
 
 
-@pytest.fixture
-def history_index(tmp_path, monkeypatch):
-    """Point server.py's history index at a fresh temp DB and reset the
-    cached connection so each test opens its own."""
-    db = tmp_path / "index.db"
-    _build_index(db)
-    monkeypatch.setattr(server, "_HISTORY_INDEX_PATH", db)
-    # Drop any connection cached by a prior test/run so the patched path takes.
-    with server._history_conn_lock:
-        if server._history_conn is not None:
-            try:
-                server._history_conn.close()
-            except Exception:
-                pass
-        server._history_conn = None
-    yield db
+def _reset_history_conn() -> None:
+    """Drop any cached connection so the next open() picks up the patched path."""
     with server._history_conn_lock:
         if server._history_conn is not None:
             try:
@@ -84,63 +73,83 @@ def history_index(tmp_path, monkeypatch):
         server._history_conn = None
 
 
-def test_concurrent_searches_do_not_raise(history_index):
-    """Many threads searching the shared connection at once must all succeed.
+class TestHistorySearchConcurrency(unittest.TestCase):
+    """Point server.py's history index at a fresh temp DB and reset the cached
+    connection so each test opens its own, then hammer it from many threads."""
 
-    Pre-fix this raised sqlite3.InterfaceError ('bad parameter or other API
-    misuse') in at least one worker thread under load."""
-    errors: list[BaseException] = []
-    results: list[int] = []
-    barrier = threading.Barrier(24)
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        db = Path(self._tmp.name) / "index.db"
+        _build_index(db)
+        self._orig_path = server._HISTORY_INDEX_PATH
+        server._HISTORY_INDEX_PATH = db
+        _reset_history_conn()
 
-    def worker():
-        barrier.wait()  # maximise overlap on the shared connection
-        try:
-            for _ in range(15):
-                out = server.search_conversation_history("widget refactor", limit=20)
-                assert "error" not in out, out.get("error")
-                results.append(len(out["results"]))
-        except BaseException as e:  # noqa: BLE001 — capture across threads
-            errors.append(e)
+    def tearDown(self):
+        _reset_history_conn()
+        server._HISTORY_INDEX_PATH = self._orig_path
+        self._tmp.cleanup()
 
-    threads = [threading.Thread(target=worker) for _ in range(24)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    def test_concurrent_searches_do_not_raise(self):
+        """Many threads searching the shared connection at once must all succeed.
 
-    assert not errors, f"{len(errors)} worker(s) raised; first: {errors[0]!r}"
-    assert results and all(r > 0 for r in results)
+        Pre-fix this raised sqlite3.InterfaceError ('bad parameter or other API
+        misuse') in at least one worker thread under load."""
+        errors = []
+        results = []
+        barrier = threading.Barrier(24)
+
+        def worker():
+            barrier.wait()  # maximise overlap on the shared connection
+            try:
+                for _ in range(15):
+                    out = server.search_conversation_history("widget refactor", limit=20)
+                    assert "error" not in out, out.get("error")
+                    results.append(len(out["results"]))
+            except BaseException as e:  # noqa: BLE001 — capture across threads
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(24)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertFalse(errors, f"{len(errors)} worker(s) raised; first: {errors[0]!r}" if errors else "")
+        self.assertTrue(results and all(r > 0 for r in results))
+
+    def test_concurrent_mixed_search_and_fetch(self):
+        """Interleave search_conversation_history and get_history_message — both
+        touch the shared connection and must coexist without SQLITE_MISUSE."""
+        errors = []
+        barrier = threading.Barrier(20)
+
+        def searcher():
+            barrier.wait()
+            try:
+                for _ in range(20):
+                    out = server.search_conversation_history("alpha beta", limit=10)
+                    assert "error" not in out, out.get("error")
+            except BaseException as e:  # noqa: BLE001
+                errors.append(e)
+
+        def fetcher():
+            barrier.wait()
+            try:
+                for i in range(20):
+                    server.get_history_message(f"uuid-{i}")
+            except BaseException as e:  # noqa: BLE001
+                errors.append(e)
+
+        threads = [threading.Thread(target=searcher) for _ in range(10)]
+        threads += [threading.Thread(target=fetcher) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertFalse(errors, f"{len(errors)} worker(s) raised; first: {errors[0]!r}" if errors else "")
 
 
-def test_concurrent_mixed_search_and_fetch(history_index):
-    """Interleave search_conversation_history and get_history_message — both
-    touch the shared connection and must coexist without SQLITE_MISUSE."""
-    errors: list[BaseException] = []
-    barrier = threading.Barrier(20)
-
-    def searcher():
-        barrier.wait()
-        try:
-            for _ in range(20):
-                out = server.search_conversation_history("alpha beta", limit=10)
-                assert "error" not in out, out.get("error")
-        except BaseException as e:  # noqa: BLE001
-            errors.append(e)
-
-    def fetcher():
-        barrier.wait()
-        try:
-            for i in range(20):
-                server.get_history_message(f"uuid-{i}")
-        except BaseException as e:  # noqa: BLE001
-            errors.append(e)
-
-    threads = [threading.Thread(target=searcher) for _ in range(10)]
-    threads += [threading.Thread(target=fetcher) for _ in range(10)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    assert not errors, f"{len(errors)} worker(s) raised; first: {errors[0]!r}"
+if __name__ == "__main__":
+    unittest.main()

@@ -121,7 +121,7 @@ RUN mkdir -p /root/.ccc \
 # `exec python3 server.py` — both foreground) and poll the port.
 #
 # Probes:
-#   - GET /                         -> 200, body contains <title>Claude Command Center</title>
+#   - GET /                         -> 200, body contains <title>Command Center…
 #   - GET /static/templates.json    -> 200, parses as JSON
 #   - GET /api/version              -> 200 (cheap aliveness signal)
 #   - $HOME/.claude/command-center/install-source contains the channel
@@ -152,7 +152,7 @@ RUN set -eux; \
     fi; \
     # 1. Dashboard root: 200 + title marker.
     body=$(curl -fsS http://127.0.0.1:8090/); \
-    echo "$body" | grep -q '<title>Claude Command Center</title>' \
+    echo "$body" | grep -q '<title>Command Center' \
       || { echo "dashboard root missing expected <title>"; echo "--- body ---"; echo "$body" | head -40; exit 1; }; \
     # 2. Static asset: templates.json parses as JSON.
     curl -fsS http://127.0.0.1:8090/static/templates.json | python3 -c 'import json,sys; json.load(sys.stdin)' \
