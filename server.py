@@ -28383,7 +28383,17 @@ except Exception:
 
 _HISTORY_INDEX_PATH = Path.home() / ".claude-index" / "index.db"
 _history_conn = None
-_history_conn_lock = threading.Lock()
+_history_conn_lock = threading.Lock()       # guards connection open / reset
+
+# A single sqlite3.Connection cannot be used concurrently from multiple
+# threads. check_same_thread=False only silences Python's guard — it does NOT
+# serialise access, and overlapping .execute() on one shared handle raises
+# SQLITE_MISUSE ("bad parameter or other API misuse"). The server runs behind
+# ThreadingHTTPServer (a thread per request), so every *use* of the shared
+# read-only connection is serialised through this lock. History search is
+# user-triggered and low-frequency, so the serialisation cost is negligible and
+# we keep the benefit of one cached connection (+ a single sqlite-vec load).
+_history_query_lock = threading.Lock()
 
 # What counts as "user composed an FTS5 query, leave it alone": quoted
 # phrases, explicit boolean keywords, parens, prefix-star. NOT '-', '+',
@@ -28474,9 +28484,9 @@ def _open_history_index():
 
     `mode=ro` enforces read-only at the URI level so even a stray
     INSERT here would raise instead of silently mutating the file.
-    `check_same_thread=False` is safe because http.server's threading
-    mixin runs handlers across worker threads, and FTS5 reads don't
-    require per-thread connections.
+    `check_same_thread=False` lets worker threads share this one cached
+    handle, but it does NOT make concurrent use safe — every actual query
+    must hold `_history_query_lock` (see its definition above).
     """
     global _history_conn
     if _history_conn is not None:
@@ -28538,15 +28548,16 @@ def search_conversation_history(query, limit=20, cwd_like=None, since=None, sema
     # _source tagging + graceful BM25 fallback when vec/Ollama is missing.
     if semantic and _hi_search is not None:
         try:
-            rows = _hi_search.search(
-                conn,
-                query,
-                limit=limit,
-                cwd_like=cwd_like,
-                since=since,
-                semantic=True,
-            )
-        except sqlite3.OperationalError as e:
+            with _history_query_lock:
+                rows = _hi_search.search(
+                    conn,
+                    query,
+                    limit=limit,
+                    cwd_like=cwd_like,
+                    since=since,
+                    semantic=True,
+                )
+        except (sqlite3.OperationalError, sqlite3.ProgrammingError) as e:
             return {"error": f"search failed: {e}", "results": []}
         results = []
         for row in rows:
@@ -28587,12 +28598,17 @@ def search_conversation_history(query, limit=20, cwd_like=None, since=None, sema
     """
     params.append(limit)
     try:
-        rows = conn.execute(sql, params).fetchall()
+        with _history_query_lock:
+            rows = conn.execute(sql, params).fetchall()
     except sqlite3.OperationalError as e:
         # FTS5 rejects malformed queries (unbalanced quotes, dangling
         # operators, etc.) with OperationalError. Surface as an empty
         # result + error string so the UI can show "syntax error" rather
         # than a 500.
+        return {"error": f"search failed: {e}", "results": []}
+    except sqlite3.ProgrammingError as e:
+        # Connection closed under us (e.g. a concurrent index reset between
+        # fetching the handle and acquiring the query lock). Degrade, don't 500.
         return {"error": f"search failed: {e}", "results": []}
     results = [dict(r) for r in rows]
     for r in results:
@@ -28610,12 +28626,16 @@ def get_history_message(uuid):
     conn = _open_history_index()
     if conn is None:
         return None
-    row = conn.execute(
-        "SELECT uuid, session_id, type, role, cwd, project_dir, git_branch, "
-        "timestamp, ts_unix, model, source_file, source_line, content "
-        "FROM messages WHERE uuid = ?",
-        (uuid,),
-    ).fetchone()
+    try:
+        with _history_query_lock:
+            row = conn.execute(
+                "SELECT uuid, session_id, type, role, cwd, project_dir, git_branch, "
+                "timestamp, ts_unix, model, source_file, source_line, content "
+                "FROM messages WHERE uuid = ?",
+                (uuid,),
+            ).fetchone()
+    except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+        return None
     return dict(row) if row else None
 
 
@@ -31018,11 +31038,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             started = _hi_indexer.start_ingest(with_embed=True)
             with _history_conn_lock:
                 if _history_conn is not None:
-                    try:
-                        _history_conn.close()
-                    except Exception:
-                        pass
-                    _history_conn = None
+                    # Hold the query lock too so we never close the handle out
+                    # from under an in-flight search on another worker thread.
+                    with _history_query_lock:
+                        try:
+                            _history_conn.close()
+                        except Exception:
+                            pass
+                        _history_conn = None
             self.send_json({
                 "ok": True,
                 "started": started,
