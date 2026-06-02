@@ -11007,7 +11007,7 @@
     const _sessionConvs = [];
     const _ghIssueConvs = [];
     const _readyToMergeConvs = [];
-    const _readyToMergeSeenPrNums = new Set();
+    const _readyToMergeByPr = new Map();   // pr_num -> { idx, conv }
     const _archivedConvs = [];
     const _idSearchConvs = [];
     const _inGroupChatIds = new Set(_gcActiveChats.flatMap(c => c.session_ids || []));
@@ -11034,14 +11034,25 @@
       const _prDone = _prState === 'MERGED' || _prState === 'CLOSED';
       const _prStatePending = c._pr_state_pending === true;
       if (c.source !== 'pkood' && c.tail_pr_number && !_prStatePending && !_prDone) {
-        // Dedup: one row per PR number. Convs are sorted by recency
-        // upstream, so the first encounter is the freshest row for that
-        // PR — secondary rows (same PR in another session, GitHub-issue
-        // mirror) get suppressed here. Without this, dual-source PRs
-        // appeared as two visually identical rows in Ready to merge.
-        if (_readyToMergeSeenPrNums.has(c.tail_pr_number)) continue;
-        _readyToMergeSeenPrNums.add(c.tail_pr_number);
+        // Dedup: one row per PR number. PREFER a real session row
+        // (source !== 'github_pr') over the synthesized github_pr row —
+        // otherwise clicking the row opens the PR URL in a new tab
+        // (handled in the row-click branch for source='github_pr') even
+        // though the user actually wanted to jump into the session that
+        // worked on it. If we already saw a github_pr row and a better
+        // session row shows up later, swap in-place to keep position
+        // stable.
+        const existing = _readyToMergeByPr.get(c.tail_pr_number);
+        if (existing) {
+          if (existing.conv.source === 'github_pr' && c.source !== 'github_pr') {
+            _readyToMergeConvs[existing.idx] = c;
+            _readyToMergeByPr.set(c.tail_pr_number, { idx: existing.idx, conv: c });
+          }
+          continue;
+        }
+        const idx = _readyToMergeConvs.length;
         _readyToMergeConvs.push(c);
+        _readyToMergeByPr.set(c.tail_pr_number, { idx, conv: c });
         continue;
       }
       // Sessions in a group chat used to be filtered out of the main
