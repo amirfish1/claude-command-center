@@ -1,0 +1,1 @@
+Annotate screenshots: captures the annotated DOM region in-browser (no tab prompt required), falls back to tab capture or macOS window capture, and always attempts server capture when pixels are still missing. Saves without a screenshot show a clear warning instead of failing silently.

@@ -2812,6 +2812,11 @@
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         sendToTerminal();
+      } else if (e.key === 'Escape') {
+        if ($convEscBtn && $convEscBtn.style.display !== 'none' && !$convEscBtn.disabled) {
+          e.preventDefault();
+          sendEscToTerminal();
+        }
       }
     });
     // Various callsites do `$convInput.value = ''` to clear after send;
@@ -11579,6 +11584,30 @@
     return ',left=' + left + ',top=' + top + ',screenX=' + left + ',screenY=' + top;
   }
 
+  function isCccMacApp() {
+    if (window.__CCC_MAC_APP__ === true) return true;
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    if (ua.indexOf('CCC-macOS') !== -1) return true;
+    const bridge = window.webkit
+      && window.webkit.messageHandlers
+      && window.webkit.messageHandlers.cccNative;
+    return !!(bridge && typeof bridge.postMessage === 'function');
+  }
+
+  function tryOpenNativeMacPopout(url) {
+    const bridge = window.webkit
+      && window.webkit.messageHandlers
+      && window.webkit.messageHandlers.cccNative;
+    if (!bridge || typeof bridge.postMessage !== 'function') return false;
+    try {
+      bridge.postMessage({ action: 'openPopout', url: url });
+      showOpToast('Conversation opened in a new window');
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function openConversationPopout(convId, repoPath, anchor) {
     if (!convId) return false;
     const row = rowForConversationId(convId);
@@ -11602,6 +11631,31 @@
     const features = 'popup=yes,width=' + width + ',height=' + height
       + ',menubar=no,toolbar=no,location=no,status=no,scrollbars=yes,resizable=yes'
       + popoutPositionFeature(anchor, width, height);
+    if (isCccMacApp()) {
+      const popup = window.open(url, name, features);
+      if (popup) {
+        try { popup.focus(); } catch (_) {}
+        showOpToast('Conversation opened in a new window');
+        return true;
+      }
+      if (tryOpenNativeMacPopout(url)) return true;
+      fetch('/api/open-browser', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url })
+      }).then(r => r.json()).then(data => {
+        if (data.ok) {
+          showOpToast(data.via === 'ccc-app'
+            ? 'Conversation opened in a new window'
+            : 'Conversation opened in external browser');
+        } else {
+          showOpToast('Could not open a new Command Center window', 'error');
+        }
+      }).catch(() => {
+        showOpToast('Could not open a new Command Center window', 'error');
+      });
+      return false;
+    }
     const popup = window.open(url, name, features);
     if (popup) {
       try { popup.focus(); } catch (_) {}

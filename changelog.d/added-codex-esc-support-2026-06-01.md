@@ -1,0 +1,2 @@
+- Implement Escape/interrupt capability for Codex sessions. Clicking the Esc button in the composer bar or pressing the physical Escape key on the keyboard sends `SIGINT` (Ctrl+C) to terminate the running Codex process (which does not natively handle Escape keystrokes), supporting both headless spawns and terminal window runs.
+- Fixed a liveness detection bug where spawned Codex and Gemini sessions were not correctly identified as live by the backend, which hid the "ESC" button in the dashboard's input composer.

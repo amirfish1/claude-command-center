@@ -1,0 +1,1 @@
+Fixed the visual jump and flicker when assistant text is streamed. Streaming text blocks are now rendered incrementally as Markdown matching the final layout, horizontally aligned with the settled conversation messages, and no longer prepended with a layout-shifting timestamp prefix.

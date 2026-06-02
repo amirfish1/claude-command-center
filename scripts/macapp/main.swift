@@ -63,12 +63,285 @@ func runAppleScript(_ source: String) {
     script.executeAndReturnError(&error)
 }
 
+func isLocalDashboardURL(_ url: URL) -> Bool {
+    let scheme = (url.scheme ?? "").lowercased()
+    if scheme == "about" || scheme == "data" || scheme == "blob" { return true }
+    if scheme != "http" && scheme != "https" { return false }
+    let host = (url.host ?? "").lowercased()
+    return host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0"
+}
+
+func isConversationPopoutURL(_ url: URL) -> Bool {
+    guard isLocalDashboardURL(url),
+          let comp = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+        return false
+    }
+    let items = comp.queryItems ?? []
+    return items.contains(where: { $0.name == "ccc_popout" && $0.value == "conversation" })
+        || items.contains(where: { $0.name == "popout" && $0.value == "conversation" })
+}
+
+func stampMacAppFlag(on webView: WKWebView) {
+    webView.evaluateJavaScript("window.__CCC_MAC_APP__ = true;", completionHandler: nil)
+}
+
+func injectMacAppFlags(into config: WKWebViewConfiguration) {
+    let script = WKUserScript(
+        source: "window.__CCC_MAC_APP__ = true;",
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: true
+    )
+    config.userContentController.addUserScript(script)
+}
+
+// MARK: - Native bridge (JS → open in-app pop-out windows)
+
+final class CCCNativeBridge: NSObject, WKScriptMessageHandler {
+    weak var appDelegate: AppDelegate?
+
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        guard message.name == "cccNative",
+              let body = message.body as? [String: Any],
+              let action = body["action"] as? String,
+              action == "openPopout",
+              let urlStr = body["url"] as? String,
+              let url = URL(string: urlStr),
+              isLocalDashboardURL(url) else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.appDelegate?.openConversationPopoutWindow(url: url)
+        }
+    }
+}
+
+// MARK: - Dashboard web window (main shell + conversation pop-outs)
+
+final class CCCWebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
+    let window: NSWindow
+    let webView: WKWebView
+    let loadingLabel: NSTextField?
+    private weak var appDelegate: AppDelegate?
+    private let isMain: Bool
+
+    static func createMain(appDelegate: AppDelegate) -> CCCWebWindow {
+        CCCWebWindow(appDelegate: appDelegate, isMain: true, url: nil,
+                     configuration: nil, features: nil)
+    }
+
+    static func popoutTitle(from url: URL?) -> String {
+        guard let url = url,
+              let comp = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return "Conversation"
+        }
+        let items = comp.queryItems ?? []
+        if let title = items.first(where: { $0.name == "title" })?.value,
+           !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return title
+        }
+        if let conv = items.first(where: { $0.name == "conv" })?.value, !conv.isEmpty {
+            return String(conv.prefix(8))
+        }
+        return "Conversation"
+    }
+
+    init(appDelegate: AppDelegate,
+         isMain: Bool,
+         url: URL?,
+         configuration: WKWebViewConfiguration?,
+         features: WKWindowFeatures?) {
+        self.appDelegate = appDelegate
+        self.isMain = isMain
+
+        let width: CGFloat
+        let height: CGFloat
+        if let w = features?.width?.doubleValue,
+           let h = features?.height?.doubleValue, w > 0, h > 0 {
+            width = CGFloat(w)
+            height = CGFloat(h)
+        } else if isMain {
+            width = 1400
+            height = 900
+        } else {
+            width = 920
+            height = 900
+        }
+
+        let contentRect = NSRect(x: 0, y: 0, width: width, height: height)
+        let win = NSWindow(
+            contentRect: contentRect,
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        if isMain {
+            win.title = "Command Center for Claude, Codex, Antigravity — v\(CCC_BUNDLE_VERSION)"
+            win.minSize = NSSize(width: 900, height: 600)
+            win.setFrameAutosaveName("CCCMainWindow")
+            win.titlebarAppearsTransparent = false
+            win.center()
+        } else {
+            win.title = CCCWebWindow.popoutTitle(from: url)
+            win.minSize = NSSize(width: 600, height: 400)
+            if let x = features?.x?.doubleValue, let y = features?.y?.doubleValue {
+                win.setFrameOrigin(NSPoint(x: x, y: y))
+            } else {
+                win.center()
+            }
+        }
+        window = win
+
+        let config = configuration ?? WKWebViewConfiguration()
+        if configuration == nil {
+            config.preferences.javaScriptCanOpenWindowsAutomatically = true
+            config.websiteDataStore = .default()
+            if #available(macOS 11.0, *) {
+                config.defaultWebpagePreferences.allowsContentJavaScript = true
+            }
+            config.applicationNameForUserAgent = " CCC-macOS"
+        }
+        injectMacAppFlags(into: config)
+        appDelegate.registerNativeBridge(on: config)
+
+        let view = WKWebView(frame: win.contentView!.bounds, configuration: config)
+        view.autoresizingMask = [.width, .height]
+        view.setValue(true, forKey: "drawsBackground")
+        webView = view
+
+        if isMain {
+            let label = NSTextField(labelWithString: "Starting CCC server…")
+            label.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+            label.textColor = .secondaryLabelColor
+            label.alignment = .center
+            label.translatesAutoresizingMaskIntoConstraints = false
+            loadingLabel = label
+            win.contentView!.addSubview(view)
+            win.contentView!.addSubview(label)
+            NSLayoutConstraint.activate([
+                label.centerXAnchor.constraint(equalTo: win.contentView!.centerXAnchor),
+                label.centerYAnchor.constraint(equalTo: win.contentView!.centerYAnchor),
+            ])
+        } else {
+            loadingLabel = nil
+            win.contentView!.addSubview(view)
+            if let url = url {
+                view.load(URLRequest(url: url))
+            }
+            win.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+
+        super.init()
+
+        window.delegate = self
+        webView.navigationDelegate = self
+        webView.uiDelegate = self
+
+        if !isMain {
+            appDelegate.trackPopout(self)
+        }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        appDelegate?.untrackPopout(self)
+    }
+
+    // MARK: WKNavigationDelegate
+
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.allow)
+            return
+        }
+        if isLocalDashboardURL(url) {
+            decisionHandler(.allow)
+        } else {
+            NSWorkspace.shared.open(url)
+            decisionHandler(.cancel)
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard isMain else { return }
+        appDelegate?.onMainWebViewDidFail()
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        loadingLabel?.isHidden = true
+        stampMacAppFlag(on: webView)
+    }
+
+    // MARK: WKUIDelegate
+
+    func webView(_ webView: WKWebView,
+                 createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction,
+                 windowFeatures: WKWindowFeatures) -> WKWebView? {
+        guard let url = navigationAction.request.url else { return nil }
+        if isLocalDashboardURL(url) {
+            let popout = CCCWebWindow(appDelegate: appDelegate!, isMain: false,
+                                      url: url, configuration: configuration,
+                                      features: windowFeatures)
+            return popout.webView
+        }
+        NSWorkspace.shared.open(url)
+        return nil
+    }
+
+    func webView(_ webView: WKWebView,
+                 runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+        completionHandler()
+    }
+
+    func webView(_ webView: WKWebView,
+                 runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping (Bool) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        completionHandler(alert.runModal() == .alertFirstButtonReturn)
+    }
+
+    func webView(_ webView: WKWebView,
+                 runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping (String?) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = prompt
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        input.stringValue = defaultText ?? ""
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        let response = alert.runModal()
+        completionHandler(response == .alertFirstButtonReturn ? input.stringValue : nil)
+    }
+}
+
 // MARK: - App Delegate
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
-    var window: NSWindow!
-    var webView: WKWebView!
-    var loadingLabel: NSTextField!
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    var mainWebWindow: CCCWebWindow!
+    var window: NSWindow! { mainWebWindow.window }
+    var webView: WKWebView! { mainWebWindow.webView }
+    var loadingLabel: NSTextField! { mainWebWindow.loadingLabel! }
+    private var popoutWindows: [CCCWebWindow] = []
+    private var nativeBridge: CCCNativeBridge?
+    private var bridgedContentControllers = Set<ObjectIdentifier>()
     var serverProcess: Process?
     var pollTimer: Timer?
     // Watchdog state — see startWatchdog(). Recovers a dashboard that wedges
@@ -100,6 +373,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return true
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            if isConversationPopoutURL(url) {
+                openConversationPopoutWindow(url: url)
+            } else if isLocalDashboardURL(url) {
+                mainWebWindow?.webView.load(URLRequest(url: url))
+                window.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -262,32 +547,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         alert.runModal()
     }
 
+    func activeWebView() -> WKWebView {
+        if let key = NSApp.keyWindow {
+            if key === mainWebWindow?.window { return webView }
+            if let match = popoutWindows.first(where: { $0.window === key }) {
+                return match.webView
+            }
+        }
+        return webView
+    }
+
+    func registerNativeBridge(on config: WKWebViewConfiguration) {
+        let controller = config.userContentController
+        let key = ObjectIdentifier(controller)
+        guard !bridgedContentControllers.contains(key) else { return }
+        if nativeBridge == nil {
+            let bridge = CCCNativeBridge()
+            bridge.appDelegate = self
+            nativeBridge = bridge
+        }
+        guard let bridge = nativeBridge else { return }
+        controller.add(bridge, name: "cccNative")
+        bridgedContentControllers.insert(key)
+    }
+
+    func trackPopout(_ win: CCCWebWindow) {
+        popoutWindows.append(win)
+    }
+
+    func untrackPopout(_ win: CCCWebWindow) {
+        popoutWindows.removeAll { $0 === win }
+    }
+
+    func openConversationPopoutWindow(url: URL) {
+        _ = CCCWebWindow(appDelegate: self, isMain: false, url: url,
+                         configuration: nil, features: nil)
+    }
+
+    func onMainWebViewDidFail() {
+        loadingLabel.isHidden = false
+        loadingLabel.stringValue = "Lost the server. Reconnecting…"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.bootstrap()
+        }
+    }
+
     @objc func reload() {
-        webView.reload()
+        activeWebView().reload()
     }
 
     @objc func forceReload() {
-        webView.reloadFromOrigin()
+        activeWebView().reloadFromOrigin()
     }
 
     @objc func zoomIn(_ sender: Any?) {
-        webView.pageZoom = min(webView.pageZoom + 0.1, 3.0)
+        let view = activeWebView()
+        view.pageZoom = min(view.pageZoom + 0.1, 3.0)
     }
 
     @objc func zoomOut(_ sender: Any?) {
-        webView.pageZoom = max(webView.pageZoom - 0.1, 0.5)
+        let view = activeWebView()
+        view.pageZoom = max(view.pageZoom - 0.1, 0.5)
     }
 
     @objc func zoomReset(_ sender: Any?) {
-        webView.pageZoom = 1.0
+        activeWebView().pageZoom = 1.0
     }
 
     @objc func goBack() {
-        if webView.canGoBack { webView.goBack() }
+        let view = activeWebView()
+        if view.canGoBack { view.goBack() }
     }
 
     @objc func goForward() {
-        if webView.canGoForward { webView.goForward() }
+        let view = activeWebView()
+        if view.canGoForward { view.goForward() }
     }
 
     @objc func focusFind() {
@@ -302,55 +636,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
           return false;
         })();
         """
-        webView.evaluateJavaScript(js, completionHandler: nil)
+        activeWebView().evaluateJavaScript(js, completionHandler: nil)
     }
 
     // MARK: Window
 
     func buildWindow() {
-        window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1400, height: 900),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Command Center for Claude, Codex, Antigravity — v\(CCC_BUNDLE_VERSION)"
-        window.minSize = NSSize(width: 900, height: 600)
-        window.center()
-        window.setFrameAutosaveName("CCCMainWindow")
-        window.titlebarAppearsTransparent = false
-
-        let config = WKWebViewConfiguration()
-        config.preferences.javaScriptCanOpenWindowsAutomatically = false
-        config.websiteDataStore = .default()
-        if #available(macOS 11.0, *) {
-            config.defaultWebpagePreferences.allowsContentJavaScript = true
-        }
-
-        webView = WKWebView(frame: window.contentView!.bounds, configuration: config)
-        webView.autoresizingMask = [.width, .height]
-        webView.navigationDelegate = self
-        webView.uiDelegate = self
-        // Keep the web view OPAQUE. A transparent WKWebView (drawsBackground=false)
-        // can't use WebKit's fast opaque rendering path — it blends the whole page
-        // against the window every frame, which made the app sluggish (idle/scroll/
-        // typing jank) while the identical page is fast in Safari and Chrome. The
-        // dashboard paints its own solid background, so opaque is visually identical.
-        webView.setValue(true, forKey: "drawsBackground")
-        window.contentView!.addSubview(webView)
-
-        // Loading overlay
-        loadingLabel = NSTextField(labelWithString: "Starting CCC server…")
-        loadingLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        loadingLabel.textColor = .secondaryLabelColor
-        loadingLabel.alignment = .center
-        loadingLabel.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView!.addSubview(loadingLabel)
-        NSLayoutConstraint.activate([
-            loadingLabel.centerXAnchor.constraint(equalTo: window.contentView!.centerXAnchor),
-            loadingLabel.centerYAnchor.constraint(equalTo: window.contentView!.centerYAnchor),
-        ])
-
+        mainWebWindow = CCCWebWindow.createMain(appDelegate: self)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -575,109 +867,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         NSApp.terminate(nil)
     }
 
-    // MARK: WKNavigationDelegate
-
-    // Route any navigation outside the local CCC dashboard to the system
-    // browser. Without this, an `<a href="https://...">` inside assistant
-    // text would replace the dashboard with that page; `target="_blank"`
-    // links would silently no-op because WKWebView has no concept of
-    // opening a new window unless the UI delegate handles it.
-    func webView(_ webView: WKWebView,
-                 decidePolicyFor navigationAction: WKNavigationAction,
-                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        guard let url = navigationAction.request.url else {
-            decisionHandler(.allow)
-            return
-        }
-        if isLocalDashboardURL(url) {
-            decisionHandler(.allow)
-        } else {
-            NSWorkspace.shared.open(url)
-            decisionHandler(.cancel)
-        }
-    }
-
-    func isLocalDashboardURL(_ url: URL) -> Bool {
-        let scheme = (url.scheme ?? "").lowercased()
-        if scheme == "about" || scheme == "data" || scheme == "blob" { return true }
-        if scheme != "http" && scheme != "https" { return false }
-        let host = (url.host ?? "").lowercased()
-        return host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0"
-    }
-
-    // MARK: WKUIDelegate
-
-    // Fired for `target="_blank"` and `window.open(...)`. Returning nil tells
-    // WKWebView "I handled it; don't create a child view." We open the URL
-    // in the user's default browser instead.
-    func webView(_ webView: WKWebView,
-                 createWebViewWith configuration: WKWebViewConfiguration,
-                 for navigationAction: WKNavigationAction,
-                 windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = navigationAction.request.url {
-            NSWorkspace.shared.open(url)
-        }
-        return nil
-    }
-
-    // WKWebView returns null from JS `alert`/`confirm`/`prompt` unless the UI
-    // delegate implements these. Without them, dashboard buttons that go
-    // through window.prompt (e.g. "+ Object" on the flow board) silently
-    // no-op in the native app while still working in a normal browser.
-    func webView(_ webView: WKWebView,
-                 runJavaScriptAlertPanelWithMessage message: String,
-                 initiatedByFrame frame: WKFrameInfo,
-                 completionHandler: @escaping () -> Void) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-        completionHandler()
-    }
-
-    func webView(_ webView: WKWebView,
-                 runJavaScriptConfirmPanelWithMessage message: String,
-                 initiatedByFrame frame: WKFrameInfo,
-                 completionHandler: @escaping (Bool) -> Void) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        completionHandler(alert.runModal() == .alertFirstButtonReturn)
-    }
-
-    func webView(_ webView: WKWebView,
-                 runJavaScriptTextInputPanelWithPrompt prompt: String,
-                 defaultText: String?,
-                 initiatedByFrame frame: WKFrameInfo,
-                 completionHandler: @escaping (String?) -> Void) {
-        let alert = NSAlert()
-        alert.messageText = prompt
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        input.stringValue = defaultText ?? ""
-        alert.accessoryView = input
-        alert.window.initialFirstResponder = input
-        let response = alert.runModal()
-        completionHandler(response == .alertFirstButtonReturn ? input.stringValue : nil)
-    }
-
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        loadingLabel.isHidden = false
-        loadingLabel.stringValue = "Lost the server. Reconnecting…"
-        // Retry after a beat
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            self?.bootstrap()
-        }
-    }
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        loadingLabel.isHidden = true
-    }
 }
 
 // MARK: - Main

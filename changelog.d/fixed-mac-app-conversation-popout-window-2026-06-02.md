@@ -1,0 +1,1 @@
+Dragging a conversation outside the Command Center **macOS app** window now opens another in-app window instead of launching the system browser. The dashboard also routes pop-out fallbacks through the native `.app` when installed.
