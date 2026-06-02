@@ -3565,6 +3565,11 @@
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         sendToTerminal();
+      } else if (e.key === 'Escape') {
+        if ($convEscBtn && $convEscBtn.style.display !== 'none' && !$convEscBtn.disabled) {
+          e.preventDefault();
+          sendEscToTerminal();
+        }
       }
     });
     // Various callsites do `$convInput.value = ''` to clear after send;
@@ -4049,23 +4054,21 @@
     );
   }
 
-  // RTL belt-and-suspenders: walk every .assistant-text / .user-msg and
-  // every text-bearing block descendant, setting dir="auto" if missing.
-  // The renderMarkdown regex above handles the standard render path; this
-  // observer catches anything inserted by alternate paths or rendered
-  // before the regex landed. `dir="auto"` lets the browser compute each
-  // element's direction from its first strong directional character so
-  // Hebrew/Arabic paragraphs actually right-align (text-align: start
-  // resolves based on the element's `direction` property, not CSS
-  // `unicode-bidi: plaintext` alone).
+  // RTL belt-and-suspenders: walk .assistant-text / .user-msg /
+  // gc-message-body / gc-chat-doc containers and set dir="auto" on
+  // every text-bearing block descendant (p, blockquote, li, etc.).
+  // `dir="auto"` lets the browser compute each element's direction from
+  // its first strong directional character — required for text-align:
+  // start to actually right-align RTL paragraphs (CSS unicode-bidi
+  // alone doesn't change the element's `direction` property).
+  const RTL_TARGET_SEL = '.assistant-text,.user-msg,.gc-message-body,.gc-chat-doc';
   const RTL_BLOCK_TAGS = 'p,li,blockquote,h1,h2,h3,h4,h5,h6,td,th,dt,dd';
   function tagBlocksForRtl(root) {
     if (!root || typeof root.querySelectorAll !== 'function') return;
     const containers = [];
-    if (root.matches && root.matches('.assistant-text,.user-msg,.gc-message-body,.gc-chat-doc')) {
-      containers.push(root);
-    }
-    root.querySelectorAll('.assistant-text,.user-msg,.gc-message-body,.gc-chat-doc').forEach(el => containers.push(el));
+    if (root.matches && root.matches(RTL_TARGET_SEL)) containers.push(root);
+    root.querySelectorAll(RTL_TARGET_SEL).forEach(el => containers.push(el));
+    if (!containers.length) return;
     containers.forEach(el => {
       if (!el.hasAttribute('dir')) el.setAttribute('dir', 'auto');
       el.querySelectorAll(RTL_BLOCK_TAGS).forEach(child => {
@@ -4074,6 +4077,13 @@
     });
   }
   if (window.MutationObserver) {
+    // SCOPED observer: only watch the conversation view containers
+    // (where assistant/user message HTML actually lives). The earlier
+    // version observed document.body, which fired on every sidebar
+    // re-render keystroke and starved the input thread — surfaced as
+    // "convSearch stopped working". Sidebar mutations no longer
+    // trigger any RTL work.
+    const _rtlScopeIds = ['conversationsView', 'p1ConvView', 'p2ConvView', 'p3ConvView'];
     const _rtlObserver = new MutationObserver(records => {
       for (const rec of records) {
         rec.addedNodes.forEach(n => {
@@ -4081,9 +4091,22 @@
         });
       }
     });
-    _rtlObserver.observe(document.body, { childList: true, subtree: true });
-    // Tag whatever is already in the DOM at script-load time.
-    tagBlocksForRtl(document.body);
+    const _attachRtlObserver = () => {
+      _rtlScopeIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el && !el.dataset.rtlObserverAttached) {
+          el.dataset.rtlObserverAttached = '1';
+          _rtlObserver.observe(el, { childList: true, subtree: true });
+          tagBlocksForRtl(el);
+        }
+      });
+    };
+    _attachRtlObserver();
+    // Some conv-view nodes are recreated on pane open / split — re-attach
+    // shortly after page load and again periodically (cheap; idempotent
+    // via the dataset flag).
+    setTimeout(_attachRtlObserver, 500);
+    setTimeout(_attachRtlObserver, 2000);
   }
 
   // ── Fenced-code-block rendering + tokenizer ─────────────────────────────
@@ -15043,13 +15066,14 @@
             // this streaming turn are reflected in the pill count on the next
             // ffcRefreshForCurrent() call (triggered by renderConversationEvents).
             ffcInvalidate(currentConversation);
-            renderConversationEvents(data.events, streamPaneId);
-            convLastLine = data.last_line;
-            // Advance the pane's own lastLine so reconnects (post-error
-            // or post-watchdog) request events from the right offset
-            // instead of replaying from the original stream-start.
-            if (typeof data.last_line === 'number' && data.last_line > streamPane.lastLine) {
-              streamPane.lastLine = data.last_line;
+            if (renderConversationEvents(data.events, streamPaneId) !== false) {
+              convLastLine = data.last_line;
+              // Advance the pane's own lastLine so reconnects (post-error
+              // or post-watchdog) request events from the right offset
+              // instead of replaying from the original stream-start.
+              if (typeof data.last_line === 'number' && data.last_line > streamPane.lastLine) {
+                streamPane.lastLine = data.last_line;
+              }
             }
           } finally {
             // Always restore activeIndex, even if renderConversationEvents
@@ -16234,8 +16258,9 @@
         if (convLastLine === 0) {
           $view.innerHTML = '';
         }
-        renderConversationEvents(data.events, fetchPaneId);
-        convLastLine = data.last_line;
+        if (renderConversationEvents(data.events, fetchPaneId) !== false) {
+          convLastLine = data.last_line;
+        }
         restorePendingSendEchoes(id, fetchPaneId);
       } finally {
         splitState.activeIndex = savedIdx;
@@ -18232,11 +18257,11 @@
   }
 
   function renderConversationEvents(events, paneId) {
-    if (!Array.isArray(events)) return;  // defensive: backlog/unknown responses
-    if (_isComposerFocused() || shouldPausePeriodicUiWork()) {
-      _deferredStreamBatches.push({ events, paneId: paneId || activePaneId() });
-      return;
-    }
+    if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
+    // Do not defer transcript rendering while the composer is focused.
+    // Steer/send keeps focus in the input; deferring used to advance
+    // lastLine without painting those events, so Codex replies vanished
+    // until a full reselect (and could stay missing if blur never fired).
     paneId = paneId || activePaneId();
     const $view = getConvViewForPane(paneId) || $conversationsView;
     // Stick-to-bottom only when the user is *already* near the bottom.
@@ -18245,8 +18270,13 @@
     // generous enough to absorb typical line-height jitter.
     const wasAtBottom = isConversationAtBottom($view);
     for (const ev of events) {
+      if (ev.line != null) {
+        const escLine = (window.CSS && CSS.escape) ? CSS.escape(String(ev.line)) : String(ev.line);
+        if ($view.querySelector('.event[data-jsonl-line="' + escLine + '"]')) continue;
+      }
       const div = document.createElement('div');
       div.className = 'event ' + ev.type + (ev.pending ? ' pending' : '');
+      if (ev.line != null) div.dataset.jsonlLine = String(ev.line);
 
       // Use the event's own JSONL timestamp (when it was actually written)
       // rather than render time; fall back to render time only when the
@@ -18743,6 +18773,7 @@
       updateConversationEndAffordance($view);
     }
     ffcRefreshForCurrent();
+    return true;
   }
 
   function filterConversations(q) {
