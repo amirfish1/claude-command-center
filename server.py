@@ -158,6 +158,37 @@ def _open_target_path(target):
     return s
 
 
+CCC_MAC_BUNDLE_ID = "com.github.claude-command-center"
+
+
+def _is_local_ccc_popout_url(url):
+    """True when *url* is a localhost CCC conversation pop-out link."""
+    raw = str(url or "").strip()
+    if not raw:
+        return False
+    if "ccc_popout=conversation" not in raw and "popout=conversation" not in raw:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except Exception:
+        return False
+    host = (parsed.hostname or "").lower()
+    return host in ("127.0.0.1", "localhost", "0.0.0.0", "")
+
+
+def _try_open_in_ccc_mac_app(url):
+    """Hand a pop-out URL to the native CCC.app (if installed)."""
+    try:
+        proc = subprocess.run(
+            ["open", "-b", CCC_MAC_BUNDLE_ID, url],
+            capture_output=True,
+            timeout=8,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
 def _resolve_pasted_image_path(target, *, require_file=False):
     """Return resolved path when target is one of CCC's pasted-image files."""
     raw = urllib.parse.unquote(str(target or "").strip())
@@ -4136,6 +4167,9 @@ def _annotation_screen(value):
     screen["window_screen_y"] = _annotation_number(raw.get("window_screen_y"))
     screen["outer_width"] = max(0.0, _annotation_number(raw.get("outer_width")))
     screen["outer_height"] = max(0.0, _annotation_number(raw.get("outer_height")))
+    screen["chrome_border_x"] = max(0.0, _annotation_number(raw.get("chrome_border_x")))
+    screen["chrome_offset_y"] = max(0.0, _annotation_number(raw.get("chrome_offset_y")))
+    screen["device_pixel_ratio"] = max(1.0, min(4.0, _annotation_number(raw.get("device_pixel_ratio"), 1.0)))
     return screen
 
 
@@ -4173,27 +4207,155 @@ def _write_annotations(items):
     os.replace(tmp, ANNOTATIONS_FILE)
 
 
+def _frontmost_window_id_for_capture():
+    """Return the macOS window id for the frontmost app, or None."""
+    if platform.system() != "Darwin":
+        return None
+    script = r'''
+tell application "System Events"
+  tell (first application process whose frontmost is true)
+    if (count of windows) is 0 then return ""
+    return id of window 1
+  end tell
+end tell
+'''
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    wid = (proc.stdout or "").strip()
+    return wid if wid.isdigit() else None
+
+
+def _sips_crop_png(src_path, out_path, offset_x, offset_y, width, height):
+    """Crop a PNG using the built-in macOS sips tool."""
+    if width < 1 or height < 1:
+        return False
+    try:
+        proc = subprocess.run(
+            [
+                "sips",
+                "-c",
+                str(int(height)),
+                str(int(width)),
+                "--cropOffset",
+                str(int(offset_y)),
+                str(int(offset_x)),
+                str(src_path),
+                "--out",
+                str(out_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if proc.returncode != 0:
+        return False
+    try:
+        return out_path.is_file() and out_path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _capture_annotation_window_crop(screen, viewport_crop, annotation_id):
+    """Capture the front window and crop to the viewport-relative region.
+
+    More reliable than guessing global screen coordinates from the browser.
+    """
+    if platform.system() != "Darwin":
+        return None, "window capture is macOS-only"
+    screencapture_bin = _resolve_screencapture_bin()
+    if not screencapture_bin:
+        return None, "screencapture not found"
+    wid = _frontmost_window_id_for_capture()
+    if not wid:
+        return None, "could not resolve front window"
+    crop = _annotation_rect(viewport_crop)
+    if crop["width"] < 3 or crop["height"] < 3:
+        return None, "crop region too small"
+    screen = screen if isinstance(screen, dict) else {}
+    dpr = max(1.0, min(4.0, _annotation_number(screen.get("device_pixel_ratio"), 1.0)))
+    border_x = max(0.0, _annotation_number(screen.get("chrome_border_x")))
+    chrome_y = max(0.0, _annotation_number(screen.get("chrome_offset_y")))
+    offset_x = int(round((crop["x"] + border_x) * dpr))
+    offset_y = int(round((crop["y"] + chrome_y) * dpr))
+    width = int(round(crop["width"] * dpr))
+    height = int(round(crop["height"] * dpr))
+    ANNOTATION_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_full = ANNOTATION_SCREENSHOT_DIR / f"{annotation_id}-window.png"
+    out = ANNOTATION_SCREENSHOT_DIR / f"{annotation_id}.png"
+    try:
+        proc = subprocess.run(
+            [screencapture_bin, "-x", "-l", wid, str(tmp_full)],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, f"window screencapture failed: {e}"
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()[:300]
+        return None, err or f"window screencapture exited {proc.returncode}"
+    try:
+        if not tmp_full.is_file() or tmp_full.stat().st_size <= 0:
+            return None, "window screencapture produced no image"
+    except OSError:
+        return None, "window screencapture file missing"
+    if not _sips_crop_png(tmp_full, out, offset_x, offset_y, width, height):
+        # Cropping failed (chrome estimate off, Retina mismatch, etc.) — keep
+        # the full-window capture so the agent still has visual context.
+        try:
+            shutil.copyfile(tmp_full, out)
+        except OSError:
+            try:
+                out.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None, "window crop failed"
+        try:
+            tmp_full.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return str(out), None
+    try:
+        tmp_full.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return str(out), None
+
+
 def _capture_annotation_screen_rect(screen_rect, annotation_id):
     """Best-effort non-interactive capture of the selected screen rect.
 
     Browser APIs can only estimate the viewport-to-screen transform. If that
     estimate is off, the annotation still has URL/selector/rect/text anchors;
     the screenshot path is an optional convenience.
+
+    Returns (path, error_message).
     """
     if platform.system() != "Darwin":
-        return None
+        return None, "screen-region capture is macOS-only"
     screencapture_bin = _resolve_screencapture_bin()
     if not screencapture_bin:
-        return None
+        return None, "screencapture not found"
     rect = _annotation_rect(screen_rect)
     x = int(round(rect["x"]))
     y = int(round(rect["y"]))
     w = int(round(rect["width"]))
     h = int(round(rect["height"]))
     if w < 3 or h < 3 or w > 10000 or h > 10000:
-        return None
+        return None, "screen region too small"
     if x < -10000 or y < -10000 or x > 100000 or y > 100000:
-        return None
+        return None, "screen region out of bounds"
     ANNOTATION_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     out = ANNOTATION_SCREENSHOT_DIR / f"{annotation_id}.png"
     try:
@@ -4203,21 +4365,44 @@ def _capture_annotation_screen_rect(screen_rect, annotation_id):
             text=True,
             timeout=8,
         )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, f"screencapture failed: {e}"
     if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()[:300]
         try:
-            out.unlink()
+            out.unlink(missing_ok=True)
         except OSError:
             pass
-        return None
+        hint = err or f"screencapture exited {proc.returncode}"
+        if "could not create" in hint.lower() or proc.returncode == 1:
+            hint += " (grant Screen Recording to the CCC server process in System Settings)"
+        return None, hint
     try:
         if out.stat().st_size <= 0:
             out.unlink(missing_ok=True)
-            return None
+            return None, "screencapture produced an empty file"
     except OSError:
-        return None
-    return str(out)
+        return None, "screencapture file missing"
+    return str(out), None
+
+
+def _capture_annotation_screenshot_native(payload, annotation_id):
+    """Try window crop, then estimated screen rect. Returns (path, error)."""
+    errors = []
+    screen = payload.get("screen") if isinstance(payload.get("screen"), dict) else {}
+    viewport = payload.get("viewport_crop")
+    if isinstance(viewport, dict):
+        path, err = _capture_annotation_window_crop(screen, viewport, annotation_id)
+        if path:
+            return path, None
+        if err:
+            errors.append(err)
+    path, err = _capture_annotation_screen_rect(screen, annotation_id)
+    if path:
+        return path, None
+    if err:
+        errors.append(err)
+    return None, "; ".join(errors) if errors else "screenshot capture failed"
 
 
 def _save_annotation_screenshot_b64(image_b64, annotation_id):
@@ -4354,17 +4539,22 @@ def create_annotation(payload):
         "source": _annotation_text(payload.get("source"), 80) or "browser-page",
     }
     screenshot_b64 = _annotation_text(payload.get("screenshot_b64"), 40 * 1024 * 1024)
+    screenshot_warning = None
     if screenshot_b64:
         try:
             annotation["screenshot_path"] = _save_annotation_screenshot_b64(
                 screenshot_b64, annotation_id
             )
-        except ValueError:
-            pass
-    if payload.get("capture_screen"):
-        screenshot_path = _capture_annotation_screen_rect(screen, annotation_id)
+        except ValueError as e:
+            screenshot_warning = str(e)
+    if not annotation.get("screenshot_path") and payload.get("capture_screen", True):
+        screenshot_path, capture_err = _capture_annotation_screenshot_native(
+            payload, annotation_id
+        )
         if screenshot_path:
             annotation["screenshot_path"] = screenshot_path
+        elif capture_err:
+            screenshot_warning = capture_err
     with _ANNOTATIONS_LOCK:
         items = _load_annotations()
         items.append(annotation)
@@ -4373,7 +4563,10 @@ def create_annotation(payload):
         if len(items) > 500:
             items = items[-500:]
         _write_annotations(items)
-    return {"ok": True, "annotation": annotation}
+    result = {"ok": True, "annotation": annotation}
+    if screenshot_warning and not annotation.get("screenshot_path"):
+        result["screenshot_warning"] = screenshot_warning
+    return result
 
 
 def _normalize_annotation_queue_name(value):
@@ -24371,23 +24564,36 @@ SHIP_COMMIT_WAIT_CAP = 180   # max seconds to wait for sessions to commit
 SHIP_POLL_INTERVAL = 4       # seconds between porcelain polls
 SHIP_DEPLOY_WAIT_CAP = 180   # max seconds to wait for Vercel production READY
 SHIP_DEPLOY_POLL_INTERVAL = 6
-SHIP_ACK_TTL = 1200          # don't re-nudge a session that answered <20min ago
+SHIP_ACK_TTL = 86400         # 24h safety backstop; real skip key is the dirt fingerprint
 SHIP_ACKS_FILE = COMMAND_CENTER_STATE_DIR / "ship-acks.json"
 
 
+def _ship_session_write_sig(sid):
+    """Per-session 'have you written anything' signature: mtime of the session's
+    `<sid>_writes` sidecar marker (bumped on every Edit/Write). A session that
+    said 'nothing of mine' is only re-asked when ITS OWN signature advances —
+    so another session's edits never re-trigger a nudge to this one."""
+    try:
+        return str(int((SIDECAR_STATE_DIR / f"{sid}_writes").stat().st_mtime))
+    except (OSError, ValueError):
+        return "0"
+
+
 def _load_ship_acks():
-    """{session_id: epoch} of recent replies, pruned to the TTL. Persisted so
-    repeated 'Push all' runs skip already-answered sessions even across a
-    server restart (the in-memory cache alone reset every restart)."""
+    """{session_id: {ts, sig}} of recent replies, keyed by the session's own
+    write signature. Persisted so 'Push all' skips already-answered sessions
+    across refresh/restart."""
     try:
         data = json.loads(SHIP_ACKS_FILE.read_text())
     except (OSError, json.JSONDecodeError):
         return {}
     if not isinstance(data, dict):
         return {}
-    now = time.time()
-    return {k: float(v) for k, v in data.items()
-            if isinstance(k, str) and isinstance(v, (int, float)) and (now - v) < SHIP_ACK_TTL}
+    now, out = time.time(), {}
+    for k, v in data.items():
+        if isinstance(k, str) and isinstance(v, dict) and (now - v.get("ts", 0)) < SHIP_ACK_TTL:
+            out[k] = {"ts": float(v.get("ts", 0)), "sig": str(v.get("sig", ""))}
+    return out
 
 
 def _save_ship_acks(acks):
@@ -24400,13 +24606,21 @@ def _save_ship_acks(acks):
         pass
 
 
-# session_id -> epoch of last reply during a ship (see above). Loaded from disk.
+# session_id -> {ts, sig} of last reply (see above). Loaded from disk.
 _ship_recent_acks = _load_ship_acks()
 
 
 def _record_ship_ack(sid):
-    _ship_recent_acks[sid] = time.time()
+    _ship_recent_acks[sid] = {"ts": time.time(), "sig": _ship_session_write_sig(sid)}
     _save_ship_acks(_ship_recent_acks)
+
+
+def _ship_already_answered(sid):
+    """True if this session already answered AND hasn't written anything since."""
+    rec = _ship_recent_acks.get(sid)
+    if not rec or (time.time() - rec.get("ts", 0)) >= SHIP_ACK_TTL:
+        return False
+    return rec.get("sig") == _ship_session_write_sig(sid)
 
 
 def _ship_session_label(sid, names):
@@ -24722,6 +24936,50 @@ def _ship_classify_remaining(path):
     return "review"
 
 
+def _ship_commit_scope(path):
+    """Best-effort conventional-commit scope from a path."""
+    if path.startswith("apps/bym-ios"):
+        return "ios"
+    if path.startswith("apps/bookyourmat"):
+        return "bym"
+    if path.startswith("packages/"):
+        parts = path.split("/")
+        return parts[1] if len(parts) > 1 else "pkg"
+    top = path.split("/")[0]
+    return top or "repo"
+
+
+def _ship_review_verdict(repo_path, path):
+    """Deterministic per-file verdict from the git graph (no LLM, no spawn):
+
+      restore — working copy is byte-identical to a committed version
+      leave   — its base lives on an UNMERGED branch/PR (committing here would
+                duplicate it and conflict when that PR merges)
+      commit  — genuine main-only work (latest commit touching it is in main,
+                or it's a brand-new file on no branch)
+    """
+    rc, sha, _ = _git(["log", "-1", "--all", "--format=%H", "--", path], repo_path, timeout=8)
+    sha = (sha or "").strip()
+    if rc != 0 or not sha:
+        return {"verdict": "commit", "why": "new file — not on any branch"}
+    rc2, diff, _ = _git(["diff", sha, "--", path], repo_path, timeout=8)
+    if rc2 == 0 and not diff.strip():
+        ref = _ship_safe_restore_ref(repo_path, path) or sha[:8]
+        return {"verdict": "restore", "why": f"identical to committed {ref} — safe to discard"}
+    in_main = _git(["merge-base", "--is-ancestor", sha, "HEAD"], repo_path, timeout=8)[0] == 0
+    if not in_main:
+        ref = None
+        rc3, brs, _ = _git(["branch", "-a", "--contains", sha], repo_path, timeout=8)
+        for b in (brs or "").splitlines():
+            b = b.strip().lstrip("*+ ").strip()
+            if b and "HEAD" not in b and "main" not in b:
+                ref = b
+                break
+        return {"verdict": "leave",
+                "why": f"base on unmerged {ref or sha[:8]} — let that branch/PR land it"}
+    return {"verdict": "commit", "why": f"main-only edit since {sha[:8]}"}
+
+
 def _run_ship_flow(repo_path, branch):
     try:
         _ship_update(repo_path, "nudging", "Checking for uncommitted work…")
@@ -24762,20 +25020,19 @@ def _run_ship_flow(repo_path, branch):
             def _label(sid):
                 return _ship_session_label(sid, names)
 
-            # Idempotent: skip sessions that already answered this ship within
-            # the TTL, so repeated "Push all" runs don't spam the same sessions
-            # (the "3 in ZOOM" problem). Stale/never-asked sessions still get it.
-            now = time.time()
+            # Idempotent per-session: skip a session that already answered and
+            # hasn't written anything since — another session's edits never
+            # re-trigger a nudge to this one.
             fresh, skipped = [], 0
             for sid in candidates:
-                last = _ship_recent_acks.get(sid)
-                if last and (now - last) < SHIP_ACK_TTL:
+                if _ship_already_answered(sid):
                     skipped += 1
-                    _ship_log(repo_path,
-                              f"↩ skipped {_label(sid)} (answered {int((now - last) / 60)}m ago)",
-                              "info")
                 else:
                     fresh.append(sid)
+            if skipped:
+                _ship_log(repo_path,
+                          f"↩ skipped {skipped} session(s) — already answered for this state",
+                          "info")
             _ship_update(repo_path, "nudging",
                          f"Asking {len(fresh)} session(s) to commit"
                          + (f" ({skipped} already answered)" if skipped else "") + "…")
@@ -24802,7 +25059,7 @@ def _run_ship_flow(repo_path, branch):
                         if jsonl is None:
                             # Non-Claude (no readable transcript): we can't hear
                             # the reply, so treat the nudge itself as the
-                            # "don't re-bug for a while" marker.
+                            # "don't re-bug until it writes again" marker.
                             _record_ship_ack(sid)
                     else:
                         _ship_log(repo_path, f"✗ {name}: {res.get('error') or 'no route'}", "warn")
@@ -24824,12 +25081,15 @@ def _run_ship_flow(repo_path, branch):
                     if a["acked"]:
                         continue
                     reply = _ship_read_reply(a["jsonl"], a["offset"], a["since"])
-                    if reply:
+                    # Only count it when the session actually says DONE (what we
+                    # asked for) — otherwise we'd grab an unrelated assistant turn
+                    # (e.g. it answering a different question).
+                    if reply and re.search(r"\bDONE\b", reply):
                         a["acked"] = True
-                        _record_ship_ack(a["sid"])   # remember: don't re-nudge soon
-                        first = reply.splitlines()[0][:140]
-                        lvl = "ok" if "DONE" in reply[:40].upper() else "info"
-                        _ship_log(repo_path, f"✓ {a['name']}: {first}", lvl)
+                        _record_ship_ack(a["sid"])
+                        done_line = next((l.strip() for l in reply.splitlines()
+                                          if "DONE" in l), reply.splitlines()[0])
+                        _ship_log(repo_path, f"✓ {a['name']}: {done_line[:140]}", "ok")
                 rc, out, err = _git(["status", "--porcelain"], repo_path)
                 if rc == 0 and not out.strip():
                     dirty = False
@@ -24856,28 +25116,40 @@ def _run_ship_flow(repo_path, branch):
                 rest = [p for p in paths if not _ship_is_junk(p)]
                 infra = [p for p in rest if _ship_classify_remaining(p) == "infra"]
                 review = [p for p in rest if _ship_classify_remaining(p) == "review"]
-                if infra:
-                    _ship_log(repo_path, f"safe to bulk-commit — docs/infra ({len(infra)}):", "info")
-                    for p in infra[:12]:
-                        _ship_log(repo_path, f"  • {p}", "info")
+                _ship_log(repo_path,
+                          f"{len(infra)} infra · {len(review)} app/deploy · {len(junk)} junk left",
+                          "info")
+                # Per-file git-derived verdict for each app/deploy file (no LLM,
+                # no spawn) — commit / restore / leave-for-PR — surfaced as its
+                # own Approve/Reject row.
+                review_actions = []
+                v_counts = {"commit": 0, "restore": 0, "leave": 0}
+                for i, p in enumerate(review):
+                    v = _ship_review_verdict(repo_path, p)
+                    verdict, why = v["verdict"], v["why"]
+                    v_counts[verdict] = v_counts.get(verdict, 0) + 1
+                    base = p.rstrip("/").rsplit("/", 1)[-1]
+                    if verdict == "commit":
+                        review_actions.append({
+                            "id": f"rv-{i}", "kind": "commit", "paths": [p],
+                            "label": f"Commit {base}", "detail": why,
+                            "message": f"chore({_ship_commit_scope(p)}): {base}",
+                        })
+                    elif verdict == "restore":
+                        review_actions.append({
+                            "id": f"rv-{i}", "kind": "restore", "paths": [p],
+                            "label": f"Discard {base}", "detail": why,
+                        })
+                    else:  # leave
+                        review_actions.append({
+                            "id": f"rv-{i}", "kind": "leave", "paths": [p],
+                            "label": f"Leave {base}", "detail": why,
+                        })
                 if review:
-                    _ship_log(repo_path, f"review before commit — app/deploy code ({len(review)}):", "warn")
-                    for p in review[:12]:
-                        _ship_log(repo_path, f"  ⚠ {p}", "warn")
-                if junk:
-                    _ship_log(repo_path, f"junk to gitignore ({len(junk)})", "warn")
-                # Spell out exactly what a human needs to do to finish.
-                _ship_log(repo_path, "— to finish —", "info")
-                if infra:
                     _ship_log(repo_path,
-                              f"1. commit the {len(infra)} infra file(s): "
-                              "git commit --only <paths> -m 'chore: …'", "info")
-                if review:
-                    _ship_log(repo_path,
-                              f"2. review the {len(review)} app/deploy file(s) "
-                              "(git diff) — they ship to prod — then commit or restore", "warn")
-                if junk:
-                    _ship_log(repo_path, f"3. gitignore/delete the {len(junk)} junk file(s)", "warn")
+                              f"verdicts → {v_counts['commit']} commit · "
+                              f"{v_counts['restore']} discard · {v_counts['leave']} leave-for-PR",
+                              "info")
                 # Cheap divergence pre-check so the handoff shows the whole path
                 # to green (the push will also need this resolved).
                 _git(["fetch", "origin", branch], repo_path, timeout=30)
@@ -24887,10 +25159,9 @@ def _run_ship_flow(repo_path, branch):
                 behind = int((bh or "0").strip() or 0) if rc_b == 0 else 0
                 if ahead and behind:
                     _ship_log(repo_path,
-                              f"4. branch diverged (ahead {ahead}, behind {behind}) — after the "
-                              f"tree is clean, reconcile from a clean worktree off origin/{branch}, "
-                              "then push (Push all won't rebase a shared clone)", "warn")
-                # Structured actions the UI offers Approve/Reject on (build 3).
+                              f"branch diverged (ahead {ahead}, behind {behind}) — once clean, "
+                              f"reconcile from a worktree off origin/{branch} then push", "warn")
+                # Structured actions the UI offers Approve/Reject on.
                 ship_actions = []
                 if infra:
                     ship_actions.append({
@@ -24907,13 +25178,7 @@ def _run_ship_flow(repo_path, branch):
                         "detail": "untracked cruft (__pycache__, .DS_Store, …)",
                         "paths": junk,
                     })
-                if review:
-                    ship_actions.append({
-                        "id": "review", "kind": "review",
-                        "label": f"{len(review)} app/deploy file(s) — review by hand",
-                        "detail": "these ship to prod; open the diffs yourself",
-                        "paths": review,
-                    })
+                ship_actions.extend(review_actions)
                 acked_n = sum(1 for a in acks if a["acked"])
                 _ship_update(repo_path, "needs_you",
                              f"Needs you: {len(infra)} infra (safe to commit), "
@@ -25089,8 +25354,18 @@ def _execute_ship_action(repo_path, action):
             except OSError:
                 pass
         return {"ok": True, "log": f"✓ deleted {removed} junk path(s)", "level": "ok"}
-    if kind == "review":
-        return {"ok": False, "log": "review must be done by hand (ships to prod)", "level": "warn"}
+    if kind == "restore":
+        # Safety re-check: only discard if STILL byte-identical to a committed
+        # version (content preserved in git). Refuse otherwise.
+        for p in paths:
+            if not _ship_safe_restore_ref(repo_path, p):
+                return {"ok": False, "log": f"refused: {p} no longer matches a commit", "level": "warn"}
+        rc, out, err = _git(["restore", "--staged", "--worktree", "--", *paths], repo_path, timeout=15)
+        if rc != 0:
+            return {"ok": False, "log": f"restore failed: {err or out.strip() or rc}", "level": "error"}
+        return {"ok": True, "log": f"↩ discarded {len(paths)} file(s) (already in git)", "level": "ok"}
+    if kind in ("review", "leave"):
+        return {"ok": False, "log": "left for the owning branch/PR — by hand", "level": "warn"}
     return {"ok": False, "log": "unknown action", "level": "warn"}
 
 
