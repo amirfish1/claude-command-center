@@ -20380,8 +20380,10 @@
     const actionsHtml = actions.length
       ? '<div class="ship-actions">'
         + actions.map(a => {
-            const canDo = a.kind === 'commit' || a.kind === 'drop';
+            const canDo = a.kind === 'commit' || a.kind === 'drop' || a.kind === 'restore';
+            const badge = { commit: 'commit', drop: 'delete', restore: 'discard', leave: 'leave-for-PR', review: 'review' }[a.kind] || a.kind;
             return '<div class="ship-action" data-action-id="' + escapeHtml(a.id) + '">'
+              + '<span class="ship-verdict v-' + escapeHtml(a.kind) + '">' + escapeHtml(badge) + '</span>'
               + '<div class="ship-action-text">'
                 + '<span class="ship-action-label">' + escapeHtml(a.label || a.id) + '</span>'
                 + (a.detail ? '<span class="ship-action-detail">' + escapeHtml(a.detail) + '</span>' : '')
