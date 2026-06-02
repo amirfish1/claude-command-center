@@ -11,7 +11,7 @@ Usage:
     PORT=9000 ./run.sh       # custom port
 """
 
-__version__ = "4.5.0"
+__version__ = "4.5.2"
 
 import ast
 import base64
@@ -2130,6 +2130,23 @@ def _live_engine_session_ids():
                 for tok in cmd.split():
                     if len(tok) >= 16 and _command_targets_engine_session(cmd, tok, engine):
                         sids.add(tok)
+        for s in _spawned_sessions:
+            try:
+                if _poll_spawn_entry(s) is not None:
+                    continue
+            except Exception:
+                continue
+            sid = s.get("session_id")
+            if not sid:
+                log = s.get("log")
+                if s.get("engine") == "codex":
+                    sid = _extract_codex_thread_id_from_log(log)
+                elif s.get("engine") == "gemini":
+                    sid = _extract_gemini_session_id_from_log(log)
+                elif s.get("engine") == "cursor":
+                    sid = _extract_cursor_chat_id_from_log(log) or _cursor_session_id_for_spawn_entry(s)
+            if sid:
+                sids.add(sid)
     except Exception:
         # Never let liveness detection break the list; fall back to last cache.
         return cached["sids"]
@@ -5417,6 +5434,17 @@ def _extract_tail_meta(path):
                         elif name == "Bash":
                             cmd = inp.get("command", "")
                             signals = _shell_command_signals(cmd)
+                            # `signals["edit"]` is true for shell-driven edits
+                            # like `sed -i`, `tee`, `apply_patch`, `cat > file`,
+                            # `printf … > file`, `perl -pi`. Without it,
+                            # sessions that edited via Bash (instead of the
+                            # Edit/Write/NotebookEdit tools) showed a
+                            # misleading "no edits" lifecycle chip. Every
+                            # other engine's parser already consumed this
+                            # signal — only the Claude branch was missing it.
+                            if signals["edit"]:
+                                meta["has_edit"] = True
+                                meta["last_edit_pos"] = _pos
                             if signals["commit"]:
                                 meta["has_commit"] = True
                                 meta["last_commit_pos"] = _pos
@@ -6779,6 +6807,8 @@ def session_live_status(session_id, session_cwd):
                 pass
         registry_known = _spawn_registry_has_session(session_id, "codex")
         entry = _live_spawn_registry_entry_for_session(session_id, "codex")
+        if not entry:
+            entry = _find_live_spawn_entry_for_session(session_id)
         if entry:
             pid = entry["pid"]
             result["pid"] = pid
@@ -6828,6 +6858,8 @@ def session_live_status(session_id, session_cwd):
                 pass
         registry_known = _spawn_registry_has_session(session_id, "gemini")
         entry = _live_spawn_registry_entry_for_session(session_id, "gemini")
+        if not entry:
+            entry = _find_live_spawn_entry_for_session(session_id)
         if entry:
             pid = entry["pid"]
             result["pid"] = pid
@@ -23013,9 +23045,11 @@ def _interrupt_session(session_id):
     """Send an interrupt to a session using the same fall-through as
     `_inject_text_into_session`:
 
-      * Live TTY → AppleScript Esc keystroke (cancels the in-flight stream
+      * Codex session → SIGINT directly to the process (both TTY and headless)
+        since Codex does not have a native TUI Escape key handler.
+      * Live TTY (non-Codex) → AppleScript Esc keystroke (cancels the in-flight stream
         when Claude is mid-response, clears the input buffer otherwise).
-      * Live CCC-spawned headless session (no TTY) → SIGINT to the spawned
+      * Live CCC-spawned headless session (no TTY, non-Codex) → SIGINT to the spawned
         pid. NOTE: this terminates the headless `claude -p` subprocess —
         you cannot resume mid-conversation, the spawn is over.
       * Dormant session with no live spawn → no-op error; nothing is running
@@ -23025,6 +23059,24 @@ def _interrupt_session(session_id):
         return {"ok": False, "error": "missing session_id"}
     cwd = find_session_cwd(session_id)
     status = session_live_status(session_id, cwd)
+    if _is_codex_session(session_id):
+        pid = status.get("pid")
+        if not pid:
+            spawn = _find_live_spawn_entry_for_session(session_id)
+            if spawn:
+                pid = spawn.get("pid")
+        if pid:
+            try:
+                os.kill(pid, signal.SIGINT)
+            except (ProcessLookupError, PermissionError, OSError) as e:
+                return {"ok": False, "via": "spawn-sigint", "pid": pid, "error": str(e)}
+            return {
+                "ok": True,
+                "via": "spawn-sigint",
+                "pid": pid,
+                "note": "Codex process interrupted",
+            }
+        return {"ok": False, "error": "Codex session is not live — nothing to interrupt"}
     tty = status.get("tty")
     term_app = status.get("terminal_app")
     has_tty = bool(tty) and tty != "??"

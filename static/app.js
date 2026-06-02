@@ -9583,6 +9583,10 @@
     if (!c) return false;
     if (c.verified || c.archived) return false;
     if (c.source === 'backlog') return false;
+    // Live or just-spawned sessions might be mid-work — don't claim
+    // "no edits" while they're still running. WIP/sending chips take
+    // their spot at higher precedence anyway.
+    if (c.is_live || c.pending_spawn) return false;
     if (hasReadOnlyWork(c)) return false;
     // Sessions that spawn subagents (Task tool) delegate edits to the
     // subagent JSONLs — the parent JSONL has no Edit/Write/NotebookEdit
@@ -11596,6 +11600,9 @@
       const historyBadgeHtml = c._historyMatch
         ? '<span class="conv-history-badge' + (_historyIsSemantic ? ' is-semantic' : '') + '" title="Matched in conversation history' + (_historyIsSemantic ? ' (semantic)' : '') + '">' + (_historyIsSemantic ? 'semantic history' : 'history') + '</span>'
         : '';
+      const repoBadgeHtml = c._repoSearchMatch
+        ? '<span class="conv-history-badge" title="Matched repo search; showing latest sessions from ' + escapeHtml(c._repoSearchLabel || 'repo') + '">repo</span>'
+        : '';
       const historySnippetHtml = c._historySnippet
         ? '<div class="conv-history-snippet">' + c._historySnippet + '</div>'
         : '';
@@ -11611,6 +11618,7 @@
             + titleFolderChipHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to open; click again to rename">' + escapeHtml(title) + '</div>'
             + historyBadgeHtml
+            + repoBadgeHtml
             + worktreeBadgeHtml
             + pinnedHtml
             + rowMetaHtml
@@ -18902,7 +18910,7 @@
   // _historyState.query: the query the map was built for; stale queries
   //                       are ignored to avoid showing decorations from a
   //                       previous keystroke after the user has typed more.
-  const _historyState = { query: '', map: new Map(), broaden: false };
+  const _historyState = { query: '', map: new Map(), broaden: false, repoRows: [] };
   let _historyFetchSeq = 0;
   let _historyFetchTimer = null;
 
@@ -18910,6 +18918,60 @@
   // without leaking HTML through escapeHtml later.
   function _stripHistoryHtml(s) {
     return (s || '').replace(/<mark>/g, '').replace(/<\/mark>/g, '').replace(/…/g, '');
+  }
+
+  function _repoMatchScore(repo, qLower) {
+    if (!repo || !qLower) return Number.POSITIVE_INFINITY;
+    const path = (repo.path || '').toLowerCase();
+    const label = (repo.label || '').toLowerCase();
+    const leaf = _pathLeaf(repo.path || '').toLowerCase();
+    let best = Number.POSITIVE_INFINITY;
+    for (const haystack of [leaf, label, path]) {
+      if (!haystack) continue;
+      const idx = haystack.indexOf(qLower);
+      if (idx < 0) continue;
+      best = Math.min(best, idx + (haystack.length / 1000));
+    }
+    return best;
+  }
+
+  function _bestRepoMatchForQuery(qLower) {
+    if (!qLower || qLower.length < 2) return null;
+    const repos = (repoListState && Array.isArray(repoListState.repos)) ? repoListState.repos : [];
+    if (!repos.length) return null;
+    let bestRepo = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const repo of repos) {
+      const score = _repoMatchScore(repo, qLower);
+      if (!Number.isFinite(score)) continue;
+      if (score < bestScore) {
+        bestScore = score;
+        bestRepo = repo;
+      }
+    }
+    return bestRepo;
+  }
+
+  function _buildRepoSearchRows(rows, repo) {
+    const repoPath = (repo && repo.path) || '';
+    const repoLabel = (repo && (repo.label || _pathLeaf(repo.path) || repo.path)) || repoPath;
+    return (Array.isArray(rows) ? rows : [])
+      .slice()
+      .sort((a, b) => (b.modified || 0) - (a.modified || 0))
+      .slice(0, 5)
+      .map(c => {
+        const sessionId = c.session_id || c.id;
+        return {
+          ...c,
+          id: c.id || sessionId,
+          session_id: sessionId,
+          session_cwd: c.session_cwd || c.folder_path || c.repo_path || repoPath || '',
+          _repoSearchMatch: true,
+          _repoSearchLabel: repoLabel || '',
+          _repoSearchScore: (c.modified || 0),
+        };
+      })
+      .filter(c => !!(c.session_id || c.id));
   }
 
   function _decorateWithHistoryMatches(localSorted, qLower) {
@@ -18921,26 +18983,43 @@
           c._historySnippet = '';
           c._historySource = '';
         }
+        if (c._repoSearchMatch) {
+          c._repoSearchMatch = false;
+          c._repoSearchLabel = '';
+          c._repoSearchScore = 0;
+        }
       }
       return localSorted;
     }
     const map = _historyState.map;
-    if (!map.size) return localSorted;
+    const repoRows = Array.isArray(_historyState.repoRows) ? _historyState.repoRows : [];
+    if (!map.size && !repoRows.length) return localSorted;
     // Decorate locally-known sessions that also matched in history.
     const seen = new Set();
     for (const c of localSorted) {
       const sid = c.session_id || c.id;
+      if (sid) seen.add(sid);
       if (sid && map.has(sid)) {
         const hit = map.get(sid);
         c._historyMatch = true;
         c._historySnippet = hit.snippet;
         c._historySource = hit.source || 'bm25';
-        seen.add(sid);
       } else if (c._historyMatch) {
         // Was decorated for a previous query; clear.
         c._historyMatch = false;
         c._historySnippet = '';
         c._historySource = '';
+      }
+      const localSid = c.session_id || c.id;
+      if (localSid && repoRows.some(r => (r.session_id || r.id) === localSid)) {
+        const match = repoRows.find(r => (r.session_id || r.id) === localSid);
+        c._repoSearchMatch = true;
+        c._repoSearchLabel = (match && match._repoSearchLabel) || '';
+        c._repoSearchScore = (match && match._repoSearchScore) || 0;
+      } else if (c._repoSearchMatch) {
+        c._repoSearchMatch = false;
+        c._repoSearchLabel = '';
+        c._repoSearchScore = 0;
       }
     }
     // Append synthetic rows for sessions that the local filter doesn't
@@ -18970,10 +19049,18 @@
         _historyOnly: true,
       });
     }
+    const syntheticRepo = [];
+    for (const row of repoRows) {
+      const sid = row.session_id || row.id;
+      if (!sid || seen.has(sid)) continue;
+      syntheticRepo.push(row);
+      seen.add(sid);
+    }
+    syntheticRepo.sort((a, b) => (b._repoSearchScore || 0) - (a._repoSearchScore || 0));
     // History-only rows trail the local matches. Within themselves they
     // keep history-search BM25 order (already sorted by score in the
     // server response, so insertion order suffices).
-    return _prioritizeSessionIdMatches(localSorted.concat(synthetic), qLower);
+    return _prioritizeSessionIdMatches(localSorted.concat(synthetic).concat(syntheticRepo), qLower);
   }
 
   function _fetchHistoryAugment(query) {
@@ -18983,6 +19070,7 @@
     if (!q) {
       _historyState.query = '';
       _historyState.map = new Map();
+      _historyState.repoRows = [];
       return Promise.resolve();
     }
     // Default scope = current repo, mirroring the rest of the list view.
@@ -18998,33 +19086,40 @@
     if (window._historyIndexStatus && window._historyIndexStatus.semantic && window._historyIndexStatus.semantic.available) {
       params.set('semantic', '1');
     }
-    return fetch('/api/search-history?' + params.toString())
+    const historyReq = fetch('/api/search-history?' + params.toString())
       .then(r => r.ok ? r.json() : { results: [] })
       .catch(() => ({ results: [] }))
-      .then(data => {
-        // Drop stale responses — newer keystroke already in flight.
-        if (seq !== _historyFetchSeq) return;
-        const results = (data && data.results) || [];
-        const bySession = new Map();
-        for (const r of results) {
-          const sid = r.session_id;
-          if (!sid) continue;
-          // First hit per session wins. Server returns RRF-sorted when
-          // semantic is on, BM25-sorted when off. Either way, first hit
-          // is the best per session.
-          if (!bySession.has(sid)) {
-            bySession.set(sid, {
-              snippet: r.snippet || '',
-              ts: r.ts_unix || 0,
-              cwd: r.cwd || '',
-              type: r.type || '',
-              source: r._source || 'bm25',
-            });
-          }
+    const matchedRepo = _bestRepoMatchForQuery(qLower);
+    const repoReq = matchedRepo
+      ? fetch('/api/conversations?repo_path=' + encodeURIComponent(matchedRepo.path) + '&include_old=1')
+        .then(r => r.ok ? r.json() : [])
+        .catch(() => [])
+      : Promise.resolve([]);
+    return Promise.all([historyReq, repoReq]).then(([data, repoRows]) => {
+      // Drop stale responses — newer keystroke already in flight.
+      if (seq !== _historyFetchSeq) return;
+      const results = (data && data.results) || [];
+      const bySession = new Map();
+      for (const r of results) {
+        const sid = r.session_id;
+        if (!sid) continue;
+        // First hit per session wins. Server returns RRF-sorted when
+        // semantic is on, BM25-sorted when off. Either way, first hit
+        // is the best per session.
+        if (!bySession.has(sid)) {
+          bySession.set(sid, {
+            snippet: r.snippet || '',
+            ts: r.ts_unix || 0,
+            cwd: r.cwd || '',
+            type: r.type || '',
+            source: r._source || 'bm25',
+          });
         }
-        _historyState.query = qLower;
-        _historyState.map = bySession;
-      });
+      }
+      _historyState.query = qLower;
+      _historyState.map = bySession;
+      _historyState.repoRows = _buildRepoSearchRows(repoRows, matchedRepo);
+    });
   }
 
   function updateConversationSearchClear() {
