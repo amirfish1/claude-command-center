@@ -5375,8 +5375,8 @@ PENDING_INPUTS_FILE = COMMAND_CENTER_STATE_DIR / "pending-inputs.json"
 _conv_meta_cache = {}
 _conv_meta_cache_dirty = False
 _conv_meta_cache_lock = threading.Lock()
-_CONV_META_SCHEMA_VERSION = 8
-_CONV_META_COMPAT_SCHEMA_VERSIONS = {8}
+_CONV_META_SCHEMA_VERSION = 9
+_CONV_META_COMPAT_SCHEMA_VERSIONS = {9}
 _CONV_META_CACHE_FILE = (
     Path.home() / ".claude" / "command-center" / "conv_meta_cache.json"
 )
