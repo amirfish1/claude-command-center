@@ -3051,14 +3051,31 @@
      boring, the section is supposed to be quiet. */
   #convList .conv-archived-section,
   #convList .conv-ghissues-section,
+  #convList .conv-repo-search-section,
   #convList .conv-readytomerge-section,
   #convList .conv-inprogress-section { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 6px; }
   /* The first section in the list (whichever it is — typically GH Issues,
    * but the next section takes the spot if earlier ones are empty) loses
    * its divider so the list doesn't start with an empty stripe. */
   #convList > .conv-ghissues-section:first-child,
+  #convList > .conv-repo-search-section:first-child,
   #convList > .conv-readytomerge-section:first-child,
   #convList > .conv-inprogress-section:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+  #convList .conv-repo-search-header {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 8px 14px; color: var(--text-muted);
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;
+  }
+  #convList .conv-repo-search-label { color: var(--cyan); }
+  #convList .conv-repo-search-name {
+    color: var(--text); text-transform: none; letter-spacing: 0;
+    font-weight: 600; font-size: 13px;
+  }
+  #convList .conv-repo-search-hint {
+    margin-left: auto; font-size: 11px; color: var(--text-muted);
+    text-transform: none; letter-spacing: 0; font-weight: 500;
+  }
+  #convList .conv-repo-search-list .conv-item.is-history-match { border-left: 2px solid var(--cyan); }
   /* Ready-to-merge label gets a subtle green tint so the bucket reads as
    * "action required" at a glance, separate from the muted neutrality of
    * the other section labels. */

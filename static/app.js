@@ -679,6 +679,14 @@
     const t = (ae.type || 'text').toLowerCase();
     return /^(text|search|email|url|tel|password)$/.test(t);
   }
+  // Sidebar list renders must still run while #convSearch is focused —
+  // otherwise the debounced filter never paints until blur/Enter (the
+  // pause guard was written for background pollers, not the search box).
+  function shouldPauseSidebarRender() {
+    const ae = document.activeElement;
+    if (ae && ae.id === 'convSearch') return false;
+    return shouldPausePeriodicUiWork();
+  }
 
   // ── DEBUG: mute every setInterval callback while user is typing ──────
   // Wrap window.setInterval so any timer-driven work CCC registers from
@@ -8618,7 +8626,7 @@
   function renderSidebar(convs) {
     if (_renameInProgress) return;
     if (deferSidebarRenderIfDragging()) return;
-    if (shouldPausePeriodicUiWork()) return;
+    if (shouldPauseSidebarRender()) return;
     const $kanbanBoard = document.getElementById('kanbanBoard');
     const $flow = document.getElementById('flowBoard');
     const $convList = document.getElementById('convList');
@@ -11870,8 +11878,25 @@
     const _readyToMergeByPr = new Map();   // pr_num -> { idx, conv }
     const _archivedConvs = [];
     const _idSearchConvs = [];
+    const _qActive = (document.getElementById('convSearch')?.value || '').trim().toLowerCase();
+    const _repoSearchActive = (_qActive && _historyState.query === _qActive
+      && Array.isArray(_historyState.repoRows) && _historyState.repoRows.length)
+      ? {
+          label: (_historyState.matchedRepo && _historyState.matchedRepo.label)
+            || _historyState.repoRows[0]._repoSearchLabel
+            || 'repo',
+          ids: new Set(_historyState.repoRows.map(r => r.session_id || r.id).filter(Boolean)),
+          order: _historyState.repoRows.map(r => r.session_id || r.id).filter(Boolean),
+        }
+      : null;
+    const _convById = new Map();
+    for (const c of convs) {
+      const sid = c.session_id || c.id;
+      if (sid) _convById.set(sid, c);
+    }
     const _inGroupChatIds = new Set(_gcActiveChats.flatMap(c => c.session_ids || []));
     for (const c of convs) {
+      if (_repoSearchActive && _repoSearchActive.ids.has(c.session_id || c.id)) continue;
       // A UUID/prefix/substring search is a direct lookup; keep it above
       // pipeline sections and history-index matches.
       if (Number.isFinite(c && c._idSearchRank)) {
@@ -12688,6 +12713,23 @@
     const _idSearchRowsHtml = _idSearchConvs.length
       ? _idSearchConvs.map(c => _renderRow(c)).join('')
       : '';
+    const _repoSearchRowsHtml = (() => {
+      if (!_repoSearchActive) return '';
+      const cards = _repoSearchActive.order
+        .map(id => _convById.get(id))
+        .filter(Boolean);
+      if (!cards.length) return '';
+      return '<div class="conv-repo-search-section" data-role="repo-search-section">'
+        + '<div class="conv-repo-search-header">'
+        +   '<span class="conv-repo-search-label">Repo match</span>'
+        +   '<span class="conv-repo-search-name">' + escapeHtml(_repoSearchActive.label) + '</span>'
+        +   '<span class="conv-repo-search-hint">latest ' + cards.length + '</span>'
+        + '</div>'
+        + '<div class="conv-repo-search-list">'
+        + cards.map(c => _renderRow(c)).join('')
+        + '</div>'
+        + '</div>';
+    })();
 
     // Group-chat ITEMS — each chat becomes one sortable item with its
     // own mtime, so the In Progress list can interleave chats with
@@ -13284,7 +13326,7 @@
     // Order: GH Issues (to start) → Ready to merge (action) → In
     // progress (which now also contains the group-chat rows at the
     // top) → Archived.
-    const _convListHtml = _idSearchRowsHtml + _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
+    const _convListHtml = _idSearchRowsHtml + _repoSearchRowsHtml + _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
     // Flicker guard. The 10s bulk-sessions poll and the 5s live-status tick both
     // re-run this render constantly. The wholesale innerHTML reset below tears
     // down and rebuilds every row, which the user sees as the whole list
@@ -20283,7 +20325,7 @@
   // _historyState.query: the query the map was built for; stale queries
   //                       are ignored to avoid showing decorations from a
   //                       previous keystroke after the user has typed more.
-  const _historyState = { query: '', map: new Map(), broaden: false, repoRows: [] };
+  const _historyState = { query: '', map: new Map(), broaden: false, repoRows: [], matchedRepo: null };
   let _historyFetchSeq = 0;
   let _historyFetchTimer = null;
 
@@ -20444,6 +20486,7 @@
       _historyState.query = '';
       _historyState.map = new Map();
       _historyState.repoRows = [];
+      _historyState.matchedRepo = null;
       return Promise.resolve();
     }
     // Default scope = current repo, mirroring the rest of the list view.
@@ -20492,6 +20535,12 @@
       _historyState.query = qLower;
       _historyState.map = bySession;
       _historyState.repoRows = _buildRepoSearchRows(repoRows, matchedRepo);
+      _historyState.matchedRepo = matchedRepo
+        ? { path: matchedRepo.path, label: matchedRepo.label || _pathLeaf(matchedRepo.path) || matchedRepo.path }
+        : null;
+      // Force a full sidebar rebuild — the flicker guard can otherwise
+      // skip the second pass that adds repo badges/section HTML.
+      _convListRenderSig = null;
     });
   }
 
@@ -21211,6 +21260,11 @@
       });
     }, 180);
   });
+  if ($convSearch) {
+    $convSearch.addEventListener('blur', () => {
+      try { _flushDeferredSidebarRenderIfAny(); } catch (_) {}
+    });
+  }
 
   // ── Issues dashboard ──
   let issuesPolling = null;
@@ -23424,7 +23478,7 @@
     if (!$list) return;
     if (_renameInProgress) return;
     if (deferSidebarRenderIfDragging()) return;
-    if (shouldPausePeriodicUiWork()) return;
+    if (shouldPauseSidebarRender()) return;
     const q = (filter || '').trim().toLowerCase();
     const scrollState = _captureArchiveListScroll(q, $list);
     const _finishArchiveRender = () => {
