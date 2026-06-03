@@ -16899,8 +16899,32 @@
       'padding:8px;text-align:center;background:var(--surface-2);color:var(--text-muted);' +
       'border:1px dashed var(--border);border-radius:8px;font:500 12px inherit;cursor:pointer;}' +
       '.conv-load-earlier:hover{background:var(--hover-bg,rgba(127,127,127,.14));color:var(--text);}' +
-      '.conv-load-earlier:disabled{cursor:default;opacity:.7;}';
+      '.conv-load-earlier:disabled{cursor:default;opacity:.7;}' +
+      // Loading overlay lives on <body> so it survives the view re-render (the
+      // banner is wiped when the view clears), pinned over the pane.
+      '.conv-loading-overlay{position:fixed;transform:translateX(-50%);z-index:1000;' +
+      'display:flex;align-items:center;gap:8px;background:var(--surface-2,#222);' +
+      'color:var(--text,#eee);font:600 12px inherit;padding:7px 14px;border-radius:999px;' +
+      'border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;}' +
+      '.conv-loading-spinner{width:12px;height:12px;border-radius:50%;flex:0 0 auto;' +
+      'border:2px solid currentColor;border-right-color:transparent;animation:conv-spin .7s linear infinite;}' +
+      '@keyframes conv-spin{to{transform:rotate(360deg);}}';
     document.head.appendChild(st);
+  }
+
+  function _showConvLoading($view, label) {
+    _ensureLoadEarlierStyle();
+    const el = document.createElement('div');
+    el.className = 'conv-loading-overlay';
+    el.innerHTML = '<span class="conv-loading-spinner"></span><span></span>';
+    el.lastChild.textContent = label || 'Loading earlier messages…';
+    try {
+      const r = $view.getBoundingClientRect();
+      el.style.left = (r.left + r.width / 2) + 'px';
+      el.style.top = (r.top + 16) + 'px';
+    } catch (_) {}
+    document.body.appendChild(el);
+    return el;
   }
 
   // Line# of the .event nearest the top of the viewport, so we can restore the
@@ -16937,12 +16961,28 @@
       pane.wantFull = true; pane.lastLine = 0;
       banner.textContent = 'Loading earlier messages…';
       banner.disabled = true;
+      // Overlay survives the view clear/re-render so there's a clear "working"
+      // signal the whole time (the banner gets wiped when the view clears).
+      const overlay = _showConvLoading($view);
       try {
         await fetchConversationEvents(paneId);
-        _scrollToEventLine($view, anchorLine);
-      } finally {
+        // Restore the reader's spot, then force a paint: the freshly rendered
+        // content can stay blank until a real scroll event fires (a browser
+        // quirk the user hit — "black screen until I move the scroll").
+        requestAnimationFrame(() => {
+          _scrollToEventLine($view, anchorLine);
+          requestAnimationFrame(() => {
+            $view.scrollTop += 1; $view.scrollTop -= 1;
+            try { $view.dispatchEvent(new Event('scroll')); } catch (_) {}
+            overlay.remove();
+            loading = false;
+          });
+        });
+      } catch (_) {
+        overlay.remove();
         loading = false;
       }
+      return;
     }
     banner.addEventListener('click', loadEarlier);
     // Auto-load once the banner scrolls into view (scroll up → history fills in).
