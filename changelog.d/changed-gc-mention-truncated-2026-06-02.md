@@ -1,0 +1,1 @@
+Group chat @mentions truncate participant names over 20 chars (e.g. `@Movie i wanted for vid…`) instead of dumping the full label inline. The bare prefix in the system note still spells out the full name once, so the @mention pill no longer adds a redundant copy of the same long string. Full name + session id stay in the title tooltip.

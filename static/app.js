@@ -9122,8 +9122,16 @@
 
         const span = document.createElement('span');
         span.className = 'gc-mention';
-        span.textContent = '@' + name;
-        span.title = `Session: ${shortId}`;
+        // Cap the displayed name so long participant labels (e.g. "Movie
+        // i wanted for video claw") don't make every system note an
+        // unreadable wall. The full name still lives in the title and as
+        // the bare prefix in the system text that precedes the mention.
+        const _MENTION_MAX = 20;
+        const _displayName = name.length > _MENTION_MAX
+          ? name.slice(0, _MENTION_MAX - 1) + '…'
+          : name;
+        span.textContent = '@' + _displayName;
+        span.title = `${name}\nSession: ${shortId}`;
         fragment.appendChild(span);
 
         lastIndex = regex.lastIndex;
