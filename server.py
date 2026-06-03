@@ -30994,6 +30994,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             repo_path = (qs.get("repo_path", [""])[0] or "").strip() or None
             fp = _resolve_conversation_path(conv_id, repo_path=repo_path)
             if not fp.is_file():
+                # Codex sessions live in the rollout tree, not the claude one.
+                alt = _resolve_codex_rollout_path(conv_id)
+                if alt and Path(alt).is_file():
+                    fp = Path(alt)
+            if not fp.is_file():
                 self.send_json({"error": "not found"}, 404)
                 return
             raw_line = None
