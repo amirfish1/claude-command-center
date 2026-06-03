@@ -1,0 +1,1 @@
+Model picker popup now flips ABOVE the pill when there isn't room below the viewport (the pill lives in the input strip near the bottom of the screen, so the default below-anchor used to clip the popup mostly off-screen). Picks below when it fits; otherwise picks whichever side has more room and clamps to keep the popup fully visible.

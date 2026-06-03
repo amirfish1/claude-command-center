@@ -18576,15 +18576,28 @@
     html += '<div class="mp-status" data-mp-status></div>';
     pop.innerHTML = html;
 
-    // Anchor: align below the pill, but clamp to the viewport so it doesn't
-    // get clipped at the right edge of the input strip.
+    // Anchor: prefer below the pill, but flip ABOVE if the popup would
+    // run past the bottom of the viewport (model pill lives in the
+    // input strip near the bottom of the screen, so the default
+    // below-anchor used to clip the popup partially off-screen).
+    // Horizontal clamp keeps it inside the right edge of the viewport.
     document.body.appendChild(pop);
     const r = btn.getBoundingClientRect();
-    const popW = pop.getBoundingClientRect().width || 240;
+    const popRect = pop.getBoundingClientRect();
+    const popW = popRect.width || 240;
+    const popH = popRect.height || 240;
     let left = r.left;
     if (left + popW > window.innerWidth - 8) left = window.innerWidth - popW - 8;
     pop.style.left = Math.max(8, left) + 'px';
-    pop.style.top = (r.bottom + 4) + 'px';
+    const spaceBelow = window.innerHeight - r.bottom;
+    const spaceAbove = r.top;
+    if (spaceBelow >= popH + 12 || spaceBelow >= spaceAbove) {
+      // Fits below, or has more room below than above.
+      pop.style.top = Math.min(r.bottom + 4, window.innerHeight - popH - 8) + 'px';
+    } else {
+      // Flip above the pill — anchor the popup's bottom to the pill's top.
+      pop.style.top = Math.max(8, r.top - popH - 4) + 'px';
+    }
     _modelPickerEl = pop;
 
     const statusEl = pop.querySelector('[data-mp-status]');
