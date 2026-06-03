@@ -21856,6 +21856,12 @@
     return _activeGroupChatPillEl;
   }
   const GC_ACTIVE_TRIGGER_RECENT_MS = 60 * 1000;
+  // Cap on how long after the most recent trigger / activity we still
+  // call a chat "active" in the pill. Server keeps it in the watcher
+  // for 45min after the last file change (COORD_DEATH_TIMEOUT), but
+  // that's a "should we keep nudging" threshold — too lax for the UI.
+  // 10min reads as "really active right now" to a human.
+  const GC_ACTIVE_PILL_FRESHNESS_MS = 10 * 60 * 1000;
   // _gcActiveChats now contains active + closed (unarchived) chats. The
   // topbar badge uses the .status field to count active-only; the sidebar
   // section renders both, ghosting the closed ones.
@@ -21903,7 +21909,20 @@
 
   function gcShouldShowActivePill(chat, now) {
     if (!chat) return false;
-    if (chat.status === 'active' || chat.orchestrator_timer_active) return true;
+    // Even when the server still has it in the watcher (status==='active'
+    // for up to 45 min after the last file change), the pill should drop
+    // off if there hasn't been a real trigger/activity recently. The
+    // user reads "Active Group chat" as "happening right now", not "in
+    // the watcher backlog". Take the freshest signal across triggers,
+    // file activity, and recent local trigger touches.
+    const freshness = Math.max(
+      gcTriggerMs(chat),
+      gcEpochMs(chat.last_activity),
+      gcEpochMs(chat.last_mtime)
+    );
+    if (freshness > 0 && (now - freshness) <= GC_ACTIVE_PILL_FRESHNESS_MS) return true;
+    // Allow the immediate post-trigger window even if the freshness
+    // fields are momentarily stale on the next poll tick.
     const triggerAt = gcTriggerMs(chat);
     return triggerAt > 0 && (now - triggerAt) <= GC_ACTIVE_TRIGGER_RECENT_MS;
   }
@@ -21943,9 +21962,22 @@
     }
     $activeGroupChatPill.hidden = false;
     if (chatId) $activeGroupChatPill.dataset.chatId = chatId;
+    // Recency hint on the label and tooltip — disambiguates "happening
+    // RIGHT NOW" from "happened a few minutes ago and still in window".
+    const _freshAt = Math.max(
+      gcTriggerMs(chat),
+      gcEpochMs(chat.last_activity),
+      gcEpochMs(chat.last_mtime)
+    );
+    const _ageMin = _freshAt > 0 ? Math.max(0, Math.round((now - _freshAt) / 60000)) : null;
+    const _ageHint = _ageMin == null
+      ? ''
+      : (_ageMin === 0 ? ' · just now' : ' · ' + _ageMin + 'm ago');
+    if (label) label.textContent += _ageHint;
     $activeGroupChatPill.title = (activeCount > 1
       ? activeCount + ' active group-chat orchestrations are looping (tokens in use). Latest: ' + topic
       : 'Active group-chat orchestration: ' + topic)
+      + (_freshAt > 0 ? ' — last activity ' + new Date(_freshAt).toLocaleTimeString() : '')
       + '. Click to open the latest active chat.';
   }
 
