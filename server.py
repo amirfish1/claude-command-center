@@ -2336,8 +2336,40 @@ def _live_activity_entry_for_session(session_id):
     return entry
 
 
+# Coalescing cache for the live-activity snapshot. /api/sessions/live-activity
+# is polled by every dashboard client (browser tab + desktop app); without
+# coalescing, each concurrent poll recomputed the whole snapshot, and slow polls
+# made clients fire new ones before old ones finished — a pile-up that pinned a
+# core on GIL/lock contention. The snapshot is inherently approximate (sidebar
+# WIP chips), so serving one ≤TTL-old result to all concurrent callers is fine.
+# The lock makes it single-flight: at most one build runs at a time; everyone
+# else waits briefly and shares its result.
+_LIVE_ACTIVITY_SNAPSHOT_TTL = 1.5
+_live_activity_snapshot = {"ts": 0.0, "data": None}
+_live_activity_snapshot_lock = threading.Lock()
+
+
 def build_live_sessions_activity():
-    """Map session_id → live-work fields for every currently-live session."""
+    """Map session_id → live-work fields for every currently-live session.
+
+    Coalesced: concurrent / rapid polls within _LIVE_ACTIVITY_SNAPSHOT_TTL
+    share a single computation. See _live_activity_snapshot."""
+    snap = _live_activity_snapshot
+    now = time.time()
+    if snap["data"] is not None and now - snap["ts"] < _LIVE_ACTIVITY_SNAPSHOT_TTL:
+        return snap["data"]
+    with _live_activity_snapshot_lock:
+        # Another thread may have refreshed it while we waited for the lock.
+        now = time.time()
+        if snap["data"] is not None and now - snap["ts"] < _LIVE_ACTIVITY_SNAPSHOT_TTL:
+            return snap["data"]
+        data = _build_live_sessions_activity_uncached()
+        snap["data"] = data
+        snap["ts"] = time.time()
+        return data
+
+
+def _build_live_sessions_activity_uncached():
     out = {}
     for sid in _discover_live_session_ids():
         if not _archive_session_is_live(sid):
