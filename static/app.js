@@ -1687,6 +1687,11 @@
     }
   }
 
+  // Tracks the server's last-reported count of CCC-spawned sessions so
+  // refreshLiveStatus can detect external-to-this-client spawns (an
+  // agent calling /api/sessions/spawn for a sibling Codex / Gemini
+  // session) and trigger a conv-list refresh immediately.
+  let _lastSeenSpawnCount = null;
   async function refreshLiveStatus() {
     if (!currentSession.id) {
       liveStatus = { live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
@@ -1722,6 +1727,21 @@
         questionOptions: Array.isArray(data.question_options) ? data.question_options : [],
         questionOptionDetails: Array.isArray(data.question_option_details) ? data.question_option_details : [],
       };
+      // Detect server-side spawns we didn't initiate from this client
+      // (e.g. agent calls /api/sessions/spawn for a sibling Codex /
+      // Gemini session). Server returns a running count of CCC-spawned
+      // sessions; growth → trigger an immediate conv-list refresh so
+      // the new row appears in seconds, not on the next manual poll.
+      if (typeof data.spawn_registry_count === 'number') {
+        if (typeof _lastSeenSpawnCount === 'number' && data.spawn_registry_count > _lastSeenSpawnCount) {
+          if (typeof refreshConversationList === 'function') {
+            setTimeout(refreshConversationList, 0);
+            setTimeout(refreshConversationList, 1200);
+            setTimeout(refreshConversationList, 3000);
+          }
+        }
+        _lastSeenSpawnCount = data.spawn_registry_count;
+      }
       // Mirror the freshly-fetched sidecar fields back into the cached
       // sidebar row so the left list catches up to the right pane on
       // the same 5s tick. Without this, the row's yellow live-tool pill

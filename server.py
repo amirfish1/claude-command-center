@@ -31094,6 +31094,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     status["question_option_details"] = []
             status["needs_approval"] = bool(notif)
             status["needs_approval_message"] = notif.get("message", "") if notif else ""
+            # Surface a count of CCC-initiated spawns so the client can
+            # detect "a new session was just spawned (by an agent via
+            # /api/sessions/spawn) — refresh the conv list NOW instead
+            # of waiting for the next manual refresh". Compared
+            # against the last value on each poll; growth triggers an
+            # immediate conv-list refresh.
+            try:
+                status["spawn_registry_count"] = len(_spawned_sessions)
+            except Exception:
+                status["spawn_registry_count"] = 0
             self.send_json(status)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/files$", path):
             conv_id = path.split("/")[-2]
