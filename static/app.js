@@ -16740,6 +16740,43 @@
     }
   }
 
+  // Fast open: a fresh open pulls only the last CONV_TAIL_LINES lines of the
+  // transcript (the backend windows the parse), so a long file opens instantly.
+  // If earlier history exists, a "Load earlier" banner loads the whole thing on
+  // demand. Live `after=` polling is unaffected (tail returns the real
+  // last_line, so streamed events keep appending from there).
+  const CONV_TAIL_LINES = 150;
+
+  function _ensureLoadEarlierStyle() {
+    if (document.getElementById('__convLoadEarlierStyle')) return;
+    const st = document.createElement('style');
+    st.id = '__convLoadEarlierStyle';
+    st.textContent =
+      '.conv-load-earlier{display:block;width:calc(100% - 24px);margin:8px 12px 4px;' +
+      'padding:8px;text-align:center;background:var(--surface-2);color:var(--text-muted);' +
+      'border:1px dashed var(--border);border-radius:8px;font:500 12px inherit;cursor:pointer;}' +
+      '.conv-load-earlier:hover{background:var(--hover-bg,rgba(127,127,127,.14));color:var(--text);}' +
+      '.conv-load-earlier:disabled{cursor:default;opacity:.7;}';
+    document.head.appendChild(st);
+  }
+
+  function _insertLoadEarlierBanner($view, id, paneId) {
+    if (!$view || $view.querySelector('.conv-load-earlier')) return;
+    _ensureLoadEarlierStyle();
+    const banner = document.createElement('button');
+    banner.type = 'button';
+    banner.className = 'conv-load-earlier';
+    banner.textContent = '↑ Load earlier messages';
+    banner.addEventListener('click', () => {
+      const pane = paneByPaneId(paneId);
+      if (pane) { pane.wantFull = true; pane.lastLine = 0; }
+      banner.textContent = 'Loading earlier messages…';
+      banner.disabled = true;
+      fetchConversationEvents(paneId);
+    });
+    $view.insertBefore(banner, $view.firstChild);
+  }
+
   async function fetchConversationEvents(paneId) {
     if (paneId) {
       const idx = paneIndexByPaneId(paneId);
@@ -16784,7 +16821,14 @@
       }
     }
     try {
-      const res = await fetch('/api/conversations/' + id + '?after=' + convLastLine);
+      const _pane0 = paneByPaneId(fetchPaneId);
+      const _wantFull = !!(_pane0 && _pane0.wantFull);
+      if (_pane0) _pane0.wantFull = false;   // one-shot: consumed on this fetch
+      const _freshOpen = convLastLine === 0;
+      const _url = (_freshOpen && !_wantFull)
+        ? '/api/conversations/' + id + '?tail=' + CONV_TAIL_LINES
+        : '/api/conversations/' + id + '?after=' + convLastLine;
+      const res = await fetch(_url);
       const data = await res.json();
       // Guard: if the pane's conv id shifted (e.g. user navigated away
       // while the fetch was in-flight), discard the stale response.
@@ -16802,6 +16846,9 @@
         }
         if (renderConversationEvents(data.events, fetchPaneId) !== false) {
           convLastLine = data.last_line;
+        }
+        if (_freshOpen && !_wantFull && data && data.truncated_before) {
+          _insertLoadEarlierBanner($view, id, fetchPaneId);
         }
         restorePendingSendEchoes(id, fetchPaneId);
       } finally {
