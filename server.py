@@ -15403,6 +15403,21 @@ def _start_resume_queue_watcher() -> None:
                 terminal_sids = list(_pending_terminal_input_queue.keys())
             for sid in terminal_sids:
                 try:
+                    # CRITICAL guard — never flush queued input while an
+                    # AskUserQuestion is in-flight. The watcher previously
+                    # only checked _session_status_is_busy() (status =
+                    # busy/running), which can return False even when
+                    # sidecar_tool == "AskUserQuestion" is still pending a
+                    # user pick. Injecting queued text in that window made
+                    # Claude Code synthesize a tool_result for the open
+                    # AskUserQuestion (treating the queued text as the
+                    # user's "answer") and continue the conversation —
+                    # surfacing as "Claude continued silently past the
+                    # question". The pending-question sidecar payload is
+                    # the authoritative signal; if it exists, hold the
+                    # queue until the user actually answers in the UI.
+                    if _pending_ask_user_question_for_session(sid):
+                        continue
                     status = session_live_status(sid, find_session_cwd(sid))
                     if status.get("live") and status.get("tty") and _session_status_is_busy(status):
                         continue
@@ -23341,6 +23356,14 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
     text = _strip_ccc_session_state_instruction(text)
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
+    # Defense-in-depth: never inject text while an AskUserQuestion is
+    # pending. Queue it instead — the queue watcher above also has this
+    # guard, so the text will be flushed once the user answers in the UI
+    # and the pending-question marker clears. The watcher fix at the
+    # top-level loop covers queued sends; this catches direct injects
+    # (annotation flows, /api/inject-input direct calls, etc.).
+    if not _from_terminal_queue and _pending_ask_user_question_for_session(session_id):
+        return _queue_terminal_input(session_id, text, {"status": "busy"})
     # /compact rewrites the JSONL — snapshot it first so the user can
     # recover the pre-compact transcript from
     # ~/.claude/command-center/compact-backups/ if needed.
