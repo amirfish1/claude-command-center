@@ -93,6 +93,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("/api/repo/ship", app_js)
         self.assertIn("_startShipPushAll", app_js)
         self.assertIn(".conv-folder-ship", app_css)
+        # Editor/cache cruft is junk (gitignore material), not "app/deploy
+        # review" — otherwise Push all parks on it every time. The cache/ prefix
+        # is anchored so a legit src/cache/ deeper in the tree isn't swept.
+        self.assertTrue(server._ship_is_junk("apps/x/.obsidian/app.json"))
+        self.assertTrue(server._ship_is_junk("cache/projects.json"))
+        self.assertFalse(server._ship_is_junk("apps/x/src/cache/util.ts"))
+        # Resolving the last handoff action must carry through to a push, so the
+        # integrate step is a standalone helper shared by the flow + the action
+        # handler (the "I clicked skip and nothing happened" fix).
+        self.assertTrue(hasattr(server, "_ship_integrate"))
 
     def test_ship_index_attribution_is_wired_and_degrades(self):
         """The conversation-index attribution layer is defined, the verdict +

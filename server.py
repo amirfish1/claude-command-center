@@ -25901,12 +25901,27 @@ def _ship_read_reply(jsonl_path, start_offset, since_epoch):
     return ("".join(out)).strip() or None
 
 
-_SHIP_JUNK_MARKERS = ("__pycache__/", ".claude/annotations/", ".DS_Store")
+_SHIP_JUNK_MARKERS = (
+    "__pycache__/", ".claude/annotations/", ".DS_Store",
+    # Editor / tool local state — always gitignore material, never committed.
+    # Matched as substrings because they live anywhere in the tree (e.g.
+    # apps/x/.obsidian/). Without them, this cruft falls through to
+    # _ship_classify_remaining, gets mislabeled "app/deploy review" by the
+    # apps/ prefix, and parks Push all every time on pure junk.
+    ".obsidian/", ".idea/",
+)
+# Top-level cruft dirs, matched by prefix so a legit src/cache/ deeper in the
+# tree is never swept (e.g. repo-root cache/projects.json → junk).
+_SHIP_JUNK_PREFIXES = ("cache/",)
 
 
 def _ship_is_junk(path):
     """Untracked cruft that should be gitignored, never committed."""
-    return path.endswith((".pyc", ".DS_Store")) or any(m in path for m in _SHIP_JUNK_MARKERS)
+    return (
+        path.endswith((".pyc", ".DS_Store"))
+        or path.startswith(_SHIP_JUNK_PREFIXES)
+        or any(m in path for m in _SHIP_JUNK_MARKERS)
+    )
 
 
 def _ship_porcelain_paths(repo_path):
@@ -26166,6 +26181,96 @@ def _ship_review_verdict(repo_path, path, _attr_cache=None):
     return _with_owner({"verdict": "commit", "why": f"main-only edit since {sha[:8]}"})
 
 
+def _ship_integrate(repo_path, branch):
+    """Fetch + fast-forward + push (then optional Vercel deploy poll).
+
+    Shared by the main ship flow AND the post-action continuation, so resolving
+    the last handoff action (commit / drop / skip) carries straight through to a
+    push instead of dead-ending at "needs you" — which was the "I clicked skip
+    and nothing happened" gap.
+
+    Never `rebase` a shared clone in place: a mid-rebase conflict leaves every
+    session's checkout broken. Fetch, then only fast-forward. If the branch has
+    diverged (local ahead AND behind), refuse and hand off to a clean-worktree
+    reconcile. Runs to a terminal _ship_update on every path (own try/except so
+    it's safe to launch in its own thread)."""
+    try:
+        _ship_update(repo_path, "pulling", f"$ git fetch origin {branch}")
+        rc, _, err = _git(["fetch", "origin", branch], repo_path, timeout=60)
+        if rc != 0:
+            _ship_update(repo_path, "error", f"git fetch failed: {err or rc}", running=False)
+            return
+        rc_a, ahead_s, _ = _git(["rev-list", "--count", f"origin/{branch}..HEAD"], repo_path)
+        rc_b, behind_s, _ = _git(["rev-list", "--count", f"HEAD..origin/{branch}"], repo_path)
+        ahead = int((ahead_s or "0").strip() or 0) if rc_a == 0 else 0
+        behind = int((behind_s or "0").strip() or 0) if rc_b == 0 else 0
+        _ship_log(repo_path, f"local {branch}: ahead {ahead}, behind {behind}", "info")
+        if ahead and behind:
+            _ship_update(repo_path, "diverged",
+                         f"Diverged: ahead {ahead}, behind {behind}. Refusing to rebase "
+                         "a shared clone in place — a mid-rebase conflict would break "
+                         "every session here. Reconcile from a clean worktree off "
+                         f"origin/{branch} (cherry-pick the {ahead} local commit(s)), then push.",
+                         running=False)
+            return
+        if behind:
+            rc, out, err = _git(["merge", "--ff-only", f"origin/{branch}"], repo_path, timeout=60)
+            if rc != 0:
+                _ship_update(repo_path, "error",
+                             f"fast-forward failed: {err or out.strip() or rc}", running=False)
+                return
+            _ship_log(repo_path, f"fast-forwarded {behind} commit(s) from origin", "ok")
+        if not ahead:
+            _ship_update(repo_path, "pushed", "Up to date — nothing to push.", running=False)
+            return
+
+        _ship_update(repo_path, "pushing", f"$ git push origin {branch} ({ahead} commit(s))")
+        rc, out, err = _git(["push", "origin", branch], repo_path, timeout=120)
+        if rc != 0:
+            _ship_update(repo_path, "error",
+                         f"git push failed: {err or out.strip() or rc}",
+                         running=False)
+            return
+
+        rc, sha, _ = _git(["rev-parse", "HEAD"], repo_path)
+        sha = (sha or "").strip()
+        _record_repo_ship(repo_path, sha, branch)
+
+        if not _resolve_vercel_project(repo_path):
+            _ship_update(repo_path, "pushed", f"Pushed {sha[:7]} to {branch}.",
+                         running=False, sha=sha[:12])
+            return
+
+        _ship_update(repo_path, "deploying",
+                     "Pushed. Waiting for Vercel production deploy…", sha=sha[:12])
+        target = sha[:7] if sha else ""
+        last_state = None
+        deadline = time.time() + SHIP_DEPLOY_WAIT_CAP
+        while time.time() < deadline:
+            status = vercel_deploy_status(repo_path)
+            state = (status.get("state") or "").upper()
+            is_ours = (not target) or status.get("commit_sha") == target
+            if state and state != last_state:
+                tag = "" if is_ours else " (prev deploy)"
+                _ship_log(repo_path, f"vercel: {state}{tag}", "info")
+                last_state = state
+            if state == "READY" and is_ours:
+                _ship_update(repo_path, "deployed", "Successfully deployed.",
+                             running=False, sha=sha[:12], deploy=status)
+                return
+            if state == "ERROR" and is_ours:
+                _ship_update(repo_path, "deploy_error",
+                             "Pushed, but Vercel deploy failed.",
+                             running=False, sha=sha[:12], deploy=status)
+                return
+            time.sleep(SHIP_DEPLOY_POLL_INTERVAL)
+        _ship_update(repo_path, "pushed",
+                     "Pushed. Deploy still building — check Vercel.",
+                     running=False, sha=sha[:12])
+    except Exception as e:
+        _ship_update(repo_path, "error", f"integrate crashed: {e}", running=False)
+
+
 def _run_ship_flow(repo_path, branch):
     try:
         _ship_update(repo_path, "nudging", "Checking for uncommitted work…")
@@ -26411,82 +26516,7 @@ def _run_ship_flow(repo_path, branch):
         if not was_dirty:
             _ship_log(repo_path, "worktree already clean ✓", "ok")
 
-        # Integrate remote SAFELY. Never `rebase` a shared clone in place: a
-        # mid-rebase conflict leaves every session's checkout broken. Fetch,
-        # then only fast-forward. If the branch has diverged (local ahead AND
-        # behind), refuse and hand off to a clean-worktree reconcile.
-        _ship_update(repo_path, "pulling", f"$ git fetch origin {branch}")
-        rc, _, err = _git(["fetch", "origin", branch], repo_path, timeout=60)
-        if rc != 0:
-            _ship_update(repo_path, "error", f"git fetch failed: {err or rc}", running=False)
-            return
-        rc_a, ahead_s, _ = _git(["rev-list", "--count", f"origin/{branch}..HEAD"], repo_path)
-        rc_b, behind_s, _ = _git(["rev-list", "--count", f"HEAD..origin/{branch}"], repo_path)
-        ahead = int((ahead_s or "0").strip() or 0) if rc_a == 0 else 0
-        behind = int((behind_s or "0").strip() or 0) if rc_b == 0 else 0
-        _ship_log(repo_path, f"local {branch}: ahead {ahead}, behind {behind}", "info")
-        if ahead and behind:
-            _ship_update(repo_path, "diverged",
-                         f"Diverged: ahead {ahead}, behind {behind}. Refusing to rebase "
-                         "a shared clone in place — a mid-rebase conflict would break "
-                         "every session here. Reconcile from a clean worktree off "
-                         f"origin/{branch} (cherry-pick the {ahead} local commit(s)), then push.",
-                         running=False)
-            return
-        if behind:
-            rc, out, err = _git(["merge", "--ff-only", f"origin/{branch}"], repo_path, timeout=60)
-            if rc != 0:
-                _ship_update(repo_path, "error",
-                             f"fast-forward failed: {err or out.strip() or rc}", running=False)
-                return
-            _ship_log(repo_path, f"fast-forwarded {behind} commit(s) from origin", "ok")
-        if not ahead:
-            _ship_update(repo_path, "pushed", "Up to date — nothing to push.", running=False)
-            return
-
-        _ship_update(repo_path, "pushing", f"$ git push origin {branch} ({ahead} commit(s))")
-        rc, out, err = _git(["push", "origin", branch], repo_path, timeout=120)
-        if rc != 0:
-            _ship_update(repo_path, "error",
-                         f"git push failed: {err or out.strip() or rc}",
-                         running=False)
-            return
-
-        rc, sha, _ = _git(["rev-parse", "HEAD"], repo_path)
-        sha = (sha or "").strip()
-        _record_repo_ship(repo_path, sha, branch)
-
-        if not _resolve_vercel_project(repo_path):
-            _ship_update(repo_path, "pushed", f"Pushed {sha[:7]} to {branch}.",
-                         running=False, sha=sha[:12])
-            return
-
-        _ship_update(repo_path, "deploying",
-                     "Pushed. Waiting for Vercel production deploy…", sha=sha[:12])
-        target = sha[:7] if sha else ""
-        last_state = None
-        deadline = time.time() + SHIP_DEPLOY_WAIT_CAP
-        while time.time() < deadline:
-            status = vercel_deploy_status(repo_path)
-            state = (status.get("state") or "").upper()
-            is_ours = (not target) or status.get("commit_sha") == target
-            if state and state != last_state:
-                tag = "" if is_ours else " (prev deploy)"
-                _ship_log(repo_path, f"vercel: {state}{tag}", "info")
-                last_state = state
-            if state == "READY" and is_ours:
-                _ship_update(repo_path, "deployed", "Successfully deployed.",
-                             running=False, sha=sha[:12], deploy=status)
-                return
-            if state == "ERROR" and is_ours:
-                _ship_update(repo_path, "deploy_error",
-                             "Pushed, but Vercel deploy failed.",
-                             running=False, sha=sha[:12], deploy=status)
-                return
-            time.sleep(SHIP_DEPLOY_POLL_INTERVAL)
-        _ship_update(repo_path, "pushed",
-                     "Pushed. Deploy still building — check Vercel.",
-                     running=False, sha=sha[:12])
+        _ship_integrate(repo_path, branch)
     except Exception as e:
         _ship_update(repo_path, "error", f"ship flow crashed: {e}", running=False)
 
@@ -26612,9 +26642,23 @@ def apply_ship_action(repo_path, action_id, decision):
             job["actions"] = [a for a in (job.get("actions") or []) if a.get("id") != action_id]
         _append_ship_log(job, result.get("log") or decision, result.get("level", "info"))
         job["updated_at"] = time.time()
+        # Once the LAST handoff action is resolved (committed, dropped, or
+        # skipped), carry straight through to integrate (pull + push) instead of
+        # dead-ending. running=True is set under the lock so a double-click can't
+        # launch two integrate threads.
+        branch = job.get("branch") or "main"
+        will_continue = not job.get("actions") and not job.get("running")
+        if will_continue:
+            job["running"] = True
+            job["phase"] = "pulling"
+            _append_ship_log(job, "all actions resolved — integrating (pull + push)…", "info")
         _ship_jobs[repo_path] = job
         snapshot = dict(job)
     _persist_ship_job(repo_path, snapshot)
+    if will_continue:
+        threading.Thread(
+            target=_ship_integrate, args=(repo_path, branch), daemon=True
+        ).start()
     return {"ok": result.get("ok", True), "job": snapshot, "message": result.get("log")}
 
 
