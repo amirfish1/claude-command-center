@@ -19549,12 +19549,14 @@ def find_antigravity_conversations(
         cli_meta_by_sid[_msid] = {**_meta, "log_path": str(_log_path)}
     out = []
     scanned = 0
+    seen_sids = set()
     for path in paths:
         if limit and scanned >= int(limit):
             break
         sid = path.parent.parent.parent.name
         if not sid:
             continue
+        seen_sids.add(sid)
         scanned += 1
         try:
             st = path.stat()
@@ -19680,6 +19682,109 @@ def find_antigravity_conversations(
             "needs_approval_message": "",
             "model": tail.get("model") or cli_meta.get("model") or spawn_info.get("model") or "",
             "reasoning_effort": "",
+        })
+    # Synthesize stub rows for live AGY spawns whose JSONL transcript hasn't
+    # materialized on disk yet. AGY allocates the conversation uuid up front
+    # (spawn_session_antigravity passes --conversation <uuid>), but the brain
+    # dir / transcript.jsonl can take several seconds to appear. Without this,
+    # an agent that spawned a sibling AGY session would not see the new row in
+    # the conv list until that file landed — defeating the spawn_registry_count
+    # ping that's supposed to surface spawns within ~5s.
+    for sid, spawn_info in spawn_by_sid.items():
+        if sid in seen_sids:
+            continue
+        if not spawn_info.get("alive"):
+            continue
+        cwd = spawn_info.get("cwd") or ""
+        pinned = repo_pins.get(sid)
+        pinned_repo = False
+        if repo_only:
+            if pinned and pinned != repo_path:
+                continue
+            if pinned == repo_path:
+                pinned_repo = True
+            elif not _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
+                continue
+        try:
+            modified = Path(spawn_info["log"]).stat().st_mtime if spawn_info.get("log") else time.time()
+        except OSError:
+            modified = time.time()
+        prompt = (spawn_info.get("prompt") or "").strip()
+        ai_title = summary_titles.get(sid)
+        display_name = (
+            name_overrides.get(sid)
+            or ai_title
+            or (prompt[:80] if prompt else None)
+            or "Antigravity session"
+        )
+        folder_path = pinned or cwd or ""
+        try:
+            cwd_exists = bool(cwd and Path(cwd).is_dir())
+        except OSError:
+            cwd_exists = False
+        if folder_path:
+            _git_root = _find_git_root(folder_path)
+            folder_label = _resolve_dir_case(_git_root or folder_path)
+        else:
+            folder_label = "Antigravity"
+        out.append({
+            "id": sid,
+            "session_id": sid,
+            "source": "antigravity",
+            "engine": "antigravity",
+            "timestamp": "",
+            "branch": _git_branch_for_cwd(cwd) if cwd else "",
+            "git_branch": _git_branch_for_cwd(cwd) if cwd else "",
+            "first_message": prompt[:200],
+            "display_name": display_name,
+            "ai_title": ai_title or None,
+            "name_overridden": bool(name_overrides.get(sid)),
+            "last_prompt": prompt[:200],
+            "size": 0,
+            "modified": modified,
+            "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)),
+            "mtime": modified,
+            "jsonl_path": "",
+            "folder_label": folder_label,
+            "folder_path": folder_path,
+            "worktree_label": None,
+            "session_cwd": cwd,
+            "session_cwd_exists": cwd_exists,
+            "session_cwd_is_worktree": False,
+            "worktree_dirty": False,
+            "effective_branch": None,
+            "effective_kind": None,
+            "has_edit": False,
+            "has_commit": False,
+            "has_push": False,
+            "last_edit_pos": 0,
+            "last_commit_pos": 0,
+            "last_push_pos": 0,
+            "last_event_type": None,
+            "pending_tool": None,
+            "pending_file": None,
+            "last_assistant_text": None,
+            "tail_issue_number": None,
+            "tail_pr_number": None,
+            "tail_pr_url": None,
+            "pr_state": None,
+            "session_state": None,
+            "archived": sid in archived_set,
+            "verified": sid in verified_set,
+            "pinned_repo": pinned_repo,
+            "last_interacted": last_interactions.get(sid),
+            "is_live": True,
+            "spawn_pid": spawn_info.get("pid"),
+            "can_headless_resume": bool(
+                _antigravity_cli_conversation_path(sid)
+                and _antigravity_cli_conversation_path(sid).is_file()
+            ),
+            "can_app_resume": bool(_antigravity_app_conversation_path(sid)),
+            "needs_approval": False,
+            "needs_approval_message": "",
+            "model": spawn_info.get("model") or "",
+            "reasoning_effort": "",
+            "pending_spawn": True,
         })
     if resolve_pr_states:
         _prime_pr_states(c.get("tail_pr_url") for c in out)
