@@ -22509,8 +22509,15 @@ def _group_chat_update_header_if_changed(chat_path, force_write=False):
             pass
 
 
-def _group_chat_nudge(path, chat_uuid=""):
-    """Re-inject /group-chat into participant sessions, skipping the last writer."""
+def _group_chat_nudge(path, chat_uuid="", target_sid=""):
+    """Re-inject /group-chat into participant sessions, skipping the last writer.
+
+    When `target_sid` is given, the auto-selection (last-writer detect,
+    only-most-recent-mentioned, "no recent author → skip" guard) is
+    bypassed and the function nudges exactly that participant. Used for
+    the UI's per-participant Nudge button — "wake this specific agent
+    up regardless of who spoke last".
+    """
     real_path = _resolve_group_chat_ref(path, chat_uuid)
     if not real_path:
         return {"ok": False, "error": "forbidden"}
@@ -22547,6 +22554,16 @@ def _group_chat_nudge(path, chat_uuid=""):
     exclude_sid = None
     only_sid = None
     reminder_key = ""
+    # Targeted nudge from the UI — bypass the last-writer auto-select
+    # entirely. The user explicitly picked which participant to wake.
+    if target_sid:
+        if target_sid not in session_ids:
+            return {"ok": False, "error": f"target_sid {target_sid[:8]} not in chat participants"}
+        results = []
+        text = _group_chat_inject_text(real_path, topic, mode, target_sid)
+        r = _inject_text_into_session(target_sid, text)
+        results.append({"session_id": target_sid, "ok": bool(r.get("ok")), "error": r.get("error", "")})
+        return {"ok": True, "results": results, "targeted": True}
     try:
         with open(real_path, "r", encoding="utf-8") as fh:
             content = fh.read()
@@ -33482,10 +33499,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = {}
             chat_path = (payload.get("path") or "").strip()
             chat_uuid = (payload.get("id") or payload.get("uuid") or "").strip()
+            target_sid = (payload.get("target_sid") or payload.get("sid") or "").strip()
             if not chat_path and not chat_uuid:
                 self.send_json({"ok": False, "error": "missing path or id"})
                 return
-            result = _group_chat_nudge(chat_path, chat_uuid)
+            result = _group_chat_nudge(chat_path, chat_uuid, target_sid=target_sid)
             if not result.get("ok") and result.get("error") == "forbidden":
                 self.send_json(result, 403)
             else:

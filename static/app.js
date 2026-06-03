@@ -9379,7 +9379,7 @@
       const short = sid.substring(0, 8).toLowerCase();
       const name = nm[sid] || short;
 
-      html += `<div class="gco-part-card">`;
+      html += `<div class="gco-part-card" data-gc-part-sid="${escapeAttr(sid)}">`;
       html += `<div class="gco-part-name">${escapeHtml(name)} <span class="gco-part-id">(${short})</span></div>`;
 
       const spoken = lastSpoken[short];
@@ -9393,11 +9393,52 @@
         html += `<div class="gco-part-stat"><span class="gco-label">Last mentioned:</span> <span class="gco-val">Never</span></div>`;
       }
 
+      // Nudge button: re-inject the /group-chat prompt into just this
+      // participant's session. Useful when one agent has gone quiet
+      // (last spoken 3h ago, last mentioned 2m ago, etc.) and you want
+      // to wake it up specifically without nudging everyone.
+      html += `<button type="button" class="gco-nudge-btn" data-gc-nudge="${escapeAttr(sid)}" title="Re-inject the /group-chat prompt into ${escapeAttr(name)}'s session — wakes this agent specifically.">Nudge</button>`;
+
       html += `</div>`;
     }
     html += '</div>';
 
     panel.innerHTML = html;
+
+    // Wire per-participant Nudge buttons. Chat path lives on the panel
+    // data attrs set above (the same ones the Stop / Enable buttons
+    // already use). Failure toasts the error; success briefly disables
+    // the button so a frustrated user doesn't double-fire.
+    const chatPathForNudge = (panel.querySelector('[data-gc-stop]') || panel.querySelector('[data-gc-enable]') || {}).dataset || {};
+    panel.querySelectorAll('[data-gc-nudge]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const sid = btn.getAttribute('data-gc-nudge') || '';
+        if (!sid) return;
+        btn.disabled = true;
+        const restore = btn.textContent;
+        btn.textContent = 'Nudging…';
+        try {
+          const res = await fetch('/api/group-chat/nudge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              path: chatPathForNudge.gcPath || '',
+              id: chatPathForNudge.gcId || '',
+              target_sid: sid,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+          btn.textContent = 'Nudged ✓';
+          if (typeof showOpToast === 'function') showOpToast('Nudged ' + (sid.slice(0, 8)), 'success');
+        } catch (err) {
+          btn.textContent = 'Nudge failed';
+          if (typeof showOpToast === 'function') showOpToast('Nudge failed: ' + (err && err.message || 'unknown'), 'error');
+        } finally {
+          setTimeout(() => { btn.disabled = false; btn.textContent = restore; }, 1800);
+        }
+      });
+    });
 
     const stopBtn = panel.querySelector('[data-gc-stop]');
     if (stopBtn) {

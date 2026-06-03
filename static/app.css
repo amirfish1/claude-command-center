@@ -9496,6 +9496,25 @@ body:has(.gc-reader) .pwa-install-banner {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  position: relative;
+}
+.gco-nudge-btn {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.gco-nudge-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.gco-nudge-btn:disabled {
+  opacity: 0.55; cursor: default;
 }
 
 .gco-part-name {
