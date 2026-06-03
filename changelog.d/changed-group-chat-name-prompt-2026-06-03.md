@@ -1,0 +1,1 @@
+Clicking "+ New Group chat" now prompts for the chat name up front instead of silently creating an "empty chat" you had to click ✏️ to rename afterwards. Cancel aborts (no chat created); pressing Enter with nothing typed falls back to "empty chat" so users who don't want to name it can still ship.

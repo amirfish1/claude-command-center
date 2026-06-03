@@ -12177,7 +12177,7 @@
       // up at the top of renderConversationList from _gcActiveChats.
       const _rowSid = c.session_id || c.id || '';
       if (_rowSid && _inGroupChatIds.has(_rowSid)) {
-        signals += '<span class="conv-signal in-group-chat" title="This session is participating in a group chat">💬 IN GROUP CHAT</span>';
+        signals += '<span class="conv-signal in-group-chat is-icon-only" title="In group chat" aria-label="In group chat">💬</span>';
       }
       // Subagent chip — surfaces Claude Code Task tool spawns. Shows total
       // count plus an `▶ N` suffix when any spawn is still in flight, so
@@ -12418,14 +12418,6 @@
           + '<span>' + formatSize(c.size) + '</span>'
           + (sourceBadge ? '<span class="sep">&middot;</span>' + sourceBadge : '')
           + '</span>';
-      const rowMetaHtml = (rowSizeHtml || liveToolHtml || signals || branch)
-        ? '<span class="conv-row-meta">'
-          + (rowSizeHtml || '<span class="conv-meta-inline"></span>')
-          + '<span class="conv-status-slot">' + liveToolHtml + signals + '</span>'
-          + '<span class="conv-branch-slot">' + branch + '</span>'
-          + '</span>'
-        : '';
-
       // Suppressed when the row sits under a folder
       // group header that already labels the folder — chip would be noise.
       const folderChipHtml = (c.folder_label_chip && !opts.suppressFolderChip)
@@ -12475,8 +12467,16 @@
       let pctBadgeHtml = '';
       if (ctxPct) {
         const tip = ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens';
-        pctBadgeHtml = '<span class="conv-pct-badge" style="font-size: 10px; opacity: 0.75; font-weight: 600; margin-right: 4px; padding: 1px 4px; background: var(--surface-2); border-radius: 3px; font-family: monospace; color: var(--accent);" title="' + escapeAttr(tip) + '">' + ctxPct.pct + '%</span>';
+        pctBadgeHtml = '<span class="conv-pct-badge" title="' + escapeAttr(tip) + '">' + ctxPct.pct + '%</span>';
       }
+      const branchSlotHtml = pctBadgeHtml + worktreeBadgeHtml + branch;
+      const rowMetaHtml = (rowSizeHtml || liveToolHtml || signals || branchSlotHtml)
+        ? '<span class="conv-row-meta">'
+          + (rowSizeHtml || '<span class="conv-meta-inline"></span>')
+          + '<span class="conv-status-slot">' + liveToolHtml + signals + '</span>'
+          + '<span class="conv-branch-slot">' + branchSlotHtml + '</span>'
+          + '</span>'
+        : '';
 
       const groupedRowClass = opts.suppressFolderChip ? ' is-grouped-row' : '';
       const rowRepoAttr = escapeAttr(rowRepoPath(c) || '');
@@ -12487,11 +12487,9 @@
             + sessionIconHtml
             + leftFolderChipHtml
             + titleFolderChipHtml
-            + pctBadgeHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to open; click again to rename">' + escapeHtml(title) + '</div>'
             + historyBadgeHtml
             + repoBadgeHtml
-            + worktreeBadgeHtml
             + pinnedHtml
             + rowMetaHtml
             // Right-edge slot — Omnara-style. Shows the time at rest;
@@ -22758,11 +22756,17 @@
   }
 
   async function createEmptyGroupChat() {
-    // Default topic to "empty chat" — the user can rename it via the
-    // ✏️ button on the row, which is the same affordance as renaming
-    // any other conversation. No prompt, faster path: click "+",
-    // chat appears, click ✏️ to give it a real name.
-    const topic = 'empty chat';
+    // Ask for the chat name up front. Cancel aborts (no chat created);
+    // an empty/whitespace input falls back to 'empty chat' so users who
+    // just hit Enter still land on a named, renameable chat.
+    let topic = '';
+    try {
+      const raw = window.prompt('Name for the new group chat:', '');
+      if (raw === null) return;
+      topic = (raw || '').trim() || 'empty chat';
+    } catch (_) {
+      topic = 'empty chat';
+    }
     try {
       const res = await fetch('/api/coordinate', {
         method: 'POST',
@@ -22778,7 +22782,7 @@
         return;
       }
       try { await pollGcActive(); } catch (_) {}
-      showOpToast?.('Empty chat created — click ✏️ to rename, drag sessions in to add them');
+      showOpToast?.('Created "' + topic + '" — drag sessions in to add them');
       if (data.chat_path) {
         try { openGroupChatReader(data.chat_path, topic, 'topic', true, data.uuid || data.id || null); } catch (_) {}
       }
