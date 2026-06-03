@@ -9160,6 +9160,9 @@
       }
       if (gcHumanInput) {
         wireGcMentionAutocomplete(gcHumanInput);
+        if (typeof window.__cccAttachImagePaste === 'function') {
+          window.__cccAttachImagePaste(gcHumanInput);
+        }
         // Mirror the convo input: Enter sends, Shift+Enter inserts a
         // newline. Same convention as Claude Desktop / Slack / Omnara.
         gcHumanInput.addEventListener('keydown', ev => {
@@ -24111,6 +24114,58 @@
     }
     return null;
   }
+  function _pastedImageThumbsContainer(el) {
+    // Find or create a thumbnails strip adjacent to the input element.
+    // Lives in the input's container so it travels with the composer
+    // regardless of which pane / which composer fired the paste.
+    const host = el.closest('.conv-input-bar, .gc-reader-input-row, .new-session-modal-body') || el.parentElement;
+    if (!host) return null;
+    let strip = host.querySelector(':scope > .paste-thumb-strip');
+    if (!strip) {
+      strip = document.createElement('div');
+      strip.className = 'paste-thumb-strip';
+      strip.setAttribute('aria-label', 'Pasted images');
+      host.insertBefore(strip, host.firstChild);
+    }
+    return strip;
+  }
+  function _addPastedImageThumb(el, path, blobUrl) {
+    const strip = _pastedImageThumbsContainer(el);
+    if (!strip) return;
+    const thumb = document.createElement('div');
+    thumb.className = 'paste-thumb';
+    thumb.dataset.path = path;
+    const img = document.createElement('img');
+    img.src = blobUrl || ('/api/pasted-image?path=' + encodeURIComponent(path));
+    img.alt = 'Pasted image';
+    img.loading = 'lazy';
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'paste-thumb-remove';
+    remove.innerHTML = '&times;';
+    remove.title = 'Remove this attachment from the message';
+    remove.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      // Strip the path token from the input value so the send doesn't
+      // carry an orphan reference.
+      try {
+        const re = new RegExp('\\s*' + path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*', 'g');
+        el.value = el.value.replace(re, ' ').replace(/\s{2,}/g, ' ').trim();
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      } catch (_) {}
+      thumb.remove();
+      if (!strip.querySelector('.paste-thumb')) strip.remove();
+    });
+    thumb.appendChild(img);
+    thumb.appendChild(remove);
+    strip.appendChild(thumb);
+  }
+  function _clearPastedImageThumbs(el) {
+    const host = el && el.closest('.conv-input-bar, .gc-reader-input-row, .new-session-modal-body');
+    const strip = host && host.querySelector(':scope > .paste-thumb-strip');
+    if (strip) strip.remove();
+  }
   function attachImagePaste(el) {
     if (!el || el._imgPasteBound) return;
     el._imgPasteBound = true;
@@ -24120,18 +24175,50 @@
       ev.preventDefault();
       const placeholder = ' [uploading image...] ';
       insertAtCursor(el, placeholder);
+      // Show an immediate thumbnail from the browser-side blob so the
+      // user sees their image instantly — before the upload returns.
+      // Once the server returns the real path, swap data-path to the
+      // canonical value so the remove button can strip the token.
+      let immediateBlobUrl = null;
+      let pendingThumb = null;
+      try {
+        immediateBlobUrl = URL.createObjectURL(blob);
+        const strip = _pastedImageThumbsContainer(el);
+        if (strip) {
+          pendingThumb = document.createElement('div');
+          pendingThumb.className = 'paste-thumb paste-thumb-pending';
+          const im = document.createElement('img');
+          im.src = immediateBlobUrl;
+          im.alt = 'Pasted image (uploading)';
+          pendingThumb.appendChild(im);
+          strip.appendChild(pendingThumb);
+        }
+      } catch (_) {}
       try {
         const p = await uploadPastedImage(blob);
         el.value = el.value.replace(placeholder, ' ' + p + ' ');
         el.dispatchEvent(new Event('input', { bubbles: true }));
+        if (pendingThumb) pendingThumb.remove();
+        _addPastedImageThumb(el, p, immediateBlobUrl);
       } catch (e) {
         el.value = el.value.replace(placeholder, ' [upload failed: ' + e.message + '] ');
+        if (pendingThumb) pendingThumb.remove();
+        if (immediateBlobUrl) try { URL.revokeObjectURL(immediateBlobUrl); } catch (_) {}
       }
+    });
+    // Clear thumbnails when the input itself is cleared (post-send).
+    // The send paths already do `el.value = ''` so an 'input' event
+    // fires; observe that and clean up if value went empty.
+    el.addEventListener('input', () => {
+      if (!el.value || !el.value.trim()) _clearPastedImageThumbs(el);
     });
   }
   [document.getElementById('nsmBody'),
    document.getElementById('kptNewSession'), document.getElementById('cpInput'),
    document.getElementById('convInput')].forEach(attachImagePaste);
+  // Expose so the group-chat reader (created lazily after this block
+  // runs) can opt in too — see wireGcMentionAutocomplete's neighbor.
+  window.__cccAttachImagePaste = attachImagePaste;
 
   if ($kptNewSession) {
     // Open new session mode the moment the user starts typing (or focuses)
