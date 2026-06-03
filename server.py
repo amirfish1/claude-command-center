@@ -52,6 +52,78 @@ from pathlib import Path
 CCC_ROOT = Path(__file__).resolve().parent
 COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
 COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
+# AskUserQuestion relay: headless `claude -p` auto-declines AskUserQuestion
+# (no TUI picker), so for CCC-spawned sessions the PreToolUse hook blocks and
+# waits here for the dashboard to drop an answer file. Kept in sync with
+# QUESTION_RELAY_DIR in hooks/pre-tool-use.py. CCC marks the sessions it wants
+# intercepted by setting QUESTION_RELAY_ENV on the spawned process.
+QUESTION_RELAY_DIR = COMMAND_CENTER_STATE_DIR / "questions"
+QUESTION_RELAY_ENV = "CCC_QUESTION_RELAY"
+# Claude Code kills a hook that runs past its registered timeout. The
+# PreToolUse hook blocks here while a relayed AskUserQuestion waits for an
+# answer, so it needs a generous ceiling — kept above the hook's own
+# CCC_QUESTION_TIMEOUT (default 1740s) so the hook returns its own clean
+# message before Claude Code force-kills it.
+PRETOOLUSE_HOOK_TIMEOUT = 1800
+
+
+def _question_relay_env():
+    """Child env that opts a spawned session into AskUserQuestion relay."""
+    return dict(os.environ, **{QUESTION_RELAY_ENV: "1"})
+
+
+def _read_question_request(session_id):
+    """Return the pending AskUserQuestion relay request for a session, or None.
+
+    The PreToolUse hook writes this {nonce, questions, ...} file while it
+    blocks waiting for an answer; the dashboard reads it to render the modal.
+    """
+    if not session_id:
+        return None
+    path = QUESTION_RELAY_DIR / f"{session_id}.request.json"
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not data.get("nonce"):
+        return None
+    return data
+
+
+def _write_question_answer(session_id, answers):
+    """Drop the user's AskUserQuestion picks for the blocking hook to consume.
+
+    `answers` is aligned to the request's questions; each entry is
+    {"index": int, "text": str} — a non-negative index selects that option,
+    otherwise `text` is used as a free-text answer. The nonce from the live
+    request is stamped in so a stale hook never consumes a fresh answer.
+    """
+    req = _read_question_request(session_id)
+    if not req:
+        return {"ok": False, "error": "no pending question for this session"}
+    if not isinstance(answers, list) or not answers:
+        return {"ok": False, "error": "answers must be a non-empty list"}
+    norm = []
+    for a in answers:
+        if isinstance(a, dict):
+            idx = a.get("index")
+            norm.append({
+                "index": idx if isinstance(idx, int) else -1,
+                "text": str(a.get("text") or ""),
+            })
+        else:
+            norm.append({"index": -1, "text": str(a or "")})
+    try:
+        QUESTION_RELAY_DIR.mkdir(parents=True, exist_ok=True)
+        path = QUESTION_RELAY_DIR / f"{session_id}.answer.json"
+        tmp = str(path) + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"nonce": req["nonce"], "answers": norm, "ts": time.time()}, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        return {"ok": False, "error": f"could not write answer: {e}"}
+    return {"ok": True, "questions": len(req.get("questions") or [])}
 ANNOTATIONS_FILE = COMMAND_CENTER_STATE_DIR / "annotations.json"
 ANNOTATION_SCREENSHOT_DIR = COMMAND_CENTER_STATE_DIR / "annotation-screenshots"
 ANNOTATION_UX_FIXES_QUEUE_NAME = "UX-fixes-queue"
@@ -12903,7 +12975,7 @@ def _run_worktree_init_hook(worktree_path, parent_repo, session_name, log_fh):
 CODEX_APP_BUNDLE_PATH = "/Applications/Codex.app/Contents/Resources/codex"
 CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
-_CODEX_META_VERSION = 2
+_CODEX_META_VERSION = 3
 _CODEX_APP_SERVER_LOCK = threading.Condition()
 _CODEX_APP_SERVER_PROC = None
 _CODEX_APP_SERVER_READER = None
@@ -14738,6 +14810,8 @@ def _extract_codex_tail_meta(path):
             "has_external_cd": False,
             "cwd": None,
             "model": None,
+            "latest_input_tokens": 0,
+            "context_limit": 0,
         }
         pending_calls = {}
         pos = 0
@@ -14765,6 +14839,18 @@ def _extract_codex_tail_meta(path):
                 try:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                usage = _codex_token_usage_from_event(ev)
+                if usage:
+                    inp = _codex_int(usage.get("input_tokens"))
+                    if inp:
+                        meta["latest_input_tokens"] = inp
+                    payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+                    info = payload.get("info") or {}
+                    if isinstance(info, dict):
+                        cl = _codex_int(info.get("model_context_window"))
+                        if cl:
+                            meta["context_limit"] = cl
                     continue
                 payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
                 ts_epoch = _codex_event_epoch(ev)
@@ -15153,6 +15239,8 @@ def find_codex_conversations(
             "needs_approval_message": "",
             "model": row.get("model") or tail.get("model") or "",
             "reasoning_effort": row.get("reasoning_effort") or "",
+            "latest_input_tokens": tail.get("latest_input_tokens") or 0,
+            "context_limit": tail.get("context_limit") or 0,
         })
     if resolve_pr_states:
         _prime_pr_states(c.get("tail_pr_url") for c in out)
@@ -16723,6 +16811,8 @@ def _extract_gemini_tail_meta(path):
         "has_external_cd": False,
         "cwd": _gemini_project_root_for_chat(path),
         "model": None,
+        "latest_input_tokens": 0,
+        "context_limit": GEMINI_CONTEXT_LIMIT,
     }
     pr_url_re = re.compile(r"github\.com/([^/\s]+/[^/\s]+)/pull/(\d{1,7})")
     messages = data.get("messages") if isinstance(data.get("messages"), list) else []
@@ -16748,6 +16838,9 @@ def _extract_gemini_tail_meta(path):
             meta.update(_extract_codex_summary_signals(text, pr_url_re))
         meta["model"] = msg.get("model") or meta["model"]
         meta["last_event_type"] = "assistant"
+        usage = _gemini_token_usage_from_message(msg)
+        if usage and usage.get("input_tokens"):
+            meta["latest_input_tokens"] = usage["input_tokens"]
         for call in msg.get("toolCalls") or []:
             if not isinstance(call, dict):
                 continue
@@ -17056,6 +17149,8 @@ def find_gemini_conversations(
             "question_option_details": [],
             "model": tail.get("model") or "",
             "reasoning_effort": "",
+            "latest_input_tokens": tail.get("latest_input_tokens") or 0,
+            "context_limit": tail.get("context_limit") or GEMINI_CONTEXT_LIMIT,
         })
     seen_ids = {c.get("id") for c in out}
     antigravity_spawn_by_sid = _antigravity_spawn_pid_by_session_id()
@@ -19318,6 +19413,8 @@ def _extract_antigravity_tail_meta(path_or_session_id):
             "has_external_cd": False,
             "cwd": None,
             "model": None,
+            "latest_input_tokens": 0,
+            "context_limit": 0,
         }
         cwd_candidates = []
         pending_tool = False
@@ -21301,6 +21398,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         stderr=subprocess.STDOUT,
         cwd=spawn_cwd,
         start_new_session=True,
+        env=_question_relay_env(),
     )
     popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
     try:
@@ -21871,6 +21969,7 @@ def resume_session_headless(session_id, text):
         stderr=subprocess.STDOUT,
         cwd=cwd,
         start_new_session=True,
+        env=_question_relay_env(),
     )
     popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
     try:
@@ -30762,6 +30861,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(e.as_payload(), e.status)
         elif path == "/api/config":
             self.send_json(get_app_config())
+        elif path == "/api/question":
+            # Pending relayed AskUserQuestion for a session (headless sessions
+            # whose PreToolUse hook is blocking on an answer). The modal reads
+            # the full question/option text from here, then POSTs the pick to
+            # /api/answer-question.
+            qs = urllib.parse.parse_qs(parsed.query)
+            sid = (qs.get("session_id", [""])[0] or "").strip()
+            req = _read_question_request(sid) if sid else None
+            if req:
+                self.send_json({
+                    "ok": True,
+                    "pending": True,
+                    "session_id": sid,
+                    "nonce": req.get("nonce"),
+                    "questions": req.get("questions") or [],
+                })
+            else:
+                self.send_json({"ok": True, "pending": False, "session_id": sid})
         elif path == "/api/annotations":
             qs = urllib.parse.parse_qs(parsed.query)
             try:
@@ -34284,6 +34401,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # whether the keystroke injection itself ends up succeeding.
                 _record_interaction(sid)
                 self.send_json(_inject_text_into_session(sid, text, mode=mode))
+        elif path == "/api/answer-question":
+            # Answer a relayed AskUserQuestion (headless sessions only — the
+            # PreToolUse hook is blocking on this file). `answers` is aligned
+            # to the request's questions: [{"index": int, "text": str}, ...].
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = (payload.get("session_id") or "").strip()
+            answers = payload.get("answers")
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"})
+            else:
+                result = _write_question_answer(sid, answers)
+                if result.get("ok"):
+                    _record_interaction(sid)
+                    self.send_json(result)
+                else:
+                    self.send_json(result, 404 if "no pending" in result.get("error", "") else 400)
         elif re.match(r"^/api/session/[a-zA-Z0-9-]+/model/clear$", path):
             sid = path.split("/")[3]
             _clear_session_override(sid)
@@ -35295,7 +35433,9 @@ def ensure_hooks_installed():
                     rewrote_legacy = True
 
     # PreToolUse hook — writes an in-flight marker so the dashboard can show
-    # "running X for Ns" while a long tool is still executing.
+    # "running X for Ns" while a long tool is still executing, and blocks on a
+    # relayed AskUserQuestion (needs the long `timeout` below to wait out the
+    # user's answer).
     pre_tool_hooks = hooks.setdefault("PreToolUse", [])
     has_pre_tool = any(
         "pre-tool-use.py" in h.get("command", "") and HOOK_MARKER in h.get("command", "")
@@ -35307,10 +35447,22 @@ def ensure_hooks_installed():
             "matcher": "",
             "hooks": [{
                 "type": "command",
-                "command": f"python3 {HOOK_SCRIPTS_DIR / 'pre-tool-use.py'}"
+                "command": f"python3 {HOOK_SCRIPTS_DIR / 'pre-tool-use.py'}",
+                "timeout": PRETOOLUSE_HOOK_TIMEOUT,
             }]
         })
         print("  [hooks] Installed PreToolUse hook")
+    else:
+        # Migrate older installs: ensure our pre-tool-use hook carries the long
+        # timeout so AskUserQuestion relay can block until answered.
+        for entry in pre_tool_hooks:
+            for h in entry.get("hooks", []) or []:
+                cmd = h.get("command", "")
+                if ("pre-tool-use.py" in cmd and HOOK_MARKER in cmd
+                        and h.get("timeout") != PRETOOLUSE_HOOK_TIMEOUT):
+                    h["timeout"] = PRETOOLUSE_HOOK_TIMEOUT
+                    rewrote_legacy = True
+                    print("  [hooks] Set PreToolUse hook timeout for question relay")
 
     # PostToolUse hook
     post_tool_hooks = hooks.setdefault("PostToolUse", [])

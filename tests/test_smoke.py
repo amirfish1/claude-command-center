@@ -4798,5 +4798,117 @@ class TestCodexEsc(unittest.TestCase):
             self.assertIn("dynamic-codex-sid", sids)
 
 
+class TestQuestionRelay(unittest.TestCase):
+    """AskUserQuestion relay: dashboard answers a blocked headless session."""
+
+    def setUp(self):
+        self.tmp_home = tempfile.mkdtemp(prefix="ccc-question-relay-home-")
+        self._prev_home = os.environ.get("HOME")
+        os.environ["HOME"] = str(pathlib.Path(self.tmp_home).resolve())
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        self.server = importlib.import_module("server")
+
+    def tearDown(self):
+        if self._prev_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self._prev_home
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        shutil.rmtree(self.tmp_home, ignore_errors=True)
+
+    def _write_request(self, sid, nonce="N1"):
+        self.server.QUESTION_RELAY_DIR.mkdir(parents=True, exist_ok=True)
+        (self.server.QUESTION_RELAY_DIR / f"{sid}.request.json").write_text(json.dumps({
+            "nonce": nonce,
+            "session_id": sid,
+            "questions": [{
+                "header": "Color",
+                "question": "Pick a color",
+                "multiSelect": False,
+                "options": [{"label": "Red", "description": ""},
+                            {"label": "Blue", "description": ""}],
+            }],
+        }))
+
+    def test_relay_env_opts_in(self):
+        env = self.server._question_relay_env()
+        self.assertEqual(env.get(self.server.QUESTION_RELAY_ENV), "1")
+
+    def test_read_request_none_when_absent(self):
+        self.assertIsNone(self.server._read_question_request("missing-sid"))
+
+    def test_answer_roundtrip_indexed(self):
+        sid = "relay-sid-1"
+        self._write_request(sid, nonce="abc")
+        req = self.server._read_question_request(sid)
+        self.assertEqual(req["nonce"], "abc")
+
+        result = self.server._write_question_answer(sid, [{"index": 1, "text": ""}])
+        self.assertTrue(result["ok"])
+        ans = json.loads(
+            (self.server.QUESTION_RELAY_DIR / f"{sid}.answer.json").read_text()
+        )
+        self.assertEqual(ans["nonce"], "abc")
+        self.assertEqual(ans["answers"], [{"index": 1, "text": ""}])
+
+    def test_answer_without_pending_question_fails(self):
+        result = self.server._write_question_answer("no-such-sid", [{"index": 0}])
+        self.assertFalse(result["ok"])
+        self.assertIn("no pending", result["error"])
+
+    def test_answer_rejects_empty_list(self):
+        sid = "relay-sid-2"
+        self._write_request(sid)
+        self.assertFalse(self.server._write_question_answer(sid, [])["ok"])
+
+
+class TestQuestionRelayHook(unittest.TestCase):
+    """The PreToolUse hook's answer-rendering logic (hooks/pre-tool-use.py)."""
+
+    def setUp(self):
+        import importlib.util
+        repo_root = pathlib.Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location(
+            "ccc_pre_tool_use_hook", str(repo_root / "hooks" / "pre-tool-use.py")
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.hook = mod
+
+    def test_full_questions_preserves_all(self):
+        qs = self.hook.full_questions({"questions": [
+            {"header": "A", "question": "q1", "options": [{"label": "x"}]},
+            {"header": "B", "question": "q2", "options": [{"label": "y"}, {"label": "z"}]},
+        ]})
+        self.assertEqual(len(qs), 2)
+        self.assertEqual(qs[1]["options"][1]["label"], "z")
+
+    def test_build_reason_maps_index_to_label(self):
+        questions = [{"question": "Pick a color",
+                      "options": [{"label": "Red"}, {"label": "Blue"}]}]
+        reason = self.hook.build_answer_reason(questions, [{"index": 1, "text": ""}])
+        self.assertIn('"Pick a color" = "Blue"', reason)
+        self.assertIn("do not ask again", reason)
+
+    def test_build_reason_uses_free_text_when_no_index(self):
+        questions = [{"question": "Pick a color",
+                      "options": [{"label": "Red"}, {"label": "Blue"}]}]
+        reason = self.hook.build_answer_reason(questions, [{"index": -1, "text": "Teal"}])
+        self.assertIn('"Pick a color" = "Teal"', reason)
+
+    def test_build_reason_multi_question_plural(self):
+        questions = [
+            {"question": "q1", "options": [{"label": "a"}]},
+            {"question": "q2", "options": [{"label": "b"}]},
+        ]
+        reason = self.hook.build_answer_reason(
+            questions, [{"index": 0, "text": ""}, {"index": 0, "text": ""}]
+        )
+        self.assertIn("answered the questions", reason)
+        self.assertIn("these answers", reason)
+
+
 if __name__ == "__main__":
     unittest.main()
