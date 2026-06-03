@@ -16205,9 +16205,21 @@ def _gemini_tmp_root():
     return GEMINI_HOME / "tmp"
 
 
+_gemini_chat_paths_cache = {"ts": 0.0, "paths": []}
+_GEMINI_PATHS_TTL = 5.0
+
+
 def _gemini_chat_paths():
+    # Directory walk cached for a few seconds: this is hit per-participant on
+    # group-chat reads and per-session on live-activity polls, and the chat
+    # listing changes slowly.
+    now = time.time()
+    cache = _gemini_chat_paths_cache
+    if now - cache["ts"] < _GEMINI_PATHS_TTL:
+        return cache["paths"]
     root = _gemini_tmp_root()
     if not root.is_dir():
+        cache.update({"ts": now, "paths": []})
         return []
     paths = []
     try:
@@ -16220,11 +16232,13 @@ def _gemini_chat_paths():
             except OSError:
                 continue
     except OSError:
+        cache.update({"ts": now, "paths": []})
         return []
     try:
         paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     except OSError:
         paths.sort(key=lambda p: str(p), reverse=True)
+    cache.update({"ts": now, "paths": paths})
     return paths
 
 
@@ -16234,6 +16248,29 @@ def _load_gemini_chat(path):
     except (OSError, json.JSONDecodeError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+# path -> (mtime, sessionId). Resolving a gemini session used to re-read and
+# JSON-parse EVERY chat file on disk, once per caller — the dominant cost of
+# group-chat opens (per participant) and a big chunk of live-activity polls.
+# Caching the sessionId by (path, mtime) turns those full re-parses into a stat
+# + dict lookup; only changed files are re-read.
+_gemini_sessionid_index = {}
+
+
+def _gemini_sessionid_for_path(path):
+    try:
+        mtime = Path(path).stat().st_mtime
+    except OSError:
+        return None
+    key = str(path)
+    cached = _gemini_sessionid_index.get(key)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    data = _load_gemini_chat(path)
+    sid = data.get("sessionId") if isinstance(data, dict) else None
+    _gemini_sessionid_index[key] = (mtime, sid)
+    return sid
 
 
 def _gemini_project_dir_for_chat(path):
@@ -16262,8 +16299,7 @@ def _resolve_gemini_chat_path(session_id):
     # Filename embeds the leading UUID segment; check likely matches first.
     likely = [p for p in paths if short and short in p.name]
     for p in likely + [p for p in paths if p not in likely]:
-        data = _load_gemini_chat(p)
-        if data and data.get("sessionId") == session_id:
+        if _gemini_sessionid_for_path(p) == session_id:
             return p
     return None
 
