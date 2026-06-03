@@ -11623,7 +11623,7 @@
       // markSessionSending on send/inject and auto-clears after
       // _SENDING_TIMEOUT_MS — long enough to bridge most agent turns.
       const _isOptimisticallySending = sidVal && sessionIsOptimisticallySending(sidVal);
-      const _isAgentRunning = !!c.pending_spawn
+      let _isAgentRunning = !!c.pending_spawn
         || _hasLivePendingTool
         || _codexOpenTurn
         || _geminiOpenTurn
@@ -11631,6 +11631,22 @@
         || _antigravityOpenTurn
         || _claudeWipFromSidecar
         || _isOptimisticallySending;
+      // Final sanity gate: if the agent's last event was a `result`
+      // (turn-finished marker) AND the row hasn't seen any new activity
+      // in the last 60s AND we don't have a fresh optimistic-send tag,
+      // the agent is genuinely idle. Suppress WIP regardless of stale
+      // pending_tool / sidecar_tool fields that the server forgot to
+      // clear — those let the row show "Shell" or "Bash" indefinitely
+      // even though no work was running (user-reported).
+      if (
+        _isAgentRunning
+        && !_isOptimisticallySending
+        && !c.pending_spawn
+        && c.last_event_type === 'result'
+        && _rowActivityAge > 60
+      ) {
+        _isAgentRunning = false;
+      }
       if (_isAgentRunning) {
         rel = c.sidecar_ts ? relativeTime(c.sidecar_ts) : 'now';
       }
