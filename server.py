@@ -6875,6 +6875,49 @@ def find_live_claude_processes():
     return procs
 
 
+_ttl_memo_caches = []  # every _ttl_memo's state dict, for test-isolation resets
+
+
+def _reset_ttl_memo_caches():
+    """Drop all _ttl_memo caches. Tests call this between cases (these caches
+    are module-global, so a stale entry would otherwise leak across tests)."""
+    for state in _ttl_memo_caches:
+        state["ts"] = 0.0
+        state["val"] = None
+
+
+def _ttl_memo(ttl_seconds):
+    """Memoise a zero-arg function for `ttl_seconds`, thread-safe and
+    single-flight (concurrent callers within the window share one result).
+
+    For the ps-backed liveness scans below: they're hit per-participant on
+    group-chat opens and per-session on status polls, so without this each
+    caller re-shells `ps` (plus per-process cwd/tty/terminal lookups). Callers
+    iterate the result read-only, and ~3s of staleness is already the accepted
+    contract for liveness here (see _ENGINE_LIVE_TTL)."""
+    def decorate(fn):
+        state = {"ts": 0.0, "val": None}
+        _ttl_memo_caches.append(state)
+        lock = threading.Lock()
+
+        def wrapper():
+            now = time.time()
+            if state["val"] is not None and now - state["ts"] < ttl_seconds:
+                return state["val"]
+            with lock:
+                now = time.time()
+                if state["val"] is not None and now - state["ts"] < ttl_seconds:
+                    return state["val"]
+                val = fn()
+                state["val"] = val
+                state["ts"] = now
+                return val
+        wrapper.cache_clear = lambda: state.update(ts=0.0, val=None)
+        return wrapper
+    return decorate
+
+
+@_ttl_memo(3.0)
 def find_live_codex_processes():
     """Return running Codex CLI processes with pid, tty, cwd, terminal app, command."""
     procs = []
@@ -6913,6 +6956,7 @@ def find_live_codex_processes():
     return procs
 
 
+@_ttl_memo(3.0)
 def find_live_gemini_processes():
     """Return running Gemini CLI processes with pid, tty, cwd, terminal app, command."""
     procs = []
@@ -6950,6 +6994,7 @@ def find_live_gemini_processes():
     return procs
 
 
+@_ttl_memo(3.0)
 def find_live_cursor_processes():
     """Return running Cursor Agent processes with pid, tty, cwd, terminal app, command."""
     procs = []
@@ -6987,6 +7032,7 @@ def find_live_cursor_processes():
     return procs
 
 
+@_ttl_memo(3.0)
 def find_live_antigravity_processes():
     """Return running Antigravity CLI processes with pid, tty, cwd, terminal app, command."""
     procs = []
@@ -7087,6 +7133,7 @@ def _process_comm_is_claude(comm):
     return bool(re.match(r"^\d+\.\d+\.\d+(?:[-+].*)?$", name))
 
 
+@_ttl_memo(3.0)
 def _load_session_registry():
     """Read ~/.claude/sessions/*.json and return {session_id: {pid, cwd, ...}}.
 
