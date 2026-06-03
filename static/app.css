@@ -7162,23 +7162,46 @@
 .gc-message {
   margin: 0 0 18px;
   padding: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
+/* Speaker meta is now a full-width header bar with a tinted background,
+   so each message reads as a clearly-bounded card and the boundary
+   between messages is obvious at a glance. */
 .gc-message-meta {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  margin: 0 0 4px;
-  color: var(--text-muted);
-  font-size: 15px;
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--text);
+  font-size: 14px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface) 88%);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .gc-message-speaker {
   color: var(--accent);
   font-weight: 700;
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .gc-message-time {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: 11px;
   opacity: 0.72;
+  flex: 0 0 auto;
+}
+/* Body sits below the header bar with comfortable padding so the
+   message reads as a clear card, not a header floating over text. */
+.gc-message-body {
+  padding: 10px 12px 12px;
+}
+/* System messages get a quieter header tint so the lifecycle log
+   doesn't look as loud as actual participant posts. */
+.gc-message.gc-system .gc-message-meta {
+  background: color-mix(in srgb, var(--text-muted) 14%, var(--surface) 86%);
+  border-bottom-color: color-mix(in srgb, var(--text-muted) 28%, transparent);
 }
 .conversations-view .gc-message-body.assistant-text {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
