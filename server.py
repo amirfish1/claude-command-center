@@ -11465,13 +11465,18 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
                 events_copy = list(hit.get("events") or [])
                 events_copy.extend(_get_queued_events_for_session(conversation_id))
                 return {"events": events_copy, "last_line": hit.get("last_line", 0)}
-    if _is_gemini_session(conversation_id):
+    # Route via the memoized engine detector instead of probing gemini then
+    # antigravity unconditionally — _is_gemini_session scans the whole gemini
+    # store (~160ms cold), which every codex/claude open was paying for nothing.
+    # _detect_session_engine checks codex first and is cached.
+    engine = _detect_session_engine(conversation_id)
+    if engine == "gemini":
         result = _parse_gemini_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
         events_copy.extend(_get_queued_events_for_session(conversation_id))
         return {"events": events_copy, "last_line": result.get("last_line", 0)}
-    if _is_antigravity_session(conversation_id):
+    if engine == "antigravity":
         result = _parse_antigravity_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
