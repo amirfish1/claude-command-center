@@ -1,0 +1,1 @@
+- Added real-time subscription plan limits and usage popover (5-hour limit, weekly models limit, sonnet only limit, and extra usage USD credits) retrieved dynamically from Anthropic, displayed when clicking the context usage pill at the bottom of the composer.

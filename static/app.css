@@ -1851,6 +1851,59 @@
   .conv-input-context .wp-cotenants { color: var(--red); margin-left: auto; font-weight: 500; }
   .conv-input-context.hide-cotenants .wp-cotenants { display: none; }
 
+  /* Plan usage popover */
+  .plan-usage-pop {
+    position: fixed; z-index: 9000;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px;
+    min-width: 280px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    display: none; flex-direction: column; gap: 10px;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .plan-usage-pop.open { display: flex; }
+  .plan-usage-pop .pu-title-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-weight: 600; font-size: 13px;
+  }
+  .plan-usage-pop .pu-title-row-right {
+    color: var(--text-muted); font-size: 12px; font-weight: normal;
+  }
+  .plan-usage-pop .pu-progress-bg {
+    height: 6px; background: var(--surface-2, #333); border-radius: 3px;
+    overflow: hidden; width: 100%;
+  }
+  .plan-usage-pop .pu-progress-fill {
+    height: 100%; background: var(--accent, #58a6ff); width: 0%;
+    border-radius: 3px;
+  }
+  .plan-usage-pop .pu-divider {
+    height: 1px; background: var(--border); margin: 4px 0;
+  }
+  .plan-usage-pop .pu-header {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--text-muted);
+  }
+  .plan-usage-pop .pu-limit-row {
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .plan-usage-pop .pu-limit-label-row {
+    display: flex; justify-content: space-between; font-size: 12px;
+  }
+  .plan-usage-pop .pu-limit-label {
+    font-weight: 500;
+  }
+  .plan-usage-pop .pu-limit-val {
+    color: var(--text-muted);
+  }
+  .plan-usage-pop .pu-error {
+    color: var(--red); font-size: 12px; text-align: center; padding: 4px;
+  }
+  .plan-usage-pop .pu-loading {
+    color: var(--text-muted); font-size: 12px; text-align: center; padding: 8px;
+  }
+
   /* Spawn cwd picker — appears in the context strip ONLY when in
    * new-session mode (currentConversation === '__new__'). Replaces the
    * passive workspace pill the strip shows for an existing session.

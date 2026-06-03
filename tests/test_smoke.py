@@ -4445,8 +4445,8 @@ class TestGroupChatSidecarHelpers(unittest.TestCase):
             self.assertIn(f'/group-chat chat="{md}"', text)
             self.assertIn('topic="topic with \\"quotes\\""', text)
             self.assertIn('sid="abc12345-session"', text)
-            self.assertIn("CCC latest chat snapshot", text)
-            self.assertIn("please respond", text)
+            self.assertIn("CCC pointer: a new post just landed", text)
+            self.assertIn("## 2026-05-13 10:01 PDT — Human", text)
 
     def test_resolve_group_chat_path_rejects_outside_dir(self):
         """The path validator must clamp to ~/.claude/group-chats/ and

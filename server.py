@@ -29371,6 +29371,132 @@ def get_history_message(uuid):
     return dict(row) if row else None
 
 
+_plan_usage_cache = None
+_plan_usage_cache_time = 0
+_plan_usage_cache_lock = threading.Lock()
+
+
+def _get_claude_credentials():
+    # 1. Environment variable
+    token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if token:
+        return {"oauth_token": token}
+
+    # 2. macOS System Keychain (cookie header)
+    try:
+        res = subprocess.run(
+            ["security", "find-generic-password", "-s", "com.steipete.codexbar.cache", "-a", "cookie.claude", "-w"],
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            try:
+                data = json.loads(res.stdout.strip())
+                cookie = data.get("cookieHeader") or ""
+                if "sessionKey=" in cookie:
+                    for part in cookie.split(";"):
+                        part = part.strip()
+                        if part.startswith("sessionKey="):
+                            return {"session_key": part.split("=", 1)[1]}
+                return {"session_key": cookie}
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 3. macOS System Keychain fallback for standard OAuth (Claude Code token)
+    try:
+        res = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            val = res.stdout.strip()
+            if val.startswith("{"):
+                try:
+                    data = json.loads(val)
+                    token = data.get("accessToken") or data.get("oauthToken") or data.get("token")
+                    if token:
+                        return {"oauth_token": token}
+                except Exception:
+                    pass
+            else:
+                return {"oauth_token": val}
+    except Exception:
+        pass
+
+    # 4. Linux/Windows/macOS credentials file fallback
+    cred_file = Path.home() / ".claude" / ".credentials.json"
+    if cred_file.is_file():
+        try:
+            with open(cred_file, "r") as f:
+                data = json.load(f)
+                token = data.get("oauthToken") or data.get("accessToken") or data.get("token")
+                if token:
+                    return {"oauth_token": token}
+                session_key = data.get("sessionKey")
+                if session_key:
+                    return {"session_key": session_key}
+        except Exception:
+            pass
+
+    return None
+
+
+def _fetch_plan_usage():
+    creds = _get_claude_credentials()
+    if not creds:
+        return {"ok": False, "error": "No credentials found. Please run `claude auth login` in your terminal."}
+
+    org_id = None
+    try:
+        claude_info = _resolve_claude_bin()
+        cmd = claude_info.get("bin") if claude_info.get("available") else "claude"
+        res = subprocess.run(
+            [cmd, "auth", "status"],
+            capture_output=True, text=True, timeout=5
+        )
+        if res.returncode == 0:
+            data = json.loads(res.stdout.strip())
+            org_id = data.get("orgId")
+    except Exception:
+        pass
+
+    if not org_id:
+        return {"ok": False, "error": "Could not determine organization ID. Ensure `claude` is logged in."}
+
+    url = f"https://claude.ai/api/organizations/{org_id}/usage"
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+
+    if "session_key" in creds:
+        req.add_header("Cookie", f"sessionKey={creds['session_key']}")
+    elif "oauth_token" in creds:
+        req.add_header("Authorization", f"Bearer {creds['oauth_token']}")
+
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            res_data = json.loads(response.read().decode("utf-8"))
+            return {"ok": True, "usage": res_data}
+    except Exception as e:
+        return {"ok": False, "error": f"Failed to fetch from Anthropic: {str(e)}"}
+
+
+def get_cached_plan_usage():
+    global _plan_usage_cache, _plan_usage_cache_time
+    now = time.time()
+    with _plan_usage_cache_lock:
+        if _plan_usage_cache is not None and now - _plan_usage_cache_time < 30:
+            return _plan_usage_cache
+        res = _fetch_plan_usage()
+        _plan_usage_cache = res
+        _plan_usage_cache_time = now
+        return res
+
+
 # ---------------------------------------------------------------------------
 # Global usage stats — aggregated across every transcript under PROJECTS_ROOT.
 # Powers the /api/stats endpoint and the "Stats" overlay in the UI.
@@ -30576,6 +30702,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 days = 30
             self.send_json(compute_global_stats(days=days))
+        elif path == "/api/plan-usage":
+            self.send_json(get_cached_plan_usage())
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)
             rows = list_spawned_sessions()

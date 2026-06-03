@@ -18271,14 +18271,11 @@
     syncInputContextVisibility(slot);
     scheduleInputContextFit();
     const pill = uSlot.querySelector('.wp-usage-clickable');
-    if (pill && canToggleContextLimit) {
-      pill.addEventListener('click', () => {
-        // Toggle between 200k, 1M, and clear (back to server-detected).
-        const cur = _getCtxLimitOverride();
-        const next = cur === 0 ? 1_000_000 : (cur === 1_000_000 ? 200_000 : 0);
-        if (next === 0) localStorage.removeItem('ccc-context-limit');
-        else localStorage.setItem('ccc-context-limit', String(next));
-        renderSessionUsageIntoStrip();
+    if (pill) {
+      pill.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openPlanUsagePopover(pill);
       });
     }
     const modelBtn = uSlot.querySelector('[data-model-picker]');
@@ -18336,8 +18333,184 @@
 
   let _modelPickerEl = null;
   let _modelPickerCloseHandler = null;
+  let _planUsagePopEl = null;
+  let _planUsageCloseHandler = null;
+
+  function closePlanUsagePopover() {
+    if (_planUsagePopEl) {
+      _planUsagePopEl.remove();
+      _planUsagePopEl = null;
+    }
+    if (_planUsageCloseHandler) {
+      document.removeEventListener('click', _planUsageCloseHandler, true);
+      document.removeEventListener('keydown', _planUsageCloseHandler, true);
+      _planUsageCloseHandler = null;
+    }
+  }
+
+  function openPlanUsagePopover(btn) {
+    closePlanUsagePopover();
+    closeModelPicker();
+
+    const pop = document.createElement('div');
+    pop.className = 'plan-usage-pop open';
+    pop.innerHTML = '<div class="pu-loading">Loading usage info…</div>';
+
+    document.body.appendChild(pop);
+
+    const r = btn.getBoundingClientRect();
+    const popW = pop.getBoundingClientRect().width || 280;
+    const popH = pop.getBoundingClientRect().height || 180;
+    let left = r.left;
+    if (left + popW > window.innerWidth - 8) left = window.innerWidth - popW - 8;
+    pop.style.left = Math.max(8, left) + 'px';
+    pop.style.top = (r.top - popH - 8) + 'px';
+
+    _planUsagePopEl = pop;
+
+    _planUsageCloseHandler = (ev) => {
+      if (ev.type === 'keydown' && ev.key === 'Escape') {
+        closePlanUsagePopover();
+        return;
+      }
+      if (ev.type === 'click' && pop && !pop.contains(ev.target) && ev.target !== btn) {
+        closePlanUsagePopover();
+      }
+    };
+    document.addEventListener('click', _planUsageCloseHandler, true);
+    document.addEventListener('keydown', _planUsageCloseHandler, true);
+
+    fetch('/api/plan-usage')
+      .then(r => r.json())
+      .then(data => {
+        if (!_planUsagePopEl || _planUsagePopEl !== pop) return;
+        if (!data.ok) {
+          pop.innerHTML = '<div class="pu-error">' + escapeHtml(data.error || 'Failed to load usage') + '</div>';
+          const newH = pop.getBoundingClientRect().height;
+          pop.style.top = (r.top - newH - 8) + 'px';
+          return;
+        }
+
+        const usage = data.usage || {};
+
+        function formatResetTime(isoStr) {
+          if (!isoStr) return '';
+          try {
+            const resetDate = new Date(isoStr);
+            const diffMs = resetDate.getTime() - Date.now();
+            if (diffMs <= 0) return 'resets now';
+            const diffHrs = Math.ceil(diffMs / (1000 * 60 * 60));
+            if (diffHrs < 24) return 'resets ' + diffHrs + 'h';
+            const diffDays = Math.ceil(diffHrs / 24);
+            return 'resets ' + diffDays + 'd';
+          } catch (_) {
+            return '';
+          }
+        }
+
+        const u = _usageData || {};
+        const transcriptLatest = u.latest_input_tokens || 0;
+        const peak = u.peak_input_tokens || 0;
+        const liveContextTokens = Number(u.live_context_tokens || 0);
+        const hasLiveContext = (u.engine || 'claude') === 'claude' && liveContextTokens > 0;
+        const displayTokens = transcriptLatest || (hasLiveContext ? liveContextTokens : 0);
+
+        const override = _getCtxLimitOverride();
+        const limit = override || (hasLiveContext ? u.live_context_limit : 0) || u.context_limit || 200000;
+        const pct = Math.min(100, Math.round((displayTokens / limit) * 100));
+
+        let html = '';
+
+        const overrideText = override ? ' (override)' : '';
+        html += '<div class="pu-limit-row" style="cursor:pointer;" id="puContextToggle" title="Click to toggle context limit between 200k and 1M.">'
+          + '<div class="pu-title-row">'
+          + '<span>Context window' + overrideText + '</span>'
+          + '<span class="pu-title-row-right">' + _formatTokens(displayTokens) + ' / ' + _formatTokens(limit) + ' (' + pct + '%) &gt;</span>'
+          + '</div>'
+          + '<div class="pu-progress-bg"><div class="pu-progress-fill" style="width:' + pct + '%;"></div></div>'
+          + '</div>';
+
+        html += '<div class="pu-divider"></div>';
+        html += '<div class="pu-header">Plan usage</div>';
+
+        const fiveHour = usage.five_hour || {};
+        const fhPct = Math.round(fiveHour.utilization || 0);
+        const fhReset = formatResetTime(fiveHour.resets_at);
+        html += '<div class="pu-limit-row">'
+          + '<div class="pu-limit-label-row">'
+          + '<span class="pu-limit-label">5-hour limit</span>'
+          + '<span class="pu-limit-val">' + fhPct + '% · ' + fhReset + '</span>'
+          + '</div>'
+          + '<div class="pu-progress-bg"><div class="pu-progress-fill" style="width:' + fhPct + '%;"></div></div>'
+          + '</div>';
+
+        const sevenDay = usage.seven_day || {};
+        const sdPct = Math.round(sevenDay.utilization || 0);
+        const sdReset = formatResetTime(sevenDay.resets_at);
+        html += '<div class="pu-limit-row">'
+          + '<div class="pu-limit-label-row">'
+          + '<span class="pu-limit-label">Weekly · all models</span>'
+          + '<span class="pu-limit-val">' + sdPct + '% · ' + sdReset + '</span>'
+          + '</div>'
+          + '<div class="pu-progress-bg"><div class="pu-progress-fill" style="width:' + sdPct + '%;"></div></div>'
+          + '</div>';
+
+        const sdSonnet = usage.seven_day_sonnet || {};
+        const sPct = Math.round(sdSonnet.utilization || 0);
+        const sReset = formatResetTime(sdSonnet.resets_at);
+        html += '<div class="pu-limit-row">'
+          + '<div class="pu-limit-label-row">'
+          + '<span class="pu-limit-label">Sonnet only</span>'
+          + '<span class="pu-limit-val">' + sPct + '% · ' + sReset + '</span>'
+          + '</div>'
+          + '<div class="pu-progress-bg"><div class="pu-progress-fill" style="width:' + sPct + '%;"></div></div>'
+          + '</div>';
+
+        const extra = usage.extra_usage || {};
+        if (extra.is_enabled) {
+          const limitCents = extra.monthly_limit || 0;
+          const usedCents = extra.used_credits || 0;
+          const limitUSD = (limitCents / 100).toFixed(2);
+          const usedUSD = (usedCents / 100).toFixed(2);
+          const exPct = Math.min(100, Math.round(extra.utilization || (limitCents ? (usedCents / limitCents) * 100 : 0)));
+          html += '<div class="pu-limit-row">'
+            + '<div class="pu-limit-label-row">'
+            + '<span class="pu-limit-label">Extra usage</span>'
+            + '<span class="pu-limit-val">$' + usedUSD + ' of $' + limitUSD + '</span>'
+            + '</div>'
+            + '<div class="pu-progress-bg"><div class="pu-progress-fill" style="width:' + exPct + '%;"></div></div>'
+            + '</div>';
+        }
+
+        pop.innerHTML = html;
+
+        const newH = pop.getBoundingClientRect().height;
+        pop.style.top = (r.top - newH - 8) + 'px';
+
+        const ctxToggle = pop.querySelector('#puContextToggle');
+        if (ctxToggle) {
+          ctxToggle.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const cur = _getCtxLimitOverride();
+            const next = cur === 0 ? 1_000_000 : (cur === 1_000_000 ? 200_000 : 0);
+            if (next === 0) localStorage.removeItem('ccc-context-limit');
+            else localStorage.setItem('ccc-context-limit', String(next));
+            renderSessionUsageIntoStrip();
+            openPlanUsagePopover(btn);
+          });
+        }
+      })
+      .catch(err => {
+        if (!_plan_usage_popEl || _plan_usage_popEl !== pop) return;
+        pop.innerHTML = '<div class="pu-error">Error connecting to server</div>';
+        const newH = pop.getBoundingClientRect().height;
+        pop.style.top = (r.top - newH - 8) + 'px';
+      });
+  }
 
   function closeModelPicker() {
+    closePlanUsagePopover();
     if (_modelPickerEl) {
       _modelPickerEl.remove();
       _modelPickerEl = null;
