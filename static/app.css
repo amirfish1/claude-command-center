@@ -1016,11 +1016,53 @@
     border-bottom: 1px solid var(--border, #2a2a2a);
     background: color-mix(in srgb, var(--surface) 82%, var(--bg));
   }
-  .conv-pane.has-pane-title > .conv-pane-header,
+  /* In single-pane mode the active-pane breadcrumb is mirrored into the
+     global toolbar (#cccBreadcrumb), so keep the per-pane header hidden
+     to give the sticky "original ask" the slot below the toolbar. In
+     split mode each pane still shows its own header so the user can
+     tell the two panes apart at a glance. */
   body.conversation-popout .conv-pane > .conv-pane-header,
   .conv-split[data-orientation="vertical"] .conv-pane-header,
   .conv-split[data-orientation="horizontal"] .conv-pane-header {
     display: flex;
+  }
+  /* Toolbar breadcrumb — same look as the per-pane header but inline
+     with the global topbar actions. Hidden by default; updatePaneHeader
+     reveals it when the active pane has a row to describe. */
+  .ccc-breadcrumb {
+    display: flex; align-items: center; gap: 8px;
+    min-width: 0; max-width: 50%;
+    padding: 2px 8px;
+    overflow: hidden;
+  }
+  .ccc-breadcrumb[hidden] { display: none; }
+  .ccc-breadcrumb .ccc-breadcrumb-category {
+    flex: 0 1 auto; max-width: 220px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding: 2px 7px;
+    border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--bg) 70%, var(--surface));
+    font-size: 11px; line-height: 1.2;
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+  }
+  .ccc-breadcrumb .ccc-breadcrumb-title {
+    min-width: 0; flex: 1 1 auto;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text);
+    font-size: 12px; font-weight: 650;
+  }
+  .ccc-breadcrumb .ccc-breadcrumb-size {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    font-size: 10px;
+    color: var(--text-muted, var(--text-2));
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
+    border-radius: 4px;
+    line-height: 1.2;
+    white-space: nowrap;
   }
   .conv-pane-titlebar {
     min-width: 0;

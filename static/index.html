@@ -495,6 +495,10 @@
         <span class="live-badge-label">live</span>
       </span>
       <span class="status" id="convStatus"></span>
+      <!-- Active-pane breadcrumb lifted from the in-pane header so the
+           sticky "original ask" panel can take its slot below. Populated
+           by updatePaneHeader whenever the active pane's row changes. -->
+      <div class="ccc-breadcrumb" id="cccBreadcrumb" hidden></div>
       <!-- Global controls (formerly the standalone .ccc-topbar row above —
            merged into the main toolbar to recover ~33px of vertical space). -->
       <div class="ccc-topbar" id="cccTopbar" style="margin-left:auto;">

@@ -14566,7 +14566,8 @@
   }
 
   function updatePaneHeader(paneId, row, opts = {}) {
-    const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
+    const targetPaneId = paneId || activePaneId();
+    const pane = document.querySelector(`.conv-pane[data-pane-id="${targetPaneId}"]`);
     if (!pane) return;
     const categoryEl = pane.querySelector('[data-role="pane-category"]');
     const titleEl = pane.querySelector('[data-role="pane-title"]');
@@ -14578,6 +14579,28 @@
     pane.classList.toggle('has-pane-title', !!(category || title));
     const header = pane.querySelector('[data-role="pane-header"]');
     if (header) header.title = [category, title].filter(Boolean).join(' - ');
+    // Mirror the active pane's breadcrumb into the global toolbar slot
+    // (#cccBreadcrumb). In single-pane mode the in-pane header is CSS-
+    // hidden so the sticky "original ask" rises to that slot — the
+    // topbar breadcrumb gives the user back the "where am I?" cue. In
+    // split mode each pane still shows its own header (CSS rule lets
+    // them through), and we still populate the topbar from whichever
+    // pane is active.
+    const breadcrumbEl = document.getElementById('cccBreadcrumb');
+    const sizeBytes = row && typeof row.size === 'number' ? row.size : 0;
+    if (breadcrumbEl) {
+      const isActive = targetPaneId === activePaneId();
+      if (isActive && (category || title)) {
+        breadcrumbEl.innerHTML = ''
+          + (category ? '<span class="ccc-breadcrumb-category">' + escapeHtml(category) + '</span>' : '')
+          + (title ? '<span class="ccc-breadcrumb-title">' + escapeHtml(title) + '</span>' : '')
+          + (sizeBytes > 0 ? '<span class="ccc-breadcrumb-size" title="' + sizeBytes.toLocaleString() + ' bytes">' + escapeHtml(formatSize(sizeBytes)) + '</span>' : '');
+        breadcrumbEl.hidden = false;
+      } else if (isActive) {
+        breadcrumbEl.innerHTML = '';
+        breadcrumbEl.hidden = true;
+      }
+    }
     // Conversation size badge — surfaces how big the JSONL is so the
     // user can correlate "this took a while to load" with sheer size
     // (often >5 MB sessions). Created lazily; cleared when row is null
