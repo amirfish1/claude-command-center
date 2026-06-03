@@ -3876,6 +3876,8 @@
       + '<span class="compact-banner-text">'
       +   '<strong>Compacting conversation context…</strong>'
       +   ' Claude is summarizing the prior turns. This usually takes 1-3 minutes.'
+      +   ' <em>The on-disk transcript will be rewritten — a snapshot of the pre-compact JSONL was saved to'
+      +   ' <code>~/.claude/command-center/compact-backups/</code>.</em>'
       + '</span>';
     $view.appendChild(banner);
     if (typeof scrollConversationToEnd === 'function') {

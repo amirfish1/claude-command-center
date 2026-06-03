@@ -23101,6 +23101,43 @@ def _group_chat_add_participant(raw_path: str, session_id: str, display_name: st
     }
 
 
+def _backup_jsonl_before_compact(session_id):
+    """Copy the session's JSONL to ~/.claude/command-center/compact-backups/
+    before Claude Code rewrites it during /compact. Returns the backup path
+    or None on failure. Best-effort — never blocks the inject path.
+
+    Claude Code's /compact replaces the on-disk transcript with the compacted
+    summary, deleting the original message history. Without a snapshot the
+    user loses everything before the compact boundary permanently.
+    """
+    try:
+        path = _find_session_jsonl(session_id)
+        if not path:
+            return None
+        src = Path(path)
+        if not src.is_file():
+            return None
+        backup_dir = Path.home() / ".claude" / "command-center" / "compact-backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        dest = backup_dir / f"{session_id}-{stamp}.jsonl"
+        shutil.copy2(str(src), str(dest))
+        # Keep at most 10 backups per session — older ones rotate out.
+        backups = sorted(backup_dir.glob(f"{session_id}-*.jsonl"))
+        for stale in backups[:-10]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+        return str(dest)
+    except Exception as e:
+        print(f"  [compact-backup] failed for {session_id}: {e}", file=sys.stderr)
+        return None
+
+
+_COMPACT_TRIGGER_RE = re.compile(r"^\s*/compact(?:\s|$)", re.IGNORECASE)
+
+
 def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, mode="send"):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
@@ -23110,6 +23147,11 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
     text = _strip_ccc_session_state_instruction(text)
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
+    # /compact rewrites the JSONL — snapshot it first so the user can
+    # recover the pre-compact transcript from
+    # ~/.claude/command-center/compact-backups/ if needed.
+    if _COMPACT_TRIGGER_RE.match(text):
+        _backup_jsonl_before_compact(session_id)
     mode = "steer" if str(mode or "").lower() == "steer" else "send"
     cwd = find_session_cwd(session_id)
     status = session_live_status(session_id, cwd)
