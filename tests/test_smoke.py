@@ -473,6 +473,83 @@ class TestServerImports(unittest.TestCase):
                 self.assertEqual(data["agentId"], sid)
                 self.assertEqual(data["name"], "Test Cursor Session")
 
+    def test_ensure_cursor_session_visible_registers_composer(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.object(server.Path, "home", return_value=pathlib.Path(td)):
+                import urllib.parse
+                
+                # Mock platforms to Darwin so it uses standard macOS App Support dir in tests
+                with mock.patch("sys.platform", "darwin"):
+                    # Create workspaceStorage and workspace.json
+                    ws_dir = pathlib.Path(td) / "Library" / "Application Support" / "Cursor" / "User" / "workspaceStorage" / "test-workspace-id"
+                    ws_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    ws_json = ws_dir / "workspace.json"
+                    project_dir = pathlib.Path(td) / "my-project"
+                    project_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    with open(ws_json, "w", encoding="utf-8") as f:
+                        json.dump({"folder": project_dir.as_uri()}, f)
+                        
+                    ws_db = ws_dir / "state.vscdb"
+                    import sqlite3
+                    conn = sqlite3.connect(str(ws_db))
+                    conn.execute("CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+                    # Seed with some existing composer data
+                    conn.execute(
+                        "INSERT INTO ItemTable (key, value) VALUES ('composer.composerData', ?)",
+                        (json.dumps({"allComposers": []}),)
+                    )
+                    conn.commit()
+                    conn.close()
+                    
+                    # Create globalStorage and state.vscdb
+                    global_dir = pathlib.Path(td) / "Library" / "Application Support" / "Cursor" / "User" / "globalStorage"
+                    global_dir.mkdir(parents=True, exist_ok=True)
+                    global_db = global_dir / "state.vscdb"
+                    conn = sqlite3.connect(str(global_db))
+                    conn.execute("CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+                    conn.execute(
+                        "INSERT INTO ItemTable (key, value) VALUES ('composer.composerHeaders', ?)",
+                        (json.dumps([]),)
+                    )
+                    conn.commit()
+                    conn.close()
+                    
+                    sid = "00000000-0000-4000-8000-000000000001"
+                    spawn_entry = {
+                        "cwd": str(project_dir),
+                        "name": "Test Cursor Session",
+                        "started": "20260601T120000",
+                    }
+                    res = server._ensure_cursor_session_visible(sid, spawn_entry=spawn_entry)
+                    self.assertTrue(res)
+                    
+                    # Assert workspace db updated
+                    conn = sqlite3.connect(str(ws_db))
+                    row = conn.execute("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").fetchone()
+                    conn.close()
+                    self.assertIsNotNone(row)
+                    ws_data = json.loads(row[0])
+                    self.assertEqual(len(ws_data["allComposers"]), 1)
+                    self.assertEqual(ws_data["allComposers"][0]["composerId"], sid)
+                    self.assertEqual(ws_data["allComposers"][0]["name"], "Test Cursor Session")
+                    
+                    # Assert global db updated
+                    conn = sqlite3.connect(str(global_db))
+                    row = conn.execute("SELECT value FROM ItemTable WHERE key = 'composer.composerHeaders'").fetchone()
+                    conn.close()
+                    self.assertIsNotNone(row)
+                    global_data = json.loads(row[0])
+                    self.assertEqual(len(global_data), 1)
+                    self.assertEqual(global_data[0]["composerId"], sid)
+                    self.assertEqual(global_data[0]["workspaceIdentifier"]["id"], "test-workspace-id")
+
+
 
 class TestPrStateResolution(unittest.TestCase):
     def setUp(self):

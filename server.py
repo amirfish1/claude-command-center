@@ -18320,6 +18320,225 @@ def _cursor_spawn_pid_by_session_id():
     return out
 
 
+def _get_cursor_app_support_dir():
+    import sys
+    home = Path.home()
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "Cursor"
+    elif sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "Cursor"
+        return home / "AppData" / "Roaming" / "Cursor"
+    else:
+        config = os.environ.get("XDG_CONFIG_HOME")
+        if config:
+            return Path(config) / "Cursor"
+        return home / ".config" / "Cursor"
+
+
+def _find_cursor_workspace_db_and_id(cwd):
+    import urllib.parse
+    import sys
+    app_support_dir = _get_cursor_app_support_dir()
+    workspace_storage_dir = app_support_dir / "User" / "workspaceStorage"
+    if not workspace_storage_dir.is_dir():
+        return None, None
+        
+    try:
+        target_path = Path(cwd).expanduser().resolve()
+    except Exception:
+        target_path = Path(cwd)
+
+    for p in workspace_storage_dir.iterdir():
+        if not p.is_dir():
+            continue
+        ws_json_path = p / "workspace.json"
+        if not ws_json_path.is_file():
+            continue
+        try:
+            with open(ws_json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            folder_uri = data.get("folder")
+            if folder_uri:
+                parsed = urllib.parse.urlparse(urllib.parse.unquote(folder_uri))
+                path_str = parsed.path
+                if sys.platform == "win32" and path_str.startswith("/") and len(path_str) > 2 and path_str[2] == ":":
+                    path_str = path_str[1:]
+                decoded_path = Path(path_str).resolve(strict=False)
+                if decoded_path == target_path:
+                    db_path = p / "state.vscdb"
+                    if db_path.is_file():
+                        return db_path, p.name
+        except Exception:
+            pass
+    return None, None
+
+
+def _register_composer_in_workspace_db(db_path, sid, title, created_at):
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=2.0)
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+            row = conn.execute("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").fetchone()
+            existing = {}
+            row_is_bytes = False
+            if row and row[0]:
+                val = row[0]
+                if isinstance(val, bytes):
+                    val = val.decode("utf-8")
+                    row_is_bytes = True
+                try:
+                    existing = json.loads(val)
+                except Exception:
+                    pass
+            
+            all_composers = existing.get("allComposers")
+            if not isinstance(all_composers, list):
+                all_composers = []
+            
+            found_idx = -1
+            for idx, c in enumerate(all_composers):
+                if isinstance(c, dict) and c.get("composerId") == sid:
+                    found_idx = idx
+                    break
+            
+            composer_entry = {
+                "type": "head",
+                "composerId": sid,
+                "name": title or "New Agent",
+                "createdAt": created_at or int(time.time() * 1000),
+                "lastUpdatedAt": int(time.time() * 1000),
+                "unifiedMode": "agent",
+                "forceMode": "edit",
+                "hasUnreadMessages": False,
+                "totalLinesAdded": 0,
+                "totalLinesRemoved": 0,
+                "hasBlockingPendingActions": False,
+                "isArchived": False,
+                "isDraft": False,
+                "isWorktree": False,
+                "isSpec": False,
+                "isBestOfNSubcomposer": False,
+                "numSubComposers": 0,
+                "referencedPlans": []
+            }
+            
+            if found_idx >= 0:
+                old_entry = all_composers[found_idx]
+                if isinstance(old_entry, dict):
+                    composer_entry.update({
+                        "name": title or old_entry.get("name") or "New Agent",
+                        "createdAt": old_entry.get("createdAt") or created_at or int(time.time() * 1000),
+                        "unifiedMode": old_entry.get("unifiedMode") or "agent",
+                        "forceMode": old_entry.get("forceMode") or "edit",
+                        "isArchived": old_entry.get("isArchived", False),
+                    })
+                all_composers[found_idx] = composer_entry
+            else:
+                all_composers.append(composer_entry)
+            
+            payload = dict(existing)
+            payload["allComposers"] = all_composers
+            if "selectedComposerIds" not in payload:
+                payload["selectedComposerIds"] = [sid]
+            if "lastFocusedComposerIds" not in payload:
+                payload["lastFocusedComposerIds"] = [sid]
+            payload["hasMigratedComposerData"] = True
+            payload["hasMigratedMultipleComposers"] = True
+            
+            new_val_str = json.dumps(payload, ensure_ascii=False)
+            conn.execute(
+                "INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('composer.composerData', ?)",
+                (new_val_str.encode("utf-8") if row_is_bytes else new_val_str,)
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"  [cursor-visible] failed to register composer {sid} in workspace db: {e}")
+        return False
+
+
+def _register_composer_in_global_db(global_db_path, workspace_id, sid, title, created_at):
+    try:
+        conn = sqlite3.connect(str(global_db_path), timeout=2.0)
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+            row = conn.execute("SELECT value FROM ItemTable WHERE key = 'composer.composerHeaders'").fetchone()
+            existing_list = []
+            row_is_bytes = False
+            if row and row[0]:
+                val = row[0]
+                if isinstance(val, bytes):
+                    val = val.decode("utf-8")
+                    row_is_bytes = True
+                try:
+                    existing_list = json.loads(val)
+                except Exception:
+                    pass
+            
+            if not isinstance(existing_list, list):
+                existing_list = []
+            
+            found_idx = -1
+            for idx, h in enumerate(existing_list):
+                if isinstance(h, dict) and h.get("composerId") == sid:
+                    found_idx = idx
+                    break
+            
+            header_entry = {
+                "type": "head",
+                "composerId": sid,
+                "name": title or "New Agent",
+                "createdAt": created_at or int(time.time() * 1000),
+                "lastUpdatedAt": int(time.time() * 1000),
+                "unifiedMode": "agent",
+                "forceMode": "edit",
+                "hasUnreadMessages": False,
+                "totalLinesAdded": 0,
+                "totalLinesRemoved": 0,
+                "hasBlockingPendingActions": False,
+                "isArchived": False,
+                "isDraft": False,
+                "isWorktree": False,
+                "isSpec": False,
+                "isBestOfNSubcomposer": False,
+                "numSubComposers": 0,
+                "referencedPlans": [],
+                "workspaceIdentifier": {"id": workspace_id}
+            }
+            
+            if found_idx >= 0:
+                old_entry = existing_list[found_idx]
+                if isinstance(old_entry, dict):
+                    header_entry.update({
+                        "name": title or old_entry.get("name") or "New Agent",
+                        "createdAt": old_entry.get("createdAt") or created_at or int(time.time() * 1000),
+                        "unifiedMode": old_entry.get("unifiedMode") or "agent",
+                        "forceMode": old_entry.get("forceMode") or "edit",
+                        "isArchived": old_entry.get("isArchived", False),
+                        "workspaceIdentifier": old_entry.get("workspaceIdentifier") or {"id": workspace_id}
+                    })
+                existing_list[found_idx] = header_entry
+            else:
+                existing_list.append(header_entry)
+            
+            new_val_str = json.dumps(existing_list, ensure_ascii=False)
+            conn.execute(
+                "INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('composer.composerHeaders', ?)",
+                (new_val_str.encode("utf-8") if row_is_bytes else new_val_str,)
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"  [cursor-visible] failed to register composer {sid} in global db: {e}")
+        return False
+
+
 def _ensure_cursor_session_visible(session_id, spawn_entry=None):
     """Create or refresh Cursor's workspace metadata/store.db for a CLI session."""
     sid = str(session_id or "").strip()
@@ -18415,6 +18634,15 @@ def _ensure_cursor_session_visible(session_id, spawn_entry=None):
             conn.commit()
         finally:
             conn.close()
+
+        # Integrate with Cursor IDE (desktop app) workspace and global databases
+        ws_db_path, ws_id = _find_cursor_workspace_db_and_id(cwd)
+        if ws_db_path and ws_id:
+            _register_composer_in_workspace_db(ws_db_path, sid, title, created_at)
+            global_db_path = _get_cursor_app_support_dir() / "User" / "globalStorage" / "state.vscdb"
+            if global_db_path.is_file():
+                _register_composer_in_global_db(global_db_path, ws_id, sid, title, created_at)
+
         return True
     except Exception as e:
         print(f"  [cursor-visible] failed to make {sid} visible: {e}")
