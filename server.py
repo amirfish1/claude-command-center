@@ -1747,6 +1747,64 @@ def _nearest_marked_repo_dir(path):
     return None
 
 
+def _plus_space_path_candidates(raw, *, cap=10):
+    """Yield variants of `raw` where each space is optionally swapped for `+`.
+
+    Defends against the URL query-string quirk: `+` decodes to a space in a
+    query, so a literal `+` in a repo path arrives at the server as a space.
+    When the as-given path doesn't resolve, we try `+` in each space slot to
+    see if exactly one variant maps to a real/known repo.
+
+    Cap is a safety bound: with N space positions there are 2^N variants. A
+    path with more than `cap` spaces falls back to a single "all spaces → +"
+    attempt instead of enumerating.
+    """
+    seen = set()
+    if raw not in seen:
+        seen.add(raw)
+        yield raw
+    if " " not in raw:
+        return
+    space_positions = [i for i, ch in enumerate(raw) if ch == " "]
+    n = len(space_positions)
+    if n > cap:
+        alt = raw.replace(" ", "+")
+        if alt not in seen:
+            seen.add(alt)
+            yield alt
+        return
+    chars0 = list(raw)
+    for mask in range(1, 1 << n):
+        chars = list(chars0)
+        for i, pos in enumerate(space_positions):
+            if mask & (1 << i):
+                chars[pos] = "+"
+        alt = "".join(chars)
+        if alt not in seen:
+            seen.add(alt)
+            yield alt
+
+
+def _resolve_repo_path_check(raw, *, known):
+    """Return (canon_path, error_code) for a single candidate string.
+
+    error_code is None on success. On failure it is one of "not_dir" or
+    "not_allowed" so the outer logic can decide which fallback to attempt.
+    """
+    try:
+        p = Path(raw).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None, "not_dir"
+    if not p.is_dir():
+        return None, "not_dir"
+    s = str(p)
+    git_marker = p / ".git"
+    looks_like_repo = git_marker.exists() or (p / ".claude").is_dir()
+    if s not in known and not looks_like_repo:
+        return s, "not_allowed"
+    return s, None
+
+
 def resolve_repo_path(value):
     """Validate and canonicalize one concrete repo path.
 
@@ -1763,12 +1821,6 @@ def resolve_repo_path(value):
         raise RepoContextError("repo_required", "repo_path is required")
     if raw.upper() == "ALL":
         raise RepoContextError("invalid_repo_path", "repo_path must be one real path, not ALL", path=raw)
-    try:
-        p = Path(raw).expanduser().resolve()
-    except (OSError, ValueError, RuntimeError) as e:
-        raise RepoContextError("invalid_repo_path", f"could not resolve repo_path: {e}", path=raw)
-    if not p.is_dir():
-        raise RepoContextError("invalid_repo_path", f"repo_path is not a directory: {p}", path=str(p))
 
     # Allow rule: must be in the known-repos list OR look like a real repo
     # (`.git` or `.claude` directory present). The looks-like-repo escape
@@ -1779,17 +1831,52 @@ def resolve_repo_path(value):
     # by `Path.resolve()` above, and shell-out endpoints layer their own
     # sandboxing on top (see /api/open's REPO_ROOT-style clamps).
     known = set(_known_repo_paths())
-    s = str(p)
-    git_marker = p / ".git"
-    looks_like_repo = git_marker.exists() or (p / ".claude").is_dir()
-    if s not in known and not looks_like_repo:
-        raise RepoContextError(
-            "repo_not_allowed",
-            "repo_path is not known; add it through /api/repo/add first",
-            path=s,
-            status=403,
-        )
-    return s
+
+    canon, err = _resolve_repo_path_check(raw, known=known)
+    if err is None:
+        return canon
+
+    # Fallback for query-string `+` decoding. A repo at /Users/.../BYM+Finie
+    # arrives over the wire as /Users/.../BYM Finie because `+` decodes to a
+    # space in a URL query. Try restoring `+` in space positions and see if
+    # exactly one variant resolves to a real or known repo. Skip the raw
+    # since we already tried it.
+    if " " in raw:
+        matches = []
+        for variant in _plus_space_path_candidates(raw):
+            if variant == raw:
+                continue
+            cand, cand_err = _resolve_repo_path_check(variant, known=known)
+            if cand_err is None and cand:
+                matches.append(cand)
+        # Dedup while preserving order.
+        matches = list(dict.fromkeys(matches))
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise RepoContextError(
+                "ambiguous_repo_path",
+                "repo_path matches multiple known repos after `+`/space normalization; encode `+` as %2B",
+                path=raw,
+            )
+
+    # No variant resolved. Re-raise the original error using the as-given raw.
+    if err == "not_dir":
+        try:
+            p = Path(raw).expanduser().resolve()
+            shown = str(p)
+        except (OSError, ValueError, RuntimeError) as e:
+            raise RepoContextError("invalid_repo_path", f"could not resolve repo_path: {e}", path=raw)
+        raise RepoContextError("invalid_repo_path", f"repo_path is not a directory: {shown}", path=shown)
+    # err == "not_allowed"
+    if canon is None:
+        canon = str(Path(raw).expanduser().resolve())
+    raise RepoContextError(
+        "repo_not_allowed",
+        "repo_path is not known; add it through /api/repo/add first",
+        path=canon,
+        status=403,
+    )
 
 
 def _resolve_cwd_context(value):

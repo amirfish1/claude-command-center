@@ -556,6 +556,31 @@ class TestRepoContextHelpers(unittest.TestCase):
     def test_valid_repo_path_is_accepted(self):
         self.assertEqual(self.server.resolve_repo_path(str(self.repo)), str(self.repo))
 
+    def test_repo_path_with_plus_resolves_when_query_decoded_to_space(self):
+        """A repo with `+` in its name arrives as a space via URL query-string
+        decoding (`+` → ` `). resolve_repo_path() must recover by trying `+`
+        variants instead of forcing every caller to encode as %2B."""
+        plus_repo = pathlib.Path(self.tmp_home, "BYM+Finie").resolve()
+        plus_repo.mkdir()
+        (plus_repo / ".git").mkdir()
+        # 1. Exact path still works.
+        self.assertEqual(self.server.resolve_repo_path(str(plus_repo)), str(plus_repo))
+        # 2. The +→space mangled form (what a URL query carrying `+`
+        #    produces) resolves to the real repo.
+        mangled = str(plus_repo).replace("+", " ")
+        self.assertEqual(self.server.resolve_repo_path(mangled), str(plus_repo))
+        # 3. Genuinely missing paths still 400.
+        with self.assertRaises(self.server.RepoContextError):
+            self.server.resolve_repo_path(str(pathlib.Path(self.tmp_home, "no such repo")))
+
+    def test_repo_path_plus_fallback_keeps_real_space_repo(self):
+        """A repo with a real space in its name still resolves directly — the
+        fallback only kicks in when the as-given path does not exist."""
+        space_repo = pathlib.Path(self.tmp_home, "Foo Bar").resolve()
+        space_repo.mkdir()
+        (space_repo / ".git").mkdir()
+        self.assertEqual(self.server.resolve_repo_path(str(space_repo)), str(space_repo))
+
     def test_session_registry_accepts_native_claude_binary_path(self):
         sid = "00000000-0000-4000-8000-000000000001"
         sessions_dir = pathlib.Path(self.server.SESSIONS_REGISTRY)
