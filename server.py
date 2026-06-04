@@ -11916,6 +11916,34 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     line_num = 0
     is_codex = parser is _parse_codex_event
     codex_token_usage = None
+    is_cursor = parser is _parse_cursor_event
+    # Cursor JSONLs record no per-event timestamp (only `role` + `message`)
+    # so every event ended up with ts="", and the browser fell back to
+    # nowStamp() — making every row claim "just now" regardless of actual
+    # age. We don't have true per-event times, so the closest honest
+    # approximation is to interpolate between the file's birthtime (first
+    # event) and mtime (last event); cursor sessions are streamed
+    # append-only so position-in-file ≈ position-in-time. Falls back to
+    # mtime-everywhere when birthtime isn't available.
+    cursor_ts_start = 0.0  # epoch seconds
+    cursor_ts_end = 0.0
+    if is_cursor:
+        try:
+            st = Path(filepath).stat()
+            cursor_ts_end = float(st.st_mtime)
+            cursor_ts_start = float(getattr(st, "st_birthtime", st.st_mtime) or st.st_mtime)
+            # Defensive: if birthtime > mtime (clock skew, restored file),
+            # just collapse to mtime everywhere.
+            if cursor_ts_start > cursor_ts_end:
+                cursor_ts_start = cursor_ts_end
+        except (OSError, ValueError, OverflowError):
+            cursor_ts_start = cursor_ts_end = 0.0
+
+    def _cursor_ts_iso(epoch):
+        try:
+            return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        except (TypeError, ValueError, OverflowError, OSError):
+            return ""
 
     try:
         with open(filepath, "r") as f:
@@ -11954,6 +11982,22 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         stub = _registry_only_conversation_stub(conversation_id, after_line=after_line)
         if stub is not None:
             return stub
+
+    # Cursor: fill empty ts by interpolating between file birthtime and
+    # mtime. With one event the only honest answer is mtime; with two or
+    # more, linearly spread between start and end so the UI shows
+    # distinct, monotonically-increasing times instead of N copies of
+    # "just now".
+    if is_cursor and cursor_ts_end > 0:
+        missing_idx = [i for i, e in enumerate(events) if not e.get("ts")]
+        m = len(missing_idx)
+        if m == 1:
+            events[missing_idx[0]]["ts"] = _cursor_ts_iso(cursor_ts_end)
+        elif m > 1:
+            span = cursor_ts_end - cursor_ts_start
+            for k, idx in enumerate(missing_idx):
+                frac = k / (m - 1)
+                events[idx]["ts"] = _cursor_ts_iso(cursor_ts_start + span * frac)
 
     result = {"events": events, "last_line": line_num}
     _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
