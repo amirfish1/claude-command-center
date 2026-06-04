@@ -15117,7 +15117,26 @@
     // mutations from paths that didn't explicitly capture a snapshot;
     // this catches all of them.
     if (window.MutationObserver && !view._convPinObserver) {
-      const pinObserver = new MutationObserver(() => {
+      const pinObserver = new MutationObserver((mutations) => {
+        // The sticky header (.conv-sticky-header) lives inside the same
+        // scroll container as the events, so any text update it makes
+        // counts as a subtree mutation. `_dynAskApply` rewrites the
+        // earlier-ask slot on every scroll tick — without this filter
+        // the observer interprets that as "new content" and, if the
+        // user was at the bottom, forces a scroll-to-end on every tick.
+        // The visible symptom is "scroll down doesn't scroll, the top
+        // box just blinks" — the scroll happens, then snaps right back.
+        // Filter sticky-header mutations out of the auto-scroll path.
+        let hasContentMutation = false;
+        for (const m of mutations) {
+          const node = m.target;
+          if (node && node.nodeType === 1 && node.closest && node.closest('.conv-sticky-header')) continue;
+          if (node && node.nodeType === 3 && node.parentNode && node.parentNode.closest
+              && node.parentNode.closest('.conv-sticky-header')) continue;
+          hasContentMutation = true;
+          break;
+        }
+        if (!hasContentMutation) return;
         if (view._pinnedToBottom) {
           scrollConversationToEnd(view);
         } else {
