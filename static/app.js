@@ -14361,6 +14361,25 @@
     return x <= 0 || y <= 0 || x >= window.innerWidth - 1 || y >= window.innerHeight - 1;
   }
 
+  // Breadcrumb pop-out button — delegated so it survives every
+  // updatePaneHeader innerHTML rewrite. Pops out whatever conversation
+  // the active pane is currently showing (same target as the
+  // drag-to-out-of-window gesture, just a click instead of a drag).
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target && ev.target.closest && ev.target.closest('[data-role="ccc-breadcrumb-popout"]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const convId = (typeof currentConversation === 'string' && currentConversation && currentConversation !== '__new__')
+      ? currentConversation
+      : null;
+    if (!convId) {
+      try { showOpToast('No conversation selected to pop out', 'error'); } catch (_) {}
+      return;
+    }
+    openConversationPopout(convId, null, null);
+  });
+
   function startExternalConversationDrag(convId, repoPath) {
     if (CONV_POPOUT_MODE || !convId) return;
     const row = rowForConversationId(convId);
@@ -14950,10 +14969,26 @@
     if (breadcrumbEl) {
       const isActive = targetPaneId === activePaneId();
       if (isActive && (category || title)) {
+        // Pop-out button mirrors the drag-out-of-window gesture for users
+        // who prefer a click. Skipped inside the popout itself (no point
+        // popping a popout). Click handler is delegated once at boot —
+        // see the document listener for [data-role="ccc-breadcrumb-popout"].
+        const popoutBtn = CONV_POPOUT_MODE ? ''
+          : '<button type="button" class="ccc-breadcrumb-popout" data-role="ccc-breadcrumb-popout"'
+            + ' title="Pop this conversation out to its own window" aria-label="Pop out">'
+            // Diagonal arrow-out-of-box glyph. Inline SVG so it inherits
+            // currentColor and stays crisp at any zoom.
+            + '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">'
+            +   '<path d="M5 1H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
+            +   '<path d="M7 1h4v4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>'
+            +   '<path d="M11 1L6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
+            + '</svg>'
+          + '</button>';
         breadcrumbEl.innerHTML = ''
           + (category ? '<span class="ccc-breadcrumb-category">' + escapeHtml(category) + '</span>' : '')
           + (title ? '<span class="ccc-breadcrumb-title">' + escapeHtml(title) + '</span>' : '')
-          + (sizeBytes > 0 ? '<span class="ccc-breadcrumb-size" title="' + sizeBytes.toLocaleString() + ' bytes">' + escapeHtml(formatSize(sizeBytes)) + '</span>' : '');
+          + (sizeBytes > 0 ? '<span class="ccc-breadcrumb-size" title="' + sizeBytes.toLocaleString() + ' bytes">' + escapeHtml(formatSize(sizeBytes)) + '</span>' : '')
+          + popoutBtn;
         breadcrumbEl.hidden = false;
       } else if (isActive) {
         breadcrumbEl.innerHTML = '';
