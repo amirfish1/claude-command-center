@@ -5086,8 +5086,13 @@
   .annotation-link {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 3px 8px; margin-left: 4px;
-    background: transparent; color: var(--text-muted);
-    border: 1px solid transparent; border-radius: 999px;
+    /* TEMP: bright blue so we can confirm a cache-busted reload picked
+       up new CSS. If you see blue, the new code reached you. Revert
+       once verified. */
+    background: #1f6feb !important;
+    color: #ffffff !important;
+    border: 1px solid #1f6feb !important;
+    border-radius: 999px;
     font-size: 11px; font-family: inherit; cursor: pointer;
     letter-spacing: 0.2px; white-space: nowrap;
     transition: background 0.12s ease-out, color 0.12s ease-out, border-color 0.12s ease-out;
