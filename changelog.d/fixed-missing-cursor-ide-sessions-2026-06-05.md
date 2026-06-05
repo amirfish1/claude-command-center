@@ -1,1 +1,0 @@
-- Fixed an issue where some Cursor agent sessions (including manually discovered ones, and ones spawned in directories not yet opened in the IDE) were missing from the Cursor IDE sidebar. The system now automatically creates missing workspace storage folders and backfills all discovered transcripts.
