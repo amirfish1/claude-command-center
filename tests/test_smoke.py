@@ -391,6 +391,40 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("body.flow-popout", app_css)
         self.assertIn(".conv-list-panel > *:not(#flowBoard)", app_css)
 
+    def test_first_existing_dir_picks_first_real_path(self):
+        """Codex / claude rows used to surface a tail-extracted worktree
+        cwd that had since been deleted, so Launch built
+        `cd '/.../no-such-worktree' && resume` and dropped the user in
+        their home dir. _first_existing_dir prefers the first cwd
+        candidate that still exists on disk."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        srv = importlib.import_module("server")
+        self.assertTrue(hasattr(srv, "_first_existing_dir"))
+        with tempfile.TemporaryDirectory() as td:
+            real = pathlib.Path(td, "real-repo")
+            real.mkdir()
+            missing = pathlib.Path(td, "deleted-worktree-sGH1nB")
+            # missing intentionally never created
+            self.assertEqual(srv._first_existing_dir(str(missing), str(real)), str(missing.parent / "real-repo"))
+            # All missing → None.
+            other_missing = pathlib.Path(td, "also-missing")
+            self.assertIsNone(srv._first_existing_dir(str(missing), str(other_missing)))
+            # Empty / None args skip cleanly.
+            self.assertEqual(srv._first_existing_dir("", None, str(real)), str(real))
+
+    def test_launch_falls_back_to_repo_when_cwd_missing(self):
+        """buildResumeCommand used to emit `cd '/.../no-such-worktree' &&
+        resume` for non-.claude/worktrees paths that don't exist on
+        disk — `cd` fails, `&&` blocks the resume. Falls back to the
+        session's repoPath, and drops the `cd` entirely if no fallback
+        is known."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        # Fallback to currentSession.repoPath is the documented escape.
+        self.assertIn("currentSession.repoPath", app_js)
+        # No-cd path returns the bare resumeCmd.
+        self.assertIn("return resumeCmd;", app_js)
+
     def test_macapp_cmd_backtick_cycles_windows(self):
         """Cmd+` should switch between CCC windows (main ↔ flow popout ↔
         conv popout). Default Cmd+` works for AppKit apps with multiple

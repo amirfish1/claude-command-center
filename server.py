@@ -8755,6 +8755,25 @@ def _relocation_search_roots(session_id, missing_cwd):
     return roots
 
 
+def _first_existing_dir(*paths):
+    """Return the first path that exists as a directory; None if none do.
+
+    Used to pick an "effective" cwd for row metadata that may have been
+    captured from a long-dead worktree path. Without this, Launch in
+    Terminal would build `cd '/.../no-such-dir' && resume`, fail, and
+    leave the user in their home directory.
+    """
+    for p in paths:
+        if not p:
+            continue
+        try:
+            if Path(p).is_dir():
+                return p
+        except (OSError, ValueError, RuntimeError):
+            continue
+    return None
+
+
 def _relocate_missing_session_cwd(session_id, cwd):
     """Best-effort repair for transcripts whose recorded cwd was moved.
 
@@ -15513,7 +15532,14 @@ def find_codex_conversations(
         branch = row.get("git_branch") or ""
         tail_branch = tail.get("tail_branch") or ""
         tail_worktree_path = tail.get("tail_worktree_path") or ""
-        effective_cwd = tail_worktree_path or cwd
+        # Prefer the FIRST cwd candidate that still exists on disk. Without
+        # this, a tail-extracted worktree path that has since been deleted
+        # (deleted worktree, moved repo) would land in `session_cwd` and
+        # Launch would try `cd '/.../no-such-worktree' && codex resume …`
+        # — which fails and leaves the user in their home dir.
+        effective_cwd = _first_existing_dir(
+            tail_worktree_path, cwd, pinned
+        ) or tail_worktree_path or cwd
         try:
             cwd_exists = bool(effective_cwd and Path(effective_cwd).is_dir())
         except OSError:

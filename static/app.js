@@ -1254,7 +1254,18 @@
              ' 2>/dev/null || git worktree add ' + quotedCwd + ' -b ' + quotedBranch + ' origin/main)' +
              ' && cd ' + quotedCwd + ' && ' + resumeCmd;
     }
-    return 'cd ' + quotedCwd + ' && ' + resumeCmd;
+    // Missing dir that isn't a `.claude/worktrees/` path (e.g. a custom
+    // worktree like `BYM-Finie-push-reschedule-sGH1nB` cleaned up off
+    // the books). `cd` would fail and `&&` would block the resume,
+    // dropping the user in their home dir. Fall back to the session's
+    // repo root if we know one — that's almost always still on disk —
+    // otherwise drop the `cd` entirely so resume runs from the user's
+    // current pwd instead of failing.
+    const fallbackRepo = currentSession && currentSession.repoPath;
+    if (fallbackRepo) {
+      return 'cd ' + shellQuote(fallbackRepo) + ' && ' + resumeCmd;
+    }
+    return resumeCmd;
   }
 
   function resumeButtonsForActiveTab() { return []; }
