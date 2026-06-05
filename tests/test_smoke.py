@@ -348,6 +348,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function archiveFlowSession", app_js)
         self.assertIn("let flowSelectedNodes", app_js)
         self.assertIn("function startFlowRangeSelection", app_js)
+        self.assertIn("FLOW_CANVAS_PAD_RATIO = 0.30", app_js)
+        self.assertIn("FLOW_CANVAS_PAD_MIN_PX = 260", app_js)
+        self.assertIn("function flowCanvasPadding", app_js)
+        self.assertIn("data-flow-pad-x", app_js)
+        self.assertIn("flowCanvasPaddingFromCanvas", app_js)
+        self.assertIn("canvas.addEventListener('pointerdown'", app_js)
         self.assertIn("flowSelectedNodeIds", app_js)
         self.assertIn("const isGroupDrag = dragItems.length > 1;", app_js)
         self.assertIn("data-flow-action=\"play-draft-session\"", app_js)
@@ -367,6 +373,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".flow-node-archive", app_css)
         self.assertIn(".flow-selection-box", app_css)
         self.assertIn(".flow-node.selected", app_css)
+        self.assertIn("--flow-grid-size", app_css)
+        self.assertIn("background-position:", app_css)
 
     def test_flow_work_item_inspector_wired(self):
         """Repo/object Flow nodes open a Markdown-backed work-item inspector,

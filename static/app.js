@@ -7078,6 +7078,8 @@
   } catch (_) {}
   const FLOW_ZOOM_MIN = 0.45;
   const FLOW_ZOOM_MAX = 2.25;
+  const FLOW_CANVAS_PAD_RATIO = 0.30;
+  const FLOW_CANVAS_PAD_MIN_PX = 260;
   let flowZoom = 1;
   try {
     const savedZoom = Number(localStorage.getItem('ccc-flow-zoom'));
@@ -7430,6 +7432,26 @@
     };
   }
 
+  function flowCanvasPaddingFromCanvas(canvas) {
+    return {
+      x: Number(canvas && canvas.dataset.flowPadX) || 0,
+      y: Number(canvas && canvas.dataset.flowPadY) || 0,
+    };
+  }
+
+  function flowCanvasPadding(targetEl) {
+    if (!targetEl) return { x: 0, y: 0 };
+    const toolbar = targetEl.querySelector('.flow-toolbar');
+    const toolbarHeight = toolbar ? toolbar.offsetHeight : 46;
+    const rawWidth = targetEl.clientWidth || window.innerWidth || 0;
+    const rawHeight = Math.max(0, (targetEl.clientHeight || window.innerHeight || 0) - toolbarHeight);
+    const zoom = flowZoom || 1;
+    return {
+      x: Math.ceil(Math.max(rawWidth * FLOW_CANVAS_PAD_RATIO, FLOW_CANVAS_PAD_MIN_PX) / zoom),
+      y: Math.ceil(Math.max(rawHeight * FLOW_CANVAS_PAD_RATIO, FLOW_CANVAS_PAD_MIN_PX) / zoom),
+    };
+  }
+
   function flowMinimumBaseSize(targetEl) {
     if (!targetEl) return { width: 0, height: 0 };
     const toolbar = targetEl.querySelector('.flow-toolbar');
@@ -7463,12 +7485,14 @@
       clientY = boardRect.top + toolbarHeight + Math.max(0, targetEl.clientHeight - toolbarHeight) / 2;
     }
     const canvasRect = canvas.getBoundingClientRect();
+    const world = canvas.querySelector('.flow-world');
+    const worldRect = world ? world.getBoundingClientRect() : canvasRect;
     const base = flowEffectiveBaseSize(targetEl, canvas);
     return {
       clientX,
       clientY,
-      x: Math.max(0, Math.min(base.width, (clientX - canvasRect.left) / oldZoom)),
-      y: Math.max(0, Math.min(base.height, (clientY - canvasRect.top) / oldZoom)),
+      x: Math.max(0, Math.min(base.width, (clientX - worldRect.left) / oldZoom)),
+      y: Math.max(0, Math.min(base.height, (clientY - worldRect.top) / oldZoom)),
     };
   }
 
@@ -7481,23 +7505,40 @@
       ? flowZoomOrigin(targetEl, canvas, oldZoom || 1, opts || {})
       : null;
     if (canvas) {
+      const prevPad = flowCanvasPaddingFromCanvas(canvas);
+      const prevZoom = Number(canvas.dataset.flowZoom) || oldZoom || flowZoom || 1;
       const base = flowEffectiveBaseSize(targetEl, canvas);
-      const scaledWidth = Math.ceil(base.width * flowZoom);
-      const scaledHeight = Math.ceil(base.height * flowZoom);
+      const pad = flowCanvasPadding(targetEl);
+      const scaledPadX = Math.ceil(pad.x * flowZoom);
+      const scaledPadY = Math.ceil(pad.y * flowZoom);
+      const scaledWidth = Math.ceil((base.width + pad.x * 2) * flowZoom);
+      const scaledHeight = Math.ceil((base.height + pad.y * 2) * flowZoom);
+      canvas.dataset.flowPadX = String(pad.x);
+      canvas.dataset.flowPadY = String(pad.y);
+      canvas.dataset.flowZoom = String(flowZoom);
       canvas.style.width = scaledWidth + 'px';
       canvas.style.height = scaledHeight + 'px';
       canvas.style.minWidth = scaledWidth + 'px';
       canvas.style.minHeight = scaledHeight + 'px';
+      canvas.style.setProperty('--flow-zoom', String(flowZoom));
+      canvas.style.setProperty('--flow-grid-size', Math.max(1, 32 * flowZoom) + 'px');
+      canvas.style.setProperty('--flow-pad-x', scaledPadX + 'px');
+      canvas.style.setProperty('--flow-pad-y', scaledPadY + 'px');
       const world = canvas.querySelector('.flow-world');
       if (world) {
         world.style.width = base.width + 'px';
         world.style.height = base.height + 'px';
+        world.style.left = scaledPadX + 'px';
+        world.style.top = scaledPadY + 'px';
         world.style.transform = 'scale(' + flowZoom + ')';
       }
       if (origin) {
         const boardRect = targetEl.getBoundingClientRect();
-        targetEl.scrollLeft = Math.max(0, canvas.offsetLeft + origin.x * flowZoom - (origin.clientX - boardRect.left));
-        targetEl.scrollTop = Math.max(0, canvas.offsetTop + origin.y * flowZoom - (origin.clientY - boardRect.top));
+        targetEl.scrollLeft = Math.max(0, canvas.offsetLeft + (pad.x + origin.x) * flowZoom - (origin.clientX - boardRect.left));
+        targetEl.scrollTop = Math.max(0, canvas.offsetTop + (pad.y + origin.y) * flowZoom - (origin.clientY - boardRect.top));
+      } else {
+        targetEl.scrollLeft = Math.max(0, targetEl.scrollLeft + pad.x * flowZoom - prevPad.x * prevZoom);
+        targetEl.scrollTop = Math.max(0, targetEl.scrollTop + pad.y * flowZoom - prevPad.y * prevZoom);
       }
     }
     updateFlowToolbarState(targetEl);
@@ -7979,8 +8020,9 @@
       conversationsData.forEach(c => { if (c && c.id) convsById[c.id] = c; });
     }
     const zoom = flowZoom || 1;
-    const vpL = Math.max(0, (board.scrollLeft - canvas.offsetLeft)) / zoom;
-    const vpT = Math.max(0, (board.scrollTop - canvas.offsetTop)) / zoom;
+    const pad = flowCanvasPaddingFromCanvas(canvas);
+    const vpL = Math.max(0, ((board.scrollLeft - canvas.offsetLeft) / zoom) - pad.x);
+    const vpT = Math.max(0, ((board.scrollTop - canvas.offsetTop) / zoom) - pad.y);
     const vpR = vpL + (board.clientWidth || window.innerWidth || 1200) / zoom;
     const PARENT_PAD = 20;
     const CLUSTER_MARGIN = 20;
@@ -8534,7 +8576,8 @@
   function flowScreenPointToCanvasPos(clientX, clientY) {
     const canvas = document.querySelector('#flowBoard .flow-canvas');
     if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
+    const world = canvas.querySelector('.flow-world');
+    const rect = (world || canvas).getBoundingClientRect();
     const zoom = flowZoom || 1;
     return {
       x: Math.max(0, Math.round((clientX - rect.left) / zoom)),
@@ -9297,11 +9340,17 @@
         + '</div>';
     });
     canvasHeight = Math.max(canvasHeight, yCursor + 40);
+    const prevCanvas = $flow.querySelector('.flow-canvas');
+    const prevPad = flowCanvasPaddingFromCanvas(prevCanvas);
+    const prevZoom = Number(prevCanvas && prevCanvas.dataset.flowZoom) || flowZoom || 1;
     const minBase = flowMinimumBaseSize($flow);
     const baseWidth = Math.ceil(Math.max(canvasWidth, minBase.width));
     const baseHeight = Math.ceil(Math.max(canvasHeight, minBase.height));
-    const scaledWidth = Math.ceil(baseWidth * flowZoom);
-    const scaledHeight = Math.ceil(baseHeight * flowZoom);
+    const pad = flowCanvasPadding($flow);
+    const scaledPadX = Math.ceil(pad.x * flowZoom);
+    const scaledPadY = Math.ceil(pad.y * flowZoom);
+    const scaledWidth = Math.ceil((baseWidth + pad.x * 2) * flowZoom);
+    const scaledHeight = Math.ceil((baseHeight + pad.y * 2) * flowZoom);
     // Preserve the user's current pan position across the innerHTML
     // rewrite. Without this, any background render (deferred-after-pan
     // flush, periodic livestatus tick) snaps the board back to scroll
@@ -9310,8 +9359,11 @@
     const _prevScrollLeft = $flow.scrollLeft;
     const _prevScrollTop = $flow.scrollTop;
     $flow.innerHTML = flowToolbarHtml()
-      + '<div class="flow-canvas" data-flow-base-width="' + baseWidth + '" data-flow-base-height="' + baseHeight + '" style="width:' + scaledWidth + 'px;height:' + scaledHeight + 'px;min-width:' + scaledWidth + 'px;min-height:' + scaledHeight + 'px;">'
-      + '<div class="flow-world" style="width:' + baseWidth + 'px;height:' + baseHeight + 'px;transform:scale(' + flowZoom + ');">'
+      + '<div class="flow-canvas" data-flow-base-width="' + baseWidth + '" data-flow-base-height="' + baseHeight + '"'
+        + ' data-flow-pad-x="' + pad.x + '" data-flow-pad-y="' + pad.y + '" data-flow-zoom="' + flowZoom + '"'
+        + ' style="width:' + scaledWidth + 'px;height:' + scaledHeight + 'px;min-width:' + scaledWidth + 'px;min-height:' + scaledHeight + 'px;'
+        + '--flow-zoom:' + flowZoom + ';--flow-grid-size:' + Math.max(1, 32 * flowZoom) + 'px;--flow-pad-x:' + scaledPadX + 'px;--flow-pad-y:' + scaledPadY + 'px;">'
+      + '<div class="flow-world" style="left:' + scaledPadX + 'px;top:' + scaledPadY + 'px;width:' + baseWidth + 'px;height:' + baseHeight + 'px;transform:scale(' + flowZoom + ');">'
       + '<svg class="flow-links" aria-hidden="true"></svg>'
       + nodeHtml.join('')
       + '</div>'
@@ -9320,9 +9372,13 @@
     setFlowExpanded(flowExpanded);
     applyFlowZoom($flow, { preserve: false });
     // Restore the captured pan position now that the canvas has its
-    // new dimensions (applyFlowZoom may have widened/shrunk it).
-    $flow.scrollLeft = _prevScrollLeft;
-    $flow.scrollTop = _prevScrollTop;
+    // new dimensions. Pad delta keeps the user's logical viewport stable
+    // while still adding scrollable room around the top/left edge.
+    const nextCanvas = $flow.querySelector('.flow-canvas');
+    const nextPad = flowCanvasPaddingFromCanvas(nextCanvas);
+    const nextZoom = Number(nextCanvas && nextCanvas.dataset.flowZoom) || flowZoom || 1;
+    $flow.scrollLeft = Math.max(0, _prevScrollLeft + nextPad.x * nextZoom - prevPad.x * prevZoom);
+    $flow.scrollTop = Math.max(0, _prevScrollTop + nextPad.y * nextZoom - prevPad.y * prevZoom);
     requestAnimationFrame(() => {
       redrawFlowLinks($flow);
       if (flowDraftFocusId) {
@@ -9735,8 +9791,8 @@
       });
     }
     if (!canvas || !world) return;
-    world.addEventListener('pointerdown', ev => {
-      if (ev.altKey) startFlowRangeSelection(ev, targetEl, canvas, world);
+    canvas.addEventListener('pointerdown', ev => {
+      if (ev.altKey && world.contains(ev.target)) startFlowRangeSelection(ev, targetEl, canvas, world);
       else startFlowPan(ev, targetEl);
     });
     world.querySelectorAll('.flow-node').forEach(node => {

@@ -4158,15 +4158,20 @@
   }
   .flow-canvas {
     position: relative; box-sizing: border-box;
+    --flow-zoom: 1;
+    --flow-grid-size: 32px;
+    --flow-pad-x: 0px;
+    --flow-pad-y: 0px;
+    background:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: var(--flow-grid-size) var(--flow-grid-size);
+    background-position:
+      calc(var(--flow-pad-x) - 1px) calc(var(--flow-pad-y) - 1px);
   }
   .flow-world {
     position: absolute; left: 0; top: 0;
     transform-origin: 0 0;
-    background:
-      linear-gradient(var(--border) 1px, transparent 1px),
-      linear-gradient(90deg, var(--border) 1px, transparent 1px);
-    background-size: 32px 32px;
-    background-position: -1px -1px;
   }
   .flow-links {
     position: absolute; inset: 0; overflow: visible;
