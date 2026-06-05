@@ -22790,6 +22790,17 @@
     };
     _setStatusRailWidth(_savedStatusRailWidth(), false);
     _setStatusRailCollapsed(document.body.classList.contains('status-rail-collapsed'), false);
+    // Quick-close X inside the rail (top-right). Persisted so a
+    // reload keeps the rail closed unless the user re-opens it via
+    // the topbar restore button.
+    const $statusRailClose = document.getElementById('statusRailCloseBtn');
+    if ($statusRailClose) {
+      $statusRailClose.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        _setStatusRailCollapsed(true, true);
+      });
+    }
     if ($statusToggle) {
       $statusToggle.addEventListener('click', () => {
         const next = !document.body.classList.contains('status-pos-right');

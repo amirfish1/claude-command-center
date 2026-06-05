@@ -8764,6 +8764,38 @@ body.status-pos-right .conv-pane > .status-rail {
   background: var(--accent);
   opacity: 0.95;
 }
+/* Quick-close X — top-right inside the rail. Only visible when the
+   rail itself is shown (the rail's parent .conv-pane is in status-pos-
+   right mode and not collapsed). 22×22 hit target sits above the
+   rail's contents so it's reachable even when the rail is short. */
+.status-rail-close {
+  position: absolute;
+  top: 6px; right: 6px;
+  width: 22px; height: 22px;
+  display: none;
+  align-items: center; justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 16px; line-height: 1;
+  cursor: pointer;
+  z-index: 5;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+body.status-pos-right:not(.status-rail-collapsed) .status-rail-close {
+  display: inline-flex;
+}
+.status-rail-close:hover {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.status-rail-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 body.status-rail-resizing {
   cursor: col-resize;
   user-select: none;

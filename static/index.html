@@ -602,6 +602,10 @@
              in by JS at boot from `.ccc-topbar`. -->
         <aside class="status-rail" id="statusRail" aria-label="Session status rail">
           <div class="status-rail-resizer" id="statusRailResizer" role="separator" aria-orientation="vertical" aria-label="Resize status rail" aria-controls="statusRail" tabindex="0" title="Drag to resize the status rail; drag to the right edge to hide it"></div>
+          <!-- Quick-close X — collapses the rail without having to drag
+               the resizer or find the topbar toggle. Wired below in
+               the rail-toggle IIFE. -->
+          <button class="status-rail-close" id="statusRailCloseBtn" type="button" title="Hide status rail" aria-label="Hide status rail" aria-controls="statusRail">&times;</button>
           <div class="rail-actions" id="railActions" data-role="rail-actions"></div>
           <div class="files-panel" id="filesPanel" style="display: none;">
             <div class="files-resize-handle" id="filesResizeHandle" title="Drag up to resize · double-click to reset"></div>
