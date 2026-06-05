@@ -8625,6 +8625,13 @@
     const baseHeight = Math.ceil(Math.max(canvasHeight, minBase.height));
     const scaledWidth = Math.ceil(baseWidth * flowZoom);
     const scaledHeight = Math.ceil(baseHeight * flowZoom);
+    // Preserve the user's current pan position across the innerHTML
+    // rewrite. Without this, any background render (deferred-after-pan
+    // flush, periodic livestatus tick) snaps the board back to scroll
+    // 0,0 — the user releases their drag and the view jumps to where
+    // it was BEFORE the pan started.
+    const _prevScrollLeft = $flow.scrollLeft;
+    const _prevScrollTop = $flow.scrollTop;
     $flow.innerHTML = flowToolbarHtml()
       + '<div class="flow-canvas" data-flow-base-width="' + baseWidth + '" data-flow-base-height="' + baseHeight + '" style="width:' + scaledWidth + 'px;height:' + scaledHeight + 'px;min-width:' + scaledWidth + 'px;min-height:' + scaledHeight + 'px;">'
       + '<div class="flow-world" style="width:' + baseWidth + 'px;height:' + baseHeight + 'px;transform:scale(' + flowZoom + ');">'
@@ -8635,6 +8642,10 @@
     wireFlowBoard($flow);
     setFlowExpanded(flowExpanded);
     applyFlowZoom($flow, { preserve: false });
+    // Restore the captured pan position now that the canvas has its
+    // new dimensions (applyFlowZoom may have widened/shrunk it).
+    $flow.scrollLeft = _prevScrollLeft;
+    $flow.scrollTop = _prevScrollTop;
     requestAnimationFrame(() => {
       redrawFlowLinks($flow);
       if (flowDraftFocusId) {
