@@ -750,6 +750,25 @@
     try { localStorage.setItem('ccc-session-view', 'flow'); } catch (_) {}
     try { document.title = 'Flow — CCC'; } catch (_) {}
   }
+  // Reader-on-right toggle for the flow popout — persisted across
+  // popout reloads. Applied at boot so the layout doesn't flash from
+  // full-width-flow → split on first paint.
+  function flowPopoutReaderEnabled() {
+    try { return localStorage.getItem('ccc-flow-popout-reader') === '1'; } catch (_) { return false; }
+  }
+  function setFlowPopoutReaderEnabled(on) {
+    try { localStorage.setItem('ccc-flow-popout-reader', on ? '1' : '0'); } catch (_) {}
+    if (document.body) {
+      document.body.classList.toggle('flow-popout-reader', !!on);
+    }
+    // Repaint the flow toolbar so the button's aria-pressed state stays
+    // in sync without a full re-render.
+    const btn = document.querySelector('[data-flow-action="toggle-reader"]');
+    if (btn) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+  if (FLOW_POPOUT_MODE && document.body && flowPopoutReaderEnabled()) {
+    document.body.classList.add('flow-popout-reader');
+  }
   // Regex compiled from APP_CONFIG.title_strip at load; used to strip
   // user-configured prefixes like "[ACME ...]" from session titles.
   let _titleStripRe = null;  // null = no stripping until config loads
@@ -7118,6 +7137,20 @@
         +   '<path d="M11 1L6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
         + '</svg>'
         + '</button>')
+      // Reader toggle: only meaningful in the flow popout. Splits the
+      // window into flow-left + conv-reader-right so clicking a node
+      // shows its conversation inline. Persisted via localStorage.
+      + (FLOW_POPOUT_MODE
+        ? ('<button type="button" class="flow-toolbar-btn flow-icon-btn" data-flow-action="toggle-reader"'
+          + ' title="Show/hide conversation reader (right pane)"'
+          + ' aria-label="Toggle conversation reader"'
+          + ' aria-pressed="' + (flowPopoutReaderEnabled() ? 'true' : 'false') + '">'
+          + '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">'
+          +   '<rect x="1" y="2" width="10" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+          +   '<line x1="7" y1="2" x2="7" y2="10" stroke="currentColor" stroke-width="1.2"/>'
+          + '</svg>'
+          + '</button>')
+        : '')
       + '<div class="flow-toolbar-spacer"></div>'
       + '<button type="button" class="flow-toolbar-btn" data-flow-action="annotate" title="Annotate the visible page and save a local note for agent context.">&#9998; Annotate</button>'
       + '</div>';
@@ -8923,6 +8956,10 @@
     if (expandAllBtn) expandAllBtn.addEventListener('click', () => setFlowAllNodesCollapsed(false, targetEl));
     const popoutBtn = targetEl && targetEl.querySelector('[data-flow-action="popout"]');
     if (popoutBtn) popoutBtn.addEventListener('click', () => openFlowPopout(null));
+    const readerBtn = targetEl && targetEl.querySelector('[data-flow-action="toggle-reader"]');
+    if (readerBtn) readerBtn.addEventListener('click', () => {
+      setFlowPopoutReaderEnabled(!flowPopoutReaderEnabled());
+    });
     const organizeBtn = targetEl && targetEl.querySelector('[data-flow-action="organize"]');
     if (organizeBtn) organizeBtn.addEventListener('click', () => organizeFlowSessions(targetEl));
     const archivedBtn = targetEl && targetEl.querySelector('[data-flow-action="toggle-archived"]');

@@ -312,6 +312,32 @@
     height: 100% !important;
     flex: 1 1 auto !important;
   }
+  /* Reader-on-right mode: when the toolbar toggle is on, un-hide the
+     main pane and split the popout 60/40 (sidebar/flow on the left,
+     conv reader on the right). Clicking a node in the flow board
+     mounts that conversation into the right pane through the normal
+     selectConversation path. */
+  body.flow-popout.flow-popout-reader {
+    display: flex !important;
+    flex-direction: row;
+  }
+  body.flow-popout.flow-popout-reader .main {
+    display: flex !important;
+    flex: 0 0 40% !important;
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    height: 100vh !important;
+    width: auto !important;
+    min-width: 360px;
+    border-left: 1px solid var(--border);
+  }
+  body.flow-popout.flow-popout-reader .sidebar {
+    flex: 1 1 auto !important;
+    width: auto !important;
+    max-width: none !important;
+    height: 100vh !important;
+  }
   body.conversation-popout .main {
     display: flex !important;
     position: static !important;

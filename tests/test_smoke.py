@@ -368,6 +368,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".flow-selection-box", app_css)
         self.assertIn(".flow-node.selected", app_css)
 
+    def test_flow_popout_reader_toggle(self):
+        """Flow popout has a button to show/hide a conversation reader
+        on the right side. Toggling writes ccc-flow-popout-reader to
+        localStorage; the body class flow-popout-reader splits the
+        viewport into flow-left + conv-pane-right via CSS."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn('data-flow-action="toggle-reader"', app_js)
+        self.assertIn("flowPopoutReaderEnabled", app_js)
+        self.assertIn("ccc-flow-popout-reader", app_js)
+        self.assertIn("body.flow-popout.flow-popout-reader", app_css)
+
     def test_flow_popout_button_and_mode_wired(self):
         """Flow toolbar gets a pop-out button (skipped inside the popout
         itself). Click → openFlowPopout → window.open with ccc_popout=flow.
