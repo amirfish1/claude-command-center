@@ -1846,34 +1846,40 @@
     selections: null,    // per-question state: { picked:Set<int>, custom:string }
   };
 
-  function _relayedQuestionModalEl() {
-    return document.getElementById('cccQuestionModal');
+  function _relayedQuestionInlineEl() {
+    return document.querySelector('[data-role="ccc-inline-question"]');
   }
 
-  function closeRelayedQuestionModal() {
-    const modal = _relayedQuestionModalEl();
-    if (modal) modal.remove();
+  // Back-compat alias — older call sites may still reference the modal name.
+  function _relayedQuestionModalEl() { return _relayedQuestionInlineEl(); }
+
+  function closeRelayedQuestionInline() {
+    document.querySelectorAll('[data-role="ccc-inline-question"]').forEach(function (n) {
+      n.remove();
+    });
     _relayedQuestionState = {
       sessionId: null, nonce: null, fetching: false,
       submitting: false, questions: null, selections: null,
     };
   }
+  function closeRelayedQuestionModal() { closeRelayedQuestionInline(); }
 
-  // Called each poll tick. Decides whether to fetch/show/close the modal
-  // based on the open session's question_waiting flag.
+  // Called each poll tick. Decides whether to fetch/show/close the inline
+  // question card based on the open session's question_waiting flag.
   function syncRelayedQuestionModal() {
     const sid = currentSession && currentSession.id;
-    // No open session, or this session is no longer waiting → close any
-    // modal we have open (someone answered, or it timed out server-side).
+    // No open session, or this session is no longer waiting → tear down
+    // any inline card we have open (someone answered, or it timed out
+    // server-side).
     if (!sid || !liveStatus.questionWaiting) {
-      if (_relayedQuestionModalEl() || _relayedQuestionState.sessionId) {
-        closeRelayedQuestionModal();
+      if (_relayedQuestionInlineEl() || _relayedQuestionState.sessionId) {
+        closeRelayedQuestionInline();
       }
       return;
     }
-    // Already showing the modal for this session — leave it be; the user
+    // Already showing the card for this session — leave it be; the user
     // is mid-answer and we don't want to clobber their selections.
-    if (_relayedQuestionState.sessionId === sid && _relayedQuestionModalEl()) return;
+    if (_relayedQuestionState.sessionId === sid && _relayedQuestionInlineEl()) return;
     // Avoid stacking fetches.
     if (_relayedQuestionState.fetching) return;
     _relayedQuestionState.fetching = true;
@@ -1885,33 +1891,36 @@
         // Open session changed out from under us while fetching — bail.
         if (!currentSession || currentSession.id !== fetchedFor) return;
         if (!data || !data.ok || !data.pending) {
-          // Nothing pending after all — tear down a stale modal if present.
-          if (_relayedQuestionModalEl()) closeRelayedQuestionModal();
+          // Nothing pending after all — tear down a stale card if present.
+          if (_relayedQuestionInlineEl()) closeRelayedQuestionInline();
           return;
         }
         const questions = Array.isArray(data.questions) ? data.questions : [];
         if (!questions.length) return;
-        showRelayedQuestionModal(fetchedFor, data.nonce || null, questions);
+        showRelayedQuestionInline(fetchedFor, data.nonce || null, questions);
       })
       .catch(function () { _relayedQuestionState.fetching = false; });
   }
 
-  function showRelayedQuestionModal(sessionId, nonce, questions) {
-    // If a modal for the same session+nonce is already open, don't rebuild.
+  function showRelayedQuestionInline(sessionId, nonce, questions) {
+    // If a card for the same session+nonce is already open, don't rebuild.
     if (_relayedQuestionState.sessionId === sessionId
       && _relayedQuestionState.nonce === nonce
-      && _relayedQuestionModalEl()) return;
-    closeRelayedQuestionModal();
+      && _relayedQuestionInlineEl()) return;
+    closeRelayedQuestionInline();
+    // Mount into the active pane's conversation view so the card inherits
+    // the conv pane's font stack and lives where the user is reading. If
+    // no conv view is mounted yet (race during pane swap), bail — the
+    // next poll tick will retry.
+    const $view = (typeof getConvView === 'function') ? getConvView() : null;
+    if (!$view) return;
+
     _relayedQuestionState.sessionId = sessionId;
     _relayedQuestionState.nonce = nonce;
     _relayedQuestionState.questions = questions;
     _relayedQuestionState.selections = questions.map(function () {
       return { picked: new Set(), custom: '' };
     });
-
-    const modal = document.createElement('div');
-    modal.id = 'cccQuestionModal';
-    modal.className = 'upd-overlay ccc-question-modal open';
 
     const blocksHtml = questions.map(function (q, qi) {
       const multi = !!q.multiSelect;
@@ -1936,23 +1945,24 @@
         + questionHtml
         + (multi ? '<div class="ccc-q-multi-hint">Select all that apply</div>' : '')
         + (optsHtml ? '<ul class="cl-question-options ccc-q-options">' + optsHtml + '</ul>' : '')
-        + '<input type="text" class="ccc-q-custom bug-input" data-ccc-q="' + qi + '"'
+        + '<input type="text" class="ccc-q-custom" data-ccc-q="' + qi + '"'
         + ' placeholder="Other / type your own…" autocomplete="off">'
         + '</div>';
     }).join('');
 
+    const modal = document.createElement('div');
+    modal.className = 'ccc-inline-question';
+    modal.setAttribute('data-role', 'ccc-inline-question');
+    modal.setAttribute('data-session-id', sessionId);
     modal.innerHTML =
-      '<div class="upd-backdrop"></div>' +
-      '<div class="upd-dialog ccc-question-dialog" role="dialog" aria-modal="true">' +
-        '<div class="upd-title">Session is asking a question</div>' +
-        '<div class="ccc-q-blocks">' + blocksHtml + '</div>' +
-        '<div class="upd-error ccc-q-error"></div>' +
-        '<div class="upd-actions ccc-q-actions">' +
-          '<button type="button" class="upd-btn ccc-q-dismiss">Answer in terminal</button>' +
-          '<button type="button" class="upd-btn upd-primary ccc-q-send" disabled>Send answer</button>' +
-        '</div>' +
+      '<div class="ccc-iq-title">Session is asking a question</div>' +
+      '<div class="ccc-q-blocks">' + blocksHtml + '</div>' +
+      '<div class="ccc-q-error"></div>' +
+      '<div class="ccc-q-actions">' +
+        '<button type="button" class="ccc-q-dismiss">Answer in terminal</button>' +
+        '<button type="button" class="ccc-q-send ccc-q-primary" disabled>Send answer</button>' +
       '</div>';
-    document.body.appendChild(modal);
+    $view.appendChild(modal);
 
     const sendBtn = modal.querySelector('.ccc-q-send');
     const dismissBtn = modal.querySelector('.ccc-q-dismiss');

@@ -368,6 +368,35 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".flow-selection-box", app_css)
         self.assertIn(".flow-node.selected", app_css)
 
+    def test_relayed_question_renders_inline_in_conv_view(self):
+        """The "Session is asking a question" surface is an inline card
+        mounted inside the active conversation view (not a body-level
+        modal overlay) so it inherits the conv pane's font stack and
+        lives where the user is reading. Guarded by class names so a
+        future refactor that accidentally reintroduces the modal trips
+        this test."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        # Inline card class + data-role must exist in JS and CSS.
+        self.assertIn('ccc-inline-question', app_js)
+        self.assertIn('data-role="ccc-inline-question"', app_js)
+        self.assertIn(".ccc-inline-question", app_css)
+        # Mount must target the active conv view, not document.body.
+        self.assertIn("$view.appendChild(modal)", app_js)
+        self.assertIn("showRelayedQuestionInline", app_js)
+        self.assertIn("closeRelayedQuestionInline", app_js)
+        # Old modal shell must be gone — no more body-level overlay.
+        self.assertNotIn("cccQuestionModal", app_js)
+        self.assertNotIn('upd-overlay ccc-question-modal', app_js)
+        # The old .ccc-question-modal selector block must not declare
+        # any actual rules (comment mentions of the migrated name are
+        # fine; an active selector means the modal CSS came back).
+        self.assertNotIn(".ccc-question-modal {", app_css)
+        self.assertNotIn(".ccc-question-modal .", app_css)
+        # Fonts inherit from the conv pane (rather than the modal's own).
+        self.assertIn(".ccc-inline-question {", app_css)
+        self.assertIn("font: inherit;", app_css)
+
     def test_live_question_indicator_renders_prompt_and_options(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")

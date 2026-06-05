@@ -5561,47 +5561,121 @@
     top: var(--live-strip-offset, 24px);
   }
 
-  /* ── Relayed-question blocking modal ──────────────────────────────
-     Reuses the .upd-overlay / .upd-dialog shell and the .cl-question-*
-     visual language (see app.js showRelayedQuestionModal). Pops when the
-     open conversation's session has a pending relayed AskUserQuestion. */
-  .ccc-question-dialog { width: min(540px, 94vw); max-height: 86vh; overflow: auto; }
-  .ccc-question-modal .ccc-q-blocks {
-    display: flex; flex-direction: column; gap: 16px;
+  /* ── Inline relayed-question card ─────────────────────────────────
+     Renders inside `.conversations-view` so it inherits the conv pane's
+     font stack (no separate modal typography). Pinned via position:
+     sticky to stay in view as the user scrolls through the surrounding
+     conversation. Replaces the old .ccc-question-modal overlay; classes
+     reused from the .cl-question-* visual language. */
+  .ccc-inline-question {
+    position: sticky; bottom: 8px; z-index: 5;
+    margin: 18px 12px 12px;
+    padding: 14px 16px;
+    border: 1px solid rgba(88, 166, 255, 0.45);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--surface) 92%, rgba(88,166,255,0.16));
+    box-shadow: 0 6px 18px rgba(0,0,0,0.28);
+    /* Inherit conv pane font stack — no modal-specific typography. */
+    font: inherit;
+    color: var(--text);
   }
-  .ccc-question-modal .ccc-q-block {
+  .ccc-inline-question .ccc-iq-title {
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+  }
+  .ccc-inline-question .ccc-q-blocks {
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .ccc-inline-question .ccc-q-block {
     padding: 10px 12px;
     border-left: 3px solid rgba(88,166,255,0.55);
     border-radius: 4px;
-    background: rgba(88,166,255,0.08);
+    background: color-mix(in srgb, var(--surface-2) 60%, transparent);
   }
-  .ccc-question-modal .ccc-q-multi-hint {
+  .ccc-inline-question .cl-question-header,
+  .ccc-inline-question .cl-question-text {
+    font: inherit;
+  }
+  .ccc-inline-question .ccc-q-multi-hint {
     color: var(--text-muted); font-size: 11px;
     text-transform: uppercase; letter-spacing: 0.4px;
     margin: 4px 0 2px;
   }
-  .ccc-question-modal .ccc-q-options { margin-top: 8px; }
-  .ccc-question-modal .ccc-q-option.is-selected {
-    outline: 2px solid var(--accent); outline-offset: 1px;
-    border-radius: 4px;
-  }
-  .ccc-question-modal .ccc-q-option.is-selected .cl-question-option-label {
-    color: var(--accent);
-  }
-  .ccc-question-modal .cl-question-options li {
+  .ccc-inline-question .ccc-q-options { margin-top: 8px; }
+  .ccc-inline-question .cl-question-options li {
     transition: border-color 0.12s ease-out, background 0.12s ease-out;
   }
-  .ccc-question-modal .cl-question-options li:hover {
+  .ccc-inline-question .cl-question-options li:hover {
     border-color: rgba(88,166,255,0.55);
     background: rgba(88,166,255,0.14);
   }
-  .ccc-question-modal .ccc-q-custom { margin-top: 9px; }
-  .ccc-question-modal .ccc-q-dismiss {
-    margin-right: auto; font-size: 12px;
-    color: var(--text-muted); background: transparent; border-color: transparent;
+  .ccc-inline-question .cl-question-option-btn {
+    font: inherit;
   }
-  .ccc-question-modal .ccc-q-dismiss:hover {
-    color: var(--text); background: var(--surface-2);
+  .ccc-inline-question .ccc-q-option.is-selected {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+    border-radius: 4px;
+  }
+  .ccc-inline-question .ccc-q-option.is-selected .cl-question-option-label {
+    color: var(--accent);
+  }
+  .ccc-inline-question .ccc-q-custom {
+    display: block; width: 100%; box-sizing: border-box;
+    margin-top: 9px;
+    padding: 8px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text);
+    font: inherit;
+  }
+  .ccc-inline-question .ccc-q-custom:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .ccc-inline-question .ccc-q-error {
+    display: none;
+    margin-top: 10px;
+    color: var(--red);
+    font-size: 12px;
+  }
+  .ccc-inline-question .ccc-q-error.visible { display: block; }
+  .ccc-inline-question .ccc-q-actions {
+    display: flex; gap: 8px; align-items: center;
+    margin-top: 14px;
+  }
+  .ccc-inline-question .ccc-q-dismiss,
+  .ccc-inline-question .ccc-q-send {
+    padding: 6px 14px;
+    border-radius: 5px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+  }
+  .ccc-inline-question .ccc-q-dismiss {
+    margin-right: auto;
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid transparent;
+  }
+  .ccc-inline-question .ccc-q-dismiss:hover {
+    color: var(--text);
+    background: var(--surface-2);
+  }
+  .ccc-inline-question .ccc-q-send {
+    color: #fff;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    font-weight: 600;
+  }
+  .ccc-inline-question .ccc-q-send:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .ccc-inline-question .ccc-q-send:hover:not(:disabled) {
+    filter: brightness(1.08);
   }
 
   .kanban-approve-deny {
