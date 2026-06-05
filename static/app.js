@@ -3171,6 +3171,43 @@
     { name: '/model', description: 'Select or change model' },
     { name: '/status', description: 'Show session status' },
   ];
+  const CODEX_SLASH_FALLBACK_COMMANDS = [
+    { name: '/approve', description: 'Approve one retry of a recent auto-review denial' },
+    { name: '/apps', description: 'Browse apps and insert them into the prompt' },
+    { name: '/clear', description: 'Clear the terminal and start a new chat' },
+    { name: '/compact', description: 'Summarize the visible conversation to free tokens' },
+    { name: '/copy', description: 'Copy the latest completed Codex output' },
+    { name: '/diff', description: 'Show the current Git diff' },
+    { name: '/exit', description: 'Exit the Codex CLI' },
+    { name: '/fast', description: 'Toggle the current model fast tier' },
+    { name: '/fork', description: 'Fork the current conversation' },
+    { name: '/goal', description: 'Set or view a task goal' },
+    { name: '/hooks', description: 'Review lifecycle hooks' },
+    { name: '/ide', description: 'Include IDE context' },
+    { name: '/init', description: 'Generate an AGENTS.md scaffold' },
+    { name: '/logout', description: 'Sign out of Codex' },
+    { name: '/mcp', description: 'List configured MCP tools' },
+    { name: '/memories', description: 'Configure memory use and generation' },
+    { name: '/mention', description: 'Attach a file to the conversation' },
+    { name: '/model', description: 'Choose the active model' },
+    { name: '/new', description: 'Start a new conversation in the same CLI' },
+    { name: '/permissions', description: 'Set approval and permission behavior' },
+    { name: '/personality', description: 'Choose a communication style' },
+    { name: '/plan', description: 'Switch to plan mode' },
+    { name: '/plugins', description: 'Browse installed and discoverable plugins' },
+    { name: '/quit', description: 'Exit the Codex CLI' },
+    { name: '/raw', description: 'Toggle raw scrollback mode' },
+    { name: '/resume', description: 'Resume a saved conversation' },
+    { name: '/review', description: 'Ask Codex to review the working tree' },
+    { name: '/sandbox-add-read-dir', description: 'Grant sandbox read access to a directory' },
+    { name: '/skills', description: 'Browse and use skills' },
+    { name: '/status', description: 'Display session configuration and token usage' },
+    { name: '/statusline', description: 'Configure TUI status-line fields' },
+    { name: '/stop', description: 'Stop background terminals' },
+    { name: '/theme', description: 'Choose a syntax-highlighting theme' },
+    { name: '/title', description: 'Configure terminal title items' },
+    { name: '/vim', description: 'Toggle Vim mode' },
+  ];
   const _slashCommandCache = new Map();
   let _slashMenuEl = null;
   let _slashMenuInput = null;
@@ -3205,20 +3242,25 @@
     setActivePaneById(paneId);
   }
 
+  function slashFallbackCommandsForSource(source) {
+    return source === 'codex' ? CODEX_SLASH_FALLBACK_COMMANDS : SLASH_FALLBACK_COMMANDS;
+  }
+
   function slashCommandUnavailableReason() {
-    if ((currentConversation || '').startsWith('backlog-issue-')) return 'Issue actions do not use Claude slash commands';
-    if (conversationsData.some(x => x.id === currentConversation && x.source === 'backlog')) return 'Issue actions do not use Claude slash commands';
+    if ((currentConversation || '').startsWith('backlog-issue-')) return 'Issue actions do not use slash commands';
+    if (conversationsData.some(x => x.id === currentConversation && x.source === 'backlog')) return 'Issue actions do not use slash commands';
     const source = currentSession && currentSession.source;
-    if (source === 'codex') return 'Codex sessions do not use Claude slash commands';
-    if (source === 'gemini') return 'Gemini sessions do not use Claude slash commands';
-    if (source === 'cursor') return 'Cursor sessions do not use Claude slash commands';
-    if (source === 'antigravity') return 'Antigravity sessions do not use Claude slash commands';
-    if (source === 'pkood') return 'pkood agents do not use Claude slash commands';
+    if (source === 'gemini') return 'Slash commands are not wired for Gemini sessions';
+    if (source === 'cursor') return 'Slash commands are not wired for Cursor sessions';
+    if (source === 'antigravity') return 'Slash commands are not wired for Antigravity sessions';
+    if (source === 'pkood') return 'pkood agents do not use slash commands';
     if (currentConversation === '__new__') {
       const engine = (typeof getSpawnEngine === 'function') ? getSpawnEngine() : 'claude';
-      return engine === 'claude' ? '' : 'Switch the new-session engine to claude';
+      return (engine === 'claude' || engine === 'codex')
+        ? ''
+        : 'Slash commands are not wired for ' + engine + ' sessions';
     }
-    return (currentSession && currentSession.id) ? '' : 'Select a Claude session first';
+    return (currentSession && currentSession.id) ? '' : 'Select a Claude or Codex session first';
   }
 
   async function slashCommandsForCurrentContext() {
@@ -3226,11 +3268,14 @@
     if (unavailable) {
       return [{ name: '/slash', description: unavailable, disabled: true }];
     }
-    if (currentConversation === '__new__') return SLASH_FALLBACK_COMMANDS;
+    if (currentConversation === '__new__') {
+      const engine = (typeof getSpawnEngine === 'function') ? getSpawnEngine() : 'claude';
+      return slashFallbackCommandsForSource(engine);
+    }
     const sid = currentSession && currentSession.id;
     if (!sid) return [];
     if (_slashCommandCache.has(sid)) return _slashCommandCache.get(sid);
-    let commands = SLASH_FALLBACK_COMMANDS;
+    let commands = slashFallbackCommandsForSource(currentSession && currentSession.source);
     try {
       const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/slash-commands', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
@@ -3599,7 +3644,7 @@
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ agent_id: agentId, message: text }),
         });
-      } else if (compactCommand) {
+      } else if (compactCommand && currentSession.source !== 'codex') {
         res = await fetch('/api/session/compact', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -3651,9 +3696,14 @@
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
         } else if (compactCommand) {
-          showOpToast(compactRequestSuccessMessage(data));
-          showCompactInProgressBanner(sid);
-          scheduleCompactUsageRefresh(sid);
+          showOpToast(compactRequestSuccessMessage(data, currentSession.source));
+          if (currentSession.source !== 'codex') {
+            showCompactInProgressBanner(sid);
+            scheduleCompactUsageRefresh(sid);
+          } else {
+            setTimeout(refreshConversationList, 1500);
+            setTimeout(refreshConversationList, 3500);
+          }
         }
       } else {
         const reason = formatInjectFailure(data, res.status);
@@ -3664,13 +3714,15 @@
         }
         restoreInputAfterSendFailure($input, text);
         flashRed();
-        showOpToast((injectMode === 'steer' ? 'Steer' : 'Send') + ' failed: ' + reason, 'error');
+        const failurePrefix = compactCommand ? '/compact failed' : ((injectMode === 'steer' ? 'Steer' : 'Send') + ' failed');
+        showOpToast(failurePrefix + ': ' + reason, 'error');
       }
     } catch (err) {
       removePendingSendEcho(pendingSend);
       restoreInputAfterSendFailure($input, text);
       flashRed();
-      showOpToast((injectMode === 'steer' ? 'Steer' : 'Send') + ' failed: ' + (err.message || 'network error'), 'error');
+      const failurePrefix = compactCommand ? '/compact failed' : ((injectMode === 'steer' ? 'Steer' : 'Send') + ' failed');
+      showOpToast(failurePrefix + ': ' + (err.message || 'network error'), 'error');
     }
     if ($actionBtn) $actionBtn.disabled = false;
     $input.focus();
@@ -12531,8 +12583,15 @@
     return data;
   }
 
-  function compactRequestSuccessMessage(data) {
+  async function postRunCompactForSession(sessionId, source, terminalApp) {
+    if (source === 'codex') return postInjectInput(sessionId, '/compact');
+    return postCompactSession(sessionId, terminalApp);
+  }
+
+  function compactRequestSuccessMessage(data, source) {
     if (data && data.queued) return 'Queued /compact until the terminal session is idle.';
+    if (data && data.submit_key === 'tab') return 'Queued Codex /compact in the live terminal.';
+    if (source === 'codex' && data && data.via === 'terminal-control') return '/compact sent to the live Codex terminal.';
     if (data && data.launched) return 'Opened Claude terminal and requested /compact.';
     if (data && data.via === 'bg-agent-pty') return '/compact sent to background agent.';
     return 'Compact requested. Waiting for Claude to write the compact boundary.';
@@ -14724,16 +14783,24 @@
         const pct = badge.getAttribute('data-pct') || '';
         const titleEl = item && item.querySelector('[data-role="title"]');
         const titleText = (titleEl && (titleEl.textContent || '').trim()) || 'this session';
+        const rowId = item && item.dataset.id;
+        const row = conversationsData.find(c => c && ((rowId && c.id === rowId) || c.session_id === sid));
+        const source = row && row.source;
         const msg = 'Context is at ' + pct + '%. Compact "' + titleText + '" now? '
-          + '(Runs Claude Code /compact for the session.)';
+          + '(Runs /compact for the session.)';
         if (!window.confirm(msg)) return;
         try {
-          const data = await postCompactSession(sid);
+          const data = await postRunCompactForSession(sid, source);
           if (data && data.ok) {
-            showOpToast(compactRequestSuccessMessage(data), 'success');
+            showOpToast(compactRequestSuccessMessage(data, source), 'success');
             touchSessionOptimistically(sid);
-            showCompactInProgressBanner(sid);
-            scheduleCompactUsageRefresh(sid);
+            if (source !== 'codex') {
+              showCompactInProgressBanner(sid);
+              scheduleCompactUsageRefresh(sid);
+            } else {
+              setTimeout(refreshConversationList, 1500);
+              setTimeout(refreshConversationList, 3500);
+            }
           } else {
             showOpToast('/compact failed: ' + ((data && data.error) || 'unknown'), 'error');
           }

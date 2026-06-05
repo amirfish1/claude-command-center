@@ -648,7 +648,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_conv_pct_badge_is_clickable_compact_shortcut(self):
         """The context-% badge on each conv row is a one-click shortcut to
-        /compact. Click → confirm → injectToSession('/compact'). The
+        /compact. Click -> confirm -> run the engine-aware compact helper. The
         row-click handler must EXCLUDE the badge so clicking it doesn't
         also open the conversation."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -659,11 +659,23 @@ class TestServerImports(unittest.TestCase):
         # itself doesn't open underneath the /compact confirm.
         self.assertIn('ev.target.closest(\'[data-role="conv-pct-compact"]\')', app_js)
         # Confirm + POST shape — compact is a command operation, not a
-        # generic text inject.
+        # generic text inject. Codex is routed through /api/inject-input
+        # inside postRunCompactForSession so it can execute as a Codex slash
+        # command in the live TUI.
         self.assertIn("window.confirm(msg)", app_js)
-        self.assertIn("postCompactSession(sid)", app_js)
+        self.assertIn("postRunCompactForSession(sid, source)", app_js)
+        self.assertIn("postInjectInput(sessionId, '/compact')", app_js)
         self.assertIn("/api/session/compact", app_js)
         self.assertIn(".conv-pct-badge.is-actionable", app_css)
+
+    def test_codex_slash_commands_are_wired_as_codex_commands(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("const CODEX_SLASH_FALLBACK_COMMANDS = [", app_js)
+        self.assertIn("{ name: '/compact', description: 'Summarize the visible conversation to free tokens' }", app_js)
+        self.assertIn("return source === 'codex' ? CODEX_SLASH_FALLBACK_COMMANDS : SLASH_FALLBACK_COMMANDS;", app_js)
+        self.assertIn("compactCommand && currentSession.source !== 'codex'", app_js)
+        self.assertNotIn("Codex sessions do not use Claude slash commands", app_js)
+        self.assertIn("const failurePrefix = compactCommand ? '/compact failed'", app_js)
 
     def test_relayed_question_renders_inline_in_conv_view(self):
         """The "Session is asking a question" surface is an inline card
@@ -1322,6 +1334,108 @@ class TestRepoContextHelpers(unittest.TestCase):
         launch.assert_not_called()
         resume.assert_not_called()
 
+    def test_extract_session_slash_commands_returns_codex_catalog(self):
+        with mock.patch.object(self.server, "_detect_session_engine", return_value="codex"):
+            result = self.server.extract_session_slash_commands("codex-session")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["engine"], "codex")
+        self.assertEqual(result["source"], "codex-fallback")
+        names = {cmd["name"] for cmd in result["commands"]}
+        self.assertIn("/compact", names)
+        self.assertIn("/model", names)
+        self.assertIn("/status", names)
+
+    def test_compact_live_headless_spawn_rejects_without_side_effects(self):
+        sid = "00000000-0000-4000-8000-000000000001"
+        spawn = {"pid": 12345}
+        with mock.patch.object(self.server, "_detect_session_engine", return_value="claude"), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={
+                     "live": True,
+                     "tty": None,
+                     "terminal_app": None,
+                     "pid": 12345,
+                 },
+             ), \
+             mock.patch.object(self.server, "_find_live_spawn_entry_for_session", return_value=spawn), \
+             mock.patch.object(self.server, "_backup_jsonl_before_compact") as backup, \
+             mock.patch.object(self.server, "_queue_terminal_input") as queue, \
+             mock.patch.object(self.server, "launch_terminal_for_session") as launch, \
+             mock.patch.object(self.server, "inject_input_via_keystroke") as inject, \
+             mock.patch.object(self.server, "_write_stream_json_user_message") as write:
+            result = self.server.compact_session_context(sid)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "compact_headless_running")
+        self.assertEqual(result["pid"], 12345)
+        self.assertIn("still running headlessly", result["error"])
+        backup.assert_not_called()
+        queue.assert_not_called()
+        launch.assert_not_called()
+        inject.assert_not_called()
+        write.assert_not_called()
+
+    def test_compact_live_tty_plus_headless_spawn_rejects_before_keystroke(self):
+        sid = "00000000-0000-4000-8000-000000000001"
+        spawn = {"pid": 12345}
+        with mock.patch.object(self.server, "_detect_session_engine", return_value="claude"), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={
+                     "live": True,
+                     "tty": "/dev/ttys001",
+                     "terminal_app": "Terminal",
+                     "pid": 54321,
+                 },
+             ), \
+             mock.patch.object(self.server, "_find_live_spawn_entry_for_session", return_value=spawn), \
+             mock.patch.object(self.server, "_backup_jsonl_before_compact") as backup, \
+             mock.patch.object(self.server, "_queue_terminal_input") as queue, \
+             mock.patch.object(self.server, "inject_input_via_keystroke") as inject:
+            result = self.server.compact_session_context(sid)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "compact_headless_running")
+        self.assertEqual(result["pid"], 12345)
+        backup.assert_not_called()
+        queue.assert_not_called()
+        inject.assert_not_called()
+
+    def test_compact_live_no_tty_registry_rejects_as_headless_running(self):
+        sid = "00000000-0000-4000-8000-000000000001"
+        with mock.patch.object(self.server, "_detect_session_engine", return_value="claude"), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={
+                     "live": True,
+                     "tty": None,
+                     "terminal_app": None,
+                     "pid": 12345,
+                 },
+             ), \
+             mock.patch.object(self.server, "_find_live_spawn_entry_for_session", return_value=None), \
+             mock.patch.object(self.server, "_backup_jsonl_before_compact") as backup, \
+             mock.patch.object(self.server, "_queue_terminal_input") as queue, \
+             mock.patch.object(self.server, "launch_terminal_for_session") as launch, \
+             mock.patch.object(self.server, "inject_input_via_keystroke") as inject:
+            result = self.server.compact_session_context(sid)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "compact_headless_running")
+        self.assertEqual(result["pid"], 12345)
+        backup.assert_not_called()
+        queue.assert_not_called()
+        launch.assert_not_called()
+        inject.assert_not_called()
+
     def test_live_background_agent_injects_via_daemon_pty(self):
         sid = "00000000-0000-4000-8000-000000000001"
         worker = {"pid": 12345, "sessionId": sid, "ptySock": "/tmp/cc-daemon-501/x.sock"}
@@ -1480,6 +1594,81 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(result["ok"])
         inject.assert_called_once_with("ttys009", "Terminal", "hello")
         resume.assert_not_called()
+
+    def test_codex_slash_idle_terminal_submits_with_return(self):
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={
+                     "live": True,
+                     "tty": "ttys009",
+                     "terminal_app": "Terminal",
+                     "status": "idle",
+                 },
+             ), \
+             mock.patch.object(self.server, "_terminal_input_queue_has_pending", return_value=False), \
+             mock.patch.object(
+                 self.server,
+                 "inject_input_via_keystroke",
+                 return_value={"ok": True, "via": "terminal-control", "submit_key": "return"},
+             ) as inject, \
+             mock.patch.object(self.server, "resume_session_codex") as resume:
+            result = self.server._inject_text_into_session(sid, "/status")
+
+        self.assertTrue(result["ok"])
+        inject.assert_called_once_with("ttys009", "Terminal", "/status", submit_key="return")
+        resume.assert_not_called()
+
+    def test_codex_slash_busy_terminal_queues_with_tab(self):
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={
+                     "live": True,
+                     "tty": "ttys009",
+                     "terminal_app": "Terminal",
+                     "status": "busy",
+                 },
+             ), \
+             mock.patch.object(self.server, "_terminal_input_queue_has_pending", return_value=False), \
+             mock.patch.object(
+                 self.server,
+                 "inject_input_via_keystroke",
+                 return_value={"ok": True, "via": "terminal-control", "submit_key": "tab"},
+             ) as inject, \
+             mock.patch.object(self.server, "resume_session_codex") as resume:
+            result = self.server._inject_text_into_session(sid, "/compact")
+
+        self.assertTrue(result["ok"])
+        inject.assert_called_once_with("ttys009", "Terminal", "/compact", submit_key="tab")
+        resume.assert_not_called()
+
+    def test_codex_slash_without_live_tui_rejects_resume(self):
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={"live": False, "tty": None, "terminal_app": None},
+             ), \
+             mock.patch.object(self.server, "resume_session_codex") as resume, \
+             mock.patch.object(self.server, "inject_input_via_keystroke") as inject:
+            result = self.server._inject_text_into_session(sid, "/status")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "codex_slash_requires_live_tui")
+        resume.assert_not_called()
+        inject.assert_not_called()
 
     def test_codex_busy_terminal_routes_to_resume_for_app_queue(self):
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
@@ -1860,6 +2049,25 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("unix id of first application process whose frontmost is true", script)
         self.assertIn("frontmost of first application process whose unix id is prevPid", script)
         self.assertNotIn("tell application prevApp", script)
+
+    def test_terminal_inject_can_submit_tab(self):
+        seen = {}
+
+        def fake_run(args, **kwargs):
+            seen["script"] = args[2]
+            return subprocess.CompletedProcess(args, 0, stdout="ok\n", stderr="")
+
+        with mock.patch.object(self.server.subprocess, "run", side_effect=fake_run):
+            result = self.server.inject_input_via_keystroke(
+                "/dev/ttys001",
+                "Terminal",
+                "/compact",
+                submit_key="tab",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["submit_key"], "tab")
+        self.assertIn("key code 48", seen["script"])
 
     def test_live_claude_scan_skips_headless_processes_before_lsof(self):
         calls = []

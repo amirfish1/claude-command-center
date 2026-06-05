@@ -1110,6 +1110,52 @@ _FALLBACK_SLASH_COMMANDS = (
 )
 
 
+_CODEX_FALLBACK_SLASH_COMMANDS = (
+    {"name": "/approve", "description": "Approve one retry of a recent auto-review denial"},
+    {"name": "/apps", "description": "Browse apps and insert them into the prompt"},
+    {"name": "/btw", "description": "Start an ephemeral side conversation"},
+    {"name": "/clear", "description": "Clear the terminal and start a new chat"},
+    {"name": "/compact", "description": "Summarize the visible conversation to free tokens"},
+    {"name": "/copy", "description": "Copy the latest completed Codex output"},
+    {"name": "/debug-config", "description": "Inspect config layers and requirements"},
+    {"name": "/diff", "description": "Show the current Git diff"},
+    {"name": "/exit", "description": "Exit the Codex CLI"},
+    {"name": "/experimental", "description": "Toggle experimental features"},
+    {"name": "/fast", "description": "Toggle the current model's Fast tier"},
+    {"name": "/feedback", "description": "Send logs and feedback to Codex maintainers"},
+    {"name": "/fork", "description": "Fork the current conversation"},
+    {"name": "/goal", "description": "Set, view, pause, resume, or clear a task goal"},
+    {"name": "/hooks", "description": "Review lifecycle hooks"},
+    {"name": "/ide", "description": "Include IDE context"},
+    {"name": "/init", "description": "Generate an AGENTS.md scaffold"},
+    {"name": "/keymap", "description": "Remap TUI keyboard shortcuts"},
+    {"name": "/logout", "description": "Sign out of Codex"},
+    {"name": "/mcp", "description": "List configured MCP tools"},
+    {"name": "/memories", "description": "Configure memory use and generation"},
+    {"name": "/mention", "description": "Attach a file to the conversation"},
+    {"name": "/model", "description": "Choose the active model"},
+    {"name": "/new", "description": "Start a new conversation in the same CLI"},
+    {"name": "/permissions", "description": "Set approval and permission behavior"},
+    {"name": "/personality", "description": "Choose a communication style"},
+    {"name": "/plan", "description": "Switch to plan mode"},
+    {"name": "/plugins", "description": "Browse installed and discoverable plugins"},
+    {"name": "/ps", "description": "Show experimental background terminals"},
+    {"name": "/quit", "description": "Exit the Codex CLI"},
+    {"name": "/raw", "description": "Toggle raw scrollback mode"},
+    {"name": "/resume", "description": "Resume a saved conversation"},
+    {"name": "/review", "description": "Ask Codex to review the working tree"},
+    {"name": "/sandbox-add-read-dir", "description": "Grant sandbox read access to a directory"},
+    {"name": "/side", "description": "Start an ephemeral side conversation"},
+    {"name": "/skills", "description": "Browse and use skills"},
+    {"name": "/status", "description": "Display session configuration and token usage"},
+    {"name": "/statusline", "description": "Configure TUI status-line fields"},
+    {"name": "/stop", "description": "Stop background terminals"},
+    {"name": "/theme", "description": "Choose a syntax-highlighting theme"},
+    {"name": "/title", "description": "Configure terminal title items"},
+    {"name": "/vim", "description": "Toggle Vim mode"},
+)
+
+
 def _clean_slash_command_name(value):
     name = str(value or "").strip()
     if not name:
@@ -1333,21 +1379,35 @@ def _local_slash_commands_for_session(session_id):
 
 
 def extract_session_slash_commands(session_id):
-    """Return slash commands advertised by a Claude session's init events.
+    """Return slash commands for the session's engine.
 
     The Claude Agent SDK exposes dispatchable slash commands in `system/init`.
     Reading that list from the transcript lets CCC support built-ins and custom
     skills without hardcoding a stale command catalog. If the transcript is
     missing or predates the field, fall back to a small common set.
+
+    Codex exposes its own slash-command layer in the interactive CLI. Codex
+    transcripts do not currently advertise a per-session command catalog, so
+    CCC returns the documented built-in CLI set.
     """
+    engine = _detect_session_engine(session_id)
+    if engine == "codex":
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "engine": "codex",
+            "commands": list(_CODEX_FALLBACK_SLASH_COMMANDS),
+            "source": "codex-fallback",
+        }
     result = {
         "ok": True,
         "session_id": session_id,
+        "engine": "claude",
         "commands": list(_FALLBACK_SLASH_COMMANDS),
         "source": "fallback",
     }
-    if not session_id or _detect_session_engine(session_id) != "claude":
-        return {**result, "commands": []}
+    if not session_id or engine != "claude":
+        return {**result, "engine": engine, "commands": []}
     local_commands = _local_slash_commands_for_session(session_id)
     path = _find_session_jsonl(session_id)
     if path is None:
@@ -8168,24 +8228,24 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None, post_sl
     return {"ok": True, "terminal_app": target, "command": command}
 
 
-def inject_input_via_keystroke(tty, terminal_app, text):
-    """Find the terminal tab for `tty`, then send `text` + Enter to it.
+def inject_input_via_keystroke(tty, terminal_app, text, submit_key="return"):
+    """Find the terminal tab for `tty`, then send `text` + a submit key to it.
 
     Two stages, both inside one osascript call:
       1. Native terminal input API (`do script` for Terminal.app,
          `write text` for iTerm2) types the text into the TTY without
          needing System Events keystroke permissions for the body.
-      2. Activate the terminal app and emit `key code 36` (Return) via
-         System Events so Claude Code's TUI sees a real keypress and
-         submits the input. The native APIs alone leave the text in
-         the input buffer (the TUI's bracketed-paste handling treats
-         the trailing newline as content, not as submit), which causes
-         consecutive injects to concatenate in the buffer.
+      2. Activate the terminal app and emit a real keypress via System
+         Events so the TUI sees submission. Return submits normal input;
+         Tab queues Codex slash commands while a turn is running.
 
     Stage 2 briefly steals focus; we capture the previously-frontmost
     process id and restore it at the end so the user's browser doesn't
     stay buried.
     """
+    submit_key = str(submit_key or "return").strip().lower()
+    submit_key_code = 48 if submit_key == "tab" else 36
+    submit_label = "Tab" if submit_key_code == 48 else "Return"
     tty_short = tty.replace("/dev/", "")
     tty_full = "/dev/" + tty_short
 
@@ -8247,7 +8307,7 @@ def inject_input_via_keystroke(tty, terminal_app, text):
     if terminal_app == "iTerm2":
         # iTerm2: find the session by tty, write the body via the
         # native session API (no focus needed), then activate iTerm and
-        # emit a real Return keystroke so the TUI submits.
+        # emit a real submit keystroke so the TUI accepts it.
         script = f'''
         set prevPid to 0
         try
@@ -8288,7 +8348,7 @@ def inject_input_via_keystroke(tty, terminal_app, text):
         try
           tell application "System Events"
             tell process "iTerm2"
-              key code 36
+              key code {submit_key_code}
             end tell
           end tell
         on error errMsg
@@ -8306,8 +8366,8 @@ def inject_input_via_keystroke(tty, terminal_app, text):
     else:
         # Terminal.app: find the tab by tty, focus it, send text through
         # Terminal's native `do script ... in tab` API, then activate
-        # Terminal and emit a real Return keystroke via System Events so
-        # the TUI submits. Target "process Terminal" explicitly so the
+        # Terminal and emit a real submit keystroke via System Events so
+        # the TUI accepts it. Target "process Terminal" explicitly so the
         # keystroke reaches the right process even if focus briefly shifts.
         script = f'''
         set prevPid to 0
@@ -8345,7 +8405,7 @@ def inject_input_via_keystroke(tty, terminal_app, text):
         try
           tell application "System Events"
             tell process "Terminal"
-              key code 36
+              key code {submit_key_code}
             end tell
           end tell
         on error errMsg
@@ -8409,7 +8469,7 @@ def inject_input_via_keystroke(tty, terminal_app, text):
             "terminal_app": terminal_app,
             "submitted": False,
             "warning": (
-                "Text typed but auto-submit was blocked. Grant "
+                f"Text typed but auto-submit with {submit_label} was blocked. Grant "
                 "Accessibility to osascript in System Settings > "
                 "Privacy & Security > Accessibility, then retry."
             ),
@@ -8433,6 +8493,7 @@ def inject_input_via_keystroke(tty, terminal_app, text):
         "terminal_app": terminal_app,
         "via": "terminal-control",
         "submitted": True,
+        "submit_key": "tab" if submit_key_code == 48 else "return",
     }
 
 
@@ -24797,6 +24858,9 @@ def _backup_jsonl_before_compact(session_id):
 
 
 _COMPACT_TRIGGER_RE = re.compile(r"^\s*/compact(?:\s|$)", re.IGNORECASE)
+_SLASH_COMMAND_TRIGGER_RE = re.compile(
+    r"^\s*/[A-Za-z][A-Za-z0-9_-]*(?::[A-Za-z0-9_-]+)*(?=\s|$)"
+)
 
 
 def _compact_result(payload, backup_path=None):
@@ -24833,6 +24897,32 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
     tty = status.get("tty")
     term_app = terminal_app or status.get("terminal_app") or "Terminal"
     has_tty = bool(tty) and tty != "??"
+    live_spawn = _find_live_spawn_entry_for_session(sid)
+    if live_spawn is not None:
+        return {
+            "ok": False,
+            "code": "compact_headless_running",
+            "pid": live_spawn.get("pid"),
+            "error": (
+                "This session is still running headlessly. Wait for it to "
+                "finish, then click Compact again; CCC will open an "
+                "interactive terminal to run /compact."
+            ),
+        }
+    if status.get("live") and not has_tty and status.get("kind") != "bg":
+        payload = {
+            "ok": False,
+            "code": "compact_headless_running",
+            "error": (
+                "This session is still running headlessly. Wait for it to "
+                "finish, then click Compact again; CCC will open an "
+                "interactive terminal to run /compact."
+            ),
+        }
+        if status.get("pid"):
+            payload["pid"] = status.get("pid")
+        return payload
+
     pending_question = _pending_ask_user_question_for_session(sid)
 
     if status.get("live") and has_tty:
@@ -24882,18 +24972,6 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
             "error": "This session is waiting for an answer. Answer it before compacting.",
         }
 
-    live_spawn = _find_live_spawn_entry_for_session(sid)
-    if live_spawn is not None:
-        return {
-            "ok": False,
-            "code": "compact_headless_running",
-            "pid": live_spawn.get("pid"),
-            "error": (
-                "This Claude session is running headlessly. Wait for that run "
-                "to finish, then compact from an interactive terminal."
-            ),
-        }
-
     if status.get("live"):
         return {
             "ok": False,
@@ -24930,11 +25008,41 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
     text = _strip_ccc_session_state_instruction(text)
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
-    if _COMPACT_TRIGGER_RE.match(text):
+    is_codex = _is_codex_session(session_id)
+    compact_command = bool(_COMPACT_TRIGGER_RE.match(text))
+    slash_command = bool(_SLASH_COMMAND_TRIGGER_RE.match(text))
+    if compact_command and not is_codex:
         return compact_session_context(
             session_id,
             _from_terminal_queue=_from_terminal_queue,
         )
+    mode = "steer" if str(mode or "").lower() == "steer" else "send"
+    cwd = find_session_cwd(session_id)
+    status = session_live_status(session_id, cwd)
+    tty = status.get("tty")
+    term_app = status.get("terminal_app")
+    has_tty = bool(tty) and tty != "??"
+    is_cursor = _is_cursor_session(session_id)
+    if is_codex and slash_command:
+        if status.get("live") and has_tty:
+            if not _from_terminal_queue and _terminal_input_queue_has_pending(session_id):
+                return _queue_terminal_input(session_id, text, status)
+            submit_key = "tab" if _session_status_is_busy(status) else "return"
+            return inject_input_via_keystroke(
+                tty,
+                term_app or "Terminal",
+                text,
+                submit_key=submit_key,
+            )
+        return {
+            "ok": False,
+            "code": "codex_slash_requires_live_tui",
+            "engine": "codex",
+            "error": (
+                "Codex slash commands require a live interactive Codex "
+                "terminal. Launch or focus the session, then retry."
+            ),
+        }
     # Defense-in-depth: never inject text while an AskUserQuestion is
     # pending. Queue it instead — the queue watcher above also has this
     # guard, so the text will be flushed once the user answers in the UI
@@ -24943,19 +25051,6 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
     # (annotation flows, /api/inject-input direct calls, etc.).
     if not _from_terminal_queue and _pending_ask_user_question_for_session(session_id):
         return _queue_terminal_input(session_id, text, {"status": "busy"})
-    # /compact rewrites the JSONL — snapshot it first so the user can
-    # recover the pre-compact transcript from
-    # ~/.claude/command-center/compact-backups/ if needed.
-    if _COMPACT_TRIGGER_RE.match(text):
-        _backup_jsonl_before_compact(session_id)
-    mode = "steer" if str(mode or "").lower() == "steer" else "send"
-    cwd = find_session_cwd(session_id)
-    status = session_live_status(session_id, cwd)
-    tty = status.get("tty")
-    term_app = status.get("terminal_app")
-    has_tty = bool(tty) and tty != "??"
-    is_codex = _is_codex_session(session_id)
-    is_cursor = _is_cursor_session(session_id)
     if is_codex and mode == "steer":
         return resume_session_codex(session_id, text, steer=True)
     if status.get("live") and has_tty:
