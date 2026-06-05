@@ -7872,9 +7872,15 @@
         const ancId = ancestorOf.get(cid);
         const ancPlace = ancId && clusterPlacements.get(ancId);
         if (ancPlace) {
-          // Unplaced nested cluster — default to "right of ancestor".
-          anchorX = ancPlace.x + ancPlace.w + NESTED_GAP_X;
-          anchorY = ancPlace.y;
+          // Unplaced nested cluster — default to "below ancestor".
+          // Per user request 2026-06-05: children of an object/repo
+          // (including nested objects and nested repos) should stack
+          // BELOW their parent, not to the right of it. Multiple
+          // unplaced nested siblings start at the same seed slot;
+          // the overlap resolver then stacks the subsequent ones
+          // further down so they don't pile on top of each other.
+          anchorX = ancPlace.x;
+          anchorY = ancPlace.y + ancPlace.h + CLUSTER_MARGIN;
         } else {
           // Unplaced top-level cluster — bin-pack seed.
           if (rowHasCluster && (cursorX - startX + cluster.width) > rowBudget) {
@@ -24925,6 +24931,12 @@
     setInterval(_gated('archiveTimes', () => {
       if (document.hidden) return;
       if (typeof refreshArchiveData !== 'function') return;
+      // Skip while the user is panning the flow board (or otherwise
+      // dragging in the sidebar). Without this, the fetch fires, the
+      // .then re-renders, and the in-progress pointer drag bumps into
+      // the swapped DOM mid-pan. The flush-after-drag hook replays
+      // the deferred render when the drag ends.
+      if (typeof deferSidebarRenderIfDragging === 'function' && deferSidebarRenderIfDragging()) return;
       refreshArchiveData({ staleOk: true }).then(() => {
         try {
           if (typeof renderArchiveList === 'function') {

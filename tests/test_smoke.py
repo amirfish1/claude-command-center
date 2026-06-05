@@ -409,8 +409,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("parentNode.offsetLeft", app_js)
         self.assertIn("parentNode.offsetTop", app_js)
         self.assertIn("clusterPlacements", app_js)
-        # Unplaced nested clusters seed from "right of ancestor".
-        self.assertIn("ancPlace.x + ancPlace.w + NESTED_GAP_X", app_js)
+        # Unplaced nested clusters seed BELOW the ancestor (not right of
+        # it) per the 2026-06-05 layout rule: nested objects/repos stack
+        # vertically under their parent, not horizontally.
+        self.assertIn("ancPlace.y + ancPlace.h + CLUSTER_MARGIN", app_js)
         # Overlap-resolve picks the worst overlap each iteration and
         # pushes the cluster with smaller displacement.
         self.assertIn("worstArea", app_js)

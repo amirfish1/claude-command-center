@@ -1,0 +1,5 @@
+Two flow-board fixes:
+
+1. **Background pan no longer hitches every 90s.** The `archiveTimes` poller fired its `refreshArchiveData` fetch unconditionally; even though the resulting `renderArchiveList` correctly deferred itself when a sidebar drag was in progress, the queued render kicked in right after the drag ended and could clip the pan. Wrap the poller body with `deferSidebarRenderIfDragging()` so the whole tick skips while panning — the flush-after-drag hook still replays the deferred render the moment the user releases.
+
+2. **Nested objects / repos now stack BELOW their parent, not to the right** when first added. The unplaced-nested seed used to default to `ancestor.right + NESTED_GAP_X` which placed a child repo next to its parent object; the user wanted the layout to match the "Small Projects → video-claw / usage_on_mac" stack-below shape. Seed is now `(ancestor.x, ancestor.y + ancestor.h + CLUSTER_MARGIN)`. Multiple unplaced siblings start at the same slot and the overlap resolver stacks them further down.
