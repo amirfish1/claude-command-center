@@ -368,6 +368,24 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".flow-selection-box", app_css)
         self.assertIn(".flow-node.selected", app_css)
 
+    def test_conv_pct_badge_is_clickable_compact_shortcut(self):
+        """The context-% badge on each conv row is a one-click shortcut to
+        /compact. Click → confirm → injectToSession('/compact'). The
+        row-click handler must EXCLUDE the badge so clicking it doesn't
+        also open the conversation."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn('data-role="conv-pct-compact"', app_js)
+        self.assertIn("conv-pct-badge is-actionable", app_js)
+        # Badge must be in the row-click exclusion list so the row
+        # itself doesn't open underneath the /compact confirm.
+        self.assertIn('ev.target.closest(\'[data-role="conv-pct-compact"]\')', app_js)
+        # Confirm + POST shape — user explicitly asked for "Compact?"
+        # suggest followed by an inject of /compact.
+        self.assertIn("window.confirm(msg)", app_js)
+        self.assertIn("postInjectInput(sid, '/compact')", app_js)
+        self.assertIn(".conv-pct-badge.is-actionable", app_css)
+
     def test_relayed_question_renders_inline_in_conv_view(self):
         """The "Session is asking a question" surface is an inline card
         mounted inside the active conversation view (not a body-level

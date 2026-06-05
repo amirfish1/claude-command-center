@@ -2678,6 +2678,19 @@
     color: var(--red);
     background: rgba(248, 81, 73, 0.16);
   }
+  /* Click → /compact confirm. cursor:pointer + a faint hover lift make the
+     badge feel like a button without changing its resting visual weight. */
+  .conv-pct-badge.is-actionable {
+    cursor: pointer;
+    user-select: none;
+    transition: filter 0.12s ease-out, transform 0.12s ease-out, opacity 0.12s ease-out;
+  }
+  .conv-pct-badge.is-actionable:hover { filter: brightness(1.15); opacity: 1; }
+  .conv-pct-badge.is-actionable:active { transform: translateY(0.5px); }
+  .conv-pct-badge.is-actionable:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
   /* Semantic match — slightly different hue + label to make it visible
      when results came via the vector path (vs lexical BM25). */
   .conv-history-badge.is-semantic {

@@ -12518,9 +12518,15 @@
       const ctxPct = _convRowContextPct(c);
       let pctBadgeHtml = '';
       if (ctxPct) {
-        const tip = ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens';
+        const tip = ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens — click to run /compact';
         const pctLevel = ctxPct.pct > 60 ? ' is-danger' : (ctxPct.pct > 30 ? ' is-warn' : '');
-        pctBadgeHtml = '<span class="conv-pct-badge' + pctLevel + '" title="' + escapeAttr(tip) + '">' + ctxPct.pct + '%</span>';
+        // Tagged as an action target so the delegated click handler can
+        // offer /compact without scooping the surrounding row click.
+        pctBadgeHtml = '<span class="conv-pct-badge is-actionable' + pctLevel + '"'
+          + ' role="button" tabindex="0"'
+          + ' data-role="conv-pct-compact"'
+          + ' data-pct="' + ctxPct.pct + '"'
+          + ' title="' + escapeAttr(tip) + '">' + ctxPct.pct + '%</span>';
       }
       const branchSlotHtml = pctBadgeHtml + worktreeBadgeHtml + branch;
       const rowMetaHtml = (rowSizeHtml || liveToolHtml || signals || branchSlotHtml)
@@ -13846,9 +13852,10 @@
       });
       el.addEventListener('click', (ev) => {
         // Ignore clicks that started the inline editor, archive button,
-        // or that landed on the title (which now triggers rename instead
-        // of opening the conversation — the pencil's job moved here).
-        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="pin"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="wake-codex"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
+        // the context-% badge (its own confirm-and-/compact handler runs
+        // below), or that landed on the title (which now triggers rename
+        // instead of opening the conversation — the pencil's job moved here).
+        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="pin"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="wake-codex"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('[data-role="conv-pct-compact"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
         if (ev.metaKey || ev.ctrlKey || ev.shiftKey) {
           ev.preventDefault();
           if (selectedListIds.has(el.dataset.id)) {
@@ -13874,6 +13881,40 @@
         selectConversation(el.dataset.id);
       });
       attachDragHandlers(el);
+    });
+    // Context-% badge: click to /compact the session. The badge already
+    // stops propagation via the exclusion list above so the surrounding
+    // row click doesn't open the conversation. A native confirm keeps
+    // the surface tiny — no modal, no state machine — and matches the
+    // user's "suggest 'Compact?' if yes inject /compact" spec exactly.
+    $convList.querySelectorAll('[data-role="conv-pct-compact"]').forEach(badge => {
+      const runCompact = async (ev) => {
+        if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+        const item = badge.closest('.conv-item');
+        const sid = item && item.dataset.sessionId;
+        if (!sid) return;
+        const pct = badge.getAttribute('data-pct') || '';
+        const titleEl = item && item.querySelector('[data-role="title"]');
+        const titleText = (titleEl && (titleEl.textContent || '').trim()) || 'this session';
+        const msg = 'Context is at ' + pct + '%. Compact "' + titleText + '" now? '
+          + '(Sends /compact to the session.)';
+        if (!window.confirm(msg)) return;
+        try {
+          const data = await postInjectInput(sid, '/compact');
+          if (data && data.ok) {
+            showOpToast('/compact sent', 'success');
+            touchSessionOptimistically(sid);
+          } else {
+            showOpToast('/compact failed: ' + ((data && data.error) || 'unknown'), 'error');
+          }
+        } catch (err) {
+          showOpToast('/compact failed: ' + ((err && err.message) || 'network'), 'error');
+        }
+      };
+      badge.addEventListener('click', runCompact);
+      badge.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') runCompact(ev);
+      });
     });
     // Unpin-repo button on rows whose folder bucket the user pinned.
     $convList.querySelectorAll('[data-role="unpin-repo"]').forEach(btn => {
