@@ -1,0 +1,5 @@
+Flow "Organize" is now incremental — it keeps repos and objects exactly where you put them and only moves them when it absolutely has to. Per user request: "move repos and objects as least as possible. The only case we're OK moving them is if we cannot form a rectangle that includes the sessions beneath them and the object."
+
+Previously every run bin-packed every chain from the top-left, which scrambled a board the moment you ran it. Now each chain anchors at its root's current position; if two chain bounding boxes overlap, a greedy resolver picks the worst-overlapping pair, pushes the chain that has moved less so far by the minimum right/down amount, and repeats until clean. Re-running Organize on an already-tidy board is a no-op (zero pixels moved). The toast at the end reports the total pixel displacement so you can see how much it had to nudge.
+
+Untouched chains (first-ever Organize, root still at 0,0) seed from the legacy bin-pack cursor so a fresh board still produces a tidy initial layout. The minimum-displacement rule is now R10 in the in-source algorithm doc block.

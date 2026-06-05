@@ -7674,6 +7674,18 @@
   //     DOM attribute second. A full sidebar re-render at the end
   //     rebuilds the DOM from the source-of-truth maps so connector
   //     lines and parent links survive Organize.
+  // R10. INCREMENTAL — chains anchor at their root's CURRENT position;
+  //     no bin-pack reset. Greedy overlap resolver pushes the chain
+  //     that has moved less so far by the minimum amount (right or
+  //     down) until no overlaps remain. Untouched chains (root at
+  //     0,0) get seeded by the legacy bin-pack cursor so first-ever
+  //     Organize still produces a tidy layout, but every subsequent
+  //     run moves the minimum number of pixels needed to keep each
+  //     parent + its sessions + nested objects non-overlapping.
+  //     Trades R1's strict idempotence for "stay where the user put
+  //     things" — re-running Organize on an already-clean board is a
+  //     no-op (zero pushes), so it's still effectively idempotent in
+  //     the common case.
   // ──────────────────────────────────────────────────────────────────
   function organizeFlowSessions(targetEl) {
     const board = targetEl || document.getElementById('flowBoard');
@@ -7876,23 +7888,106 @@
       chainBBoxes.set(rootId, { width: maxRight, height: maxBottom, local });
     });
 
-    // Bin-pack chains (not individual clusters) — the row-budget check
-    // now accounts for nested children, so a wide chain wraps to the
-    // next row instead of bleeding over the next chain.
+    // R10 — INCREMENTAL ORGANIZE (per user request 2026-06-05):
+    //   "we want to move repos and objects as least as possible. The
+    //    only case we're OK moving them is if we cannot form a rectangle
+    //    that includes the sessions beneath them and the object."
+    // Strategy: each chain ANCHORS at its root's CURRENT position (no
+    // bin-pack reset). If two chain bboxes overlap, push the chain that
+    // has moved less so far by the minimum amount (right OR down,
+    // whichever is shorter). Iterate until clean OR a sane cap fires.
+    // Untouched chains (root at 0,0) get seeded by the old bin-pack
+    // cursor so first-ever Organize still produces a tidy layout.
     let cursorX = startX;
     let cursorY = startY;
     let rowMaxHeight = 0;
     let rowHasCluster = false;
+    const chainPlacements = new Map();
     chains.forEach((chainClusters, rootId) => {
       const bbox = chainBBoxes.get(rootId);
-      if (rowHasCluster && (cursorX - startX + bbox.width) > rowBudget) {
-        cursorX = startX;
-        cursorY += rowMaxHeight + CLUSTER_MARGIN;
-        rowMaxHeight = 0;
-        rowHasCluster = false;
+      // The root cluster is the first in topo order (it's the only
+      // one with no in-cluster ancestor); fall back defensively.
+      const rootCluster = chainClusters.find(c => !c.ancestor || !chains.has(c.ancestor)) || chainClusters[0];
+      const root = rootCluster.parent;
+      let anchorX = root.offsetLeft;
+      let anchorY = root.offsetTop;
+      // Untouched node — never placed. Bin-pack seed.
+      if (anchorX === 0 && anchorY === 0) {
+        if (rowHasCluster && (cursorX - startX + bbox.width) > rowBudget) {
+          cursorX = startX;
+          cursorY += rowMaxHeight + CLUSTER_MARGIN;
+          rowMaxHeight = 0;
+          rowHasCluster = false;
+        }
+        anchorX = cursorX;
+        anchorY = cursorY;
+        cursorX += bbox.width + CLUSTER_MARGIN;
+        if (bbox.height > rowMaxHeight) rowMaxHeight = bbox.height;
+        rowHasCluster = true;
       }
-      const baseLeft = cursorX;
-      const baseTop = cursorY;
+      chainPlacements.set(rootId, {
+        x: anchorX, y: anchorY,
+        w: bbox.width, h: bbox.height,
+        originalX: anchorX, originalY: anchorY,
+        chainClusters,
+        bbox,
+      });
+    });
+
+    // Greedy overlap-resolve. Each iteration picks one overlapping
+    // pair and pushes the cheaper-to-move chain by the minimum amount.
+    // The cap is generous but finite — a pathological input (e.g. one
+    // chain wider than the screen with N tiny chains stacked) still
+    // converges in O(N) iterations.
+    const SEP = CLUSTER_MARGIN;
+    const entries = Array.from(chainPlacements.values());
+    const maxIter = Math.max(40, entries.length * entries.length * 2);
+    let totalPushPx = 0;
+    for (let iter = 0; iter < maxIter; iter++) {
+      let worst = null;
+      let worstArea = 0;
+      for (let i = 0; i < entries.length; i++) {
+        for (let j = i + 1; j < entries.length; j++) {
+          const a = entries[i], b = entries[j];
+          const ox = Math.min(a.x + a.w + SEP, b.x + b.w + SEP) - Math.max(a.x, b.x);
+          const oy = Math.min(a.y + a.h + SEP, b.y + b.h + SEP) - Math.max(a.y, b.y);
+          if (ox > 0 && oy > 0) {
+            const area = ox * oy;
+            if (area > worstArea) {
+              worstArea = area;
+              worst = { a, b, ox, oy };
+            }
+          }
+        }
+      }
+      if (!worst) break;
+      const { a, b, ox, oy } = worst;
+      // Push the chain that's currently LESS displaced from its
+      // original anchor — so the algorithm keeps the "already moved"
+      // chain stable instead of ping-ponging it. Tie-break: push the
+      // one further right/down (b is later in iteration, often newer).
+      const aDisp = Math.abs(a.x - a.originalX) + Math.abs(a.y - a.originalY);
+      const bDisp = Math.abs(b.x - b.originalX) + Math.abs(b.y - b.originalY);
+      let mover = (aDisp <= bDisp) ? b : a;
+      let other = (mover === a) ? b : a;
+      // Cheapest push direction.
+      const pushRight = (other.x + other.w + SEP) - mover.x;
+      const pushDown = (other.y + other.h + SEP) - mover.y;
+      if (pushRight > 0 && (pushDown <= 0 || pushRight < pushDown)) {
+        mover.x += pushRight;
+        totalPushPx += pushRight;
+      } else if (pushDown > 0) {
+        mover.y += pushDown;
+        totalPushPx += pushDown;
+      } else {
+        // Defensive — shouldn't happen if ox/oy > 0.
+        break;
+      }
+    }
+
+    // Apply final placements.
+    chainPlacements.forEach((place) => {
+      const { x: baseLeft, y: baseTop, chainClusters, bbox } = place;
       chainClusters.forEach(cluster => {
         const cid = cluster.parent.dataset.flowNodeId;
         const offset = bbox.local.get(cid);
@@ -7918,10 +8013,10 @@
           left, top, width: cluster.width, height: cluster.height,
         });
       });
-      cursorX += bbox.width + CLUSTER_MARGIN;
-      if (bbox.height > rowMaxHeight) rowMaxHeight = bbox.height;
-      rowHasCluster = true;
     });
+    if (typeof showOpToast === 'function' && totalPushPx > 0) {
+      showOpToast('Organize: moved ' + Math.round(totalPushPx) + 'px total', 'info');
+    }
 
     persistFlowNodePositions();
     // R9 (post-pass): force a full sidebar re-render so the DOM rebuilds

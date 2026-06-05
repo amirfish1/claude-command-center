@@ -391,6 +391,28 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("body.flow-popout", app_css)
         self.assertIn(".conv-list-panel > *:not(#flowBoard)", app_css)
 
+    def test_organize_is_incremental_with_overlap_resolve(self):
+        """Per user request: Organize must keep repos/objects where they
+        are, only moving them when absolutely needed to avoid overlap,
+        and the total pixel displacement should be minimized. Strategy:
+        anchor each chain at its root's current position, then
+        greedy-resolve overlaps by pushing the less-displaced chain by
+        the minimum right/down amount. Untouched chains seed from the
+        legacy bin-pack cursor."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        # New R10 rule documented in the algorithm comment block.
+        self.assertIn("R10. INCREMENTAL", app_js)
+        # Anchor at current position rather than bin-pack reset.
+        self.assertIn("INCREMENTAL ORGANIZE", app_js)
+        self.assertIn("root.offsetLeft", app_js)
+        self.assertIn("root.offsetTop", app_js)
+        self.assertIn("originalX: anchorX", app_js)
+        # Overlap-resolve picks the worst overlap each iteration and
+        # pushes the chain with smaller displacement.
+        self.assertIn("worstArea", app_js)
+        self.assertIn("totalPushPx", app_js)
+        self.assertIn("aDisp <= bDisp", app_js)
+
     def test_inline_rename_force_renders_even_when_search_focused(self):
         """Inline session rename commit() must force the sidebar render —
         the rename input itself is a text input, and after Enter/blur
