@@ -259,6 +259,55 @@
   body.conversation-popout .pwa-install-banner {
     display: none !important;
   }
+  /* ── Flow popout ─────────────────────────────────────────────────
+     Same idea as conversation-popout but the surface is the Flow
+     board: hide the conv pane, hide every chrome strip, let the
+     sidebar fill the viewport, and inside the sidebar keep only the
+     flow board visible. */
+  body.flow-popout {
+    overflow: hidden;
+  }
+  body.flow-popout .main,
+  body.flow-popout #sidebarResizer,
+  body.flow-popout .pwa-install-banner,
+  body.flow-popout .ccc-topbar,
+  body.flow-popout .font-size-controls,
+  body.flow-popout #mobileBackBtn,
+  body.flow-popout .toolbar,
+  body.flow-popout .attention-panel,
+  body.flow-popout #notifBanner,
+  body.flow-popout .conv-search-bar,
+  body.flow-popout #convSearchWrap,
+  body.flow-popout #convSearch,
+  body.flow-popout #convFolderFilter,
+  body.flow-popout #convList,
+  body.flow-popout #kanbanBoard,
+  body.flow-popout .coord-toolbar,
+  body.flow-popout #repoBar,
+  body.flow-popout .sidebar > .sidebar-header,
+  body.flow-popout .sidebar > .sidebar-tabs,
+  body.flow-popout .conv-list-panel > *:not(#flowBoard) {
+    display: none !important;
+  }
+  body.flow-popout .sidebar {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+    height: 100vh !important;
+  }
+  body.flow-popout .conv-list-panel {
+    width: 100% !important;
+    height: 100% !important;
+    flex: 1 1 auto !important;
+  }
+  body.flow-popout #flowBoard {
+    display: flex !important;
+    flex-direction: column;
+    width: 100% !important;
+    height: 100% !important;
+    flex: 1 1 auto !important;
+  }
   body.conversation-popout .main {
     display: flex !important;
     position: static !important;

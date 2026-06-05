@@ -739,6 +739,17 @@
   if (CONV_POPOUT_MODE && document.body) {
     document.body.classList.add('conversation-popout');
   }
+  // Flow popout: same shape, different surface — when set, the page boots
+  // straight into the Flow view and CSS hides every other piece of chrome.
+  const FLOW_POPOUT_MODE = _bootUrlParams.get('ccc_popout') === 'flow'
+    || _bootUrlParams.get('popout') === 'flow';
+  if (FLOW_POPOUT_MODE && document.body) {
+    document.body.classList.add('flow-popout');
+    // Force the sidebar into Flow view on boot so the user lands on the
+    // board immediately. localStorage write keeps it sticky on reload.
+    try { localStorage.setItem('ccc-session-view', 'flow'); } catch (_) {}
+    try { document.title = 'Flow — CCC'; } catch (_) {}
+  }
   // Regex compiled from APP_CONFIG.title_strip at load; used to strip
   // user-configured prefixes like "[ACME ...]" from session titles.
   let _titleStripRe = null;  // null = no stripping until config loads
@@ -6888,6 +6899,18 @@
       +   '<button type="button" class="flow-toolbar-btn flow-icon-btn" data-flow-action="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>'
       + '</div>'
       + '<button type="button" class="flow-toolbar-btn flow-icon-btn flow-expand-btn" data-flow-action="toggle-expand" title="' + expandedLabel + '" aria-label="' + expandedLabel + '" aria-pressed="' + (flowExpanded ? 'true' : 'false') + '">' + flowExpandIconHtml() + '</button>'
+      // Pop the whole flow into its own window — native CCC window inside
+      // the macOS app, browser popup otherwise. Skipped when we ARE the
+      // popout (no point popping a popout).
+      + (FLOW_POPOUT_MODE ? '' :
+        '<button type="button" class="flow-toolbar-btn flow-icon-btn" data-flow-action="popout"'
+        + ' title="Pop the flow out into its own window" aria-label="Pop flow out">'
+        + '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">'
+        +   '<path d="M5 1H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
+        +   '<path d="M7 1h4v4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>'
+        +   '<path d="M11 1L6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
+        + '</svg>'
+        + '</button>')
       + '<div class="flow-toolbar-spacer"></div>'
       + '<button type="button" class="flow-toolbar-btn" data-flow-action="annotate" title="Annotate the visible page and save a local note for agent context.">&#9998; Annotate</button>'
       + '</div>';
@@ -8374,6 +8397,8 @@
     if (expandBtn) expandBtn.addEventListener('click', () => setFlowExpanded(!flowExpanded));
     if (collapseAllBtn) collapseAllBtn.addEventListener('click', () => setFlowAllNodesCollapsed(true, targetEl));
     if (expandAllBtn) expandAllBtn.addEventListener('click', () => setFlowAllNodesCollapsed(false, targetEl));
+    const popoutBtn = targetEl && targetEl.querySelector('[data-flow-action="popout"]');
+    if (popoutBtn) popoutBtn.addEventListener('click', () => openFlowPopout(null));
     const organizeBtn = targetEl && targetEl.querySelector('[data-flow-action="organize"]');
     if (organizeBtn) organizeBtn.addEventListener('click', () => organizeFlowSessions(targetEl));
     const archivedBtn = targetEl && targetEl.querySelector('[data-flow-action="toggle-archived"]');
@@ -14331,18 +14356,82 @@
     return !!(bridge && typeof bridge.postMessage === 'function');
   }
 
-  function tryOpenNativeMacPopout(url) {
+  function tryOpenNativeMacPopout(url, opts) {
     const bridge = window.webkit
       && window.webkit.messageHandlers
       && window.webkit.messageHandlers.cccNative;
     if (!bridge || typeof bridge.postMessage !== 'function') return false;
     try {
       bridge.postMessage({ action: 'openPopout', url: url });
-      showOpToast('Conversation opened in a new window');
+      showOpToast((opts && opts.successToast) || 'Conversation opened in a new window');
       return true;
     } catch (_) {
       return false;
     }
+  }
+
+  function flowPopoutUrl() {
+    const u = new URL(window.location.pathname || '/', window.location.href);
+    u.search = '';
+    u.hash = '';
+    u.searchParams.set('ccc_popout', 'flow');
+    // CCCWebWindow.popoutTitle reads `title=` from the URL; without it
+    // the native window inherits the fallback "Conversation" label.
+    u.searchParams.set('title', 'Flow');
+    return u.toString();
+  }
+
+  function openFlowPopout(anchor) {
+    if (FLOW_POPOUT_MODE) return false;  // no point popping a popout
+    const url = flowPopoutUrl();
+    const name = 'ccc-flow-popout';
+    const width = 1280;
+    const height = 860;
+    const features = 'popup=yes,width=' + width + ',height=' + height
+      + ',menubar=no,toolbar=no,location=no,status=no,scrollbars=yes,resizable=yes'
+      + popoutPositionFeature(anchor, width, height);
+    if (isCccMacApp()) {
+      const popup = window.open(url, name, features);
+      if (popup) {
+        try { popup.focus(); } catch (_) {}
+        showOpToast('Flow opened in a new window');
+        return true;
+      }
+      if (tryOpenNativeMacPopout(url, { successToast: 'Flow opened in a new window' })) return true;
+      fetch('/api/open-browser', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url })
+      }).then(r => r.json()).then(data => {
+        if (data.ok) {
+          showOpToast(data.via === 'ccc-app'
+            ? 'Flow opened in a new window'
+            : 'Flow opened in external browser');
+        } else {
+          showOpToast('Could not open a new Command Center window', 'error');
+        }
+      }).catch(() => {
+        showOpToast('Could not open a new Command Center window', 'error');
+      });
+      return false;
+    }
+    const popup = window.open(url, name, features);
+    if (popup) {
+      try { popup.focus(); } catch (_) {}
+      showOpToast('Flow opened in a pop-up');
+      return true;
+    }
+    fetch('/api/open-browser', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url })
+    }).then(r => r.json()).then(data => {
+      if (data.ok) showOpToast('Flow opened in external browser');
+      else showOpToast('Pop-up blocked. Allow pop-ups for CCC.', 'error');
+    }).catch(() => {
+      showOpToast('Pop-up blocked. Allow pop-ups for CCC.', 'error');
+    });
+    return false;
   }
 
   function openConversationPopout(convId, repoPath, anchor) {

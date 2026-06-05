@@ -368,6 +368,29 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".flow-selection-box", app_css)
         self.assertIn(".flow-node.selected", app_css)
 
+    def test_flow_popout_button_and_mode_wired(self):
+        """Flow toolbar gets a pop-out button (skipped inside the popout
+        itself). Click → openFlowPopout → window.open with ccc_popout=flow.
+        Body class + localStorage on boot route the popped-out tab
+        straight into the Flow view, and CSS hides every other surface."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        # Boot flag + body class.
+        self.assertIn("FLOW_POPOUT_MODE", app_js)
+        self.assertIn("'ccc_popout') === 'flow'", app_js)
+        self.assertIn("document.body.classList.add('flow-popout')", app_js)
+        self.assertIn("localStorage.setItem('ccc-session-view', 'flow')", app_js)
+        # Helper + URL shape.
+        self.assertIn("function openFlowPopout", app_js)
+        self.assertIn("u.searchParams.set('ccc_popout', 'flow')", app_js)
+        self.assertIn("u.searchParams.set('title', 'Flow')", app_js)
+        # Toolbar button + click wiring.
+        self.assertIn('data-flow-action="popout"', app_js)
+        self.assertIn('openFlowPopout(null)', app_js)
+        # CSS gates the popout layout.
+        self.assertIn("body.flow-popout", app_css)
+        self.assertIn(".conv-list-panel > *:not(#flowBoard)", app_css)
+
     def test_macapp_does_not_quit_when_last_window_closes(self):
         """Closing a conversation pop-out (or the main window momentarily)
         must NOT terminate the app — that kills the server we spawned
