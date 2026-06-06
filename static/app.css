@@ -2715,7 +2715,17 @@
     max-height: 200px;
     overflow-y: auto;
   }
+  .tool-result-output::before {
+    content: attr(data-result-label);
+    display: block;
+    margin-bottom: 4px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 650;
+    color: var(--text);
+  }
   .tool-result-output.is-error { border-left-color: var(--red); color: var(--red); }
+  .tool-result-output.is-error::before { color: var(--red); }
   .tool-result-code-preview {
     margin: 6px 0 4px 18px;
     max-width: min(100%, 980px);

@@ -571,6 +571,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("body.flow-popout", app_css)
         self.assertIn(".conv-list-panel > *:not(#flowBoard)", app_css)
 
+    def test_tool_results_attach_to_matching_tool_call(self):
+        """Tool result previews should render under the command/tool whose
+        tool_use id matches, with a visible result/error label."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn("function toolCallForResult", app_js)
+        self.assertIn("tc.dataset.toolUseId || '') === toolUseId", app_js)
+        self.assertIn("data-tool-use-id=\"' + escapeAttr(toolUseId) + '\"", app_js)
+        self.assertIn("const last = toolCallForResult(_currentToolGroup, ev.tool_use_id || '');", app_js)
+        self.assertIn("out.dataset.resultLabel = toolResultOutputLabel(last, ev.is_error);", app_js)
+        self.assertIn("Command result", app_js)
+        self.assertIn("Command error", app_js)
+        self.assertIn(".tool-result-output::before", app_css)
+        self.assertIn("content: attr(data-result-label);", app_css)
+
     def test_organize_is_incremental_with_overlap_resolve(self):
         """Per user request: Organize must keep repos/objects where they
         are, only moving them when absolutely needed to avoid overlap,
@@ -2254,6 +2269,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertEqual(parsed["type"], "assistant")
         detail = parsed["blocks"][0]["detail"]
+        self.assertEqual(parsed["blocks"][0]["id"], "toolu-question")
         self.assertIn("How automated do you want this?", detail)
         self.assertIn("Full auto", detail)
         self.assertIn("Half auto", detail)
@@ -2285,6 +2301,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         parsed = self.server._parse_conversation_event(ev, 8)
 
         detail = parsed["blocks"][0]["detail"]
+        self.assertEqual(parsed["blocks"][0]["id"], "toolu-bash")
         self.assertEqual(detail, "python3 render_short_slides.py 2>&1 | grep slide")
         self.assertNotIn("NO_EXTENDED_GLOB", detail)
 
@@ -3751,6 +3768,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                     {"type": "text", "text": "I will inspect it."},
                     {
                         "type": "tool_use",
+                        "id": "toolu-cursor",
                         "name": "run_terminal_cmd",
                         "input": {"command": "git status --short"},
                     },
@@ -3766,6 +3784,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(parsed["blocks"][0]["text"], "I will inspect it.")
         self.assertEqual(parsed["blocks"][1]["kind"], "tool_use")
         self.assertEqual(parsed["blocks"][1]["name"], "run_terminal_cmd")
+        self.assertEqual(parsed["blocks"][1]["id"], "toolu-cursor")
         self.assertIn("git status --short", parsed["blocks"][1].get("detail", ""))
 
     def test_parse_cursor_event_skips_redacted_placeholder_text(self):

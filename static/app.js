@@ -21447,6 +21447,24 @@
     return (toolCall.dataset.toolDetail || toolCall.querySelector('.tool-detail')?.textContent || '').trim();
   }
 
+  function toolCallForResult(group, toolUseId) {
+    if (!group) return null;
+    const calls = Array.from(group.querySelectorAll('.tool-call'));
+    if (!calls.length) return null;
+    if (toolUseId) {
+      const match = calls.find(tc => (tc.dataset.toolUseId || '') === toolUseId);
+      if (match) return match;
+    }
+    return calls[calls.length - 1];
+  }
+
+  function toolResultOutputLabel(toolCall, isError) {
+    if (isCommandActivityTool(toolCallName(toolCall))) {
+      return isError ? 'Command error' : 'Command result';
+    }
+    return isError ? 'Tool error' : 'Tool result';
+  }
+
   function isEditToolName(name) {
     const base = toolDisplayName(name);
     return base === 'Edit' || base === 'MultiEdit' || base === 'Write' || base === 'NotebookEdit';
@@ -22309,7 +22327,8 @@
             }
             const commandDisclosure = renderToolCommandDisclosure(b, detail);
             const commandClass = commandDisclosure ? ' has-command-disclosure' : '';
-            html += '<div class="tool-call' + toolClass + detail.className + commandClass + '" data-tool-detail="' + escapeAttr(detail.full) + '" data-tool-source="' + escapeAttr(source) + '">'
+            const toolUseId = String(b.id || b.tool_use_id || '').trim();
+            html += '<div class="tool-call' + toolClass + detail.className + commandClass + '" data-tool-detail="' + escapeAttr(detail.full) + '" data-tool-source="' + escapeAttr(source) + '" data-tool-use-id="' + escapeAttr(toolUseId) + '">'
               + '<span class="arrow">-></span> '
               + sourceHtml
               + '<span class="tool-name" data-tool-name="' + escapeAttr(b.name || '') + '">' + escapeHtml(displayName) + '</span>'
@@ -22384,8 +22403,7 @@
         // empty .event.tool_result rows are hidden by CSS anyway.
         const text = eventTextString(ev.text).trim();
         if (text && _currentToolGroup) {
-          const calls = _currentToolGroup.querySelectorAll('.tool-call');
-          const last = calls[calls.length - 1];
+          const last = toolCallForResult(_currentToolGroup, ev.tool_use_id || '');
           if (last && !last.querySelector('.tool-result-output, .tool-result-code-preview')) {
             // Stamp this output with the tool_result event's own ts (when
             // the result actually landed in the JSONL), not render time.
@@ -22407,6 +22425,7 @@
               out.dataset.renderTs = _toolTs;
             } else {
               out.className = 'tool-result-output' + (ev.is_error ? ' is-error' : '');
+              out.dataset.resultLabel = toolResultOutputLabel(last, ev.is_error);
               out.dataset.renderTs = _toolTs;
               // textContent for safety, then if the text has URLs swap to
               // an escaped+linkified innerHTML so they're one-click. The

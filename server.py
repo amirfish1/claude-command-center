@@ -14015,7 +14015,12 @@ def _parse_conversation_event(ev, line_num):
                 else:
                     detail_max = 1200 if name == "Bash" else 240
                     detail = _tool_use_detail(name, inp, max_len=detail_max)
-                tool_block = {"kind": "tool_use", "name": name, "detail": detail}
+                tool_block = {
+                    "kind": "tool_use",
+                    "name": name,
+                    "detail": detail,
+                    "id": block.get("id", ""),
+                }
                 if raw_command:
                     command_text = _redacted_shell_command_text(raw_command, max_len=12000)
                     if command_text and (
@@ -16653,7 +16658,12 @@ def _parse_codex_event(ev, line_num, token_usage=None):
         detail = _codex_tool_detail(name, args)
         if isinstance(detail, str) and len(detail) > 200:
             detail = detail[:200] + "..."
-        block = {"kind": "tool_use", "name": _codex_tool_name(name), "detail": detail or ""}
+        block = {
+            "kind": "tool_use",
+            "name": _codex_tool_name(name),
+            "detail": detail or "",
+            "id": payload.get("call_id") or payload.get("id") or "",
+        }
         command_text = _codex_tool_command(name, args)
         if command_text:
             redacted_command = _redacted_shell_command_text(command_text, max_len=12000)
@@ -18747,7 +18757,12 @@ def _parse_gemini_conversation(session_id, after_line=0):
                     "ts": call.get("timestamp") or ts,
                     "type": "assistant",
                     "message_id": f"gemini-tool-{line_num}",
-                    "blocks": [{"kind": "tool_use", "name": _gemini_tool_name(call), "detail": detail or ""}],
+                    "blocks": [{
+                        "kind": "tool_use",
+                        "name": _gemini_tool_name(call),
+                        "detail": detail or "",
+                        "id": call.get("id", ""),
+                    }],
                 })
             output = _gemini_tool_output(call)
             if output:
@@ -20102,6 +20117,7 @@ def _parse_cursor_event(ev, line_num, usage_map=None):
                     "kind": "tool_use",
                     "name": _cursor_tool_name(block),
                     "detail": detail or "",
+                    "id": block.get("id", "") or block.get("tool_use_id", ""),
                 }
                 command_text = _cursor_tool_command(block)
                 if command_text:
