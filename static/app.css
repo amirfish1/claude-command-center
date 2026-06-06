@@ -4412,6 +4412,10 @@
   .flow-chip.pr-merged   { color: var(--purple); border-color: rgba(168, 102, 232, 0.45); }
   .flow-chip.pr-closed   { color: var(--text-2); }
   .flow-chip.counter     { color: var(--text-2); }
+  .flow-chip.working.steady { animation: none; }
+  .flow-chip.stuck   { background: rgba(230, 160, 60, 0.16); color: #e0a83c; border-color: rgba(230, 160, 60, 0.45); }
+  .flow-chip.idle    { color: var(--text-2); }
+  .flow-chip.offline { background: rgba(220, 80, 80, 0.15); color: #e06c6c; border-color: rgba(220, 80, 80, 0.45); }
   @keyframes ccc-flow-chip-pulse {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.55; }

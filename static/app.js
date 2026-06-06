@@ -7785,11 +7785,25 @@
     const isWorktree = (c.worktree_label || c.session_cwd_is_worktree || c.effective_kind === 'worktree');
     // Live activity wins visually — show first.
     const liveTool = c.is_live && (c.pending_tool || c.sidecar_tool || '');
+    const isCodexRow = c.source === 'codex' || c.engine === 'codex';
     const wipActive = c.is_live && (
       !!c.pending_spawn || !!c.pending_tool || !!c.sidecar_in_flight
         || c.sidecar_status === 'active'
     );
-    if (c.needs_approval || c.question_waiting) {
+    if (isCodexRow && c.codex_state) {
+      const st = c.codex_state;
+      if (st === 'working') {
+        const label = liveTool ? String(liveTool).slice(0, 16) : 'Working';
+        const steady = c.codex_fresh ? '' : ' steady';
+        chips.push('<span class="flow-chip working' + steady + '" title="Codex is working' + (liveTool ? ' — ' + escapeAttr(String(liveTool)) : '') + '">' + escapeHtml(label) + '</span>');
+      } else if (st === 'stuck') {
+        chips.push('<span class="flow-chip stuck" title="Stalled — no rollout activity past the stale threshold">Stuck</span>');
+      } else if (st === 'offline') {
+        chips.push('<span class="flow-chip offline" title="Codex engine offline — sessions paused">Offline</span>');
+      } else if (st === 'idle') {
+        chips.push('<span class="flow-chip idle" title="Idle — last turn complete">Idle</span>');
+      }
+    } else if (c.needs_approval || c.question_waiting) {
       chips.push('<span class="flow-chip waiting" title="Paused waiting for your input">WAITING</span>');
     } else if (wipActive) {
       const label = liveTool ? String(liveTool).slice(0, 16) : 'WIP';
