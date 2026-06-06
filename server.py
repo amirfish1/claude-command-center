@@ -2502,6 +2502,8 @@ _LIVE_ACTIVITY_FIELD_KEYS = (
     "pending_tool",
     "pending_file",
     "last_event_type",
+    "codex_state",
+    "codex_fresh",
     "needs_approval",
     "needs_approval_message",
     "question_waiting",
@@ -2563,6 +2565,7 @@ def _live_activity_entry_for_session(session_id):
         entry["pending_tool"] = tail.get("pending_tool")
         entry["pending_file"] = tail.get("pending_file")
         entry["last_event_type"] = tail.get("last_event_type")
+        entry.update(_codex_state_fields(session_id))
     elif engine == "gemini":
         path = _resolve_gemini_chat_path(session_id)
         tail = _extract_gemini_tail_meta(path) if path else {}
@@ -33106,6 +33109,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 status["pending_tool_ts"] = tail.get("pending_tool_ts") if tail else 0
                 status.update(_codex_activity_fields_from_tail(tail, status.get("live")))
                 status.update(_codex_stale_tool_fields(tail))
+                status.update(_codex_state_fields(sid))
             elif is_gemini_status:
                 path = _resolve_gemini_chat_path(sid)
                 tail = _extract_gemini_tail_meta(path) if path else {}
