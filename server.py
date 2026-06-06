@@ -14511,6 +14511,23 @@ def _codex_app_server_shutdown():
             pass
 
 
+def _codex_app_server_is_live():
+    """True iff CCC's own Codex app-server subprocess is up and initialized.
+
+    This reflects whether CCC is currently driving Codex via the JSON-RPC
+    stdio app-server (the path that can append input to a loaded thread and
+    run thread/compact) versus having no live app-server (in which case a
+    Codex action would lazily spawn one or fall back to one-shot `codex exec`).
+    Read-only: it does NOT start the server (so it stays cheap for polling).
+    """
+    proc = _CODEX_APP_SERVER_PROC
+    return bool(
+        proc is not None
+        and proc.poll() is None
+        and _CODEX_APP_SERVER_INITIALIZED
+    )
+
+
 def _codex_user_input(text, image_paths=None):
     items = [{"type": "text", "text": str(text or "")}]
     for image_path in image_paths or []:
@@ -33738,6 +33755,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 status.update(_codex_activity_fields_from_tail(tail, status.get("live")))
                 status.update(_codex_stale_tool_fields(tail))
                 status.update(_codex_state_fields(sid))
+                # App-server liveness: is CCC currently driving Codex via its
+                # own JSON-RPC stdio app-server (the path that can append input
+                # to a loaded thread and run thread/compact), or is there no
+                # live app-server (a Codex action would then lazily spawn one /
+                # fall back to one-shot `codex exec`). Read-only, cheap.
+                status["codex_app_server"] = _codex_app_server_is_live()
             elif is_gemini_status:
                 path = _resolve_gemini_chat_path(sid)
                 tail = _extract_gemini_tail_meta(path) if path else {}

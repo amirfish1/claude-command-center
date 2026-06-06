@@ -717,6 +717,11 @@
                   <path d="M13 2 4 14h7l-1 8 10-13h-7l1-7Z"></path>
                 </svg>
               </button>
+              <button class="compact-btn" id="convCompactBtn" title="Compact conversation context — summarize to free tokens" aria-label="Compact conversation context">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 8 L4 5 L7 5 M20 8 L20 5 L17 5 M4 16 L4 19 L7 19 M20 16 L20 19 L17 19 M9 12 L15 12"></path>
+                </svg>
+              </button>
               <button class="send-btn" id="convSendBtn" title="Send to terminal" aria-label="Send to terminal">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M12 19 L12 5 M6 11 L12 5 L18 11"></path>
@@ -730,6 +735,9 @@
              itself so the row stays uncluttered. -->
         <div class="conv-input-hint" id="convInputHint">
           <span class="tty-label" id="convTtyLabel"></span>
+          <span class="codex-appsrv" id="convCodexAppSrv" title="">
+            <span class="dot" aria-hidden="true"></span><span class="codex-appsrv-label" id="convCodexAppSrvLabel"></span>
+          </span>
           <span class="conv-input-kbd"><kbd>⏎</kbd> send &nbsp;·&nbsp; <kbd>⇧⏎</kbd> newline</span>
         </div>
       </div>
