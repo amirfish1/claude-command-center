@@ -1420,8 +1420,15 @@
     return out;
   }
 
+  function _isAbsoluteLocalPath(value) {
+    return typeof value === 'string' && value.startsWith('/');
+  }
+
   function rowRepoPath(row) {
-    return (row && (row.repo_path || row.folder_path || row.spawn_cwd || row.session_cwd || row.cwd)) || '';
+    if (!row) return '';
+    const absolute = [row.repo_path, row.folder_path, row.spawn_cwd, row.session_cwd, row.cwd]
+      .find(_isAbsoluteLocalPath);
+    return absolute || row.repo_path || row.spawn_cwd || row.session_cwd || row.cwd || row.folder_path || '';
   }
 
   function repoPathForIssueNumber(issueNum) {

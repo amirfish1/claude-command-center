@@ -1,0 +1,1 @@
+- Group archived Claude Flow session nodes under the real repo path when archive rows also carry a Claude project slug.
