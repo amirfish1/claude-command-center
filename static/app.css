@@ -4165,6 +4165,11 @@
     border-color: rgba(88,166,255,0.44);
     background: rgba(88,166,255,0.12);
   }
+  .flow-toolbar-btn.is-recording {
+    color: var(--red);
+    border-color: rgba(248,81,73,0.45);
+    background: rgba(248,81,73,0.12);
+  }
   .flow-toolbar-group {
     display: inline-flex; align-items: center; gap: 4px;
     flex: 0 0 auto;

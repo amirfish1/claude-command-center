@@ -7305,6 +7305,14 @@
 
   let flowNodePositions = {};
   try { flowNodePositions = JSON.parse(localStorage.getItem('ccc-flow-node-positions') || '{}'); } catch (_) {}
+  const FLOW_ORGANIZE_PLUS_KEY = 'ccc-flow-organize-plus-examples';
+  const FLOW_ORGANIZE_PLUS_LIMIT = 24;
+  let flowOrganizePlusExamples = [];
+  try {
+    const savedExamples = JSON.parse(localStorage.getItem(FLOW_ORGANIZE_PLUS_KEY) || '[]');
+    if (Array.isArray(savedExamples)) flowOrganizePlusExamples = savedExamples;
+  } catch (_) {}
+  let flowOrganizeRecordSession = null;
   let flowNodeParents = {};
   try { flowNodeParents = JSON.parse(localStorage.getItem('ccc-flow-node-parents') || '{}'); } catch (_) {}
   let flowCollapsedNodes = {};
@@ -7529,6 +7537,145 @@
     try { localStorage.setItem('ccc-flow-node-positions', JSON.stringify(flowNodePositions)); } catch (_) {}
   }
 
+  function persistFlowOrganizePlusExamples() {
+    try { localStorage.setItem(FLOW_ORGANIZE_PLUS_KEY, JSON.stringify(flowOrganizePlusExamples)); } catch (_) {}
+  }
+
+  function flowSnapshotNodePositions(targetEl) {
+    const board = targetEl || document.getElementById('flowBoard');
+    if (!board) return {};
+    const snapshot = {};
+    board.querySelectorAll('.flow-node').forEach(node => {
+      const id = node.dataset.flowNodeId || '';
+      if (!id) return;
+      snapshot[id] = {
+        x: Math.round(node.offsetLeft || 0),
+        y: Math.round(node.offsetTop || 0),
+        kind: node.dataset.flowKind || '',
+        parent: node.dataset.flowParent || flowNodeParents[id] || '',
+      };
+    });
+    return snapshot;
+  }
+
+  function flowChangedPositionCount(before, after) {
+    let count = 0;
+    Object.keys(after || {}).forEach(id => {
+      const a = after[id];
+      const b = (before || {})[id];
+      if (!a || !b || a.x !== b.x || a.y !== b.y || a.parent !== b.parent) count++;
+    });
+    return count;
+  }
+
+  function updateFlowOrganizeRecordState(targetEl) {
+    const board = targetEl || document.getElementById('flowBoard');
+    if (document.body) document.body.classList.toggle('flow-organize-recording', !!flowOrganizeRecordSession);
+    if (!board) return;
+    const btn = board.querySelector('[data-flow-action="record-organize"]');
+    if (!btn) return;
+    const recording = !!flowOrganizeRecordSession;
+    btn.classList.toggle('active', recording);
+    btn.classList.toggle('is-recording', recording);
+    btn.setAttribute('aria-pressed', recording ? 'true' : 'false');
+    btn.textContent = recording ? 'Stop recording' : 'Record';
+    btn.title = recording
+      ? 'Stop recording this manual Flow layout for Organize+'
+      : 'Record a before/after Flow layout example for Organize+';
+  }
+
+  function startFlowOrganizeRecord(targetEl) {
+    flowOrganizeRecordSession = {
+      started_at: Date.now(),
+      repo_path: selectedRepoPath() || '',
+      before: flowSnapshotNodePositions(targetEl),
+    };
+    updateFlowOrganizeRecordState(targetEl);
+    if (typeof showOpToast === 'function') showOpToast('Recording Flow layout. Move nodes, then stop recording.', 'info');
+  }
+
+  function stopFlowOrganizeRecord(targetEl) {
+    if (!flowOrganizeRecordSession) return;
+    const after = flowSnapshotNodePositions(targetEl);
+    const before = flowOrganizeRecordSession.before || {};
+    const changed = flowChangedPositionCount(before, after);
+    const example = {
+      id: 'flow-record-' + Date.now().toString(36),
+      repo_path: flowOrganizeRecordSession.repo_path || selectedRepoPath() || '',
+      started_at: flowOrganizeRecordSession.started_at || Date.now(),
+      stopped_at: Date.now(),
+      before,
+      after,
+      changed,
+    };
+    flowOrganizeRecordSession = null;
+    updateFlowOrganizeRecordState(targetEl);
+    if (!changed) {
+      if (typeof showOpToast === 'function') showOpToast('No layout changes recorded.', 'info');
+      return;
+    }
+    flowOrganizePlusExamples.unshift(example);
+    if (flowOrganizePlusExamples.length > FLOW_ORGANIZE_PLUS_LIMIT) {
+      flowOrganizePlusExamples = flowOrganizePlusExamples.slice(0, FLOW_ORGANIZE_PLUS_LIMIT);
+    }
+    persistFlowOrganizePlusExamples();
+    if (typeof showOpToast === 'function') showOpToast('Recorded ' + changed + ' layout change' + (changed === 1 ? '' : 's') + ' for Organize+.', 'ok');
+  }
+
+  function toggleFlowOrganizeRecord(targetEl) {
+    if (flowOrganizeRecordSession) stopFlowOrganizeRecord(targetEl);
+    else startFlowOrganizeRecord(targetEl);
+  }
+
+  function bestFlowOrganizePlusExample(targetEl) {
+    const board = targetEl || document.getElementById('flowBoard');
+    if (!board || !flowOrganizePlusExamples.length) return null;
+    const ids = new Set(Array.from(board.querySelectorAll('.flow-node'))
+      .map(node => node.dataset.flowNodeId || '')
+      .filter(Boolean));
+    let best = null;
+    let bestScore = 0;
+    flowOrganizePlusExamples.forEach(example => {
+      const after = example && example.after;
+      if (!after) return;
+      let score = 0;
+      ids.forEach(id => { if (after[id]) score++; });
+      if (score > bestScore) {
+        best = example;
+        bestScore = score;
+      }
+    });
+    return bestScore > 0 ? best : null;
+  }
+
+  function applyFlowOrganizePlus(targetEl) {
+    const example = bestFlowOrganizePlusExample(targetEl);
+    if (!example) {
+      if (typeof showOpToast === 'function') showOpToast('Record a Flow layout before using Organize+.', 'info');
+      return;
+    }
+    organizeFlowSessions(targetEl, { silent: true });
+    const board = targetEl || document.getElementById('flowBoard');
+    if (!board) return;
+    const after = example.after || {};
+    let applied = 0;
+    board.querySelectorAll('.flow-node').forEach(node => {
+      const id = node.dataset.flowNodeId || '';
+      const pos = id && after[id];
+      if (!pos || !Number.isFinite(Number(pos.x)) || !Number.isFinite(Number(pos.y))) return;
+      const x = Math.round(Number(pos.x));
+      const y = Math.round(Number(pos.y));
+      node.style.left = x + 'px';
+      node.style.top = y + 'px';
+      flowNodePositions[id] = { x, y };
+      applied++;
+    });
+    if (!applied) return;
+    persistFlowNodePositions();
+    redrawFlowLinks(board);
+    if (typeof showOpToast === 'function') showOpToast('Organize+ applied ' + applied + ' recorded position' + (applied === 1 ? '' : 's') + '.', 'ok');
+  }
+
   function persistFlowNodeParents() {
     try { localStorage.setItem('ccc-flow-node-parents', JSON.stringify(flowNodeParents)); } catch (_) {}
   }
@@ -7588,6 +7735,12 @@
     const recency = flowRecencyValue();
     const archivedActive = flowIncludeArchived ? ' active' : '';
     const archivedPressed = flowIncludeArchived ? 'true' : 'false';
+    const recordActive = flowOrganizeRecordSession ? ' active is-recording' : '';
+    const recordPressed = flowOrganizeRecordSession ? 'true' : 'false';
+    const recordLabel = flowOrganizeRecordSession ? 'Stop recording' : 'Record';
+    const recordTitle = flowOrganizeRecordSession
+      ? 'Stop recording this manual Flow layout for Organize+'
+      : 'Record a before/after Flow layout example for Organize+';
     return '<div class="flow-toolbar">'
       + '<div class="flow-toolbar-group" role="group" aria-label="Add">'
       +   '<button type="button" class="flow-toolbar-btn" data-flow-action="add-draft-session">+ Session</button>'
@@ -7606,6 +7759,8 @@
       +   '<button type="button" class="flow-toolbar-btn" data-flow-action="collapse-all">Collapse all</button>'
       +   '<button type="button" class="flow-toolbar-btn" data-flow-action="expand-all">Expand all</button>'
       +   '<button type="button" class="flow-toolbar-btn" data-flow-action="organize" title="Keep all objects in place, line up session children below each parent — most recent leftmost.">Organize</button>'
+      +   '<button type="button" class="flow-toolbar-btn" data-flow-action="organize-plus" title="Run Organize, then apply your recorded Flow layout preferences.">Organize+</button>'
+      +   '<button type="button" class="flow-toolbar-btn' + recordActive + '" data-flow-action="record-organize" aria-pressed="' + recordPressed + '" title="' + escapeAttr(recordTitle) + '">' + escapeHtml(recordLabel) + '</button>'
       + '</div>'
       + '<div class="flow-toolbar-divider"></div>'
       + '<div class="flow-zoom-controls" role="group" aria-label="Flow zoom">'
@@ -8285,7 +8440,7 @@
   //     dragged them — fixed by treating each cluster as its own
   //     placement unit instead of a derived offset of its chain root.
   // ──────────────────────────────────────────────────────────────────
-  function organizeFlowSessions(targetEl) {
+  function organizeFlowSessions(targetEl, opts) {
     const board = targetEl || document.getElementById('flowBoard');
     if (!board) return;
     const world = board.querySelector('.flow-world') || board.querySelector('.flow-canvas');
@@ -8573,7 +8728,7 @@
         left, top, width: cluster.width, height: cluster.height,
       });
     });
-    if (typeof showOpToast === 'function' && totalPushPx > 0) {
+    if (!(opts && opts.silent) && typeof showOpToast === 'function' && totalPushPx > 0) {
       showOpToast('Organize: moved ' + Math.round(totalPushPx) + 'px total', 'info');
     }
 
@@ -8596,7 +8751,7 @@
       if (typeof renderSidebar === 'function') renderSidebar(convs);
     } catch (_) { /* fall back to in-place redraw below */ }
     redrawFlowLinks(board);
-    if (typeof showOpToast === 'function') showOpToast('Organized — tight pack.', 'info');
+    if (!(opts && opts.silent) && typeof showOpToast === 'function') showOpToast('Organized — tight pack.', 'info');
   }
 
   function flowDraftPositionForParent(parentNodeId, repoPath) {
@@ -10001,6 +10156,11 @@
     });
     const organizeBtn = targetEl && targetEl.querySelector('[data-flow-action="organize"]');
     if (organizeBtn) organizeBtn.addEventListener('click', () => organizeFlowSessions(targetEl));
+    const organizePlusBtn = targetEl && targetEl.querySelector('[data-flow-action="organize-plus"]');
+    if (organizePlusBtn) organizePlusBtn.addEventListener('click', () => applyFlowOrganizePlus(targetEl));
+    const recordOrganizeBtn = targetEl && targetEl.querySelector('[data-flow-action="record-organize"]');
+    if (recordOrganizeBtn) recordOrganizeBtn.addEventListener('click', () => toggleFlowOrganizeRecord(targetEl));
+    updateFlowOrganizeRecordState(targetEl);
     const archivedBtn = targetEl && targetEl.querySelector('[data-flow-action="toggle-archived"]');
     if (archivedBtn) archivedBtn.addEventListener('click', () => {
       flowIncludeArchived = !flowIncludeArchived;

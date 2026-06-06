@@ -614,6 +614,22 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("totalPushPx", app_js)
         self.assertIn("aDisp <= bDisp", app_js)
 
+    def test_flow_record_mode_and_organize_plus_wired(self):
+        """Flow has a Record mode that stores before/after layout examples
+        and an Organize+ button that replays the best matching example."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn("FLOW_ORGANIZE_PLUS_KEY = 'ccc-flow-organize-plus-examples'", app_js)
+        self.assertIn("function flowSnapshotNodePositions", app_js)
+        self.assertIn("function toggleFlowOrganizeRecord", app_js)
+        self.assertIn("function applyFlowOrganizePlus", app_js)
+        self.assertIn('data-flow-action="record-organize"', app_js)
+        self.assertIn('data-flow-action="organize-plus"', app_js)
+        self.assertIn("flowOrganizePlusExamples.unshift(example)", app_js)
+        self.assertIn("organizeFlowSessions(targetEl, { silent: true });", app_js)
+        self.assertIn("updateFlowOrganizeRecordState(targetEl);", app_js)
+        self.assertIn(".flow-toolbar-btn.is-recording", app_css)
+
     def test_inline_rename_force_renders_even_when_search_focused(self):
         """Inline session rename commit() must force the sidebar render —
         the rename input itself is a text input, and after Enter/blur
