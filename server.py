@@ -2480,7 +2480,15 @@ def _archive_session_is_live(session_id):
                     return True
         except OSError:
             pass
-    return session_id in _live_engine_session_ids()
+    if session_id in _live_engine_session_ids():
+        return True
+    # Pool-model codex (Codex.app `codex app-server`) puts no session id on
+    # any command line, so the resume-arg scan above misses it. A codex
+    # session whose rollout was written recently (non-None codex_state) and
+    # whose engine pool is up is live.
+    if _is_codex_session(session_id):
+        return _codex_state_fields(session_id).get("codex_state") is not None
+    return False
 
 
 _LIVE_ACTIVITY_FIELD_KEYS = (

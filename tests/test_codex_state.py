@@ -91,5 +91,40 @@ class TestCodexPoolAlive(unittest.TestCase):
             srv._codex_pool_alive_cache["ts"] = 0.0
 
 
+class TestCodexPoolLiveness(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        cls.server = importlib.import_module("server")
+
+    def test_recently_active_pool_codex_counts_live(self):
+        srv = self.server
+        sid = "test-pool-sid"
+        saved = {
+            "is_codex": srv._is_codex_session,
+            "is_cursor": srv._is_cursor_session,
+            "is_gemini": srv._is_gemini_session,
+            "is_antigravity": srv._is_antigravity_session,
+            "fields": srv._codex_state_fields,
+            "ids": srv._live_engine_session_ids,
+        }
+        srv._is_codex_session = lambda s: s == sid
+        srv._is_cursor_session = lambda s: False
+        srv._is_gemini_session = lambda s: False
+        srv._is_antigravity_session = lambda s: False
+        srv._codex_state_fields = lambda s, now=None: {"codex_state": "working", "codex_fresh": True}
+        srv._live_engine_session_ids = lambda: frozenset()
+        try:
+            self.assertTrue(srv._archive_session_is_live(sid))
+        finally:
+            srv._is_codex_session = saved["is_codex"]
+            srv._is_cursor_session = saved["is_cursor"]
+            srv._is_gemini_session = saved["is_gemini"]
+            srv._is_antigravity_session = saved["is_antigravity"]
+            srv._codex_state_fields = saved["fields"]
+            srv._live_engine_session_ids = saved["ids"]
+
+
 if __name__ == "__main__":
     unittest.main()
