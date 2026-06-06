@@ -4895,9 +4895,32 @@ def _reveal_bug_screenshot(path_str):
 # the user's note plus enough page/element/viewport anchors for a later agent
 # to reopen the page and inspect the same visual area.
 
+_LONE_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+
+def _strip_lone_surrogates(s):
+    """Remove unpaired UTF-16 surrogate code points (U+D800..U+DFFF).
+
+    JS strings are UTF-16; the browser's clipboard / pasted-image / selection
+    APIs can leave a lone high or low surrogate in the payload sent to
+    /api/annotations (or any other text field). Python stores those as-is
+    in `str`, but `json.dumps` happily serialises them, and the Anthropic
+    API rejects the resulting request with
+        "API Error: 400 The request body is not valid JSON:
+         no low surrogate in string: line 1 column N (char N)"
+    Strip the unpaired code points at the boundary so downstream injection
+    paths can never feed broken UTF-16 into the API. Paired surrogates
+    (i.e. real astral-plane chars like emoji) are already collapsed into
+    a single Python code point above U+FFFF and do not match this regex.
+    """
+    if not s:
+        return s
+    return _LONE_SURROGATE_RE.sub("", s)
+
+
 def _annotation_text(value, max_len=4000):
     s = "" if value is None else str(value)
-    s = s.replace("\x00", "").strip()
+    s = _strip_lone_surrogates(s).replace("\x00", "").strip()
     if len(s) > max_len:
         return s[:max_len].rstrip() + "…"
     return s
@@ -25934,6 +25957,16 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
     {"ok": bool, "via": <route>}.
     """
     text = _strip_ccc_session_state_instruction(text)
+    # Hard boundary: strip lone UTF-16 surrogates BEFORE the text reaches
+    # any code path that will eventually JSON-serialise it for an
+    # Anthropic API call. A pasted annotation or selected DOM text can
+    # carry an unpaired surrogate from the browser's clipboard /
+    # selection APIs; Anthropic's API rejects the resulting request body
+    # with "no low surrogate in string". Belt-and-suspenders with
+    # _annotation_text's own strip so we're covered regardless of which
+    # entry point fed the text.
+    if isinstance(text, str):
+        text = _strip_lone_surrogates(text)
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
     is_codex = _is_codex_session(session_id)
