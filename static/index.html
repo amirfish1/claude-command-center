@@ -1511,6 +1511,12 @@
         }
       }
     }
+    // Measure BEFORE the append — once the new wrap is in the DOM the
+    // scrollHeight inflates by the just-added height, so a user glued
+    // to the bottom looked "far from bottom" by exactly the new line's
+    // height and the autoscroll silently skipped. Capture the
+    // pre-append state and use that to decide.
+    const wasNearBottom = ($log.scrollHeight - $log.scrollTop - $log.clientHeight) < 80;
     $log.appendChild(wrap);
     // Trim if log grew too large.
     if ($log.childNodes.length > MAX_LOG_LINES) {
@@ -1518,9 +1524,7 @@
         $log.removeChild($log.firstChild);
       }
     }
-    // Auto-scroll if the user is near the bottom.
-    const nearBottom = ($log.scrollHeight - $log.scrollTop - $log.clientHeight) < 80;
-    if (nearBottom) $log.scrollTop = $log.scrollHeight;
+    if (wasNearBottom) $log.scrollTop = $log.scrollHeight;
   }
 
   function pushHistory(cmd) {
