@@ -1,1 +1,0 @@
-Codex sessions now show a live state badge (Working / Idle / Stuck / Offline) on the conversation row and in the conversation pane, derived from the rollout log — fixing pool-model codex sessions that previously showed no activity indicator.

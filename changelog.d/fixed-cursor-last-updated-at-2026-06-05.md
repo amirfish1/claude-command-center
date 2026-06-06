@@ -1,1 +1,0 @@
-- Cursor backfill now correctly sets the `lastUpdatedAt` field to match the most recent transcript activity, ensuring fresh sessions appear at the top of the Cursor IDE history.

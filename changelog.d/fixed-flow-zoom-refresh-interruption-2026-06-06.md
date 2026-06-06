@@ -1,1 +1,0 @@
-Flow wheel/trackpad zoom now defers sidebar refresh renders while the zoom gesture is active, matching the existing pan guard so periodic refreshes cannot interrupt the gesture or snap the board mid-zoom.

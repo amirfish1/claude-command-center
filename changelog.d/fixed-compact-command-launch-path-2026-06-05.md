@@ -1,1 +1,0 @@
-Context percentage compact now uses a dedicated compact API instead of injecting `/compact` as ordinary text. Live Claude terminals receive the slash command directly; busy terminals queue it; dormant Claude sessions open an interactive `claude --resume` terminal and run `/compact` there, avoiding the broken headless-resume fallback.

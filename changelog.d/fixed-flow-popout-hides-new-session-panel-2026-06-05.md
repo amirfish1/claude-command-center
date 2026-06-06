@@ -1,1 +1,0 @@
-The "+ New session / + New Group chat" panel no longer shows up in the Flow pop-out window. It's an entry point into the main dashboard's session-creation flow and has no business in a dedicated flow board view. Added `.new-session-panel` to the `body.flow-popout` hide list alongside the conv list, search bar, topbar, etc.
