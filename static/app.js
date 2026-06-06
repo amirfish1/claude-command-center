@@ -8988,10 +8988,20 @@
           if (!sid) return;
           const sessionNodeId = flowNodeKey('session', sid);
           flowNodeParents[sessionNodeId] = parentNodeId;
+          // Pin to the flow board so flowIsVisibleSession keeps the
+          // session rendered even if it's archived (the toggle on the
+          // toolbar is for the BOARD-WIDE archive default; a session
+          // the user just attached is unambiguous — they want to see
+          // it). flowPinnedSessionIds keys on c.id; row.dataset.rowId
+          // was populated from c.id || sid.
           const rowId = row.getAttribute('data-row-id') || sid;
-          if (typeof setFlowPinned === 'function') {
-            try { setFlowPinned(rowId, true); } catch (_) {}
-          }
+          try {
+            flowPinnedSessionIds.add(rowId);
+            // Sessions sometimes carry a row id == session id; pin
+            // both shapes so isFlowPinned(c) hits either lookup.
+            if (rowId !== sid) flowPinnedSessionIds.add(sid);
+            persistFlowPinnedSessionIds();
+          } catch (_) {}
           try { persistFlowNodeParents(); } catch (_) {}
           if (typeof showOpToast === 'function') {
             showOpToast('Attached to ' + (parentTitle || 'parent'));
