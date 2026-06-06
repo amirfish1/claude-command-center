@@ -13619,6 +13619,10 @@
     const _archivedConvs = [];
     const _idSearchConvs = [];
     const _qActive = (document.getElementById('convSearch')?.value || '').trim().toLowerCase();
+    // Group-chat rows are navigation chrome, not conversation search hits.
+    // When the sidebar search is active, keep the results focused on
+    // matching sessions/issues instead of surfacing every active/archived chat.
+    const _hideGroupChatsForSearch = !!_qActive;
     const _repoSearchActive = (_qActive && _historyState.query === _qActive
       && Array.isArray(_historyState.repoRows) && _historyState.repoRows.length)
       ? {
@@ -14491,7 +14495,7 @@
     // (+ child data-roles) so the click / drag / archive handlers
     // wired further down still find them regardless of where the rows
     // ended up in the DOM.
-    const _gcItems = (_gcActiveChats || []).map(chat => {
+    const _gcItems = _hideGroupChatsForSearch ? [] : (_gcActiveChats || []).map(chat => {
         const isClosed = chat.status === 'closed';
         const isPaused = chat.status === 'paused' || !!chat.paused;
         const chatId = chat.uuid || chat.id || '';
@@ -14761,7 +14765,7 @@
     // interleave with session rows (or folder groups) by mtime — see
     // the _gcItems build and the _activeRowsHtml merge above.
     let _inProgressHtml = '';
-    const _gcCountForSection = (_gcActiveChats || []).length;
+    const _gcCountForSection = _hideGroupChatsForSearch ? 0 : (_gcActiveChats || []).length;
     if (_sessionConvs.length > 0 || _gcCountForSection > 0) {
       const _ipCollapsed = localStorage.getItem('ccc-inprogress-collapsed') === '1';
       const _ipArrow = _ipCollapsed ? '▸' : '▾';
@@ -14942,6 +14946,9 @@
     // through everything at once — useful because archived can get long.
     let _archivedHtml = '';
     const _arcHasFolderChips = _archivedConvs.some(c => c.folder_label_chip);
+    const _archivedGroupChatsForRender = _hideGroupChatsForSearch
+      ? []
+      : (Array.isArray(_archivedGroupChats) ? _archivedGroupChats : []);
     const _arcGrouping = (() => {
       try { return localStorage.getItem('ccc-archived-grouping') || 'time'; }
       catch (_) { return 'time'; }
@@ -14999,15 +15006,15 @@
           + cards.map(c => _renderRow(c, { suppressFolderChip: true })).join('')
           + '</div>';
       }).join('');
-      const _gcRowsFlat = (Array.isArray(_archivedGroupChats) && _archivedGroupChats.length)
-        ? _archivedGroupChats
+      const _gcRowsFlat = _archivedGroupChatsForRender.length
+        ? _archivedGroupChatsForRender
             .slice()
             .sort((a, b) => ((b.archived_at || b.closed_at || b.last_mtime || 0) - (a.archived_at || a.closed_at || a.last_mtime || 0)))
             .map(_renderArchivedGcRow)
             .join('')
         : '';
       _arcRows = _folderRowsHtml + _gcRowsFlat;
-      _arcCount = _archivedConvs.length + (Array.isArray(_archivedGroupChats) ? _archivedGroupChats.length : 0);
+      _arcCount = _archivedConvs.length + _archivedGroupChatsForRender.length;
     } else {
       // Flat chronological list — original behavior.
       const _archivedItems = [];
@@ -15018,8 +15025,8 @@
           html: _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter }),
         });
       }
-      if (Array.isArray(_archivedGroupChats) && _archivedGroupChats.length) {
-        for (const gc of _archivedGroupChats) {
+      if (_archivedGroupChatsForRender.length) {
+        for (const gc of _archivedGroupChatsForRender) {
           const ago = (gc.archived_at || gc.closed_at || gc.last_mtime) || 0;
           _archivedItems.push({ pinRank: Infinity, mtime: ago, html: _renderArchivedGcRow(gc) });
         }
@@ -25841,7 +25848,7 @@
       }
     }
 
-    const hasGc = _gcActiveChats && _gcActiveChats.length > 0;
+    const hasGc = !q && _gcActiveChats && _gcActiveChats.length > 0;
     if (!archiveLoaded && !archiveRows.length && !hasGc) {
       _renderArchiveEmpty('<div class="archive-empty-state archive-loading-placeholder">Loading archive&hellip;</div>');
       return;

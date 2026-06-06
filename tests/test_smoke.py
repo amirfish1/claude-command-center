@@ -495,6 +495,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("ccc-flow-popout-reader", app_js)
         self.assertIn("body.flow-popout.flow-popout-reader", app_css)
 
+    def test_sidebar_search_hides_group_chat_rows(self):
+        """Sidebar search is for sessions/issues. Active and archived
+        group-chat rows are navigation chrome, so they should not appear
+        in In progress or Archived while a query is active."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("const _hideGroupChatsForSearch = !!_qActive;", app_js)
+        self.assertIn(
+            "const _gcItems = _hideGroupChatsForSearch ? [] : (_gcActiveChats || []).map(chat => {",
+            app_js,
+        )
+        self.assertIn("const _gcCountForSection = _hideGroupChatsForSearch ? 0", app_js)
+        self.assertIn("const _archivedGroupChatsForRender = _hideGroupChatsForSearch", app_js)
+        self.assertIn("const hasGc = !q && _gcActiveChats && _gcActiveChats.length > 0;", app_js)
+
     def test_flow_popout_button_and_mode_wired(self):
         """Flow toolbar gets a pop-out button (skipped inside the popout
         itself). Click → openFlowPopout → window.open with ccc_popout=flow.
