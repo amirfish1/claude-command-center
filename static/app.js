@@ -329,13 +329,16 @@
             ' (no transcript activity) · not running an encode/transcode. Reaping SIGTERMs the whole process tree. ' +
             'Sessions you’re in (⌨) or actively working (⚙) are never offered.</div>';
     (d.sessions || []).forEach(function (s) {
-      let badge, btn = '', badgeTitle = '';
-      if (s.interactive) { badge = '⌨ in use'; badgeTitle = 'A terminal is attached (you’re in this session) — never reaped'; }
-      else if (s.busy) { badge = '⚙ ' + (s.worker || (s.tree_cpu + '% cpu')); badgeTitle = 'Working (encode/transcode child or live CPU) — never reaped'; }
-      else if (s.reapable) { badge = '🧹 stale'; btn = 'danger'; badgeTitle = 'Headless · idle ≥ ' + staleLabel + ' · not working — safe to reap'; }
+      let badge, btn = '', badgeTitle = '', badgeCls = '';
+      if (s.concurrent) {
+        badge = '⚠ concurrent'; btn = ''; badgeCls = ' sh-warn';
+        badgeTitle = '2+ live processes share this session id (e.g. a terminal + a headless agent). Killing one is the riskiest move — resolve it deliberately, not from here.';
+      } else if (s.interactive) { badge = '⌨ in use'; badgeTitle = 'A terminal is attached (you’re in this session) — never reaped'; }
+      else if (s.busy) { badge = '⚙ ' + (s.worker || (s.tree_cpu + '% cpu')); badgeCls = ' sh-ok'; badgeTitle = 'Working (encode/transcode child or live CPU) — never reaped'; }
+      else if (s.reapable) { badge = '🧹 stale'; btn = 'danger'; badgeCls = ' sh-warn'; badgeTitle = 'Headless · idle ≥ ' + staleLabel + ' · not working — safe to reap'; }
       else { badge = 'idle'; btn = 'plain'; badgeTitle = 'Headless and idle, but more recent than ' + staleLabel + ' — not stale yet'; }
-      const badgeCls = s.busy ? ' sh-ok' : (s.reapable ? ' sh-warn' : '');
       const when = s.idle_known ? 'idle ' + _shFmtIdle(s.idle_min) : 'up ' + _shFmtIdle(s.age_min);
+      const epTag = s.entrypoint ? ' · ' + _shEsc(s.entrypoint) : '';
       const nameMain = s.name ? _shEsc(s.name) : _shEsc(s.cwd_short);
       const repoTag = s.name ? '<span class="sh-repo">' + _shEsc(s.cwd_short) + '</span>' : '';
       const nameAttr = s.session_id
@@ -344,7 +347,7 @@
       html += '<div class="sh-sess"><span class="sh-badge' + badgeCls + '" title="' + _shEsc(badgeTitle) + '">' + _shEsc(badge) + '</span>' +
               '<div class="sh-sesscol">' +
                 '<div><span class="sh-name"' + nameAttr + '>' + nameMain + '</span>' + repoTag + '</div>' +
-                '<div class="sh-meta">' + when + ' · ' + _shFmtMB(s.tree_rss_mb) + ' · ' + s.nprocs + 'p · PID ' + s.pid + '</div>' +
+                '<div class="sh-meta">' + when + ' · ' + _shFmtMB(s.tree_rss_mb) + ' · ' + s.nprocs + 'p · PID ' + s.pid + epTag + '</div>' +
               '</div>' +
               '<span class="sh-spacer"></span>' +
               (btn ? '<button class="sh-btn ' + (btn === 'danger' ? 'sh-btn-danger' : '') + '" data-reap="' + s.tree_pids.join(',') + '">kill tree</button>' : '') +

@@ -2974,6 +2974,7 @@ def _sys_sessions(rows, now):
             "pid": r["pid"],
             "session_id": sid,
             "name": _name_for(sid),
+            "entrypoint": (meta_by_sid.get(sid) or {}).get("entrypoint"),
             "age_min": round(r["etime_min"], 1),
             "idle_min": round(idle_min, 1),
             "idle_known": idle_known is not None,
@@ -2993,6 +2994,19 @@ def _sys_sessions(rows, now):
         c = cwds.get(s["pid"], "")
         s["cwd"] = c
         s["cwd_short"] = "~" if c == home else (c.rsplit("/", 1)[-1] if c else "?")
+
+    # Concurrent sessions: 2+ live processes on one session_id (e.g. a headless
+    # sdk-cli + a terminal cli both on the same transcript). The data-loss path
+    # is unproven (study T1), but a kill here is the riskiest move, so flag them
+    # and withhold reaping — the user resolves a concurrent pair deliberately.
+    sid_counts = {}
+    for s in sessions:
+        if s["session_id"]:
+            sid_counts[s["session_id"]] = sid_counts.get(s["session_id"], 0) + 1
+    for s in sessions:
+        s["concurrent"] = bool(s["session_id"]) and sid_counts.get(s["session_id"], 0) >= 2
+        if s["concurrent"]:
+            s["reapable"] = False
 
     # Sort by the strength of the case to reap (strongest first), so the best
     # kill targets surface at the top and protected sessions sink:
