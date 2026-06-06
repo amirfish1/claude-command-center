@@ -4296,8 +4296,14 @@
   // button (see #convTtsRate). Persisted to localStorage so it sticks
   // across sessions. 1.25 was the prior baked-in default — anything
   // higher missed words, anything lower felt sleepy.
-  const _TTS_RATE_MIN = 0.5;
-  const _TTS_RATE_MAX = 2.5;
+  // 0.8 – 1.3 covers the actually-useful range for narration. Tighter
+  // than the original 0.5 – 2.5 per user 2026-06-06 — slider misclicks
+  // can't push playback into "robot at half-speed" or "auctioneer"
+  // territory. _readPersistedTtsRate's bounds-check clamps any stale
+  // localStorage value (e.g. 1.5 from the old range) back into the
+  // new window on next boot.
+  const _TTS_RATE_MIN = 0.8;
+  const _TTS_RATE_MAX = 1.3;
   const _TTS_RATE_DEFAULT = 1.25;
   function _readPersistedTtsRate() {
     try {
