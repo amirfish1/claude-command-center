@@ -57,5 +57,39 @@ class TestCodexRowState(unittest.TestCase):
         )
 
 
+class TestCodexPoolAlive(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        cls.server = importlib.import_module("server")
+
+    def test_pool_alive_true_when_app_server_running(self):
+        srv = self.server
+        srv._codex_pool_alive_cache["ts"] = 0.0
+        orig = srv.find_live_codex_processes
+        srv.find_live_codex_processes = lambda: [
+            {"pid": 1, "command": "/opt/homebrew/bin/codex app-server --listen stdio://"}
+        ]
+        try:
+            self.assertTrue(srv._codex_pool_alive(now=1000.0))
+        finally:
+            srv.find_live_codex_processes = orig
+            srv._codex_pool_alive_cache["ts"] = 0.0
+
+    def test_pool_alive_false_when_no_app_server(self):
+        srv = self.server
+        srv._codex_pool_alive_cache["ts"] = 0.0
+        orig = srv.find_live_codex_processes
+        srv.find_live_codex_processes = lambda: [
+            {"pid": 1, "command": "codex --resume abc123"}
+        ]
+        try:
+            self.assertFalse(srv._codex_pool_alive(now=1000.0))
+        finally:
+            srv.find_live_codex_processes = orig
+            srv._codex_pool_alive_cache["ts"] = 0.0
+
+
 if __name__ == "__main__":
     unittest.main()

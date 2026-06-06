@@ -2396,6 +2396,7 @@ def _bust_pr_state_cache(url=None):
 # single ps scan rather than one per row.
 _engine_live_sids_cache = {"ts": 0.0, "sids": frozenset()}
 _ENGINE_LIVE_TTL = 4.0
+_codex_pool_alive_cache = {"ts": 0.0, "alive": True}
 
 
 def _live_engine_session_ids():
@@ -15956,6 +15957,62 @@ def _codex_row_state(tail, mtime, now, pool_alive, has_live_proc):
             return "stuck"
         return "working"
     return "idle"
+
+
+def _codex_pool_alive(now=None):
+    """True when a `codex app-server` pool process is running.
+
+    Cached for _ENGINE_LIVE_TTL like the engine-live scan. On any error,
+    fall back to the last value (default True) so a transient ps failure
+    never flips every codex row to a false 'offline'.
+    """
+    now = now if now is not None else time.time()
+    cached = _codex_pool_alive_cache
+    if now - cached["ts"] < _ENGINE_LIVE_TTL:
+        return cached["alive"]
+    try:
+        alive = False
+        for p in find_live_codex_processes():
+            if "app-server" in (p.get("command") or ""):
+                alive = True
+                break
+    except Exception:
+        return cached["alive"]
+    _codex_pool_alive_cache["ts"] = now
+    _codex_pool_alive_cache["alive"] = alive
+    return alive
+
+
+def _codex_state_fields(sid, now=None):
+    """Resolve {codex_state, codex_fresh} for one codex session id.
+
+    Applies the recency gate (no chip for sessions whose rollout hasn't
+    been touched within _codex_recent_window_s). Fails quiet to nulls.
+    """
+    fields = {"codex_state": None, "codex_fresh": False}
+    if not sid:
+        return fields
+    try:
+        path = _resolve_codex_rollout_path(sid)
+        if not path:
+            return fields
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return fields
+    now = now if now is not None else time.time()
+    if (now - mtime) > _codex_recent_window_s():
+        return fields
+    try:
+        tail = _extract_codex_tail_meta(path) or {}
+        pool_alive = _codex_pool_alive(now)
+        has_live_proc = sid in _live_engine_session_ids()
+        state = _codex_row_state(tail, mtime, now, pool_alive, has_live_proc)
+    except Exception:
+        return fields
+    fields["codex_state"] = state
+    if state == "working":
+        fields["codex_fresh"] = (now - float(mtime)) < _codex_fresh_threshold_s()
+    return fields
 
 
 def find_codex_conversations(
