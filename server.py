@@ -15915,6 +15915,49 @@ def _codex_activity_fields_from_tail(tail, live):
     return fields
 
 
+def _codex_fresh_threshold_s():
+    try:
+        v = float(os.environ.get("CCC_CODEX_FRESH_SEC", "40"))
+    except (TypeError, ValueError):
+        v = 40.0
+    return max(0.0, v)
+
+
+def _codex_recent_window_s():
+    try:
+        v = float(os.environ.get("CCC_CODEX_RECENT_SEC", str(24 * 3600)))
+    except (TypeError, ValueError):
+        v = float(24 * 3600)
+    return max(0.0, v)
+
+
+def _codex_row_state(tail, mtime, now, pool_alive, has_live_proc):
+    """Classify one codex session into working / idle / stuck / offline.
+
+    Pure function (no I/O) so it is unit-testable. Caller applies the
+    recency gate and resolves pool/liveness/mtime before calling.
+
+    Priority: offline (engine down) > stuck (mid-turn, stale) >
+    working (mid-turn, fresh) > idle (turn complete).
+    """
+    if not tail:
+        return None
+    mid_turn = bool(tail.get("pending_tool")) or (
+        tail.get("last_event_type") in ("user", "assistant")
+    )
+    if not pool_alive and not has_live_proc:
+        return "offline"
+    if mid_turn:
+        try:
+            age = max(0.0, float(now) - float(mtime or 0))
+        except (TypeError, ValueError):
+            age = 0.0
+        if age >= _codex_stale_tool_threshold_s():
+            return "stuck"
+        return "working"
+    return "idle"
+
+
 def find_codex_conversations(
     repo_path=None,
     include_old=True,
