@@ -5811,5 +5811,24 @@ class TestQuestionRelayHook(unittest.TestCase):
         self.assertIn("these answers", reason)
 
 
+class TestCodexStateWiring(unittest.TestCase):
+    def test_server_exposes_codex_state_helpers(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        for name in ("_codex_row_state", "_codex_state_fields", "_codex_pool_alive"):
+            self.assertTrue(hasattr(server, name), name)
+
+    def test_static_renders_codex_state(self):
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parent.parent
+        js = (root / "static" / "app.js").read_text()
+        css = (root / "static" / "app.css").read_text()
+        self.assertIn("codex_state", js)
+        self.assertIn("updateCodexStateBadge", js)
+        self.assertIn("flow-chip.offline", css)
+        self.assertIn("conv-codex-state", css)
+
+
 if __name__ == "__main__":
     unittest.main()
