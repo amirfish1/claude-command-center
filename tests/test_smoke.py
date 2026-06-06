@@ -486,11 +486,16 @@ class TestServerImports(unittest.TestCase):
         safety margin. JS _mobileMQ and the relevant CSS @media blocks
         must use the same threshold so isMobile() and the slide-in
         overlay agree."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("matchMedia('(max-width: 950px)')", app_js)
         # CSS for the back-button visibility + main-overlay must match.
         self.assertIn("@media (max-width: 950px)", app_css)
+        self.assertIn('data-role="pane-mobile-back"', index_html)
+        self.assertIn("mobile-show-main .conv-split[data-orientation=\"\"] .conv-pane > .conv-pane-header", app_css)
+        self.assertIn("ev.target.closest('[data-role=\"pane-mobile-back\"]')", app_js)
+        self.assertNotIn("_captureRailEl(document.getElementById('mobileBackBtn'))", app_js)
 
     def test_flow_group_chat_nodes_and_drop(self):
         """Group chats render as a third node kind on the flow board

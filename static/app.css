@@ -1298,6 +1298,7 @@
     border-radius: 3px;
   }
   .conv-pane-close:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
+  .conv-pane-mobile-back { display: none !important; }
 
   .conv-split-divider {
     flex: 0 0 4px;
@@ -7233,6 +7234,19 @@
     }
     body:not(.kanban-split).mobile-show-main .main {
       transform: translateX(0);
+    }
+
+    body:not(.kanban-split).mobile-show-main .conv-split[data-orientation=""] .conv-pane > .conv-pane-header {
+      display: flex;
+      padding-left: max(8px, env(safe-area-inset-left));
+      padding-right: max(8px, env(safe-area-inset-right));
+    }
+    body:not(.kanban-split).mobile-show-main .conv-pane-mobile-back {
+      display: inline-flex !important;
+      flex: 0 0 auto;
+    }
+    body.conversation-popout .conv-pane-mobile-back {
+      display: none !important;
     }
 
     .mobile-back-btn {

@@ -5782,6 +5782,12 @@
   }
   const $mobileBackBtn = document.getElementById('mobileBackBtn');
   if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => mobileShowMain(false));
+  document.addEventListener('click', ev => {
+    const btn = ev.target && ev.target.closest ? ev.target.closest('[data-role="pane-mobile-back"]') : null;
+    if (!btn) return;
+    ev.preventDefault();
+    mobileShowMain(false);
+  });
   const $cpMobileBackBtn = document.getElementById('cpMobileBackBtn');
   if ($cpMobileBackBtn) $cpMobileBackBtn.addEventListener('click', () => mobileShowConv(false));
   const $mobileReloadBtn = document.getElementById('mobileReloadBtn');
@@ -23630,7 +23636,6 @@
     _captureRailEl(document.getElementById('announceBtnConv'));
     _captureRailEl(document.getElementById('jumpBtnConv'));
     _captureRailEl(document.getElementById('pkoodKillBtn'));
-    _captureRailEl(document.getElementById('mobileBackBtn'));
     if ($toolbar) {
       _captureRailEl(document.getElementById('convSessionId'));
       _captureRailEl($toolbar.querySelector('.conv-overflow-wrap'));
