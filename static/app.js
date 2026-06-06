@@ -174,6 +174,200 @@
     tick();
     setInterval(tick, 5000);
   }
+  // ---- System Health panel -------------------------------------------------
+  // Full-screen overlay opened from the footer health cluster. While open it
+  // polls /api/system-health (machine memory/swap, CPU hogs, Claude session
+  // trees with last-activity) and can reap a stale session's whole tree. The
+  // reap is guarded server-side — only headless/idle/stale trees can die.
+  let _sysHealthTimer = null;
+  function _shFmtMB(mb) {
+    if (mb == null) return '—';
+    if (mb >= 1024) { const g = mb / 1024; return (g >= 10 ? g.toFixed(0) : g.toFixed(1)) + ' GB'; }
+    return Math.round(mb) + ' MB';
+  }
+  function _shFmtIdle(min) {
+    if (min == null) return '—';
+    if (min < 60) return min.toFixed(0) + 'm';
+    if (min < 1440) return (min / 60).toFixed(1) + 'h';
+    return (min / 1440).toFixed(1) + 'd';
+  }
+  function _shEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function _ensureSysHealthModal() {
+    if (!document.getElementById('__sysHealthStyle')) {
+      const st = document.createElement('style');
+      st.id = '__sysHealthStyle';
+      st.textContent =
+        '#sysHealthOverlay{position:fixed;inset:0;z-index:9999;display:none;}' +
+        '#sysHealthOverlay.open{display:block;}' +
+        '#sysHealthBackdrop{position:absolute;inset:0;background:rgba(0,0,0,.5);}' +
+        '#sysHealthPanel{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);' +
+        'width:min(680px,92vw);max-height:86vh;overflow:auto;background:var(--bg-primary,#1c2128);' +
+        'color:var(--text-primary,#e6edf3);border:1px solid var(--border-color,#30363d);border-radius:12px;' +
+        'box-shadow:0 18px 60px rgba(0,0,0,.5);font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;}' +
+        '#sysHealthPanel h2{margin:0;font-size:14px;font-weight:600;}' +
+        '.sh-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;' +
+        'border-bottom:1px solid var(--border-color,#30363d);position:sticky;top:0;background:var(--bg-primary,#1c2128);}' +
+        '.sh-close{cursor:pointer;border:0;background:transparent;color:inherit;font-size:20px;line-height:1;padding:2px 7px;border-radius:6px;}' +
+        '.sh-close:hover{background:var(--hover-bg,rgba(127,127,127,.16));}' +
+        '.sh-body{padding:14px 16px;display:flex;flex-direction:column;gap:16px;}' +
+        '.sh-sec-title{font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.6;margin-bottom:7px;}' +
+        '.sh-row{display:flex;align-items:center;gap:8px;margin-top:5px;}' +
+        '.sh-bar{flex:1 1 auto;height:8px;border-radius:5px;background:var(--hover-bg,rgba(127,127,127,.18));overflow:hidden;}' +
+        '.sh-bar-fill{height:100%;border-radius:5px;background:#3fb950;transition:width .3s;}' +
+        '.sh-ok{color:#3fb950;} .sh-warn{color:#d29922;} .sh-crit{color:#f85149;}' +
+        '.sh-fill-ok{background:#3fb950;} .sh-fill-warn{background:#d29922;} .sh-fill-crit{background:#f85149;}' +
+        '.sh-sess{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;}' +
+        '.sh-sess:hover{background:var(--hover-bg,rgba(127,127,127,.08));}' +
+        '.sh-cwd{font-weight:600;}' +
+        '.sh-meta{opacity:.7;font-size:12px;}' +
+        '.sh-spacer{flex:1 1 auto;}' +
+        '.sh-badge{font-size:11px;padding:1px 7px;border-radius:5px;background:var(--hover-bg,rgba(127,127,127,.16));white-space:nowrap;}' +
+        '.sh-btn{cursor:pointer;border:1px solid var(--border-color,#30363d);background:transparent;color:inherit;' +
+        'font:600 11px/1 ui-monospace,Menlo,monospace;padding:4px 9px;border-radius:6px;white-space:nowrap;}' +
+        '.sh-btn:hover{background:var(--hover-bg,rgba(127,127,127,.16));}' +
+        '.sh-btn-danger{border-color:#a3352f;color:#f85149;}' +
+        '.sh-btn-danger:hover{background:rgba(248,81,73,.14);}';
+      document.head.appendChild(st);
+    }
+    let ov = document.getElementById('sysHealthOverlay');
+    if (ov) return ov;
+    ov = document.createElement('div');
+    ov.id = 'sysHealthOverlay';
+    ov.innerHTML =
+      '<div id="sysHealthBackdrop"></div>' +
+      '<div id="sysHealthPanel" role="dialog" aria-modal="true" aria-label="System Health">' +
+        '<div class="sh-head"><h2>System Health</h2>' +
+        '<button class="sh-close" aria-label="Close">&times;</button></div>' +
+        '<div class="sh-body" id="sysHealthBody"><div style="opacity:.6">Loading…</div></div>' +
+      '</div>';
+    document.body.appendChild(ov);
+    ov.querySelector('#sysHealthBackdrop').addEventListener('click', _closeSystemHealth);
+    ov.querySelector('.sh-close').addEventListener('click', _closeSystemHealth);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && ov.classList.contains('open')) _closeSystemHealth();
+    });
+    return ov;
+  }
+  function _openSystemHealth() {
+    const ov = _ensureSysHealthModal();
+    ov.classList.add('open');
+    _pollSystemHealth();
+    if (_sysHealthTimer) clearInterval(_sysHealthTimer);
+    _sysHealthTimer = setInterval(_pollSystemHealth, 4000);
+  }
+  function _closeSystemHealth() {
+    const ov = document.getElementById('sysHealthOverlay');
+    if (ov) ov.classList.remove('open');
+    if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
+  }
+  function _pollSystemHealth() {
+    if (document.hidden) return;
+    fetch('/api/system-health', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { if (d) _renderSystemHealth(d); })
+      .catch(function () {});
+  }
+  function _shBar(used, total, warn, crit) {
+    const pct = total ? Math.min(100, used / total * 100) : 0;
+    const cls = pct >= crit ? 'sh-fill-crit' : (pct >= warn ? 'sh-fill-warn' : 'sh-fill-ok');
+    return '<div class="sh-bar"><div class="sh-bar-fill ' + cls + '" style="width:' + pct.toFixed(0) + '%"></div></div>';
+  }
+  function _renderSystemHealth(d) {
+    const body = document.getElementById('sysHealthBody');
+    if (!body) return;
+    const m = d.memory || {}, cpu = d.cpu || {}, t = d.session_totals || {};
+    let html = '';
+
+    // Memory + swap
+    html += '<div><div class="sh-sec-title">Memory</div>';
+    html += '<div class="sh-row"><span style="width:46px">RAM</span>' + _shBar(m.used_mb, m.total_mb, 75, 90) +
+            '<span class="sh-meta" style="width:158px;text-align:right">' + _shFmtMB(m.used_mb) + ' / ' + _shFmtMB(m.total_mb) + '</span></div>';
+    if (m.swap_total_mb) {
+      const swapPct = m.swap_used_mb / m.swap_total_mb * 100;
+      html += '<div class="sh-row"><span style="width:46px">Swap</span>' + _shBar(m.swap_used_mb, m.swap_total_mb, 50, 85) +
+              '<span class="sh-meta" style="width:158px;text-align:right">' + _shFmtMB(m.swap_used_mb) + ' / ' + _shFmtMB(m.swap_total_mb) + ' (' + swapPct.toFixed(0) + '%)</span></div>';
+    }
+    const pcls = m.pressure === 'critical' ? 'sh-crit' : (m.pressure === 'elevated' ? 'sh-warn' : 'sh-ok');
+    html += '<div class="sh-meta" style="margin-top:6px">pressure <span class="' + pcls + '">' + _shEsc(m.pressure || '?') + '</span> · ' +
+            _shFmtMB(m.available_mb) + ' available · ' + _shFmtMB(m.compressed_mb) + ' compressed</div></div>';
+
+    // CPU + hogs
+    html += '<div><div class="sh-sec-title">CPU</div>';
+    html += '<div class="sh-meta">load ' + [cpu.load1, cpu.load5, cpu.load15].map(function (x) { return x == null ? '—' : x.toFixed(2); }).join(' / ') +
+            ' · ' + (cpu.cores || '?') + ' cores</div>';
+    if (d.hogs && d.hogs.length) {
+      d.hogs.forEach(function (h) {
+        html += '<div class="sh-row"><span class="sh-crit" style="width:46px">' + h.cpu + '%</span><span>' + _shEsc(h.label) +
+                '</span><span class="sh-meta">PID ' + h.pid + ' · ' + _shFmtIdle(h.etime_min) + '</span></div>';
+      });
+    } else {
+      html += '<div class="sh-meta" style="margin-top:5px">no sustained CPU hogs</div>';
+    }
+    html += '</div>';
+
+    // Claude sessions
+    html += '<div><div class="sh-sec-title" style="display:flex;align-items:center;gap:8px">' +
+            '<span>Claude sessions — ' + (t.count || 0) + ' · ' + _shFmtMB(t.tree_rss_mb) +
+            (t.reapable ? ' · <span class="sh-warn">' + t.reapable + ' reapable (' + _shFmtMB(t.reapable_rss_mb) + ')</span>' : '') + '</span>' +
+            (t.reapable > 1 ? '<button class="sh-btn sh-btn-danger" data-reapall="1">Reap all stale</button>' : '') +
+            '</div>';
+    (d.sessions || []).forEach(function (s) {
+      let badge, btn = '';
+      if (s.interactive) { badge = '<span class="sh-badge">⌨ in use</span>'; }
+      else if (s.busy) { badge = '<span class="sh-badge sh-ok">⚙ ' + _shEsc(s.worker || (s.tree_cpu + '% cpu')) + '</span>'; }
+      else if (s.reapable) { badge = '<span class="sh-badge sh-warn">🧹 stale</span>'; btn = 'danger'; }
+      else { badge = '<span class="sh-badge">idle</span>'; btn = 'plain'; }
+      const when = s.idle_known ? 'idle ' + _shFmtIdle(s.idle_min) : 'up ' + _shFmtIdle(s.age_min);
+      html += '<div class="sh-sess">' + badge +
+              '<span class="sh-cwd">' + _shEsc(s.cwd_short) + '</span>' +
+              '<span class="sh-meta">' + when + ' · ' + _shFmtMB(s.tree_rss_mb) + ' · ' + s.nprocs + 'p · PID ' + s.pid + '</span>' +
+              '<span class="sh-spacer"></span>' +
+              (btn ? '<button class="sh-btn ' + (btn === 'danger' ? 'sh-btn-danger' : '') + '" data-reap="' + s.tree_pids.join(',') + '">kill tree</button>' : '') +
+              '</div>';
+    });
+    html += '</div>';
+
+    body.innerHTML = html;
+
+    Array.prototype.forEach.call(body.querySelectorAll('[data-reap]'), function (b) {
+      b.addEventListener('click', function () {
+        _confirmReap(b, b.getAttribute('data-reap').split(',').map(Number));
+      });
+    });
+    const ra = body.querySelector('[data-reapall]');
+    if (ra) ra.addEventListener('click', function () {
+      let pids = [];
+      (d.sessions || []).forEach(function (s) { if (s.reapable) pids = pids.concat(s.tree_pids); });
+      _confirmReap(ra, pids);
+    });
+  }
+  function _confirmReap(btn, pids) {
+    // Two-step in-button confirm (no native dialog): first click arms, second
+    // reaps. Auto-disarms after 3s.
+    if (btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1';
+      btn.dataset.prev = btn.textContent;
+      btn.textContent = 'confirm reap?';
+      btn.classList.add('sh-btn-danger');
+      setTimeout(function () {
+        if (btn.dataset.armed === '1') { btn.dataset.armed = '0'; btn.textContent = btn.dataset.prev || 'kill tree'; }
+      }, 3000);
+      return;
+    }
+    btn.dataset.armed = '0';
+    btn.textContent = 'reaping…';
+    fetch('/api/system-health/reap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pids: pids }),
+    }).then(function (r) { return r.json(); })
+      .then(function () { _pollSystemHealth(); })
+      .catch(function () { _pollSystemHealth(); });
+  }
+
   function _initPollerStrip() {
     const footer = document.querySelector('.sidebar-footer');
     if (!footer) { setTimeout(_initPollerStrip, 400); return; }
@@ -246,7 +440,9 @@
     // footer; the trigger strip is collapsed behind a toggle to make room.
     const health = document.createElement('div');
     health.id = 'cccHealth';
-    health.title = 'CCC daemon health — server CPU%, live-activity build latency, recent errors. Polls /api/health.';
+    health.title = 'CCC daemon health — server CPU%, live-activity build latency, recent errors.\nClick for full System Health (memory/swap, CPU hogs, session reaping).';
+    health.style.cursor = 'pointer';
+    health.addEventListener('click', _openSystemHealth);
     health.innerHTML =
       '<span class="ccchealth-metric" data-k="cpu"><span class="ccchealth-dot"></span><span class="ccchealth-val">cpu —</span></span>' +
       '<span class="ccchealth-metric" data-k="build"><span class="ccchealth-dot"></span><span class="ccchealth-val">build —</span></span>' +
