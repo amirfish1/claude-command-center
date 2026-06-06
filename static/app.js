@@ -26049,7 +26049,12 @@
     const _arcWindowCutoff = _arcWindowDays
       ? Math.floor(Date.now() / 1000) - (_arcWindowDays * 24 * 3600)
       : null;
-    const _windowed = _arcWindowCutoff
+    // An active text search must span every session, not just the current
+    // time window — otherwise a session older than the window (or one with no
+    // `modified` timestamp) is silently unsearchable by title. Bypass the
+    // window when `q` is set; the substring filter + history union below
+    // narrow it back down.
+    const _windowed = (_arcWindowCutoff && !q)
       ? archiveRows.filter(c => c.pinned || ((c.modified || c.mtime || 0) >= _arcWindowCutoff))
       : archiveRows;
     // Never filter by folder — the folder picker controls grouping and the
