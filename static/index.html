@@ -540,7 +540,7 @@
         </button>
         <button id="kptWorktreesBtn" class="topbar-btn" title="Show all worktrees of this repo, with an indicator for those that have uncommitted changes." aria-label="Show worktrees">&#127807; Worktrees</button>
         <button id="statsBtn" class="topbar-btn" title="Usage stats — sessions, messages, tokens, streaks across every Claude Code transcript on this machine." aria-label="Show usage stats">&#128202; Stats</button>
-        <button id="termToggleBtn" class="topbar-btn" title="Open the in-UI terminal panel — run quick shell commands (git status, npm test, ./script.sh) without leaving the page. One-shot per command, no interactive TTY (no vim/top)." aria-label="Toggle terminal panel">&#9000; Terminal</button>
+        <button id="termToggleBtn" class="topbar-btn" title="Open the in-UI terminal panel — run quick shell commands (git status, npm test, ./script.sh) without leaving the page. One-shot per command, no interactive TTY (no vim/top). Shortcut: ⌘2." aria-label="Toggle terminal panel">&#9000; Terminal</button>
         <a class="topbar-btn sh-btn-deploy" id="deployPill" target="_blank" rel="noopener" title="Vercel deploy — loading…" aria-label="Vercel deploy status"><span class="deploy-dot" id="deployDot"></span><span class="deploy-label" id="deployStateLabel">Vercel</span></a>
         <a class="topbar-btn sh-btn-deploy" id="localhostPill" target="_blank" rel="noopener" title="localhost dev server — loading…" aria-label="Local Next.js dev server"><span class="deploy-dot" id="localhostDot"></span><span class="deploy-label" id="localhostLabel">localhost</span></a>
         <div id="historyStatusPill" class="topbar-btn hi-status-pill" style="display:none;" title="" role="button" tabindex="0">
@@ -1680,12 +1680,28 @@
     }
   });
 
-  // Global hotkey: Ctrl/Cmd+` to toggle panel.
+  // Global hotkey: Ctrl/Cmd+2 to toggle the terminal panel.
+  // Used to be Cmd+\` but that's macOS' system-level window-cycling
+  // shortcut (and CCC also surfaces it via the .app shell for cycling
+  // between CCC's own windows). Cmd+2 sits next to Cmd+1 which the
+  // OS already reserves for first-tab patterns; it's free across all
+  // major browsers and unused by CCC. Ignore the keystroke when the
+  // user is typing in a text input / textarea so we don't intercept
+  // "2" inside a message draft.
   document.addEventListener('keydown', (e) => {
-    if (e.key === '`' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      if ($panel.classList.contains('open')) closePanel(); else openPanel();
+    if (e.key !== '2' || !(e.ctrlKey || e.metaKey)) return;
+    if (e.shiftKey || e.altKey) return;
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === 'TEXTAREA'
+      || (ae.tagName === 'INPUT' && /^(text|search|email|url|tel|password)$/i.test(ae.type || 'text'))
+      || ae.isContentEditable)) {
+      // Allow the keystroke through — don't intercept while the user
+      // is composing text. The terminal panel can still be toggled
+      // via the topbar button.
+      return;
     }
+    e.preventDefault();
+    if ($panel.classList.contains('open')) closePanel(); else openPanel();
   });
 })();
 </script>
