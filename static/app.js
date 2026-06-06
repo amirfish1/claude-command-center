@@ -942,9 +942,9 @@
     || _bootUrlParams.get('popout') === 'flow';
   if (FLOW_POPOUT_MODE && document.body) {
     document.body.classList.add('flow-popout');
-    // Force the sidebar into Flow view on boot so the user lands on the
-    // board immediately. localStorage write keeps it sticky on reload.
-    try { localStorage.setItem('ccc-session-view', 'flow'); } catch (_) {}
+    // The popout owns Flow view for this page load only. Do not persist
+    // `flow` into shared sidebar storage or the main window can reopen with
+    // Flow embedded inline instead of showing the conversation list/board.
     try { document.title = 'Flow — CCC'; } catch (_) {}
   }
   // Reader-on-right toggle for the flow popout — persisted across
@@ -5636,15 +5636,17 @@
   })();
 
   function normalizeSidebarViewMode(value) {
-    if (value === 'flow' || value === 'list') return value;
-    if (value === 'board' || value === 'kanban') return 'flow';
+    if (value === 'flow') return FLOW_POPOUT_MODE ? 'flow' : 'list';
+    if (value === 'list') return 'list';
+    if (value === 'board' || value === 'kanban') return 'board';
     return 'list';
   }
   function readSidebarViewMode() {
+    if (FLOW_POPOUT_MODE) return 'flow';
     try {
       const saved = localStorage.getItem('ccc-session-view');
       if (saved) return normalizeSidebarViewMode(saved);
-      return localStorage.getItem('ccc-kanban-view') === 'true' ? 'flow' : 'list';
+      return localStorage.getItem('ccc-kanban-view') === 'true' ? 'board' : 'list';
     } catch (_) {
       return 'list';
     }
@@ -5657,7 +5659,7 @@
     kanbanView = sidebarViewMode === 'board';
     if (sidebarViewMode !== 'flow') setFlowExpanded(false);
     try {
-      localStorage.setItem('ccc-session-view', sidebarViewMode);
+      localStorage.setItem('ccc-session-view', sidebarViewMode === 'flow' ? 'list' : sidebarViewMode);
       localStorage.setItem('ccc-kanban-view', kanbanView ? 'true' : 'false');
     } catch (_) {}
   }
@@ -16132,8 +16134,26 @@
     return u.toString();
   }
 
+  let _flowPopoutWindow = null;
+  function focusFlowPopoutWindow() {
+    if (!_flowPopoutWindow) return false;
+    try {
+      if (_flowPopoutWindow.closed) {
+        _flowPopoutWindow = null;
+        return false;
+      }
+      _flowPopoutWindow.focus();
+      showOpToast('Flow window focused');
+      return true;
+    } catch (_) {
+      _flowPopoutWindow = null;
+      return false;
+    }
+  }
+
   function openFlowPopout(anchor) {
     if (FLOW_POPOUT_MODE) return false;  // no point popping a popout
+    if (focusFlowPopoutWindow()) return true;
     const url = flowPopoutUrl();
     const name = 'ccc-flow-popout';
     const width = 1280;
@@ -16144,6 +16164,7 @@
     if (isCccMacApp()) {
       const popup = window.open(url, name, features);
       if (popup) {
+        _flowPopoutWindow = popup;
         try { popup.focus(); } catch (_) {}
         showOpToast('Flow opened in a new window');
         return true;
@@ -16168,6 +16189,7 @@
     }
     const popup = window.open(url, name, features);
     if (popup) {
+      _flowPopoutWindow = popup;
       try { popup.focus(); } catch (_) {}
       showOpToast('Flow opened in a pop-up');
       return true;
@@ -16631,13 +16653,12 @@
   }
   function updateKanbanToggle() {
     if ($convKanbanToggle) {
-      const labels = { list: 'List', flow: 'Flow' };
-      const next = sidebarViewMode === 'list' ? 'flow' : 'list';
-      $convKanbanToggle.classList.toggle('active', sidebarViewMode !== 'list');
-      $convKanbanToggle.classList.toggle('is-flow', sidebarViewMode === 'flow');
-      $convKanbanToggle.innerHTML = '<span aria-hidden="true">&#9783;</span><span class="sh-action-label">' + labels[sidebarViewMode] + '</span>';
-      $convKanbanToggle.title = 'Switch to ' + labels[next] + ' view';
-      $convKanbanToggle.setAttribute('aria-label', 'Switch to ' + labels[next] + ' view');
+      const title = FLOW_POPOUT_MODE ? 'Flow' : 'Open Flow in a separate window';
+      $convKanbanToggle.classList.remove('active');
+      $convKanbanToggle.classList.add('is-flow');
+      $convKanbanToggle.innerHTML = '<span aria-hidden="true">&#9783;</span><span class="sh-action-label">Flow</span>';
+      $convKanbanToggle.title = title;
+      $convKanbanToggle.setAttribute('aria-label', title);
     }
     // The split-pane kanban layout was retired in favour of swapping the
     // sidebar's list↔kanban-board view inline (so .main stays visible in
@@ -16654,17 +16675,10 @@
   }
   if ($convKanbanToggle) {
     $convKanbanToggle.addEventListener('click', () => {
-      // User asked: clicking the Flow toggle should POP THE FLOW INTO
-      // A NEW WINDOW, not swap the sidebar in-place. openFlowPopout
-      // routes to the native CCC window inside the mac app and to a
-      // browser popup otherwise. If we ARE already inside the flow
-      // popout, fall back to the legacy in-sidebar swap (no point
-      // popping a popout).
+      // Clicking the Flow button opens or focuses the popout. The main
+      // sidebar remains in list/board mode; Flow renders inline only inside
+      // the dedicated flow popout page.
       if (typeof FLOW_POPOUT_MODE !== 'undefined' && FLOW_POPOUT_MODE) {
-        const next = sidebarViewMode === 'list' ? 'flow' : 'list';
-        setSidebarViewMode(next);
-        updateKanbanToggle();
-        renderSidebar(filterConversations($convSearch.value));
         return;
       }
       if (typeof openFlowPopout === 'function') {

@@ -302,6 +302,33 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("openConversationPopout(convId, null, null)", app_js)
         self.assertIn(".ccc-breadcrumb-popout", app_css)
 
+    def test_annotation_text_strips_lone_surrogates(self):
+        """An unpaired UTF-16 surrogate code point (U+D800..U+DFFF)
+        coming from the browser's clipboard / selection APIs used to
+        sail through _annotation_text and then break the downstream
+        Anthropic API call with "no low surrogate in string". The
+        sanitizer must drop lone surrogates AND leave real astral
+        chars (paired surrogates collapsed into a single Python code
+        point) untouched."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        # Lone high surrogate in the middle of normal text — the exact
+        # shape that produces the Anthropic 400.
+        dirty = "fix the bug \ud83d in row 42"
+        cleaned = server._annotation_text(dirty)
+        self.assertNotIn("\ud83d", cleaned)
+        # Result must round-trip through json + utf-8 — that's the
+        # failure surface the Anthropic API rejects.
+        json.dumps(cleaned, ensure_ascii=False).encode("utf-8")
+        # A real astral character (😀 = U+1F600, one Python code point)
+        # must survive — only LONE surrogates are stripped.
+        kept = server._annotation_text("hi 😀 there")
+        self.assertIn("😀", kept)
+        # _inject_text_into_session uses the same strip so a missed
+        # entry point still can't leak a surrogate to the API.
+        self.assertIn("_strip_lone_surrogates", inspect.getsource(server._inject_text_into_session))
+
     def test_annotation_notes_render_screenshots(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("ann-note-shot", app_js)
@@ -371,7 +398,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (col === 'archived' && !flowIncludeArchived && !pinnedInFlow) return false;", app_js)
         self.assertIn("flow_parent_node_id", app_js)
         self.assertIn("return ts ? relativeTime(ts) : '';", app_js)
-        self.assertIn("const next = sidebarViewMode === 'list' ? 'flow' : 'list';", app_js)
+        self.assertIn("if (value === 'flow') return FLOW_POPOUT_MODE ? 'flow' : 'list';", app_js)
+        self.assertIn("if (value === 'board' || value === 'kanban') return 'board';", app_js)
+        self.assertIn("return localStorage.getItem('ccc-kanban-view') === 'true' ? 'board' : 'list';", app_js)
         self.assertIn("New session draft connected here", app_js)
         self.assertIn("if (isFlowView()) createFlowDraftSession();", app_js)
         self.assertIn(".flow-node-archive", app_css)
@@ -516,17 +545,23 @@ class TestServerImports(unittest.TestCase):
     def test_flow_popout_button_and_mode_wired(self):
         """Flow toolbar gets a pop-out button (skipped inside the popout
         itself). Click → openFlowPopout → window.open with ccc_popout=flow.
-        Body class + localStorage on boot route the popped-out tab
-        straight into the Flow view, and CSS hides every other surface."""
+        Body class + popout-only mode routing send the popped-out tab
+        straight into the Flow view without polluting main-window storage."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         # Boot flag + body class.
         self.assertIn("FLOW_POPOUT_MODE", app_js)
         self.assertIn("'ccc_popout') === 'flow'", app_js)
         self.assertIn("document.body.classList.add('flow-popout')", app_js)
-        self.assertIn("localStorage.setItem('ccc-session-view', 'flow')", app_js)
+        self.assertIn("if (FLOW_POPOUT_MODE) return 'flow';", app_js)
+        self.assertNotIn("localStorage.setItem('ccc-session-view', 'flow')", app_js)
+        self.assertIn("localStorage.setItem('ccc-session-view', sidebarViewMode === 'flow' ? 'list' : sidebarViewMode)", app_js)
         # Helper + URL shape.
         self.assertIn("function openFlowPopout", app_js)
+        self.assertIn("let _flowPopoutWindow = null;", app_js)
+        self.assertIn("function focusFlowPopoutWindow", app_js)
+        self.assertIn("if (focusFlowPopoutWindow()) return true;", app_js)
+        self.assertIn("_flowPopoutWindow = popup;", app_js)
         self.assertIn("u.searchParams.set('ccc_popout', 'flow')", app_js)
         self.assertIn("u.searchParams.set('title', 'Flow')", app_js)
         # Toolbar button + click wiring.
