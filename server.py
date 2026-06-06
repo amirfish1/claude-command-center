@@ -2993,7 +2993,22 @@ def _sys_sessions(rows, now):
         c = cwds.get(s["pid"], "")
         s["cwd"] = c
         s["cwd_short"] = "~" if c == home else (c.rsplit("/", 1)[-1] if c else "?")
-    return sorted(sessions, key=lambda s: s["tree_rss_mb"], reverse=True)
+
+    # Sort by the strength of the case to reap (strongest first), so the best
+    # kill targets surface at the top and protected sessions sink:
+    #   reapable (stale) > headless-but-recent > working > the one you're in.
+    # Within a tier, longer-idle first, then bigger memory win.
+    def _kill_rank(s):
+        if s["reapable"]:
+            tier = 3                                   # stale → kill candidate
+        elif not s["interactive"] and not s["busy"]:
+            tier = 2                                   # headless idle, not stale yet
+        elif s["busy"]:
+            tier = 1                                   # working → protected
+        else:
+            tier = 0                                   # interactive → you're in it
+        return (tier, s["idle_min"], s["tree_rss_mb"])
+    return sorted(sessions, key=_kill_rank, reverse=True)
 
 
 def _sys_hogs(rows):
