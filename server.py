@@ -2705,6 +2705,332 @@ def build_ccc_health():
     }
 
 
+# ---------------------------------------------------------------------------
+# System health (the /api/system-health endpoint + the dashboard Health panel).
+#
+# This is the *machine's* health, not CCC's own (build_ccc_health above):
+# memory + swap pressure, sustained CPU hogs, and every Claude session rolled
+# up with its whole process subtree, last-activity, and whether it's safe to
+# reap. Mirrors the standalone mac-health menu-bar plugin so both render from
+# the same logic.
+#
+# "Stale" = idle for a while, measured from the session transcript mtime (each
+# turn appends to ~/.claude/projects/*/<uuid>.jsonl, so its mtime is a real
+# last-activity clock that freezes when the session goes idle) — NOT process
+# age, which says nothing about whether a session is still in use. A session is
+# only reapable when it is headless (no TTY = no human in a terminal), idle (no
+# encode/transcode child, low tree CPU), and stale. Bursty workers (whisper run
+# chunk-by-chunk) and sessions blocked on one long command have a frozen
+# transcript too, so they lean on the worker/CPU check, not the clock.
+# ---------------------------------------------------------------------------
+
+_SYS_PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
+_SYS_SESSION_UUID_RE = re.compile(r"--(?:resume|session-id|sid)\s+([0-9a-fA-F-]{36})")
+_SYS_WORKER_RE = re.compile(r"\b(whisper(?:-cli)?|ffmpeg|ffprobe|HandBrakeCLI)\b", re.I)
+_SYS_STALE_MIN = 120.0       # idle minutes past which a headless session is reapable
+_SYS_BUSY_CPU = 30.0         # tree CPU% above which a session counts as working
+_SYS_HOG_CPU = 80.0          # process CPU% to count as a sustained hog
+_SYS_HOG_MIN_AGE = 2.0       # minutes alive, to skip brief compile/encode spikes
+_SYS_UNIT_MB = {"K": 1 / 1024, "M": 1.0, "G": 1024.0, "T": 1024 * 1024.0}
+# Absolute tool paths: the launchd daemon's PATH lacks /usr/sbin, so bare
+# `sysctl`/`lsof` silently fail (FileNotFoundError -> "").
+_SYS_PS = "/bin/ps"
+_SYS_LSOF = "/usr/sbin/lsof"
+_SYS_SYSCTL = "/usr/sbin/sysctl"
+_SYS_VM_STAT = "/usr/bin/vm_stat"
+
+
+def _sys_run(cmd, timeout=3):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except Exception:
+        return ""
+
+
+def _sys_to_mb(value, unit):
+    return float(value) * _SYS_UNIT_MB.get(unit.upper(), 1.0)
+
+
+def _sys_parse_etime(s):
+    """ps etime (SS, MM:SS, HH:MM:SS, DD-HH:MM:SS) -> minutes."""
+    days = 0
+    if "-" in s:
+        d, s = s.split("-", 1)
+        try:
+            days = int(d)
+        except ValueError:
+            return 0.0
+    try:
+        nums = [int(p) for p in s.split(":")]
+    except ValueError:
+        return 0.0
+    if len(nums) == 1:
+        h, m, sec = 0, 0, nums[0]
+    elif len(nums) == 2:
+        h, m, sec = 0, nums[0], nums[1]
+    else:
+        h, m, sec = nums[0], nums[1], nums[2]
+    return days * 1440 + h * 60 + m + sec / 60.0
+
+
+def _sys_memory():
+    """Memory + swap, matching Activity Monitor's pressure bar (kernel pressure
+    level + available = free+inactive+speculative+purgeable, not top's 'used')."""
+    total_mb = None
+    try:
+        total_mb = int(_sys_run([_SYS_SYSCTL, "-n", "hw.memsize"]).strip()) / (1024 * 1024)
+    except ValueError:
+        pass
+    pages = {}
+    for line in _sys_run([_SYS_VM_STAT]).splitlines():
+        m = re.match(r"(.+?):\s+(\d+)\.?\s*$", line.strip())
+        if m:
+            pages[m.group(1).strip()] = int(m.group(2))
+    try:
+        page = int(_sys_run([_SYS_SYSCTL, "-n", "hw.pagesize"]).strip() or 16384)
+    except ValueError:
+        page = 16384
+    mb = lambda k: pages.get(k, 0) * page / (1024 * 1024)
+    available = mb("Pages free") + mb("Pages inactive") + mb("Pages speculative") + mb("Pages purgeable")
+    used = (total_mb - available) if total_mb else None
+    swap_used = swap_total = None
+    for k, v, u in re.findall(r"(total|used|free)\s*=\s*([\d.]+)([KMGT])",
+                              _sys_run([_SYS_SYSCTL, "-n", "vm.swapusage"])):
+        if k == "total":
+            swap_total = _sys_to_mb(v, u)
+        elif k == "used":
+            swap_used = _sys_to_mb(v, u)
+    pressure = {"1": "ok", "2": "elevated", "4": "critical"}.get(
+        _sys_run([_SYS_SYSCTL, "-n", "kern.memorystatus_vm_pressure_level"]).strip())
+    if pressure is None and total_mb:
+        ap = available / total_mb
+        pressure = "critical" if ap < 0.05 else ("elevated" if ap < 0.20 else "ok")
+    return {
+        "total_mb": round(total_mb) if total_mb else None,
+        "used_mb": round(used) if used is not None else None,
+        "available_mb": round(available),
+        "compressed_mb": round(mb("Pages occupied by compressor")),
+        "swap_used_mb": round(swap_used) if swap_used is not None else None,
+        "swap_total_mb": round(swap_total) if swap_total is not None else None,
+        "pressure": pressure,
+    }
+
+
+def _sys_cpu():
+    cores = None
+    try:
+        cores = int(_sys_run([_SYS_SYSCTL, "-n", "hw.ncpu"]).strip())
+    except ValueError:
+        pass
+    nums = re.findall(r"[\d.]+", _sys_run([_SYS_SYSCTL, "-n", "vm.loadavg"]))
+    load = [float(x) for x in nums[:3]] if len(nums) >= 3 else [None, None, None]
+    return {"load1": load[0], "load5": load[1], "load15": load[2], "cores": cores}
+
+
+def _sys_label(cmd):
+    exe = cmd.split(None, 1)[0]
+    base = exe.rsplit("/", 1)[-1]
+    app = re.search(r"/([^/]+)\.app/Contents/", cmd)
+    if app:
+        return app.group(1)
+    if base == "claude":
+        return "claude CLI"
+    if "python" in base.lower():
+        sc = re.search(r"\s([^ ]+\.py)(?:\s|$)", cmd)
+        return "Python: " + sc.group(1).rsplit("/", 1)[-1] if sc else "Python"
+    return base or cmd[:40]
+
+
+def _sys_process_rows():
+    rows = []
+    for line in _sys_run([_SYS_PS, "-axo", "pid=,ppid=,rss=,pcpu=,etime=,tty=,command="]).splitlines():
+        parts = line.strip().split(None, 6)
+        if len(parts) < 7:
+            continue
+        try:
+            rows.append({
+                "pid": int(parts[0]),
+                "ppid": int(parts[1]),
+                "rss_mb": int(parts[2]) / 1024,
+                "cpu": float(parts[3]),
+                "etime_min": _sys_parse_etime(parts[4]),
+                "tty": parts[5],
+                "cmd": parts[6],
+            })
+        except ValueError:
+            continue
+    return rows
+
+
+def _sys_last_activity_min(uuid, now, proj_dirs):
+    """Minutes since the session transcript was last written, or None. Stats
+    <proj>/<uuid>.jsonl across project dirs — no cwd-encoding assumptions."""
+    if not uuid:
+        return None
+    target = uuid + ".jsonl"
+    best = None
+    for proj in proj_dirs:
+        try:
+            mt = os.path.getmtime(os.path.join(_SYS_PROJECTS_DIR, proj, target))
+        except OSError:
+            continue
+        if best is None or mt > best:
+            best = mt
+    return ((now - best) / 60.0) if best is not None else None
+
+
+def _sys_cwds(pids):
+    """Batch one lsof for every session root's cwd (basename used to tell repos apart)."""
+    if not pids:
+        return {}
+    out = _sys_run([_SYS_LSOF, "-a", "-d", "cwd", "-Fn", "-p", ",".join(map(str, pids))])
+    cwds, cur = {}, None
+    for line in out.splitlines():
+        if line.startswith("p"):
+            try:
+                cur = int(line[1:])
+            except ValueError:
+                cur = None
+        elif line.startswith("n") and cur is not None:
+            cwds.setdefault(cur, line[1:])
+    return cwds
+
+
+def _sys_sessions(rows, now):
+    by_pid = {r["pid"]: r for r in rows}
+    children = {}
+    for r in rows:
+        children.setdefault(r["ppid"], []).append(r["pid"])
+
+    def descendants(root):
+        seen, stack = [], list(children.get(root, []))
+        while stack:
+            pid = stack.pop()
+            seen.append(pid)
+            stack.extend(children.get(pid, []))
+        return seen
+
+    try:
+        proj_dirs = os.listdir(_SYS_PROJECTS_DIR)
+    except OSError:
+        proj_dirs = []
+
+    sessions = []
+    for r in rows:
+        if _sys_label(r["cmd"]) != "claude CLI":
+            continue
+        desc = descendants(r["pid"])
+        drows = [by_pid[p] for p in desc if p in by_pid]
+        tree_rss = r["rss_mb"] + sum(d["rss_mb"] for d in drows)
+        tree_cpu = r["cpu"] + sum(d["cpu"] for d in drows)
+        worker = next((d for d in drows if _SYS_WORKER_RE.search(d["cmd"])), None)
+        interactive = bool(r["tty"]) and r["tty"] not in ("??", "?", "-", "")
+        busy = bool(worker) or tree_cpu >= _SYS_BUSY_CPU
+        uuid = (m.group(1) if (m := _SYS_SESSION_UUID_RE.search(r["cmd"])) else None)
+        idle_known = _sys_last_activity_min(uuid, now, proj_dirs)
+        idle_min = idle_known if idle_known is not None else r["etime_min"]
+        sessions.append({
+            "pid": r["pid"],
+            "age_min": round(r["etime_min"], 1),
+            "idle_min": round(idle_min, 1),
+            "idle_known": idle_known is not None,
+            "tree_rss_mb": round(tree_rss),
+            "tree_cpu": round(tree_cpu),
+            "nprocs": 1 + len(desc),
+            "tree_pids": [r["pid"]] + desc,
+            "interactive": interactive,
+            "busy": busy,
+            "worker": _sys_label(worker["cmd"]) if worker else None,
+            "reapable": (not interactive) and (not busy) and idle_min >= _SYS_STALE_MIN,
+        })
+
+    cwds = _sys_cwds([s["pid"] for s in sessions])
+    home = os.path.expanduser("~")
+    for s in sessions:
+        c = cwds.get(s["pid"], "")
+        s["cwd"] = c
+        s["cwd_short"] = "~" if c == home else (c.rsplit("/", 1)[-1] if c else "?")
+    return sorted(sessions, key=lambda s: s["tree_rss_mb"], reverse=True)
+
+
+def _sys_hogs(rows):
+    hogs = [r for r in rows
+            if r["cpu"] >= _SYS_HOG_CPU and r["etime_min"] >= _SYS_HOG_MIN_AGE]
+    hogs.sort(key=lambda r: r["cpu"], reverse=True)
+    return [{"pid": r["pid"], "label": _sys_label(r["cmd"]),
+             "cpu": round(r["cpu"]), "etime_min": round(r["etime_min"], 1)}
+            for r in hogs[:6]]
+
+
+_system_health_snapshot = {"ts": 0.0, "data": None}
+_system_health_lock = threading.Lock()
+_SYSTEM_HEALTH_TTL = 5.0
+
+
+def _build_system_health_uncached():
+    now = time.time()
+    rows = _sys_process_rows()
+    sessions = _sys_sessions(rows, now)
+    reap = [s for s in sessions if s["reapable"]]
+    return {
+        "ts": now,
+        "memory": _sys_memory(),
+        "cpu": _sys_cpu(),
+        "hogs": _sys_hogs(rows),
+        "sessions": sessions,
+        "session_totals": {
+            "count": len(sessions),
+            "tree_rss_mb": round(sum(s["tree_rss_mb"] for s in sessions)),
+            "reapable": len(reap),
+            "reapable_rss_mb": round(sum(s["tree_rss_mb"] for s in reap)),
+        },
+    }
+
+
+def build_system_health(force=False):
+    """Machine health for the dashboard Health panel. Coalesced with a 5s TTL
+    (manual cache because _ttl_memo is defined far below this point) so the
+    panel's poll and any concurrent callers share one ps/lsof sweep. Pass
+    force=True to bypass the cache (the reap guard needs a fresh view)."""
+    snap = _system_health_snapshot
+    now = time.time()
+    if not force and snap["data"] is not None and now - snap["ts"] < _SYSTEM_HEALTH_TTL:
+        return snap["data"]
+    with _system_health_lock:
+        now = time.time()
+        if not force and snap["data"] is not None and now - snap["ts"] < _SYSTEM_HEALTH_TTL:
+            return snap["data"]
+        data = _build_system_health_uncached()
+        snap["data"] = data
+        snap["ts"] = now
+        return data
+
+
+def system_health_reap(pids):
+    """SIGTERM the given PIDs, but ONLY those that belong to a currently
+    reapable session tree — never an interactive or working session. Recomputes
+    the snapshot fresh (cache bypassed) so the guard can't be raced against a
+    stale view the client was looking at."""
+    health = build_system_health(force=True)
+    allowed = set()
+    for s in health["sessions"]:
+        if s["reapable"]:
+            allowed.update(s["tree_pids"])
+    want = set(int(p) for p in pids if str(p).lstrip("-").isdigit())
+    to_kill = sorted(want & allowed)
+    blocked = sorted(want - allowed)
+    killed = []
+    for pid in to_kill:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed.append(pid)
+        except (ProcessLookupError, PermissionError):
+            pass
+    # Invalidate so the next poll reflects the kill immediately.
+    _system_health_snapshot["data"] = None
+    return {"ok": True, "killed": killed, "blocked": blocked}
+
+
 def build_live_sessions_activity():
     """Map session_id → live-work fields for every currently-live session.
 
@@ -33713,6 +34039,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # live-activity build latency, and a rolling recent-error count.
             # Polled by the dashboard's bottom-left bar. Intentionally cheap.
             self.send_json(build_ccc_health())
+        elif path == "/api/system-health":
+            # The *machine's* health for the Health panel: memory/swap, CPU
+            # hogs, and Claude session trees with last-activity + reapability.
+            # Cached 5s (build_system_health) so polling stays cheap.
+            self.send_json(build_system_health())
         elif path == "/api/version":
             self.send_json({
                 "version": __version__,
@@ -36048,6 +36379,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing agent_id"})
             else:
                 self.send_json(pkood_kill(agent_id))
+        elif path == "/api/system-health/reap":
+            # SIGTERM a stale Claude session's whole tree. The server re-derives
+            # which trees are reapable and kills ONLY those PIDs, so a stale
+            # client view can't be used to kill an interactive/working session.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            pids = payload.get("pids")
+            if not isinstance(pids, list) or not pids:
+                self.send_json({"ok": False, "error": "missing pids"})
+            else:
+                self.send_json(system_health_reap(pids))
         elif path in ("/api/coordinate", "/api/group-chat/create", "/api/group-chats/create"):
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
