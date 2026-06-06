@@ -1507,15 +1507,39 @@ class TestRepoContextHelpers(unittest.TestCase):
             post_slash_commands=["/compact"],
         )
 
-    def test_compact_rejects_non_claude_sessions(self):
+    def test_compact_rejects_unsupported_engine(self):
         result = None
+        with mock.patch.object(self.server, "_detect_session_engine", return_value="cursor"), \
+             mock.patch.object(self.server, "launch_terminal_for_session") as launch, \
+             mock.patch.object(self.server, "resume_session_headless") as resume:
+            result = self.server.compact_session_context("cursor-session")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "compact_unsupported_engine")
+        launch.assert_not_called()
+        resume.assert_not_called()
+
+    def test_compact_routes_codex_to_app_server(self):
         with mock.patch.object(self.server, "_detect_session_engine", return_value="codex"), \
+             mock.patch.object(
+                 self.server, "_backup_codex_rollout_before_compact",
+                 return_value="/tmp/backup.jsonl",
+             ) as backup, \
+             mock.patch.object(
+                 self.server, "_codex_compact_via_app_server",
+                 return_value={"ok": True, "via": "codex-compact", "session_id": "codex-session"},
+             ) as compact, \
              mock.patch.object(self.server, "launch_terminal_for_session") as launch, \
              mock.patch.object(self.server, "resume_session_headless") as resume:
             result = self.server.compact_session_context("codex-session")
 
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["code"], "compact_unsupported_engine")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["via"], "codex-compact")
+        self.assertEqual(result["engine"], "codex")
+        self.assertEqual(result["backup_path"], "/tmp/backup.jsonl")
+        self.assertTrue(result["compact"])
+        backup.assert_called_once_with("codex-session")
+        compact.assert_called_once_with("codex-session")
         launch.assert_not_called()
         resume.assert_not_called()
 

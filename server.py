@@ -14694,6 +14694,107 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
     }
 
 
+def _backup_codex_rollout_before_compact(session_id):
+    """Copy the Codex thread's rollout JSONL to
+    ~/.claude/command-center/compact-backups/ before `thread/compact/start`
+    rewrites it. Returns the backup path or None on failure. Best-effort.
+
+    Codex compaction is lossy — the app-server replaces the loaded thread's
+    history with a compacted summary and rewrites the rollout on disk. Without
+    a snapshot the pre-compact transcript is gone permanently. Mirrors the
+    Claude `_backup_jsonl_before_compact` pattern and reuses its backup dir.
+    """
+    try:
+        src = _resolve_codex_rollout_path(session_id)
+        if not src:
+            return None
+        src = Path(src)
+        if not src.is_file():
+            return None
+        backup_dir = Path.home() / ".claude" / "command-center" / "compact-backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        dest = backup_dir / f"codex-{session_id}-{stamp}.jsonl"
+        shutil.copy2(str(src), str(dest))
+        # Keep at most 10 backups per thread — older ones rotate out.
+        backups = sorted(backup_dir.glob(f"codex-{session_id}-*.jsonl"))
+        for stale in backups[:-10]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+        return str(dest)
+    except Exception as e:
+        print(f"  [compact-backup] codex backup failed for {session_id}: {e}", file=sys.stderr)
+        return None
+
+
+def _codex_compact_via_app_server(session_id, cwd=None, model=None):
+    """Compact a Codex thread via the app-server `thread/compact/start` RPC.
+
+    Resumes the thread (loading it into the CCC-owned app-server) and then calls
+    `thread/compact/start` with the schema-correct params (`{threadId}`).
+    Compaction is lossy, so the caller is expected to have already backed up the
+    rollout. Returns a result dict mirroring the other Codex app-server helpers
+    (`{ok, via, ...}` / `{ok: False, error, ...}`). Handles "app-server
+    unavailable" gracefully.
+    """
+    sid = (session_id or "").strip()
+    if not sid:
+        return {"ok": False, "via": "codex-compact", "error": "missing session_id"}
+    if os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() in ("0", "false", "no"):
+        return {
+            "ok": False,
+            "via": "codex-compact",
+            "code": "codex_compact_unavailable",
+            "error": "Codex app-server disabled",
+        }
+    # The thread must be loaded into this app-server before it can be compacted.
+    resume_params = {"threadId": sid, "excludeTurns": False}
+    if cwd:
+        resume_params["cwd"] = cwd
+    if model:
+        resume_params["model"] = model
+    resumed = _codex_app_server_request("thread/resume", resume_params, timeout=20)
+    if resumed.get("error"):
+        return {
+            "ok": False,
+            "via": "codex-compact",
+            "code": "codex_compact_unavailable",
+            "error": _codex_error_text(resumed),
+        }
+    if resumed.get("ok") is False and "result" not in resumed:
+        # `_codex_app_server_request` short-circuit (unavailable / timeout).
+        return {
+            "ok": False,
+            "via": "codex-compact",
+            "code": "codex_compact_unavailable",
+            "error": resumed.get("error") or "Codex app-server unavailable",
+        }
+    compacted = _codex_app_server_request(
+        "thread/compact/start", {"threadId": sid}, timeout=60
+    )
+    if _codex_response_succeeded(compacted):
+        return {
+            "ok": True,
+            "via": "codex-compact",
+            "session_id": sid,
+        }
+    if compacted.get("ok") is False and "result" not in compacted:
+        return {
+            "ok": False,
+            "via": "codex-compact",
+            "code": "codex_compact_unavailable",
+            "error": compacted.get("error") or "Codex app-server unavailable",
+        }
+    return {
+        "ok": False,
+        "via": "codex-compact",
+        "code": "codex_compact_failed",
+        "error": _codex_error_text(compacted) or "Codex compact failed",
+    }
+
+
 def _codex_state_db_candidates():
     """Existing Codex state DB paths, newest known schema first."""
     base = Path.home() / ".codex"
@@ -25928,6 +26029,15 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
         return {"ok": False, "error": "missing session_id"}
 
     engine = _detect_session_engine(sid)
+    if engine == "codex":
+        # Codex compaction goes through the app-server `thread/compact/start`
+        # RPC — no interactive TUI needed (unlike Claude). Back up the rollout
+        # first because compaction is lossy.
+        backup_path = _backup_codex_rollout_before_compact(sid)
+        result = _codex_compact_via_app_server(sid)
+        result = _compact_result(result, backup_path=backup_path)
+        result.setdefault("engine", "codex")
+        return result
     if engine != "claude":
         return {
             "ok": False,
