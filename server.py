@@ -31702,6 +31702,58 @@ def _clean_history_snippet(snippet):
     return s if s else snippet
 
 
+def _rerank_history_results(results, query, conn):
+    """Stable-rerank so exact-phrase matches rank above all-words (AND)
+    matches, which rank above any-word (OR) / semantic-only matches.
+
+    A bare multi-word query is OR-rewritten for recall (see
+    _rewrite_history_query), and the semantic path adds pure-vector hits with
+    no literal word at all. Both let a result that contains only one query
+    word — or none — outrank one containing the whole phrase, which reads as
+    "random results". This re-tiers the already-fetched top-N by literal
+    presence in the message body, preserving the within-tier BM25/RRF order.
+
+    No-op for single-word queries and for queries where the user supplied
+    their own FTS operators or quotes — those already mean what was typed.
+    """
+    if not results:
+        return results
+    q = (query or "").strip()
+    if not q or _HISTORY_FTS_OPERATOR_RE.search(q):
+        return results
+    tokens = [t.lower() for t in _HISTORY_FTS_TOKEN_RE.findall(q)]
+    if len(tokens) < 2:
+        return results
+    phrase = " ".join(tokens)
+    # Snippets are a 12-token window — too short to test for ALL words. Pull
+    # the full body for the candidate uuids in one query and tier on that.
+    uuids = [r.get("uuid") for r in results if r.get("uuid")]
+    content_by_uuid = {}
+    if uuids:
+        placeholders = ",".join("?" for _ in uuids)
+        try:
+            with _history_query_lock:
+                for row in conn.execute(
+                    f"SELECT uuid, content FROM messages WHERE uuid IN ({placeholders})",
+                    uuids,
+                ):
+                    content_by_uuid[row["uuid"]] = (row["content"] or "").lower()
+        except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+            return results
+
+    def _tier(r):
+        c = content_by_uuid.get(r.get("uuid"), "")
+        if not c:
+            return 2
+        if phrase in c:
+            return 0
+        if all(t in c for t in tokens):
+            return 1
+        return 2
+
+    return sorted(results, key=_tier)
+
+
 def _history_since_threshold(since):
     """Parse '7d', '24h', '30m', '2w' into a unix-timestamp threshold.
     Returns None for empty / 'all' / unparseable input — caller treats
@@ -31820,7 +31872,7 @@ def search_conversation_history(query, limit=20, cwd_like=None, since=None, sema
                 sn = _clean_history_snippet(sn)
             d["snippet"] = sn
             results.append(d)
-        return {"results": results}
+        return {"results": _rerank_history_results(results, query, conn)}
 
     # Lexical path — CCC's existing BM25 SQL with the snippet cleaner.
     fts_query = _rewrite_history_query(query)
@@ -31865,7 +31917,7 @@ def search_conversation_history(query, limit=20, cwd_like=None, since=None, sema
         if r.get("snippet"):
             r["snippet"] = _clean_history_snippet(r["snippet"])
         r["_source"] = "bm25"
-    return {"results": results}
+    return {"results": _rerank_history_results(results, query, conn)}
 
 
 def get_history_message(uuid):
