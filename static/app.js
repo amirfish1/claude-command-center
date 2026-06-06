@@ -225,6 +225,8 @@
         '.sh-cwd{font-weight:600;}' +
         '.sh-sesscol{min-width:0;display:flex;flex-direction:column;gap:1px;}' +
         '.sh-name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46ch;}' +
+        '.sh-name[data-open]{cursor:pointer;}' +
+        '.sh-name[data-open]:hover{color:var(--accent,#58a6ff);text-decoration:underline;}' +
         '.sh-repo{font-size:11px;opacity:.65;background:var(--hover-bg,rgba(127,127,127,.16));padding:1px 6px;border-radius:4px;margin-left:6px;white-space:nowrap;}' +
         '.sh-def{font-size:12px;opacity:.75;line-height:1.5;margin:2px 0 9px;}' +
         '.sh-def b{opacity:.95;}' +
@@ -336,9 +338,12 @@
       const when = s.idle_known ? 'idle ' + _shFmtIdle(s.idle_min) : 'up ' + _shFmtIdle(s.age_min);
       const nameMain = s.name ? _shEsc(s.name) : _shEsc(s.cwd_short);
       const repoTag = s.name ? '<span class="sh-repo">' + _shEsc(s.cwd_short) + '</span>' : '';
+      const nameAttr = s.session_id
+        ? ' data-open="' + _shEsc(s.session_id) + '" title="Open this session in CCC"'
+        : '';
       html += '<div class="sh-sess"><span class="sh-badge' + badgeCls + '" title="' + _shEsc(badgeTitle) + '">' + _shEsc(badge) + '</span>' +
               '<div class="sh-sesscol">' +
-                '<div><span class="sh-name">' + nameMain + '</span>' + repoTag + '</div>' +
+                '<div><span class="sh-name"' + nameAttr + '>' + nameMain + '</span>' + repoTag + '</div>' +
                 '<div class="sh-meta">' + when + ' · ' + _shFmtMB(s.tree_rss_mb) + ' · ' + s.nprocs + 'p · PID ' + s.pid + '</div>' +
               '</div>' +
               '<span class="sh-spacer"></span>' +
@@ -352,6 +357,17 @@
     Array.prototype.forEach.call(body.querySelectorAll('[data-reap]'), function (b) {
       b.addEventListener('click', function () {
         _confirmReap(b, b.getAttribute('data-reap').split(',').map(Number));
+      });
+    });
+    // Session name → open that conversation in CCC and close the panel.
+    Array.prototype.forEach.call(body.querySelectorAll('.sh-name[data-open]'), function (el) {
+      el.addEventListener('click', function () {
+        const sid = el.getAttribute('data-open');
+        _closeSystemHealth();
+        try {
+          if (typeof selectConversation === 'function') selectConversation(sid);
+          else window.location.search = '?session=' + encodeURIComponent(sid);
+        } catch (e) {}
       });
     });
     const ra = body.querySelector('[data-reapall]');
