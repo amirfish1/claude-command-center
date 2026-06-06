@@ -9577,6 +9577,15 @@
     }).sort((a, b) => (b.newest - a.newest) || a.label.localeCompare(b.label));
 
     const records = [];
+    // 5 grid cells past the rightmost / bottom-most node's edge is
+    // the "unreachable border" budget — anything past the canvas is
+    // the .flow-board background (visually distinct via the dashed
+    // border on .flow-canvas) and you can't pan into it. Per user
+    // request 2026-06-06: keep that border tight and marked so the
+    // canvas doesn't extend forever past content.
+    const FLOW_NODE_W_HINT = 260;
+    const FLOW_NODE_H_HINT = 96;
+    const FLOW_CANVAS_EDGE_PAD = 5 * 32;  // 5 grid cells
     let canvasWidth = 760;
     let canvasHeight = 360;
     let yCursor = 24;
@@ -9757,8 +9766,8 @@
     const nodeHtml = records.map(rec => {
       const savedPos = flowNodePositions[rec.id];
       const pos = savedPos || { x: rec.x, y: rec.y };
-      canvasWidth = Math.max(canvasWidth, pos.x + 300);
-      canvasHeight = Math.max(canvasHeight, pos.y + 140);
+      canvasWidth = Math.max(canvasWidth, pos.x + FLOW_NODE_W_HINT + FLOW_CANVAS_EDGE_PAD);
+      canvasHeight = Math.max(canvasHeight, pos.y + FLOW_NODE_H_HINT + FLOW_CANVAS_EDGE_PAD);
       const parent = parentMap[rec.id] || '';
       const dataParent = parent ? ' data-flow-parent="' + escapeAttr(parent) + '"' : '';
       const dataRow = rec.rowId ? ' data-id="' + escapeAttr(rec.rowId) + '"' : '';
@@ -9823,13 +9832,18 @@
         + bodyHtml
         + '</div>';
     });
-    canvasHeight = Math.max(canvasHeight, yCursor + 40);
+    canvasHeight = Math.max(canvasHeight, yCursor + FLOW_CANVAS_EDGE_PAD);
     const prevCanvas = $flow.querySelector('.flow-canvas');
     const prevPad = flowCanvasPaddingFromCanvas(prevCanvas);
     const prevZoom = Number(prevCanvas && prevCanvas.dataset.flowZoom) || flowZoom || 1;
-    const minBase = flowMinimumBaseSize($flow);
-    const baseWidth = Math.ceil(Math.max(canvasWidth, minBase.width));
-    const baseHeight = Math.ceil(Math.max(canvasHeight, minBase.height));
+    // Skip the viewport-fill override that used to inflate the canvas
+    // to at least the viewport size — that created huge swaths of
+    // empty pannable space past the content. Keep canvas tight to
+    // content + 5-grid-cell edge pad. Anything past the canvas is the
+    // .flow-board background (unreachable; marked via the dashed
+    // border on .flow-canvas).
+    const baseWidth = Math.ceil(canvasWidth);
+    const baseHeight = Math.ceil(canvasHeight);
     const pad = flowCanvasPadding($flow);
     const scaledPadX = Math.ceil(pad.x * flowZoom);
     const scaledPadY = Math.ceil(pad.y * flowZoom);

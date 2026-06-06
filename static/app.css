@@ -4206,6 +4206,25 @@
     background-size: var(--flow-grid-size) var(--flow-grid-size);
     background-position:
       calc(var(--flow-pad-x) - 1px) calc(var(--flow-pad-y) - 1px);
+    /* Mark the canvas edge so the "unreachable border" past it (the
+       .flow-board background) is visually distinct from the pannable
+       canvas. The dashed line + faint outer glow tells the user:
+       beyond here you cannot pan. */
+    outline: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent);
+    outline-offset: -1px;
+  }
+  /* The board area past the canvas — visually de-emphasized so the
+     "unreachable" zone reads as out-of-bounds. */
+  .flow-board {
+    background:
+      repeating-linear-gradient(
+        45deg,
+        color-mix(in srgb, var(--text-muted) 4%, transparent) 0,
+        color-mix(in srgb, var(--text-muted) 4%, transparent) 6px,
+        transparent 6px,
+        transparent 12px
+      ),
+      var(--bg);
   }
   .flow-world {
     position: absolute; left: 0; top: 0;
@@ -4525,6 +4544,24 @@
   .flow-node-meta {
     margin-top: 6px; color: var(--text-muted); font-size: 11px;
     line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* Inverse-scale node text so it stays readable when the canvas is
+     zoomed out. .flow-world applies transform: scale(--flow-zoom) to
+     EVERYTHING — text would shrink linearly with zoom and become
+     unreadable below ~70%. Counter that: compute font-size as
+     base/zoom so the on-screen pixel size stays near the base. Capped
+     at the original size when zoom>=1 (no need to inflate). Capped at
+     a max of 2× so very-low zooms don't make text comically huge.
+     Only applies to .flow-node-title / .flow-node-meta — kicker
+     stays small because it's a label, not body content. */
+  .flow-canvas .flow-node-title {
+    font-size: clamp(13px, calc(13px / var(--flow-zoom, 1)), 26px);
+  }
+  .flow-canvas .flow-node-meta {
+    font-size: clamp(11px, calc(11px / var(--flow-zoom, 1)), 22px);
+  }
+  .flow-canvas .flow-node-kicker {
+    font-size: clamp(10px, calc(10px / var(--flow-zoom, 1)), 18px);
   }
   .flow-workitem-chips {
     display: flex; flex-wrap: wrap; gap: 4px;

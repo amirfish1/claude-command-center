@@ -1,0 +1,5 @@
+Two flow-board fixes:
+
+1. **Canvas no longer extends forever past content.** Previously the canvas was sized to `max(content + tiny pad, viewport)` — so on a wide viewport with sparse content, the canvas became huge and you had to pan through screens of empty grid to find the next cluster. Now the canvas hugs content + a 5-grid-cell (160px) buffer on each side, and the area past the canvas (the unreachable .flow-board background) gets a faint diagonal-stripe pattern + the canvas itself gets a dashed orange outline so the boundary reads as "this is the edge, can't pan past it".
+
+2. **Node text stays readable when the canvas is zoomed out.** `.flow-world` applies `transform: scale(--flow-zoom)` which shrinks everything linearly with zoom — at 62% the title font dropped to ~8px on-screen and got unreadable. Each node's title / meta / kicker now uses `clamp(base, base / zoom, 2× base)` so the on-screen pixel size stays near the base when zoomed out (and never blows up to comically huge at extreme zoom-outs).
