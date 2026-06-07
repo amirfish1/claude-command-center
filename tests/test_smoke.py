@@ -850,12 +850,12 @@ class TestServerImports(unittest.TestCase):
         # itself doesn't open underneath the /compact confirm.
         self.assertIn('ev.target.closest(\'[data-role="conv-pct-compact"]\')', app_js)
         # Confirm + POST shape — compact is a command operation, not a
-        # generic text inject. Codex is routed through /api/inject-input
-        # inside postRunCompactForSession so it can execute as a Codex slash
-        # command in the live TUI.
+        # generic text inject. Both Claude and Codex now route through
+        # /api/session/compact (postCompactSession); Codex compaction runs via
+        # the app-server thread/compact/start RPC, not a literal text inject.
         self.assertIn("window.confirm(msg)", app_js)
         self.assertIn("postRunCompactForSession(sid, source)", app_js)
-        self.assertIn("postInjectInput(sessionId, '/compact')", app_js)
+        self.assertIn("postCompactSession", app_js)
         self.assertIn("/api/session/compact", app_js)
         self.assertIn(".conv-pct-badge.is-actionable", app_css)
 
