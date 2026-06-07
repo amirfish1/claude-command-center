@@ -1237,6 +1237,14 @@
   .ccc-breadcrumb .ccc-breadcrumb-compact:focus-visible {
     outline: 2px solid var(--accent, #5b8def); outline-offset: 1px;
   }
+  .ccc-breadcrumb .ccc-breadcrumb-compact.is-compacting {
+    cursor: default;
+    animation: ccc-compact-pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes ccc-compact-pulse {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+  }
   .conv-pane-titlebar {
     min-width: 0;
     flex: 1 1 auto;

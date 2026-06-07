@@ -12467,8 +12467,9 @@
 
   function showOpToast(msg, kind) {
     const toast = document.createElement('div');
-    const color = kind === 'error' ? 'var(--red)' : 'var(--green)';
-    const mark = kind === 'error' ? '!' : '\u2713';
+    const color = kind === 'error' ? 'var(--red)'
+      : (kind === 'info' ? 'var(--accent, #5b8def)' : 'var(--green)');
+    const mark = kind === 'error' ? '!' : (kind === 'info' ? '\u22ef' : '\u2713');
     toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:12px;color:var(--text);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);max-width:520px;';
     toast.innerHTML = '<span style="color:' + color + '">' + mark + '</span> ' + msg;
     document.body.appendChild(toast);
@@ -14065,9 +14066,20 @@
     return postCompactSession(sessionId, terminalApp);
   }
 
+  // Reflect compaction-in-flight on the breadcrumb Compact button directly
+  // (the render also respects _compactInFlight, but the next render can be a
+  // poll-interval away — this flips it the instant the user clicks).
+  function _setBreadcrumbCompacting(on) {
+    const b = document.querySelector('[data-role="ccc-breadcrumb-compact"]');
+    if (!b) return;
+    b.classList.toggle('is-compacting', !!on);
+    b.disabled = !!on;
+    b.textContent = on ? 'Compacting…' : 'Compact';
+  }
+
   // Compact-button handler. Reuses postRunCompactForSession + the same
   // toast/banner/refresh logic as typing /compact so both paths stay
-  // consistent. Used by the #convCompactBtn click.
+  // consistent. Used by the #convCompactBtn click + the breadcrumb button.
   async function compactCurrentSession() {
     if (_compactInFlight) return;
     const sid = currentSession.id;
@@ -14079,6 +14091,10 @@
     }
     _compactInFlight = true;
     if ($convCompactBtn) $convCompactBtn.disabled = true;
+    // Immediate "it started" feedback — the request (esp. Codex thread/resume
+    // + compact, or Claude queueing) can take a moment to ack.
+    showOpToast('Compacting conversation…', 'info');
+    _setBreadcrumbCompacting(true);
     try {
       const data = await postRunCompactForSession(
         sid, source, liveStatus && liveStatus.terminalApp);
@@ -14100,6 +14116,7 @@
       showOpToast('/compact failed: ' + ((err && err.message) || 'network error'), 'error');
     } finally {
       _compactInFlight = false;
+      _setBreadcrumbCompacting(false);
       if (typeof updateInputBar === 'function') updateInputBar();
     }
   }
@@ -17594,8 +17611,10 @@
         // so this breadcrumb slot is where the user looks). Shown only for
         // compaction-capable engines (Claude + Codex). Click is delegated.
         const compactBtn = (currentSession && isCompactionCapableSource(currentSession.source))
-          ? '<button type="button" class="ccc-breadcrumb-compact" data-role="ccc-breadcrumb-compact"'
-            + ' title="Compact this conversation — summarize earlier turns to free up context">Compact</button>'
+          ? '<button type="button" class="ccc-breadcrumb-compact' + (_compactInFlight ? ' is-compacting' : '') + '"'
+            + ' data-role="ccc-breadcrumb-compact"' + (_compactInFlight ? ' disabled' : '')
+            + ' title="Compact this conversation — summarize earlier turns to free up context">'
+            + (_compactInFlight ? 'Compacting…' : 'Compact') + '</button>'
           : '';
         breadcrumbEl.innerHTML = ''
           + (category ? '<span class="ccc-breadcrumb-category">' + escapeHtml(category) + '</span>' : '')
