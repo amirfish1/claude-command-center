@@ -128,6 +128,7 @@ ANNOTATIONS_FILE = COMMAND_CENTER_STATE_DIR / "annotations.json"
 ANNOTATION_SCREENSHOT_DIR = COMMAND_CENTER_STATE_DIR / "annotation-screenshots"
 ANNOTATION_UX_FIXES_QUEUE_NAME = "UX-fixes-queue"
 _ANNOTATIONS_LOCK = threading.Lock()
+import ux_fixes_queue  # durable numbered/stateful UX-fixes queue (shared w/ BYM)
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 # User-picked repos that live outside the $HOME scan (e.g. ~/dev/foo, /workspaces/bar).
 # One absolute path per line. Written by /api/repo/add, read by load_known_repos.
@@ -5484,17 +5485,58 @@ def _find_annotation_ux_queue_session(queue_name=ANNOTATION_UX_FIXES_QUEUE_NAME)
     return matches[0]
 
 
-def enqueue_annotation_ux_fixes_queue(text, queue_name=ANNOTATION_UX_FIXES_QUEUE_NAME, engine="claude"):
-    """Send annotation context to the shared CCC UX-fixes queue session.
+def enqueue_annotation_ux_fixes_queue(
+    text, queue_name=ANNOTATION_UX_FIXES_QUEUE_NAME, engine="claude", meta=None, inject=False
+):
+    """Append annotation context to the durable, numbered UX-fixes queue.
 
-    If a Claude session named ``queue_name`` already exists in this repo, the
-    text is injected into that session. Otherwise a new Claude session is
-    spawned in the CCC repo with the same text as its first prompt.
+    By default this no longer interrupts any session: it records a numbered
+    ``open`` item that survives across sessions and that any session can later
+    *claim* when it is free (see ``ux_fixes_queue``). This is the anti-
+    interruption behaviour — captures stop derailing long-running work.
+
+    Pass ``inject=True`` to additionally fall back to the legacy behaviour of
+    injecting into / spawning the named ``queue_name`` session.
     """
     text = _annotation_text(text, 24000)
     if not text:
         return {"ok": False, "error": "missing text", "status": 400}
     repo_path = resolve_repo_path(str(CCC_ROOT))
+
+    # Durable record first — this is the source of truth a human refers to by
+    # number and a second session can see. Never interrupts anyone.
+    meta = meta if isinstance(meta, dict) else {}
+    try:
+        item = ux_fixes_queue.enqueue(
+            note=meta.get("note") or text,
+            text=text,
+            source=str(meta.get("source") or "ccc"),
+            annotation_id=str(meta.get("annotation_id") or meta.get("id") or ""),
+            url=str(meta.get("url") or ""),
+            title=str(meta.get("title") or ""),
+            selector=str(meta.get("selector") or ""),
+            screenshot_path=str(meta.get("screenshot_path") or ""),
+            repo_path=str(meta.get("repo_path") or CCC_ROOT),
+            lane=str(meta.get("lane") or "normal"),
+        )
+    except Exception as e:  # never lose a capture to a queue error
+        item = None
+        queue_error = str(e)
+    else:
+        queue_error = None
+
+    if not inject:
+        if item:
+            return {
+                "ok": True,
+                "action": "queued",
+                "number": item.get("number"),
+                "queue_name": queue_name,
+                "repo_path": repo_path,
+                "item": item,
+            }
+        return {"ok": False, "action": "queue", "error": queue_error or "enqueue failed"}
+
     existing = _find_annotation_ux_queue_session(queue_name)
     if existing:
         sid = existing.get("session_id") or existing.get("id")
@@ -33942,6 +33984,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 limit = 100
             self.send_json(list_annotations(limit=limit))
+        elif path == "/api/ux-fixes/list":
+            qs = urllib.parse.parse_qs(parsed.query)
+            status_filter = (qs.get("status", [""])[0] or "").strip() or None
+            lane_filter = (qs.get("lane", [""])[0] or "").strip() or None
+            try:
+                items = ux_fixes_queue.list_items(status=status_filter, lane=lane_filter)
+                self.send_json({"ok": True, "items": items, "count": len(items)})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/telemetry/status":
             # Anonymous-telemetry opt-in state. Drives the dashboard bar:
             # only render when opt_in is null (never asked) AND not env-disabled.
@@ -35590,9 +35641,81 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "expected JSON object"}, 400)
                 return
             engine = str(payload.get("engine") or "claude").strip().lower()
-            result = enqueue_annotation_ux_fixes_queue(payload.get("text") or "", engine=engine)
+            meta = {
+                "note": payload.get("note") or "",
+                "annotation_id": payload.get("annotation_id") or "",
+                "url": payload.get("url") or "",
+                "title": payload.get("title") or "",
+                "selector": payload.get("selector") or "",
+                "screenshot_path": payload.get("screenshot_path") or "",
+                "repo_path": payload.get("repo_path") or "",
+                "source": payload.get("source") or "ccc",
+                "lane": payload.get("lane") or "normal",
+            }
+            result = enqueue_annotation_ux_fixes_queue(
+                payload.get("text") or "",
+                engine=engine,
+                meta=meta,
+                inject=bool(payload.get("inject")),
+            )
             status = int(result.pop("status", 200 if result.get("ok") else 500))
             self.send_json(result, status)
+            return
+        if path == "/api/ux-fixes/claim":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = str(payload.get("session_id") or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "session_id required"}, 400)
+                return
+            try:
+                item = ux_fixes_queue.claim_next(sid, lane=payload.get("lane") or None)
+                self.send_json({"ok": True, "item": item})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/ux-fixes/next":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = str(payload.get("session_id") or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "session_id required"}, 400)
+                return
+            close_n = payload.get("close_number")
+            try:
+                result = ux_fixes_queue.next_item(
+                    sid,
+                    close_number=int(close_n) if close_n is not None else None,
+                    lane=payload.get("lane") or None,
+                )
+                self.send_json({"ok": True, **result})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/ux-fixes/update":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            try:
+                item = ux_fixes_queue.update_status(
+                    int(payload.get("number")),
+                    str(payload.get("status") or ""),
+                    session_id=str(payload.get("session_id") or ""),
+                )
+                self.send_json({"ok": bool(item), "item": item})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
             return
         if path == "/api/bug-report":
             # Submit a bug report as a GitHub issue against the CCC repo.
