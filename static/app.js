@@ -3832,7 +3832,39 @@
       pending.list.push(entry);
       entry.timer = setTimeout(() => {
         if (pending.list && pending.entry && pending.list.includes(pending.entry)) {
-          removePendingSendEcho(pending);
+          // Don't silently remove — the user's typed text would
+          // disappear and they'd think their message was sent when in
+          // fact the agent never acknowledged it. Convert the pending
+          // div to a "not acknowledged" state with a retry button so
+          // they can see what they typed and re-send. Also de-register
+          // from _pendingSends so the JSONL-event dedupe stops trying
+          // to match it (it's not coming).
+          const idx = pending.list.indexOf(pending.entry);
+          if (idx >= 0) pending.list.splice(idx, 1);
+          const div = pending.element;
+          if (div && div.parentNode) {
+            div.classList.remove('pending');
+            div.classList.add('not-acknowledged');
+            const noteEl = document.createElement('div');
+            noteEl.className = 'not-ack-note';
+            noteEl.innerHTML =
+                '<span class="not-ack-label">⚠ Not acknowledged by the agent — your message may not have been delivered.</span>'
+              + '<button type="button" class="not-ack-retry">Re-send</button>'
+              + '<button type="button" class="not-ack-dismiss" title="Dismiss this notice">×</button>';
+            div.appendChild(noteEl);
+            noteEl.querySelector('.not-ack-retry').addEventListener('click', () => {
+              try {
+                if (typeof injectToSession === 'function' && pending.sid) {
+                  injectToSession(pending.sid, text);
+                  noteEl.remove();
+                }
+              } catch (_) {}
+            });
+            noteEl.querySelector('.not-ack-dismiss').addEventListener('click', () => {
+              if (div.parentNode) div.parentNode.removeChild(div);
+            });
+          }
+          if (pending.sid) clearSessionSending(pending.sid);
           clearOptimisticAgentIndicator($view);
         }
       }, _PENDING_SEND_ECHO_MAX_MS);
