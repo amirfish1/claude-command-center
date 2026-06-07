@@ -27058,6 +27058,21 @@
     $list.innerHTML = html;
   }
 
+  // Explanatory placeholder shown BEFORE the per-stage checklist kicks in —
+  // notably during the boot-kick window, where the archive walk is
+  // deliberately deferred until /api/sessions returns (so it doesn't starve
+  // the active-session load). On a cold cache that wait can be many seconds,
+  // and a bare "Loading archive…" reads as a hang. Say what's actually
+  // happening instead; the detailed folders→transcripts→… checklist replaces
+  // this the moment the scan starts reporting progress.
+  function _archiveLoadingPlaceholderHtml(title) {
+    return '<div class="archive-empty-state archive-loading-placeholder">'
+      + '<div class="alp-title">' + (title || 'Preparing archive…') + '</div>'
+      + '<div class="alp-detail">Loading your active sessions first, then scanning conversation history. '
+      + 'Progress (folders, transcripts, branches) appears here as each step runs.</div>'
+      + '</div>';
+  }
+
   let _archiveProgressPollId = null;
   let _archiveSideDataPromise = null;
   let _archivePrHydratePromise = null;
@@ -27338,7 +27353,7 @@
 
     const hasGc = !q && _gcActiveChats && _gcActiveChats.length > 0;
     if (!archiveLoaded && !archiveRows.length && !hasGc) {
-      _renderArchiveEmpty('<div class="archive-empty-state archive-loading-placeholder">Loading archive&hellip;</div>');
+      _renderArchiveEmpty(_archiveLoadingPlaceholderHtml('Loading archive…'));
       return;
     }
     if (!archiveRows.length && !hasGc) {
@@ -27652,7 +27667,7 @@
       if ($kanban) $kanban.style.display = 'none';
       if ($flow) $flow.style.display = 'none';
       $list.style.display = '';
-      $list.innerHTML = '<div class="archive-empty-state archive-loading-placeholder">Loading archive…</div>';
+      $list.innerHTML = _archiveLoadingPlaceholderHtml('Loading archive…');
     }
     await refreshArchiveData();
     renderArchiveList(document.getElementById('convSearch')?.value || '');
@@ -27703,7 +27718,7 @@
         if ($kanban) $kanban.style.display = 'none';
         if ($flow) $flow.style.display = 'none';
         $list.style.display = '';
-        $list.innerHTML = '<div class="archive-empty-state archive-loading-placeholder">Loading archive&hellip;</div>';
+        $list.innerHTML = _archiveLoadingPlaceholderHtml('Preparing archive…');
       }
       _firstSessionsLoaded.then(() => setArchiveMode());
     }

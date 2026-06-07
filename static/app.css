@@ -6967,6 +6967,14 @@
     color: var(--text-muted);
     font-size: 12px;
   }
+  /* Explanatory archive placeholder (pre-checklist boot wait). */
+  .archive-loading-placeholder .alp-title {
+    font-weight: 600; color: var(--text); margin-bottom: 6px;
+  }
+  .archive-loading-placeholder .alp-detail {
+    font-size: 11px; line-height: 1.5; color: var(--text-muted);
+    max-width: 280px; margin: 0 auto;
+  }
 
   /* ── Full-page loading overlay ──────────────────────────────────────────
    * Shown on initial load and during repo-switch. Covers everything so the
