@@ -14397,6 +14397,21 @@ def _codex_app_server_request_to_proc(proc, method, params=None, timeout=20):
         }
 
 
+def _codex_context_window_args():
+    """Opt every Codex invocation into the model's full 1M context window.
+
+    gpt-5.x default to a 272K working window but advertise a 1M max in their
+    model metadata ("context_window": 272000, "max_context_window": 1000000),
+    so raising `model_context_window` to 1M is supported (within max), not a
+    foot-gun. Passed as a global `-c` override on spawn, resume, and the
+    app-server so the window is consistent across a session's whole life.
+    Set CCC_CODEX_CONTEXT_1M=0 to fall back to the model default.
+    """
+    if os.environ.get("CCC_CODEX_CONTEXT_1M", "1").lower() in ("0", "false", "no"):
+        return []
+    return ["-c", "model_context_window=1000000"]
+
+
 def _codex_app_server_request(method, params=None, timeout=20):
     """Send one JSON-RPC request to Codex app-server.
 
@@ -14442,7 +14457,7 @@ def _ensure_codex_app_server():
             return None
         try:
             proc = subprocess.Popen(
-                [resolved["bin"], "app-server", "--listen", "stdio://"],
+                [resolved["bin"], *_codex_context_window_args(), "app-server", "--listen", "stdio://"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -17521,7 +17536,7 @@ def resume_session_codex(session_id, text, *, steer=False):
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
     cmd = [
-        resolved["bin"], "exec", "resume",
+        resolved["bin"], *_codex_context_window_args(), "exec", "resume",
         "--json",
         "--skip-git-repo-check",
         "--dangerously-bypass-approvals-and-sandbox",
@@ -23502,7 +23517,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
             return {"ok": False, "error": f"worktree creation failed: {e}"}
 
     cmd = [
-        bin_path, "exec",
+        bin_path, *_codex_context_window_args(), "exec",
         "--json",
         "--skip-git-repo-check",
         "--dangerously-bypass-approvals-and-sandbox",
