@@ -14163,6 +14163,15 @@
     return Math.round(m / 60) + 'h ago';
   }
 
+  // Exact wall-clock of a poll, as HH:MM:SS — the relative "just now" / "Xs
+  // ago" label is friendly but imprecise, so the tooltip carries the real time.
+  function _procCheckedClock(ms) {
+    if (!ms) return '';
+    const d = new Date(ms);
+    const p = (n) => String(n).padStart(2, '0');
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+
   // Fill the breadcrumb process-presence slot: a "headless" pill and a
   // "terminal" pill (on/off/stale) plus a "checked Xs ago" freshness label.
   // Imperative (not part of the breadcrumb innerHTML) so the "ago" stays live
@@ -14188,9 +14197,13 @@
       ? 'A live terminal (TTY) is attached to this session'
       : 'No live terminal attached to this session';
     const ago = _procCheckedAgoLabel(_lastStatusCheckedAt);
+    const clock = _procCheckedClock(_lastStatusCheckedAt);
+    const checkedTitle = clock
+      ? 'CCC last polled these processes at ' + clock
+      : 'When CCC last polled these processes';
     el.innerHTML = pill(headOn, stale, stale ? 'headless ⚠' : 'headless', headTitle)
       + pill(termOn, false, 'terminal', termTitle)
-      + (ago ? '<span class="ccc-proc-checked" title="When CCC last polled these processes">checked ' + escapeHtml(ago) + '</span>' : '');
+      + (ago ? '<span class="ccc-proc-checked" title="' + escapeHtml(checkedTitle) + '">checked ' + escapeHtml(ago) + '</span>' : '');
   }
 
   async function postRunCompactForSession(sessionId, source, terminalApp) {
