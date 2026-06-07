@@ -26592,7 +26592,25 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
                 if is_cursor:
                     return resume_session_cursor(session_id, text)
                 return _queue_terminal_input(session_id, text, status)
-        return inject_input_via_keystroke(tty, term_app or "Terminal", text)
+        keystroke_result = inject_input_via_keystroke(tty, term_app or "Terminal", text)
+        # If the AppleScript can't find the terminal tab (user switched
+        # apps, tab hidden, fullscreen-elsewhere, permission denied),
+        # queue the text instead of bouncing the message. The queue
+        # drains the next time the right terminal is focused OR the
+        # user re-fronts it manually. Saves the user from retyping.
+        if isinstance(keystroke_result, dict) and not keystroke_result.get("ok") and not _from_terminal_queue:
+            queued_status = dict(status or {})
+            queued_status["status"] = queued_status.get("status") or "tty-unreachable"
+            queued = _queue_terminal_input(session_id, text, queued_status)
+            queued["tty_unreachable"] = True
+            queued["original_error"] = keystroke_result.get("error") or "Terminal tab not reachable"
+            queued["note"] = (
+                "Queued — your message will be sent the next time CCC can "
+                "reach the terminal (re-front it, or it'll drain on the "
+                "next inject)."
+            )
+            return queued
+        return keystroke_result
     if status.get("live") and status.get("kind") == "bg":
         if not _from_terminal_queue:
             if _terminal_input_queue_has_pending(session_id) or not _bg_agent_ready_for_input(session_id, status):
@@ -34266,6 +34284,34 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 status["spawn_registry_count"] = len(_spawned_sessions)
             except Exception:
                 status["spawn_registry_count"] = 0
+            # Process-presence summary for the conversation top bar. Claude's
+            # architecture splits into a CCC-spawned persistent headless and/or
+            # a human terminal (TTY) — the UI surfaces both so the user can see
+            # what's actually live for this session. Claude-only: Codex drives
+            # via app-server (see codex_app_server), not a headless/terminal
+            # pair. Cheap — reuses the registry + spawn scan already loaded.
+            status["headless_present"] = False
+            status["headless_pid"] = None
+            status["headless_stale"] = False
+            status["terminal_present"] = False
+            if sid and not (is_codex_status or is_gemini_status or is_antigravity_status):
+                try:
+                    _spawn = _find_live_spawn_entry_for_session(sid)
+                    if _spawn and _spawn.get("engine") == "claude":
+                        status["headless_present"] = True
+                        try:
+                            status["headless_pid"] = int(_spawn.get("pid")) if _spawn.get("pid") else None
+                        except (TypeError, ValueError):
+                            status["headless_pid"] = None
+                        try:
+                            status["headless_stale"] = bool(_headless_spawn_is_stale(_spawn, sid))
+                        except Exception:
+                            status["headless_stale"] = False
+                    status["terminal_present"] = bool(
+                        _session_has_live_terminal(sid, exclude_pid=status.get("headless_pid"))
+                    )
+                except Exception:
+                    pass
             self.send_json(status)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/files$", path):
             conv_id = path.split("/")[-2]
