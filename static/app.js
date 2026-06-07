@@ -2163,6 +2163,7 @@
           row.stale_tool_call = !!data.stale_tool_call;
           row.stale_tool_age_s = data.stale_tool_age_s || 0;
           row.stale_tool_threshold_s = data.stale_tool_threshold_s || row.stale_tool_threshold_s || 0;
+          row.stale_tool_queued_input = !!data.stale_tool_queued_input;
           row.question_waiting = !!data.question_waiting;
           row.question_text = data.question_text || '';
           row.question_header = data.question_header || '';
@@ -13367,9 +13368,13 @@
           const staleTool = c.pending_tool || c.sidecar_tool || 'tool';
           const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts) : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
           const staleDetail = c.pending_file || c.sidecar_file || '';
-          const staleTitle = 'Codex has not logged a result for ' + staleTool
+          const _staleIsCodex = c.source === 'codex' || c.engine === 'codex';
+          const staleTitle = (_staleIsCodex
+              ? 'Codex has not logged a result for ' + staleTool
+              : 'This tool call has been running for too long and may be stuck: ' + staleTool)
             + (staleAge ? ' for ' + staleAge : '')
-            + (staleDetail ? ': ' + staleDetail : '');
+            + (staleDetail ? ': ' + staleDetail : '')
+            + (c.stale_tool_queued_input ? ' — queued input cannot be delivered until it finishes' : '');
           html += '<div class="kanban-live-tool stale" title="' + escapeAttr(staleTitle) + '">'
             + '<span class="kanban-live-name">Stuck</span>'
             + ' <span class="kanban-live-file">' + escapeHtml(liveActivityToolLabel(staleTool)) + '</span>'
@@ -14726,9 +14731,16 @@
         const staleTool = c.pending_tool || c.sidecar_tool || 'tool';
         const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts) : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
         const staleDetail = c.pending_file || c.sidecar_file || '';
-        const staleTitle = 'Codex has not logged a result for ' + staleTool
+        const _staleIsCodex = c.source === 'codex' || c.engine === 'codex';
+        // Codex stalls show up as a no-result rollout tail; Claude headless
+        // stalls show up as a tool child that has been alive too long (e.g. a
+        // command blocked on a FIFO). Word it accordingly.
+        const staleTitle = (_staleIsCodex
+            ? 'Codex has not logged a result for ' + staleTool
+            : 'This tool call has been running for too long and may be stuck: ' + staleTool)
           + (staleAge ? ' for ' + staleAge : '')
-          + (staleDetail ? ': ' + staleDetail : '');
+          + (staleDetail ? ': ' + staleDetail : '')
+          + (c.stale_tool_queued_input ? ' — queued input cannot be delivered until it finishes' : '');
         liveToolHtml = '<span class="conv-live-tool stale" title="' + escapeAttr(staleTitle) + '">'
           + '<span class="conv-live-name">Stuck</span>'
           + '<span class="conv-live-file">' + escapeHtml(liveActivityCompactToolLabel(staleTool)) + '</span>'

@@ -16470,6 +16470,48 @@ def _codex_stale_tool_fields(tail, now=None, threshold_s=None):
     return fields
 
 
+def _stale_tool_threshold_s():
+    """Stale-tool threshold for Claude/headless sessions (seconds).
+
+    Mirrors the Codex knob but for the headless tool-child path. A tool child
+    that has been "running" longer than this with no result is treated as hung,
+    so the UI can warn the user (queued input cannot drain while a tool child is
+    active). Configurable via ``CCC_STALE_TOOL_SEC`` (default 900s / 15m).
+    """
+    try:
+        threshold = float(os.environ.get("CCC_STALE_TOOL_SEC", "900"))
+    except (TypeError, ValueError):
+        threshold = 900.0
+    return max(0.0, threshold)
+
+
+def _claude_stale_tool_fields(started_at, in_flight, now=None, threshold_s=None):
+    """Stale-tool fields for a Claude headless session's active tool child.
+
+    Codex synthesizes these from its rollout tail; Claude headless sessions have
+    no rollout, but ``_spawn_entry_active_tool_child`` gives the real child start
+    time (from ``ps`` etime). When an in-flight tool child has aged past the
+    threshold it is almost certainly wedged (the real case: ``rg`` blocked on a
+    ``.stdin`` FIFO for ~3.7h), and the input queue cannot drain while a child
+    is alive — so flag it for the UI.
+    """
+    threshold = _stale_tool_threshold_s() if threshold_s is None else max(0.0, float(threshold_s))
+    fields = {
+        "stale_tool_call": False,
+        "stale_tool_age_s": 0,
+        "stale_tool_threshold_s": int(threshold),
+    }
+    if not in_flight or not started_at:
+        return fields
+    try:
+        age = max(0.0, float(now if now is not None else time.time()) - float(started_at))
+    except (TypeError, ValueError):
+        return fields
+    fields["stale_tool_age_s"] = int(age)
+    fields["stale_tool_call"] = bool(threshold > 0 and age >= threshold)
+    return fields
+
+
 def _codex_activity_fields_from_tail(tail, live):
     """Map Codex rollout tail state into the sidecar-shaped UI fields.
 
@@ -34347,6 +34389,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     status["sidecar_status"] = None
                     status["sidecar_ts"] = 0
                     status["sidecar_in_flight"] = False
+                # Default stale-tool fields so the response shape matches Codex
+                # (the UI reads stale_tool_call/age unconditionally). Filled in
+                # below when a long-running tool child is detected.
+                status.update(_claude_stale_tool_fields(None, False))
                 if status.get("live") and not status.get("tty"):
                     spawn = _find_live_spawn_entry_for_session(sid)
                     active_child = _spawn_entry_active_tool_child(spawn) if spawn else None
@@ -34364,6 +34410,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         status["sidecar_in_flight"] = True
                         status["active_child_pid"] = active_child.get("pid")
                         status["active_child_pgid"] = active_child.get("pgid")
+                        # Hung-tool detection for Claude headless sessions. A
+                        # tool child alive past the threshold has almost
+                        # certainly wedged (real case: rg blocked on a .stdin
+                        # FIFO for hours), and queued input can never drain
+                        # while a child is alive. Only meaningful with a real
+                        # start time — a "now" fallback can't age out, so leave
+                        # the defaults (non-stale) when etime was unparseable.
+                        if _child_started:
+                            status.update(
+                                _claude_stale_tool_fields(_child_started, True)
+                            )
+                            if status.get("stale_tool_call"):
+                                # If the user has input waiting in the terminal
+                                # queue, it cannot be delivered until this child
+                                # exits — surface that explicitly.
+                                try:
+                                    status["stale_tool_queued_input"] = bool(
+                                        _terminal_input_queue_has_pending(sid)
+                                    )
+                                except Exception:
+                                    status["stale_tool_queued_input"] = False
                 # Authoritative AskUserQuestion signal: our PreToolUse hook
                 # writes a relay request file for exactly the window it blocks
                 # waiting for an answer. Trust it over the in-flight marker
@@ -38330,15 +38397,29 @@ def _classify_attention(c):
             tool_age = c.get("stale_tool_age_s") or 0
             age_minutes = max(1, round(tool_age / 60)) if tool_age else None
             age_text = f" for about {age_minutes}m" if age_minutes else ""
+            _stale_is_codex = (c.get("source") == "codex" or c.get("engine") == "codex")
+            if _stale_is_codex:
+                _stale_where = "Needs attention · Codex tool stopped reporting"
+                _stale_next = state.get("next_step_user") or (
+                    f"Wake Codex — {pending_tool or 'a tool call'} has been open{age_text}" +
+                    (f" on {pending_file}" if pending_file else ""))
+            else:
+                # Claude headless: a tool child has been alive past the
+                # threshold (likely wedged — e.g. a command blocked on a FIFO).
+                # Queued input can't drain while the child runs. Don't suggest
+                # auto-interrupting; point the user at the terminal.
+                _stale_where = "Needs attention · tool call may be stuck"
+                _stale_next = state.get("next_step_user") or (
+                    f"Check the terminal — {pending_tool or 'a tool call'} has been running{age_text}" +
+                    (f" on {pending_file}" if pending_file else "") +
+                    "; queued input won't deliver until it finishes")
             return {
                 "kind": "stale_tool_call", "priority": 1,
                 "session_id": sid, "name": name,
-                "where": "Needs attention · Codex tool stopped reporting",
+                "where": _stale_where,
                 "did": state.get("did"),
                 "insight": state.get("insight"),
-                "next_step": state.get("next_step_user") or
-                    (f"Wake Codex — {pending_tool or 'a tool call'} has been open{age_text}" +
-                     (f" on {pending_file}" if pending_file else "")),
+                "next_step": _stale_next,
                 "has_structured": has_structured,
             }
 
