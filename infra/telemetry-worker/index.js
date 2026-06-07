@@ -132,9 +132,81 @@ async function handleOpen(request, env) {
   return new Response(null, { status: 204 });
 }
 
+// Public read-only stats endpoint. Returns aggregates only — never
+// per-install rows, never raw timestamps. Cached at the edge for 5
+// minutes so the docs/stats/ page can be hammered without hitting D1.
+// CORS allows GET from any origin so ccc.amirfish.ai/stats can fetch.
+async function handleStats(_request, env) {
+  const headers = {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "public, max-age=300",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET",
+  };
+  try {
+    const totals = await env.DB.prepare(
+      "SELECT " +
+      "  (SELECT COUNT(*) FROM opens) AS total_opens, " +
+      "  (SELECT COUNT(*) FROM pings) AS total_pings, " +
+      "  (SELECT COUNT(DISTINCT install_id) FROM pings) AS distinct_installs"
+    ).first();
+
+    const opensByDay = (await env.DB.prepare(
+      "SELECT substr(received_at, 1, 10) AS day, COUNT(*) AS boots " +
+      "FROM opens GROUP BY day ORDER BY day DESC LIMIT 30"
+    ).all()).results;
+
+    const pingsByDay = (await env.DB.prepare(
+      "SELECT substr(received_at, 1, 10) AS day, COUNT(DISTINCT install_id) AS active_installs " +
+      "FROM pings WHERE install_id NOT LIKE '00000000%' AND install_id NOT LIKE '11111111%' AND install_id NOT LIKE '22222222%' AND install_id NOT LIKE '33333333%' " +
+      "GROUP BY day ORDER BY day DESC LIMIT 30"
+    ).all()).results;
+
+    const versions = (await env.DB.prepare(
+      "SELECT version, COUNT(DISTINCT install_id) AS installs FROM pings " +
+      "WHERE install_id NOT LIKE '00000000%' AND install_id NOT LIKE '11111111%' AND install_id NOT LIKE '22222222%' AND install_id NOT LIKE '33333333%' " +
+      "GROUP BY version ORDER BY installs DESC"
+    ).all()).results;
+
+    const platforms = (await env.DB.prepare(
+      "SELECT platform, COUNT(DISTINCT install_id) AS installs FROM pings " +
+      "WHERE install_id NOT LIKE '00000000%' AND install_id NOT LIKE '11111111%' AND install_id NOT LIKE '22222222%' AND install_id NOT LIKE '33333333%' " +
+      "GROUP BY platform ORDER BY installs DESC"
+    ).all()).results;
+
+    const sessionsToday = (await env.DB.prepare(
+      "SELECT install_id, MAX(sessions_today) AS latest_sessions_today, MAX(received_at) AS last_seen " +
+      "FROM pings WHERE sessions_today IS NOT NULL AND install_id NOT LIKE '00000000%' AND install_id NOT LIKE '11111111%' AND install_id NOT LIKE '22222222%' AND install_id NOT LIKE '33333333%' " +
+      "GROUP BY install_id ORDER BY last_seen DESC LIMIT 50"
+    ).all()).results;
+
+    const body = JSON.stringify({
+      generated_at: new Date().toISOString(),
+      totals,
+      opens_by_day: opensByDay,
+      pings_by_day: pingsByDay,
+      versions,
+      platforms,
+      sessions_today_per_install: sessionsToday.map(r => ({
+        install_id_prefix: r.install_id.slice(0, 8),
+        latest_sessions_today: r.latest_sessions_today,
+        last_seen: r.last_seen,
+      })),
+    });
+    return new Response(body, { status: 200, headers });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: "query failed" }), {
+      status: 500, headers,
+    });
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/v1/stats") {
+      return handleStats(request, env);
+    }
     if (request.method !== "POST") {
       return new Response("method not allowed", { status: 405 });
     }
