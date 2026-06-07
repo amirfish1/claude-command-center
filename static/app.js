@@ -2199,6 +2199,9 @@
     updateConvProcessIndicator();
     if (typeof updateSplitToolbar === 'function') updateSplitToolbar();
     syncRelayedQuestionModal();
+    // A session that just went from live → ended needs its outcome banner
+    // recomputed even when no new transcript events arrived.
+    try { updateSessionOutcomeBanner(getConvViewForPane(activePaneId()) || $conversationsView); } catch (_) {}
   }
 
   // ── Relayed-question blocking modal ───────────────────────────────
@@ -17780,6 +17783,70 @@
     positionConversationEndAffordance(view);
   }
 
+  // Surface a plain-language banner at the end of the conversation when a
+  // session ended in a non-clean state — an error, or (the common
+  // external-agent failure) the transcript just stops mid-action with no
+  // final response. Without it, a crashed/abandoned Antigravity/Codex
+  // session reads as an empty pane with zero explanation: the only hint is a
+  // cryptic "ctx unavailable" pill. Informational only; it clears itself the
+  // moment the session is live again.
+  function updateSessionOutcomeBanner(view) {
+    if (!view) return;
+    // Drop any stale banner first so re-renders never stack duplicates.
+    const existing = view.querySelector(':scope > .conv-outcome-banner');
+    if (existing) existing.remove();
+    // A live (or actively-working) session is still in flight — never
+    // second-guess it.
+    if (liveStatus && (liveStatus.live || liveStatus.sidecarInFlight || liveStatus.questionWaiting)) return;
+    // Need real content to reason about; skip empty / still-loading panes.
+    if (!view.querySelector(':scope > .event, :scope > .tool-call-group')) return;
+
+    // An error anywhere in the transcript is always worth surfacing — error
+    // tool-results are otherwise buried inside a collapsed tool group.
+    const errNode = view.querySelector('.tool-result-output.is-error');
+
+    // Walk back to the last meaningful node, skipping the sticky header, the
+    // pinned original ask, hidden tool_result markers, the load-earlier
+    // banner, and our own banner.
+    let lastNode = null;
+    for (let i = view.children.length - 1; i >= 0; i--) {
+      const n = view.children[i];
+      if (!n || n.nodeType !== 1) continue;
+      if (n.matches('.conv-sticky-header, .conv-outcome-banner, .conv-load-earlier, .is-pinned-in-sticky')) continue;
+      if (n.classList.contains('event') && n.classList.contains('tool_result')) continue;
+      lastNode = n;
+      break;
+    }
+
+    let kind = null, title = '', detail = '';
+    if (errNode) {
+      kind = 'error';
+      title = 'This session hit an error';
+      detail = (errNode.textContent || '').replace(/^\[J [^\]]*\]\s*/, '').trim().slice(0, 220);
+    } else if (lastNode && lastNode.classList.contains('tool-call-group')) {
+      // Transcript stops on a tool action with nothing after it: the agent
+      // was mid-task when it stopped (crash, kill, or headless exit).
+      kind = 'incomplete';
+      title = 'This session stopped before finishing';
+      const lbl = lastNode.querySelector('.tcg-label');
+      const action = lbl ? (lbl.textContent || '').trim() : '';
+      detail = (action ? 'Last action: ' + action + '. ' : '')
+        + 'No final response was produced — type below to resume it.';
+    }
+    if (!kind) return;
+
+    const banner = document.createElement('div');
+    banner.className = 'conv-outcome-banner conv-outcome-' + kind;
+    banner.setAttribute('role', 'status');
+    const icon = kind === 'error' ? '⚠' : '⏹';
+    banner.innerHTML =
+      '<span class="cob-icon" aria-hidden="true">' + icon + '</span>'
+      + '<span class="cob-body"><strong>' + escapeHtml(title) + '</strong>'
+      + (detail ? '<span class="cob-detail">' + escapeHtml(detail) + '</span>' : '')
+      + '</span>';
+    view.appendChild(banner);
+  }
+
   function scrollConversationToEnd(view, behavior) {
     if (!view) return;
     const top = Math.max(0, view.scrollHeight - view.clientHeight);
@@ -23307,6 +23374,9 @@
         $view.appendChild(_optimistic);
       }
     }
+    // Re-evaluate the end-of-session outcome banner now that the latest
+    // events are painted (covers error tool-results and mid-action stops).
+    updateSessionOutcomeBanner($view);
     // When a compact-resume event just landed, scroll the boundary
     // INTO VIEW (top of the resume card) instead of the very bottom.
     // The collapsed card sits at the top of the user's gaze; the
