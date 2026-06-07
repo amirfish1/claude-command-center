@@ -3634,6 +3634,7 @@ def find_all_conversations(
                 or "/.worktrees/" in effective_cwd
                 or "/.claude/worktrees/" in effective_cwd
                 or "-wt-" in Path(effective_cwd).name
+                or Path(effective_cwd).parent.name.endswith("-wt")
             )
 
             # Per-row folder bucket. A user pin moves the row to a different
@@ -14181,14 +14182,17 @@ def _slugify(text, max_len=40):
 
 
 def _create_worktree_for_spawn(source_cwd, slug):
-    """Create `<source-parent>/<source-name>-wt-<slug>` as a git worktree
+    """Create `<source-parent>/<source-name>-wt/<slug>/` as a git worktree
     on a fresh `feat/<slug>` branch off `source_cwd`'s current HEAD, and
     return its absolute path.
 
-    Layout matches the convention already used in this repo's worktrees
-    (e.g. `claude-command-center-wt-desktop-launch`) — sibling-dir style
-    rather than nested under the source so editors / `find` calls don't
-    accidentally recurse into them.
+    Layout: all worktrees of a repo nest under a single sibling directory
+    `<repo>-wt/` so they don't sprawl across the parent. Still sibling to
+    the source (not nested inside the repo) so editors / `find` calls
+    don't recurse into worktrees from inside the repo. Read paths
+    discover worktrees in BOTH the legacy `<repo>-wt-<slug>` layout and
+    the new `<repo>-wt/<slug>` layout because the project-slug encoder
+    collapses `/` and `-` to the same character.
 
     Returns (path, branch) on success, raises RuntimeError on any failure
     (not-a-repo, dirty index, branch collision, etc.) so the caller can
@@ -14210,11 +14214,16 @@ def _create_worktree_for_spawn(source_cwd, slug):
     toplevel = Path(r.stdout.strip())
     parent = toplevel.parent
     base_name = toplevel.name
-    # Pick the first non-existing variant of `<base>-wt-<slug>[-N]`.
-    candidate = parent / f"{base_name}-wt-{slug}"
+    # Pick the first non-existing variant of `<base>-wt/<slug>[-N]/`.
+    wt_root = parent / f"{base_name}-wt"
+    try:
+        wt_root.mkdir(exist_ok=True)
+    except OSError as e:
+        raise RuntimeError(f"could not create worktree parent {wt_root}: {e}")
+    candidate = wt_root / slug
     suffix = 2
     while candidate.exists():
-        candidate = parent / f"{base_name}-wt-{slug}-{suffix}"
+        candidate = wt_root / f"{slug}-{suffix}"
         suffix += 1
     branch = f"feat/{slug}"
     # If the branch already exists, append the same numeric suffix the
