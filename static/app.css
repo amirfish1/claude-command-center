@@ -653,6 +653,23 @@
   .event.user_text.not-acknowledged .not-ack-dismiss:hover {
     color: var(--text);
   }
+  /* Server *queued* this send (session busy / headless mid-tool). Calm,
+     persistent "parked, will deliver" state — distinct from the red
+     not-acknowledged failure. */
+  .event.user_text.send-queued {
+    background: rgba(210, 153, 34, 0.08);
+    border-left-color: var(--orange, #d29922);
+    opacity: 0.95;
+  }
+  .event.user_text.send-queued .label::after {
+    content: ' · queued';
+    font-style: normal; font-weight: 400;
+    color: var(--orange, #d29922); text-transform: none; letter-spacing: 0;
+    font-size: 10px; margin-left: 4px;
+  }
+  .event.user_text.send-queued .send-queued-note {
+    margin-top: 8px; font-size: 11px; color: var(--text-muted);
+  }
   .event.user_text {
     background: rgba(63, 185, 80, 0.08); border-left-color: var(--green);
   }

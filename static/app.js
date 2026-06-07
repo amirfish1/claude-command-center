@@ -3909,6 +3909,28 @@
     if (convId && pane) syncPendingSendsMapForConv(pane, convId);
   }
 
+  // A send the server *queued* (the session is busy mid-tool, or headless
+  // with no terminal to type into right now) is NOT a failure — it drains to
+  // the agent the moment the session goes idle. Mark the pending echo with a
+  // calm, persistent "queued" state and cancel its not-acknowledged timer, so
+  // a long-running turn doesn't make a safely-parked message look dropped.
+  // When the input finally delivers, the normal JSONL dedupe removes the echo.
+  function markPendingSendQueued(pending, label) {
+    if (!pending || !pending.entry) return;
+    if (pending.entry.timer) { clearTimeout(pending.entry.timer); pending.entry.timer = null; }
+    const div = pending.element;
+    if (!div) return;
+    div.classList.remove('pending');
+    div.classList.add('send-queued');
+    let note = div.querySelector('.send-queued-note');
+    if (!note) {
+      note = document.createElement('div');
+      note.className = 'send-queued-note';
+      div.appendChild(note);
+    }
+    note.textContent = '⏳ ' + (label || 'Queued — will send when the session finishes its current step.');
+  }
+
   function isCursorUsageLimitFailure(data, reason) {
     const text = [
       data && data.engine,
@@ -4082,11 +4104,19 @@
           // is preserved AND offer to locate the new directory so the
           // queue can drain.
           const missing = data.missing_path || '(unknown path)';
+          markPendingSendQueued(pendingSend, 'Queued — session folder is missing. Restore or relocate it to deliver.');
           showOpToast('Queued — session folder is missing (' + missing + '). Restore it or relocate to resume.', 'info');
         } else if (data.queued) {
+          // The session is busy (or headless mid-tool). Keep the echo visible
+          // as "queued" — NOT "terminal idle" (a headless session has no
+          // terminal) and NOT the not-acknowledged timeout — so the user sees
+          // their message is parked and will be delivered, not lost.
+          markPendingSendQueued(pendingSend, compactCommand
+            ? 'Queued /compact — will run when the session finishes its current step.'
+            : 'Queued — will send when the session finishes its current step.');
           showOpToast(compactCommand
-            ? 'Queued /compact until the terminal session is idle.'
-            : 'Queued until the terminal session is idle.');
+            ? 'Queued /compact until the session is idle.'
+            : 'Queued — will send when the session finishes its current step.');
         } else if (data.via === 'codex-steer') {
           showOpToast('Steered running Codex turn.');
           setTimeout(refreshConversationList, 1500);
@@ -28320,7 +28350,8 @@
             setTimeout(refreshConversationList, 1500);
             setTimeout(refreshConversationList, 3500);
           } else if (data.queued) {
-            showOpToast('Queued until the terminal session is idle.');
+            markPendingSendQueued(pendingSend, 'Queued — will send when the session finishes its current step.');
+            showOpToast('Queued — will send when the session finishes its current step.');
           } else if (data.via === 'codex-steer') {
             showOpToast('Sent to running Codex turn.');
             setTimeout(refreshConversationList, 1500);
