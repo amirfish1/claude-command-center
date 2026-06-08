@@ -9181,17 +9181,30 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None, post_sl
         return s.replace("\\", "\\\\").replace('"', '\\"')
     cmd_lit = as_literal(command)
 
-    # Use a human-readable name for the terminal tab.
-    # Look up display_name from conversations, fall back to session name or ID prefix.
+    # Use a human-readable name for the terminal tab. Look it up cheaply: a
+    # user rename override, else the title the parser derives from this
+    # session's own transcript tail (custom-title / agent-name / ai-title),
+    # which _extract_tail_meta caches by (mtime,size). This previously called
+    # find_all_sessions(ctx["repo_path"]), which rebuilds the ENTIRE repo
+    # session list (seconds — the dominant synchronous cost of a launch, and
+    # far worse under load) just to read one row's display name.
     rename_target = None
     try:
-        convs = find_all_sessions(ctx["repo_path"]) or []
-        for c in convs:
-            if c.get("session_id") == session_id:
-                rename_target = c.get("display_name") or c.get("name")
-                break
+        rename_target = _load_session_name_overrides().get(session_id)
     except Exception:
-        pass
+        rename_target = None
+    if not rename_target:
+        try:
+            jsonl = _canonical_conversation_path(ctx["repo_path"], session_id)
+            if jsonl and jsonl.exists():
+                tm = _extract_tail_meta(jsonl)
+                rename_target = (
+                    tm.get("custom_title")
+                    or tm.get("agent_name")
+                    or tm.get("ai_title")
+                )
+        except Exception:
+            rename_target = None
     if not rename_target:
         rename_target = (session_id or "")[:12]
     # Sanitize for AppleScript (no quotes/backslashes)
