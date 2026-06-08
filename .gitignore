@@ -110,3 +110,7 @@ venv/
 /package.json
 /package-lock.json
 /git_log.txt
+
+# babysitter (orchestration harness) run state: journals, logs, caches, and
+# install inputs. Local scratch only — must never ship in this public repo.
+/.a5c/
