@@ -650,6 +650,10 @@
   // issues pollers catch up on their own next tick.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
+    // Instantly correct the (now-stale) "checked ago" label on return, before
+    // the async refreshLiveStatus fetch lands — so the user never sees a frozen
+    // "just now" from minutes ago while the tab was backgrounded.
+    try { if (typeof updateConvProcessIndicator === 'function') updateConvProcessIndicator(); } catch (_) {}
     try { if (typeof refreshLiveStatus === 'function') refreshLiveStatus(); } catch (_) {}
     try { if (typeof updateLiveToolStrip === 'function') updateLiveToolStrip(); } catch (_) {}
     try { if (typeof updateCodexStateBadge === 'function') updateCodexStateBadge(); } catch (_) {}
@@ -2511,7 +2515,14 @@
       refreshLiveStatus();
       refreshLiveSessionsActivity();
     }), 5000);
-    liveStatusRenderTicker = setInterval(_gated('liveToolStrip', updateLiveToolStrip), 1000);
+    liveStatusRenderTicker = setInterval(_gated('liveToolStrip', () => {
+      updateLiveToolStrip();
+      // Age the "checked Xs ago · HH:MM:SS" label every second so it never
+      // lies. The 5s poll pauses when the tab is hidden / on fetch failure;
+      // without this re-render the label froze at "just now" even after
+      // minutes, hiding that the status is stale.
+      updateConvProcessIndicator();
+    }), 1000);
   }
 
   // Render a live "what's running right now" indicator at the bottom of the
