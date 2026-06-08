@@ -11096,3 +11096,443 @@ body:has(.gc-reader) .pwa-install-banner {
   font-size: 0.95em;
   white-space: nowrap;
 }
+
+/* Onboarding Premium Wizard Styles */
+.onb-dialog {
+  position: relative;
+  width: min(650px, 94vw);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: 0 30px 70px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.05);
+  overflow: hidden;
+  z-index: 10000;
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.onb-hero-glow {
+  position: absolute;
+  top: -100px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 300px;
+  height: 200px;
+  background: radial-gradient(circle, rgba(168, 85, 247, 0.15) 0%, rgba(59, 130, 246, 0.05) 50%, transparent 100%);
+  filter: blur(40px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.onb-steps-container {
+  position: relative;
+  min-height: 380px;
+  display: flex;
+  flex-direction: column;
+}
+
+.onb-step {
+  display: none;
+  flex-direction: column;
+  gap: 16px;
+  animation: onb-fade-in 0.3s ease-out forwards;
+}
+
+.onb-step-active {
+  display: flex;
+}
+
+@keyframes onb-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.onb-welcome-icon {
+  font-size: 48px;
+  align-self: center;
+  margin-bottom: 8px;
+  animation: onb-bounce 2s infinite ease-in-out;
+}
+
+@keyframes onb-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+.onb-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  text-align: center;
+  margin: 0;
+  letter-spacing: -0.5px;
+}
+
+.onb-desc {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  text-align: center;
+  max-width: 540px;
+  align-self: center;
+  margin: 0 0 10px 0;
+}
+
+.onb-features-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+@media(min-width: 480px) {
+  .onb-features-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.onb-feature-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.onb-feature-card:hover {
+  border-color: rgba(168, 85, 247, 0.4);
+  background: rgba(255,255,255,0.02);
+}
+
+.onb-feat-icon {
+  font-size: 20px;
+  background: rgba(168, 85, 247, 0.1);
+  border-radius: 8px;
+  padding: 6px;
+  line-height: 1;
+}
+
+.onb-feature-card h4 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+  color: var(--text);
+}
+
+.onb-feature-card p {
+  font-size: 12px;
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* CLI Checker Step */
+.onb-cli-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.onb-cli-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  gap: 12px;
+}
+
+.onb-cli-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.onb-cli-icon {
+  font-size: 20px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.onb-cli-details h4 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text);
+}
+
+.onb-cli-details p {
+  font-size: 11px;
+  margin: 2px 0 0 0;
+  color: var(--text-muted);
+}
+
+.onb-cli-status-badges {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.onb-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.onb-badge-green {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.onb-badge-orange {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.onb-badge-gray {
+  background: rgba(107, 114, 128, 0.15);
+  color: #9ca3af;
+  border: 1px solid rgba(107, 114, 128, 0.25);
+}
+
+.onb-setup-action {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.onb-setup-action:hover {
+  background: rgba(255,255,255,0.05);
+  text-decoration: underline;
+}
+
+.onb-cli-footer-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 14px;
+  line-height: 1.4;
+}
+
+/* First Session Step */
+.onb-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.onb-form-group label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.onb-select {
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  cursor: pointer;
+}
+
+.onb-select:focus {
+  border-color: var(--accent);
+}
+
+.onb-prompts-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+@media(min-width: 480px) {
+  .onb-prompts-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.onb-prompt-chip {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 12px;
+  text-align: left;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.onb-prompt-chip:hover {
+  border-color: rgba(168, 85, 247, 0.4);
+  color: var(--text);
+  background: rgba(255,255,255,0.02);
+}
+
+.onb-prompt-chip.active {
+  border-color: var(--accent);
+  background: rgba(88, 166, 255, 0.1);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.onb-textarea {
+  min-height: 80px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  resize: vertical;
+  outline: none;
+  font-family: inherit;
+  margin-top: 6px;
+  animation: onb-fade-in 0.2s ease-out;
+}
+
+.onb-textarea:focus {
+  border-color: var(--accent);
+}
+
+/* Footer & Navigation */
+.onb-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+}
+
+.onb-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.onb-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  cursor: pointer;
+  transition: background-color 0.2s, transform 0.2s;
+}
+
+.onb-dot.active {
+  background: var(--accent);
+  transform: scale(1.2);
+}
+
+.onb-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Onboarding arrow helper */
+.onb-arrow-highlight {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  animation: onb-arrow-float 2s infinite ease-in-out;
+}
+
+@keyframes onb-arrow-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+.onb-arrow-bubble {
+  position: relative;
+  background: #1a0d2e;
+  border: 2px solid #b266ff;
+  border-radius: 12px;
+  padding: 16px;
+  width: 280px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  pointer-events: auto;
+}
+
+.onb-arrow-tip {
+  position: absolute;
+  left: -10px;
+  top: 30px;
+  width: 0;
+  height: 0;
+  border-top: 10px solid transparent;
+  border-bottom: 10px solid transparent;
+  border-right: 10px solid #b266ff;
+}
+
+.onb-arrow-tip::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: -8px;
+  width: 0;
+  height: 0;
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  border-right: 8px solid #1a0d2e;
+}
+
+.onb-arrow-content h4 {
+  margin: 0 0 6px 0;
+  color: #e9d5ff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.onb-arrow-content p {
+  margin: 0 0 10px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.onb-arrow-close-btn {
+  background: #5e2ea8;
+  color: #fff;
+  border: 1px solid #b266ff;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.onb-arrow-close-btn:hover {
+  background: #733bb8;
+}

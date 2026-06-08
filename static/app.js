@@ -27187,6 +27187,25 @@
     return String(value || '').trim().toLowerCase();
   }
 
+  // A worker may claim with EITHER its real session UUID or its made-up CCC
+  // name (e.g. "BYM UX-fixes-queue"). To let the badge match either, reduce
+  // both `claimed_by` and each candidate row identity to the same key:
+  // lowercased, with runs of space/dash/underscore collapsed to one space.
+  function _uxFixesIdentityKey(value) {
+    return String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+  }
+
+  // Every identity a conversation row can be matched on (UUID + names).
+  function _uxFixesRowIdentityKeys(c) {
+    if (!c) return [];
+    const keys = [];
+    for (const v of [c.session_id, c.id, c.display_name, c.ai_title]) {
+      const k = _uxFixesIdentityKey(v);
+      if (k && keys.indexOf(k) === -1) keys.push(k);
+    }
+    return keys;
+  }
+
   // CCC-29: the chip read the global cross-project row `number`, so a session
   // working CCC-29 showed "(12/31)" — numbers that match neither the ref the
   // user sees (CCC-29) nor "which ticket of how many". Scope to the
@@ -27206,16 +27225,34 @@
     const t = Date.parse((item && item.claimed_at) || '');
     return Number.isFinite(t) ? t : 0;
   }
+  function _uxFixesClosedAtMs(item) {
+    const t = Date.parse((item && item.closed_at) || '');
+    return Number.isFinite(t) ? t : 0;
+  }
   function _setUxFixesQueueMeta(items) {
     const byClaimedSession = new Map();
     const projectMaxSeq = new Map();
+    // Per project, the most recently CLOSED ticket and who closed it. Drives
+    // the "last fix" chip so an idle worker row still shows what it finished.
+    const projectLastClosed = new Map();
     for (const item of (Array.isArray(items) ? items : [])) {
       const seq = _uxFixesSeq(item);
       if (!seq) continue;
       const project = String((item && item.project) || '').trim() || '?';
       projectMaxSeq.set(project, Math.max(projectMaxSeq.get(project) || 0, seq));
-      if ((item.status || '') !== 'in_progress') continue;
-      const sid = _normalizeUxFixesSessionId(item.claimed_by);
+      const status = item.status || '';
+      if (status === 'closed') {
+        const csid = _uxFixesIdentityKey(item.claimed_by);
+        if (!csid) continue; // unclaimed close (e.g. a manual probe) → no row to credit
+        const closedAt = _uxFixesClosedAtMs(item);
+        const prevC = projectLastClosed.get(project);
+        if (!prevC || closedAt > prevC.closedAt) {
+          projectLastClosed.set(project, { seq, project, ref: item.ref || '', closedAt, sid: csid });
+        }
+        continue;
+      }
+      if (status !== 'in_progress') continue;
+      const sid = _uxFixesIdentityKey(item.claimed_by);
       if (!sid) continue;
       // "Current" = the ticket this session most RECENTLY claimed, not the
       // highest seq — otherwise a freshly-claimed low-seq fix loses to a stale
@@ -27226,32 +27263,64 @@
         byClaimedSession.set(sid, { seq, project, ref: item.ref || '', lane: item.lane || 'normal', claimedAt });
       }
     }
-    uxFixesQueueMeta = { projectMaxSeq, byClaimedSession };
+    // Credit each project's latest close to the session that closed it (one
+    // row per project). A session that's the latest closer in two projects
+    // keeps its most recent close.
+    const lastFixBySession = new Map();
+    for (const rec of projectLastClosed.values()) {
+      const prev = lastFixBySession.get(rec.sid);
+      if (!prev || rec.closedAt > prev.closedAt) lastFixBySession.set(rec.sid, rec);
+    }
+    uxFixesQueueMeta = { projectMaxSeq, byClaimedSession, lastFixBySession };
     _uxFixesQueueMetaLoadedAt = Date.now();
     return uxFixesQueueMeta;
   }
 
   function _uxFixesQueueProgressForRow(c) {
-    const sid = _normalizeUxFixesSessionId(c && (c.session_id || c.id));
-    if (!sid || !uxFixesQueueMeta || !uxFixesQueueMeta.byClaimedSession) return null;
-    const current = uxFixesQueueMeta.byClaimedSession.get(sid);
-    if (!current) return null;
-    // Stale claim → the session is between tickets / the claim is parked.
-    // Don't render a frozen "(10/33)"; just drop the chip until a fresh claim.
-    if (current.claimedAt && (Date.now() - current.claimedAt) > UX_FIXES_ACTIVE_CLAIM_MS) return null;
-    const total = Number((uxFixesQueueMeta.projectMaxSeq || new Map()).get(current.project) || 0);
-    if (!Number.isFinite(total) || total <= 0) return null;
-    return { current: current.seq, total, lane: current.lane || 'normal', project: current.project, ref: current.ref };
+    if (!uxFixesQueueMeta) return null;
+    // Match the row on any of its identities (UUID or name) so a worker that
+    // claimed with its made-up name still lights up its row, not just one that
+    // claimed with its raw session id.
+    const keys = _uxFixesRowIdentityKeys(c);
+    if (!keys.length) return null;
+    const projectMaxSeq = uxFixesQueueMeta.projectMaxSeq || new Map();
+    const byClaimed = uxFixesQueueMeta.byClaimedSession || new Map();
+    // 1) A FRESH in-progress claim wins — "currently working".
+    for (const key of keys) {
+      const cur = byClaimed.get(key);
+      if (!cur) continue;
+      // Stale claim → parked/between tickets. Fall through to the last-fix chip
+      // instead of freezing a "(10/33)".
+      if (cur.claimedAt && (Date.now() - cur.claimedAt) > UX_FIXES_ACTIVE_CLAIM_MS) break;
+      const total = Number(projectMaxSeq.get(cur.project) || 0);
+      if (!Number.isFinite(total) || total <= 0) break;
+      return { kind: 'working', current: cur.seq, total, lane: cur.lane || 'normal', project: cur.project, ref: cur.ref };
+    }
+    // 2) Otherwise, credit the session that closed this project's LATEST ticket
+    //    — so an idle worker row still shows the last fix it shipped.
+    const lastFix = uxFixesQueueMeta.lastFixBySession || new Map();
+    for (const key of keys) {
+      const done = lastFix.get(key);
+      if (!done) continue;
+      const total = Number(projectMaxSeq.get(done.project) || 0);
+      if (!Number.isFinite(total) || total <= 0) break;
+      return { kind: 'done', current: done.seq, total, lane: 'normal', project: done.project, ref: done.ref };
+    }
+    return null;
   }
 
   function _uxFixesQueueProgressHtml(c) {
     const progress = _uxFixesQueueProgressForRow(c);
     if (!progress) return '';
     const proj = progress.project && progress.project !== '?' ? progress.project + ' ' : '';
+    const count = '(' + escapeHtml(progress.current) + '/' + escapeHtml(progress.total) + ')';
+    if (progress.kind === 'done') {
+      const title = 'Last fixed ' + proj + 'fix #' + progress.current + ' of ' + progress.total + ' (idle)';
+      return '<span class="conv-ux-fix-progress conv-ux-fix-done" title="' + escapeAttr(title) + '">'
+        + '✓ ' + count + '</span>';
+    }
     const title = 'Working ' + proj + 'fix #' + progress.current + ' of ' + progress.total + ' queued';
-    return '<span class="conv-ux-fix-progress" title="' + escapeAttr(title) + '">'
-      + '(' + escapeHtml(progress.current) + '/' + escapeHtml(progress.total) + ')'
-      + '</span>';
+    return '<span class="conv-ux-fix-progress" title="' + escapeAttr(title) + '">' + count + '</span>';
   }
 
   async function refreshUxFixesQueueMeta(opts = {}) {
@@ -33309,5 +33378,326 @@
     setInterval(_gated('vercelDeploy', pollVercelDeploy), 15000);
     pollLocalhost();
     setInterval(_gated('localhost', pollLocalhost), 15000);
+  }
+
+  // ── Onboarding premium wizard ──────────────────────────────────────
+  let currentOnbStep = 0;
+  let onbCliStatus = null;
+
+  async function checkOnboarding() {
+    try {
+      const res = await fetch('/api/onboarding/status');
+      const data = await res.json();
+      if (!data.completed) {
+        showOnboarding(data);
+      }
+    } catch (e) {
+      console.error('Failed to check onboarding status:', e);
+    }
+  }
+
+  function showOnboarding(statusData) {
+    const modal = document.getElementById('onboardingModal');
+    if (!modal) return;
+
+    modal.classList.add('open');
+    onbCliStatus = statusData.clis;
+    currentOnbStep = 0;
+    showOnbStep(0);
+    
+    // Bind event listeners if they haven't been bound yet
+    setupOnboardingEvents();
+  }
+
+  function showOnbStep(stepIndex) {
+    currentOnbStep = stepIndex;
+    const steps = document.querySelectorAll('.onb-step');
+    steps.forEach((step, idx) => {
+      if (idx === stepIndex) {
+        step.classList.add('onb-step-active');
+      } else {
+        step.classList.remove('onb-step-active');
+      }
+    });
+
+    const dots = document.querySelectorAll('.onb-dot');
+    dots.forEach((dot, idx) => {
+      if (idx === stepIndex) {
+        dot.classList.add('active');
+      } else {
+        dot.classList.remove('active');
+      }
+    });
+
+    const backBtn = document.getElementById('onbBackBtn');
+    const nextBtn = document.getElementById('onbNextBtn');
+    
+    if (backBtn) {
+      backBtn.style.visibility = stepIndex === 0 ? 'hidden' : 'visible';
+    }
+
+    if (nextBtn) {
+      if (stepIndex === 2) {
+        nextBtn.textContent = 'Launch First Session';
+      } else {
+        nextBtn.textContent = 'Continue';
+      }
+    }
+
+    if (stepIndex === 1) {
+      renderCliChecker();
+    } else if (stepIndex === 2) {
+      populateOnbFirstSessionForm();
+    }
+  }
+
+  function renderCliChecker() {
+    const listContainer = document.getElementById('onbCliList');
+    if (!listContainer || !onbCliStatus) return;
+
+    listContainer.innerHTML = '';
+    
+    const engines = ['claude', 'antigravity', 'cursor', 'codex'];
+    engines.forEach(key => {
+      const cli = onbCliStatus[key];
+      if (!cli) return;
+
+      const item = document.createElement('div');
+      item.className = 'onb-cli-item';
+
+      let statusBadge = '';
+      if (cli.available && cli.logged_in) {
+        statusBadge = `<span class="onb-badge onb-badge-green">✓ Installed &amp; Active</span>`;
+      } else if (cli.available) {
+        statusBadge = `<span class="onb-badge onb-badge-orange">⚠ Installed, Needs Login</span>`;
+      } else {
+        statusBadge = `<span class="onb-badge onb-badge-gray">✗ Not Installed</span>`;
+      }
+
+      let actionHtml = '';
+      if (!cli.available) {
+        actionHtml = `<a href="${cli.signup_url}" target="_blank" class="onb-setup-action">🌐 Setup Guide &rarr;</a>`;
+      } else if (!cli.logged_in) {
+        actionHtml = `<button type="button" class="onb-setup-action" onclick="alert('Open your terminal and run: ${cli.login_instruction}')">🔑 Log In Command</button>`;
+      } else if (cli.email) {
+        actionHtml = `<span style="font-size: 12px; color: var(--text-muted);">${cli.email}</span>`;
+      }
+
+      // Add a special "Antigravity has free tier" note if Antigravity is not installed or logged in
+      let noteHtml = '';
+      if (key === 'antigravity' && (!cli.available || !cli.logged_in)) {
+        noteHtml = `<div style="font-size: 11px; color: var(--accent); margin-top: 4px; font-weight: 500;">💡 Antigravity has a free tier! Try it out.</div>`;
+      }
+
+      item.innerHTML = `
+        <div class="onb-cli-info">
+          <div class="onb-cli-icon">${key === 'claude' ? '🤖' : key === 'antigravity' ? '🌌' : key === 'cursor' ? '🖱️' : '💻'}</div>
+          <div class="onb-cli-details">
+            <h4>${cli.name}</h4>
+            <p style="font-family: monospace; font-size: 11px;">command: ${cli.command}</p>
+            ${noteHtml}
+          </div>
+        </div>
+        <div class="onb-cli-status-badges">
+          ${statusBadge}
+          ${actionHtml}
+        </div>
+      `;
+      listContainer.appendChild(item);
+    });
+
+    // Add re-detect button
+    const detectRow = document.createElement('div');
+    detectRow.style.display = 'flex';
+    detectRow.style.justifyContent = 'center';
+    detectRow.style.marginTop = '10px';
+    
+    const detectBtn = document.createElement('button');
+    detectBtn.type = 'button';
+    detectBtn.className = 'upd-btn';
+    detectBtn.style.fontSize = '12px';
+    detectBtn.textContent = '🔄 Re-detect status';
+    detectBtn.onclick = async () => {
+      detectBtn.textContent = 'Scanning...';
+      try {
+        const res = await fetch('/api/onboarding/status');
+        const data = await res.json();
+        onbCliStatus = data.clis;
+        renderCliChecker();
+      } catch (e) {
+        console.error('Failed to re-detect CLIs:', e);
+      } finally {
+        detectBtn.textContent = '🔄 Re-detect status';
+      }
+    };
+    detectRow.appendChild(detectBtn);
+    listContainer.appendChild(detectRow);
+  }
+
+  function populateOnbFirstSessionForm() {
+    const select = document.getElementById('onbEngineSelect');
+    if (!select || !onbCliStatus) return;
+
+    select.innerHTML = '';
+    
+    const engines = ['claude', 'antigravity', 'cursor', 'codex'];
+    let addedCount = 0;
+    
+    engines.forEach(key => {
+      const cli = onbCliStatus[key];
+      if (!cli) return;
+
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = cli.name + (cli.available && cli.logged_in ? ' (Active)' : ' (Not configured)');
+      select.appendChild(opt);
+      
+      if (cli.available && cli.logged_in && addedCount === 0) {
+        opt.selected = true;
+        addedCount++;
+      }
+    });
+
+    // If no active engines, default to Claude
+    if (addedCount === 0 && select.options.length > 0) {
+      select.options[0].selected = true;
+    }
+  }
+
+  let onboardingEventsBound = false;
+  function setupOnboardingEvents() {
+    if (onboardingEventsBound) return;
+    onboardingEventsBound = true;
+
+    const backBtn = document.getElementById('onbBackBtn');
+    const nextBtn = document.getElementById('onbNextBtn');
+    const skipBtn = document.getElementById('onbSkipBtn');
+    const closeBtn = document.getElementById('onboardingCloseBtn');
+
+    if (backBtn) {
+      backBtn.onclick = () => {
+        if (currentOnbStep > 0) {
+          showOnbStep(currentOnbStep - 1);
+        }
+      };
+    }
+
+    if (nextBtn) {
+      nextBtn.onclick = async () => {
+        if (currentOnbStep < 2) {
+          showOnbStep(currentOnbStep + 1);
+        } else {
+          // Launch session!
+          const select = document.getElementById('onbEngineSelect');
+          const chosenEngine = select ? select.value : 'claude';
+          
+          let chosenPrompt = 'Explain what this repository does and list its main files.';
+          const activeChip = document.querySelector('.onb-prompt-chip.active');
+          if (activeChip) {
+            const dataPrompt = activeChip.getAttribute('data-prompt');
+            if (dataPrompt === 'custom') {
+              const customInput = document.getElementById('onbCustomPromptInput');
+              if (customInput && customInput.value.trim()) {
+                chosenPrompt = customInput.value.trim();
+              }
+            } else if (dataPrompt) {
+              chosenPrompt = dataPrompt;
+            }
+          }
+
+          // Complete onboarding in backend
+          try {
+            await fetch('/api/onboarding/complete', { method: 'POST' });
+          } catch (e) {
+            console.error('Failed to complete onboarding:', e);
+          }
+
+          // Set the engine dropdown and trigger the spawn
+          if (typeof setSpawnEngine === 'function') {
+            setSpawnEngine(chosenEngine);
+          }
+          
+          const modal = document.getElementById('onboardingModal');
+          if (modal) modal.classList.remove('open');
+
+          if (typeof spawnFromInlineInput === 'function') {
+            await spawnFromInlineInput(chosenPrompt);
+          }
+
+          // Show arrow pointing to active conversations list
+          setTimeout(showOnboardingArrow, 800);
+        }
+      };
+    }
+
+    const dismissOnboarding = async () => {
+      const modal = document.getElementById('onboardingModal');
+      if (modal) modal.classList.remove('open');
+      try {
+        await fetch('/api/onboarding/complete', { method: 'POST' });
+      } catch (e) {
+        console.error('Failed to complete onboarding:', e);
+      }
+    };
+
+    if (skipBtn) skipBtn.onclick = dismissOnboarding;
+    if (closeBtn) closeBtn.onclick = dismissOnboarding;
+
+    // Dots navigation
+    const dots = document.querySelectorAll('.onb-dot');
+    dots.forEach(dot => {
+      dot.onclick = () => {
+        const step = parseInt(dot.getAttribute('data-step') || '0', 10);
+        showOnbStep(step);
+      };
+    });
+
+    // Prompt chips
+    const chips = document.querySelectorAll('.onb-prompt-chip');
+    const customTextarea = document.getElementById('onbCustomPromptInput');
+    chips.forEach(chip => {
+      chip.onclick = () => {
+        chips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        
+        if (chip.getAttribute('data-prompt') === 'custom') {
+          if (customTextarea) {
+            customTextarea.style.display = 'block';
+            customTextarea.focus();
+          }
+        } else {
+          if (customTextarea) customTextarea.style.display = 'none';
+        }
+      };
+    });
+  }
+
+  function showOnboardingArrow() {
+    const target = document.getElementById('convListPanel') || document.getElementById('convList');
+    const arrow = document.getElementById('onbArrowHighlight');
+    if (!target || !arrow) return;
+    
+    const rect = target.getBoundingClientRect();
+    arrow.style.left = (rect.right + 15) + 'px';
+    arrow.style.top = (rect.top + 80) + 'px';
+    arrow.removeAttribute('hidden');
+    
+    // Auto-hide after 12 seconds
+    const autoHide = setTimeout(() => {
+      arrow.setAttribute('hidden', '');
+    }, 12000);
+    
+    const closeBtn = document.getElementById('onbArrowClose');
+    if (closeBtn) {
+      closeBtn.onclick = () => {
+        clearTimeout(autoHide);
+        arrow.setAttribute('hidden', '');
+      };
+    }
+  }
+
+  // Trigger check on load
+  if (!CONV_POPOUT_MODE) {
+    setTimeout(checkOnboarding, 1000);
   }
 })();

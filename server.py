@@ -34332,6 +34332,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(e.as_payload(), e.status)
         elif path == "/api/config":
             self.send_json(get_app_config())
+        elif path == "/api/onboarding/status":
+            self.send_json(_get_onboarding_status())
         elif path == "/api/flow/index":
             self.send_json(_flow_index_payload())
         elif path == "/api/flow/node":
@@ -35805,6 +35807,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # and auto_verify_closed_issues can fire immediately.
             _bust_issue_state_cache()
             self.send_json({"ok": True})
+            return
+        if path == "/api/onboarding/complete":
+            try:
+                _complete_onboarding()
+                self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
             return
         if path == "/api/history/setup" or path == "/api/history/ingest":
             # First-click OOBE: kick a background ingest of all known JSONL
@@ -39141,6 +39150,173 @@ def get_app_config():
     _app_config_cache = config
     _app_config_cache_ts = time.time()
     return config
+
+
+def _get_onboarding_status():
+    """Return the installation and login status for Claude, Codex, Antigravity, and Cursor CLIs,
+    as well as whether onboarding has been completed.
+    """
+    import json
+    import os
+    from pathlib import Path
+    
+    # 1. Check if onboarding is completed
+    onboarding_file = COMMAND_CENTER_STATE_DIR / "onboarding.json"
+    completed = False
+    completed_at = None
+    if onboarding_file.is_file():
+        try:
+            with open(onboarding_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                completed = bool(data.get("completed", False))
+                completed_at = data.get("completed_at")
+        except Exception:
+            pass
+
+    # 2. Claude Code Status
+    claude_info = _resolve_claude_bin()
+    claude_available = claude_info.get("available", False)
+    claude_bin = claude_info.get("bin")
+    claude_logged_in = False
+    claude_email = None
+    
+    claude_config_file = Path.home() / ".claude.json"
+    if claude_config_file.is_file():
+        try:
+            with open(claude_config_file, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                oauth = config_data.get("oauthAccount")
+                if oauth and isinstance(oauth, dict) and oauth.get("emailAddress"):
+                    claude_logged_in = True
+                    claude_email = oauth.get("emailAddress")
+        except Exception:
+            pass
+
+    # 3. Codex Status
+    codex_info = _resolve_codex_bin()
+    codex_available = codex_info.get("available", False)
+    codex_bin = codex_info.get("bin")
+    codex_logged_in = False
+    
+    codex_auth_file = Path.home() / ".codex" / "auth.json"
+    if codex_auth_file.is_file():
+        try:
+            with open(codex_auth_file, "r", encoding="utf-8") as f:
+                auth_data = json.load(f)
+                if auth_data.get("OPENAI_API_KEY") or auth_data.get("tokens"):
+                    codex_logged_in = True
+        except Exception:
+            pass
+
+    # 4. Antigravity Status
+    antigravity_info = _resolve_antigravity_bin()
+    antigravity_available = antigravity_info.get("available", False)
+    antigravity_bin = antigravity_info.get("bin")
+    antigravity_logged_in = False
+    antigravity_email = None
+    
+    # Check google_accounts.json
+    gemini_accounts_file = Path.home() / ".gemini" / "google_accounts.json"
+    if gemini_accounts_file.is_file():
+        try:
+            with open(gemini_accounts_file, "r", encoding="utf-8") as f:
+                accounts_data = json.load(f)
+                active = accounts_data.get("active")
+                if active and isinstance(active, str):
+                    antigravity_logged_in = True
+                    antigravity_email = active
+        except Exception:
+            pass
+    # If not found via google_accounts.json, check oauth_creds.json
+    if not antigravity_logged_in:
+        gemini_oauth_file = Path.home() / ".gemini" / "oauth_creds.json"
+        if gemini_oauth_file.is_file():
+            antigravity_logged_in = True
+
+    # 5. Cursor Status
+    cursor_info = _resolve_cursor_bin()
+    cursor_available = cursor_info.get("available", False)
+    cursor_bin = cursor_info.get("bin")
+    cursor_logged_in = False
+    cursor_email = None
+    
+    cursor_config_file = Path.home() / ".cursor" / "cli-config.json"
+    if cursor_config_file.is_file():
+        try:
+            with open(cursor_config_file, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                auth_info = config_data.get("authInfo")
+                if auth_info and isinstance(auth_info, dict) and (auth_info.get("email") or auth_info.get("authId")):
+                    cursor_logged_in = True
+                    cursor_email = auth_info.get("email")
+        except Exception:
+            pass
+
+    return {
+        "completed": completed,
+        "completed_at": completed_at,
+        "clis": {
+            "claude": {
+                "name": "Claude Code",
+                "command": "claude",
+                "available": claude_available,
+                "bin_path": claude_bin,
+                "logged_in": claude_logged_in,
+                "email": claude_email,
+                "signup_url": "https://docs.claude.com/en/docs/claude-code",
+                "install_instruction": "npm install -g @anthropic-ai/claude-code",
+                "login_instruction": "claude"
+            },
+            "antigravity": {
+                "name": "Antigravity CLI",
+                "command": "agy",
+                "available": antigravity_available,
+                "bin_path": antigravity_bin,
+                "logged_in": antigravity_logged_in,
+                "email": antigravity_email,
+                "signup_url": "https://antigravity.google",
+                "install_instruction": "Install from https://antigravity.google",
+                "login_instruction": "agy"
+            },
+            "cursor": {
+                "name": "Cursor Agent",
+                "command": "cursor-agent",
+                "available": cursor_available,
+                "bin_path": cursor_bin,
+                "logged_in": cursor_logged_in,
+                "email": cursor_email,
+                "signup_url": "https://cursor.com",
+                "install_instruction": "Install via Cursor App or npm install -g @cursor/agent",
+                "login_instruction": "cursor-agent login"
+            },
+            "codex": {
+                "name": "Codex CLI",
+                "command": "codex",
+                "available": codex_available,
+                "bin_path": codex_bin,
+                "logged_in": codex_logged_in,
+                "email": None,
+                "signup_url": "https://openai.com",
+                "install_instruction": "npm install -g @openai/codex",
+                "login_instruction": "codex login"
+            }
+        }
+    }
+
+
+def _complete_onboarding():
+    """Mark onboarding as completed by writing to onboarding.json in state dir."""
+    import json
+    from datetime import datetime, timezone
+    COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    onboarding_file = COMMAND_CENTER_STATE_DIR / "onboarding.json"
+    data = {
+        "completed": True,
+        "completed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    }
+    with open(onboarding_file, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
 
 
 def migrate_state_dir():

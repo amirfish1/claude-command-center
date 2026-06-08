@@ -979,6 +979,118 @@
     </div>
   </div>
 
+  <!-- Onboarding Modal -->
+  <div id="onboardingModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
+    <div class="upd-backdrop" id="onboardingBackdrop"></div>
+    <div class="onb-dialog">
+      <button type="button" class="whats-new-close" id="onboardingCloseBtn" title="Skip onboarding" aria-label="Skip onboarding">&times;</button>
+      
+      <div class="onb-steps-container">
+        <!-- Step 1: Welcome -->
+        <div class="onb-step onb-step-active" id="onbStepWelcome">
+          <div class="onb-hero-glow"></div>
+          <div class="onb-welcome-icon">🚀</div>
+          <h2 class="onb-title" id="onboardingTitle">Welcome to Claude Command Center</h2>
+          <p class="onb-desc">
+            A unified agentic workflow cockpit. CCC connects to the terminal agents you already use, providing a high-performance visual cockpit for running tasks, viewing logs, managing subagents, and deploying code.
+          </p>
+          <div class="onb-features-grid">
+            <div class="onb-feature-card">
+              <span class="onb-feat-icon">⚡</span>
+              <div>
+                <h4>Multi-Engine Support</h4>
+                <p>Run sessions across Claude Code, Antigravity, Cursor, and Codex.</p>
+              </div>
+            </div>
+            <div class="onb-feature-card">
+              <span class="onb-feat-icon">🎯</span>
+              <div>
+                <h4>First-Class Dashboard</h4>
+                <p>Track active commands, stream logs, and manage agent focus states in real time.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 2: CLI Checker -->
+        <div class="onb-step" id="onbStepCliChecker">
+          <h2 class="onb-title">Detecting Agent CLI Tools</h2>
+          <p class="onb-desc">
+            Command Center runs sessions by driving your local CLI agents. Let's see which ones you have installed and signed in.
+          </p>
+          
+          <div class="onb-cli-list" id="onbCliList">
+            <div class="onb-cli-loading">Scanning local environment...</div>
+          </div>
+          
+          <div class="onb-cli-footer-note">
+            💡 <em>Need to sign up or install? Click the setup links above, run the command in your terminal, and click "Re-detect status".</em>
+          </div>
+        </div>
+
+        <!-- Step 3: First Session -->
+        <div class="onb-step" id="onbStepFirstSession">
+          <div class="onb-hero-glow"></div>
+          <h2 class="onb-title">Try Your First Session</h2>
+          <p class="onb-desc">
+            Ready to test? Select a CLI engine and a starter prompt to kick off a headless session in this workspace!
+          </p>
+          
+          <div class="onb-form-group">
+            <label for="onbEngineSelect">Select Engine</label>
+            <select id="onbEngineSelect" class="onb-select">
+              <!-- Populated dynamically -->
+            </select>
+          </div>
+          
+          <div class="onb-form-group" style="margin-top: 10px;">
+            <label>Choose a Starter Prompt</label>
+            <div class="onb-prompts-grid" id="onbPromptsGrid">
+              <button type="button" class="onb-prompt-chip active" data-prompt="Explain what this repository does and list its main files.">
+                📝 Explain repository structure
+              </button>
+              <button type="button" class="onb-prompt-chip" data-prompt="Scan this codebase and find potential bugs or issues.">
+                🔍 Scan for bugs
+              </button>
+              <button type="button" class="onb-prompt-chip" data-prompt="Write a brief smoke test for the main files in this workspace.">
+                🧪 Write a smoke test
+              </button>
+              <button type="button" class="onb-prompt-chip" data-prompt="custom">
+                ✍️ Write your own...
+              </button>
+            </div>
+            <textarea id="onbCustomPromptInput" class="onb-textarea" style="display:none;" placeholder="Enter what you'd like the agent to do..."></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="onb-footer">
+        <div class="onb-dots">
+          <span class="onb-dot active" data-step="0"></span>
+          <span class="onb-dot" data-step="1"></span>
+          <span class="onb-dot" data-step="2"></span>
+        </div>
+        <div class="onb-actions">
+          <button type="button" class="upd-btn" id="onbBackBtn" style="visibility:hidden; background:transparent;">Back</button>
+          <button type="button" class="upd-btn" id="onbSkipBtn" style="background:transparent;">Skip</button>
+          <button type="button" class="upd-btn upd-primary" id="onbNextBtn">Continue</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Arrow Highlight Overlay -->
+  <div id="onbArrowHighlight" class="onb-arrow-highlight" hidden>
+    <div class="onb-arrow-bubble">
+      <div class="onb-arrow-tip"></div>
+      <div class="onb-arrow-content">
+        <h4>🚀 Run Spawned!</h4>
+        <p>Your new session has started. Follow its live logs and status right here in the conversation list!</p>
+        <button type="button" id="onbArrowClose" class="onb-arrow-close-btn">Got it</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Bug-report modal. Opened from #bugReportLink. POSTs to
        /api/bug-report which shells out to `gh issue create` against
        amirfish1/claude-command-center. If gh is missing or fails, the
