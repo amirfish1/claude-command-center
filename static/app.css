@@ -5965,6 +5965,41 @@
   .ann-queue-btn {
     flex: 1 1 100%;
   }
+  /* Pre-submit preview for the UX-fixes queue (see annShowUxFixesPreview). */
+  .ann-ux-preview-modal {
+    position: fixed; inset: 0; z-index: 100000;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.55); padding: 20px;
+  }
+  .ann-ux-preview-card {
+    width: min(720px, 96vw); max-height: 90vh; overflow: auto;
+    display: flex; flex-direction: column; gap: 10px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  }
+  .ann-ux-preview-title { font: 700 14px var(--font-ui); color: var(--text); }
+  .ann-ux-preview-label { font: 600 11px var(--font-ui); color: var(--text-muted); }
+  .ann-ux-preview-shot { display: flex; flex-direction: column; gap: 6px; }
+  .ann-ux-preview-thumb {
+    max-width: 100%; max-height: 220px; align-self: flex-start;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  .ann-ux-ok { font: 600 12px var(--font-ui); color: var(--green); }
+  .ann-ux-warn {
+    font: 600 12px var(--font-ui); color: var(--orange);
+    line-height: 1.4;
+  }
+  .ann-ux-preview-text {
+    width: 100%; box-sizing: border-box; resize: vertical;
+    font: 12px var(--font-mono, ui-monospace, monospace);
+    color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+    white-space: pre-wrap;
+  }
+  .ann-ux-preview-actions {
+    display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;
+  }
   .ann-notes-dialog {
     width: min(760px, 94vw);
     max-height: min(720px, 88vh);

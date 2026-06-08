@@ -30744,6 +30744,66 @@
     return 'Fix the following UX issue based on this annotation:\n\n' + annContextForClipboard(ann);
   }
 
+  // Pre-submit review for "Add to UX fixes queue". Shows EXACTLY what the
+  // worker will receive (annUxFixesQueuePrompt), whether a screenshot is
+  // attached, and which fields were truncated when stored — plus a Copy
+  // button — so nothing is sent blind. Submit forwards to the queue; Cancel
+  // aborts (the annotation is already persisted, so nothing is lost).
+  function annShowUxFixesPreview(ann, onSubmit) {
+    const existing = document.getElementById('annUxPreviewModal');
+    if (existing) existing.remove();
+    const promptText = annUxFixesQueuePrompt(ann);
+    const el = (ann && ann.element) || {};
+    // Limits annContextForClipboard applies when building the stored text.
+    const trunc = [];
+    if ((ann.note || '').length > 500) trunc.push('note → first 500 chars');
+    if ((el.selector || '').length > 200) trunc.push('selector → 200');
+    if ((el.text || '').length > 160) trunc.push('element text → 160');
+    if ((ann.url || '').length > 240) trunc.push('URL → 240');
+    const hasShot = !!(ann && ann.screenshot_path);
+    const shotSrc = hasShot ? ('/api/pasted-image?path=' + encodeURIComponent(ann.screenshot_path)) : '';
+    const modal = document.createElement('div');
+    modal.id = 'annUxPreviewModal';
+    modal.className = 'ann-ux-preview-modal';
+    modal.innerHTML =
+      '<div class="ann-ux-preview-card">' +
+        '<div class="ann-ux-preview-title">Review before adding to UX fixes queue</div>' +
+        '<div class="ann-ux-preview-shot">' +
+          (hasShot
+            ? '<span class="ann-ux-ok">✓ Screenshot attached</span>'
+              + '<a href="' + shotSrc + '" target="_blank" rel="noopener">'
+              + '<img class="ann-ux-preview-thumb" src="' + shotSrc + '" alt="annotation screenshot"></a>'
+            : '<span class="ann-ux-warn">⚠ No screenshot. Cancel, then use “Allow screenshot” / the “Screen” button and re-annotate so the worker can see it.</span>') +
+        '</div>' +
+        (trunc.length
+          ? '<div class="ann-ux-warn">⚠ Stored truncated: ' + escapeHtml(trunc.join(', ')) + '</div>'
+          : '') +
+        '<div class="ann-ux-preview-label">Exactly what the worker receives:</div>' +
+        '<textarea class="ann-ux-preview-text" readonly rows="14"></textarea>' +
+        '<div class="ann-ux-preview-actions">' +
+          '<button type="button" class="ann-btn" data-ux-copy>Copy</button>' +
+          '<button type="button" class="ann-btn" data-ux-cancel>Cancel</button>' +
+          '<button type="button" class="ann-btn ann-primary" data-ux-submit>Submit to queue</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    const textArea = modal.querySelector('.ann-ux-preview-text');
+    textArea.value = promptText;
+    const close = () => { modal.remove(); document.removeEventListener('keydown', onKey, true); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    document.addEventListener('keydown', onKey, true);
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    modal.querySelector('[data-ux-copy]').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(promptText); showOpToast('Annotation copied', 'success'); }
+      catch (_) { try { textArea.select(); document.execCommand('copy'); } catch (e) {} }
+    });
+    modal.querySelector('[data-ux-cancel]').addEventListener('click', close);
+    modal.querySelector('[data-ux-submit]').addEventListener('click', () => {
+      close();
+      if (typeof onSubmit === 'function') onSubmit();
+    });
+  }
+
   async function annOpenUxFixesQueue(ann, closeFn, _errEl) {
     if (!ann) return;
     // Close the editor up front — the user clicked the button and
@@ -31001,7 +31061,12 @@
     if (uxQueueBtn) {
       uxQueueBtn.addEventListener('click', async () => {
         const ann = await persistAnnotation('Saving…');
-        if (ann) annOpenUxFixesQueue(ann, annStop, errEl);
+        if (!ann) return;
+        // Show a pre-submit preview (what's stored + screenshot + truncation +
+        // copy) instead of firing straight at the queue. The annotation is
+        // already persisted; the overlay can close, the preview is its own modal.
+        annStop();
+        annShowUxFixesPreview(ann, () => annOpenUxFixesQueue(ann, null, errEl));
       });
     }
     saveBtn.addEventListener('click', save);
