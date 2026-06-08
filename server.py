@@ -27116,9 +27116,21 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
     if not status.get("live") or not has_tty:
         spawn = _find_live_spawn_entry_for_session(session_id)
         if spawn is not None:
+            active_child = _spawn_entry_active_tool_child(spawn)
             if not _from_terminal_queue:
-                active_child = _spawn_entry_active_tool_child(spawn)
-                if _terminal_input_queue_has_pending(session_id) or active_child:
+                # Deliver mid-turn. A headless `claude -p` reading stream-json
+                # from its FIFO accepts a user message written WHILE a tool
+                # child is running — it buffers it and processes it at the next
+                # turn boundary, exactly like the TUI's queued messages
+                # (verified: a mid-tool stdin write neither blocks nor is lost,
+                # and claude picks it up). So do NOT proactively park input
+                # behind a busy turn the way the old `or active_child` gate did
+                # — that was the source of the "Queued — will send when the
+                # session finishes its current step" friction. Only queue when
+                # input is ALREADY queued, to preserve delivery order; the write
+                # below still falls back to the queue if the pipe genuinely
+                # rejects the message.
+                if _terminal_input_queue_has_pending(session_id):
                     queued_status = dict(status or {})
                     queued_status["status"] = "busy"
                     queued_status["pid"] = queued_status.get("pid") or spawn.get("pid")
