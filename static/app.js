@@ -2615,22 +2615,49 @@
   }
 
   let _optimisticAgentTimer = null;
+  // CCC-28: tick a live elapsed counter (1s, 2s, …) in the optimistic
+  // indicator's age slot so "Sending…/🧠 Thinking…" reads as actively
+  // running, not frozen. Counts from when the indicator first appeared.
+  let _optimisticAgentTick = null;
+  let _optimisticAgentStart = 0;
+  function _stopOptimisticAgeTicker() {
+    if (_optimisticAgentTick) { clearInterval(_optimisticAgentTick); _optimisticAgentTick = null; }
+    _optimisticAgentStart = 0;
+  }
+  function _optimisticAgeLabel(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return s + 's';
+    return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+  }
+  function _startOptimisticAgeTicker($view) {
+    if (_optimisticAgentTick) clearInterval(_optimisticAgentTick);
+    _optimisticAgentTick = setInterval(() => {
+      const el = $view && $view.querySelector('.conv-live-tool-inline.optimistic');
+      if (!el) { _stopOptimisticAgeTicker(); return; }
+      const age = el.querySelector('.cl-age');
+      if (age) age.textContent = _optimisticAgeLabel(Date.now() - _optimisticAgentStart);
+    }, 1000);
+  }
   function showOptimisticAgentIndicator($view) {
     if (!$view) return;
     let el = $view.querySelector('.conv-live-tool-inline.optimistic');
+    const fresh = !el;
     if (!el) {
       el = document.createElement('div');
       el.className = 'conv-live-tool-inline optimistic';
     }
     el.innerHTML = '<span class="cl-pulse"></span>'
       + '<span class="cl-tool">Sending&hellip;</span>'
-      + '<span class="cl-age">just now</span>';
+      + '<span class="cl-age">0s</span>';
     $view.appendChild(el);
+    if (fresh || !_optimisticAgentStart) _optimisticAgentStart = Date.now();
+    _startOptimisticAgeTicker($view);
     if (_optimisticAgentTimer) clearTimeout(_optimisticAgentTimer);
     _optimisticAgentTimer = setTimeout(() => {
       const stale = $view.querySelector('.conv-live-tool-inline.optimistic');
       if (stale) stale.remove();
       _optimisticAgentTimer = null;
+      _stopOptimisticAgeTicker();
     }, 60000);
   }
   function clearOptimisticAgentIndicator($view) {
@@ -2640,6 +2667,7 @@
       clearTimeout(_optimisticAgentTimer);
       _optimisticAgentTimer = null;
     }
+    _stopOptimisticAgeTicker();
   }
   // Tier 2 (live-thinking-and-input-echo doc): advance the optimistic agent
   // indicator from "Sending…" to "🧠 Thinking…" once the message is delivered
