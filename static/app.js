@@ -23796,7 +23796,7 @@
             html += '<div class="assistant-text" dir="auto">' + renderMarkdown(b.text) + '</div>';
             hasNonTool = true;
           } else if (b.kind === 'thinking') {
-            html += '<div class="thinking-block" style="display:none"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">Thinking</span><div class="t-body">' + escapeHtml(b.text) + '</div></div>';
+            html += '<div class="thinking-block"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">💭 Thinking</span><div class="t-body" style="display:none">' + escapeHtml(b.text) + '</div></div>';
             hasNonTool = true;
           }
         }

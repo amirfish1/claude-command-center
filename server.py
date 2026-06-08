@@ -14365,7 +14365,11 @@ def _parse_conversation_event(ev, line_num):
             elif btype == "thinking":
                 thinking = block.get("thinking", "").strip()
                 if thinking:
-                    preview = thinking[:300] + ("..." if len(thinking) > 300 else "")
+                    # Was a 300-char preview — too short now that the thinking
+                    # block is shown (collapsed/expandable) in the UI. Send a
+                    # generous slice so the expanded view is readable without
+                    # shipping unbounded reasoning on every turn.
+                    preview = thinking[:4000] + ("..." if len(thinking) > 4000 else "")
                     blocks.append({"kind": "thinking", "text": preview})
 
         if blocks:
