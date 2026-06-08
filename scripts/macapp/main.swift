@@ -68,7 +68,15 @@ func isLocalDashboardURL(_ url: URL) -> Bool {
     if scheme == "about" || scheme == "data" || scheme == "blob" { return true }
     if scheme != "http" && scheme != "https" { return false }
     let host = (url.host ?? "").lowercased()
-    return host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0"
+    let isLocalHost = host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0"
+    if !isLocalHost { return false }
+    // Only OUR dashboard port is the in-app dashboard. Other localhost ports
+    // (e.g. the Next.js dev server the "localhost" pill links to) are external
+    // sites — they must open in the browser, not spawn a duplicate in-app
+    // window (CCC-39). Default ports (no explicit :port) are never the CCC
+    // dashboard, which always runs on CCC_PORT.
+    let port = url.port ?? (scheme == "https" ? 443 : 80)
+    return port == CCC_PORT
 }
 
 func isConversationPopoutURL(_ url: URL) -> Bool {
