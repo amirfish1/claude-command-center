@@ -5423,6 +5423,42 @@
   // a toast that disappeared after 3 seconds). The banner mounts into
   // the active pane's conv view and clears when the compact-resume
   // user_text event lands (see renderConversationEvents below).
+  // Heartbeat for the compact banner. A static "compacting…" banner can't
+  // tell a live compact from a dead one (CCC-26: "actively poll … to really
+  // know there's work in progress"). The timer ticks elapsed once a second
+  // (visible proof the UI is alive) and, every few ticks, refetches the
+  // transcript so the resume boundary is picked up promptly instead of
+  // waiting on the slow background poll. After the usual window it flips to
+  // a calm "longer than usual" hint rather than spinning forever silently.
+  let _compactBannerTimer = null;
+  let _compactBannerStart = 0;
+  const _COMPACT_STALL_MS = 4 * 60 * 1000; // past the typical 1-3 min window
+  function _stopCompactBannerTimer() {
+    if (_compactBannerTimer) { clearInterval(_compactBannerTimer); _compactBannerTimer = null; }
+    _compactBannerStart = 0;
+  }
+  function _compactElapsedLabel(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    const m = Math.floor(s / 60);
+    return m + ':' + String(s % 60).padStart(2, '0');
+  }
+  function _tickCompactBanner(sid) {
+    const $view = typeof getConvView === 'function' ? getConvView() : document.getElementById('conversationsView');
+    const banner = $view && $view.querySelector('.compact-in-progress-banner');
+    if (!banner) { _stopCompactBannerTimer(); return; }
+    const elapsed = Date.now() - _compactBannerStart;
+    const elEl = banner.querySelector('.compact-banner-elapsed');
+    if (elEl) elEl.textContent = _compactElapsedLabel(elapsed);
+    if (elapsed >= _COMPACT_STALL_MS) banner.classList.add('is-slow');
+    // Active poll: every ~4s pull the transcript so the boundary (which
+    // tears this banner down) is caught quickly — only while this session
+    // is still the foreground one.
+    const ticks = Math.round(elapsed / 1000);
+    if (ticks > 0 && ticks % 4 === 0 && currentSession && currentSession.id === sid
+        && typeof fetchConversationEvents === 'function') {
+      try { fetchConversationEvents(typeof activePaneId === 'function' ? activePaneId() : undefined); } catch (e) {}
+    }
+  }
   function showCompactInProgressBanner(sid) {
     const $view = typeof getConvView === 'function' ? getConvView() : document.getElementById('conversationsView');
     if (!$view) return;
@@ -5435,6 +5471,10 @@
       + '<span class="compact-banner-text">'
       +   '<strong>Compacting conversation context…</strong>'
       +   ' Claude is summarizing the prior turns. This usually takes 1-3 minutes.'
+      +   ' <span class="compact-banner-heartbeat">CCC is polling for the new boundary'
+      +     ' · <span class="compact-banner-elapsed">0:00</span> elapsed</span>'
+      +   ' <span class="compact-banner-slow-note">Longer than usual — still polling. If the engine'
+      +     ' went idle, re-running <code>/compact</code> is safe.</span>'
       +   ' <em>The on-disk transcript will be rewritten — a snapshot of the pre-compact JSONL was saved to'
       +   ' <code>~/.claude/command-center/compact-backups/</code>.</em>'
       + '</span>';
@@ -5442,8 +5482,12 @@
     if (typeof scrollConversationToEnd === 'function') {
       scrollConversationToEnd($view);
     }
+    _stopCompactBannerTimer();
+    _compactBannerStart = Date.now();
+    _compactBannerTimer = setInterval(() => _tickCompactBanner(sid), 1000);
   }
   function clearCompactInProgressBanner(view) {
+    _stopCompactBannerTimer();
     const views = view ? [view] : (typeof conversationScrollViews === 'function'
       ? conversationScrollViews()
       : [document.getElementById('conversationsView')].filter(Boolean));

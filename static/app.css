@@ -4282,6 +4282,14 @@
     color: var(--text);
   }
   .compact-banner-text strong { color: var(--accent); margin-right: 4px; }
+  .compact-banner-heartbeat {
+    display: inline; color: color-mix(in srgb, var(--text) 70%, transparent);
+  }
+  .compact-banner-elapsed { font-variant-numeric: tabular-nums; }
+  /* Stall hint stays hidden until the banner has outrun the usual window. */
+  .compact-banner-slow-note { display: none; color: var(--text); }
+  .compact-in-progress-banner.is-slow .compact-banner-slow-note { display: inline; }
+  .compact-in-progress-banner.is-slow { border-style: solid; }
   .compact-banner-spinner {
     flex: 0 0 auto;
     width: 14px; height: 14px; border-radius: 50%;
