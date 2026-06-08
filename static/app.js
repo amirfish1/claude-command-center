@@ -27075,22 +27075,34 @@
     return String(value || '').trim().toLowerCase();
   }
 
+  // CCC-29: the chip read the global cross-project row `number`, so a session
+  // working CCC-29 showed "(12/31)" — numbers that match neither the ref the
+  // user sees (CCC-29) nor "which ticket of how many". Scope to the
+  // per-project `seq` (the number inside the ref) and that project's latest
+  // seq, so the chip reads in the same numbering as the refs: (29/29).
+  function _uxFixesSeq(item) {
+    const seq = Number(item && item.seq);
+    if (Number.isFinite(seq) && seq > 0) return seq;
+    const number = Number(item && item.number);
+    return Number.isFinite(number) && number > 0 ? number : 0;
+  }
   function _setUxFixesQueueMeta(items) {
     const byClaimedSession = new Map();
-    let total = 0;
+    const projectMaxSeq = new Map();
     for (const item of (Array.isArray(items) ? items : [])) {
-      const number = Number(item && item.number);
-      if (!Number.isFinite(number) || number <= 0) continue;
-      total = Math.max(total, number);
+      const seq = _uxFixesSeq(item);
+      if (!seq) continue;
+      const project = String((item && item.project) || '').trim() || '?';
+      projectMaxSeq.set(project, Math.max(projectMaxSeq.get(project) || 0, seq));
       if ((item.status || '') !== 'in_progress') continue;
       const sid = _normalizeUxFixesSessionId(item.claimed_by);
       if (!sid) continue;
       const prev = byClaimedSession.get(sid);
-      if (!prev || number > prev.number) {
-        byClaimedSession.set(sid, { number, lane: item.lane || 'normal' });
+      if (!prev || seq > prev.seq) {
+        byClaimedSession.set(sid, { seq, project, ref: item.ref || '', lane: item.lane || 'normal' });
       }
     }
-    uxFixesQueueMeta = { total, byClaimedSession };
+    uxFixesQueueMeta = { projectMaxSeq, byClaimedSession };
     _uxFixesQueueMetaLoadedAt = Date.now();
     return uxFixesQueueMeta;
   }
@@ -27099,15 +27111,17 @@
     const sid = _normalizeUxFixesSessionId(c && (c.session_id || c.id));
     if (!sid || !uxFixesQueueMeta || !uxFixesQueueMeta.byClaimedSession) return null;
     const current = uxFixesQueueMeta.byClaimedSession.get(sid);
-    const total = Number(uxFixesQueueMeta.total || 0);
-    if (!current || !Number.isFinite(total) || total <= 0) return null;
-    return { current: current.number, total, lane: current.lane || 'normal' };
+    if (!current) return null;
+    const total = Number((uxFixesQueueMeta.projectMaxSeq || new Map()).get(current.project) || 0);
+    if (!Number.isFinite(total) || total <= 0) return null;
+    return { current: current.seq, total, lane: current.lane || 'normal', project: current.project, ref: current.ref };
   }
 
   function _uxFixesQueueProgressHtml(c) {
     const progress = _uxFixesQueueProgressForRow(c);
     if (!progress) return '';
-    const title = 'Current UX fix #' + progress.current + '; latest queued fix #' + progress.total;
+    const proj = progress.project && progress.project !== '?' ? progress.project + ' ' : '';
+    const title = 'Working ' + proj + 'fix #' + progress.current + ' of ' + progress.total + ' queued';
     return '<span class="conv-ux-fix-progress" title="' + escapeAttr(title) + '">'
       + '(' + escapeHtml(progress.current) + '/' + escapeHtml(progress.total) + ')'
       + '</span>';
