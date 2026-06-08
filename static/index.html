@@ -715,11 +715,12 @@
                    the Esc button (mutually exclusive — Esc only appears for live
                    sessions, this only for `__new__`). updateInputBar() toggles
                    visibility. -->
-              <select id="convInputEngineSelect" class="engine-select" title="Engine that starts this new session — claude, codex, cursor, or antigravity" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
+              <select id="convInputEngineSelect" class="engine-select" title="Engine that starts this new session — claude, codex, cursor, antigravity, or kilo" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
                 <option value="claude">claude</option>
                 <option value="codex">codex</option>
                 <option value="cursor">cursor</option>
                 <option value="antigravity">antigravity</option>
+                <option value="kilo">kilo</option>
               </select>
               <select id="convInputModelSelect" class="model-select" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
                 <!-- Populated dynamically via app.js -->
@@ -799,11 +800,12 @@
         <input type="text" class="kpt-search" id="kptSearch" placeholder="Search sessions...">
         <button id="kptRefreshBtn" title="Refresh data" aria-label="Refresh data">&#8634;</button>
         <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
-        <select id="kptToolbarEngineSelect" title="Engine that starts the new session — claude, codex, cursor, or antigravity" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
+        <select id="kptToolbarEngineSelect" title="Engine that starts the new session — claude, codex, cursor, antigravity, or kilo" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
           <option value="claude">claude</option>
           <option value="codex">codex</option>
           <option value="cursor">cursor</option>
           <option value="antigravity">antigravity</option>
+          <option value="kilo">kilo</option>
         </select>
         <button id="kptRunBtn" title="Run new session" aria-label="Run new session">Run</button>
         <button id="kptListViewBtn" title="Switch to list view" aria-label="Switch to list view">&#9783;</button>
@@ -1201,6 +1203,7 @@
             <option value="codex">Codex</option>
             <option value="cursor">Cursor</option>
             <option value="antigravity">Antigravity</option>
+            <option value="kilo">Kilo</option>
           </select>
         </div>
         <div>

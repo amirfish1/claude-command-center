@@ -1583,10 +1583,10 @@ def _detect_session_engine_uncached(session_id):
     for s in _spawned_sessions:
         if s.get("session_id") == session_id or s.get("resumed_sid") == session_id:
             engine = s.get("engine")
-            if engine in ("claude", "codex", "gemini", "cursor", "antigravity"):
+            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo"):
                 return engine
     spawned = _spawn_registry_entry_for_session(session_id)
-    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity"):
+    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo"):
         return spawned.get("engine")
     if _is_codex_session(session_id):
         return "codex"
@@ -1596,6 +1596,8 @@ def _detect_session_engine_uncached(session_id):
         return "antigravity"
     if _is_gemini_session(session_id):
         return "gemini"
+    if _is_kilo_session(session_id):
+        return "kilo"
     return "claude"
 
 
@@ -2159,7 +2161,7 @@ def _spawn_repo_context(cwd=None, repo_path=None):
     return {"repo_path": resolved, "cwd": str(p)}
 
 
-_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity")
+_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo")
 _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "claude": "claude",
     "claude-code": "claude",
@@ -2173,6 +2175,9 @@ _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "antigravity": "antigravity",
     "agy": "antigravity",
     "gemini": "antigravity",
+    "kilo": "kilo",
+    "kilo-code": "kilo",
+    "kilo_code": "kilo",
 }
 
 
@@ -2201,6 +2206,8 @@ def _spawn_fallback_model_for_engine(engine):
         return os.environ.get("CCC_CURSOR_MODEL", "auto")
     if engine == "antigravity":
         return os.environ.get("CCC_ANTIGRAVITY_MODEL") or _antigravity_cli_configured_model()
+    if engine == "kilo":
+        return os.environ.get("CCC_KILO_MODEL", "stepfun/step-3.7-flash:free")
     return ""
 
 
@@ -2558,6 +2565,7 @@ def _archive_session_is_live(session_id):
         or _is_cursor_session(session_id)
         or _is_gemini_session(session_id)
         or _is_antigravity_session(session_id)
+        or _is_kilo_session(session_id)
     )
     if not is_non_claude_engine and SIDECAR_STATE_DIR.is_dir():
         try:
@@ -5693,6 +5701,8 @@ def enqueue_annotation_ux_fixes_queue(
         spawned = spawn_session_antigravity(text, name=queue_name, repo_path=repo_path)
     elif engine == "gemini":
         spawned = spawn_session_gemini(text, name=queue_name, repo_path=repo_path)
+    elif engine == "kilo":
+        spawned = spawn_session_kilo(text, name=queue_name, repo_path=repo_path)
     elif engine == "cursor":
         spawned = spawn_session_cursor(text, name=queue_name, repo_path=repo_path)
     else:
@@ -18364,6 +18374,42 @@ def _resolve_cursor_bin():
     }
 
 
+def _resolve_kilo_bin():
+    """Locate a usable Kilo Code CLI binary.
+
+    Priority order:
+      1. $CCC_KILO_BIN (env override) — if set and executable.
+      2. `shutil.which("kilo")` — picks up Homebrew / npm-global.
+
+    Returns a dict so the caller and the availability endpoint can share
+    one shape:
+      {available: True,  bin: "<abs path>", source: "env|path"}
+      {available: False, reason: "<human readable>", bin: None}
+    """
+    env_bin = os.environ.get("CCC_KILO_BIN")
+    if env_bin:
+        if os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+            return {"available": True, "bin": env_bin, "source": "env"}
+        return {
+            "available": False,
+            "bin": None,
+            "code": "kilo_unavailable",
+            "reason": f"CCC_KILO_BIN is set to {env_bin!r} but it isn't an executable file",
+        }
+    which_bin = shutil.which("kilo")
+    if which_bin:
+        return {"available": True, "bin": which_bin, "source": "path"}
+    return {
+        "available": False,
+        "bin": None,
+        "code": "kilo_unavailable",
+        "reason": (
+            "Kilo Code CLI not found. Install Kilo Code, "
+            "`npm i -g kilo-code`, or set CCC_KILO_BIN."
+        ),
+    }
+
+
 def _antigravity_command_words(resolved):
     words = [resolved["bin"]]
     raw_args = (os.environ.get("CCC_ANTIGRAVITY_ARGS") or "").strip()
@@ -21073,6 +21119,18 @@ def _is_antigravity_session(session_id):
         return True
     app_path = _antigravity_app_conversation_path(session_id)
     return bool(app_path and app_path.is_file())
+
+
+def _is_kilo_session(session_id):
+    """Check if session_id corresponds to a Kilo Code session."""
+    for s in _spawned_sessions:
+        if s.get("engine") == "kilo" and (
+            s.get("session_id") == session_id
+            or s.get("resumed_sid") == session_id
+            or s.get("name") == session_id
+        ):
+            return True
+    return False
 
 
 def _load_antigravity_transcript(session_id):
@@ -24152,6 +24210,69 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
     return _finalize_spawn_response(resp, entry, ctx)
+
+
+def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None):
+    """Spawn a headless Kilo Code CLI run and return tracking info."""
+    prompt = _strip_ccc_session_state_instruction(prompt)
+    resolved = _resolve_kilo_bin()
+    if not resolved["available"]:
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
+    spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
+    session_name = _slugify(name or prompt) or "unnamed"
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"spawn-kilo-{session_name}-{timestamp}.log"
+    model_to_use = _spawn_model_for_engine("kilo", model) or os.environ.get("CCC_KILO_MODEL", "stepfun/step-3.7-flash:free")
+    if model_to_use:
+        _set_session_model(log_filename[:-4], model_to_use, False)
+    log_dir = repo_log_dir(repo_for_logs)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
+    worktree_path = None
+    worktree_branch = None
+    if worktree:
+        try:
+            worktree_path, worktree_branch = _create_worktree_for_spawn(spawn_cwd, session_name)
+            spawn_cwd = worktree_path
+        except RuntimeError as e:
+            return {"ok": False, "error": f"worktree creation failed: {e}"}
+    cmd = [resolved["bin"], "run", "--auto"]
+    if model_to_use:
+        cmd.extend(["--model", model_to_use])
+    cmd.extend([prompt])
+    log_fh = open(log_path, "w")
+    if worktree_path:
+        _run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
+    try:
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
+            cwd=spawn_cwd, start_new_session=True,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log_fh.close()
+        return {"ok": False, "error": str(e), "code": "kilo_launch_failed", "via": "kilo-spawn"}
+    failure = _spawn_early_failure_payload(proc, log_path, log_fh, engine="kilo", via="kilo-spawn")
+    if failure:
+        return failure
+    entry = {
+        "pid": proc.pid, "name": session_name, "log": str(log_path),
+        "prompt": prompt[:200], "started": timestamp, "proc": proc,
+        "log_fh": log_fh, "fifo": None, "stdin_fd": None,
+        "engine": "kilo", "cwd": spawn_cwd, "repo_path": repo_for_logs,
+        "model": model_to_use or "",
+    }
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid, name=session_name, log_path=log_path, cwd=spawn_cwd,
+        spawned_at=timestamp, command_summary=prompt[:200],
+        fifo=None, engine="kilo", repo_path=repo_for_logs, model=model_to_use,
+    )
+    return _finalize_spawn_response(
+        {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "kilo-spawn"},
+        entry, ctx,
+    )
 
 
 _COLOR_PALETTE = [
@@ -34639,6 +34760,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             info["print_mode"] = "-p"
             info["resume"] = "Use /resume inside AGY CLI for manual TUI resume."
             self.send_json(info)
+        elif path == "/api/sessions/spawn-kilo/availability":
+            info = _resolve_kilo_bin()
+            info["model"] = os.environ.get("CCC_KILO_MODEL", "stepfun/step-3.7-flash:free")
+            self.send_json(info)
         elif path == "/api/loading-status":
             self.send_json(_session_load_snapshot())
         elif path == "/api/archive/loading-status":
@@ -36903,6 +37028,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             worktree=worktree_flag,
                             model=model,
                         )
+                    elif engine == "kilo":
+                        result = spawn_session_kilo(
+                            prompt,
+                            name=name,
+                            cwd=spawn_cwd,
+                            repo_path=payload.get("repo_path"),
+                            worktree=worktree_flag,
+                            model=model,
+                        )
                     else:
                         result = spawn_session(
                             prompt,
@@ -37160,6 +37294,64 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         model=model,
                     )
                     if result.get("code") in ("antigravity_unavailable", "antigravity_launch_failed"):
+                        self.send_json(result, 503)
+                    else:
+                        self.send_json(result)
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/sessions/spawn-kilo":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            prompt = (payload.get("prompt") or "").strip()
+            name = (payload.get("name") or "").strip() or None
+            cwd_raw = payload.get("cwd")
+            cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
+            cwd_resolved = None
+            cwd_error = None
+            if cwd_input:
+                try:
+                    expanded = os.path.expanduser(cwd_input)
+                    candidate = Path(expanded).resolve()
+                except (OSError, RuntimeError) as e:
+                    cwd_error = f"could not resolve path ({e})"
+                else:
+                    home = Path.home().resolve()
+                    try:
+                        st = os.stat(candidate)
+                    except OSError as e:
+                        cwd_error = f"path does not exist ({e.strerror or e})"
+                    else:
+                        if not stat.S_ISDIR(st.st_mode):
+                            cwd_error = f"not a directory: {candidate}"
+                        else:
+                            try:
+                                candidate.relative_to(home)
+                            except ValueError:
+                                cwd_error = f"path is outside $HOME ({home}): {candidate}"
+                            else:
+                                cwd_resolved = candidate
+            model = payload.get("model")
+            if not prompt:
+                self.send_json({"ok": False, "error": "missing prompt"}, 400)
+            elif cwd_error:
+                self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
+            else:
+                try:
+                    result = spawn_session_kilo(
+                        prompt,
+                        name=name,
+                        cwd=str(cwd_resolved) if cwd_resolved else None,
+                        repo_path=payload.get("repo_path"),
+                        worktree=bool(payload.get("worktree")),
+                        model=model,
+                    )
+                    if result.get("code") in ("kilo_unavailable", "kilo_launch_failed"):
                         self.send_json(result, 503)
                     else:
                         self.send_json(result)
@@ -40122,6 +40314,11 @@ def _telemetry_detect_engines():
     try:
         if _resolve_antigravity_bin().get("available"):
             out.append("antigravity")
+    try:
+        if _resolve_kilo_bin().get("available"):
+            out.append("kilo")
+    except Exception:
+        pass
     except Exception:
         pass
     return out
