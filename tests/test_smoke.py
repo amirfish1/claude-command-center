@@ -5556,7 +5556,7 @@ class TestGroupChatSidecarHelpers(unittest.TestCase):
             text = server._group_chat_inject_text(
                 md, 'topic with "quotes"', "topic", "abc12345-session"
             )
-            self.assertIn(f'/group-chat chat="{md}"', text)
+            self.assertIn(f'/group-chat-checkin chat="{md}"', text)
             self.assertIn('topic="topic with \\"quotes\\""', text)
             self.assertIn('sid="abc12345-session"', text)
             self.assertIn("CCC pointer: a new post just landed", text)
