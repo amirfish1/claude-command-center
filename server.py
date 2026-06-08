@@ -8135,12 +8135,55 @@ _TERMINAL_APPS = {
 }
 
 
+_ttl_memo_keyed_caches = []  # every keyed memo's cache dict, for test resets
+
+
+def _ttl_memo_keyed(ttl_seconds):
+    """Like _ttl_memo but for a single-arg function, keyed on that arg.
+
+    The per-pid liveness probes below (ancestor-terminal walk, cwd, tty) each
+    fork `ps`/`lsof`, and are hit once per participant per group-chat build —
+    AND twice per build while the header-rewrite pass also probed every
+    participant. Memoising per pid for a few seconds collapses those repeated
+    forks (same staleness contract as _ttl_memo / _ENGINE_LIVE_TTL). Defined
+    here because _ttl_memo lives further down the file than these callers."""
+    def decorate(fn):
+        cache = {}
+        lock = threading.Lock()
+        _ttl_memo_keyed_caches.append(cache)
+
+        def wrapper(arg):
+            now = time.time()
+            ent = cache.get(arg)
+            if ent is not None and now - ent[0] < ttl_seconds:
+                return ent[1]
+            with lock:
+                now = time.time()
+                ent = cache.get(arg)
+                if ent is not None and now - ent[0] < ttl_seconds:
+                    return ent[1]
+                val = fn(arg)
+                cache[arg] = (now, val)
+                if len(cache) > 256:  # opportunistic prune of expired entries
+                    dead = [k for k, v in cache.items() if now - v[0] >= ttl_seconds]
+                    for k in dead:
+                        cache.pop(k, None)
+                return val
+        wrapper.cache_clear = cache.clear
+        return wrapper
+    return decorate
+
+
+@_ttl_memo_keyed(3.0)
 def _proc_ancestor_terminal(pid):
     """Walk a PID's parent chain and return (term_app_friendly_name, term_pid) or (None, None).
 
     Uses `ps -o ppid,comm -p <pid>` to avoid parsing platform-specific /proc.
     Stops at init (ppid==1) or when a known terminal app is found.
-    """
+
+    Memoised per pid (_ttl_memo_keyed): this is the worst offender — up to 20
+    sequential `ps` forks walking the parent chain — and was run per participant,
+    twice per group-chat build, uncached."""
     current = pid
     for _ in range(20):  # hard cap to avoid runaway loops
         try:
@@ -8169,8 +8212,9 @@ def _proc_ancestor_terminal(pid):
     return None, None
 
 
+@_ttl_memo_keyed(3.0)
 def _proc_cwd(pid):
-    """Return a process's cwd via lsof, or None."""
+    """Return a process's cwd via lsof, or None. Memoised per pid (forks lsof)."""
     try:
         out = subprocess.run(
             ["lsof", "-a", "-d", "cwd", "-p", str(pid), "-Fn"],
@@ -8255,6 +8299,8 @@ def _reset_ttl_memo_caches():
     for state in _ttl_memo_caches:
         state["ts"] = 0.0
         state["val"] = None
+    for cache in _ttl_memo_keyed_caches:  # keyed per-pid memos (tty/cwd/terminal)
+        cache.clear()
 
 
 def _ttl_memo(ttl_seconds):
@@ -24765,7 +24811,9 @@ def _spawn_registry_has_session(session_id, engine):
     )
 
 
+@_ttl_memo_keyed(3.0)
 def _process_tty(pid):
+    """Return a process's controlling tty, or None. Memoised per pid (forks ps)."""
     try:
         ps_out = subprocess.run(
             ["ps", "-p", str(pid), "-o", "tty="],
@@ -25130,27 +25178,63 @@ def _group_chat_post(path, text, chat_uuid=""):
             _update_group_chat_sidecar(real_path, closed_at=None)
             _register_coordination(real_path)
         _group_chat_update_header_if_changed(real_path, force_write=True)
+        # Bust the coalescing read cache so the poster sees their own message
+        # on the next poll instead of a ≤TTL-old snapshot from before the post.
+        _invalidate_group_chat_read_cache(real_path)
         return {"ok": True}
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
 
 
+# Coalescing cache for group-chat reads. The sidebar polls /api/group-chat/read
+# every ~3s per open chat, and each build fans out to per-participant liveness
+# probes (ps/lsof forks) plus a waiting-summary pass — the same concurrent
+# pile-up the live-activity snapshot already guards against. Serve a ≤TTL-old
+# result per chat path; single-flight so at most one build runs per path at a
+# time. Invalidated immediately on post so a participant always sees their own
+# message without waiting out the TTL.
+_GROUP_CHAT_READ_TTL = 2.0
+_group_chat_read_cache = {}  # real_path -> {"ts": float, "data": (result, err)}
+_group_chat_read_cache_lock = threading.Lock()
+
+
+def _invalidate_group_chat_read_cache(real_path=None):
+    """Drop the coalescing cache for one chat path (or all paths)."""
+    with _group_chat_read_cache_lock:
+        if real_path is None:
+            _group_chat_read_cache.clear()
+        else:
+            _group_chat_read_cache.pop(real_path, None)
+
+
 def _group_chat_read(path, chat_uuid=""):
-    """Read a group-chat file. Returns (result_dict, None) or (None, 'forbidden')."""
+    """Read a group-chat file. Returns (result_dict, None) or (None, 'forbidden').
+
+    Coalesced: concurrent / rapid polls within _GROUP_CHAT_READ_TTL share one
+    build (see _group_chat_read_cache). The expensive per-participant liveness
+    probing happens only in the uncached build below."""
     real_path = _resolve_group_chat_ref(path, chat_uuid)
     if not real_path:
         return None, "forbidden"
-    try:
-        _group_chat_update_header_if_changed(real_path)
-    except Exception:
-        pass
-    # Strip trailing-blank-line bloat that agents leave behind. Idempotent
-    # — no-op when the file is already clean, so cheap to run on every
-    # read. Keeps the file lean for the next round of agent re-reads.
-    try:
-        _group_chat_normalize_whitespace(real_path)
-    except Exception:
-        pass
+    now = time.time()
+    ent = _group_chat_read_cache.get(real_path)
+    if ent is not None and now - ent["ts"] < _GROUP_CHAT_READ_TTL:
+        return ent["data"]
+    with _group_chat_read_cache_lock:
+        now = time.time()
+        ent = _group_chat_read_cache.get(real_path)
+        if ent is not None and now - ent["ts"] < _GROUP_CHAT_READ_TTL:
+            return ent["data"]
+        data = _group_chat_read_uncached(real_path)
+        _group_chat_read_cache[real_path] = {"ts": time.time(), "data": data}
+        return data
+
+
+def _group_chat_read_uncached(real_path):
+    """The real group-chat read build. Does NOT rewrite the file: whitespace
+    normalisation and wake-status header updates happen on post and on the 30s
+    watcher tick, not on this read hot path (a sidebar poll every 3s must not
+    trigger a 58KB read+rewrite plus a duplicate per-participant probe pass)."""
     try:
         stat_result = os.stat(real_path)
         with open(real_path, "r", encoding="utf-8") as fh:
