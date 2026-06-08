@@ -2207,7 +2207,7 @@ def _spawn_fallback_model_for_engine(engine):
     if engine == "antigravity":
         return os.environ.get("CCC_ANTIGRAVITY_MODEL") or _antigravity_cli_configured_model()
     if engine == "kilo":
-        return os.environ.get("CCC_KILO_MODEL", "stepfun/step-3.7-flash:free")
+        return os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
     return ""
 
 
@@ -24224,7 +24224,7 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
     session_name = _slugify(name or prompt) or "unnamed"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-kilo-{session_name}-{timestamp}.log"
-    model_to_use = _spawn_model_for_engine("kilo", model) or os.environ.get("CCC_KILO_MODEL", "stepfun/step-3.7-flash:free")
+    model_to_use = _spawn_model_for_engine("kilo", model) or os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
     if model_to_use:
         _set_session_model(log_filename[:-4], model_to_use, False)
     log_dir = repo_log_dir(repo_for_logs)
@@ -34762,7 +34762,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(info)
         elif path == "/api/sessions/spawn-kilo/availability":
             info = _resolve_kilo_bin()
-            info["model"] = os.environ.get("CCC_KILO_MODEL", "stepfun/step-3.7-flash:free")
+            info["model"] = os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
             self.send_json(info)
         elif path == "/api/loading-status":
             self.send_json(_session_load_snapshot())
@@ -40314,11 +40314,11 @@ def _telemetry_detect_engines():
     try:
         if _resolve_antigravity_bin().get("available"):
             out.append("antigravity")
+    except Exception:
+        pass
     try:
         if _resolve_kilo_bin().get("available"):
             out.append("kilo")
-    except Exception:
-        pass
     except Exception:
         pass
     return out
