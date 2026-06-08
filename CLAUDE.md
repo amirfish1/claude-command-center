@@ -125,38 +125,6 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 - `hooks/` scripts run inside Claude Code's hook pipeline — they must exit fast and never prompt.
 - The Morning view (`morning.py`, `morning_store.py`, `static/morning/`) is a **gitignored opt-in plugin** for one user's workflow. Don't reference it in the README or treat it as part of the core.
 
-## Babysitter
-
-Babysitter runs for this repo are local-only by default. Do not add CI/CD
-integration, push, release, deploy, update Sparkle/Homebrew artifacts, or touch
-Cloudflare Worker deployment without explicit owner approval.
-
-Recommended local skills:
-
-- `babysitter:babysit` — default orchestration for local analysis and fixes.
-- `babysitter:plan` — use before broad or risky work.
-- `babysitter:resume` — continue paused or compacted runs.
-- `babysitter:doctor` — inspect run, journal, lock, and session health.
-- `babysitter:retrospect` — capture lessons after long or repeated runs.
-- `browser:control-in-app-browser` — verify significant frontend changes.
-
-Recommended processes/methodology:
-
-- `methodologies/gsd/quick` for small scoped maintenance slices.
-- `methodologies/gsd/debug` for stale state, liveness, transcript, queue, and
-  local-agent bugs.
-- `methodologies/gsd/verify-work` before marking work complete.
-- `methodologies/gsd/add-tests` when a user-visible fix needs smoke coverage.
-- `methodologies/gsd/audit-milestone` before public OSS, release, API, or
-  security-sensitive boundaries.
-- `methodologies/plan-and-execute` for larger multi-file changes in hotspot
-  areas such as `server.py` and `static/app.js`.
-
-Keep Babysitter low-breakpoint and autonomous for local analysis/fixes, but ask
-before owner-policy decisions. Security-sensitive changes include localhost
-binding, origin checks, path validation, `/api/open`, subprocess execution,
-telemetry, release signing, and anything that can expose private data.
-
 ## Testing
 
 `tests/test_smoke.py` imports `server.py` and checks nothing explodes. CI is minimal by design. If you add a feature, a smoke-level assertion is nice-to-have but not required — the bar is "doesn't break the import."

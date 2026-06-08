@@ -23,6 +23,10 @@ venv/
 /tmp/
 /scratch/
 
+# Per-machine Claude Code guidance — auto-loaded alongside CLAUDE.md, but
+# personal/one-user workflow only (e.g. babysitter run policy). Never shared.
+CLAUDE.local.md
+
 # Git worktrees created by superpowers:using-git-worktrees skill
 .worktrees/
 
