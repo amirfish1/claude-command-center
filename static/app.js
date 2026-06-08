@@ -20737,16 +20737,12 @@
           }
         } else if (b.type === 'thinking') {
           // Headless stream-json carries no thinking text (only a signature is
-          // emitted post-turn), so show the same compact "thinking happened"
-          // marker as the durable render rather than noisy placeholder text.
-          if (!slot.querySelector('.stream-block-thinking')) {
-            const span = document.createElement('span');
-            span.className = 'stream-block-thinking thinking-marker';
-            span.dataset.renderTs = nowStamp();
-            span.title = 'Claude used extended thinking this turn (reasoning text not persisted — only a cryptographic signature)';
-            span.textContent = '🧠 thought';
-            slot.appendChild(span);
-          }
+          // emitted post-turn) — so this would only ever render an empty
+          // "🧠 thought" marker that appears after the fact with nothing behind
+          // it. Render nothing; the live "🧠 Thinking…" optimistic indicator and
+          // the "headless · stream-json" pill already convey that work is
+          // happening. (If --include-partial-messages is ever enabled, real
+          // thinking_delta text could be shown here instead.)
         }
       }
     }
@@ -24030,15 +24026,18 @@
             hasNonTool = true;
           } else if (b.kind === 'thinking') {
             if (b.signature_only || !b.text) {
-              // Signature-only: the reasoning text was not persisted (only a
-              // cryptographic signature survived). Show a compact, non-expandable
-              // marker so the user knows extended thinking happened this turn.
-              blockParts.push('<span class="thinking-marker" title="Claude used extended thinking this turn (reasoning text not persisted — only a cryptographic signature)">🧠 thought</span>');
+              // Signature-only: the reasoning text was NOT persisted (only a
+              // cryptographic signature survived a resume). The old "🧠 thought"
+              // marker therefore carried no content and only appeared after the
+              // turn finished — noise, not signal. Drop it. The live
+              // "🧠 Thinking…" optimistic indicator still covers in-flight turns;
+              // a turn that is ONLY silent thinking is hidden below.
+              // (intentionally renders nothing)
             } else {
               // Text present: visible block with a collapsed, expandable body.
               blockParts.push('<div class="thinking-block"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">💭 Thinking</span><div class="t-body" style="display:none">' + escapeHtml(b.text) + '</div></div>');
+              hasNonTool = true;
             }
-            hasNonTool = true;
           }
         }
         // Per-turn token chips. Set for Antigravity (from the trajectory's
@@ -24048,7 +24047,12 @@
         // (CCC-30). Merge the count into the END of the last tool-call line
         // when there is one; only fall back to a standalone line for turns
         // with no tool call to hang it on.
-        if ((ev.tokens_in || ev.tokens_out || ev.tokens_thinking)) {
+        // Did this turn render anything visible? A turn whose only block was
+        // signature-only ("silent") thinking now renders nothing — hide it
+        // rather than leave an empty row (or a lone token line).
+        const hadTool = lastToolPartIdx >= 0;
+        const renderedSomething = hadTool || hasNonTool;
+        if (renderedSomething && (ev.tokens_in || ev.tokens_out || ev.tokens_thinking)) {
           const chipText = _formatAntigravityTokenChips(ev.tokens_in, ev.tokens_out, ev.tokens_thinking);
           if (chipText) {
             const chipTitle = 'Input:    ' + (Number(ev.tokens_in) || 0).toLocaleString() + ' tokens'
@@ -24064,6 +24068,7 @@
         }
         html += blockParts.join('');
         if (!hasNonTool) div.classList.add('tool-only');
+        if (!renderedSomething) div.classList.add('is-silent-thinking-only');
         // Hide bare no-op acknowledgments ("No response requested." etc.):
         // filler an agent emits when the Claude Code harness resume-nudges an
         // idle session ("Continue from where you left off"). Zero signal, and

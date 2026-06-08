@@ -1109,15 +1109,11 @@
   /* Signature-only thinking: the reasoning text was not persisted, so we show
      a compact, non-expandable "thinking happened" marker instead of an empty
      toggle. Small and muted, but not italic-noise. */
-  .thinking-marker {
-    display: inline-flex; align-items: center; gap: 4px;
-    font-size: 11px; line-height: 1.4;
-    color: var(--text-muted);
-    opacity: 0.8;
-    margin: 4px 0;
-    cursor: default;
-    user-select: none;
-  }
+  /* Signature-only "🧠 thought" markers were removed (no persisted text behind
+     them — pure noise that appeared after the turn). A turn left with nothing
+     but silent thinking is hidden entirely. The live "🧠 Thinking…" optimistic
+     indicator still covers the in-flight signal. */
+  .event.assistant.is-silent-thinking-only { display: none !important; }
 
   /* Per-turn token chips — rendered under an assistant event when the
    * source engine exposes per-turn token usage (currently only Antigravity,
