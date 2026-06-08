@@ -35815,6 +35815,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
             return
+        if path == "/api/onboarding/login-terminal":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+                engine = payload.get("engine")
+                if not engine:
+                    self.send_json({"error": "missing engine"}, 400)
+                    return
+                res = _launch_login_terminal(engine)
+                self.send_json(res)
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+            return
         if path == "/api/history/setup" or path == "/api/history/ingest":
             # First-click OOBE: kick a background ingest of all known JSONL
             # transcripts. /api/history/setup is called from the OOBE prompt;
@@ -39302,6 +39316,66 @@ def _get_onboarding_status():
             }
         }
     }
+
+
+def _launch_login_terminal(engine):
+    """Launch a terminal window and run the login command for the specified engine."""
+    import subprocess
+    import shutil
+    import os
+    
+    # 1. Resolve command to run
+    command = None
+    if engine == "claude":
+        claude_info = _resolve_claude_bin()
+        bin_path = claude_info.get("bin") or "claude"
+        command = f"{bin_path}"
+    elif engine == "antigravity":
+        antigravity_info = _resolve_antigravity_bin()
+        bin_path = antigravity_info.get("bin") or "agy"
+        command = f"{bin_path}"
+    elif engine == "cursor":
+        cursor_info = _resolve_cursor_bin()
+        bin_path = cursor_info.get("bin") or "cursor-agent"
+        command = f"{bin_path} login"
+    elif engine == "codex":
+        codex_info = _resolve_codex_bin()
+        bin_path = codex_info.get("bin") or "codex"
+        command = f"{bin_path} login"
+        
+    if not command:
+        return {"ok": False, "error": f"Unknown engine: {engine}"}
+        
+    # AppleScript string needs the command embedded; escape backslashes and double quotes
+    cmd_lit = command.replace("\\", "\\\\").replace('"', '\\"')
+    target = _preferred_terminal_app()
+    
+    if target == "iTerm2":
+        script = f'''
+        tell application "iTerm2"
+          activate
+          set newWin to (create window with default profile)
+          tell current session of newWin
+            write text "{cmd_lit}"
+          end tell
+        end tell
+        return "ok"
+        '''
+    else:
+        script = f'''
+        tell application "Terminal"
+          activate
+          do script "{cmd_lit}"
+        end tell
+        return "ok"
+        '''
+        
+    try:
+        # Launch terminal in background
+        subprocess.Popen(["osascript", "-e", script])
+        return {"ok": True, "terminal_app": target, "command": command}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 def _complete_onboarding():

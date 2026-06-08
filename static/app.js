@@ -33509,11 +33509,26 @@
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'onb-setup-action';
-          btn.innerHTML = '🔑 Copy login';
-          btn.title = 'Copy the login command to clipboard';
-          btn.onclick = () => {
-            navigator.clipboard.writeText(cli.login_instruction);
-            showOpToast('Copied "' + cli.login_instruction + '" to clipboard! Run it in your terminal.', 'ok');
+          btn.innerHTML = '🔑 Log in';
+          btn.title = 'Start login flow in a new terminal tab';
+          btn.onclick = async () => {
+            try {
+              const res = await fetch('/api/onboarding/login-terminal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ engine: key })
+              });
+              const data = await res.json();
+              if (data && data.ok) {
+                showOpToast('Opened terminal window for ' + cli.name + ' login!', 'ok');
+              } else {
+                navigator.clipboard.writeText(cli.login_instruction);
+                showOpToast('Copied "' + cli.login_instruction + '" to clipboard! Run it in your terminal.', 'ok');
+              }
+            } catch (e) {
+              navigator.clipboard.writeText(cli.login_instruction);
+              showOpToast('Copied "' + cli.login_instruction + '" to clipboard! Run it in your terminal.', 'ok');
+            }
           };
           badgesContainer.appendChild(btn);
         } else if (cli.email) {
