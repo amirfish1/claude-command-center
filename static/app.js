@@ -2915,15 +2915,45 @@
     const steady = (st === 'working' && !liveStatus.codexFresh) ? ' steady' : '';
     if (!badge) {
       badge = document.createElement('div');
+      // One-click wake: clicking a stuck/idle pill nudges Codex to continue,
+      // so the user doesn't have to scroll to the input and retype. Wired once
+      // on the reused element; the handler re-checks the live state at click
+      // time (the pill's class is rebuilt every poll).
+      const _doWake = () => {
+        if (!badge.classList.contains('is-wakeable')) return;
+        const sid = (currentSession && currentSession.id) || '';
+        if (!sid) return;
+        badge.classList.add('is-waking');
+        setTimeout(() => badge.classList.remove('is-waking'), 1600);
+        wakeCodexSession(sid, null);
+      };
+      badge.addEventListener('click', _doWake);
+      badge.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _doWake(); }
+      });
       $view.appendChild(badge);
     }
     // For a stuck session, answer "why?" right on the pill: show the concrete
     // reason (hung tool + how long silent) inline, not just a bare "Stuck".
     const reason = (st === 'stuck') ? (liveStatus.codexStateReason || '') : '';
-    badge.className = 'conv-codex-state state-' + st + steady;
-    badge.title = reason || TITLES[st] || '';
+    // Stuck or idle turns can be nudged awake; working/offline cannot.
+    const wakeable = (st === 'stuck' || st === 'idle');
+    badge.className = 'conv-codex-state state-' + st + steady + (wakeable ? ' is-wakeable' : '');
+    if (wakeable) {
+      badge.setAttribute('role', 'button');
+      badge.setAttribute('tabindex', '0');
+      badge.setAttribute('aria-label', 'Wake GPT — ' + (LABELS[st] || st));
+    } else {
+      badge.removeAttribute('role');
+      badge.removeAttribute('tabindex');
+      badge.removeAttribute('aria-label');
+    }
+    badge.title = wakeable
+      ? ((reason || TITLES[st] || '') + ' — click to wake GPT')
+      : (reason || TITLES[st] || '');
     badge.innerHTML = '<span class="ccs-dot"></span><span class="ccs-label">' + escapeHtml(LABELS[st] || st) + '</span>'
-      + (reason ? '<span class="ccs-reason">' + escapeHtml(reason) + '</span>' : '');
+      + (reason ? '<span class="ccs-reason">' + escapeHtml(reason) + '</span>' : '')
+      + (wakeable ? '<span class="ccs-wake" aria-hidden="true" title="Wake GPT">↻</span>' : '');
   }
 
   const $convSessionId = document.getElementById('convSessionId');
