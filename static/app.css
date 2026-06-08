@@ -4116,19 +4116,27 @@
     background: var(--surface);
   }
   .tts-rate-control[hidden] { display: none; }
-  .tts-rate-control input[type="range"] {
-    width: 80px;
-    height: 4px;
-    accent-color: var(--accent);
-    cursor: pointer;
-    margin: 0;
+  /* − / + rate buttons (replaced the drag slider). */
+  .tts-rate-control .tts-rate-btn {
+    width: 20px; height: 20px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border); border-radius: 5px;
+    background: var(--surface-2); color: var(--text);
+    font-size: 14px; line-height: 1; cursor: pointer;
+    user-select: none;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+  }
+  .tts-rate-control .tts-rate-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .tts-rate-control .tts-rate-btn:active { transform: translateY(1px); }
+  .tts-rate-control .tts-rate-btn:disabled {
+    opacity: 0.4; cursor: not-allowed; background: transparent; color: var(--text-muted);
   }
   .tts-rate-control .tts-rate-label {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
     color: var(--text-muted);
-    min-width: 38px;
-    text-align: right;
+    min-width: 44px;
+    text-align: center;
     user-select: none;
   }
   /* ── Floating TTS playback control ────────────────────────────────

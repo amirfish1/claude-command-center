@@ -5029,23 +5029,33 @@
       setTimeout(() => { try { window.speechSynthesis.pause(); } catch (_) {} }, 0);
     }
   }
-  if ($convTtsRate) {
-    $convTtsRate.addEventListener('input', () => {
-      const raw = parseFloat($convTtsRate.value || '');
-      if (!Number.isFinite(raw)) return;
-      _ttsRate = Math.min(_TTS_RATE_MAX, Math.max(_TTS_RATE_MIN, raw));
-      try { localStorage.setItem('ccc-tts-rate', String(_ttsRate)); } catch (_) {}
-      if ($convTtsRateLabel) $convTtsRateLabel.textContent = _ttsRate.toFixed(2) + '×';
-      // Debounce the restart — drag input fires per-pixel; spinning up
-      // a fresh utterance every event makes the speech stutter.
-      if (_ttsRateRestartTimer) clearTimeout(_ttsRateRestartTimer);
-      _ttsRateRestartTimer = setTimeout(() => {
-        _ttsRateRestartTimer = null;
-        if (_ttsActive || _ttsPaused) _restartTtsAtCurrentPosition();
-      }, 180);
-    });
+  // Rate is adjusted with − / + buttons (replaced the drag slider). Each click
+  // steps ±0.05 within [MIN, MAX]; persist, relabel, disable at the ends, and
+  // restart playback (debounced) so an active read picks up the new speed.
+  const $convTtsRateDown = document.getElementById('convTtsRateDown');
+  const $convTtsRateUp = document.getElementById('convTtsRateUp');
+  function _refreshTtsRateBtns() {
+    if ($convTtsRateDown) $convTtsRateDown.disabled = _ttsRate <= _TTS_RATE_MIN + 1e-9;
+    if ($convTtsRateUp) $convTtsRateUp.disabled = _ttsRate >= _TTS_RATE_MAX - 1e-9;
   }
+  function _stepTtsRate(delta) {
+    const next = Math.min(_TTS_RATE_MAX, Math.max(_TTS_RATE_MIN,
+      Math.round((_ttsRate + delta) * 100) / 100));
+    if (next === _ttsRate) { _refreshTtsRateBtns(); return; }
+    _ttsRate = next;
+    try { localStorage.setItem('ccc-tts-rate', String(_ttsRate)); } catch (_) {}
+    if ($convTtsRateLabel) $convTtsRateLabel.textContent = _ttsRate.toFixed(2) + '×';
+    _refreshTtsRateBtns();
+    if (_ttsRateRestartTimer) clearTimeout(_ttsRateRestartTimer);
+    _ttsRateRestartTimer = setTimeout(() => {
+      _ttsRateRestartTimer = null;
+      if (_ttsActive || _ttsPaused) _restartTtsAtCurrentPosition();
+    }, 120);
+  }
+  if ($convTtsRateDown) $convTtsRateDown.addEventListener('click', () => _stepTtsRate(-0.05));
+  if ($convTtsRateUp) $convTtsRateUp.addEventListener('click', () => _stepTtsRate(0.05));
   _syncTtsRateUi();
+  _refreshTtsRateBtns();
   _wireTtsFloatingControl();
   // Textarea autosize: grow up to ~10 rows then scroll. Reset to one row
   // on every input so deletions shrink the box too. Mirrors Omnara's
