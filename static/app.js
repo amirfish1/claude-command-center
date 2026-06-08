@@ -23551,6 +23551,7 @@
         // If this matches an outstanding optimistic send, drop the pending stub
         // (the real event lands in its place below).
         const normed = _normSend(ev.text);
+        let _reconciledExact = false;
         const pIdx = _pendingSends.findIndex(p => _normSend(p.text) === normed);
         if (pIdx >= 0) {
           const p = _pendingSends[pIdx];
@@ -23558,6 +23559,7 @@
           if (p.timer) clearTimeout(p.timer);
           if (p.sid) clearSessionSending(p.sid);
           _pendingSends.splice(pIdx, 1);
+          _reconciledExact = true;
           const pane = paneByPaneId(paneId);
           if (pane && currentConversation) syncPendingSendsMapForConv(pane, currentConversation);
         }
@@ -23568,7 +23570,29 @@
             const rawText = userMsgDiv.getAttribute('data-raw-text') || userMsgDiv.textContent;
             if (_normSend(rawText) === normed) {
               if (pDiv.parentNode) pDiv.parentNode.removeChild(pDiv);
+              _reconciledExact = true;
             }
+          }
+        }
+        // FIFO fallback: user messages deliver in send order, so a real
+        // user_text event with no exact-text match still proves the OLDEST
+        // outstanding optimistic echo was delivered — just recorded with
+        // slightly different text (common with voice transcription, where the
+        // echoed words and the saved transcript differ). Reconcile it instead
+        // of leaving the message stuck on "· sending…" for the full 5-minute
+        // timeout (the "why is this still being pushed?" symptom). Worst case
+        // the echo clears a beat early — the message still renders below, so
+        // nothing is lost. Skip synthetic continuation events so they never
+        // consume a genuine pending echo.
+        const _isContinuation = /^This session is being continued from a previous conversation\b/.test(ev.text || '');
+        if (!_reconciledExact && !_isContinuation && _pendingSends.length) {
+          const oldest = _pendingSends.shift();
+          if (oldest) {
+            if (oldest.element && oldest.element.parentNode) oldest.element.parentNode.removeChild(oldest.element);
+            if (oldest.timer) clearTimeout(oldest.timer);
+            if (oldest.sid) clearSessionSending(oldest.sid);
+            const pane = paneByPaneId(paneId);
+            if (pane && currentConversation) syncPendingSendsMapForConv(pane, currentConversation);
           }
         }
         const imagesHtml = renderImageDescriptors(ev.images);
