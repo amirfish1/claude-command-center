@@ -26338,14 +26338,24 @@ def _list_group_chats(include_archived: bool = False, only_archived: bool = Fals
         sids = meta.get("session_ids") or []
         nm = meta.get("name_map") or {}
         chat_uuid = _ensure_group_chat_uuid(md_path, meta)
-        # Per-participant status snapshot (live, last activity, WIP).
-        # Keyed by full session_id so the UI can match it against the
-        # name_map / participants list it already renders.
-        participant_meta = {sid: _group_chat_participant_meta(sid) for sid in sids}
-        # "Who are we waiting for" hint for the chat row, mirroring the
-        # nudge-targeting logic so the sidebar's summary matches what
-        # the watcher would actually do.
-        waiting = _group_chat_compute_waiting(md_path, sids, nm)
+        # Archived chats are history: no session is live and nothing is
+        # "waiting", so skip the per-participant liveness probes (ps/lsof +
+        # sidecar reads) and the chat-tail scan. The archive view lists ALL
+        # archived chats, and doing the live work for each (53 probes across
+        # 28 chats here) was the entire ~12s archive-load cost.
+        if is_archived:
+            participant_meta = {}
+            waiting = {"last_author_hash": None, "last_author_is_human": False,
+                       "waiting_on_hashes": []}
+        else:
+            # Per-participant status snapshot (live, last activity, WIP).
+            # Keyed by full session_id so the UI can match it against the
+            # name_map / participants list it already renders.
+            participant_meta = {sid: _group_chat_participant_meta(sid) for sid in sids}
+            # "Who are we waiting for" hint for the chat row, mirroring the
+            # nudge-targeting logic so the sidebar's summary matches what
+            # the watcher would actually do.
+            waiting = _group_chat_compute_waiting(md_path, sids, nm)
         out.append({
             "id": chat_uuid,
             "uuid": chat_uuid,
