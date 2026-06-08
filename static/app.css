@@ -1369,6 +1369,13 @@
     background: color-mix(in srgb, var(--ok, #3fb950) 12%, transparent);
     border-color: color-mix(in srgb, var(--ok, #3fb950) 35%, transparent);
   }
+  /* Streaming — the headless pill while CCC live-tails its stdout as
+     stream-json. Teal so it reads distinctly from the plain-green on-state. */
+  .ccc-breadcrumb .ccc-proc-pill.is-streaming {
+    color: var(--accent-teal, #2bb6a6);
+    background: color-mix(in srgb, var(--accent-teal, #2bb6a6) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent-teal, #2bb6a6) 40%, transparent);
+  }
   /* Off — no such process. Muted, dot hollow. */
   .ccc-breadcrumb .ccc-proc-pill.is-off {
     color: var(--text-muted, var(--text-2));

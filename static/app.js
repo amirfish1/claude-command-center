@@ -14608,7 +14608,22 @@
     const checkedTitle = clock
       ? 'CCC last polled these processes at ' + clock
       : 'When CCC last polled these processes';
-    el.innerHTML = pill(headOn, stale, stale ? 'headless ⚠' : 'headless', headTitle)
+    // A terminal session's stdout is its TUI — it can't be stream-json-tailed.
+    // So rather than a third pill, fold the stream-json state into the headless
+    // pill: "headless · stream-json" (distinct color) when CCC is live-tailing
+    // this session's stdout, plain "headless" when it's only reading the JSONL.
+    const streaming = !!(typeof _spawnLiveSid !== 'undefined' && _spawnLiveSid
+      && currentSession && _spawnLiveSid === currentSession.id);
+    const headActive = headOn || streaming;
+    const headLabel = (stale ? 'headless ⚠' : 'headless') + (streaming ? ' · stream-json' : '');
+    const headStateCls = headActive ? (stale ? 'is-stale' : 'is-on') : 'is-off';
+    const headPillTitle = streaming
+      ? headTitle + ' — CCC is live-tailing its stdout as stream-json (block-level)'
+      : headTitle + (headOn ? ' — reading the JSONL transcript, not stream-tailing' : '');
+    const headPill = '<span class="ccc-proc-pill ' + headStateCls + (streaming ? ' is-streaming' : '') + '"'
+      + ' title="' + escapeHtml(headPillTitle) + '">'
+      + '<span class="ccc-proc-dot"></span>' + escapeHtml(headLabel) + '</span>';
+    el.innerHTML = headPill
       + pill(termOn, false, 'terminal', termTitle)
       + (ago ? '<span class="ccc-proc-checked" title="' + escapeHtml(checkedTitle) + '">checked ' + escapeHtml(ago) + (clock ? ' · ' + escapeHtml(clock) : '') + '</span>' : '');
   }
@@ -20130,6 +20145,10 @@
     const b = document.getElementById('cpLiveBadge');
     if (a) a.style.display = visible ? '' : 'none';
     if (b) b.style.display = visible ? '' : 'none';
+    // Flip the breadcrumb "headless · stream-json" pill immediately on stream
+    // start/stop. Deferred one tick because _spawnLiveSid is set/cleared just
+    // AFTER this call in startSpawnStream/stopSpawnStream.
+    setTimeout(() => { try { updateConvProcessIndicator(); } catch (_) {} }, 0);
   }
 
   async function startSpawnStream(sid, paneId) {
