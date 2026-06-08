@@ -14254,13 +14254,25 @@ def _parse_conversation_event(ev, line_num):
         if isinstance(r, dict):
             cost = r.get("cost_usd", cost)
             dur = r.get("duration_ms", dur)
-        return {
+        out = {
             "line": line_num,
             "ts": ts,
             "type": "result",
             "cost_usd": cost,
             "duration_ms": dur,
         }
+        # Pass through the error signal so the UI can say *why* a turn stopped
+        # (usage/quota limit, max turns, API error) instead of a blanket
+        # "Done". The result text on an error carries the reason; clip it.
+        subtype = ev.get("subtype")
+        if subtype:
+            out["subtype"] = subtype
+        if ev.get("is_error"):
+            out["is_error"] = True
+            err = r if isinstance(r, str) else ev.get("result")
+            if isinstance(err, str) and err.strip():
+                out["error"] = err.strip()[:400]
+        return out
 
     return None
 

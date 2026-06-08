@@ -23238,6 +23238,37 @@
     return /^(no response (requested|needed|required)|nothing (to (do|add|report)|further( to (do|add))?)|acknowledged|no action (needed|required)|standing by|continuing|will continue)\.?$/.test(t);
   }
 
+  // Classify a `result` event so the transcript can say WHY a turn stopped
+  // instead of a blanket "Done". Token/quota/subscription exhaustion is called
+  // out specifically (the #1 reason a session silently "goes to sleep"); other
+  // errors get a generic stop label. A clean success returns null → the caller
+  // renders the normal "Done".
+  function _resultOutcomeInfo(ev) {
+    if (!ev) return null;
+    const sub = String(ev.subtype || '').toLowerCase();
+    const errText = String(ev.error || '').trim();
+    const isError = !!ev.is_error || /error|failed|aborted|interrupt/.test(sub);
+    if (!isError && !errText) return null;
+    const blob = (sub + ' ' + errText).toLowerCase();
+    const exhausted = /(rate.?limit|usage.?limit|quota|exhaust|insufficient.?quota|resource_exhausted|no tokens?\b|out of (tokens|credit)|credit balance|reached your[^.]*limit|429|too many requests|subscription)/.test(blob);
+    if (exhausted) {
+      return {
+        kind: 'exhausted',
+        label: 'Stopped — no tokens remaining',
+        detail: (errText ? errText.slice(0, 200) : 'Token / subscription limit reached.')
+          + ' Top up or wait for the limit to reset, then resume.',
+      };
+    }
+    if (isError) {
+      return {
+        kind: 'error',
+        label: 'Stopped — error',
+        detail: errText.slice(0, 240) || (sub ? sub.replace(/_/g, ' ') : ''),
+      };
+    }
+    return null;
+  }
+
   // The first user message is shown as "Original ask" in the sticky header
   // (inline mode) or the status rail (right-rail mode); its in-conversation
   // bubble is meant to stay hidden via `is-pinned-in-sticky` so the same text
@@ -23705,10 +23736,24 @@
           statsHtml += '<span>Cost: ' + escapeHtml(String(cost)) + '</span>';
         }
         statsHtml += '<span>Duration: ' + escapeHtml(String(dur)) + '</span>';
-        div.innerHTML = '<span class="label">Done</span>'
-          + '<span class="line-num">L' + ev.line + '</span>'
-          + tsSpan(ev.ts)
-          + '<div class="stats">' + statsHtml + '</div>';
+        // A turn can end in error — most importantly a token/quota/subscription
+        // limit. Don't mislabel that as "Done": say what actually happened so
+        // the user knows it stopped because it's out of tokens, not because it
+        // finished.
+        const _outcome = _resultOutcomeInfo(ev);
+        if (_outcome) {
+          div.classList.add('result-error', 'result-' + _outcome.kind);
+          div.innerHTML = '<span class="label">' + escapeHtml(_outcome.label) + '</span>'
+            + '<span class="line-num">L' + ev.line + '</span>'
+            + tsSpan(ev.ts)
+            + (_outcome.detail ? '<div class="result-error-detail">' + escapeHtml(_outcome.detail) + '</div>' : '')
+            + '<div class="stats">' + statsHtml + '</div>';
+        } else {
+          div.innerHTML = '<span class="label">Done</span>'
+            + '<span class="line-num">L' + ev.line + '</span>'
+            + tsSpan(ev.ts)
+            + '<div class="stats">' + statsHtml + '</div>';
+        }
       } else if (ev.type === 'tool_result') {
         // If this result closes out a Task delegate (its tool_use_id matches
         // an active subagent tab), mark the tab completed so the auto-close

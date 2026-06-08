@@ -749,6 +749,15 @@
   .event.result .label { color: var(--cyan); font-weight: 600; text-transform: uppercase; font-size: 11px; }
   .event.result .stats { margin-top: 4px; }
   .event.result .stats span { margin-right: 16px; }
+  /* Error / exhaustion results: a turn that stopped because of a token /
+     subscription limit (or other error) must read as a stop, not "Done". */
+  .event.result.result-error { background: rgba(248, 81, 73, 0.1); border-left-color: var(--red); }
+  .event.result.result-error .label,
+  .conversations-view .event.result.result-error .label { color: var(--red); }
+  .event.result.result-exhausted { background: rgba(210, 153, 34, 0.12); border-left-color: var(--orange, #d29922); }
+  .event.result.result-exhausted .label,
+  .conversations-view .event.result.result-exhausted .label { color: var(--orange, #d29922); }
+  .event.result .result-error-detail { margin-top: 4px; color: var(--text); font-size: 12px; opacity: 0.92; }
 
   .tool-call {
     display: flex; align-items: flex-start; gap: 8px;
