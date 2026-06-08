@@ -4592,10 +4592,30 @@
     }
   }
 
+  // CCC-31: the speech engine ran every paragraph together because text nodes
+  // were concatenated with no break, so it never paused between paragraphs.
+  // Nearest block-level ancestor of a text node — when it changes between
+  // nodes we've crossed a paragraph/list-item/heading boundary.
+  function _ttsBlockAncestor(node) {
+    const el = node && node.parentElement;
+    if (!el) return null;
+    return (el.closest && el.closest('p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,td,th,tr,div')) || el;
+  }
+  // Paragraph break appended at a block boundary. PURELY ADDITIVE (never trims
+  // already-emitted text) so previously-pushed highlight mappings stay valid.
+  // Ends the prior sentence with a period when it lacks terminal punctuation —
+  // engines (incl. macOS) pause longer at "<punct>\n\n" than at a bare break.
+  function _ttsParagraphBreak(text) {
+    const tail = text.replace(/\s+$/, '');
+    const needsStop = tail && !/[.!?:;,–—-]$/.test(tail);
+    return (needsStop ? '.' : '') + '\n\n';
+  }
   function buildTtsDataFromElements(elements) {
     let text = "";
     const mapping = [];
-    
+    let prevBlock = null;
+    let firstNode = true;
+
     for (const el of elements) {
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
         acceptNode: function(node) {
@@ -4611,12 +4631,20 @@
       let node;
       while ((node = walker.nextNode())) {
         const nodeText = node.nodeValue;
+        if (!nodeText) continue;
+        const block = _ttsBlockAncestor(node);
+        if (!firstNode && block !== prevBlock) {
+          text += _ttsParagraphBreak(text);
+        }
+        firstNode = false;
+        prevBlock = block;
         mapping.push({ node, start: text.length, end: text.length + nodeText.length, nodeOffsetStart: 0 });
         text += nodeText;
       }
-      text += " "; 
+      // Boundary between two top-level message elements is also a paragraph.
+      prevBlock = null;
     }
-    
+
     const clipped = text.length > TTS_TEXT_MAX_CHARS ? text.slice(0, TTS_TEXT_MAX_CHARS) : text;
     return { text: clipped, mapping };
   }
@@ -4635,20 +4663,28 @@
     }, false);
     
     let node;
+    let prevBlock = null;
+    let firstNode = true;
     while ((node = walker.nextNode())) {
       let nodeText = node.nodeValue;
       let startIndex = 0;
       let endIndex = nodeText.length;
-      
+
       if (node === range.startContainer) {
         startIndex = range.startOffset;
       }
       if (node === range.endContainer) {
         endIndex = range.endOffset;
       }
-      
+
       const chunk = nodeText.substring(startIndex, endIndex);
       if (chunk) {
+        const block = _ttsBlockAncestor(node);
+        if (!firstNode && block !== prevBlock) {
+          text += _ttsParagraphBreak(text);
+        }
+        firstNode = false;
+        prevBlock = block;
         mapping.push({ node, start: text.length, end: text.length + chunk.length, nodeOffsetStart: startIndex });
         text += chunk;
       }
@@ -4734,6 +4770,17 @@
   let _ttsPaused = false;
   let _ttsBoundUtteranceText = '';
   let _ttsRateRestartTimer = null;
+  // One-time iOS-Safari engine prime (CCC-31). Must run inside a user gesture.
+  let _ttsPrimed = false;
+  function _primeTtsEngine() {
+    if (_ttsPrimed || !window.speechSynthesis) return;
+    _ttsPrimed = true;
+    try {
+      const warm = new SpeechSynthesisUtterance(' ');
+      warm.volume = 0;
+      window.speechSynthesis.speak(warm);
+    } catch (_) {}
+  }
 
   async function stopTextToSpeech() {
     clearTtsHighlight();
@@ -4908,6 +4955,11 @@
 
     _ttsLastCharIndex = 0;
     _ttsPaused = false;
+    // iOS Safari blocks speechSynthesis until it's been kicked once inside a
+    // user gesture (CCC-31, mobile). We're synchronously inside the tap here,
+    // so prime the engine with a silent utterance the first time. Best-effort
+    // and inaudible; needs on-device verification.
+    _primeTtsEngine();
     paneId = paneId || activePaneId();
     const data = selectedConversationTtsData(paneId) || lastMessageTtsData(paneId);
     if (!data || !data.text.trim()) {
