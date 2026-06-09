@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.11.0] - 2026-06-09
+
+### Added
+- **ACP server adapter** (`ccc_acp.py`). Exposes CCC over the [Agent Client Protocol](https://agentclientprotocol.com) so editors and ACP clients (VS Code, JetBrains, Zed, Hermes) can drive Claude Code sessions over JSON-RPC stdio. Optional: requires `pip install agent-client-protocol` and is launched separately (`python3 ccc_acp.py`); the core stdlib-only server is unaffected.
+- Added a standalone group-chat live view with chat-style reading, posting, nudging, and a searchable participant picker.
+- **Kilo Code CLI engine.** Spawn headless [Kilo Code CLI](https://kilo.ai/docs/code-with-ai/platforms/cli) runs as a first-class engine alongside Claude, Codex, Cursor, and Antigravity. New `/api/sessions/spawn-kilo` and `/api/sessions/spawn-kilo/availability` endpoints, an engine entry in the spawn dropdowns, and worktree support. Override the binary with `CCC_KILO_BIN` and the default model with `CCC_KILO_MODEL`.
+- **Kilo Code session ingestion.** Externally-launched Kilo Code sessions now appear on the board alongside Claude/Codex/Cursor/Antigravity. CCC reads Kilo's SQLite store (`~/.local/share/kilo/kilo.db`) read-only via `find_kilo_conversations`, surfaces each session's title, cwd, model, and live status, and renders full transcripts (user / assistant / tool calls) through `_parse_kilo_conversation`. Detection (`_is_kilo_session`) now probes the DB so historical and terminal-launched sessions route to the Kilo transcript loader.
+- Added a microphone button to both the main conversation input bar and the group chat input row, enabling users to dictate speech directly into the input textareas using the Web Speech API.
+- Added support for new model releases (Gemini 3.5 Pro/Flash, Claude Sonnet/Haiku 4.8, OpenAI o4/o4-mini, and StepFun/GPT-6.0) in the user interface model selection dropdown.
+- Added a premium step-by-step onboarding experience to guide first-time users through agent CLI detection (Claude Code, Antigravity, Cursor, Codex), account setup, and spawning their first session.
+- `/api/sessions/spawn` accepts an optional `report_to` (return address) — the dispatching session's UUID. When set, the spawned session is instructed to POST one structured completion report (STATUS, summary, file paths, failure reason) back to that session via `/api/inject-input` when it finishes. Aliases `return_to` / `reply_to` accepted; value is validated as a session-id-shaped string.
+- Public stats page at https://ccc.amirfish.ai/stats backed by a new read-only `/v1/stats` endpoint on the telemetry worker. Shows live aggregates only: distinct opt-in installs, active-today, anonymous boots per day, version + platform breakdown, and per-install sessions-in-last-24h (just an 8-char install_id prefix, never the full id). Worker caches the response 5 min at the edge so the page is hammer-safe.
+- Added a dedicated Token Throughput Analyzer page (`/throughput`) and corresponding `/api/throughput` endpoint to measure active LLM processing speed (TPM/TPS) and turn durations.
+
+### Changed
+- Draws a visual horizontal line indicator with a progress percentage label and a custom accent handle as the user drags horizontally to collapse/fold earlier conversation messages.
+
+### Fixed
+- UX fixes queue worker rows now show the current queue item and latest queued item, updating when annotations add new fixes.
+
 ## [4.10.0] - 2026-06-07
 
 ### Added
@@ -1606,7 +1626,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v4.10.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v4.11.0...HEAD
+[4.11.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v4.11.0
 [4.10.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v4.10.0
 [4.9.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v4.9.0
 [4.8.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v4.8.0
