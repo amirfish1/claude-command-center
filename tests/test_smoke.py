@@ -4551,7 +4551,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             sys.modules.pop(mod, None)
         import server
         src = pathlib.Path(server.__file__).read_text()
-        self.assertIn("/api/conversations/[a-f0-9-]+/files", src)
+        self.assertIn("/api/conversations/(?:[a-f0-9-]+|ses_[A-Za-z0-9]+)/files", src)
 
     def test_session_initial_scan_keeps_recent_and_live_rows(self):
         """Initial /api/sessions scans should avoid cold history while keeping
@@ -4784,7 +4784,7 @@ class TestModelPicker(unittest.TestCase):
         src = pathlib.Path(server.__file__).read_text()
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
-        self.assertIn("/api/conversations/[^/]+/pin", src)
+        self.assertIn("/api/conversations/(?:[a-f0-9-]+|ses_[A-Za-z0-9]+)/files", src)
         self.assertIn("class=\"conv-pin-btn", js)
         self.assertIn("mergeBtn + startBtn + pinBtn + archiveBtn", js)
         self.assertIn("Pinned to top", js)
