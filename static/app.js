@@ -22657,6 +22657,7 @@
   // sonnet support the 1M-context beta header; haiku does not).
   const MODEL_OPTIONS_BY_ENGINE = {
     claude: [
+      { id: 'opus-4-8',   label: 'opus-4-8',   oneM: true },
       { id: 'opus-4-7',   label: 'opus-4-7',   oneM: true },
       { id: 'sonnet-4-6', label: 'sonnet-4-6', oneM: true },
       { id: 'haiku-4-5',  label: 'haiku-4-5',  oneM: false },
