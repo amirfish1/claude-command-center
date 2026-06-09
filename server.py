@@ -18405,7 +18405,7 @@ def _resolve_kilo_bin():
         "code": "kilo_unavailable",
         "reason": (
             "Kilo Code CLI not found. Install Kilo Code, "
-            "`npm i -g kilo-code`, or set CCC_KILO_BIN."
+            "`npm install -g @kilocode/cli`, or set CCC_KILO_BIN."
         ),
     }
 
@@ -24269,10 +24269,11 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
         spawned_at=timestamp, command_summary=prompt[:200],
         fifo=None, engine="kilo", repo_path=repo_for_logs, model=model_to_use,
     )
-    return _finalize_spawn_response(
-        {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "kilo-spawn"},
-        entry, ctx,
-    )
+    resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "kilo-spawn"}
+    if worktree_path:
+        resp["worktree_path"] = worktree_path
+        resp["worktree_branch"] = worktree_branch
+    return _finalize_spawn_response(resp, entry, ctx)
 
 
 _COLOR_PALETTE = [

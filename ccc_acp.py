@@ -47,7 +47,9 @@ from acp.schema import (
     PlanEntry,
     PromptCapabilities,
     SessionCapabilities,
+    SessionCloseCapabilities,
     SessionInfo,
+    SessionListCapabilities,
 )
 
 # ---------------------------------------------------------------------------

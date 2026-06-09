@@ -7172,6 +7172,7 @@
       : card.source === 'gemini' ? 'Gemini'
       : card.source === 'cursor' ? 'Cursor'
       : card.source === 'antigravity' ? 'Antigravity'
+      : card.source === 'kilo' ? 'Kilo'
       : card.source === 'pkood' ? 'pkood'
       : 'Claude';
     const cwd = card.spawn_cwd || card.repo_path || card.folder_path || card.cwd || '';
@@ -7196,7 +7197,7 @@
       || conversationsData.find(x => x && x.id === 'spawning-' + tempPid);
     if (!placeholder) return null;
     placeholder.spawn_pid = realPid;
-    if ((placeholder.source === 'codex' || placeholder.source === 'gemini' || placeholder.source === 'cursor' || placeholder.source === 'antigravity') && logPath) {
+    if ((placeholder.source === 'codex' || placeholder.source === 'gemini' || placeholder.source === 'cursor' || placeholder.source === 'antigravity' || placeholder.source === 'kilo') && logPath) {
       placeholder.agent_log_path = logPath;
       if (placeholder.source === 'codex') placeholder.codex_log_path = logPath;
     }
@@ -7323,7 +7324,7 @@
       name_overridden: false,
       // Fire-and-watch engines also get durable engine-native sessions; the
       // log path is only a fallback while the real row is materializing.
-      agent_log_path: (source === 'codex' || source === 'gemini' || source === 'cursor' || source === 'antigravity') ? (logPath || null) : null,
+      agent_log_path: (source === 'codex' || source === 'gemini' || source === 'cursor' || source === 'antigravity' || source === 'kilo') ? (logPath || null) : null,
       codex_log_path: source === 'codex' ? (logPath || null) : null,
     };
     if (meta && typeof meta === 'object') {
@@ -7352,7 +7353,7 @@
     // Auto-cleanup after 30s for Claude placeholders. Fire-and-watch placeholders
     // stick around until the durable thread row appears, with the spawn log
     // as a fallback if the CLI exits before creating a thread.
-    if (source !== 'codex' && source !== 'gemini' && source !== 'cursor' && source !== 'antigravity') {
+    if (source !== 'codex' && source !== 'gemini' && source !== 'cursor' && source !== 'antigravity' && source !== 'kilo') {
       setTimeout(() => {
         const direct = pendingSpawns.has(pid) ? [pid, pendingSpawns.get(pid)] : null;
         const adopted = direct || Array.from(pendingSpawns.entries()).find(([, c]) => c && c.id === id);
@@ -22689,6 +22690,12 @@
       { id: 'Claude Opus 4.6 (Thinking)', label: 'Claude Opus 4.6 (Thinking)' },
       { id: 'GPT-OSS 120B (Medium)', label: 'GPT-OSS 120B (Medium)' },
     ],
+    kilo: [
+      { id: 'kilo/stepfun/step-3.7-flash:free', label: 'step-3.7-flash (free, default)' },
+      { id: 'kilo/anthropic/claude-opus-4.8',   label: 'claude-opus-4.8' },
+      { id: 'kilo/anthropic/claude-sonnet-4.6', label: 'claude-sonnet-4.6' },
+      { id: 'kilo/openai/gpt-5.5',              label: 'gpt-5.5' },
+    ],
   };
 
   function _normalizeModelId(s) {
@@ -28863,7 +28870,7 @@
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
-  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity'];
+  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity', 'kilo'];
   const SPAWN_DEFAULT_OTHER = '__other__';
   function normalizeSpawnDefaultEngine(v) {
     if (v === 'gemini') return 'antigravity';
@@ -28873,7 +28880,7 @@
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: 'opus', codex: 'gpt-5.5', cursor: 'auto', antigravity: '' };
+  let _defaultModelsByEngine = { claude: 'opus', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free' };
   let _spawnDefaultsLoaded = false;
   let _spawnDefaultsSaveTimer = null;
   let _spawnDefaultsSaving = false;
@@ -28904,6 +28911,7 @@
     if (engine === 'gemini') return 'Gemini';
     if (engine === 'cursor') return 'Cursor';
     if (engine === 'antigravity') return 'Antigravity';
+    if (engine === 'kilo') return 'Kilo';
     if (engine === 'pkood') return 'pkood';
     return 'Claude';
   }
@@ -28912,6 +28920,7 @@
     if (engine === 'gemini') return 'gemini';
     if (engine === 'cursor') return 'cursor';
     if (engine === 'antigravity') return 'antigravity';
+    if (engine === 'kilo') return 'kilo';
     if (engine === 'pkood') return 'pkood';
     return 'interactive';
   }
@@ -28921,15 +28930,16 @@
     if (engine === 'gemini') return '/api/sessions/spawn-gemini';
     if (engine === 'cursor') return '/api/sessions/spawn-cursor';
     if (engine === 'antigravity') return '/api/sessions/spawn-antigravity';
+    if (engine === 'kilo') return '/api/sessions/spawn-kilo';
     return '/api/sessions/spawn';
   }
   function spawnSupportsWorktree(engine) {
     // pkood orchestrates remote agents and has its own workspace contract,
     // so it doesn't participate in the CCC-managed git-worktree flow.
-    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'cursor' || engine === 'antigravity';
+    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo';
   }
   function spawnUsesLogPlaceholder(engine) {
-    return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity';
+    return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo';
   }
 
   function modelOptionsForSpawnEngine(engine, currentModel, includeOther) {
@@ -29010,6 +29020,7 @@
     if (engine === 'claude' && !value) value = 'opus';
     if (engine === 'codex' && !value) value = 'gpt-5.5';
     if (engine === 'cursor' && !value) value = 'auto';
+    if (engine === 'kilo' && !value) value = 'kilo/stepfun/step-3.7-flash:free';
     spawnDefaultsState.models[engine] = value;
     _defaultModelsByEngine[engine] = value;
     syncSpawnEngineDependentUi();
@@ -29133,6 +29144,7 @@
       probe('gemini', '/api/sessions/spawn-gemini/availability', 'Gemini'),
       probe('cursor', '/api/sessions/spawn-cursor/availability', 'Cursor'),
       probe('antigravity', '/api/sessions/spawn-antigravity/availability', 'Antigravity'),
+      probe('kilo', '/api/sessions/spawn-kilo/availability', 'Kilo'),
     ]);
     syncSpawnEngineDependentUi();
   }

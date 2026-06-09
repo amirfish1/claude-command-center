@@ -1,0 +1,1 @@
+**ACP server adapter** (`ccc_acp.py`). Exposes CCC over the [Agent Client Protocol](https://agentclientprotocol.com) so editors and ACP clients (VS Code, JetBrains, Zed, Hermes) can drive Claude Code sessions over JSON-RPC stdio. Optional: requires `pip install agent-client-protocol` and is launched separately (`python3 ccc_acp.py`); the core stdlib-only server is unaffected.

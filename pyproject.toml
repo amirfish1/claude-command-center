@@ -29,6 +29,14 @@ classifiers = [
 # install whichever ones you want and the corresponding UI surfaces light up.
 dependencies = []
 
+# Optional extras. The core server (`server.py`) stays stdlib-only; these are
+# only needed by separately-launched companion processes.
+#   acp — the ACP server adapter (`ccc_acp.py`), an Agent Client Protocol
+#         bridge so editors/ACP clients can drive Claude Code sessions.
+#         Launched on its own: `python3 ccc_acp.py`.
+[project.optional-dependencies]
+acp = ["agent-client-protocol>=0.10"]
+
 [project.urls]
 Homepage = "https://github.com/amirfish1/claude-command-center"
 Repository = "https://github.com/amirfish1/claude-command-center"
