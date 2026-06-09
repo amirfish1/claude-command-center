@@ -48,6 +48,7 @@ All operations (except List) use `curl -s -X POST "$CCC_URL<endpoint>" -H "Conte
   *Returns cross-repo sessions plus the spawned-run registry.*
 - **Spawn:** `/api/sessions/spawn` 
   *Payload:* `{"prompt": "...", "repo_path": "/abs/repo", "engine": "claude|codex|antigravity", "model": "..."}`. `repo_path` (or `cwd`) is required. `engine` and `model` are optional; when omitted, CCC uses the server-side defaults from **Settings → Spawn defaults…**. Legacy `gemini` maps to `antigravity`.
+  *Return address (optional):* Add `"report_to": "<your-session-id>"` (aliases: `return_to`, `reply_to`) to the payload. CCC appends a footer to the spawned agent's prompt instructing it to POST a structured completion report back to your session via `/api/inject-input` when it finishes (success or failure). The report format is: `STATUS: SUCCEEDED|FAILED / SUMMARY: ... / FILES: ... / REASON: ...` (reason only on failure). Use this to get async completion callbacks without polling.
   *Returns:* `{"ok": true, "session_id": "...", "spawn_id": "123", "engine": "...", "repo_path": "...", "cwd": "...", "session_id_pending": false}`. Prefer `session_id` immediately; if pending, poll Spawned Runs by `spawn_id`.
 - **Inject (Fire & Forget):** `/api/inject-input`
   *Payload:* `{"session_id": "<uuid>", "text": "..."}`. CCC detects the target session's engine.
