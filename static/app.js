@@ -2228,6 +2228,13 @@
     questions: null,     // questions array currently rendered
     selections: null,    // per-question state: { picked:Set<int>, custom:string }
   };
+  // CCC-46: nonce of the question we most recently answered. Survives the
+  // _relayedQuestionState reset on close. The relay request file lingers a
+  // moment after /api/answer-question (the blocking hook clears it on its own
+  // poll), so /api/question keeps returning the just-answered question as
+  // "pending" briefly — without this guard the poll re-mounts the modal and
+  // flashes the question the user already answered.
+  let _lastAnsweredQuestionNonce = null;
 
   function _relayedQuestionInlineEl() {
     return document.querySelector('[data-role="ccc-inline-question"]');
@@ -2334,6 +2341,12 @@
         if (!currentSession || currentSession.id !== fetchedFor) return;
         if (!data || !data.ok || !data.pending) {
           // Nothing pending after all — tear down a stale card if present.
+          if (_relayedQuestionInlineEl()) closeRelayedQuestionInline();
+          return;
+        }
+        // Just-answered question still reported pending (relay file not yet torn
+        // down) — don't re-mount it and flash the answered question.
+        if (data.nonce && data.nonce === _lastAnsweredQuestionNonce) {
           if (_relayedQuestionInlineEl()) closeRelayedQuestionInline();
           return;
         }
@@ -2535,6 +2548,9 @@
       .then(function (data) {
         _relayedQuestionState.submitting = false;
         if (data && data.ok) {
+          // Remember what we answered so the poll doesn't re-mount it while the
+          // relay request file is still being torn down server-side.
+          _lastAnsweredQuestionNonce = _relayedQuestionState.nonce || _lastAnsweredQuestionNonce;
           closeRelayedQuestionModal();
           return;
         }
@@ -2976,20 +2992,17 @@
     const ts = liveStatus.sidecarTs || 0;
     const ageSec = ts ? Math.max(0, Math.floor(Date.now() / 1000 - ts)) : 9999;
     const isQuestion = tool === 'AskUserQuestion' || !!liveStatus.questionWaiting;
-    // CCC-46: when the relayed answer modal is mounted for THIS session, it is
-    // the single source of truth for the pending question (it routes through
-    // /api/answer-question and handles multi-question). This live-strip card
-    // answers by typing into the composer + sendToTerminal — correct for
-    // terminal sessions, but for a headless relay that path goes to the ether.
-    // Rendering both is the "double" the user sees. Suppress the strip's
-    // question card while the modal is up; terminal questions (no modal) keep it.
-    const _modalActive = (function () {
-      const csid = currentSession && currentSession.id;
-      return !!(csid && _relayedQuestionState && _relayedQuestionState.sessionId === csid
-        && typeof _relayedQuestionInlineEl === 'function' && _relayedQuestionInlineEl());
-    })();
+    // CCC-46: a HEADLESS question (no tty) is owned by the relayed answer modal
+    // — it routes through /api/answer-question and handles multi-question. This
+    // live-strip card answers by typing into the composer + sendToTerminal,
+    // which is correct for a TERMINAL session but goes to the ether for a
+    // headless relay. Suppress the strip's question card for headless questions
+    // entirely (not just while the modal is mounted) — otherwise it flashes the
+    // just-answered question in the gap between the modal closing and the server
+    // clearing question_waiting. Terminal questions (tty present) keep the card.
+    const _headlessQuestion = isQuestion && !liveStatus.tty;
     const shouldShow = liveStatus.live && tool && liveStatus.sidecarStatus === 'active'
-      && (ageSec < 300 || isQuestion) && !(isQuestion && _modalActive);
+      && (ageSec < 300 || isQuestion) && !_headlessQuestion;
     if (!shouldShow) {
       if (inline) inline.remove();
       updateLiveStripOffset($view, null);
