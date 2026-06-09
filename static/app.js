@@ -4823,7 +4823,9 @@
       };
 
       _sttRecognition.onerror = (event) => {
-        if (event.error !== 'aborted') {
+        if (event.error === 'not-allowed') {
+          showOpToast('Microphone access blocked. Please allow mic permissions in your browser & macOS Privacy settings.', 'error');
+        } else if (event.error !== 'aborted') {
           showOpToast('Speech recognition error: ' + event.error, 'error');
         }
         stopSpeechRecognition();
