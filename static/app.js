@@ -2427,8 +2427,8 @@
           + '<span class="cl-question-option-label">' + escapeHtml(opt.label || '') + '</span>'
           + (opt.description ? '<span class="cl-question-option-desc">' + escapeHtml(opt.description) + '</span>' : '')
           // CCC-46: the optional `preview` field — a richer block the native
-          // picker reveals on focus. Hidden by default; CSS shows it when the
-          // option is selected so the list stays scannable.
+          // picker reveals on focus. Always in the DOM; CSS shows it when the
+          // option is selected so it doesn't bloat the list.
           + (opt.preview ? '<span class="cl-question-option-preview">' + escapeHtml(opt.preview) + '</span>' : '')
           + '</button>'
           + '</li>';
