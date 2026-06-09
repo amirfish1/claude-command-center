@@ -848,11 +848,11 @@
         return;
       }
       
-      // Scales: use 95th percentile to prevent extreme outliers from flattening the chart
+      // Scales: use 99th percentile to prevent extreme outliers from flattening the chart
       const sortedTpm = data.map(d => d.tpm).sort((a, b) => a - b);
-      let maxTpm = sortedTpm[Math.floor(sortedTpm.length * 0.95)] || 1000;
+      let maxTpm = sortedTpm[Math.floor(sortedTpm.length * 0.99)] || 1000;
       const trueMax = sortedTpm[sortedTpm.length - 1] || 1000;
-      if (trueMax < maxTpm * 1.5) {
+      if (trueMax < maxTpm * 3.0) {
         maxTpm = trueMax;
       }
       
