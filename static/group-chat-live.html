@@ -446,6 +446,10 @@
     </div>
     <button class="btn btn-primary" onclick="openCreateModal()">+ New Chat</button>
     <button class="btn btn-sm" onclick="refreshAll()">&#x21BB; Refresh</button>
+    <!-- Shown only in a PWA/standalone window (see init script): there a new
+         tab cannot open, so this is the only way back to the dashboard. In a
+         normal browser tab it stays hidden and behaviour is unchanged. -->
+    <a class="btn btn-sm" id="backToCccBtn" href="/" title="Back to the CCC dashboard" style="display:none">&#8592; CCC</a>
   </div>
 </div>
 
@@ -1148,6 +1152,20 @@
   });
 
   /* ── Init ── */
+  // The dashboard opens this page in a new tab. A new tab cannot open inside
+  // an installed PWA (standalone display mode), which would strand the user
+  // here with no way back. Reveal the Back-to-CCC link only in that case so
+  // normal browser-tab behaviour is left untouched.
+  (function revealBackInStandalone() {
+    var standalone =
+      (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+      window.navigator.standalone === true;
+    if (standalone) {
+      var back = document.getElementById('backToCccBtn');
+      if (back) back.style.display = '';
+    }
+  })();
+
   fetchChats().then(function() { startPolling(); });
 
 })();
