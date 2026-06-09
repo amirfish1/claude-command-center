@@ -1173,10 +1173,10 @@ def _cli_model_flag(model):
             m = m[: -len(tail)].strip()
     if not m:
         return ""
-    # Versioned aliases like 'sonnet-4-6', 'opus-4-8', 'haiku-4-5' need the
-    # 'claude-' prefix for --model (the /model slash command accepts the bare
-    # alias, but the CLI flag does not for 4.x models).
-    if not m.lower().startswith("claude-") and re.match(r"^(sonnet|opus|haiku)-\d", m.lower()):
+    # Versioned aliases like 'sonnet-4-6', 'opus-4-8', 'haiku-4-5', 'fable-5'
+    # need the 'claude-' prefix for --model (the /model slash command accepts
+    # the bare alias, but the CLI flag does not for these models).
+    if not m.lower().startswith("claude-") and re.match(r"^(sonnet|opus|haiku|fable)-\d", m.lower()):
         m = "claude-" + m
     return m
 
@@ -2224,7 +2224,7 @@ def _clean_spawn_default_model(value):
 
 def _spawn_fallback_model_for_engine(engine):
     if engine == "claude":
-        return "opus"
+        return os.environ.get("CCC_CLAUDE_MODEL", "claude-fable-5")
     if engine == "codex":
         return os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
     if engine == "cursor":

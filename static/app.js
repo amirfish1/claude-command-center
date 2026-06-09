@@ -7235,6 +7235,7 @@
     if ($convList) {
       $convList.querySelectorAll('.conv-item').forEach(el => {
         el.classList.toggle('active', el.dataset.id === convId);
+        el.classList.remove('mobile-tapped');
       });
     }
     if ($kanbanBoard) {
@@ -17780,6 +17781,20 @@
       el.addEventListener('mouseleave', () => {
         _convPrefetchCancel(el.dataset.id);
       });
+      el.addEventListener('touchstart', () => {
+        if (isMobile()) {
+          el.classList.add('mobile-active-tap');
+        }
+      }, { passive: true });
+      el.addEventListener('touchend', () => {
+        el.classList.remove('mobile-active-tap');
+      }, { passive: true });
+      el.addEventListener('touchmove', () => {
+        el.classList.remove('mobile-active-tap');
+      }, { passive: true });
+      el.addEventListener('touchcancel', () => {
+        el.classList.remove('mobile-active-tap');
+      }, { passive: true });
       el.addEventListener('click', (ev) => {
         // Ignore clicks that started the inline editor, archive button,
         // the context-% badge (its own confirm-and-/compact handler runs
@@ -17802,6 +17817,10 @@
           document.querySelectorAll('.conv-item.list-selected').forEach(n => n.classList.remove('list-selected'));
           selectedListIds.clear();
           updateCoordToolbar();
+        }
+        if (isMobile()) {
+          $convList.querySelectorAll('.conv-item.mobile-tapped').forEach(n => n.classList.remove('mobile-tapped'));
+          el.classList.add('mobile-tapped');
         }
         const row = conversationsData.find(c => c.id === el.dataset.id);
         selectConversation(el.dataset.id);
@@ -23218,6 +23237,7 @@
   // sonnet support the 1M-context beta header; haiku does not).
   const MODEL_OPTIONS_BY_ENGINE = {
     claude: [
+      { id: 'fable-5',    label: 'fable-5',    oneM: false },
       { id: 'sonnet-4-8', label: 'sonnet-4-8', oneM: true },
       { id: 'opus-4-8',   label: 'opus-4-8',   oneM: true },
       { id: 'opus-4-7',   label: 'opus-4-7',   oneM: true },
@@ -23450,24 +23470,27 @@
   // Each row carries the bare alias in `id` plus its 1M / legacy flags. Numbers
   // mirror the native keyboard shortcuts (1-7).
   const CLAUDE_MODEL_MENU = [
-    { id: 'opus-4-8',   label: 'Opus 4.8',   num: '1' },
-    { id: 'opus-4-8',   label: 'Opus 4.8',   num: '2', context_1m: true },
-    { id: 'sonnet-4-6', label: 'Sonnet 4.6', num: '3' },
-    { id: 'haiku-4-5',  label: 'Haiku 4.5',  num: '4' },
-    { id: 'opus-4-7',   label: 'Opus 4.7',   num: '5', legacy: true },
-    { id: 'opus-4-7',   label: 'Opus 4.7',   num: '6', legacy: true, context_1m: true },
-    { id: 'opus-4-6',   label: 'Opus 4.6',   num: '7', legacy: true },
+    { id: 'fable-5',    label: 'Fable 5',    num: '1' },
+    { id: 'opus-4-8',   label: 'Opus 4.8',   num: '2' },
+    { id: 'opus-4-8',   label: 'Opus 4.8',   num: '3', context_1m: true },
+    { id: 'sonnet-4-6', label: 'Sonnet 4.6', num: '4' },
+    { id: 'haiku-4-5',  label: 'Haiku 4.5',  num: '5' },
+    { id: 'opus-4-7',   label: 'Opus 4.7',   num: '6', legacy: true },
+    { id: 'opus-4-7',   label: 'Opus 4.7',   num: '7', legacy: true, context_1m: true },
+    { id: 'opus-4-6',   label: 'Opus 4.6',   num: '8', legacy: true },
   ];
   // Claude Code's current shipped default model. Shown in the menu's top
   // "· Default" row.
-  const CLAUDE_DEFAULT_MODEL = 'sonnet-4-6';
+  const CLAUDE_DEFAULT_MODEL = 'fable-5';
 
   // Map a model alias/id to the menu's friendly label ("opus-4-8" → "Opus 4.8").
   function _claudeFriendlyModelName(id) {
     const n = _normalizeModelId(id);
     const m = n.match(/^(opus|sonnet|haiku)-(\d+)-(\d+)$/);
     if (m) return m[1][0].toUpperCase() + m[1].slice(1) + ' ' + m[2] + '.' + m[3];
-    const bare = n.match(/^(opus|sonnet|haiku)$/);
+    const f = n.match(/^fable-(\d+)$/);
+    if (f) return 'Fable ' + f[1];
+    const bare = n.match(/^(opus|sonnet|haiku|fable)$/);
     if (bare) return bare[1][0].toUpperCase() + bare[1].slice(1);
     return id || n;
   }
@@ -23657,7 +23680,7 @@
     if (engine === 'claude') {
       const claudeRows = Array.from(pop.querySelectorAll('.mp-claude-row[data-model]'));
       pop.__mpNumberHandler = (ev) => {
-        if (ev.key >= '1' && ev.key <= '7') {
+        if (ev.key >= '1' && ev.key <= '9') {
           const row = claudeRows.find((r) => r.querySelector('.mp-num') && r.querySelector('.mp-num').textContent === ev.key);
           if (row) { ev.preventDefault(); ev.stopPropagation(); row.click(); }
         }
@@ -29760,7 +29783,7 @@
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: 'opus', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free' };
+  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free' };
   let _spawnDefaultsLoaded = false;
   let _spawnDefaultsSaveTimer = null;
   let _spawnDefaultsSaving = false;
