@@ -30979,6 +30979,14 @@
 
   const WHATS_NEW_FEATURES = [
     {
+      id: 'fable-5',
+      title: 'Claude Fable 5 Support',
+      date: 'Jun 9, 2026',
+      tag: 'Models',
+      desc: '<p>CCC now supports <strong>Claude Fable 5</strong> — Anthropic\'s new top-tier model above Opus — everywhere a Claude model can be picked.</p><p>Fable 5 is the new <strong>default for spawned sessions</strong>, sits at the top of the redesigned model picker (a faithful replica of Claude Code\'s native <code>/model</code> menu, with number-key shortcuts and 1M-context variants), and live sessions can switch to it mid-conversation with one click.</p>',
+      mockup: '<div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--bg,#0d1117);font-size:12px;max-width:280px;"><div style="display:flex;justify-content:space-between;color:var(--text-muted);padding:2px 8px 8px;">Models <span style="font-size:10px;">⇧ ⌘ I</span></div><div style="padding:6px 8px;border-radius:5px;color:var(--text);">Fable 5 <span style="color:var(--text-muted);">· Default</span> <span style="float:right;">✓</span></div><div style="height:1px;background:var(--border);margin:5px 4px;"></div><div style="display:flex;justify-content:space-between;padding:5px 8px;color:var(--text);"><span>Fable 5</span><span style="color:var(--text-muted);">1</span></div><div style="display:flex;justify-content:space-between;padding:5px 8px;color:var(--text);"><span>Opus 4.8</span><span style="color:var(--text-muted);">2</span></div><div style="display:flex;justify-content:space-between;padding:5px 8px;color:var(--text);"><span>Opus 4.8 (1M context)</span><span style="color:var(--text-muted);">3</span></div><div style="display:flex;justify-content:space-between;padding:5px 8px;color:var(--text-muted);"><span>Opus 4.7 <span style="opacity:0.7;">Legacy</span></span><span>6</span></div></div>'
+    },
+    {
       id: 'subagent-tabs',
       title: 'Subagent Tabs',
       date: 'Jun 3, 2026',

@@ -1,0 +1,1 @@
+- Claude Fable 5 support: new top-tier model available in the model picker, set as the default for spawned Claude sessions, with live mid-session switching. The Claude model picker is now a faithful replica of Claude Code's native `/model` menu (number-key shortcuts, 1M-context variants, Fast mode toggle on Opus models).
