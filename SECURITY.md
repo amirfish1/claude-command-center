@@ -11,6 +11,7 @@ The server:
 - Spawns headless Claude sessions with `--dangerously-skip-permissions`. Anyone who can reach the API can ask the headless Claude to read any file your user can read, write to disk, run commands, and reach the network.
 - Reads Claude Code conversation transcripts under `~/.claude/projects/`.
 - Writes per-user state under `~/.claude/command-center/` (renamed from `~/.claude/log-viewer/` — the server auto-migrates on first launch). These files are created with your default umask (typically world-readable on macOS). On a shared machine, run `chmod 700 ~/.claude/command-center/`.
+- **Experimental ACP adapter**: The optional `ccc_acp.py` standalone script exposes a JSON-RPC bridge over stdio. If manually run, it accepts arbitrary working directories from the connecting client (e.g., your IDE) and spawns Claude with `--dangerously-skip-permissions` in those paths.
 
 If you expose the port to the network, the LAN, or the internet, you are giving every reachable peer the ability to run arbitrary commands as your user. **Don't.**
 
