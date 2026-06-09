@@ -2259,26 +2259,38 @@
   // history. Idempotent + re-applied on each render (the transcript rebuilds
   // the inline blocks without the hide class).
   function _syncLiveQuestionDuplicateHide() {
-    const view = (typeof getConvView === 'function') ? getConvView() : null;
-    if (!view) return;
-    view.querySelectorAll('.is-live-question-dup').forEach(function (n) {
+    // Clear every prior hide across the WHOLE document first — the conv pane
+    // can hold more than one `.conversations-view` (split view, the popout
+    // reader), and a stale hide in any of them must be cleared.
+    document.querySelectorAll('.is-live-question-dup').forEach(function (n) {
       n.classList.remove('is-live-question-dup');
     });
-    // CCC-55: hide the inline transcript copy whenever a RELAYED question is
-    // active for the open session — keyed on _relayedQuestionState.sessionId
-    // (module state), NOT the live card element. The transcript re-renders on
-    // its own poll and transiently destroys/re-creates the card DOM; keying on
-    // the element meant the dedup saw `cardEl === null` right after most
-    // rebuilds and left the inline copy visible → the persistent "still seeing
-    // double". The relay state survives those rebuilds and is relay-specific
-    // (never set for terminal-answered questions, so those still read inline).
+    // CCC-46/CCC-55: hide the inline transcript copy of the question that the
+    // relayed answer card is currently answering. Earlier versions scoped the
+    // search to ONE `.conversations-view` (the active pane, or the card's
+    // closest ancestor). When the card and the inline block live in DIFFERENT
+    // conversations-view nodes — which the layout does have (the CCC-55 anchor
+    // was `.conversations-view:nth-of-type(2)`) — the hide searched the wrong
+    // view, found nothing, and the question rendered twice. Fix: match the
+    // pending question by CONTENT (header + question text) and hide its inline
+    // copy wherever it lives. Content-matching also leaves answered/historical
+    // questions and other panes' questions visible.
     const sid = currentSession && currentSession.id;
     const relayActive = sid && _relayedQuestionState && _relayedQuestionState.sessionId === sid;
     if (!relayActive) return;
-    const blocks = view.querySelectorAll('.ask-user-block');
-    if (!blocks.length) return;
-    const last = blocks[blocks.length - 1];
-    (last.closest('.tool-call') || last).classList.add('is-live-question-dup');
+    const qs = _relayedQuestionState.questions || [];
+    if (!qs.length) return;
+    const SEP = '';
+    const keys = new Set(qs.map(function (q) {
+      return ((q.header || '').trim() + SEP + (q.question || '').trim());
+    }));
+    document.querySelectorAll('.conversations-view .ask-user-block').forEach(function (blk) {
+      const h = (blk.querySelector('.ask-user-header') || {}).textContent || '';
+      const q = (blk.querySelector('.ask-user-question-text') || {}).textContent || '';
+      if (keys.has(h.trim() + SEP + q.trim())) {
+        (blk.closest('.tool-call') || blk).classList.add('is-live-question-dup');
+      }
+    });
   }
 
   // Called each poll tick. Decides whether to fetch/show/close the inline
