@@ -23019,9 +23019,77 @@
       });
   }
 
+  // The Claude `/model` menu, replicated 1:1 from Claude Code's native picker.
+  // Each row carries the bare alias in `id` plus its 1M / legacy flags. Numbers
+  // mirror the native keyboard shortcuts (1-7).
+  const CLAUDE_MODEL_MENU = [
+    { id: 'opus-4-8',   label: 'Opus 4.8',   num: '1' },
+    { id: 'opus-4-8',   label: 'Opus 4.8',   num: '2', context_1m: true },
+    { id: 'sonnet-4-6', label: 'Sonnet 4.6', num: '3' },
+    { id: 'haiku-4-5',  label: 'Haiku 4.5',  num: '4' },
+    { id: 'opus-4-7',   label: 'Opus 4.7',   num: '5', legacy: true },
+    { id: 'opus-4-7',   label: 'Opus 4.7',   num: '6', legacy: true, context_1m: true },
+    { id: 'opus-4-6',   label: 'Opus 4.6',   num: '7', legacy: true },
+  ];
+  // Claude Code's current shipped default model. Shown in the menu's top
+  // "· Default" row.
+  const CLAUDE_DEFAULT_MODEL = 'sonnet-4-6';
+
+  // Map a model alias/id to the menu's friendly label ("opus-4-8" → "Opus 4.8").
+  function _claudeFriendlyModelName(id) {
+    const n = _normalizeModelId(id);
+    const m = n.match(/^(opus|sonnet|haiku)-(\d+)-(\d+)$/);
+    if (m) return m[1][0].toUpperCase() + m[1].slice(1) + ' ' + m[2] + '.' + m[3];
+    const bare = n.match(/^(opus|sonnet|haiku)$/);
+    if (bare) return bare[1][0].toUpperCase() + bare[1].slice(1);
+    return id || n;
+  }
+
+  function _buildClaudeModelMenuHtml(currentNorm, currentIs1M) {
+    const defNorm = _normalizeModelId(CLAUDE_DEFAULT_MODEL);
+    const defaultActive = currentNorm === defNorm && !currentIs1M;
+    const defLabel = _claudeFriendlyModelName(CLAUDE_DEFAULT_MODEL);
+    let html = ''
+      + '<div class="mp-header">'
+      +   '<span class="mp-header-title">Models</span>'
+      +   '<span class="mp-keys"><kbd>⇧</kbd><kbd>⌘</kbd><kbd>I</kbd></span>'
+      + '</div>'
+      + '<button type="button" class="mp-row mp-default-row' + (defaultActive ? ' active' : '') + '"'
+      +   ' data-mp-reset data-model="' + escapeHtml(CLAUDE_DEFAULT_MODEL) + '">'
+      +   '<span class="mp-name">' + escapeHtml(defLabel) + '</span>'
+      +   '<span class="mp-default-tag"> · Default</span>'
+      +   '<span class="mp-check">' + (defaultActive ? '✓' : '') + '</span>'
+      + '</button>'
+      + '<div class="mp-divider"></div>';
+    CLAUDE_MODEL_MENU.forEach((opt) => {
+      const ctx1m = !!opt.context_1m;
+      const isActive = _normalizeModelId(opt.id) === currentNorm && ctx1m === !!currentIs1M;
+      html += '<button type="button" class="mp-row mp-claude-row' + (isActive ? ' active' : '') + '"'
+        + ' data-model="' + escapeHtml(opt.id) + '"'
+        + ' data-ctx1m="' + (ctx1m ? '1' : '0') + '">'
+        + '<span class="mp-name">' + escapeHtml(opt.label) + (ctx1m ? ' (1M context)' : '') + '</span>'
+        + (opt.legacy ? '<span class="mp-legacy">Legacy</span>' : '')
+        + '<span class="mp-check">' + (isActive ? '✓' : '') + '</span>'
+        + '<span class="mp-num">' + escapeHtml(opt.num) + '</span>'
+        + '</button>';
+    });
+    html += '<div class="mp-divider"></div>'
+      + '<div class="mp-section">Fast mode</div>'
+      + '<button type="button" class="mp-row mp-fast-row" data-mp-fast>'
+      +   '<span class="mp-name">Enable fast mode</span>'
+      +   '<span class="mp-switch" data-mp-switch></span>'
+      + '</button>'
+      + '<div class="mp-status" data-mp-status></div>';
+    return html;
+  }
+
   function closeModelPicker() {
     closePlanUsagePopover();
     if (_modelPickerEl) {
+      if (_modelPickerEl.__mpNumberHandler) {
+        document.removeEventListener('keydown', _modelPickerEl.__mpNumberHandler, true);
+        _modelPickerEl.__mpNumberHandler = null;
+      }
       _modelPickerEl.remove();
       _modelPickerEl = null;
     }
@@ -23043,27 +23111,32 @@
     const currentNorm = _normalizeModelId(currentModel);
 
     const pop = document.createElement('div');
-    pop.className = 'model-picker-pop open';
-    let html = '<div class="mp-header">Switch model — ' + escapeHtml(engine) + '</div>';
-    options.forEach((opt) => {
-      const isActive = _normalizeModelId(opt.id) === currentNorm;
-      const oneM = !!opt.oneM;
-      const oneMOn = isActive && currentIs1M;
-      html += '<button type="button" class="mp-row' + (isActive ? ' active' : '') + '" data-model="' + escapeHtml(opt.id) + '">'
-        + escapeHtml(opt.label || opt.id);
-      if (oneM) {
-        html += '<span class="mp-1m-toggle' + (oneMOn ? ' on' : '') + '" data-1m-toggle title="1M context (anthropic-beta: context-1m)">1M</span>';
-      }
-      html += '</button>';
-    });
-    html += '<div class="mp-divider"></div>';
-    html += '<div class="mp-other">'
-      + '<input type="text" placeholder="Other model…" data-mp-other-input>'
-      + '<button type="button" data-mp-other-apply>Apply</button>'
-      + '</div>';
-    html += '<div class="mp-divider"></div>';
-    html += '<button type="button" class="mp-row mp-reset" data-mp-reset>↺ Reset to session default</button>';
-    html += '<div class="mp-status" data-mp-status></div>';
+    pop.className = 'model-picker-pop open' + (engine === 'claude' ? ' mp-claude' : '');
+    let html;
+    if (engine === 'claude') {
+      html = _buildClaudeModelMenuHtml(currentNorm, currentIs1M);
+    } else {
+      html = '<div class="mp-header">Switch model — ' + escapeHtml(engine) + '</div>';
+      options.forEach((opt) => {
+        const isActive = _normalizeModelId(opt.id) === currentNorm;
+        const oneM = !!opt.oneM;
+        const oneMOn = isActive && currentIs1M;
+        html += '<button type="button" class="mp-row' + (isActive ? ' active' : '') + '" data-model="' + escapeHtml(opt.id) + '">'
+          + escapeHtml(opt.label || opt.id);
+        if (oneM) {
+          html += '<span class="mp-1m-toggle' + (oneMOn ? ' on' : '') + '" data-1m-toggle title="1M context (anthropic-beta: context-1m)">1M</span>';
+        }
+        html += '</button>';
+      });
+      html += '<div class="mp-divider"></div>';
+      html += '<div class="mp-other">'
+        + '<input type="text" placeholder="Other model…" data-mp-other-input>'
+        + '<button type="button" data-mp-other-apply>Apply</button>'
+        + '</div>';
+      html += '<div class="mp-divider"></div>';
+      html += '<button type="button" class="mp-row mp-reset" data-mp-reset>↺ Reset to session default</button>';
+      html += '<div class="mp-status" data-mp-status></div>';
+    }
     pop.innerHTML = html;
 
     // Anchor: prefer below the pill, but flip ABOVE if the popup would
@@ -23127,7 +23200,9 @@
       }
     }
 
-    pop.querySelectorAll('.mp-row[data-model]').forEach((row) => {
+    // Selectable model rows. The Claude default row carries data-mp-reset and is
+    // wired separately (it clears the override rather than pinning a model).
+    pop.querySelectorAll('.mp-row[data-model]:not([data-mp-reset])').forEach((row) => {
       row.addEventListener('click', (ev) => {
         const t = ev.target;
         if (t && t.matches && t.matches('[data-1m-toggle]')) {
@@ -23138,11 +23213,45 @@
           return;
         }
         const model = row.dataset.model;
-        const oneMChip = row.querySelector('[data-1m-toggle]');
-        const oneM = !!(oneMChip && oneMChip.classList.contains('on'));
+        // Claude rows encode 1M on the row itself (data-ctx1m); other engines
+        // use the inline 1M chip.
+        let oneM;
+        if (row.dataset.ctx1m != null) {
+          oneM = row.dataset.ctx1m === '1';
+        } else {
+          const oneMChip = row.querySelector('[data-1m-toggle]');
+          oneM = !!(oneMChip && oneMChip.classList.contains('on'));
+        }
         applyModel(model, oneM);
       });
     });
+
+    // Claude menu: number keys 1-7 select rows; Fast-mode toggle injects /fast.
+    if (engine === 'claude') {
+      const claudeRows = Array.from(pop.querySelectorAll('.mp-claude-row[data-model]'));
+      pop.__mpNumberHandler = (ev) => {
+        if (ev.key >= '1' && ev.key <= '7') {
+          const row = claudeRows.find((r) => r.querySelector('.mp-num') && r.querySelector('.mp-num').textContent === ev.key);
+          if (row) { ev.preventDefault(); ev.stopPropagation(); row.click(); }
+        }
+      };
+      document.addEventListener('keydown', pop.__mpNumberHandler, true);
+      const fastRow = pop.querySelector('[data-mp-fast]');
+      if (fastRow) {
+        fastRow.addEventListener('click', async () => {
+          const sw = fastRow.querySelector('[data-mp-switch]');
+          if (sw) sw.classList.toggle('on');
+          setStatus('Toggling fast mode…');
+          try {
+            const data = await postInjectInput(sid, '/fast', 'enqueue');
+            setStatus(data && data.ok === false ? (data.error || 'Failed') : 'Fast mode toggled ✓',
+              data && data.ok === false ? 'err' : 'ok');
+          } catch (_) {
+            setStatus('Network error', 'err');
+          }
+        });
+      }
+    }
     const otherInput = pop.querySelector('[data-mp-other-input]');
     const otherApply = pop.querySelector('[data-mp-other-apply]');
     if (otherApply && otherInput) {

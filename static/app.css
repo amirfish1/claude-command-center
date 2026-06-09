@@ -2261,6 +2261,62 @@
   }
   .model-picker-pop .mp-status.ok { color: var(--green); }
   .model-picker-pop .mp-status.err { color: var(--red); }
+
+  /* Claude `/model` menu — replicates Claude Code's native picker. */
+  .model-picker-pop.mp-claude {
+    min-width: 340px; padding: 6px; gap: 1px;
+    font-size: 14px;
+  }
+  .model-picker-pop.mp-claude .mp-header {
+    display: flex; align-items: center; justify-content: space-between;
+    text-transform: none; letter-spacing: 0; font-weight: 400;
+    font-size: 14px; color: var(--text-muted);
+    padding: 6px 10px 8px;
+  }
+  .model-picker-pop.mp-claude .mp-keys { display: flex; gap: 4px; }
+  .model-picker-pop.mp-claude .mp-keys kbd {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 22px; height: 22px; padding: 0 4px;
+    border: 1px solid var(--border); border-radius: 5px;
+    background: var(--surface-2); color: var(--text-muted);
+    font-family: inherit; font-size: 12px; line-height: 1;
+  }
+  .model-picker-pop.mp-claude .mp-row {
+    gap: 0; padding: 7px 10px; border-radius: 6px;
+    font-size: 14px; font-weight: 400;
+  }
+  .model-picker-pop.mp-claude .mp-row.active { background: transparent; color: var(--text); font-weight: 400; }
+  .model-picker-pop.mp-claude .mp-row:hover { background: var(--surface-2); }
+  .model-picker-pop.mp-claude .mp-name { color: var(--text); }
+  .model-picker-pop.mp-claude .mp-default-tag,
+  .model-picker-pop.mp-claude .mp-legacy { color: var(--text-muted); }
+  .model-picker-pop.mp-claude .mp-legacy { margin-left: 6px; }
+  .model-picker-pop.mp-claude .mp-check {
+    margin-left: auto; width: 18px; text-align: center; color: var(--text);
+  }
+  .model-picker-pop.mp-claude .mp-default-row .mp-check { margin-left: auto; }
+  .model-picker-pop.mp-claude .mp-num {
+    width: 20px; text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums;
+  }
+  /* Default row has no trailing number, so its check sits at the far right. */
+  .model-picker-pop.mp-claude .mp-section {
+    padding: 6px 10px 2px; font-size: 14px; color: var(--text-muted);
+  }
+  .model-picker-pop.mp-claude .mp-fast-row { padding-top: 4px; }
+  .model-picker-pop.mp-claude .mp-switch {
+    margin-left: auto; position: relative;
+    width: 34px; height: 18px; border-radius: 10px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    transition: background 0.15s;
+  }
+  .model-picker-pop.mp-claude .mp-switch::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--text-muted); transition: transform 0.15s, background 0.15s;
+  }
+  .model-picker-pop.mp-claude .mp-switch.on { background: var(--accent); border-color: var(--accent); }
+  .model-picker-pop.mp-claude .mp-switch.on::after { transform: translateX(16px); background: #fff; }
+  .model-picker-pop.mp-claude .mp-divider { margin: 5px 4px; }
   .conv-input-context .wp-ahead { color: var(--green); }
   .conv-input-context .wp-behind { color: var(--orange); }
   .conv-input-context .wp-even { color: var(--text-muted); opacity: 0.6; }
