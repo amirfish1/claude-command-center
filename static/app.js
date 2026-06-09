@@ -2235,6 +2235,20 @@
   // "pending" briefly — without this guard the poll re-mounts the modal and
   // flashes the question the user already answered.
   let _lastAnsweredQuestionNonce = null;
+  // Debug hook: read the live relay-card state from the console to diagnose a
+  // "card won't appear" report (is `fetching` wedged? which nonce/session?).
+  try {
+    window.__cccRelayState = function () {
+      return {
+        sessionId: _relayedQuestionState.sessionId,
+        nonce: _relayedQuestionState.nonce,
+        fetching: _relayedQuestionState.fetching,
+        fetchStartedAt: _relayedQuestionState.fetchStartedAt || null,
+        lastAnswered: _lastAnsweredQuestionNonce,
+        cardEl: !!_relayedQuestionInlineEl(),
+      };
+    };
+  } catch (_) {}
 
   function _relayedQuestionInlineEl() {
     return document.querySelector('[data-role="ccc-inline-question"]');
@@ -2320,9 +2334,19 @@
     // seeing the last question"). We always re-fetch; showRelayedQuestionInline
     // rebuilds only when the nonce changed, so an in-progress answer to the
     // SAME question is never clobbered.
-    // Avoid stacking fetches.
-    if (_relayedQuestionState.fetching) return;
+    // Avoid stacking fetches — but never let a wedged `fetching` flag block
+    // mounts forever. If a fetch has been "in flight" longer than 8s (its 4s
+    // abort timeout plus slack), force-reset and proceed: this is the
+    // belt-and-suspenders against the "card never appears until I reload/click"
+    // bug, which is a stuck `fetching:true` swallowing every poll.
+    if (_relayedQuestionState.fetching) {
+      var _age = _relayedQuestionState.fetchStartedAt
+        ? (Date.now() - _relayedQuestionState.fetchStartedAt) : 99999;
+      if (_age < 8000) return;
+      _relayedQuestionState.fetching = false;
+    }
     _relayedQuestionState.fetching = true;
+    _relayedQuestionState.fetchStartedAt = Date.now();
     const fetchedFor = sid;
     // CCC-46: hard-timeout the fetch. A hung /api/question (server busy, lost
     // connection) used to leave `fetching` stuck true forever, so this poll
