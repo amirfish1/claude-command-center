@@ -2259,14 +2259,22 @@
   // history. Idempotent + re-applied on each render (the transcript rebuilds
   // the inline blocks without the hide class).
   function _syncLiveQuestionDuplicateHide() {
-    const cardEl = _relayedQuestionInlineEl();
-    const view = (cardEl && cardEl.closest('.conversations-view'))
-      || (typeof getConvView === 'function' ? getConvView() : null);
+    const view = (typeof getConvView === 'function') ? getConvView() : null;
     if (!view) return;
     view.querySelectorAll('.is-live-question-dup').forEach(function (n) {
       n.classList.remove('is-live-question-dup');
     });
-    if (!cardEl) return;
+    // CCC-55: hide the inline transcript copy whenever a RELAYED question is
+    // active for the open session — keyed on _relayedQuestionState.sessionId
+    // (module state), NOT the live card element. The transcript re-renders on
+    // its own poll and transiently destroys/re-creates the card DOM; keying on
+    // the element meant the dedup saw `cardEl === null` right after most
+    // rebuilds and left the inline copy visible → the persistent "still seeing
+    // double". The relay state survives those rebuilds and is relay-specific
+    // (never set for terminal-answered questions, so those still read inline).
+    const sid = currentSession && currentSession.id;
+    const relayActive = sid && _relayedQuestionState && _relayedQuestionState.sessionId === sid;
+    if (!relayActive) return;
     const blocks = view.querySelectorAll('.ask-user-block');
     if (!blocks.length) return;
     const last = blocks[blocks.length - 1];
