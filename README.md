@@ -174,7 +174,7 @@ CCC was built around Claude Code first; Codex, Cursor, Antigravity, and Kilo Cod
 | Codex         | yes                      | yes (both)                                 | partial — Codex JSONL parsed, broader parity tracked in [#57](https://github.com/amirfish1/claude-command-center/issues/57) | yes — UI picker via per-session override; default from `CCC_CODEX_MODEL` |
 | Cursor        | yes — headless via `cursor-agent` | yes — follow-ups route through `cursor-agent --resume` | partial — Cursor agent transcripts parsed from `~/.cursor/projects/` | yes — UI/default model picker; default from `CCC_CURSOR_MODEL` |
 | Antigravity   | yes — headless via `agy` print mode | yes — follow-ups route through AGY CLI or the running app's language-server RPC | yes — JSONL transcripts from `~/.gemini/antigravity/brain/` | auto-detected from transcript metadata |
-| Kilo Code     | yes — headless via `kilo run --auto` | no — fire-and-forget headless run, no resume wiring yet | no — run output captured in the spawn log only | yes — UI/default model picker; default from `CCC_KILO_MODEL` |
+| Kilo Code     | yes — headless via `kilo run --auto` | no — fire-and-forget headless run, no resume wiring yet | yes — reads Kilo's SQLite store (`~/.local/share/kilo/kilo.db`); externally-launched sessions appear on the board | yes — UI/default model picker; default from `CCC_KILO_MODEL` |
 
 **Note on Cursor IDE integration:** While CCC spawns Cursor agents headlessly via the CLI, the Desktop IDE manages UI state internally using a highly-nested, proprietary Protobuf Merkle tree in `store.db`. Full "two-way chat sync" into the IDE is unsupported due to the extreme risk of workspace corruption. Instead, CCC performs a **metadata integration**: CLI sessions are injected into the IDE sidebar as bookmarks (with correct titles and timestamps) so you don't lose track of them, but they cannot be interacted with natively inside the IDE window. Use the CCC dashboard for full history.
 
@@ -302,16 +302,16 @@ The `CCC_BIND_HOST`, `CCC_ALLOWED_ORIGIN`, and `CCC_TRUST_TAILNET` knobs can als
 - AI title regeneration
 - Cursor — session cards, transcript ingestion, headless spawn/resume via `cursor-agent`
 - Antigravity (Google DeepMind) — full session view, transcript ingestion, headless resume via AGY CLI or app RPC
-- Kilo Code — headless spawn via `kilo run --auto`, engine selector + model picker
+- Kilo Code — headless spawn via `kilo run --auto`, engine selector + model picker, and read-only ingestion of externally-launched sessions from Kilo's SQLite store
 - ACP adapter — drive Claude Code sessions over the Agent Client Protocol (`ccc_acp.py`, optional)
 
 **Not yet**
 - First-class parity for Codex. Spawn works, but transcript ingestion and UX
   polish lag behind Claude Code — see the [engine support matrix](#engine-support)
   and [#57](https://github.com/amirfish1/claude-command-center/issues/57).
-- Kilo Code resume + transcript ingestion. Spawn works; follow-up/resume and
-  transcript parsing are not wired yet (the `kilo run --auto` output lands in
-  the spawn log only).
+- Kilo Code resume / follow-up. Spawn and read-only ingestion both work
+  (externally-launched sessions appear on the board and open with full
+  transcripts); injecting follow-up turns into a Kilo session is not wired yet.
 - More agent runtimes (Aider, OpenCode, etc.). The ingestion layer is
   engine-agnostic; adapters just don't exist yet.
 - Code split. `server.py` and `index.html` are each one huge file on

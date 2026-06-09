@@ -918,6 +918,7 @@ def _archive_load_begin():
         "codex":       {"key": "codex",       "label": "Codex / Gemini conversations",     "state": "pending", "detail": "Scanning sibling stores."},
         "cursor":      {"key": "cursor",      "label": "Cursor conversations",             "state": "pending", "detail": "Scanning ~/.cursor/projects/."},
         "antigravity": {"key": "antigravity", "label": "Antigravity conversations",        "state": "pending", "detail": "Scanning ~/.gemini/antigravity/brain/."},
+        "kilo":        {"key": "kilo",        "label": "Kilo Code conversations",          "state": "pending", "detail": "Scanning ~/.local/share/kilo/kilo.db."},
         "pr_states":   {"key": "pr_states",   "label": "Refreshing pull-request status",   "state": "pending", "detail": "gh pr view per known PR."},
         "issues":      {"key": "issues",      "label": "Refreshing GitHub issues",         "state": "pending", "detail": "gh issue list per repo."},
         "group_chats": {"key": "group_chats", "label": "Cross-repo group chats",           "state": "pending", "detail": "Reading sidecars."},
@@ -931,7 +932,7 @@ def _archive_load_begin():
             "started_at": now,
             "updated_at": now,
             "steps": steps,
-            "order": ["folders", "transcripts", "infer", "worktrees", "codex", "cursor", "antigravity", "pr_states", "issues", "group_chats"],
+            "order": ["folders", "transcripts", "infer", "worktrees", "codex", "cursor", "antigravity", "kilo", "pr_states", "issues", "group_chats"],
         })
 
 
@@ -3994,6 +3995,16 @@ def find_all_conversations(
     # transcripts under ~/.gemini/antigravity/brain/<uuid>/.
     try:
         out.extend(find_antigravity_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+            resolve_pr_states=resolve_pr_states,
+            resolve_worktree_dirty=resolve_worktree_dirty,
+        ))
+    except Exception:
+        pass
+    try:
+        out.extend(find_kilo_conversations(
             include_old=True,
             repo_only=False,
             limit=limit_per_folder,
@@ -12656,6 +12667,21 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
         if progress:
             progress("antigravity", state="error", detail=f"Antigravity session scan failed: {exc}")
 
+    if progress:
+        progress("kilo", state="running", detail="Reading Kilo Code sessions.")
+    try:
+        conversations.extend(find_kilo_conversations(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+        if progress:
+            progress("kilo", state="done")
+    except Exception as exc:
+        if progress:
+            progress("kilo", state="error", detail=f"Kilo session scan failed: {exc}")
+
     # Add pkood agents — and merge in their linked claude-session card, if any.
     # Pkood spawns a claude process in a tmux pty, which produces a regular
     # ~/.claude/projects/*/*.jsonl file. Without dedup the kanban would show
@@ -13142,6 +13168,12 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         return {"events": events_copy, "last_line": result.get("last_line", 0)}
     if engine == "antigravity":
         result = _parse_antigravity_conversation(conversation_id, after_line=after_line)
+        _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
+        events_copy = list(result.get("events") or [])
+        events_copy.extend(_get_queued_events_for_session(conversation_id))
+        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+    if engine == "kilo":
+        result = _parse_kilo_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
         events_copy.extend(_get_queued_events_for_session(conversation_id))
@@ -21122,7 +21154,13 @@ def _is_antigravity_session(session_id):
 
 
 def _is_kilo_session(session_id):
-    """Check if session_id corresponds to a Kilo Code session."""
+    """Check if session_id corresponds to a Kilo Code session.
+
+    Matches both sessions CCC spawned (in-memory registry) and external
+    sessions discovered in Kilo's on-disk SQLite store — without the DB probe
+    a historical or terminal-launched Kilo session would be misclassified as
+    Claude and routed to the wrong transcript parser.
+    """
     for s in _spawned_sessions:
         if s.get("engine") == "kilo" and (
             s.get("session_id") == session_id
@@ -21130,7 +21168,419 @@ def _is_kilo_session(session_id):
             or s.get("name") == session_id
         ):
             return True
+    if isinstance(session_id, str) and session_id.startswith("ses_"):
+        con = _kilo_connect()
+        if con is not None:
+            try:
+                row = con.execute(
+                    "SELECT 1 FROM session WHERE id=? LIMIT 1", (session_id,)
+                ).fetchone()
+                if row:
+                    return True
+            except sqlite3.Error:
+                pass
+            finally:
+                con.close()
     return False
+
+
+# ---------------------------------------------------------------------------
+# Kilo Code session ingestion (read-only).
+#
+# Kilo Code (OpenCode-derived) keeps its sessions in a SQLite DB at
+# ~/.local/share/kilo/kilo.db with tables session / message / part. Reading it
+# lets an externally-launched `kilo` appear on the board like a Claude or Codex
+# session. The DB is WAL-mode and written live by the `kilo serve` daemon; a
+# read-only-URI open can silently miss un-checkpointed WAL frames, so we open
+# the file normally and immediately set PRAGMA query_only=1 — the standard WAL
+# multi-reader path, which still cannot write to Kilo's DB.
+# ---------------------------------------------------------------------------
+
+KILO_LIVE_WINDOW_S = 180
+
+
+def _kilo_db_path():
+    p = Path.home() / ".local" / "share" / "kilo" / "kilo.db"
+    try:
+        return p if p.exists() else None
+    except OSError:
+        return None
+
+
+def _kilo_connect():
+    db = _kilo_db_path()
+    if not db:
+        return None
+    try:
+        con = sqlite3.connect(str(db), timeout=0.5)
+        con.execute("PRAGMA query_only=1")
+        con.row_factory = sqlite3.Row
+        return con
+    except sqlite3.Error:
+        return None
+
+
+def _kilo_model_str(raw):
+    """Kilo stores model as JSON {providerID, modelID}; render it as a string."""
+    if not raw:
+        return ""
+    try:
+        d = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return str(raw)
+    if not isinstance(d, dict):
+        return str(raw)
+    mid = (d.get("modelID") or d.get("id") or "").strip()
+    prov = (d.get("providerID") or "").strip()
+    if prov and mid and "/" not in mid:
+        return f"{prov}/{mid}"
+    return mid or ""
+
+
+def _kilo_fetch_sessions(con, limit=None):
+    """Return one dict per row of Kilo's `session` table, newest first."""
+    try:
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(session)")}
+    except sqlite3.Error:
+        return []
+    if "id" not in cols:
+        return []
+    sql = "SELECT * FROM session ORDER BY time_updated DESC"
+    if limit and limit > 0:
+        sql += f" LIMIT {int(limit)}"
+    out = []
+    try:
+        for r in con.execute(sql):
+            d = dict(r)
+            out.append({
+                "id": d.get("id") or "",
+                "cwd": d.get("directory") or "",
+                "title": (d.get("title") or "").strip(),
+                "model": _kilo_model_str(d.get("model")),
+                "agent": d.get("agent") or "",
+                "created": (d.get("time_created") or 0) / 1000.0,
+                "updated": (d.get("time_updated") or 0) / 1000.0,
+                "archived": bool(d.get("time_archived")),
+            })
+    except sqlite3.Error:
+        return out
+    return out
+
+
+def _kilo_first_user_text(con, sid):
+    """First user-message text for a Kilo session (for the card preview)."""
+    try:
+        msg = con.execute(
+            "SELECT id FROM message WHERE session_id=? "
+            "AND json_extract(data,'$.role')='user' ORDER BY time_created LIMIT 1",
+            (sid,),
+        ).fetchone()
+        if not msg:
+            return ""
+        for p in con.execute(
+            "SELECT data FROM part WHERE message_id=? "
+            "AND json_extract(data,'$.type')='text' ORDER BY time_created",
+            (msg["id"],),
+        ):
+            try:
+                txt = (json.loads(p["data"]) or {}).get("text") or ""
+            except (ValueError, TypeError):
+                txt = ""
+            if txt.strip():
+                return txt.strip()
+    except sqlite3.Error:
+        pass
+    return ""
+
+
+def _kilo_last_assistant_text(con, sid):
+    """Last assistant text-part for a Kilo session (card subtitle / state)."""
+    try:
+        for m in con.execute(
+            "SELECT id FROM message WHERE session_id=? "
+            "AND json_extract(data,'$.role')='assistant' ORDER BY time_created DESC LIMIT 8",
+            (sid,),
+        ):
+            texts = []
+            for p in con.execute(
+                "SELECT data FROM part WHERE message_id=? "
+                "AND json_extract(data,'$.type')='text' ORDER BY time_created",
+                (m["id"],),
+            ):
+                try:
+                    t = (json.loads(p["data"]) or {}).get("text") or ""
+                except (ValueError, TypeError):
+                    t = ""
+                if t.strip():
+                    texts.append(t.strip())
+            if texts:
+                return "\n".join(texts)
+    except sqlite3.Error:
+        pass
+    return ""
+
+
+def find_kilo_conversations(
+    repo_path=None,
+    include_old=True,
+    repo_only=True,
+    progress=None,
+    limit=None,
+    resolve_pr_states=True,
+    resolve_worktree_dirty=True,
+):
+    """Discover external Kilo Code sessions from ~/.local/share/kilo/kilo.db."""
+    con = _kilo_connect()
+    if con is None:
+        return []
+    try:
+        sessions = _kilo_fetch_sessions(con, limit=limit)
+        if not sessions:
+            return []
+        if repo_only:
+            repo_path = resolve_repo_path(repo_path)
+            repo_path_obj = Path(repo_path)
+        try:
+            repo_pins = _load_repo_pins()
+        except Exception:
+            repo_pins = {}
+        try:
+            name_overrides = _load_session_name_overrides()
+        except Exception:
+            name_overrides = {}
+        try:
+            archived_set = set(_load_archived_conversations())
+        except Exception:
+            archived_set = set()
+        try:
+            verified_set = set(_load_verified_conversations())
+        except Exception:
+            verified_set = set()
+        try:
+            last_interactions = _load_last_interactions()
+        except Exception:
+            last_interactions = {}
+
+        cutoff = _session_scan_cutoff_ts(include_old)
+        max_rows = _session_scan_file_limit(include_old)
+        git_top_cache = {}
+        now = time.time()
+        out = []
+        for s in sessions:
+            sid = s.get("id")
+            if not sid:
+                continue
+            cwd = s.get("cwd") or ""
+            pinned = repo_pins.get(sid)
+            pinned_repo = False
+            if repo_only:
+                if pinned and pinned != repo_path:
+                    continue
+                if pinned == repo_path:
+                    pinned_repo = True
+                elif not _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
+                    continue
+            modified = s.get("updated") or s.get("created") or 0
+            freshness = max(modified, last_interactions.get(sid) or 0)
+            if not include_old and cutoff > 0 and freshness < cutoff:
+                continue
+            if not include_old and max_rows > 0 and len(out) >= max_rows:
+                continue
+            title = _strip_ccc_session_state_instruction(s.get("title") or "").strip()
+            first_message = _strip_ccc_session_state_instruction(
+                _kilo_first_user_text(con, sid)
+            ).strip()
+            # Kilo titles untouched conversations "New session - <iso>"; treat
+            # those as not-AI-summarised so the ✨ glyph doesn't show.
+            kilo_ai_title = title if (title and not title.startswith("New session")) else None
+            display_name = (
+                name_overrides.get(sid)
+                or _truncate_session_name(title if kilo_ai_title else "")
+                or (first_message[:80] if first_message else None)
+                or (title[:80] if title else "Kilo session")
+            )
+            effective_cwd = _first_existing_dir(cwd, pinned) or cwd
+            try:
+                cwd_exists = bool(effective_cwd and Path(effective_cwd).is_dir())
+            except OSError:
+                cwd_exists = False
+            folder_path = pinned or cwd or effective_cwd or ""
+            if folder_path:
+                _git_root = _find_git_root(folder_path)
+                folder_label = _resolve_dir_case(_git_root or folder_path)
+            else:
+                folder_label = "Kilo"
+            _wt_worktree_label = None
+            _wt_idx = folder_label.find("-wt-")
+            if _wt_idx > 0:
+                _wt_worktree_label = folder_label[_wt_idx + 4:]
+                folder_label = folder_label[:_wt_idx]
+            last_assistant_text = _kilo_last_assistant_text(con, sid)
+            is_live = (now - modified) < KILO_LIVE_WINDOW_S
+            out.append({
+                "id": sid,
+                "session_id": sid,
+                "source": "kilo",
+                "engine": "kilo",
+                "timestamp": "",
+                "branch": "",
+                "git_branch": "",
+                "first_message": first_message[:200],
+                "display_name": display_name,
+                "ai_title": kilo_ai_title,
+                "name_overridden": bool(name_overrides.get(sid)),
+                "last_prompt": first_message[:200],
+                "size": 0,
+                "modified": modified,
+                "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)) if modified else "",
+                "mtime": modified,
+                "jsonl_path": "",
+                "folder_label": folder_label,
+                "folder_path": folder_path,
+                "worktree_label": _wt_worktree_label,
+                "session_cwd": effective_cwd,
+                "session_cwd_exists": cwd_exists,
+                "session_cwd_is_worktree": bool(
+                    effective_cwd and (Path(effective_cwd) / ".git").is_file()
+                ),
+                "worktree_dirty": (
+                    _worktree_dirty_cached(effective_cwd, modified)
+                    if resolve_worktree_dirty and effective_cwd else False
+                ),
+                "effective_branch": None,
+                "effective_kind": None,
+                "has_edit": False,
+                "has_commit": False,
+                "has_push": False,
+                "last_edit_pos": 0,
+                "last_commit_pos": 0,
+                "last_push_pos": 0,
+                "last_event_type": None,
+                "pending_tool": None,
+                "pending_file": None,
+                "pending_tool_ts": 0,
+                "last_assistant_text": last_assistant_text,
+                "tail_issue_number": None,
+                "tail_pr_number": None,
+                "tail_pr_url": None,
+                "pr_state": None,
+                "session_state": _parse_session_state(last_assistant_text),
+                "archived": sid in archived_set or bool(s.get("archived")),
+                "verified": sid in verified_set,
+                "pinned_repo": pinned_repo,
+                "last_interacted": last_interactions.get(sid),
+                "is_live": is_live,
+                "spawn_pid": None,
+                "needs_approval": False,
+                "needs_approval_message": "",
+                "model": s.get("model") or "",
+                "reasoning_effort": "",
+            })
+    finally:
+        con.close()
+    out.sort(key=lambda x: x.get("last_interacted") or x.get("modified") or 0, reverse=True)
+    return out
+
+
+def _parse_kilo_conversation(session_id, after_line=0):
+    """Build a CCC transcript event list from a Kilo session's messages/parts."""
+    con = _kilo_connect()
+    if con is None:
+        return {"events": [], "last_line": 0}
+    events = []
+    line = 0
+    try:
+        msgs = con.execute(
+            "SELECT id, data FROM message WHERE session_id=? ORDER BY time_created",
+            (session_id,),
+        ).fetchall()
+        for m in msgs:
+            try:
+                md = json.loads(m["data"]) if m["data"] else {}
+            except (ValueError, TypeError):
+                md = {}
+            role = md.get("role")
+            tc = (md.get("time") or {}).get("created")
+            ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(tc / 1000.0)) if tc else ""
+            try:
+                parts = con.execute(
+                    "SELECT data FROM part WHERE message_id=? ORDER BY time_created",
+                    (m["id"],),
+                ).fetchall()
+            except sqlite3.Error:
+                parts = []
+            pdatas = []
+            for p in parts:
+                try:
+                    pdatas.append(json.loads(p["data"]) if p["data"] else {})
+                except (ValueError, TypeError):
+                    pdatas.append({})
+            if role == "user":
+                text = "\n".join(
+                    p.get("text", "") for p in pdatas if p.get("type") == "text"
+                ).strip()
+                if not text:
+                    continue
+                line += 1
+                events.append({
+                    "line": line, "ts": ts, "type": "user_text",
+                    "text": text, "images": [],
+                })
+            elif role == "assistant":
+                blocks = []
+                tool_results = []
+                for p in pdatas:
+                    ptype = p.get("type")
+                    if ptype in ("text", "reasoning"):
+                        t = p.get("text") or ""
+                        if t.strip():
+                            blocks.append({"kind": "text", "text": t})
+                    elif ptype == "tool":
+                        st = p.get("state") or {}
+                        inp = st.get("input") or {}
+                        detail = (
+                            inp.get("command")
+                            or inp.get("description")
+                            or st.get("title")
+                            or (json.dumps(inp)[:200] if inp else "")
+                        )
+                        blocks.append({
+                            "kind": "tool_use",
+                            "name": p.get("tool", ""),
+                            "detail": str(detail)[:200],
+                            "id": p.get("callID", ""),
+                            "command": inp.get("command"),
+                            "command_kind": None,
+                        })
+                        out_text = st.get("output")
+                        if out_text is not None:
+                            tool_results.append({
+                                "text": str(out_text)[:800],
+                                "tool_use_id": p.get("callID", ""),
+                                "is_error": st.get("status") == "error",
+                            })
+                if blocks:
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "assistant",
+                        "message_id": f"kilo-{line}", "blocks": blocks,
+                    })
+                for tr in tool_results:
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "tool_result",
+                        "text": tr["text"], "tool_use_id": tr["tool_use_id"],
+                        "is_error": tr["is_error"],
+                    })
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+    if after_line and after_line > 0:
+        visible = [e for e in events if e["line"] > after_line]
+    else:
+        visible = events
+    return {"events": visible, "last_line": line}
 
 
 def _load_antigravity_transcript(session_id):
@@ -35179,11 +35629,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass
             self.send_json(status)
-        elif re.match(r"^/api/conversations/[a-f0-9-]+/files$", path):
+        elif re.match(r"^/api/conversations/(?:[a-f0-9-]+|ses_[A-Za-z0-9]+)/files$", path):
             conv_id = path.split("/")[-2]
             payload = _extract_files_from_conversation(conv_id)
             self.send_json(payload)
-        elif re.match(r"^/api/conversations/[a-f0-9-]+/stream$", path):
+        elif re.match(r"^/api/conversations/(?:[a-f0-9-]+|ses_[A-Za-z0-9]+)/stream$", path):
             conv_id = path.split("/")[-2]
             qs = urllib.parse.parse_qs(parsed.query)
             after_line = int(qs.get("after", ["0"])[0])
@@ -35206,7 +35656,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif re.match(r"^/api/session/[a-f0-9-]+/spawn-stream$", path):
             sid = path.split("/")[-2]
             self._stream_spawn_deltas(sid)
-        elif re.match(r"^/api/conversations/[a-f0-9-]+$", path):
+        elif re.match(r"^/api/conversations/(?:[a-f0-9-]+|ses_[A-Za-z0-9]+)$", path):
             conv_id = path.split("/")[-1]
             qs = urllib.parse.parse_qs(parsed.query)
             after_line = int(qs.get("after", ["0"])[0])
