@@ -104,6 +104,31 @@ def _write_question_answer(session_id, answers):
         return {"ok": False, "error": "no pending question for this session"}
     if not isinstance(answers, list) or not answers:
         return {"ok": False, "error": "answers must be a non-empty list"}
+    # CCC-46: the blocking PreToolUse hook (in the headless `claude -p` process)
+    # is the ONLY consumer of the answer file. If that process is gone, writing
+    # the answer succeeds silently but nothing ever reads it — the classic
+    # "I answered and nothing happened" symptom. Verify the hook's pid is alive
+    # before pretending the answer was delivered.
+    hook_pid = req.get("pid")
+    if hook_pid and not _pid_alive(hook_pid):
+        # Stale request from a dead process — clear it so the waiting indicator
+        # doesn't keep prompting for an answer that can never land.
+        try:
+            (QUESTION_RELAY_DIR / f"{session_id}.request.json").unlink()
+        except OSError:
+            pass
+        try:
+            marker = SIDECAR_STATE_DIR / f"{session_id}_in_flight.json"
+            if marker.exists():
+                marker.unlink()
+        except (OSError, ValueError):
+            pass
+        return {
+            "ok": False,
+            "dead": True,
+            "error": "this session's process is no longer running — "
+                     "the answer can't reach it. Resume the session to continue.",
+        }
     norm = []
     for a in answers:
         if isinstance(a, dict):

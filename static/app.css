@@ -6508,12 +6508,28 @@
     /* Inherit conv pane font stack — no modal-specific typography. */
     font: inherit;
     color: var(--text);
+    /* CCC-46: cap height so the card stops swallowing the whole pane — the
+       conversation above stays visible and the card scrolls internally. */
+    max-height: 62vh;
+    overflow-y: auto;
   }
   .ccc-inline-question .ccc-iq-title {
     font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.5px;
     color: var(--text-muted);
     margin-bottom: 10px;
+  }
+  /* CCC-46: the lead-in context the question is about. Muted, slightly
+     indented, capped so a long preamble doesn't dominate the card. */
+  .ccc-inline-question .ccc-iq-context {
+    font-size: 12.5px; line-height: 1.5;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    max-height: 22vh; overflow-y: auto;
+    margin-bottom: 12px; padding: 8px 10px;
+    border-left: 2px solid rgba(88,166,255,0.4);
+    background: color-mix(in srgb, var(--surface) 80%, transparent);
+    border-radius: 4px;
   }
   .ccc-inline-question .ccc-q-blocks {
     display: flex; flex-direction: column; gap: 14px;

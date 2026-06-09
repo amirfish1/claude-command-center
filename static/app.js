@@ -2246,6 +2246,8 @@
     };
     // Card gone — un-hide the inline transcript copy of the question.
     try { _syncLiveQuestionDuplicateHide(); } catch (_) {}
+    // Card closed — re-enable the bottom composer (CCC-46 gate).
+    try { if (typeof updateInputBar === 'function') updateInputBar(); } catch (_) {}
   }
   function closeRelayedQuestionModal() { closeRelayedQuestionInline(); }
 
@@ -2361,8 +2363,17 @@
     modal.className = 'ccc-inline-question';
     modal.setAttribute('data-role', 'ccc-inline-question');
     modal.setAttribute('data-session-id', sessionId);
+    // CCC-46: surface the lead-in context (the assistant text that preceded
+    // the question) so the user isn't answering blind. liveStatus.questionPreamble
+    // is populated by /api/session-status; render it as a scrollable context
+    // block above the options when present.
+    const _preamble = (liveStatus && liveStatus.questionPreamble || '').trim();
+    const ctxHtml = _preamble
+      ? '<div class="ccc-iq-context">' + escapeHtml(_preamble) + '</div>'
+      : '';
     modal.innerHTML =
       '<div class="ccc-iq-title">Session is asking a question</div>' +
+      ctxHtml +
       '<div class="ccc-q-blocks">' + blocksHtml + '</div>' +
       '<div class="ccc-q-error"></div>' +
       '<div class="ccc-q-actions">' +
@@ -2370,6 +2381,8 @@
         '<button type="button" class="ccc-q-send ccc-q-primary" disabled>Send answer</button>' +
       '</div>';
     $view.appendChild(modal);
+    // Card just mounted — gate the bottom composer (CCC-46 one-input rule).
+    try { if (typeof updateInputBar === 'function') updateInputBar(); } catch (_) {}
     // Card is up — hide the duplicate inline copy of this question.
     try { _syncLiveQuestionDuplicateHide(); } catch (_) {}
 
@@ -3529,6 +3542,21 @@
           : (isAntigravity && !antigravityCanSendNow
               ? 'Send — runs AGY headless on this session'
               : 'Send');
+      }
+      // CCC-46: when a relayed AskUserQuestion card is showing for this
+      // session there must be exactly ONE place to answer. The bottom composer
+      // otherwise invites a second input that does NOT answer the question —
+      // it queues a follow-up the blocked turn never reads. Redirect the user
+      // up to the card while it's open.
+      if ($convInput && liveStatus.questionWaiting
+          && typeof _relayedQuestionInlineEl === 'function' && _relayedQuestionInlineEl()) {
+        $convInput.readOnly = true;
+        $convInput.classList.add('is-readonly');
+        $convInput.placeholder = '↑ Answer the question above to continue';
+        if ($convSendBtn) {
+          $convSendBtn.disabled = true;
+          $convSendBtn.title = 'Answer the question above first';
+        }
       }
       if ($convSteerBtn) {
         const canSteer = canSend && isCodex && hasSession && !isNewSession && !isBacklogIssue;
