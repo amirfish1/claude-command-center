@@ -35377,8 +35377,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         t_end = _stats_parse_ts(ev.get("ts"))
                         if t_start and t_end:
                             dur_sec = (t_end - t_start).total_seconds()
-                            if dur_sec < 0:
-                                dur_sec = 0.0
+                            if dur_sec < 1.0:
+                                dur_sec = 1.0
                             tokens_in = ev.get("tokens_in") or 0
                             tokens_out = ev.get("tokens_out") or 0
                             

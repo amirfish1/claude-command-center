@@ -848,8 +848,13 @@
         return;
       }
       
-      // Scales
-      const maxTpm = Math.max(...data.map(d => d.tpm)) || 1000;
+      // Scales: use 95th percentile to prevent extreme outliers from flattening the chart
+      const sortedTpm = data.map(d => d.tpm).sort((a, b) => a - b);
+      let maxTpm = sortedTpm[Math.floor(sortedTpm.length * 0.95)] || 1000;
+      const trueMax = sortedTpm[sortedTpm.length - 1] || 1000;
+      if (trueMax < maxTpm * 1.5) {
+        maxTpm = trueMax;
+      }
       
       const xScale = (index) => {
         if (data.length <= 1) return padding.left + (width - padding.left - padding.right) / 2;
@@ -857,7 +862,8 @@
       };
       
       const yScale = (tpm) => {
-        return height - padding.bottom - (tpm / (maxTpm * 1.1)) * (height - padding.top - padding.bottom);
+        const rawY = height - padding.bottom - (tpm / (maxTpm * 1.1)) * (height - padding.top - padding.bottom);
+        return Math.max(padding.top - 8, Math.min(height - padding.bottom, rawY));
       };
       
       // Draw grid lines
