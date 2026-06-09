@@ -562,6 +562,32 @@
         <button type="button" id="bugReportLink" class="bug-link" title="Report a bug or request a feature. Files a GitHub issue against amirfish1/claude-command-center." aria-label="Report a bug">
           <span aria-hidden="true">&#9873;</span><span class="sh-action-label">Report a bug</span>
         </button>
+        <!-- Topbar TTS control: visible whenever TTS is playing or paused,
+             regardless of which conversation is focused. Left of Annotate.
+             Wired in app.js (_wireTopbarTtsControl / updateTopbarTtsControl). -->
+        <span id="topbarTtsControl" class="tts-topbar-control" hidden role="status" aria-live="polite" aria-label="Reading aloud">
+          <span class="tts-topbar-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 5 6 9H3v6h3l5 4V5Z"></path>
+              <path d="M15.5 8.5a5 5 0 0 1 0 7"></path>
+            </svg>
+          </span>
+          <span class="tts-topbar-label">Reading…</span>
+          <button type="button" class="tts-topbar-btn tts-topbar-toggle" title="Pause reading" aria-label="Pause reading">
+            <svg class="tts-topbar-pause-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+              <rect x="6" y="5" width="4" height="14" rx="1"></rect>
+              <rect x="14" y="5" width="4" height="14" rx="1"></rect>
+            </svg>
+            <svg class="tts-topbar-play-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+              <path d="M7 5l12 7-12 7V5Z"></path>
+            </svg>
+          </button>
+          <button type="button" class="tts-topbar-btn tts-topbar-stop" title="Stop reading" aria-label="Stop reading">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+              <rect x="6" y="6" width="12" height="12" rx="1.5"></rect>
+            </svg>
+          </button>
+        </span>
         <button type="button" id="annotationStartBtn" class="annotation-link" title="Annotate the visible page and save a local note for agent context.">
           &#9998; Annotate
         </button>

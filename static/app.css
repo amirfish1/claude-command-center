@@ -4372,6 +4372,60 @@
   .tts-floating-control .tts-fc-toggle .tts-fc-pause-icon { display: block; }
   .tts-floating-control.is-paused .tts-fc-toggle .tts-fc-play-icon { display: block; }
   .tts-floating-control.is-paused .tts-fc-toggle .tts-fc-pause-icon { display: none; }
+  /* ── Topbar TTS control ────────────────────────────────────────────
+     Compact inline control in the global topbar; mirrors play/pause/stop
+     state regardless of which conversation is focused. Hidden when idle. */
+  .tts-topbar-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 6px 3px 8px;
+    border-radius: 4px;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border) 55%);
+    background: color-mix(in srgb, var(--accent) 10%, var(--surface) 90%);
+    color: var(--text);
+    font-size: 11px;
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+  .tts-topbar-control[hidden] { display: none; }
+  .tts-topbar-icon {
+    display: inline-flex;
+    color: var(--accent);
+  }
+  .tts-topbar-control:not(.is-paused) .tts-topbar-icon {
+    animation: ttsFcPulse 1.4s ease-in-out infinite;
+  }
+  .tts-topbar-label {
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    user-select: none;
+    min-width: 48px;
+  }
+  .tts-topbar-btn {
+    width: 22px; height: 22px; flex-shrink: 0;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .tts-topbar-btn:hover {
+    background: var(--surface-2);
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--accent) 50%, var(--border) 50%);
+  }
+  .tts-topbar-stop:hover {
+    color: var(--red, #e5484d);
+    border-color: color-mix(in srgb, var(--red, #e5484d) 60%, var(--border) 40%);
+  }
+  .tts-topbar-toggle .tts-topbar-play-icon { display: none; }
+  .tts-topbar-toggle .tts-topbar-pause-icon { display: block; }
+  .tts-topbar-control.is-paused .tts-topbar-toggle .tts-topbar-play-icon { display: block; }
+  .tts-topbar-control.is-paused .tts-topbar-toggle .tts-topbar-pause-icon { display: none; }
   /* ── Compact-resume card ──────────────────────────────────────────
      The user_text following a /compact run is a multi-page wall of
      prose Claude wrote to "remember" the prior conversation. Wrap it
@@ -6506,6 +6560,21 @@
     word-break: normal;
   }
   .conv-live-tool-inline .cl-age { color: var(--text-muted); font-size: 11px; margin-left: auto; flex: 0 0 auto; }
+  .cl-agy-wake-btn {
+    flex-shrink: 0;
+    margin-left: 6px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
+    background: transparent;
+    color: var(--accent);
+    font-size: 11px;
+    cursor: pointer;
+    line-height: 1.4;
+    transition: background 0.15s, opacity 0.15s;
+  }
+  .cl-agy-wake-btn:hover { background: color-mix(in srgb, var(--accent) 12%, transparent 88%); }
+  .cl-agy-wake-btn:disabled { opacity: 0.5; cursor: default; }
   .conv-live-tool-inline.is-generating {
     color: var(--text-muted); background: rgba(139,148,158,0.08); border-color: rgba(139,148,158,0.20);
   }

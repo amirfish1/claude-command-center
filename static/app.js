@@ -2981,6 +2981,34 @@
 
   document.addEventListener('click', handleLiveQuestionActionClick);
 
+  // Antigravity "Push input" button inside the live tool strip. Uses
+  // delegation because the button is inside innerHTML-replaced content.
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('.cl-agy-wake-btn');
+    if (!btn) return;
+    ev.stopPropagation();
+    const sid = currentSession && currentSession.id;
+    if (!sid || (currentSession.source !== 'antigravity')) return;
+    btn.disabled = true;
+    btn.textContent = '…';
+    const AGY_WAKE = 'Status check: your last action has not returned for a while. If you are stuck, describe what you were waiting on and continue with the next concrete step.';
+    try {
+      const res = await fetch('/api/inject-input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid, text: AGY_WAKE }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'push failed');
+      showOpToast('Wake message pushed to Antigravity session.');
+      setTimeout(refreshConversationList, 2000);
+    } catch (err) {
+      showOpToast('Push failed: ' + (err.message || 'unknown'), 'error');
+      btn.disabled = false;
+      btn.textContent = 'Push input';
+    }
+  });
+
   function updateLiveStripOffset($view, strip) {
     if (!$view) return;
     if (!strip) {
@@ -3103,12 +3131,18 @@
     const detailHtml = isQuestion
       ? liveQuestionDetailHtml(file)
       : (shortFile ? ' <span class="cl-file' + liveActivityDetailClass(tool) + '">' + escapeHtml(shortFile) + '</span>' : '');
+    // Antigravity wake button: appears when the session is live-AGY and the
+    // in-flight tool has been running for > 60s. One click pushes the wake
+    // text via /api/inject-input without requiring the user to type anything.
+    const isAgySession = currentSession && currentSession.source === 'antigravity';
+    const showWakeBtn = isAgySession && inFlight && !isQuestion && ageSec > 60;
     const html =
         '<span class="cl-pulse"></span>'
       + '<span class="cl-tool">' + (inFlight && !isQuestion ? '▶ ' : '') + escapeHtml(toolLabel) + '</span>'
       + (isQuestion ? '' : detailHtml)
       + '<span class="cl-age">' + ageLbl + '</span>'
-      + (isQuestion ? detailHtml : '');
+      + (isQuestion ? detailHtml : '')
+      + (showWakeBtn ? '<button type="button" class="cl-agy-wake-btn" title="Session looks stuck — push a wake message to Antigravity">Push input</button>' : '');
     updateLiveStripOffset($view, null);
     // Inline indicator at the bottom of the transcript. Re-append on every
     // refresh so it stays the last child even when new events have
@@ -4743,14 +4777,19 @@
     // Keep the floating playback control (shown when reading a conversation
     // that isn't the focused one) in sync with the current state.
     updateTtsFloatingControl();
+    if (typeof updateTopbarTtsControl === 'function') updateTopbarTtsControl();
   }
 
   // ── Speech-to-Text (STT) Speech Recognition ──
   let _sttRecognition = null;
   let _sttRecording = false;
   let _sttActivePaneId = null;
+  let _sttActiveConvId = null;
   let _sttPreText = '';
   let _sttPostText = '';
+  let _sttCommittedIndex = 0;
+  let _sttResultsLength = 0;
+  let _sttUpdatingText = false;
 
   function micButtons() {
     return Array.from(document.querySelectorAll('.conv-input-bar .mic-btn, .gc-reader .mic-btn'));
@@ -4776,6 +4815,11 @@
     }
 
     _sttActivePaneId = paneId;
+    _sttActiveConvId = currentConversation;
+    _sttCommittedIndex = 0;
+    _sttResultsLength = 0;
+    _sttUpdatingText = false;
+
     let textarea = null;
     if (paneId === 'gc') {
       textarea = document.getElementById('gcHumanInput');
@@ -4806,20 +4850,38 @@
       };
 
       _sttRecognition.onresult = (event) => {
-        let recognitionText = '';
-        for (let i = 0; i < event.results.length; ++i) {
-          recognitionText += event.results[i][0].transcript;
+        _sttResultsLength = event.results.length;
+
+        // Commit final results
+        for (let i = _sttCommittedIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            let text = event.results[i][0].transcript;
+            if (_sttPreText && !/[\s.,!?;:]$/.test(_sttPreText) && !/^\s/.test(text)) {
+              _sttPreText += ' ';
+            }
+            _sttPreText += text;
+            _sttCommittedIndex = i + 1;
+          }
         }
 
-        let insertedText = recognitionText;
-        if (_sttPreText && !/[\s.,!?;:]$/.test(_sttPreText) && !/^\s/.test(insertedText)) {
-          insertedText = ' ' + insertedText;
+        // Gather interim results
+        let interimText = '';
+        for (let i = _sttCommittedIndex; i < event.results.length; ++i) {
+          let text = event.results[i][0].transcript;
+          if ((_sttPreText || interimText) && 
+              !/[\s.,!?;:]$/.test(_sttPreText + interimText) && 
+              !/^\s/.test(text)) {
+            interimText += ' ';
+          }
+          interimText += text;
         }
 
-        textarea.value = _sttPreText + insertedText + _sttPostText;
-        textarea.selectionStart = textarea.selectionEnd = _sttPreText.length + insertedText.length;
+        _sttUpdatingText = true;
+        textarea.value = _sttPreText + interimText + _sttPostText;
+        textarea.selectionStart = textarea.selectionEnd = _sttPreText.length + interimText.length;
         textarea.focus();
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        setTimeout(() => { _sttUpdatingText = false; }, 0);
       };
 
       _sttRecognition.onerror = (event) => {
@@ -4863,6 +4925,26 @@
     _sttRecording = false;
     updateMicButtonsState();
   }
+
+  function _handleSttUserInteraction(e) {
+    if (!_sttRecording || _sttUpdatingText) return;
+    const target = e.target;
+    if (!target) return;
+    const isTextarea = (target.tagName === 'TEXTAREA');
+    const isTextInput = (target.tagName === 'INPUT' && target.type === 'text');
+    if (!isTextarea && !isTextInput) return;
+
+    const val = target.value || '';
+    const start = target.selectionStart || 0;
+    const end = target.selectionEnd || 0;
+    _sttPreText = val.slice(0, start);
+    _sttPostText = val.slice(end);
+    _sttCommittedIndex = _sttResultsLength;
+  }
+  document.addEventListener('focusin', _handleSttUserInteraction);
+  document.addEventListener('click', _handleSttUserInteraction);
+  document.addEventListener('input', _handleSttUserInteraction);
+  document.addEventListener('keydown', _handleSttUserInteraction);
 
   function updateMicButtonsState() {
     micButtons().forEach(btn => {
@@ -5125,6 +5207,7 @@
     _ttsActiveConvId = null;
     setTtsButtonsBusy(false);
     setTtsButtonsState(false, false);
+    if (typeof updateTopbarTtsControl === 'function') updateTopbarTtsControl();
   }
 
   // Reset TTS state whenever the conversation BEING READ grows a fresh
@@ -5166,6 +5249,45 @@
       toggle.title = _ttsPaused ? 'Resume reading' : 'Pause reading';
       toggle.setAttribute('aria-label', _ttsPaused ? 'Resume reading' : 'Pause reading');
       toggle.classList.toggle('is-paused', !!_ttsPaused);
+    }
+    if (typeof updateTopbarTtsControl === 'function') updateTopbarTtsControl();
+  }
+
+  // ── Topbar TTS control ───────────────────────────────────────────────────
+  // A compact inline control in the global topbar (left of Annotate) that
+  // mirrors play/pause/stop state regardless of which conversation is focused.
+  // Unlike the floating widget this is always in-layout — it just hides when
+  // TTS is idle.
+  function updateTopbarTtsControl() {
+    const el = document.getElementById('topbarTtsControl');
+    if (!el) return;
+    const playing = !!(_ttsActive || _ttsPaused);
+    el.hidden = !playing;
+    el.classList.toggle('is-paused', !!_ttsPaused);
+    const label = el.querySelector('.tts-topbar-label');
+    if (label) label.textContent = _ttsPaused ? 'Paused' : 'Reading…';
+    const toggle = el.querySelector('.tts-topbar-toggle');
+    if (toggle) {
+      toggle.title = _ttsPaused ? 'Resume reading' : 'Pause reading';
+      toggle.setAttribute('aria-label', _ttsPaused ? 'Resume reading' : 'Pause reading');
+      toggle.classList.toggle('is-paused', !!_ttsPaused);
+    }
+  }
+
+  function _wireTopbarTtsControl() {
+    const el = document.getElementById('topbarTtsControl');
+    if (!el) return;
+    const toggle = el.querySelector('.tts-topbar-toggle');
+    const stop = el.querySelector('.tts-topbar-stop');
+    if (toggle) {
+      toggle.addEventListener('mousedown', (ev) => ev.preventDefault());
+      toggle.addEventListener('click', () => {
+        readLastMessageAloud(_ttsActivePaneId || activePaneId());
+      });
+    }
+    if (stop) {
+      stop.addEventListener('mousedown', (ev) => ev.preventDefault());
+      stop.addEventListener('click', () => { stopTextToSpeech(); updateTopbarTtsControl(); });
     }
   }
 
@@ -5510,6 +5632,7 @@
   _syncTtsRateUi();
   _refreshTtsRateBtns();
   _wireTtsFloatingControl();
+  _wireTopbarTtsControl();
   // Textarea autosize: grow up to ~10 rows then scroll. Reset to one row
   // on every input so deletions shrink the box too. Mirrors Omnara's
   // behavior — typing more than one line expands the composer in place.
@@ -7095,10 +7218,16 @@
     return -1;
   }
   function syncActivePaneChrome(activeConvId) {
-    if (typeof _sttRecording !== 'undefined' && _sttRecording) {
-      stopSpeechRecognition();
-    }
     const activePid = activePaneId();
+    const newConvId = (arguments.length > 0 && activeConvId !== undefined) ? activeConvId : currentConversation;
+    if (typeof _sttRecording !== 'undefined' && _sttRecording) {
+      const isGc = (_sttActivePaneId === 'gc');
+      const paneChanged = (_sttActivePaneId !== activePid);
+      const convChanged = (!isGc && _sttActiveConvId !== newConvId);
+      if (paneChanged || convChanged) {
+        stopSpeechRecognition();
+      }
+    }
     document.querySelectorAll('.conv-pane').forEach(el => {
       el.classList.toggle('is-active', el.getAttribute('data-pane-id') === activePid);
     });
@@ -21904,7 +22033,7 @@
         if (convLastLine === 0) {
           $view.innerHTML = '';
         }
-        if (renderConversationEvents(data.events, fetchPaneId) !== false) {
+        if (renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen }) !== false) {
           convLastLine = data.last_line;
         }
         if (_freshOpen && !_wantFull && data && data.truncated_before) {
@@ -24405,7 +24534,7 @@
     }
   }
 
-  function renderConversationEvents(events, paneId) {
+  function renderConversationEvents(events, paneId, opts) {
     if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
     // Do not defer transcript rendering while the composer is focused.
     // Steer/send keeps focus in the input; deferring used to advance
@@ -24422,7 +24551,11 @@
     // already rendered). If found, reset TTS so the play/pause button
     // re-arms to read the new message on next click instead of resuming
     // the prior message mid-sentence.
-    if (typeof resetTtsOnNewTurn === 'function') {
+    // Skip TTS rearm on initial load (view just cleared and re-populated on
+    // conv select). We only want to stop playback when a genuinely NEW turn
+    // streams in while the user is already watching — not when every event
+    // "appears new" because the DOM was freshly wiped.
+    if (!(opts && opts.initialLoad) && typeof resetTtsOnNewTurn === 'function') {
       for (const ev of events) {
         if (ev.type !== 'assistant' && ev.type !== 'result') continue;
         if (ev.line != null) {
