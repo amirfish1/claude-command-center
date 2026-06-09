@@ -1806,7 +1806,7 @@
   .conv-sticky-header.is-expanded .csh-row {
     height: 50vh;
   }
-  .conversations-view .event { margin-bottom: 12px; padding: 10px 14px; border-radius: 6px; border-left: 3px solid transparent; }
+  .conversations-view .event { margin-bottom: 8px; padding: 10px 14px; border-radius: 6px; border-left: 3px solid transparent; }
   /* Assistant rows — Claude-Desktop-style clean prose. No background fill,
      no left border, subtle metadata so the eye lands on the prose itself. */
   .conversations-view .event.assistant { background: transparent; border: none; padding: 6px 0; }
@@ -1902,7 +1902,7 @@
   .conversations-view .event.tool_result { display: none; }
   /* Tool-call group — fused "Ran N commands ▾" container. */
   .conversations-view .tool-call-group {
-    margin: 8px 0 12px;
+    margin: 4px 0 8px;
     padding: 0;
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -2907,24 +2907,25 @@
     100% { transform: scale(2.7);  opacity: 0; }
   }
 
-  /* Per-event timestamps prefixed to each conversation row. Sourced from
-     the JSONL event's own `ts` (when the message was actually written),
-     not the render time. `[S …]` marks events that arrived first via the
-     stdout stream; `[J …]` marks events read back from the JSONL tail. */
-  .stream-block-tool[data-render-ts]::before,
-  .stream-block-thinking[data-render-ts]::before {
+  /* Per-event stream-vs-JSONL ordering stamps (`[S …]` = stdout stream,
+     `[J …]` = JSONL tail). Diagnostic only — they cost a full line of
+     vertical space per event, so they are OFF by default and only render
+     when `ccc-debug-ts` is set on <body> (toggle from devtools:
+     document.body.classList.add('ccc-debug-ts')). */
+  body.ccc-debug-ts .stream-block-tool[data-render-ts]::before,
+  body.ccc-debug-ts .stream-block-thinking[data-render-ts]::before {
     content: '[S ' attr(data-render-ts) ']';
     font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
     font-size: 10px; color: var(--accent); opacity: 0.75;
     margin-right: 6px;
   }
-  .conversations-view .event[data-render-ts]::before {
+  body.ccc-debug-ts .conversations-view .event[data-render-ts]::before {
     content: '[J ' attr(data-render-ts) ']';
     font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
     font-size: 10px; color: var(--text-muted); opacity: 0.75;
     margin-right: 6px; display: inline-block;
   }
-  .tool-call-group-header[data-render-ts]::before {
+  body.ccc-debug-ts .tool-call-group-header[data-render-ts]::before {
     content: '[J ' attr(data-render-ts) ']';
     font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
     font-size: 10px; color: var(--text-muted); opacity: 0.75;
