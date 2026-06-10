@@ -34157,6 +34157,66 @@ def get_cached_plan_usage():
 
 _STATS_FILE_CACHE = {}        # str(path) -> {"mtime", "size", "agg"}
 _STATS_CACHE_LOCK = threading.Lock()
+_STATS_FILE_CACHE_DIRTY = False
+_STATS_FILE_CACHE_SCHEMA = 1
+_STATS_FILE_CACHE_FILE = (
+    Path.home() / ".claude" / "command-center" / "stats_file_cache.json"
+)
+
+
+def _load_stats_file_cache():
+    """Load per-transcript stats aggregates from disk on startup.
+
+    Without this the in-memory cache is empty after every restart, so the
+    first /api/stats (Stats overlay) cold-parses every transcript (~1200 files
+    ≈ 40s) AND that CPU-bound parse holds the GIL, freezing the whole server
+    for its duration. Persisting means a restart only re-parses the handful of
+    transcripts that changed; entries are (mtime,size)-keyed so stale ones
+    self-invalidate in _stats_get_file_agg.
+    """
+    if not _STATS_FILE_CACHE_FILE.is_file():
+        return
+    try:
+        with _STATS_FILE_CACHE_FILE.open("r") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return
+    if not isinstance(data, dict) or data.get("schema_version") != _STATS_FILE_CACHE_SCHEMA:
+        return
+    entries = data.get("entries")
+    if not isinstance(entries, dict):
+        return
+    keep = {
+        k: v for k, v in entries.items()
+        if isinstance(v, dict) and "mtime" in v and "size" in v and "agg" in v
+    }
+    with _STATS_CACHE_LOCK:
+        _STATS_FILE_CACHE.update(keep)
+
+
+def _save_stats_file_cache():
+    """Atomic write of _STATS_FILE_CACHE when dirty. Must be called OUTSIDE
+    _STATS_CACHE_LOCK (it acquires the lock; compute_global_stats holds it for
+    the whole build, so call this after that returns)."""
+    global _STATS_FILE_CACHE_DIRTY
+    with _STATS_CACHE_LOCK:
+        if not _STATS_FILE_CACHE_DIRTY:
+            return
+        snapshot = {
+            "schema_version": _STATS_FILE_CACHE_SCHEMA,
+            "entries": dict(_STATS_FILE_CACHE),
+        }
+        _STATS_FILE_CACHE_DIRTY = False
+    try:
+        _STATS_FILE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _STATS_FILE_CACHE_FILE.with_suffix(".tmp")
+        with tmp.open("w") as f:
+            json.dump(snapshot, f)
+        tmp.replace(_STATS_FILE_CACHE_FILE)
+    except OSError as e:
+        with _STATS_CACHE_LOCK:
+            _STATS_FILE_CACHE_DIRTY = True
+        print(f"  [stats-file-cache] save failed: {e}")
 
 # Token equivalent of "The Lord of the Rings" — ~576k words × ~1.25 tokens/word.
 # Used for the whimsical comparison line at the bottom of the stats overlay.
@@ -34277,6 +34337,8 @@ def _stats_get_file_agg(path):
         return cached["agg"]
     agg = _stats_aggregate_file(path)
     _STATS_FILE_CACHE[key] = {"mtime": st.st_mtime, "size": st.st_size, "agg": agg}
+    global _STATS_FILE_CACHE_DIRTY
+    _STATS_FILE_CACHE_DIRTY = True
     return agg
 
 
@@ -35387,7 +35449,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 days = None
             else:
                 days = 30
-            self.send_json(compute_global_stats(days=days))
+            result = compute_global_stats(days=days)
+            # Persist the per-file aggregates so the next restart doesn't
+            # cold-parse every transcript again (called outside the build's
+            # _STATS_CACHE_LOCK).
+            _save_stats_file_cache()
+            self.send_json(result)
         elif path == "/api/plan-usage":
             self.send_json(get_cached_plan_usage())
         elif path in ("/api/sessions/spawned", "/api/spawned"):
@@ -41645,6 +41712,7 @@ def main():
     ).start()
     _load_conv_meta_cache()
     _load_cwd_relocation_cache()
+    _load_stats_file_cache()
     try:
         _SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
     except OSError:
