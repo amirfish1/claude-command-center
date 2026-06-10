@@ -581,6 +581,17 @@
   }
   .event.system .label { color: var(--accent); font-weight: 600; text-transform: uppercase; font-size: 11px; }
   .event.system.send-failure .label { color: var(--red); }
+  /* Compaction boundary line — hoverable "?" invites the tooltip that
+     explains what compaction is (CCC-70). */
+  .system-compact-text { cursor: help; }
+  .system-compact-help {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 13px; height: 13px; border-radius: 50%;
+    border: 1px solid var(--border);
+    font-size: 9px; line-height: 1;
+    color: var(--text-muted); opacity: 0.7;
+    vertical-align: middle; margin-left: 2px;
+  }
 
   .event.assistant { background: rgba(188, 140, 255, 0.06); border-left-color: var(--purple); }
   .event.tool_result { display: none; } /* hide tool results - they're noise */

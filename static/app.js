@@ -24807,16 +24807,21 @@
           const postTokens = Number(compact.post_tokens || 0);
           const duration = _formatCompactDuration(compact.duration_ms);
           const trigger = compact.trigger ? String(compact.trigger) : 'manual';
+          const triggerLabel = trigger === 'auto' ? 'automatic' : trigger;
           let compactText = 'Compacted context';
           if (preTokens || postTokens) {
             compactText += ': ' + _formatTokens(preTokens) + ' -> ' + _formatTokens(postTokens);
           }
-          compactText += ' (' + trigger + (duration ? ', ' + duration : '') + ')';
+          compactText += ' (' + triggerLabel + (duration ? ', ' + duration : '') + ')';
+          const compactTip = trigger === 'auto'
+            ? 'The conversation neared its context-window limit, so Claude automatically summarized the older history into a short recap and continued from there. Nothing is lost from the transcript on disk — only the model’s working memory was condensed.'
+            : 'The conversation history was summarized into a short recap to free up context-window space (/compact). The full transcript on disk is untouched — only the model’s working memory was condensed.';
           div.classList.add('system-compact');
           div.innerHTML = '<span class="label">System</span>'
             + '<span class="line-num">L' + ev.line + '</span>'
             + tsSpan(ev.ts)
-            + '<span class="system-compact-text">' + escapeHtml(compactText) + '</span>';
+            + '<span class="system-compact-text" title="' + escapeAttr(compactTip) + '">' + escapeHtml(compactText)
+            + ' <span class="system-compact-help" aria-hidden="true">?</span></span>';
         } else {
           div.innerHTML = '<span class="label">System</span>'
             + '<span class="line-num">L' + ev.line + '</span>'
