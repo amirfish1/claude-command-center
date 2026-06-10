@@ -1,0 +1,144 @@
+"""Performance-regression guards.
+
+Every slow-CCC incident has been the same bug class: a user-facing path doing
+O(all conversations/sessions) work — a subprocess fork, a full-file parse, or a
+list rebuild — per item, uncached. Correctness tests miss these because tiny
+fixtures stay fast while production (1000+ transcripts, cold caches) is seconds.
+
+These tests assert *how much work* happens, not just that the output is right:
+  - call-count invariants  (machine-independent; catch a removed gate/cache)
+  - a lenient latency budget on a synthetic scale fixture
+
+If one fails, a hot path lost its gating or caching — don't relax the bound,
+restore the gate. See CLAUDE.md "Performance gates".
+"""
+import importlib
+import json
+import os
+import sys
+import time
+import uuid
+
+import pytest
+
+server = importlib.import_module("server")
+
+
+def _write_transcript(path, sid, *, old_ts):
+    """Minimal valid transcript: one user + one assistant turn."""
+    lines = [
+        {"type": "user", "sessionId": sid, "timestamp": "2026-01-01T00:00:00.000Z",
+         "cwd": str(path.parent), "gitBranch": "main",
+         "message": {"role": "user", "content": "hello"}},
+        {"type": "assistant", "sessionId": sid, "timestamp": "2026-01-01T00:00:01.000Z",
+         "message": {"role": "assistant", "id": f"msg_{sid[:8]}",
+                     "model": "claude-opus-4-8",
+                     "usage": {"input_tokens": 10, "output_tokens": 5},
+                     "content": [{"type": "text", "text": "hi"}]}},
+    ]
+    path.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    os.utime(path, (old_ts, old_ts))  # old mtime → outside any liveness window
+
+
+@pytest.fixture
+def big_projects(tmp_path, monkeypatch):
+    """Synthetic ~/.claude/projects with N old transcripts.
+
+    Returns (n, sids). Redirects both HOME (find_all_conversations recomputes
+    Path.home() per call) and server.PROJECTS_ROOT (compute_global_stats reads
+    the module global) so both hot paths see the synthetic tree.
+    """
+    n = 200
+    root = tmp_path / ".claude" / "projects"
+    slug = "-tmp-perf-repo"
+    (root / slug).mkdir(parents=True)
+    old_ts = time.time() - 30 * 86400
+    sids = []
+    for _ in range(n):
+        sid = str(uuid.uuid4())
+        sids.append(sid)
+        _write_transcript(root / slug / f"{sid}.jsonl", sid, old_ts=old_ts)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(server, "PROJECTS_ROOT", root)
+    return n, sids
+
+
+def _count_calls(monkeypatch, attr, passthrough_return=None):
+    calls = []
+    orig = getattr(server, attr)
+
+    def spy(*a, **k):
+        calls.append((a, k))
+        if passthrough_return is not None:
+            return passthrough_return
+        return orig(*a, **k)
+
+    monkeypatch.setattr(server, attr, spy)
+    return calls
+
+
+# ── Liveness-gate invariants ────────────────────────────────────────────────
+# Old, untouched sessions must NOT get the per-row liveness probe (which scans
+# every Gemini/Codex file). These guard the cold-build and warm-serve gates.
+
+def test_archive_rehydrate_skips_liveness_for_old_rows(monkeypatch):
+    """Warm cached-serve path: ungated probing here was the ~10s/load bug."""
+    old_mtime = time.time() - 30 * 86400
+    rows = [{"session_id": str(uuid.uuid4()), "mtime": old_mtime} for _ in range(300)]
+    calls = _count_calls(monkeypatch, "_archive_session_is_live", passthrough_return=False)
+    server._rehydrate_archive_cached_rows(rows)
+    assert len(calls) <= 10, (
+        f"_archive_session_is_live called {len(calls)}x for 300 old rows — "
+        "the rehydrate liveness gate regressed"
+    )
+
+
+def test_archive_build_skips_liveness_for_old_sessions(big_projects, monkeypatch):
+    """Cold-build path: same gate, in find_all_conversations."""
+    n, _ = big_projects
+    calls = _count_calls(monkeypatch, "_archive_session_is_live", passthrough_return=False)
+    server._build_archive_conversations()
+    assert len(calls) <= 20, (
+        f"_archive_session_is_live called {len(calls)}x for {n} old sessions — "
+        "the archive-build liveness gate regressed"
+    )
+
+
+# ── Stats persistence ─────────────────────────────────────────────────────────
+# The per-transcript stats cache must survive a reload, or the first Stats open
+# after a restart re-parses every transcript (~40s, GIL-blocking).
+
+def test_stats_cache_roundtrip_avoids_reparse(big_projects, monkeypatch, tmp_path):
+    cache_file = tmp_path / "stats_file_cache.json"
+    monkeypatch.setattr(server, "_STATS_FILE_CACHE_FILE", cache_file)
+    server._STATS_FILE_CACHE.clear()
+
+    server.compute_global_stats()      # cold build populates the cache
+    server._save_stats_file_cache()    # persist
+    assert cache_file.is_file(), "stats cache was not persisted"
+
+    server._STATS_FILE_CACHE.clear()   # simulate a restart
+    server._load_stats_file_cache()    # reload from disk
+
+    reparses = _count_calls(monkeypatch, "_stats_aggregate_file", passthrough_return={"session_id": None, "by_date": {}})
+    server.compute_global_stats()
+    assert reparses == [], (
+        f"{len(reparses)} transcripts re-parsed after reload — "
+        "stats cache persistence regressed (every restart will cold-scan)"
+    )
+
+
+# ── Latency budget (lenient smoke on the scale fixture) ───────────────────────
+
+def test_stats_build_under_budget(big_projects):
+    t = time.perf_counter()
+    server.compute_global_stats()
+    dt = time.perf_counter() - t
+    assert dt < 6.0, f"compute_global_stats took {dt:.1f}s on {big_projects[0]} files"
+
+
+def test_archive_build_under_budget(big_projects):
+    t = time.perf_counter()
+    server._build_archive_conversations()
+    dt = time.perf_counter() - t
+    assert dt < 6.0, f"_build_archive_conversations took {dt:.1f}s on {big_projects[0]} files"

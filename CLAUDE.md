@@ -131,6 +131,27 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 
 Don't mock external systems (`gh`, `claude`, `pkood`) in the smoke test. The smoke test is about import-time correctness, not behavior.
 
+## Performance gates
+
+Every "CCC is slow" incident has been the same bug: a user-facing path doing
+`O(all conversations/sessions)` work — a subprocess fork (`ps`/`lsof`/`gh`/`git`),
+a full transcript parse, or a whole-list rebuild — **per item, uncached**.
+Invisible at test scale (tiny fixtures), seconds in production (1000+ transcripts).
+
+Rules when touching any path that scans `~/.claude/projects` or session state:
+- **Gate by candidacy**: only do live/liveness work for sessions that could be
+  live (`_discover_live_session_ids()` + a recent-mtime window), not all rows.
+- **Cache by `(mtime, size)`** and persist to disk (see `_conv_meta_cache`,
+  `_STATS_FILE_CACHE`) so a restart re-parses only changed files.
+- **Never spawn a subprocess per row**; batch (one `ps -A`) or memoise.
+- **Pass the cheap flags**: don't trigger PR/worktree/effective resolution for a
+  view that doesn't render them.
+
+`tests/test_perf_budget.py` enforces this with call-count invariants (not just
+latency). The committed `scripts/pre-push.sh` runs it before every push (shared
+gate via `.git/hooks/pre-push`). If it fails, restore the gate — don't relax the
+bound. Add a call-count test there for any new all-conversations/all-sessions path.
+
 ## Finishing a change — does it need a deploy?
 
 Depends entirely on what you touched. Most changes ship the moment you `git push origin main`. Only `.app`-shell changes need a real release.
