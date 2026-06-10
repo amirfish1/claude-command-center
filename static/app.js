@@ -2747,6 +2747,17 @@
     if (fresh || !_optimisticAgentStart) _optimisticAgentStart = Date.now();
     _startOptimisticAgeTicker($view);
     _armOptimisticAgentSafetyTimer($view, 60000);
+    // CCC-79: only ONE of the many inject ACK branches advanced this to
+    // "🧠 Thinking…" (markPendingSendDelivered) — codex/cursor/antigravity
+    // resumes and slow `claude --resume` spawns kept it on "Sending…" for
+    // many seconds, so the user "never sees Thinking". Auto-advance after
+    // 1.5s; failure paths remove the indicator entirely, which wins.
+    setTimeout(() => {
+      const still = $view.querySelector('.conv-live-tool-inline.optimistic');
+      if (still && !still.classList.contains('is-thinking')) {
+        setOptimisticAgentThinking($view);
+      }
+    }, 1500);
   }
   // CCC-57: safety timeout for the optimistic Sending…/Thinking… indicator. Real
   // tool/response data clears it via clearOptimisticAgentIndicator, so this is
@@ -3092,7 +3103,12 @@
     // just-answered question in the gap between the modal closing and the server
     // clearing question_waiting. Terminal questions (tty present) keep the card.
     const _headlessQuestion = isQuestion && !liveStatus.tty;
-    const isGenerating = liveStatus.live && !tool;
+    // "Generating" needs evidence of an ACTIVE turn, not just a live TTY —
+    // an idle session with an open terminal is `live` too, and used to show
+    // a permanent "Generating…" (CCC-81). sidecar_status flips off at turn
+    // end; the age cap covers a stale sidecar that never got cleared.
+    const isGenerating = liveStatus.live && !tool
+      && liveStatus.sidecarStatus === 'active' && ageSec < 120;
     const shouldShow = (liveStatus.live && tool && liveStatus.sidecarStatus === 'active'
       && (ageSec < 300 || isQuestion) && !_headlessQuestion)
       || isGenerating;
@@ -25293,6 +25309,15 @@
         $view.appendChild(div);
       }
     }
+    // Defensive sweep: a tool group whose body has no events renders as a
+    // "Ran 1 command" header over an empty box (CCC-80 — seen after live-
+    // stream races). It carries no information; drop it.
+    $view.querySelectorAll('.tool-call-group').forEach(g => {
+      if (!g.querySelector('.tool-call-group-body .event')) {
+        if (g === _currentToolGroup) { _currentToolGroup = null; _currentToolCount = 0; }
+        g.remove();
+      }
+    });
     // Re-anchor the inline live-tool indicator at the bottom; new events
     // just appended would otherwise push past it.
     if (typeof updateLiveToolStrip === 'function') updateLiveToolStrip();
@@ -25579,7 +25604,18 @@
     // History-only rows trail the local matches. Within themselves they
     // keep history-search BM25 order (already sorted by score in the
     // server response, so insertion order suffices).
-    return _prioritizeSessionIdMatches(localSorted.concat(synthetic).concat(syntheticRepo), qLower);
+    // Favor NAME matches (CCC-78): a row whose title contains the query is
+    // a stronger hit than one that only matched transcript content. Stable
+    // partition so relative order within each band is preserved; session-id
+    // prioritization below still wins overall.
+    const _nameHit = c => {
+      const name = String(c.display_name || c.ai_title || '').toLowerCase();
+      return name.indexOf(qLower) !== -1;
+    };
+    const combined = localSorted.concat(synthetic).concat(syntheticRepo);
+    const byName = combined.filter(_nameHit);
+    const rest = combined.filter(c => !_nameHit(c));
+    return _prioritizeSessionIdMatches(byName.concat(rest), qLower);
   }
 
   function _fetchHistoryAugment(query) {
