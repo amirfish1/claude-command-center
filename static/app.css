@@ -7085,7 +7085,9 @@
     color: var(--text-muted);
     cursor: pointer;
     border-radius: 4px;
-    border-left: 3px solid hsla(var(--chip-hue), 55%, 50%, 0.42);
+    /* CCC-95: the colored left border read as visual noise down the rail —
+       the folder chip itself already carries the hue. */
+    border-left: 3px solid transparent;
     user-select: none;
     margin-top: 3px;
     border-top: 1px solid rgba(139,148,158,0.12);
