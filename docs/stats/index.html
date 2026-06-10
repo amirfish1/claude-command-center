@@ -87,6 +87,9 @@
   .error { color: #ff6b6b; padding: 18px; }
   .tab-intro { max-width: 1080px; margin: 14px auto 0; padding: 0 22px; color: var(--ink-dim); font-size: 13px; }
   .tab-intro code { background: var(--panel2); padding: 2px 6px; border-radius: 4px; }
+  .chart-wrap { width: 100%; }
+  .chart-svg { width: 100%; height: auto; display: block; max-height: 220px; }
+  .chart-svg text { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
 </style>
 </head>
 <body>
@@ -173,8 +176,12 @@ function renderOptIn(d) {
       </div>
 
       <div class="card wide">
-        <h2>Opt-in active installs per day</h2>
-        ${dayBars(pings, "active_installs")}
+        <h2>Active installs over time (last 30 days)</h2>
+        ${timelineChart(pings, "active_installs", { stroke: "#4ade80", fill: "rgba(74,222,128,0.18)" })}
+        <details style="margin-top:10px">
+          <summary class="muted" style="cursor:pointer">exact daily numbers</summary>
+          <div style="margin-top:10px">${dayBars(pings, "active_installs")}</div>
+        </details>
         <p class="muted">Same install pinging twice in a day counts once.</p>
       </div>
 
@@ -245,21 +252,31 @@ function renderBeacon(d) {
       </div>
 
       <div class="card wide">
-        <h2>Boots + distinct IPs per day</h2>
-        <table>
-          <thead><tr><th>day</th><th class="num">boots</th><th class="num">distinct IPs</th><th></th></tr></thead>
-          <tbody>
-            ${opens.slice(0, 14).map(r => `
-              <tr>
-                <td class="muted">${escapeHtml(r.day)}</td>
-                <td class="num">${r.boots}</td>
-                <td class="num">${r.distinct_ips ?? "—"}</td>
-                <td><div class="bar-track" style="width:160px"><div class="bar-fill" style="width:${Math.round(100 * r.boots / Math.max(1, ...opens.map(x=>x.boots)))}%"></div></div></td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-        <p class="muted">distinct IPs is empty (—) for rows captured before 2026-06-08 (the column didn't exist yet).</p>
+        <h2>Distinct IPs over time (last 30 days)</h2>
+        ${timelineChart(opens, "distinct_ips", { stroke: "#ffd266", fill: "rgba(255,210,102,0.18)" })}
+        <p class="muted">Empty days mean the boot beacon didn't fire (or rows captured before 2026-06-08 had no ip_hash column yet).</p>
+      </div>
+
+      <div class="card wide">
+        <h2>Total boots over time (last 30 days)</h2>
+        ${timelineChart(opens, "boots", { stroke: "#2563eb", fill: "rgba(37,99,235,0.18)" })}
+        <details style="margin-top:10px">
+          <summary class="muted" style="cursor:pointer">exact daily numbers</summary>
+          <div style="margin-top:10px">
+            <table>
+              <thead><tr><th>day</th><th class="num">boots</th><th class="num">distinct IPs</th></tr></thead>
+              <tbody>
+                ${opens.slice(0, 14).map(r => `
+                  <tr>
+                    <td class="muted">${escapeHtml(r.day)}</td>
+                    <td class="num">${r.boots}</td>
+                    <td class="num">${r.distinct_ips ?? "—"}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        </details>
       </div>
 
       <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Cached at the edge for 5 minutes.</div>
@@ -284,6 +301,65 @@ function dayBars(rows, key) {
       </tbody>
     </table>
   `;
+}
+
+// Inline SVG timeline chart. rows = [{day, <key>}, ...] in DESCENDING
+// date order (most recent first); we reverse for left-to-right time flow.
+// fillColor + strokeColor are hex strings; height/width are CSS px.
+function timelineChart(rows, key, opts) {
+  const opt = opts || {};
+  const strokeColor = opt.stroke || "#2563eb";
+  const fillColor = opt.fill || "rgba(37,99,235,0.18)";
+  const w = opt.width || 1000;
+  const h = opt.height || 160;
+  const padL = 36, padR = 12, padT = 14, padB = 26;
+  if (!rows.length) return '<p class="muted">No data yet.</p>';
+  // Reverse to ascending time order, drop missing values.
+  const points = rows.slice().reverse().map(r => ({
+    day: r.day,
+    val: typeof r[key] === "number" ? r[key] : 0,
+  }));
+  const max = Math.max(1, ...points.map(p => p.val));
+  // Round max up to next "nice" tick for the Y-axis label.
+  const tick = niceCeil(max);
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+  const stepX = points.length > 1 ? plotW / (points.length - 1) : 0;
+  const xy = points.map((p, i) => {
+    const x = padL + (points.length === 1 ? plotW / 2 : stepX * i);
+    const y = padT + plotH * (1 - p.val / tick);
+    return { x, y, p };
+  });
+  const linePath = xy.map((d, i) => `${i === 0 ? "M" : "L"}${d.x.toFixed(1)},${d.y.toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L${xy[xy.length - 1].x.toFixed(1)},${(padT + plotH).toFixed(1)} L${xy[0].x.toFixed(1)},${(padT + plotH).toFixed(1)} Z`;
+  // X axis labels: first, mid, last
+  const tickIdx = points.length <= 2 ? [0, points.length - 1] : [0, Math.floor((points.length - 1) / 2), points.length - 1];
+  const xTicks = tickIdx.map(i => ({ x: xy[i].x, label: points[i].day.slice(5) })); // MM-DD
+  return `
+    <div class="chart-wrap">
+      <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" class="chart-svg" role="img" aria-label="Timeline of ${escapeHtml(key)}">
+        <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}" stroke="#1d2632" stroke-width="1"/>
+        <line x1="${padL}" y1="${padT + plotH}" x2="${w - padR}" y2="${padT + plotH}" stroke="#1d2632" stroke-width="1"/>
+        <line x1="${padL}" y1="${padT}" x2="${w - padR}" y2="${padT}" stroke="#1d2632" stroke-width="1" stroke-dasharray="2,4"/>
+        <text x="${padL - 6}" y="${padT + 4}" text-anchor="end" font-size="11" fill="#8a96a8">${tick}</text>
+        <text x="${padL - 6}" y="${padT + plotH + 4}" text-anchor="end" font-size="11" fill="#8a96a8">0</text>
+        <path d="${areaPath}" fill="${fillColor}"/>
+        <path d="${linePath}" fill="none" stroke="${strokeColor}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+        ${xy.map(d => `<circle cx="${d.x.toFixed(1)}" cy="${d.y.toFixed(1)}" r="2.5" fill="${strokeColor}"><title>${escapeHtml(d.p.day)}: ${d.p.val}</title></circle>`).join("")}
+        ${xTicks.map(t => `<text x="${t.x}" y="${h - 8}" text-anchor="middle" font-size="11" fill="#8a96a8">${escapeHtml(t.label)}</text>`).join("")}
+      </svg>
+    </div>
+  `;
+}
+
+function niceCeil(n) {
+  if (n <= 5) return Math.max(1, Math.ceil(n));
+  if (n <= 10) return 10;
+  if (n <= 20) return 20;
+  if (n <= 50) return Math.ceil(n / 10) * 10;
+  if (n <= 100) return Math.ceil(n / 25) * 25;
+  if (n <= 1000) return Math.ceil(n / 100) * 100;
+  return Math.ceil(n / 1000) * 1000;
 }
 
 function rankTable(rows, labelKey, countKey) {
