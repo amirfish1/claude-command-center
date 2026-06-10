@@ -33766,6 +33766,9 @@
   // chooser's card 1. Moving the live DOM nodes keeps every existing
   // handler (menu, browse, persistence) wired — one folder control, not
   // two. _restoreCwdControlsToInputBar puts them back when a session opens.
+  // Original DOM home of the composer (#convInputBar) while the new-session
+  // stage borrows it — captured at adopt time so restore is exact.
+  let _adoptedComposerHome = null;
   function _adoptCwdControlsIntoChooser($view) {
     const slot = $view && $view.querySelector('#nsCwdSlot');
     const cic = document.getElementById('convInputContext');
@@ -33775,6 +33778,16 @@
     if (row) slot.appendChild(row);
     if (wt) slot.appendChild(wt);
     cic.classList.add('cwd-controls-adopted');
+    // Also center the composer itself (CCC-87 follow-up: "I also meant the
+    // input box"). Move the live #convInputBar into the stage so the prompt
+    // sits with the chooser, mid-screen; all handlers ride along.
+    const composerSlot = $view.querySelector('#nsComposerSlot');
+    const bar = document.getElementById('convInputBar');
+    if (composerSlot && bar && !composerSlot.contains(bar)) {
+      _adoptedComposerHome = { parent: bar.parentElement, next: bar.nextElementSibling };
+      composerSlot.appendChild(bar);
+      bar.classList.add('is-centered-stage');
+    }
   }
   function _restoreCwdControlsToInputBar() {
     const cic = document.getElementById('convInputContext');
@@ -33786,6 +33799,13 @@
     if (row) cic.insertBefore(row, usage || null);
     if (wt) cic.insertBefore(wt, usage || null);
     cic.classList.remove('cwd-controls-adopted');
+    const bar = document.getElementById('convInputBar');
+    if (bar && _adoptedComposerHome && _adoptedComposerHome.parent
+        && bar.parentElement !== _adoptedComposerHome.parent) {
+      bar.classList.remove('is-centered-stage');
+      _adoptedComposerHome.parent.insertBefore(bar, _adoptedComposerHome.next || null);
+    }
+    _adoptedComposerHome = null;
   }
 
   // CCC-82: wire the front-and-center new-session chooser. Repo chips set
@@ -33854,6 +33874,78 @@
     [nameEl, pathEl].forEach(el => el.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); submit(); }
     }));
+  }
+
+  // ── "Extend CCC" recipe cards on the new-session stage ────────────────
+  // Driven by the `kind: "extension"` entries in static/templates.json —
+  // each card prefills the composer with a cookbook integration prompt the
+  // user runs inside their own app's repo (pick the folder via the chips
+  // above). Fetched once per page load; a failed fetch stashes [] so
+  // re-entering new-session mode doesn't retry on every open.
+  let _nsExtensionTemplates = null;
+  async function _loadNsExtensionTemplates() {
+    if (_nsExtensionTemplates !== null) return _nsExtensionTemplates;
+    try {
+      const res = await fetch('/static/templates.json', { cache: 'no-store' });
+      const data = await res.json();
+      const all = Array.isArray(data && data.templates) ? data.templates : [];
+      _nsExtensionTemplates = all.filter(t => t && t.kind === 'extension' && typeof t.prompt === 'string' && t.prompt.trim());
+    } catch (_) {
+      _nsExtensionTemplates = [];
+    }
+    return _nsExtensionTemplates;
+  }
+  function _renderNsExtensions($view, paneId) {
+    const wrap = $view.querySelector('#nsExtensionsWrap');
+    const grid = $view.querySelector('#nsExtensionsGallery');
+    if (!wrap || !grid) return;
+    _loadNsExtensionTemplates().then(templates => {
+      if (!templates.length) return;
+      // The stage may have been torn down while the fetch was in flight.
+      if (currentConversation !== '__new__' || !grid.isConnected) return;
+      grid.innerHTML = '';
+      templates.forEach(tpl => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'nsm-gallery-card';
+        card.title = 'Click to fill the prompt below, then pick your app’s folder and press Enter';
+        const title = document.createElement('span');
+        title.className = 'nsm-gallery-card-title';
+        title.textContent = tpl.name || tpl.id;
+        const desc = document.createElement('span');
+        desc.className = 'nsm-gallery-card-desc';
+        desc.textContent = tpl.description || '';
+        card.appendChild(title);
+        card.appendChild(desc);
+        if (tpl.docs) {
+          const meta = document.createElement('span');
+          meta.className = 'nsm-gallery-card-meta';
+          const docsLink = document.createElement('a');
+          docsLink.className = 'nsm-gallery-chip';
+          docsLink.href = tpl.docs;
+          docsLink.target = '_blank';
+          docsLink.rel = 'noopener';
+          docsLink.textContent = 'recipe ↗';
+          // Keep the link from also firing the card's fill action.
+          docsLink.addEventListener('click', ev => ev.stopPropagation());
+          meta.appendChild(docsLink);
+          card.appendChild(meta);
+        }
+        card.addEventListener('click', () => {
+          const input = composerInputForPane(paneId) || $convInput;
+          if (!input) return;
+          input.value = tpl.prompt;
+          setInputDraftForKey(inputDraftKeyForConversation('__new__'), tpl.prompt);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          moveInputCaretToEnd(input);
+          input.focus();
+          grid.querySelectorAll('.nsm-gallery-card.is-selected').forEach(el => el.classList.remove('is-selected'));
+          card.classList.add('is-selected');
+        });
+        grid.appendChild(card);
+      });
+      wrap.style.display = '';
+    });
   }
 
   function enterNewSessionMode() {
@@ -33934,9 +34026,15 @@
         +   '</div>'
         + '</div>'
         + '<div style="font-size:13px;color:var(--text-muted);max-width:480px;line-height:1.5;">' + escapeHtml(newSessionHelp) + '</div>'
+        + '<div class="ns-composer-slot" id="nsComposerSlot"></div>'
+        + '<div class="new-session-template-wrap" id="nsExtensionsWrap" style="display:none;">'
+        +   '<div class="new-session-template-title">Extend CCC · integration recipes</div>'
+        +   '<div class="nsm-gallery inline-new-session-templates" id="nsExtensionsGallery"></div>'
+        + '</div>'
         + '</div></div>';
       _wireNewSessionChooser($view, paneId);
       _adoptCwdControlsIntoChooser($view);
+      _renderNsExtensions($view, paneId);
     }
     if (typeof syncSpawnEngineDependentUi === 'function') syncSpawnEngineDependentUi();
     updateInputBar();
