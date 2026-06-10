@@ -31300,6 +31300,43 @@
     $restartServerBtn.addEventListener('click', restartServerRun);
   }
 
+  // ── Settings → Refresh conversations data ─────────────────────
+  // Forces the server to rescan every conversation and rebuild the
+  // search index now, instead of waiting for the periodic refresh.
+  // The rebuild runs in the background; once the POST is accepted we
+  // pull the archive again (skipping the still-stale cache via the
+  // existing stale-retry machinery) and re-render the sidebar.
+  const $refreshDataBtn = document.getElementById('refreshDataBtn');
+  const $refreshDataLabel = document.getElementById('refreshDataLabel');
+  if ($refreshDataBtn) {
+    $refreshDataBtn.addEventListener('click', async () => {
+      if ($refreshDataBtn.disabled) return;
+      $refreshDataBtn.disabled = true;
+      if ($refreshDataLabel) $refreshDataLabel.textContent = 'Refreshing…';
+      try {
+        const r = await fetch('/api/conversations/refresh', { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error((d && d.error) || ('refresh failed (' + r.status + ')'));
+        showOpToast('Refreshing conversations data in the background…', 'info');
+        // Give the background rebuild a head start, then refetch; if the
+        // payload is still stale+refreshing, _scheduleArchiveStaleRetry
+        // keeps polling until the fresh rows land.
+        setTimeout(async () => {
+          try {
+            await refreshArchiveData();
+            _scheduleSidebarRender();
+          } catch (_) { /* next poller tick catches up */ }
+          if ($refreshDataLabel) $refreshDataLabel.textContent = 'Refresh conversations data';
+          $refreshDataBtn.disabled = false;
+        }, 3000);
+      } catch (e) {
+        if ($refreshDataLabel) $refreshDataLabel.textContent = 'Refresh conversations data';
+        $refreshDataBtn.disabled = false;
+        showOpToast('Refresh failed: ' + e.message, 'error');
+      }
+    });
+  }
+
   // ── Sidebar refresh split-button ──────────────────────────────
   // Primary action: hard reload (cache-bust via ?_r=<ts>). The caret
   // opens a small menu whose only entry today is "Restart server",

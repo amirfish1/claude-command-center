@@ -37048,6 +37048,54 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "already_running": not started,
             })
             return
+        if path == "/api/conversations/refresh":
+            # Settings → "Refresh conversations data": force-fresh everything
+            # the conversation list and search read from, without waiting for
+            # the TTLs. Marks every archive response-cache entry stale and
+            # kicks its background rebuild now, drops the sessions response
+            # cache, and re-runs the history search ingest. The UI keeps
+            # serving the old rows until each rebuild lands, so nothing
+            # blocks or flickers.
+            _load_archive_response_cache()
+            with _ARCHIVE_RESPONSE_CACHE_LOCK:
+                cached_keys = list(_ARCHIVE_RESPONSE_CACHE.keys())
+                for entry in _ARCHIVE_RESPONSE_CACHE.values():
+                    entry["cached_at"] = 0
+            if not cached_keys:
+                cached_keys = [_archive_response_cache_key()]
+            refreshing = 0
+            for key in cached_keys:
+                flags = {}
+                for part in key.split(";"):
+                    name, _, val = part.partition("=")
+                    flags[name] = val == "1"
+                options = {
+                    "include_prs": flags.get("include_prs", False),
+                    "resolve_pr_states": flags.get("resolve_prs", False),
+                    "resolve_effective": flags.get("resolve_effective", False),
+                    "resolve_worktree_dirty": flags.get("resolve_worktrees", False),
+                }
+                if _archive_refresh_response_cache_async(key, options):
+                    refreshing += 1
+            with _SESSIONS_SINGLEFLIGHT_LOCK:
+                _SESSIONS_RESPONSE_CACHE.clear()
+            history_started = False
+            if _hi_indexer is not None:
+                history_started = _hi_indexer.start_ingest(with_embed=True)
+                with _history_conn_lock:
+                    if _history_conn is not None:
+                        with _history_query_lock:
+                            try:
+                                _history_conn.close()
+                            except Exception:
+                                pass
+                            _history_conn = None
+            self.send_json({
+                "ok": True,
+                "archive_refreshing": refreshing,
+                "history_started": history_started,
+            })
+            return
         if path == "/api/restart":
             # Manual in-place restart from the settings menu. Same-origin
             # POST checking above is the security boundary, matching update.
