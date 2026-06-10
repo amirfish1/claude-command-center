@@ -16919,51 +16919,69 @@
       });
     let _activeRowsHtml;
     if (_shouldGroupByObjects) {
-      // Nearest Flow-object ancestor for a session row (walks the
-      // flowNodeParents chain; bounded hops guard against cycles).
-      const _objectForSession = (c) => {
+      // Resolve a session to its grouping node (CCC-83 + CCC-88):
+      //  - nearest explicit Flow-object ancestor → that object;
+      //  - explicit chain that tops out at a repo node → that repo
+      //    ("repo as top object");
+      //  - no explicit Flow parent → the session's own repo, since on the
+      //    board sessions cluster under their repo by default;
+      //  - nothing resolvable → Unclassified.
+      const _groupForSession = (c) => {
         let node = flowNodeKey('session', c.session_id || c.id);
         for (let hop = 0; hop < 6; hop++) {
           const parent = flowNodeParents[node];
-          if (!parent) return null;
+          if (!parent) break;
           if (parent.indexOf('object:') === 0) {
             const oid = parent.slice(7);
             const obj = (flowCustomObjects || []).find(o => o && o.id === oid);
-            return { id: oid, title: (obj && obj.title) || 'Object' };
+            return { node: parent, title: (obj && obj.title) || 'Object' };
+          }
+          if (parent.indexOf('repo:') === 0) {
+            return { node: parent, title: _pathLeaf(parent.slice(5)) || parent.slice(5) };
           }
           node = parent;
+        }
+        const repoPath = c.folder_path || '';
+        if (repoPath) {
+          return { node: flowNodeKey('repo', repoPath), title: c.folder_label_chip || _pathLeaf(repoPath) || repoPath };
         }
         return null;
       };
       const _byObject = new Map();
-      const _unparented = [];
+      const _unclassified = [];
       for (const c of _visibleSessionConvs) {
-        const obj = _objectForSession(c);
-        if (!obj) { _unparented.push(c); continue; }
-        if (!_byObject.has(obj.id)) _byObject.set(obj.id, { title: obj.title, cards: [] });
-        _byObject.get(obj.id).cards.push(c);
+        const grp = _groupForSession(c);
+        if (!grp) { _unclassified.push(c); continue; }
+        if (!_byObject.has(grp.node)) _byObject.set(grp.node, { title: grp.title, cards: [] });
+        _byObject.get(grp.node).cards.push(c);
       }
       const _objEntries = Array.from(_byObject.entries()).sort((a, b) => {
+        // Custom objects above repo-derived groups, then freshest first.
+        const aObj = a[0].indexOf('object:') === 0 ? 0 : 1;
+        const bObj = b[0].indexOf('object:') === 0 ? 0 : 1;
+        if (aObj !== bObj) return aObj - bObj;
         const aMax = a[1].cards.reduce((m, c) => Math.max(m, c.modified || 0), 0);
         const bMax = b[1].cards.reduce((m, c) => Math.max(m, c.modified || 0), 0);
         return bMax - aMax;
       });
-      const _objGroupsHtml = _objEntries.map(([oid, group]) => {
-        // Stable per-object hue so each group keeps its color across renders.
+      const _renderObjGroup = (nodeId, title, cards) => {
+        // Stable per-node hue so each group keeps its color across renders.
         let hash = 0;
-        for (let i = 0; i < oid.length; i++) hash = ((hash << 5) - hash + oid.charCodeAt(i)) | 0;
+        for (let i = 0; i < nodeId.length; i++) hash = ((hash << 5) - hash + nodeId.charCodeAt(i)) | 0;
         const hue = Math.abs(hash) % 360;
-        const collapseKey = 'object:' + oid;
-        const collapsed = _isFolderGroupCollapsed('inprogress', collapseKey);
+        const collapsed = _isFolderGroupCollapsed('inprogress', nodeId);
+        const attrs = ' data-object-drop="' + escapeAttr(nodeId) + '"';
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
-          + _folderGroupHeaderHtml('inprogress', group.title, group.cards.length, hue, '', collapseKey)
-          + group.cards.map(c => _renderRow(c)).join('')
+          + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs)
+          + cards.map(c => _renderRow(c)).join('')
           + '</div>';
-      }).join('');
-      const _restHtml = _unparented.length
-        ? _flatItemsWithSeparators(_unparented, _gcItems)
-        : (_gcItems || []).map(it => it.html).join('');
-      _activeRowsHtml = _objGroupsHtml + _restHtml;
+      };
+      let _objGroupsHtml = _objEntries.map(([nodeId, group]) =>
+        _renderObjGroup(nodeId, group.title, group.cards)).join('');
+      if (_unclassified.length) {
+        _objGroupsHtml += _renderObjGroup('unclassified', 'Unclassified', _unclassified);
+      }
+      _activeRowsHtml = _objGroupsHtml + (_gcItems || []).map(it => it.html).join('');
     } else if (_shouldGroupByFolder) {
       // Group cards by folder; preserve folder order by the most
       // recent card in each group (freshest folder appears first).
@@ -17833,6 +17851,34 @@
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
+    // By-objects drag-to-reparent (CCC-88): drop a session row on an object
+    // (or repo / Unclassified) group header to move it there. Mirrors a
+    // Flow-board drag without leaving the sidebar; writes the same
+    // flowNodeParents map the board reads.
+    $convList.querySelectorAll('[data-object-drop]').forEach(hdr => {
+      hdr.addEventListener('dragover', (ev) => {
+        if (!dragHasConversationPayload(ev)) return;
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = 'move';
+        hdr.classList.add('is-drop-target');
+      });
+      hdr.addEventListener('dragleave', () => hdr.classList.remove('is-drop-target'));
+      hdr.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        hdr.classList.remove('is-drop-target');
+        const convId = readConvIdFromDrop(ev);
+        if (!convId) return;
+        const row = (conversationsData || []).find(x => x.id === convId) || {};
+        const sid = row.session_id || convId;
+        const target = hdr.getAttribute('data-object-drop');
+        const key = flowNodeKey('session', sid);
+        if (target === 'unclassified') delete flowNodeParents[key];
+        else flowNodeParents[key] = target;
+        persistFlowNodeParents();
+        renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+    });
     const $windowToggle = $convList.querySelector('[data-role="window-toggle"]');
     if ($windowToggle) {
       $windowToggle.addEventListener('click', (ev) => {
