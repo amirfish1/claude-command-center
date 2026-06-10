@@ -12041,3 +12041,35 @@ body:has(.gc-reader) .pwa-install-banner {
 /* While adopted, hide the strip's leftover quick chips (the card owns
    folder choice now) — the strip keeps engine/model controls only. */
 #convInputContext.cwd-controls-adopted .spawn-cwd-quick-chips { display: none; }
+
+/* ── Sidebar section tabs (CCC-85) ──────────────────────────────────── */
+.conv-tab-bar {
+  display: flex; gap: 2px;
+  position: sticky; top: 0; z-index: 5;
+  background: var(--surface);
+  padding: 6px 6px 0; margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.conv-tab {
+  flex: 1; padding: 6px 4px 7px;
+  border: none; border-bottom: 2px solid transparent;
+  background: transparent; color: var(--text-muted);
+  font-size: 11.5px; font-weight: 600; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  white-space: nowrap; border-radius: 4px 4px 0 0;
+}
+.conv-tab:hover { color: var(--text); background: var(--surface-2); }
+.conv-tab.is-active {
+  color: var(--accent, #58a6ff);
+  border-bottom-color: var(--accent, #58a6ff);
+}
+.conv-tab-count {
+  font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: rgba(139,148,158,0.18); color: var(--text-muted);
+}
+.conv-tab.is-active .conv-tab-count {
+  background: rgba(88,166,255,0.18); color: var(--accent, #58a6ff);
+}
+/* Section headers double as collapse toggles; inside a tab the section
+   label is redundant with the tab itself but harmless — keep for tools
+   (1d/7d, grouping) that live in the header. */

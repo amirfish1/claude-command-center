@@ -17420,10 +17420,41 @@
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + '</div>';
     }
-    // Order: GH Issues (to start) → Ready to merge (action) → In
-    // progress (which now also contains the group-chat rows at the
-    // top) → Archived.
-    const _convListHtml = _idSearchRowsHtml + _repoSearchRowsHtml + _ghIssuesHtml + _readyToMergeHtml + _inProgressHtml + _archivedHtml;
+    // Tabs (CCC-85): GH Issues / Ready to merge / In progress / Archived
+    // are tabs now, one section visible at a time. Search result rows
+    // (id/repo search) always render above the active tab's content.
+    const _sidebarTab = (() => {
+      try {
+        const t = localStorage.getItem('ccc-sidebar-tab');
+        return (t === 'issues' || t === 'merge' || t === 'inprogress' || t === 'archived') ? t : 'inprogress';
+      } catch (_) { return 'inprogress'; }
+    })();
+    const _tabDefs = [
+      ['issues', 'Issues', (_ghIssueConvs && _ghIssueConvs.length) || 0],
+      ['merge', 'Merge', (_readyToMergeConvs && _readyToMergeConvs.length) || 0],
+      ['inprogress', 'Active', ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
+      ['archived', 'Archived', _arcCount || 0],
+    ];
+    const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
+      + _tabDefs.map(([k, label, n]) =>
+        '<button type="button" class="conv-tab' + (k === _sidebarTab ? ' is-active' : '') + '" data-conv-tab="' + k + '">'
+        + escapeHtml(label)
+        + (n ? '<span class="conv-tab-count">' + n + '</span>' : '')
+        + '</button>').join('')
+      + '</div>';
+    const _tabEmpty = (what) => '<div class="archive-empty-state">No ' + what + '.</div>';
+    // The active tab's section always renders EXPANDED — a tab opening
+    // onto a collapsed (zero-height) section reads as broken. Only the
+    // top-level section wrapper is forced open; folder groups inside
+    // keep their own collapse state.
+    const _forceOpen = (html, cls) => html
+      .replace(cls + ' collapsed', cls)
+      .replace('aria-expanded="false"', 'aria-expanded="true"');
+    const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
+      : _sidebarTab === 'merge' ? (_forceOpen(_readyToMergeHtml, 'conv-readytomerge-section') || _tabEmpty('PRs waiting to merge'))
+      : _sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('archived sessions'))
+      : (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions'));
+    const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
     // Flicker guard. The 10s bulk-sessions poll and the 5s live-status tick both
     // re-run this render constantly. The wholesale innerHTML reset below tears
     // down and rebuilds every row, which the user sees as the whole list
@@ -17852,6 +17883,17 @@
         const value = opt.getAttribute('data-grouping');
         try { localStorage.setItem('ccc-inprogress-grouping', value); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+    }
+    // Sidebar tab bar (CCC-85): switch the visible section.
+    const $convTabBar = $convList.querySelector('[data-role="conv-tab-bar"]');
+    if ($convTabBar) {
+      $convTabBar.addEventListener('click', (ev) => {
+        const tab = ev.target.closest('[data-conv-tab]');
+        if (!tab) return;
+        ev.stopPropagation();
+        try { localStorage.setItem('ccc-sidebar-tab', tab.getAttribute('data-conv-tab')); } catch (_) {}
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       });
     }
     // By-objects drag-to-reparent (CCC-88): drop a session row on an object
