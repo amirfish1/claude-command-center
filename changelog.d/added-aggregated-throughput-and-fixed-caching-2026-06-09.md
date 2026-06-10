@@ -1,0 +1,2 @@
+- Added an aggregated "Total (Last 7 Days)" view in the Token Throughput Analyzer to inspect combined token throughput trends and metrics across all sessions active in the last 7 days.
+- Fixed an issue where stale conversation parsing cache entries would show zero token counts before the server reload.

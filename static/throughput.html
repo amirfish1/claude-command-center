@@ -721,12 +721,33 @@
       listEl.innerHTML = '';
       
       const searchVal = document.getElementById('search-input').value.toLowerCase();
+      
+      // Add special aggregated "Total (Last 7 Days)" item at the top of the sidebar
+      if (!searchVal || 'total'.includes(searchVal) || 'last 7 days'.includes(searchVal) || 'all'.includes(searchVal)) {
+        const item = document.createElement('div');
+        item.className = `session-item ${activeSessionId === 'all_7_days' ? 'active' : ''}`;
+        item.style.borderLeft = '3px solid var(--accent)';
+        item.onclick = () => selectSession({ session_id: 'all_7_days', display_name: 'Total (Last 7 Days)', engine: 'aggregated' });
+        
+        item.innerHTML = `
+          <div class="session-item-header">
+            <span class="session-title" style="font-weight: 600; color: var(--accent);">📊 Total (Last 7 Days)</span>
+            <span class="badge-engine" style="font-size: 9px; padding: 1px 5px; background: rgba(57, 210, 192, 0.2);">ALL</span>
+          </div>
+          <div class="session-meta">
+            <span>Aggregated metrics</span>
+            <span>7d window</span>
+          </div>
+        `;
+        listEl.appendChild(item);
+      }
+
       const filtered = allSessions.filter(s => {
         const title = (s.display_name || s.name || s.title || s.session_id || '').toLowerCase();
         return title.includes(searchVal);
       });
       
-      if (filtered.length === 0) {
+      if (filtered.length === 0 && listEl.children.length === 0) {
         listEl.innerHTML = `<div style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px;">No sessions found</div>`;
         return;
       }
@@ -1019,6 +1040,7 @@
             <div class="turn-info-left">
               <span class="turn-index-badge">${t.turn_index}</span>
               <span class="turn-trigger-badge ${t.trigger_type}">${t.trigger_type === 'user_text' ? 'PROMPT' : 'TOOL'}</span>
+              ${t.session_name ? `<span class="badge-engine" style="font-size: 10px; font-weight: 500; text-transform: none; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--blue); border-color: rgba(71,166,255,0.2); background: rgba(71,166,255,0.05); margin-right: 4px;" title="${t.session_name}">${t.session_name}</span>` : ''}
               <span class="turn-trigger-preview" title="${previewText}">${previewText}</span>
             </div>
             <div class="turn-stats-summary">
@@ -1049,8 +1071,8 @@
               </div>
             </div>
             <div style="display: flex; gap: 24px; margin-top: 8px; font-size: 11px; color: var(--text-muted); border-top: 1px solid var(--border); padding-top: 12px;">
-              <div>🕒 Start: <strong>${new Date(t.t_start).toLocaleTimeString()}</strong></div>
-              <div>🕒 End: <strong>${new Date(t.t_end).toLocaleTimeString()}</strong></div>
+              <div>🕒 Start: <strong>${new Date(t.t_start).toLocaleString()}</strong></div>
+              <div>🕒 End: <strong>${new Date(t.t_end).toLocaleString()}</strong></div>
               <div>📥 Input: <strong>${t.tokens_in.toLocaleString()}</strong> tokens (${Math.round(t.in_tpm).toLocaleString()} TPM)</div>
               <div>📤 Output: <strong>${t.tokens_out.toLocaleString()}</strong> tokens (${Math.round(t.out_tpm).toLocaleString()} TPM)</div>
             </div>

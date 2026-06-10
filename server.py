@@ -35563,96 +35563,214 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": "Missing session_id"}, 400)
                 return
             repo_path = (qs.get("repo_path", [""])[0] or "").strip() or None
-            try:
-                conv = parse_conversation(session_id, repo_path=repo_path)
-            except Exception as e:
-                self.send_json({"error": f"Failed to parse conversation: {str(e)}"}, 500)
-                return
-            events = conv.get("events") or []
-            # Pre-process events to map Codex token_usage from "result" events to the last "assistant" event
-            for i in range(len(events)):
-                if events[i].get("type") == "assistant":
-                    if not events[i].get("tokens_in") and not events[i].get("tokens_out"):
-                        has_later_assistant = False
-                        result_ev = None
-                        for k in range(i + 1, len(events)):
-                            nxt = events[k]
-                            if nxt.get("type") == "user_text":
-                                break
-                            if nxt.get("type") == "assistant":
-                                has_later_assistant = True
-                                break
-                            if nxt.get("type") == "result":
-                                result_ev = nxt
-                                break
-                        if result_ev and not has_later_assistant:
-                            usage = result_ev.get("token_usage")
-                            if usage and isinstance(usage, dict):
-                                events[i]["tokens_in"] = usage.get("input_tokens") or 0
-                                events[i]["tokens_out"] = usage.get("output_tokens") or 0
+            
+            # Helper to preview text
+            def get_trig_prev(tev):
+                text = tev.get("text") or ""
+                if tev.get("type") == "tool_result":
+                    use_id = tev.get("tool_use_id") or ""
+                    prefix = f"Tool Result ({use_id}): " if use_id else "Tool Result: "
+                    return prefix + text[:300] + ("..." if len(text) > 300 else "")
+                return text[:300] + ("..." if len(text) > 300 else "")
+
+            def get_asst_prev(aev):
+                blocks = aev.get("blocks") or []
+                parts = []
+                for b in blocks:
+                    kind = b.get("kind") or ""
+                    if kind == "text":
+                        parts.append(b.get("text") or "")
+                    elif kind == "thinking":
+                        parts.append(f"[Thinking: {b.get('text') or ''}]")
+                    elif kind == "tool_use":
+                        parts.append(f"[Tool Use: {b.get('name') or ''}({b.get('detail') or ''})]")
+                full_text = "\n".join(parts)
+                return full_text[:4000] + ("..." if len(full_text) > 4000 else "")
+
             turns = []
-            for i, ev in enumerate(events):
-                if ev.get("type") == "assistant":
-                    trigger_ev = None
-                    for j in range(i - 1, -1, -1):
-                        prev = events[j]
-                        if prev.get("type") in ("user_text", "tool_result"):
-                            trigger_ev = prev
-                            break
-                    if trigger_ev:
-                        t_start = _stats_parse_ts(trigger_ev.get("ts"))
-                        t_end = _stats_parse_ts(ev.get("ts"))
-                        if t_start and t_end:
-                            dur_sec = (t_end - t_start).total_seconds()
-                            if dur_sec < 1.0:
-                                dur_sec = 1.0
-                            tokens_in = ev.get("tokens_in") or 0
-                            tokens_out = ev.get("tokens_out") or 0
-                            
-                            # calculate speeds
-                            in_tps = tokens_in / dur_sec if dur_sec > 0 else 0.0
-                            out_tps = tokens_out / dur_sec if dur_sec > 0 else 0.0
-                            total_tps = (tokens_in + tokens_out) / dur_sec if dur_sec > 0 else 0.0
-                            
-                            def get_trig_prev(tev):
-                                text = tev.get("text") or ""
-                                if tev.get("type") == "tool_result":
-                                    use_id = tev.get("tool_use_id") or ""
-                                    prefix = f"Tool Result ({use_id}): " if use_id else "Tool Result: "
-                                    return prefix + text[:300] + ("..." if len(text) > 300 else "")
-                                return text[:300] + ("..." if len(text) > 300 else "")
 
-                            def get_asst_prev(aev):
-                                blocks = aev.get("blocks") or []
-                                parts = []
-                                for b in blocks:
-                                    kind = b.get("kind") or ""
-                                    if kind == "text":
-                                        parts.append(b.get("text") or "")
-                                    elif kind == "thinking":
-                                        parts.append(f"[Thinking: {b.get('text') or ''}]")
-                                    elif kind == "tool_use":
-                                        parts.append(f"[Tool Use: {b.get('name') or ''}({b.get('detail') or ''})]")
-                                full_text = "\n".join(parts)
-                                return full_text[:4000] + ("..." if len(full_text) > 4000 else "")
-
-                            turns.append({
-                                "turn_index": len(turns) + 1,
-                                "trigger_type": trigger_ev.get("type"),
-                                "trigger_preview": get_trig_prev(trigger_ev),
-                                "assistant_preview": get_asst_prev(ev),
-                                "t_start": trigger_ev.get("ts"),
-                                "t_end": ev.get("ts"),
-                                "dur_sec": round(dur_sec, 2),
-                                "tokens_in": tokens_in,
-                                "tokens_out": tokens_out,
-                                "in_tps": round(in_tps, 2),
-                                "out_tps": round(out_tps, 2),
-                                "total_tps": round(total_tps, 2),
-                                "in_tpm": round(in_tps * 60.0, 2),
-                                "out_tpm": round(out_tps * 60.0, 2),
-                                "total_tpm": round(total_tps * 60.0, 2),
-                            })
+            if session_id == "all_7_days":
+                try:
+                    all_c = find_all_conversations(repo_path=repo_path, include_old=True)
+                except Exception as e:
+                    self.send_json({"error": f"Failed to list conversations: {str(e)}"}, 500)
+                    return
+                
+                cutoff = time.time() - 7 * 86400
+                recent_sids = []
+                for c in all_c:
+                    t = c.get("last_interacted") or c.get("modified") or 0
+                    if t >= cutoff:
+                        recent_sids.append((c.get("session_id"), c.get("display_name") or c.get("name") or "Untitled"))
+                
+                all_events = []
+                for sid, name in recent_sids:
+                    try:
+                        conv = parse_conversation(sid, repo_path=repo_path)
+                        events = conv.get("events") or []
+                        for i in range(len(events)):
+                            if events[i].get("type") == "assistant":
+                                if not events[i].get("tokens_in") and not events[i].get("tokens_out"):
+                                    has_later_assistant = False
+                                    result_ev = None
+                                    for k in range(i + 1, len(events)):
+                                        nxt = events[k]
+                                        if nxt.get("type") == "user_text":
+                                            break
+                                        if nxt.get("type") == "assistant":
+                                            has_later_assistant = True
+                                            break
+                                        if nxt.get("type") == "result":
+                                            result_ev = nxt
+                                            break
+                                    if result_ev and not has_later_assistant:
+                                        usage = result_ev.get("token_usage")
+                                        if usage and isinstance(usage, dict):
+                                            events[i]["tokens_in"] = usage.get("input_tokens") or 0
+                                            events[i]["tokens_out"] = usage.get("output_tokens") or 0
+                        for ev in events:
+                            ev["session_id"] = sid
+                            ev["session_name"] = name
+                        all_events.extend(events)
+                    except Exception:
+                        pass
+                
+                events_by_session = {}
+                for ev in all_events:
+                    sid = ev.get("session_id")
+                    if sid:
+                        events_by_session.setdefault(sid, []).append(ev)
+                
+                all_extracted_turns = []
+                for sid, evs in events_by_session.items():
+                    session_name = evs[0].get("session_name") or "Untitled"
+                    for i, ev in enumerate(evs):
+                        if ev.get("type") == "assistant":
+                            trigger_ev = None
+                            for j in range(i - 1, -1, -1):
+                                prev = evs[j]
+                                if prev.get("type") in ("user_text", "tool_result"):
+                                    trigger_ev = prev
+                                    break
+                            if trigger_ev:
+                                t_start = _stats_parse_ts(trigger_ev.get("ts"))
+                                t_end = _stats_parse_ts(ev.get("ts"))
+                                if t_start and t_end:
+                                    dur_sec = (t_end - t_start).total_seconds()
+                                    if dur_sec < 1.0:
+                                        dur_sec = 1.0
+                                    tokens_in = ev.get("tokens_in") or 0
+                                    tokens_out = ev.get("tokens_out") or 0
+                                    
+                                    in_tps = tokens_in / dur_sec if dur_sec > 0 else 0.0
+                                    out_tps = tokens_out / dur_sec if dur_sec > 0 else 0.0
+                                    total_tps = (tokens_in + tokens_out) / dur_sec if dur_sec > 0 else 0.0
+                                    
+                                    all_extracted_turns.append({
+                                        "session_id": sid,
+                                        "session_name": session_name,
+                                        "trigger_type": trigger_ev.get("type"),
+                                        "trigger_preview": get_trig_prev(trigger_ev),
+                                        "assistant_preview": get_asst_prev(ev),
+                                        "t_start": trigger_ev.get("ts"),
+                                        "t_end": ev.get("ts"),
+                                        "dur_sec": dur_sec,
+                                        "tokens_in": tokens_in,
+                                        "tokens_out": tokens_out,
+                                        "in_tps": in_tps,
+                                        "out_tps": out_tps,
+                                        "total_tps": total_tps,
+                                    })
+                
+                all_extracted_turns.sort(key=lambda t: t["t_start"] or "")
+                for idx, t in enumerate(all_extracted_turns):
+                    turns.append({
+                        "turn_index": idx + 1,
+                        "session_id": t["session_id"],
+                        "session_name": t["session_name"],
+                        "trigger_type": t["trigger_type"],
+                        "trigger_preview": t["trigger_preview"],
+                        "assistant_preview": t["assistant_preview"],
+                        "t_start": t["t_start"],
+                        "t_end": t["t_end"],
+                        "dur_sec": round(t["dur_sec"], 2),
+                        "tokens_in": t["tokens_in"],
+                        "tokens_out": t["tokens_out"],
+                        "in_tps": round(t["in_tps"], 2),
+                        "out_tps": round(t["out_tps"], 2),
+                        "total_tps": round(t["total_tps"], 2),
+                        "in_tpm": round(t["in_tps"] * 60.0, 2),
+                        "out_tpm": round(t["out_tps"] * 60.0, 2),
+                        "total_tpm": round(t["total_tps"] * 60.0, 2),
+                    })
+            else:
+                try:
+                    conv = parse_conversation(session_id, repo_path=repo_path)
+                except Exception as e:
+                    self.send_json({"error": f"Failed to parse conversation: {str(e)}"}, 500)
+                    return
+                events = conv.get("events") or []
+                # Pre-process events to map Codex token_usage from "result" events to the last "assistant" event
+                for i in range(len(events)):
+                    if events[i].get("type") == "assistant":
+                        if not events[i].get("tokens_in") and not events[i].get("tokens_out"):
+                            has_later_assistant = False
+                            result_ev = None
+                            for k in range(i + 1, len(events)):
+                                nxt = events[k]
+                                if nxt.get("type") == "user_text":
+                                    break
+                                if nxt.get("type") == "assistant":
+                                    has_later_assistant = True
+                                    break
+                                if nxt.get("type") == "result":
+                                    result_ev = nxt
+                                    break
+                            if result_ev and not has_later_assistant:
+                                usage = result_ev.get("token_usage")
+                                if usage and isinstance(usage, dict):
+                                    events[i]["tokens_in"] = usage.get("input_tokens") or 0
+                                    events[i]["tokens_out"] = usage.get("output_tokens") or 0
+                for i, ev in enumerate(events):
+                    if ev.get("type") == "assistant":
+                        trigger_ev = None
+                        for j in range(i - 1, -1, -1):
+                            prev = events[j]
+                            if prev.get("type") in ("user_text", "tool_result"):
+                                trigger_ev = prev
+                                break
+                        if trigger_ev:
+                            t_start = _stats_parse_ts(trigger_ev.get("ts"))
+                            t_end = _stats_parse_ts(ev.get("ts"))
+                            if t_start and t_end:
+                                dur_sec = (t_end - t_start).total_seconds()
+                                if dur_sec < 1.0:
+                                    dur_sec = 1.0
+                                tokens_in = ev.get("tokens_in") or 0
+                                tokens_out = ev.get("tokens_out") or 0
+                                
+                                # calculate speeds
+                                in_tps = tokens_in / dur_sec if dur_sec > 0 else 0.0
+                                out_tps = tokens_out / dur_sec if dur_sec > 0 else 0.0
+                                total_tps = (tokens_in + tokens_out) / dur_sec if dur_sec > 0 else 0.0
+                                
+                                turns.append({
+                                    "turn_index": len(turns) + 1,
+                                    "trigger_type": trigger_ev.get("type"),
+                                    "trigger_preview": get_trig_prev(trigger_ev),
+                                    "assistant_preview": get_asst_prev(ev),
+                                    "t_start": trigger_ev.get("ts"),
+                                    "t_end": ev.get("ts"),
+                                    "dur_sec": round(dur_sec, 2),
+                                    "tokens_in": tokens_in,
+                                    "tokens_out": tokens_out,
+                                    "in_tps": round(in_tps, 2),
+                                    "out_tps": round(out_tps, 2),
+                                    "total_tps": round(total_tps, 2),
+                                    "in_tpm": round(in_tps * 60.0, 2),
+                                    "out_tpm": round(out_tps * 60.0, 2),
+                                    "total_tpm": round(total_tps * 60.0, 2),
+                                })
             
             total_turns = len(turns)
             turns_with_tokens = sum(1 for t in turns if t["tokens_in"] > 0 or t["tokens_out"] > 0)
