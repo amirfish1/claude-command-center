@@ -1816,7 +1816,7 @@
   .conversations-view .stream-bubble .assistant-text {
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
     font-size: 16px;
-    line-height: 1.45;
+    line-height: 1.6;
     font-weight: 400;
   }
   /* User bubble — Claude-Desktop-style chat bubble. No label, no left
