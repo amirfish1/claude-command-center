@@ -28326,6 +28326,20 @@
     return String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
   }
 
+  // Reject values that clearly are NOT a session identity before crediting
+  // work to them: CLI-flag typos ("--claimed-by") and bare ticket refs
+  // ("CCC-65") have both shown up in claimed_by/closed_by via mistyped close
+  // commands. Crediting those poisons the chip (see CCC-69).
+  function _uxFixesPlausibleSessionId(value) {
+    const s = String(value || '').trim();
+    if (!s) return false;
+    if (s.startsWith('-')) return false;             // mistyped CLI flag
+    if (/^[A-Za-z][A-Za-z0-9]*(-[A-Za-z0-9]+)*-\d+$/.test(s) && s.length <= 32) {
+      return false;                                   // looks like a ticket ref (PROJ-7)
+    }
+    return true;
+  }
+
   // Every identity a conversation row can be matched on (UUID + names).
   function _uxFixesRowIdentityKeys(c) {
     if (!c) return [];
@@ -28376,7 +28390,14 @@
         // Credit the CLOSER (a worker may close by ref without a prior claim),
         // falling back to the claimer. Without this, by-ref closes are
         // unattributed and the chip freezes at the last *claimed* ticket.
-        const csid = _uxFixesIdentityKey(item.closed_by || item.claimed_by);
+        // Skip garbage identities (mistyped CLI flags like "--claimed-by",
+        // or ticket refs like "CCC-65" written where a session id belongs) —
+        // a polluted LATEST close would otherwise shadow the last properly
+        // attributed one and the chip falls back to a meaningless project
+        // (CCC-69: "✓ (1/1)" from a one-ticket preview project).
+        const rawSid = item.closed_by || item.claimed_by;
+        if (!_uxFixesPlausibleSessionId(rawSid)) continue;
+        const csid = _uxFixesIdentityKey(rawSid);
         if (!csid) continue; // unclaimed close (e.g. a manual probe) → no row to credit
         const closedAt = _uxFixesClosedAtMs(item);
         const prevC = projectLastClosed.get(project);
@@ -28386,6 +28407,7 @@
         continue;
       }
       if (status !== 'in_progress') continue;
+      if (!_uxFixesPlausibleSessionId(item.claimed_by)) continue;
       const sid = _uxFixesIdentityKey(item.claimed_by);
       if (!sid) continue;
       // "Current" = the ticket this session most RECENTLY claimed, not the
