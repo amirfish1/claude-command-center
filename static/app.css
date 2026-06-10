@@ -9211,62 +9211,6 @@
   color: var(--accent, #58a6ff); font-size: 11.5px; font-style: italic;
   opacity: 0.75; padding: 4px 14px 8px; user-select: none;
 }
-/* Conversation collapse — CCC-66 */
-.conv-collapse-tip {
-  display: inline-flex; align-items: center; gap: 7px;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 6px; padding: 5px 10px; margin-top: 6px;
-  font-size: 12px; color: var(--text); user-select: none;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-}
-.conv-collapse-yes {
-  background: var(--accent, #58a6ff); color: #fff;
-  border: none; border-radius: 4px; padding: 2px 8px;
-  font-size: 11px; cursor: pointer; font-weight: 600;
-}
-.conv-collapse-dismiss {
-  background: none; border: none; color: var(--text-muted);
-  cursor: pointer; font-size: 12px; padding: 0 2px; line-height: 1;
-}
-.conv-collapsed-section { margin: 6px 0; }
-.conv-collapse-toggle {
-  width: 100%; background: rgba(139,148,158,0.08);
-  border: 1px dashed var(--border); color: var(--text-muted);
-  font-size: 12px; padding: 5px 12px; border-radius: 4px;
-  cursor: pointer; text-align: left;
-}
-.conv-collapse-toggle:hover { background: rgba(139,148,158,0.14); }
-.conv-collapsed-inner { }
-.conv-drag-line {
-  position: fixed; pointer-events: none; z-index: 999999;
-  height: 3px; background: rgba(139, 148, 158, 0.35); border-radius: 1.5px;
-  transition: background 0.15s, box-shadow 0.15s;
-}
-.conv-drag-line.is-active {
-  background: var(--accent, #58a6ff);
-  box-shadow: 0 0 8px var(--accent, #58a6ff), 0 0 15px rgba(88, 166, 255, 0.4);
-}
-.conv-drag-line-handle {
-  position: absolute; width: 10px; height: 10px; border-radius: 50%;
-  background: #8b949e; border: 2px solid var(--border, #30363d);
-  top: -3px; transition: transform 0.15s, background-color 0.15s, border-color 0.15s;
-}
-.conv-drag-line.is-active .conv-drag-line-handle {
-  background: #fff; border-color: var(--accent, #58a6ff);
-  transform: scale(1.25); box-shadow: 0 0 6px #fff;
-}
-.conv-drag-line-label {
-  position: absolute; bottom: 10px; white-space: nowrap;
-  font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px;
-  background: var(--surface, #161b22); color: var(--text-muted, #8b949e);
-  border: 1px solid var(--border, #30363d); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.conv-drag-line.is-active .conv-drag-line-label {
-  background: var(--accent, #58a6ff); color: #fff; border-color: transparent;
-}
-
 
 /* Per-message receipt chips — CCC-62 */
 .gc-message-receipts {
