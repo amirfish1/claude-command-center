@@ -16967,7 +16967,15 @@
         if (!_byObject.has(grp.node)) _byObject.set(grp.node, { title: grp.title, cards: [] });
         _byObject.get(grp.node).cards.push(c);
       }
+      // User-pinned manual order (drag a group header above/below another).
+      // Purely cosmetic; nodes without a saved rank sort by the default
+      // rule (custom objects first, then freshest) below the ranked ones.
+      let _objOrder = {};
+      try { _objOrder = JSON.parse(localStorage.getItem('ccc-objects-order') || '{}'); } catch (_) {}
       const _objEntries = Array.from(_byObject.entries()).sort((a, b) => {
+        const aRank = Number.isFinite(_objOrder[a[0]]) ? _objOrder[a[0]] : Infinity;
+        const bRank = Number.isFinite(_objOrder[b[0]]) ? _objOrder[b[0]] : Infinity;
+        if (aRank !== bRank) return aRank - bRank;
         // Custom objects above repo-derived groups, then freshest first.
         const aObj = a[0].indexOf('object:') === 0 ? 0 : 1;
         const bObj = b[0].indexOf('object:') === 0 ? 0 : 1;
@@ -17931,22 +17939,86 @@
     // Flow-board drag without leaving the sidebar; writes the same
     // flowNodeParents map the board reads.
     $convList.querySelectorAll('[data-object-drop]').forEach(hdr => {
+      // Group headers are themselves draggable: drop on another header's
+      // top/bottom third to order above/below (cosmetic, persisted in
+      // ccc-objects-order), middle third to nest under it on the Flow
+      // board (flowNodeParents only — never touches the repo or disk).
+      hdr.setAttribute('draggable', 'true');
+      hdr.addEventListener('dragstart', (ev) => {
+        ev.stopPropagation();
+        _draggedObjectNode = hdr.getAttribute('data-object-drop') || '';
+        try { ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+        try { ev.dataTransfer.setData('text/plain', 'ccc-objnode:' + _draggedObjectNode); } catch (_) {}
+        hdr.classList.add('dragging');
+      });
+      hdr.addEventListener('dragend', () => {
+        _draggedObjectNode = '';
+        hdr.classList.remove('dragging');
+        $convList.querySelectorAll('[data-object-drop]').forEach(n =>
+          n.classList.remove('is-drop-target', 'drop-above', 'drop-below'));
+      });
+      const dropZoneOf = (ev) => {
+        const rect = hdr.getBoundingClientRect();
+        const y = (ev.clientY - rect.top) / Math.max(1, rect.height);
+        return y < 0.33 ? 'above' : (y > 0.67 ? 'below' : 'nest');
+      };
       hdr.addEventListener('dragover', (ev) => {
-        if (!dragHasConversationPayload(ev)) return;
+        if (!_draggedObjectNode && !dragHasConversationPayload(ev)) return;
         ev.preventDefault();
         ev.dataTransfer.dropEffect = 'move';
-        hdr.classList.add('is-drop-target');
+        hdr.classList.remove('is-drop-target', 'drop-above', 'drop-below');
+        if (_draggedObjectNode) {
+          if (_draggedObjectNode === hdr.getAttribute('data-object-drop')) return;
+          const zone = dropZoneOf(ev);
+          hdr.classList.add(zone === 'above' ? 'drop-above' : (zone === 'below' ? 'drop-below' : 'is-drop-target'));
+        } else {
+          hdr.classList.add('is-drop-target');
+        }
       });
-      hdr.addEventListener('dragleave', () => hdr.classList.remove('is-drop-target'));
+      hdr.addEventListener('dragleave', () => hdr.classList.remove('is-drop-target', 'drop-above', 'drop-below'));
       hdr.addEventListener('drop', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        hdr.classList.remove('is-drop-target');
+        hdr.classList.remove('is-drop-target', 'drop-above', 'drop-below');
+        const target = hdr.getAttribute('data-object-drop');
+        const raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
+        // ── Group-header drop: reorder or nest ──
+        if (raw && raw.indexOf('ccc-objnode:') === 0) {
+          const dragged = raw.slice(12);
+          if (!dragged || dragged === target) return;
+          const zone = dropZoneOf(ev);
+          if (zone === 'nest' && target !== 'unclassified' && dragged !== 'unclassified') {
+            // Cycle guard: refuse if target is a descendant of dragged.
+            let n = target, cyclic = false;
+            for (let hop = 0; hop < 8 && n; hop++) {
+              if (n === dragged) { cyclic = true; break; }
+              n = flowNodeParents[n];
+            }
+            if (cyclic) { showOpToast('That would make a loop — not nesting.', 'error'); return; }
+            flowNodeParents[dragged] = target;
+            persistFlowNodeParents();
+            showOpToast('Nested under ' + (hdr.textContent || '').trim().slice(0, 40), 'success');
+          } else {
+            // Reorder: rebuild ranks from current DOM order, splice dragged
+            // around the target. Cosmetic only.
+            const ids = Array.from($convList.querySelectorAll('[data-object-drop]'))
+              .map(n => n.getAttribute('data-object-drop'))
+              .filter(id => id && id !== dragged);
+            const at = ids.indexOf(target);
+            if (at === -1) return;
+            ids.splice(zone === 'above' ? at : at + 1, 0, dragged);
+            const order = {};
+            ids.forEach((id, i) => { order[id] = i; });
+            try { localStorage.setItem('ccc-objects-order', JSON.stringify(order)); } catch (_) {}
+          }
+          renderArchiveList(document.getElementById('convSearch')?.value || '');
+          return;
+        }
+        // ── Session-row drop: reparent the session under this group ──
         const convId = readConvIdFromDrop(ev);
         if (!convId) return;
         const row = (conversationsData || []).find(x => x.id === convId) || {};
         const sid = row.session_id || convId;
-        const target = hdr.getAttribute('data-object-drop');
         const key = flowNodeKey('session', sid);
         if (target === 'unclassified') delete flowNodeParents[key];
         else flowNodeParents[key] = target;
@@ -18770,6 +18842,8 @@
   }, true);
 
   let dragSourceId = null;
+  // Object/group header currently being dragged in the by-objects sidebar.
+  let _draggedObjectNode = '';
 
   function attachDragHandlers(el) {
     el.addEventListener('dragstart', (ev) => {

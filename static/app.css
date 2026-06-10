@@ -12147,3 +12147,15 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-row.is-closed .fq-status { background: rgba(139,148,158,0.12); color: var(--text-muted); }
 .fq-row.is-closed .fq-note { color: var(--text-muted); }
 .fq-empty { padding: 10px; font-size: 11.5px; color: var(--text-muted); }
+
+/* Draggable object-group headers in by-objects mode: above/below insert
+   lines while reordering, accent ring while nesting. */
+.conv-folder-group-header[draggable="true"] { cursor: grab; }
+.conv-folder-group-header.dragging { opacity: 0.5; }
+.conv-folder-group-header.drop-above { box-shadow: inset 0 2px 0 var(--accent, #58a6ff); }
+.conv-folder-group-header.drop-below { box-shadow: inset 0 -2px 0 var(--accent, #58a6ff); }
+.conv-folder-group-header.is-drop-target {
+  outline: 1.5px solid var(--accent, #58a6ff);
+  outline-offset: -1.5px;
+  background: rgba(88,166,255,0.08);
+}
