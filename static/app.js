@@ -4599,6 +4599,34 @@
       return;
     }
     if (!text) return;
+    // Join link (CCC-98): `ccc:join-gc:<chat id or path>` pasted into any
+    // session's composer joins THAT session to the group chat instead of
+    // being sent to the agent as text.
+    const _joinMatch = text.match(/^ccc:join-gc:(\S+)$/);
+    if (_joinMatch && currentSession.id) {
+      const ref = _joinMatch[1];
+      const body = { session_id: currentSession.id };
+      if (ref.indexOf('/') !== -1 || ref.indexOf('~') === 0) body.chat_path = ref;
+      else body.chat_id = ref;
+      try {
+        const jr = await fetch('/api/group-chat/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const jd = await jr.json().catch(() => ({}));
+        if (jr.ok && jd.ok) {
+          showOpToast('Session joined the group chat', 'success');
+          $input.value = '';
+          clearInputDraftForConversation(draftConversation);
+        } else {
+          showOpToast('Join failed: ' + ((jd && jd.error) || ('HTTP ' + jr.status)), 'error');
+        }
+      } catch (err) {
+        showOpToast('Join failed: ' + ((err && err.message) || 'network'), 'error');
+      }
+      return;
+    }
     // New-session mode: input doubles as the prompt for a fresh spawn.
     if (currentConversation === '__new__') {
       if (_ttsActive) await stopTextToSpeech();
@@ -13108,6 +13136,9 @@
       + '<div class="gc-reader-header">'
         + '<span class="gc-topic" title="' + topicSafe + '">' + topicSafe + '</span>'
         + '<span class="gc-mode-badge">' + modeSafe + '</span>'
+        + '<button type="button" class="gc-join-link-btn" id="gcJoinLinkBtn"'
+        + ' title="Copy a join link — paste it into any session\'s composer in CCC and that session joins this chat">'
+        + '🔗 Join link</button>'
       + '</div>'
       + '<div class="gc-reader-sticky-meta" id="gcReaderStickyMeta" style="display:none;">'
         + '<div class="csh-col">'
@@ -13175,6 +13206,21 @@
       _gcReaderHiddenRailItems = true;
     }
 
+    // Join link (CCC-98): copies a token any session's composer accepts.
+    // Sending `ccc:join-gc:<id>` from a session joins that session to this
+    // chat (intercepted in the composer send path).
+    const gcJoinBtn = document.getElementById('gcJoinLinkBtn');
+    if (gcJoinBtn) {
+      gcJoinBtn.addEventListener('click', async () => {
+        const token = 'ccc:join-gc:' + (_gcReaderId || _gcReaderPath || '');
+        try {
+          await navigator.clipboard.writeText(token);
+          showOpToast('Join link copied — paste it into any session’s composer and send', 'success');
+        } catch (_) {
+          prompt('Copy this join link, then paste it into any session’s composer:', token);
+        }
+      });
+    }
     if (includeHuman) {
       const gcSendBtn = document.getElementById('gcSendBtn');
       const gcHumanInput = document.getElementById('gcHumanInput');

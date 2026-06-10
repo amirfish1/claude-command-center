@@ -12189,3 +12189,13 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .ns-choice-card.is-dimmed { opacity: 0.55; }
 .ns-choice-card.is-dimmed:hover { opacity: 0.85; }
+
+/* Join-link button in the group chat reader header (CCC-98). */
+.gc-join-link-btn {
+  margin-left: auto;
+  padding: 3px 9px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--bg);
+  color: var(--text-muted); font-size: 11.5px; cursor: pointer;
+  white-space: nowrap;
+}
+.gc-join-link-btn:hover { color: var(--accent, #58a6ff); border-color: var(--accent, #58a6ff); }
