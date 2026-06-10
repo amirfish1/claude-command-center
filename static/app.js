@@ -31850,8 +31850,8 @@
         (trunc.length
           ? '<div class="ann-ux-warn">⚠ Stored truncated: ' + escapeHtml(trunc.join(', ')) + '</div>'
           : '') +
-        '<div class="ann-ux-preview-label">Exactly what the worker receives:</div>' +
-        '<textarea class="ann-ux-preview-text" readonly rows="14"></textarea>' +
+        '<div class="ann-ux-preview-label">Exactly what the worker receives — edit before submitting if needed:</div>' +
+        '<textarea class="ann-ux-preview-text" rows="14" spellcheck="false"></textarea>' +
         '<div class="ann-ux-preview-actions">' +
           '<button type="button" class="ann-btn" data-ux-copy>Copy</button>' +
           '<button type="button" class="ann-btn" data-ux-cancel>Cancel</button>' +
@@ -31866,17 +31866,21 @@
     document.addEventListener('keydown', onKey, true);
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
     modal.querySelector('[data-ux-copy]').addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(promptText); showOpToast('Annotation copied', 'success'); }
+      // Copy the LIVE textarea value — the user may have edited it.
+      try { await navigator.clipboard.writeText(textArea.value); showOpToast('Annotation copied', 'success'); }
       catch (_) { try { textArea.select(); document.execCommand('copy'); } catch (e) {} }
     });
     modal.querySelector('[data-ux-cancel]').addEventListener('click', close);
     modal.querySelector('[data-ux-submit]').addEventListener('click', () => {
+      const edited = textArea.value;
       close();
-      if (typeof onSubmit === 'function') onSubmit();
+      // Hand the (possibly edited) prompt to the submitter so what the
+      // user reviewed is exactly what the worker receives.
+      if (typeof onSubmit === 'function') onSubmit(edited);
     });
   }
 
-  async function annOpenUxFixesQueue(ann, closeFn, _errEl) {
+  async function annOpenUxFixesQueue(ann, closeFn, _errEl, textOverride) {
     if (!ann) return;
     // Close the editor up front — the user clicked the button and
     // doesn't need to stare at the modal while the fetch is in flight.
@@ -31893,7 +31897,9 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           annotation_id: ann.id || '',
-          text: annUxFixesQueuePrompt(ann),
+          text: (typeof textOverride === 'string' && textOverride.trim())
+            ? textOverride
+            : annUxFixesQueuePrompt(ann),
           note: ann.note || '',
           url: ann.url || '',
           title: ann.title || '',
@@ -32144,7 +32150,7 @@
         // copy) instead of firing straight at the queue. The annotation is
         // already persisted; the overlay can close, the preview is its own modal.
         annStop();
-        annShowUxFixesPreview(ann, () => annOpenUxFixesQueue(ann, null, errEl));
+        annShowUxFixesPreview(ann, (editedText) => annOpenUxFixesQueue(ann, null, errEl, editedText));
       });
     }
     saveBtn.addEventListener('click', save);
