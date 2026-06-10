@@ -1,1 +1,0 @@
-- Group chats: add-participant picker on chat rows and the reader header, plus "Join with this link" — paste a token into any session's composer to join (CCC-97, CCC-98)

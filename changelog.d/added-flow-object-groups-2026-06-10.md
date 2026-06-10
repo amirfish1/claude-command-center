@@ -1,1 +1,0 @@
-- Flow: "+ object" button creates empty object groups, group headers drag to reorder or nest in by-objects view, and an object-group name opens its Flow MD doc (CCC-92, CCC-93)

@@ -1,1 +1,0 @@
-- Fixes: Launch no longer forks a session a live headless process owns (CCC-96), load-earlier banner no longer auto-fires on open, repo chips track manual CWD edits (CCC-91), Files-panel Queue view scopes to the worker's project (CCC-99)

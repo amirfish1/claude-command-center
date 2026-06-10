@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-06-10
+
+### Added
+- New-session page now offers "Extend CCC" integration-recipe cards (driven by `kind: "extension"` entries in `static/templates.json`): click a cookbook recipe — Annotate → UX-fixes queue, or bug-report widget → GitHub issues — to prefill the composer with a ready-to-run integration prompt for your own app's repo.
+- Flow: "+ object" button creates empty object groups, group headers drag to reorder or nest in by-objects view, and an object-group name opens its Flow MD doc (CCC-92, CCC-93)
+- Cookbook: Gmail hourly triage → iMessage alert recipe (CCC-101)
+- Group chats: add-participant picker on chat rows and the reader header, plus "Join with this link" — paste a token into any session's composer to join (CCC-97, CCC-98)
+- Files panel flips to a Queue view for UX-fixes worker sessions, and the server auto-nudges idle queue workers (CCC-100)
+
+### Changed
+- New-session stage polish: chooser highlights the default path, centered and roomier prompt box, fun random project names; engine icon moved to the far right of conversation rows (CCC-87, CCC-94)
+
+### Fixed
+- Fixes: Launch no longer forks a session a live headless process owns (CCC-96), load-earlier banner no longer auto-fires on open, repo chips track manual CWD edits (CCC-91), Files-panel Queue view scopes to the worker's project (CCC-99)
+
 ## [5.0.1] - 2026-06-10
 
 ### Added
@@ -1653,7 +1668,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.0.1...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.1.0...HEAD
+[5.1.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.1.0
 [5.0.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.0.1
 [5.0.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.0.0
 [4.11.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v4.11.0

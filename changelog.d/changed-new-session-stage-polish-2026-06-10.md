@@ -1,1 +1,0 @@
-- New-session stage polish: chooser highlights the default path, centered and roomier prompt box, fun random project names; engine icon moved to the far right of conversation rows (CCC-87, CCC-94)

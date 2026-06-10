@@ -11,7 +11,7 @@ Usage:
     PORT=9000 ./run.sh       # custom port
 """
 
-__version__ = "5.0.1"
+__version__ = "5.1.0"
 
 import ast
 import base64

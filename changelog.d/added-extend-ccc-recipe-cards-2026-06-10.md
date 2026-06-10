@@ -1,1 +1,0 @@
-- New-session page now offers "Extend CCC" integration-recipe cards (driven by `kind: "extension"` entries in `static/templates.json`): click a cookbook recipe — Annotate → UX-fixes queue, or bug-report widget → GitHub issues — to prefill the composer with a ready-to-run integration prompt for your own app's repo.
