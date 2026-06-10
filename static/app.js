@@ -10982,6 +10982,14 @@
   async function openFlowNodeInspector(node) {
     const payload = flowInspectorPayloadFromNode(node);
     if (!payload) return;
+    return openFlowNodeInspectorForPayload(payload);
+  }
+
+  // Same inspector, entered from a plain payload instead of a Flow-board DOM
+  // node — lets the sidebar's by-objects group headers open the object's MD
+  // doc exactly like clicking the node in Flow (CCC-93).
+  async function openFlowNodeInspectorForPayload(payload) {
+    if (!payload) return;
     if (typeof stopGroupChatReader === 'function') {
       try { stopGroupChatReader({ rerenderSidebar: false }); } catch (_) {}
     }
@@ -18099,7 +18107,30 @@
         if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         hdr.setAttribute('aria-expanded', String(!wasCollapsed));
       };
-      hdr.addEventListener('click', toggleFolderGroup);
+      // By-objects headers (CCC-93): the chevron collapses; clicking the
+      // NAME opens the object's MD doc in the same inspector Flow uses.
+      // Plain folder headers keep whole-header collapse.
+      const objNode = hdr.getAttribute('data-object-drop') || '';
+      const opensInspector = objNode && objNode !== 'unclassified';
+      hdr.addEventListener('click', (ev) => {
+        if (opensInspector && !ev.target.closest('.conv-folder-group-arrow')) {
+          ev.stopPropagation();
+          let payload = null;
+          if (objNode.indexOf('object:') === 0) {
+            const oid = objNode.slice(7);
+            const obj = (flowCustomObjects || []).find(o => o && o.id === oid);
+            payload = { kind: 'object', object_id: oid, title: (obj && obj.title) || 'Object', repo_path: '' };
+          } else if (objNode.indexOf('repo:') === 0) {
+            const rp = objNode.slice(5);
+            payload = { kind: 'repo', repo_path: rp, title: _pathLeaf(rp) || rp };
+          }
+          if (payload && typeof openFlowNodeInspectorForPayload === 'function') {
+            openFlowNodeInspectorForPayload(payload);
+            return;
+          }
+        }
+        toggleFolderGroup(ev);
+      });
       hdr.addEventListener('keydown', (ev) => {
         if (ev.key !== 'Enter' && ev.key !== ' ') return;
         ev.preventDefault();
