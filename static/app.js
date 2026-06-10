@@ -19098,7 +19098,14 @@
         // last checked. (The Compact button lives in the input box now.) Filled
         // imperatively by updateConvProcessIndicator() so the "checked Xs ago"
         // label stays fresh between full breadcrumb rebuilds. Claude-only.
-        const procSlot = (currentSession && (isClaudeSource(currentSession.source) || currentSession.source === 'codex' || currentSession.source === 'antigravity'))
+        // Read via window: `currentSession` is a window-property shim
+        // installed much later in this file (Object.defineProperty over
+        // splitState). The popout's top-level updatePaneHeader call runs
+        // BEFORE that shim exists, and a bare identifier read of a
+        // not-yet-defined global throws ReferenceError — killing the boot
+        // IIFE and leaving the popout stuck on its spinner (CCC-71).
+        const _cs = window.currentSession;
+        const procSlot = (_cs && (isClaudeSource(_cs.source) || _cs.source === 'codex' || _cs.source === 'antigravity'))
           ? '<span class="ccc-breadcrumb-proc" data-role="ccc-breadcrumb-proc"></span>'
           : '';
         // Proc slot (headless/terminal indication) sits right after the
@@ -19409,7 +19416,6 @@
       raf(restore);
     });
   }
-  window.__mark = 19412;
   ensureAllConversationEndAffordances();
 
   // Build a fresh `.conv-pane` element for paneId, cloning the chrome of
@@ -19723,7 +19729,6 @@
 
   // Click anywhere inside a pane to mark it active (drives composer
   // routing via the shim, and the sidebar `.active` highlight).
-  window.__mark = 19725;
   document.addEventListener('click', (ev) => {
     // Don't activate the pane on close-button clicks — the close handler
     // is about to destroy the pane anyway, and activating it first causes
@@ -19841,7 +19846,6 @@
     }
     saveSplitState();
   }
-  window.__mark = 19842;
   window.addEventListener('resize', handleViewportResize);
   window.addEventListener('resize', () => {
     restoreConversationBottomAnchors(captureConversationBottomAnchors());
@@ -19854,7 +19858,6 @@
   // `interactive-widget` hint), so we feed `visualViewport.height` into the
   // `--app-vh` custom property that `body` reads. Wired up only under a
   // coarse pointer — desktop keeps the plain `100vh` fallback untouched.
-  window.__mark = 19854;
   if (window.visualViewport && window.matchMedia('(pointer: coarse)').matches) {
     const vv = window.visualViewport;
     let _vvRaf = 0;
@@ -21062,7 +21065,6 @@
     if (backdrop) backdrop.addEventListener('click', closeFfcModal);
     if (close)    close.addEventListener('click', closeFfcModal);
   }
-  window.__mark = 21061;
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', _ffcWireCloseHandlers);
   } else {
@@ -22693,7 +22695,6 @@
   }
   // Delegated click on the input-context strip — survives re-renders
   // of [data-workspace] without rebinding.
-  window.__mark = 22691;
   (function () {
     const slot = getInputContextSlot();
     if (!slot) return;
@@ -22704,14 +22705,12 @@
       openWorktreesModal();
     });
   })();
-  window.__mark = 22701;
   document.addEventListener('keydown', function (e) {
     const $modal = document.getElementById('worktreesModal');
     if (e.key === 'Escape' && $modal && $modal.classList.contains('open')) {
       closeWorktreesModal();
     }
   });
-  window.__mark = 22707;
   (function () {
     const $backdrop = document.getElementById('worktreesBackdrop');
     const $closeBtn = document.getElementById('worktreesCloseBtn');
@@ -22745,7 +22744,6 @@
         : baseTitle;
     } catch (_) { /* network blip — leave the badge state alone */ }
   }
-  window.__mark = 22740;
   if (!CONV_POPOUT_MODE) {
     refreshWorktreesBadge();
     setInterval(_gated('worktreesBadge', refreshWorktreesBadge), 60000);
@@ -22755,7 +22753,6 @@
   // Loads /api/stats and renders an Overview/Models view in a modal.
   // Cold first-load can take a few seconds for users with many transcripts;
   // every subsequent range switch is instant (server caches per-file aggs).
-  window.__mark = 22749;
   (function() {
     const $modal = document.getElementById('statsModal');
     const $body = document.getElementById('statsBody');
@@ -25613,7 +25610,6 @@
   //     freshness for the embedding stream
   // Click → kicks a manual /api/history/setup so the user can force a
   // refresh without waiting for the next scheduled pass.
-  window.__mark = 25606;
   window._historyIndexStatus = null;
   let _hiPollTimer = null;
   let _hiOobePromptDismissed = false;
