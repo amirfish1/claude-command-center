@@ -33841,6 +33841,14 @@
       if (isSpawnCwdMenuOpen()) renderSpawnCwdMenu(ev.target.value);
       renderSpawnCwdQuickChips();
       updateNewSessionCwdNotice();
+      // Keep the chooser's repo chips honest when the CWD is edited by
+      // hand (CCC-91): highlight the chip matching the typed path, clear
+      // the highlight when the path matches none of them.
+      const _cwdNow = normalizeSpawnCwdPath(ev.target.value);
+      document.querySelectorAll('.ns-repo-chip').forEach(b => {
+        b.classList.toggle('is-current',
+          normalizeSpawnCwdPath(b.getAttribute('data-ns-repo') || '') === _cwdNow);
+      });
       if (currentConversation === '__new__') updateInputBar();
     }
   }
