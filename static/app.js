@@ -15728,7 +15728,8 @@
           : 'A CCC-spawned headless agent is running (pid ' + (ls.headlessPid || '?') + ')')
       : 'No CCC-spawned headless agent for this session';
     const termTitle = bgOn
-      ? 'This session is open in a Claude Code background terminal (pid ' + (ls.bgPid || '?') + ') — use that window to interact'
+      ? 'This session runs in a terminal managed by the Claude Code app (pid ' + (ls.bgPid || '?') + '). '
+        + 'It has no system tty, so CCC cannot type into it — interact in the Claude Code window.'
       : (termOn
           ? 'A live terminal (TTY) is attached to this session'
           : 'No live terminal attached to this session');
@@ -15753,7 +15754,7 @@
       + ' title="' + escapeHtml(headPillTitle) + '">'
       + '<span class="ccc-proc-dot"></span>' + escapeHtml(headLabel) + '</span>';
     el.innerHTML = headPill
-      + pill(termOn, false, bgOn ? 'terminal · bg' : 'terminal', termTitle)
+      + pill(termOn, false, bgOn ? 'terminal · Claude app' : 'terminal', termTitle)
       + (ago ? '<span class="ccc-proc-checked" title="' + escapeHtml(checkedTitle) + '">checked ' + escapeHtml(ago) + (clock ? ' · ' + escapeHtml(clock) : '') + '</span>' : '')
       + '<button type="button" class="ccc-proc-refresh" title="Refresh this session\'s headless / terminal state now" aria-label="Refresh state">↻</button>';
   }
@@ -33179,7 +33180,7 @@
       bits.push(ls.live ? 'live' : 'not-live');
       if (ls.headless_present) bits.push('headless' + (ls.headless_pid ? ' pid ' + ls.headless_pid : '') + (ls.headless_stale ? ' (STALE)' : ''));
       if (ls.terminal_present) bits.push('terminal' + (ls.tty ? ' ' + ls.tty : ''));
-      if (ls.bg_present) bits.push('bg terminal' + (ls.bg_pid ? ' pid ' + ls.bg_pid : ''));
+      if (ls.bg_present) bits.push('Claude-app terminal' + (ls.bg_pid ? ' pid ' + ls.bg_pid : ''));
       if (!ls.headless_present && !ls.terminal_present && !ls.bg_present) bits.push('no headless/terminal process');
       anchors.push('Session state: ' + bits.join(' · '));
     }
