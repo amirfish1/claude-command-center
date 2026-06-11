@@ -34329,35 +34329,46 @@
       });
     });
     const nameEl = $view.querySelector('#nsNewProjectName');
-    const pathEl = $view.querySelector('#nsNewProjectPath');
     const createBtn = $view.querySelector('#nsNewProjectCreate');
     const hintEl = $view.querySelector('#nsNewProjectHint');
-    if (!nameEl || !pathEl || !createBtn) return;
-    let pathTouched = false;
+    if (!nameEl || !createBtn) return;
     const slugify = s => String(s || '').trim().toLowerCase()
       .replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
-    nameEl.addEventListener('input', () => {
+    // The ONE CWD field (CCC-102) is the adopted #spawnCwdPicker. The
+    // new-project name writes its ~/dev/<slug> suggestion there — but only
+    // while the field still holds our last auto-suggestion, so a manual
+    // edit is never clobbered.
+    let _lastAutoCwd = '';
+    const suggestCwd = () => {
       const slug = slugify(nameEl.value);
-      if (!pathTouched) pathEl.value = slug ? ('~/dev/' + slug) : '';
-      createBtn.disabled = !slug;
+      const picker = document.getElementById('spawnCwdPicker');
+      if (!slug || !picker) return;
+      const cur = (picker.value || '').trim();
+      if (!_lastAutoCwd || cur === _lastAutoCwd || cur === '') {
+        _lastAutoCwd = '~/dev/' + slug;
+        setSpawnCwdInputValue(_lastAutoCwd);
+      }
+    };
+    nameEl.addEventListener('input', () => {
+      createBtn.disabled = !slugify(nameEl.value);
+      suggestCwd();
     });
-    // Prefill a fun random name (and folder) so the card is one click from
-    // working; the dice rolls a fresh one.
+    // Prefill a fun random name so the card is one click from working;
+    // the dice rolls a fresh one. The CWD suggestion is NOT pushed on
+    // prefill — only once the user engages with the card — so opening the
+    // stage doesn't hijack the CWD away from the default repo.
     const rollName = () => {
       const pick = NS_FUN_PROJECT_NAMES[Math.floor(Math.random() * NS_FUN_PROJECT_NAMES.length)];
       nameEl.value = pick;
-      pathTouched = false;
-      nameEl.dispatchEvent(new Event('input', { bubbles: true }));
+      createBtn.disabled = false;
+      if (_lastAutoCwd) suggestCwd();  // re-suggest only if we already own the field
     };
     const diceBtn = $view.querySelector('#nsNewProjectDice');
     if (diceBtn) diceBtn.addEventListener('click', () => { rollName(); nameEl.focus(); });
     if (!nameEl.value) rollName();
-    pathEl.addEventListener('input', () => {
-      pathTouched = !!pathEl.value.trim();
-      createBtn.disabled = !(pathEl.value.trim() || slugify(nameEl.value));
-    });
+    nameEl.addEventListener('focus', () => suggestCwd());
     const submit = async () => {
-      const target = pathEl.value.trim() || ('~/dev/' + slugify(nameEl.value));
+      const target = (getSpawnCwd() || '').trim() || ('~/dev/' + slugify(nameEl.value));
       if (!target || createBtn.disabled) return;
       createBtn.disabled = true;
       createBtn.textContent = 'Creating…';
@@ -34387,9 +34398,9 @@
       }
     };
     createBtn.addEventListener('click', submit);
-    [nameEl, pathEl].forEach(el => el.addEventListener('keydown', e => {
+    nameEl.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); submit(); }
-    }));
+    });
   }
 
   // ── "Extend CCC" recipe cards on the new-session stage ────────────────
@@ -34526,12 +34537,10 @@
       $view.innerHTML = '<div class="ns-stage">'
         + '<div class="empty-state ns-hero" style="height:auto;flex-direction:column;gap:10px;text-align:center;">'
         + '<div class="ns-hero-title">🚀 Start a new session</div>'
-        + '<div style="font-size:12px;color:var(--text-muted);">CWD: <span id="newSessionCwdNotice" style="color:var(--text);" title="' + escapeAttr(spawnCwd) + '">' + escapeHtml(repoLabel) + '</span></div>'
         + '<div class="ns-choice-grid">'
         +   '<div class="ns-choice-card is-primary" id="nsCardExisting">'
         +     '<div class="ns-choice-title">1 · Existing folder / repo</div>'
         +     '<div class="ns-repo-chips">' + (repoChipsHtml || '<span class="ns-muted">No folders yet — browse with 📁 below.</span>') + '</div>'
-        +     '<div class="ns-cwd-slot" id="nsCwdSlot"></div>'
         +   '</div>'
         +   '<div class="ns-choice-card is-dimmed" id="nsCardNewProject">'
         +     '<div class="ns-choice-title">2 · New project</div>'
@@ -34539,12 +34548,15 @@
         +       '<input type="text" id="nsNewProjectName" class="ns-input" placeholder="Project name…" autocomplete="off" spellcheck="false">'
         +       '<button type="button" id="nsNewProjectDice" class="ns-dice-btn" title="Roll another name">&#127922;</button>'
         +     '</span>'
-        +     '<input type="text" id="nsNewProjectPath" class="ns-input" placeholder="~/dev/<name>" autocomplete="off" spellcheck="false">'
         +     '<button type="button" id="nsNewProjectCreate" class="ns-create-btn" disabled>Create folder &amp; start</button>'
-        +     '<div class="ns-muted" id="nsNewProjectHint">We create the folder, then you describe the project below.</div>'
+        +     '<div class="ns-muted" id="nsNewProjectHint">Folder comes from the CWD field below — we create it, then you describe the project.</div>'
         +   '</div>'
         + '</div>'
         + '<div style="font-size:13px;color:var(--text-muted);max-width:480px;line-height:1.5;">' + escapeHtml(newSessionHelp) + '</div>'
+        // ONE CWD field (CCC-102): the spawn-cwd controls are adopted into
+        // this slot, directly above the prompt. Chips and the new-project
+        // name both write into it; it always shows the full effective path.
+        + '<div class="ns-cwd-slot ns-cwd-unified" id="nsCwdSlot"></div>'
         + '<div class="ns-composer-slot" id="nsComposerSlot"></div>'
         + '<div class="new-session-template-wrap" id="nsExtensionsWrap" style="display:none;">'
         +   '<div class="new-session-template-title">Extend CCC · integration recipes</div>'

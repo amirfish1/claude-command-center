@@ -12240,3 +12240,12 @@ body:has(.gc-reader) .pwa-install-banner {
   font-size: 13px; color: var(--text-muted); padding: 0 4px; line-height: 1;
 }
 .conv-ingroupchat-addpart-btn:hover { color: var(--accent, #58a6ff); }
+
+/* ONE CWD field above the composer (CCC-102). The adopted spawn-cwd-row
+   stretches full width and reads as "this is where the session starts". */
+.ns-cwd-unified { width: 100%; max-width: 720px; }
+.ns-cwd-unified .spawn-cwd-row { width: 100%; }
+.ns-cwd-unified .spawn-cwd-row input#spawnCwdPicker {
+  width: 100%; font-size: 13px;
+  border-color: color-mix(in srgb, var(--accent, #58a6ff) 45%, var(--border) 55%);
+}
