@@ -33776,15 +33776,27 @@
     // reuse the existing tab/window; keeping the handle lets us focus it.
     let _gcLiveWindow = null;
     $sidebarGroupChatLiveBtn.addEventListener('click', () => {
+      // Re-acquire the named window with an EMPTY url: window.open('', name)
+      // returns the existing window without navigating it. Opening with the
+      // real URL re-navigates (reloads) the live page, and the browser won't
+      // raise a window that's mid-reload — that's why "Live" didn't pop it
+      // to the front after a dashboard reload lost the handle.
+      let w = null;
       try {
-        if (_gcLiveWindow && !_gcLiveWindow.closed) {
-          _gcLiveWindow.focus();
-          showOpToast('Live group chat window focused');
-          return;
-        }
-      } catch (_) { _gcLiveWindow = null; }
-      _gcLiveWindow = window.open('/group-chat-live.html', 'ccc-gc-live');
-      try { if (_gcLiveWindow) _gcLiveWindow.focus(); } catch (_) {}
+        w = (_gcLiveWindow && !_gcLiveWindow.closed)
+          ? _gcLiveWindow
+          : window.open('', 'ccc-gc-live');
+      } catch (_) {}
+      if (!w) { _gcLiveWindow = window.open('/group-chat-live.html', 'ccc-gc-live'); return; }
+      _gcLiveWindow = w;
+      let blank = false;
+      try { blank = !/group-chat-live/.test(w.location.pathname); } catch (_) { blank = true; }
+      if (blank) {
+        try { w.location.replace('/group-chat-live.html'); } catch (_) {}
+      } else {
+        showOpToast('Live group chat window focused');
+      }
+      try { w.focus(); } catch (_) {}
     });
   }
   // "Manage group chats" modal — lists every chat from _gcActiveChats

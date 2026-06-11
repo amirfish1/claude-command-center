@@ -1267,7 +1267,11 @@
   });
 
   /* ── Init ── */
-  fetchChats().then(function() { startPolling(); });
+  fetchChats().then(function() {
+    // Default focus: open the first chat so the window is immediately useful.
+    if (!selectedChatId && chats.length) selectChat(chats[0]);
+    startPolling();
+  });
 
 })();
 </script>
