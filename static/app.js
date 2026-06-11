@@ -21321,8 +21321,10 @@
         const noteFull = String(it.note || '');
         const note = noteFull.length > 30 ? noteFull.slice(0, 30) + '…' : noteFull;
         const status = it.status || 'open';
-        return '<div class="fq-row is-' + escapeAttr(status) + '" title="' + escapeAttr(noteFull) + '">'
-          + '<span class="fq-ref">' + escapeHtml(it.ref || ('#' + (it.number || '?'))) + '</span>'
+        const ref = it.ref || ('#' + (it.number || '?'));
+        return '<div class="fq-row is-' + escapeAttr(status) + '" data-ref="' + escapeAttr(ref)
+          + '" title="' + escapeAttr(noteFull) + '\n\nClick to jump to the first mention of ' + escapeAttr(ref) + ' in the conversation.">'
+          + '<span class="fq-ref">' + escapeHtml(ref) + '</span>'
           + '<span class="fq-note">' + escapeHtml(note) + '</span>'
           + '<span class="fq-status">' + escapeHtml(status) + '</span>'
           + '</div>';
@@ -21330,6 +21332,43 @@
       const $count = document.getElementById('filesCount');
       if ($count && _filesViewEffective() === 'queue') $count.textContent = rows.length;
     });
+  }
+  // Jump the conversation pane to the first mention of a ticket ref
+  // (CCC-105). The loaded tail may not include the first mention — when a
+  // "Load earlier" banner is present, pull the full transcript first so
+  // "first occurrence" means the real one, not the first in the window.
+  async function _uxqJumpToRef(ref) {
+    if (!ref) return;
+    const paneId = activePaneId();
+    const $view = getConvViewForPane(paneId) || $conversationsView;
+    if (!$view) return;
+    const findFirst = () => {
+      for (const ev of $view.querySelectorAll('.event')) {
+        if ((ev.textContent || '').includes(ref)) return ev;
+      }
+      return null;
+    };
+    const pane = paneByPaneId(paneId);
+    if (pane && $view.querySelector('.conv-load-earlier')) {
+      const overlay = _showConvLoading($view, 'Loading history to find ' + ref + '…');
+      pane.wantFull = true; pane.lastLine = 0;
+      try { await fetchConversationEvents(paneId); } catch (_) {}
+      overlay.remove();
+    }
+    const hit = findFirst();
+    if (!hit) { showOpToast('No mention of ' + ref + ' in this conversation'); return; }
+    hit.scrollIntoView({ block: 'center' });
+    hit.classList.add('uxq-jump-hit');
+    setTimeout(() => { hit.classList.remove('uxq-jump-hit'); }, 2400);
+  }
+  {
+    const $queueList = document.getElementById('sidebarQueueList');
+    if ($queueList) {
+      $queueList.addEventListener('click', (ev) => {
+        const row = ev.target && ev.target.closest && ev.target.closest('.fq-row[data-ref]');
+        if (row) _uxqJumpToRef(row.getAttribute('data-ref'));
+      });
+    }
   }
   // Sync panel chrome to the effective mode. Returns true when the panel is
   // in queue mode (caller then keeps the panel visible even with 0 files).

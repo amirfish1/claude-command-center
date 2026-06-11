@@ -12142,6 +12142,16 @@ body:has(.gc-reader) .pwa-install-banner {
   display: flex; align-items: center; gap: 7px;
   padding: 4px 10px; font-size: 11.5px;
   border-bottom: 1px solid rgba(139,148,158,0.08);
+  cursor: pointer;
+}
+.fq-row:hover { background: rgba(139,148,158,0.08); }
+/* Flash for the conversation event a queue-row click jumped to (CCC-105). */
+.event.uxq-jump-hit {
+  animation: uxq-jump-flash 2.4s ease-out;
+}
+@keyframes uxq-jump-flash {
+  0% { background: rgba(163,113,247,0.28); }
+  100% { background: transparent; }
 }
 .fq-ref {
   font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
