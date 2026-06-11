@@ -278,6 +278,30 @@
   }
   .msg-group.human .msg-time { text-align: right; }
 
+  /* ── Add participant (CCC-103) ── */
+  .add-part-pill { cursor: pointer; border-style: dashed; opacity: 0.75; }
+  .add-part-pill:hover { opacity: 1; border-color: var(--accent); color: var(--accent); }
+  .add-part-pop {
+    position: fixed; top: 110px; left: 50%; transform: translateX(-50%);
+    z-index: 1000; width: min(420px, 90vw);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    padding: 10px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .add-part-search {
+    width: 100%; padding: 7px 10px; border-radius: 6px;
+    border: 1px solid var(--accent); background: var(--bg);
+    color: var(--text); font-size: 13px; outline: none; box-sizing: border-box;
+  }
+  .add-part-list { max-height: 40vh; overflow-y: auto; }
+  .add-part-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 9px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+  }
+  .add-part-row:hover { background: rgba(88,166,255,0.12); }
+  .add-part-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .add-part-repo { font-size: 10.5px; color: var(--text-muted); }
+
   /* ── Post input ── */
   .chat-input-bar {
     padding: 12px 20px;
@@ -793,7 +817,15 @@
     var params = new URLSearchParams({ id: chat.id });
     return api('/api/group-chat/read?' + params.toString()).then(function(data) {
       if (!data.ok) throw new Error(data.error || 'Read failed');
+      // Unchanged content → no DOM rebuild at all. Most polls hit this,
+      // so typing and scrolling are simply never disturbed (CCC-103).
+      var prev = chatContentCache[chat.id];
+      var sig = JSON.stringify([data.content, data.status, data.session_ids,
+        data.participant_live_count, data.waiting]);
+      var prevSig = prev && prev._sig;
+      data._sig = sig;
       chatContentCache[chat.id] = data;
+      if (prevSig === sig && document.getElementById('postInput')) return;
       renderChatView(chat, data);
     }).catch(function(e) {
       chatView.innerHTML = '<div class="empty-state"><div class="icon">&#x26A0;&#xFE0F;</div><p>Failed to load chat: ' + escHtml(e.message) + '</p></div>';
@@ -801,6 +833,23 @@
   }
 
   function renderChatView(chat, data) {
+    // CCC-103: the periodic refresh rebuilds this pane's innerHTML, which
+    // used to steal focus mid-typing and yank the scroll back to the
+    // bottom. Capture composer + scroll state first, restore after.
+    var prevInput = document.getElementById('postInput');
+    var keep = {
+      text: prevInput ? prevInput.value : '',
+      focused: prevInput && document.activeElement === prevInput,
+      selStart: prevInput ? prevInput.selectionStart : 0,
+      selEnd: prevInput ? prevInput.selectionEnd : 0,
+    };
+    var prevMsgs = document.getElementById('chatMessages');
+    var wasAtBottom = true;
+    var prevScrollTop = 0;
+    if (prevMsgs) {
+      prevScrollTop = prevMsgs.scrollTop;
+      wasAtBottom = (prevMsgs.scrollHeight - prevMsgs.scrollTop - prevMsgs.clientHeight) < 80;
+    }
     var topic = data.topic || chat.topic || 'Untitled';
     var status = data.status || chat.status || 'unknown';
     var participantCount = data.participant_count || (chat.session_ids || []).length;
@@ -818,6 +867,9 @@
       var isLive = pm.is_live ? ' is-live' : '';
       participantBar += '<span class="pill ' + eng.cls + isLive + '"><span class="dot"></span>' + escHtml(displayName) + '</span>';
     });
+    // ＋ participant chip (CCC-103): opens a search-and-add popover.
+    participantBar += '<span class="pill add-part-pill" onclick="openAddParticipant()" title="Add a participant session">＋</span>';
+    currentChatSessionIds = sessionIds.slice();
 
     var waitingHtml = '';
     if (waiting.waiting_on_hashes && waiting.waiting_on_hashes.length > 0) {
@@ -887,7 +939,17 @@
       '</div>';
 
     var msgsEl = document.getElementById('chatMessages');
-    if (msgsEl) msgsEl.scrollTop = msgsEl.scrollHeight;
+    if (msgsEl) {
+      // Stick to bottom only if the reader was already there; otherwise
+      // put them back exactly where they were scrolled to.
+      msgsEl.scrollTop = wasAtBottom ? msgsEl.scrollHeight : prevScrollTop;
+    }
+    var newInput = document.getElementById('postInput');
+    if (newInput && keep.text) newInput.value = keep.text;
+    if (newInput && keep.focused) {
+      newInput.focus();
+      try { newInput.setSelectionRange(keep.selStart, keep.selEnd); } catch (_) {}
+    }
   }
 
   /* ── Parse chat markdown into structured messages ── */
@@ -1099,6 +1161,63 @@
       btn.disabled = false;
       btn.textContent = 'Create Chat';
     });
+  };
+
+  /* ── Add participant (CCC-103) ── */
+  var currentChatSessionIds = [];
+  window.openAddParticipant = function() {
+    var old = document.getElementById('addPartPop');
+    if (old) { old.remove(); return; }
+    var pop = document.createElement('div');
+    pop.id = 'addPartPop';
+    pop.className = 'add-part-pop';
+    pop.innerHTML =
+      '<input type="text" class="add-part-search" placeholder="Search sessions… then click to add">' +
+      '<div class="add-part-list"><div class="no-chats">Loading sessions…</div></div>';
+    document.body.appendChild(pop);
+    var search = pop.querySelector('.add-part-search');
+    var list = pop.querySelector('.add-part-list');
+    var close = function() { pop.remove(); document.removeEventListener('click', onDoc, true); };
+    var onDoc = function(e) { if (!pop.contains(e.target) && !e.target.closest('.add-part-pill')) close(); };
+    document.addEventListener('click', onDoc, true);
+    var paint = function() {
+      var q = (search.value || '').toLowerCase();
+      var inChat = {};
+      currentChatSessionIds.forEach(function(s) { inChat[s] = true; });
+      var rows = pickerSessions
+        .filter(function(r) { return !inChat[r.id]; })
+        .filter(function(r) { return !q || (r.title + ' ' + r.repo + ' ' + r.id).toLowerCase().indexOf(q) !== -1; })
+        .slice(0, q ? 25 : 10);
+      list.innerHTML = rows.map(function(r) {
+        return '<div class="add-part-row" data-sid="' + escHtml(r.id) + '">' +
+          '<span class="add-part-name">' + escHtml(r.title || r.id.substring(0, 8)) + '</span>' +
+          (r.repo ? '<span class="add-part-repo">' + escHtml(r.repo) + '</span>' : '') +
+        '</div>';
+      }).join('') || '<div class="no-chats">No matching sessions</div>';
+    };
+    list.addEventListener('click', function(e) {
+      var row = e.target.closest('[data-sid]');
+      if (!row || !selectedChatId) return;
+      var sid = row.getAttribute('data-sid');
+      api('/api/group-chat/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: selectedChatId, session_id: sid }) })
+        .then(function(d) {
+          if (!d.ok) throw new Error(d.error || 'add failed');
+          close();
+          refreshAll();
+        })
+        .catch(function(err) { list.innerHTML = '<div class="no-chats">Add failed: ' + escHtml(err.message) + '</div>'; });
+    });
+    search.addEventListener('input', paint);
+    if (!pickerLoaded) {
+      loadSessionPicker();
+      var wait = setInterval(function() {
+        if (pickerLoaded) { clearInterval(wait); paint(); }
+      }, 250);
+      setTimeout(function() { clearInterval(wait); }, 8000);
+    } else {
+      paint();
+    }
+    search.focus();
   };
 
   /* ── Polling ── */

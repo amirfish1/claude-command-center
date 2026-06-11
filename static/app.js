@@ -33769,15 +33769,19 @@
   }
   const $sidebarGroupChatLiveBtn = document.getElementById('sidebarGroupChatLiveBtn');
   if ($sidebarGroupChatLiveBtn) {
+    // One live window only (CCC-103): a NAMED window.open lets the browser
+    // reuse the existing tab/window; keeping the handle lets us focus it.
+    let _gcLiveWindow = null;
     $sidebarGroupChatLiveBtn.addEventListener('click', () => {
-      const tmp = document.createElement('a');
-      tmp.href = '/group-chat-live.html';
-      tmp.target = '_blank';
-      tmp.rel = 'noopener noreferrer';
-      tmp.style.display = 'none';
-      document.body.appendChild(tmp);
-      tmp.click();
-      setTimeout(() => tmp.remove(), 0);
+      try {
+        if (_gcLiveWindow && !_gcLiveWindow.closed) {
+          _gcLiveWindow.focus();
+          showOpToast('Live group chat window focused');
+          return;
+        }
+      } catch (_) { _gcLiveWindow = null; }
+      _gcLiveWindow = window.open('/group-chat-live.html', 'ccc-gc-live');
+      try { if (_gcLiveWindow) _gcLiveWindow.focus(); } catch (_) {}
     });
   }
   // "Manage group chats" modal — lists every chat from _gcActiveChats
