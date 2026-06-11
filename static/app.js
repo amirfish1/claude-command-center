@@ -22665,21 +22665,33 @@
       return;
     }
     banner.addEventListener('click', loadEarlier);
-    // Auto-load once the banner scrolls into view — but ARM the observer
-    // only after a real scroll gesture. On open, a short tail (or the
-    // pre-scroll-to-bottom paint) leaves the banner visible immediately,
-    // which used to fire a full-history load on every conversation click.
+    // Auto-load once the banner scrolls into view — but only as a response
+    // to a deliberate scroll-UP with real overflow. Two traps to avoid:
+    // (1) observe() fires immediately with the CURRENT state, so a short
+    // tail (banner already visible) used to load on open; (2) any trackpad
+    // twitch counted as "scrolled", so the load still fired "immediately
+    // when clicking a conversation". Now: arm only on an upward wheel
+    // tick, and the observer callback additionally requires the transcript
+    // to actually overflow the pane — a short tail never auto-loads (the
+    // banner stays clickable for that).
     if ('IntersectionObserver' in window) {
       const io = new IntersectionObserver((entries) => {
-        if (entries.some((e) => e.isIntersecting)) { io.disconnect(); loadEarlier(); }
+        const overflows = $view.scrollHeight > $view.clientHeight + 40;
+        if (overflows && entries.some((e) => e.isIntersecting)) { io.disconnect(); loadEarlier(); }
       }, { root: $view, threshold: 0.05 });
-      const arm = () => {
-        $view.removeEventListener('wheel', arm);
-        $view.removeEventListener('touchmove', arm);
+      let armed = false;
+      const armIfUpward = (ev) => {
+        if (armed) return;
+        const up = (ev.type === 'wheel' && ev.deltaY < 0)
+          || (ev.type === 'touchmove' && $view.scrollTop <= 4);
+        if (!up) return;
+        armed = true;
+        $view.removeEventListener('wheel', armIfUpward);
+        $view.removeEventListener('touchmove', armIfUpward);
         io.observe(banner);
       };
-      $view.addEventListener('wheel', arm, { passive: true, once: true });
-      $view.addEventListener('touchmove', arm, { passive: true, once: true });
+      $view.addEventListener('wheel', armIfUpward, { passive: true });
+      $view.addEventListener('touchmove', armIfUpward, { passive: true });
     }
     $view.insertBefore(banner, $view.firstChild);
   }
@@ -32448,7 +32460,7 @@
     const el = (ann && ann.element) || {};
     // Limits annContextForClipboard applies when building the stored text.
     const trunc = [];
-    if ((ann.note || '').length > 500) trunc.push('note → first 500 chars');
+    if ((ann.note || '').length > 2000) trunc.push('note → first 2000 chars');
     if ((el.selector || '').length > 200) trunc.push('selector → 200');
     if ((el.text || '').length > 160) trunc.push('element text → 160');
     if ((ann.url || '').length > 240) trunc.push('URL → 240');
@@ -33028,7 +33040,7 @@
 
   function annContextForClipboard(ann) {
     const element = ann.element || {};
-    const lines = ['Annotation: ' + annClipText(ann.note || '', 500)];
+    const lines = ['Annotation: ' + annClipText(ann.note || '', 2000)];
     const anchors = [];
     if (ann.url) anchors.push('URL: ' + annClipText(ann.url, 240));
     if (ann.session_id) anchors.push('Session ID: ' + ann.session_id);
