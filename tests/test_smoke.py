@@ -1577,6 +1577,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             str(self.repo),
             None,
             post_slash_commands=["/compact"],
+            stop_headless=True,
         )
 
     def test_compact_rejects_unsupported_engine(self):
