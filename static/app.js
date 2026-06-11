@@ -22031,23 +22031,73 @@
     const state = _convPaneTabState(view);
     if (!state) return;
     view.dataset.activeTab = state.active;
+    const onTask = state.active !== 'master';
     for (const el of view.children) {
       const t = el.dataset && el.dataset.tab;
-      if (!t) continue;  // untagged elements (sticky header, banners) always visible
+      if (!t) {
+        // Untagged chrome (sticky header, banners) stays visible. Untagged
+        // CONTENT (JSONL-rendered events/groups) is the master lane — hide
+        // it while a task tab is active so the subagent lane stands alone.
+        if (el.matches && el.matches('.event, .tool-call-group, .stream-bubble, .conv-load-earlier')) {
+          el.style.display = onTask ? 'none' : '';
+        }
+        continue;
+      }
       el.style.display = (t === state.active) ? '' : 'none';
     }
+  }
+  // Subagent lane for tasks discovered from the JSONL (no spawn stream):
+  // an embedded conversation popout on the composite id — full renderer,
+  // no second code path. Created lazily on first tab activation.
+  function _convPaneEnsureJsonlTaskLane(view, taskId) {
+    const key = 'task-' + taskId;
+    for (const el of view.children) {
+      if (el.dataset && el.dataset.tab === key) return;
+    }
+    const sid = (typeof currentConversation === 'string' && currentConversation) || '';
+    if (!sid) return;
+    const lane = document.createElement('div');
+    lane.dataset.tab = key;
+    lane.className = 'conv-subagent-lane';
+    const conv = sid + ':agent-' + taskId;
+    lane.innerHTML = '<iframe class="conv-subagent-frame" title="Subagent transcript"'
+      + ' src="/?ccc_popout=conversation&conv=' + encodeURIComponent(conv) + '"></iframe>';
+    view.appendChild(lane);
+  }
+  // Register tabs for every task-notification card rendered from the JSONL.
+  // Newer Claude Code keeps subagent transcripts in sibling files, so these
+  // tasks never flow through the spawn stream that normally seeds tabs.
+  function _convPaneSyncJsonlTaskTabs(view) {
+    const state = _convPaneTabState(view);
+    if (!state) return;
+    let added = false;
+    view.querySelectorAll('.tn-view-transcript[data-task-id]').forEach(btn => {
+      const tid = btn.getAttribute('data-task-id');
+      if (!tid || state.tasks[tid]) return;
+      const card = btn.closest('.task-notification-card');
+      const headline = card && card.querySelector('.tn-summary');
+      const label = ((headline && headline.textContent) || ('Task ' + tid.slice(-6))).trim().slice(0, 28);
+      state.tasks[tid] = { label, lastSeen: Date.now(), closeTimer: null, completed: true, jsonl: true };
+      added = true;
+    });
+    if (added) _convPaneRenderTabStrip(view);
   }
   function _convPaneActivateTab(view, tabKey) {
     const state = _convPaneTabState(view);
     if (!state) return;
     if (state.active === tabKey) return;
     state.active = tabKey;
+    if (tabKey.startsWith('task-')) {
+      const t = state.tasks[tabKey.slice(5)];
+      if (t && t.jsonl) _convPaneEnsureJsonlTaskLane(view, tabKey.slice(5));
+    }
     _convPaneRenderTabStrip(view);
     _convPaneApplyActiveTab(view);
-    // Switching AWAY from a completed task arms its auto-close.
+    // Switching AWAY from a completed task arms its auto-close. JSONL-fed
+    // tabs are historical reads — they never auto-close.
     for (const tid of Object.keys(state.tasks)) {
       const t = state.tasks[tid];
-      if (!t.completed) continue;
+      if (!t.completed || t.jsonl) continue;
       const tabKeyT = 'task-' + tid;
       if (state.active !== tabKeyT && !t.closeTimer) {
         t.closeTimer = setTimeout(() => _convPaneCloseSubagentTab(view, tid), 5 * 1000);
@@ -26084,6 +26134,9 @@
         g.remove();
       }
     });
+    // Surface a tab per task-notification rendered from the JSONL — these
+    // subagents never pass through the spawn stream that normally seeds tabs.
+    try { _convPaneSyncJsonlTaskTabs($view); } catch (_) {}
     // Re-anchor the inline live-tool indicator at the bottom; new events
     // just appended would otherwise push past it.
     if (typeof updateLiveToolStrip === 'function') updateLiveToolStrip();

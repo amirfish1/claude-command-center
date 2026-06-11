@@ -1928,6 +1928,13 @@
     margin-left: 6px;
   }
   .tn-view-transcript:hover { background: rgba(88,166,255,0.12); }
+  /* Subagent lane (CCC-112): an embedded conversation popout inside the
+     per-Task tab — fills the pane below the tab strip. */
+  .conv-subagent-lane { height: 100%; min-height: 400px; }
+  .conv-subagent-frame {
+    width: 100%; height: 100%; min-height: 400px;
+    border: none; background: var(--bg);
+  }
   /* The first user message is pinned in the sticky header as "Original ask".
      Hide its in-conversation chat bubble so the same text isn't shown twice
      (sticky + bubble) when no scrolling has occurred yet. */
