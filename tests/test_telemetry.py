@@ -169,7 +169,7 @@ class TestPayloadShape(TelemetryTestBase):
         self.assertIsNotNone(payload)
         expected = {
             "schema_version", "install_id", "version",
-            "platform", "engines", "last_active_date",
+            "platform", "engines", "last_active_date", "sessions_today",
         }
         self.assertEqual(set(payload.keys()), expected,
                          f"payload keys drifted from the public contract: {payload.keys()}")
@@ -177,7 +177,7 @@ class TestPayloadShape(TelemetryTestBase):
     def test_payload_schema_version_is_int_one(self):
         self.server._telemetry_load_or_init_install_id()
         payload = self.server._build_telemetry_payload()
-        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["schema_version"], 2)
 
     def test_payload_install_id_matches_disk(self):
         uid = self.server._telemetry_load_or_init_install_id()
@@ -191,18 +191,16 @@ class TestPayloadShape(TelemetryTestBase):
 
     def test_payload_engines_is_comma_separated_string(self):
         self.server._telemetry_load_or_init_install_id()
-        with mock.patch.object(self.server, "_resolve_claude_bin",
-                               return_value={"available": True}), \
-             mock.patch.object(self.server, "_resolve_codex_bin",
-                               return_value={"available": False}), \
-             mock.patch.object(self.server, "_resolve_gemini_bin",
-                               return_value={"available": True}), \
-             mock.patch.object(self.server, "_resolve_cursor_bin",
-                               return_value={"available": False}), \
-             mock.patch.object(self.server, "_resolve_antigravity_bin",
-                               return_value={"available": True}):
+        with (
+            mock.patch.object(self.server, "_resolve_claude_bin", return_value={"available": True}),
+            mock.patch.object(self.server, "_resolve_codex_bin", return_value={"available": False}),
+            mock.patch.object(self.server, "_resolve_gemini_bin", return_value={"available": True}),
+            mock.patch.object(self.server, "_resolve_cursor_bin", return_value={"available": False}),
+            mock.patch.object(self.server, "_resolve_antigravity_bin", return_value={"available": True}),
+            mock.patch.object(self.server, "_resolve_kilo_bin", return_value={"available": False}),
+        ):
             payload = self.server._build_telemetry_payload()
-        # claude,gemini,antigravity — order preserved, codex absent.
+        # claude,gemini,antigravity — order preserved, codex/kilo disabled in mock.
         self.assertEqual(payload["engines"], "claude,gemini,antigravity")
 
     def test_payload_last_active_date_is_iso_date_only(self):
