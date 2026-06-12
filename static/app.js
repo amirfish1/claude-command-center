@@ -20154,13 +20154,15 @@
     const bgPalette = clone.querySelector('[data-role="conv-bg-palette"]');
     if (bgPalette) bgPalette.innerHTML = '';
     renderConversationBackgroundPalette(clone);
-    // Hide the cloned workspace/usage strip — the pill renderers key off
-    // the singular #convInputContext id (which only p1 keeps), so the
-    // strip in cloned panes would render as empty space. Hiding it keeps
-    // the pane chrome clean. Re-engaging per-pane workspace pills is a
-    // potential follow-up; not required for v1.
+    // In cloned panes, hide workspace/spawn elements that rely on p1-singleton
+    // IDs. The [data-usage] slot (model + token pills) still works because
+    // renderSessionUsageIntoStrip mirrors into it after rendering to p1.
     const ctxBar = clone.querySelector('.conv-input-context');
-    if (ctxBar) ctxBar.style.display = 'none';
+    if (ctxBar) {
+      ['[data-workspace]', '.spawn-cwd-quick-chips', '.spawn-cwd-row', '.spawn-worktree-row'].forEach(sel => {
+        ctxBar.querySelectorAll(sel).forEach(el => { el.style.display = 'none'; });
+      });
+    }
     // Reveal the close button (was inline display:none in p1's static HTML).
     const closeBtn = clone.querySelector('[data-role="pane-close"]');
     if (closeBtn) {
@@ -24173,6 +24175,25 @@
         e.preventDefault();
         e.stopPropagation();
         openModelPicker(modelBtn);
+      });
+    }
+    // Mirror rendered HTML into any non-p1 pane that shows the same session.
+    const _mirrorSid = _usageSessionId;
+    if (_mirrorSid && typeof splitState !== 'undefined') {
+      splitState.panes.forEach(pane => {
+        if (pane.id === 'p1') return;
+        const paneSid = sessionIdByConv[pane.conversationId] || pane.conversationId;
+        if (paneSid !== _mirrorSid) return;
+        const paneEl = document.querySelector('.conv-pane[data-pane-id="' + pane.id + '"]');
+        const paneCtx = paneEl && paneEl.querySelector('.conv-input-context[data-role="input-context"]');
+        const paneUSlot = paneCtx && paneCtx.querySelector('[data-usage]');
+        if (!paneUSlot) return;
+        paneUSlot.innerHTML = uSlot.innerHTML;
+        if (paneCtx) paneCtx.classList.toggle('visible', slot.classList.contains('visible'));
+        const pu = paneUSlot.querySelector('.wp-usage-clickable');
+        if (pu) pu.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openPlanUsagePopover(pu); });
+        const pm = paneUSlot.querySelector('[data-model-picker]');
+        if (pm) pm.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openModelPicker(pm); });
       });
     }
   }
