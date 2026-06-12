@@ -19128,7 +19128,25 @@
       return;
     }
     openConversationPopout(convId, null, null);
+    _advanceMainAfterPopout(convId);
   });
+
+  // The popped-out conversation now lives in its own window — move the main
+  // window on to the neighboring conversation so it isn't showing a
+  // duplicate of what the user just split off (CCC-118). DOM order matches
+  // what the user sees in the sidebar (grouping included).
+  function _advanceMainAfterPopout(convId) {
+    try {
+      const items = [...document.querySelectorAll('.conv-item[data-id]')]
+        .filter(el => el.offsetParent && el.dataset.id);
+      const idx = items.findIndex(el => el.dataset.id === convId);
+      if (idx < 0) return;
+      const next = items[idx + 1] || items[idx - 1];
+      if (next && next.dataset.id && next.dataset.id !== convId) {
+        selectConversation(next.dataset.id);
+      }
+    } catch (_) {}
+  }
 
   function startExternalConversationDrag(convId, repoPath) {
     if (CONV_POPOUT_MODE || !convId) return;
@@ -19154,6 +19172,11 @@
     if (!st || st.droppedInside || st.cancelled) return;
     if (st.leftWindow || pointOutsideViewport(ev)) {
       openConversationPopout(st.convId, st.repoPath, st.screenPoint || screenPointFromDragEvent(ev));
+      // Same advance as the breadcrumb popout button (CCC-118) — but only
+      // when the dragged conversation is the one the main pane is showing.
+      if (typeof currentConversation === 'string' && currentConversation === st.convId) {
+        _advanceMainAfterPopout(st.convId);
+      }
     }
   }
 
