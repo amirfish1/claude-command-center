@@ -28072,10 +28072,12 @@ def _group_chat_add_participant(raw_path: str, session_id: str, display_name: st
     # to be live again.
     _register_coordination(real_path)
 
-    inject_result = {"ok": True, "skipped": "already a participant"}
+    # Existing participants get the check-in instruction too (CCC-114): the
+    # join link doubles as a "go read the chat now" nudge, so re-adding is
+    # idempotent for membership but still delivers the check-in.
+    text = _group_chat_inject_text(real_path, topic, mode, sid)
+    inject_result = _inject_text_into_session(sid, text)
     if not already:
-        text = _group_chat_inject_text(real_path, topic, mode, sid)
-        inject_result = _inject_text_into_session(sid, text)
         added_label = name_map.get(sid) or display_name or sid
         _group_chat_log_system(real_path, f"added `{added_label}` ({sid[:8]})")
     _group_chat_update_header_if_changed(real_path, force_write=True)
