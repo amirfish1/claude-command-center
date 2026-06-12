@@ -1859,8 +1859,14 @@
   /* User bubble — Claude-Desktop-style chat bubble. No label, no left
      border, rounded corners, constrained width, subtle blue tint. */
   .conversations-view .event.user_text {
-    background: rgba(88, 166, 255, 0.13);
-    border: none;
+    /* Aurora bubble (CCC-116): blue→violet gradient fill under a luminous
+       gradient hairline (two-layer background-clip trick), plus a faint
+       cool glow. Distinctive without shouting — the text stays plain. */
+    background:
+      linear-gradient(135deg, rgba(88, 166, 255, 0.16), rgba(163, 113, 247, 0.10) 65%, rgba(57, 210, 192, 0.08)) padding-box,
+      linear-gradient(135deg, rgba(88, 166, 255, 0.50), rgba(163, 113, 247, 0.30) 70%, rgba(57, 210, 192, 0.25)) border-box;
+    border: 1px solid transparent;
+    box-shadow: 0 2px 14px rgba(88, 166, 255, 0.07);
     /* Chat-style: right-aligned bubble with a tucked corner (CCC-116). */
     border-radius: 14px 14px 4px 14px;
     padding: 8px 14px;
