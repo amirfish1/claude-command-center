@@ -3761,6 +3761,15 @@
       } else if (live) {
         $convTtyLabel.textContent = liveStatus.tty;
         $convInput.placeholder = 'Send to terminal...';
+      } else if (liveStatus.live && liveStatus.bgPresent) {
+        // Live in a Claude-app-managed terminal (no system tty): not dormant
+        // — the process is up, CCC just has no input channel to it (CCC-115).
+        $convTtyLabel.textContent = 'Claude app';
+        $convInput.placeholder = 'Session is open in the Claude app — messages park until it closes…';
+      } else if (liveStatus.live && liveStatus.pid) {
+        // Live process without a tty (e.g. CCC headless): also not dormant.
+        $convTtyLabel.textContent = 'headless';
+        $convInput.placeholder = 'Send to headless…';
       } else {
         $convTtyLabel.textContent = 'dormant';
         $convInput.placeholder = 'Resume and send…';
