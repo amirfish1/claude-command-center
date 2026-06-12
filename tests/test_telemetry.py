@@ -169,7 +169,7 @@ class TestPayloadShape(TelemetryTestBase):
         self.assertIsNotNone(payload)
         expected = {
             "schema_version", "install_id", "version",
-            "platform", "engines", "last_active_date", "sessions_today",
+            "platform", "engines", "last_active_date",
         }
         self.assertEqual(set(payload.keys()), expected,
                          f"payload keys drifted from the public contract: {payload.keys()}")
@@ -177,7 +177,7 @@ class TestPayloadShape(TelemetryTestBase):
     def test_payload_schema_version_is_int_one(self):
         self.server._telemetry_load_or_init_install_id()
         payload = self.server._build_telemetry_payload()
-        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["schema_version"], 1)
 
     def test_payload_install_id_matches_disk(self):
         uid = self.server._telemetry_load_or_init_install_id()
@@ -200,11 +200,9 @@ class TestPayloadShape(TelemetryTestBase):
              mock.patch.object(self.server, "_resolve_cursor_bin",
                                return_value={"available": False}), \
              mock.patch.object(self.server, "_resolve_antigravity_bin",
-                               return_value={"available": True}),
-             mock.patch.object(self.server, "_resolve_grok_bin",
-                               return_value={"available": False}):
+                               return_value={"available": True}):
             payload = self.server._build_telemetry_payload()
-        # claude,gemini,antigravity — order preserved, codex absent. grok disabled in mock.
+        # claude,gemini,antigravity — order preserved, codex absent.
         self.assertEqual(payload["engines"], "claude,gemini,antigravity")
 
     def test_payload_last_active_date_is_iso_date_only(self):
