@@ -3183,13 +3183,6 @@
     // text via /api/inject-input without requiring the user to type anything.
     const isAgySession = currentSession && currentSession.source === 'antigravity';
     const showWakeBtn = isAgySession && inFlight && !isQuestion && ageSec > 60;
-    const html =
-        '<span class="cl-pulse"></span>'
-      + '<span class="cl-tool">' + (inFlight && !isQuestion ? '▶ ' : '') + escapeHtml(toolLabel) + '</span>'
-      + (isQuestion ? '' : detailHtml)
-      + '<span class="cl-age">' + ageLbl + '</span>'
-      + (isQuestion ? detailHtml : '')
-      + (showWakeBtn ? '<button type="button" class="cl-agy-wake-btn" title="Session looks stuck — push a wake message to Antigravity">Push input</button>' : '');
     updateLiveStripOffset($view, null);
     // Inline indicator at the bottom of the transcript. Re-append on every
     // refresh so it stays the last child even when new events have
@@ -3197,11 +3190,29 @@
     if (!inline) {
       inline = document.createElement('div');
       inline.className = 'conv-live-tool-inline';
+      // Click toggles expanded view (shows full URL/path, not truncated).
+      inline.addEventListener('click', (e) => {
+        if (e.target.closest('button, a, input')) return;
+        inline.classList.toggle('is-expanded');
+      });
     }
     inline.classList.toggle('in-flight', inFlight);
     inline.classList.toggle('is-question', isQuestion);
+    // Store the full detail so users can expand to see it.
+    inline.dataset.fullDetail = file || '';
     inline.title = title;
-    inline.innerHTML = html;
+    // In expanded mode, show the full file/url; otherwise use the truncated shortFile.
+    const showFull = inline.classList.contains('is-expanded');
+    const displayDetail = showFull ? file : shortFile;
+    const expandedDetailHtml = displayDetail ? ' <span class="cl-file' + liveActivityDetailClass(tool) + '">' + escapeHtml(displayDetail) + '</span>' : '';
+    const expandHtml =
+        '<span class="cl-pulse"></span>'
+      + '<span class="cl-tool">' + (inFlight && !isQuestion ? '▶ ' : '') + escapeHtml(toolLabel) + '</span>'
+      + (isQuestion ? '' : expandedDetailHtml)
+      + '<span class="cl-age">' + ageLbl + '</span>'
+      + (isQuestion ? detailHtml : '')
+      + (showWakeBtn ? '<button type="button" class="cl-agy-wake-btn" title="Session looks stuck — push a wake message to Antigravity">Push input</button>' : '');
+    inline.innerHTML = expandHtml;
     if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
       $view.appendChild(inline);
     }

@@ -6600,6 +6600,14 @@
     background: linear-gradient(rgba(251,202,4,0.10), rgba(251,202,4,0.10)), var(--bg);
     border: 1px solid rgba(251,202,4,0.30);
     border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .conv-live-tool-inline.is-expanded .cl-file {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: unset;
+    word-break: break-all;
   }
   .conv-live-tool-inline.in-flight {
     color: #58a6ff;
@@ -6610,6 +6618,7 @@
     color: #58a6ff;
     background: linear-gradient(rgba(88,166,255,0.12), rgba(88,166,255,0.12)), var(--bg);
     border-color: rgba(88,166,255,0.4);
+    cursor: default;
   }
   .conv-live-tool-inline .cl-pulse {
     width: 8px; height: 8px; border-radius: 50%;
