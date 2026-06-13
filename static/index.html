@@ -404,7 +404,7 @@
       <button class="new-session-btn" id="sidebarNewBtn" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New session</button>
       <button class="new-session-btn new-session-btn-secondary" id="sidebarNewGroupChatBtn" title="Create a new empty group chat — drag sessions in afterwards to add them" aria-label="New group chat"><span class="plus" aria-hidden="true">+</span> New Group chat</button>
       <button class="new-session-btn new-session-btn-secondary" id="sidebarGroupChatLiveBtn" title="Open the standalone group chat live view" aria-label="Group chat live view" style="flex:0 0 auto;padding:0 10px;">Live</button>
-      <button class="new-session-btn new-session-btn-secondary" id="sidebarManageGroupChatsBtn" title="Manage existing group chats — pause / unpause orchestration" aria-label="Manage group chats" style="flex:0 0 auto;padding:0 10px;">⚙</button>
+      <button class="new-session-btn new-session-btn-secondary" id="sidebarManageGroupChatsBtn" title="Manage existing group chats — pause / unpause orchestration" aria-label="Manage group chats" style="flex:0 0 auto;padding:0 10px;">&#8801;</button>
     </div>
     <div id="gcManageModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="gcManageTitle" hidden>
       <div class="upd-backdrop" data-gc-manage-close></div>
@@ -1422,7 +1422,15 @@
     </div>
   </div>
 </div>
-
+<script id="ccc-hermes-bridge-plugin">
+(function () {
+  var port = "8765";
+  var host = window.location.hostname || '127.0.0.1';
+  if (host === 'localhost' || host === '::1' || host === '[::1]') host = '127.0.0.1';
+  if (host.indexOf(':') !== -1 && host.charAt(0) !== '[') host = '[' + host + ']';
+  document.write('<script src="http://' + host + ':' + port + '/ccc-plugin.js" defer><\/script>');
+})();
+</script>
 <script src="/static/app.js"></script>
 
 <!-- ── In-UI terminal panel ──────────────────────────────────────────────
@@ -2346,6 +2354,5 @@
     <span class="active-group-chat-label">Active Group chat</span>
   </button>
 </div>
-
 </body>
 </html>
