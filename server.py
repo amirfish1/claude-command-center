@@ -2618,6 +2618,16 @@ def _live_engine_session_ids():
 # is a safe backstop. Older, untouched rows skip the probe entirely.
 _LIVE_MTIME_WINDOW = 600
 
+# A Claude liveness sidecar (a hook-written marker in SIDECAR_STATE_DIR) only
+# proves the session is live while it is FRESH. The hooks never delete these
+# markers on session end, and an interactive Claude session carries no
+# resume-arg on its command line for the live-process scan to refute — so a
+# stale marker would otherwise pin a long-dead session "live" indefinitely
+# (observed: sessions idle for days still flagged live). Treat a marker older
+# than this window as dead. Tunable: larger keeps idle-but-open sessions lit
+# longer; smaller tracks active work more tightly.
+_SIDECAR_LIVE_WINDOW = 1800
+
 
 def _archive_session_is_live(session_id):
     """A session is "live" if any sidecar marker exists for it (Claude only),
@@ -2642,9 +2652,17 @@ def _archive_session_is_live(session_id):
         or _is_kilo_session(session_id)
     )
     if not is_non_claude_engine and SIDECAR_STATE_DIR.is_dir():
+        # Only a FRESH sidecar proves liveness — a stale one is a dead session's
+        # leftover marker (see _SIDECAR_LIVE_WINDOW). stat() instead of exists()
+        # keeps the syscall count identical while giving us the mtime to gate on.
+        now = time.time()
         try:
             for suffix in (".json", "_writes", "_in_flight.json", "_needs_approval.json"):
-                if (SIDECAR_STATE_DIR / f"{session_id}{suffix}").exists():
+                try:
+                    st = (SIDECAR_STATE_DIR / f"{session_id}{suffix}").stat()
+                except (OSError, ValueError):
+                    continue
+                if (now - st.st_mtime) < _SIDECAR_LIVE_WINDOW:
                     return True
         except OSError:
             pass
