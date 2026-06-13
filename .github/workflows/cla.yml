@@ -21,9 +21,13 @@ jobs:
         uses: contributor-assistant/github-action@v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # PERSONAL_ACCESS_TOKEN is optional — only needed if you want
-          # signatures stored in a different repo. Leaving it unset stores
-          # signatures in this repo's `cla-signatures` branch.
+          # PERSONAL_ACCESS_TOKEN is required when using remote-organization-name
+          # / remote-repository-name (as we do here to store signatures in the
+          # cla-signatures branch). Create a classic PAT with `contents: write`
+          # (repo scope) on a maintainer account and add it as a repository secret
+          # named PERSONAL_ACCESS_TOKEN. See the contributor-assistant action
+          # README for details on writing signatures to a remote repo/org.
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
         with:
           path-to-signatures: 'signatures/v1/cla.json'
           path-to-document: 'https://github.com/amirfish1/claude-command-center/blob/main/CLA.md'
