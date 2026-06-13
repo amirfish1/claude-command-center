@@ -2,7 +2,7 @@
 
 **Start the next while Claude builds the first.**
 
-One local dashboard for every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, and **Kilo Code** session on your Mac. Spawn in parallel, ship in parallel.
+One local dashboard for every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, and **Grok Build** session on your Mac. Spawn in parallel, ship in parallel.
 
 ![Claude Command Center demo](docs/images/demo.png)
 
@@ -29,7 +29,7 @@ Try the read-only demo first: [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/dem
   Your browser doesn't support inline video. <a href="https://github.com/amirfish1/claude-command-center/releases/download/v4.3.2.2/May-23-v4-CCC-v5.mp4">Download the demo</a> or watch the GIF above.
 </video>
 
-CCC latches onto every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session on your Mac — terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each agent's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
+CCC latches onto every Claude Code, Codex, Cursor, Antigravity, Kilo Code, and Grok Build session on your Mac — terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each agent's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
 
 See the [engine support matrix](#engine-support) below for what's first-class vs. partial per engine — spawn works across all supported engines, transcript ingestion and UX parity vary.
 
@@ -175,6 +175,7 @@ CCC was built around Claude Code first; Codex, Cursor, Antigravity, and Kilo Cod
 | Cursor        | yes — headless via `cursor-agent` | yes — follow-ups route through `cursor-agent --resume` | partial — Cursor agent transcripts parsed from `~/.cursor/projects/` | yes — UI/default model picker; default from `CCC_CURSOR_MODEL` |
 | Antigravity   | yes — headless via `agy` print mode | yes — follow-ups route through AGY CLI or the running app's language-server RPC | yes — JSONL transcripts from `~/.gemini/antigravity/brain/` | auto-detected from transcript metadata |
 | Kilo Code     | yes — headless via `kilo run --auto` | no — fire-and-forget headless run, no resume wiring yet | yes — reads Kilo's SQLite store (`~/.local/share/kilo/kilo.db`); externally-launched sessions appear on the board | yes — UI/default model picker; default from `CCC_KILO_MODEL` |
+| Grok Build    | yes — headless via `grok -p --output-format streaming-json --yolo` | partial — `grok -c` / `--resume <id>` from terminal (session id captured in logs/JSON) | yes — scans `~/.grok/sessions/<cwd-enc>/<sid>/summary.json` + updates.jsonl | yes — UI/default model picker; default from `CCC_GROK_MODEL` |
 
 **Note on Cursor IDE integration:** While CCC spawns Cursor agents headlessly via the CLI, the Desktop IDE manages UI state internally using a highly-nested, proprietary Protobuf Merkle tree in `store.db`. Full "two-way chat sync" into the IDE is unsupported due to the extreme risk of workspace corruption. Instead, CCC performs a **metadata integration**: CLI sessions are injected into the IDE sidebar as bookmarks (with correct titles and timestamps) so you don't lose track of them, but they cannot be interacted with natively inside the IDE window. Use the CCC dashboard for full history.
 
@@ -182,7 +183,7 @@ If you'd like to see an engine bumped from "partial" to first-class, open an iss
 
 ## Features
 
-- **Multi-engine orchestration**: spawn, resume, and review **Claude Code**, **Codex**, **Cursor**, **Antigravity**, and **Kilo Code** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity.
+- **Multi-engine orchestration**: spawn, resume, and review **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, and **Grok Build** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity.
 - **ACP adapter** (optional): expose CCC over the [Agent Client Protocol](https://agentclientprotocol.com) so editors and ACP clients (VS Code, JetBrains, Zed, and agents like Hermes) can drive Claude Code sessions over JSON-RPC stdio. Runs as a separate process (`python3 ccc_acp.py`); install with the `acp` extra. The core server stays stdlib-only.
 - **Kanban** across every session, with drag-drop between columns,
   rubber-band multi-select, and per-column tinting.
@@ -294,6 +295,8 @@ For more depth: [`docs/architecture.md`](docs/architecture.md),
 | `CCC_CURSOR_MODEL` | `auto` | Default model for Cursor spawns/resumes when no dashboard or API model override is set. |
 | `CCC_KILO_BIN` | *(auto)* | Absolute path to the Kilo Code CLI (`kilo`) if it is not on the service PATH. |
 | `CCC_KILO_MODEL` | `kilo/stepfun/step-3.7-flash:free` | Default model for Kilo spawns when no dashboard or API model override is set. |
+| `CCC_GROK_BIN`   | *(auto)* | Absolute path to the Grok Build TUI binary if not on PATH (usually `~/.grok/bin/grok`). |
+| `CCC_GROK_MODEL` | `grok-build` | Default model for Grok spawns (e.g. `grok-build`). |
 | `CCC_BIND_HOST` | `127.0.0.1` | Interface to bind. Set to `0.0.0.0` to expose on the LAN. **No auth, see [`SECURITY.md`](SECURITY.md)** |
 | `CCC_ALLOWED_ORIGIN` | *(empty)* | Comma-separated origins (e.g. `http://my-mac.tailnet.ts.net:8090`) added to the same-origin POST allowlist. Use with `CCC_BIND_HOST=0.0.0.0` to reach the UI from another device on a trusted network (Tailscale / VPN). **No auth, see [`SECURITY.md`](SECURITY.md)** |
 | `CCC_TRUST_TAILNET` | *(off)* | When set (`1`/`true`/`yes`/`on`), CCC shells out to `tailscale status --json` at startup and adds the local node's MagicDNS hostname + Tailscale IPs to the allowlist automatically. Same trust caveat as `CCC_ALLOWED_ORIGIN`. |
@@ -316,6 +319,7 @@ The `CCC_BIND_HOST`, `CCC_ALLOWED_ORIGIN`, and `CCC_TRUST_TAILNET` knobs can als
 - Cursor — session cards, transcript ingestion, headless spawn/resume via `cursor-agent`
 - Antigravity (Google DeepMind) — full session view, transcript ingestion, headless resume via AGY CLI or app RPC
 - Kilo Code — headless spawn via `kilo run --auto`, engine selector + model picker, and read-only ingestion of externally-launched sessions from Kilo's SQLite store
+- Grok Build — headless spawn via `grok -p ... --yolo`, engine selector + model picker, and read-only ingestion of sessions (and live status) from `~/.grok/sessions/`
 - ACP adapter — drive Claude Code sessions over the Agent Client Protocol (`ccc_acp.py`, optional)
 
 **Not yet**

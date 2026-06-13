@@ -1,0 +1,1 @@
+- Grok Build as a first-class engine: spawn headless (`grok -p --output-format streaming-json --yolo`), read-only ingestion of sessions (summary.json + updates.jsonl under `~/.grok/sessions/`), live status, full UI wiring (engine dropdowns, availability probe, model picker via `CCC_GROK_MODEL` / `CCC_GROK_BIN`), worktree support, and classification.

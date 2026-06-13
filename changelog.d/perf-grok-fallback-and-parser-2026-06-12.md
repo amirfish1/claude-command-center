@@ -1,0 +1,1 @@
+- grok: made the fallback discovery scan use a small thread pool for loading summary files in parallel (noticeable when you have a ton of old grok sessions). also gave the transcript parser a bit more fidelity so it actually surfaces tool_use blocks instead of just swallowing them as generic text or results.

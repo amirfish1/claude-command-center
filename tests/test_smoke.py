@@ -120,6 +120,33 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(server._ship_classify_remaining("snapshot.js"), "infra")
         self.assertEqual(server._ship_classify_remaining("apps/x/page.tsx"), "review")
 
+    def test_grok_engine_surfaces_exist(self):
+        """Grok engine must be wired for resolve, spawn, is_, discovery and
+        parse. Uses mocks so it works even without the grok binary."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        self.assertTrue(hasattr(server, "_resolve_grok_bin"))
+        self.assertTrue(hasattr(server, "spawn_session_grok"))
+        self.assertTrue(hasattr(server, "_is_grok_session"))
+        self.assertTrue(hasattr(server, "find_grok_conversations"))
+        self.assertTrue(hasattr(server, "_parse_grok_conversation"))
+
+        # resolve shape (no real grok needed)
+        with mock.patch.object(server.shutil, "which", return_value=None):
+            with mock.patch.object(server.Path, "home", return_value=server.Path("/tmp/fakehome")):
+                info = server._resolve_grok_bin()
+                self.assertIsInstance(info, dict)
+                self.assertIn("available", info)
+                self.assertFalse(info["available"])  # no binary in the fake env
+
+        # is_grok on a spawned entry
+        server._spawned_sessions[:] = []  # reset for test
+        server._spawned_sessions.append({"engine": "grok", "session_id": "test-gsid-123", "name": "gsid"})
+        self.assertTrue(server._is_grok_session("test-gsid-123"))
+        self.assertFalse(server._is_grok_session("not-a-grok-id"))
+        server._spawned_sessions[:] = []
+
     def test_ship_index_attribution_is_wired_and_degrades(self):
         """The conversation-index attribution layer is defined, the verdict +
         ship-flow consult it, and a missing/erroring index degrades silently to

@@ -962,6 +962,7 @@ def _archive_load_begin():
         "cursor":      {"key": "cursor",      "label": "Cursor conversations",             "state": "pending", "detail": "Scanning ~/.cursor/projects/."},
         "antigravity": {"key": "antigravity", "label": "Antigravity conversations",        "state": "pending", "detail": "Scanning ~/.gemini/antigravity/brain/."},
         "kilo":        {"key": "kilo",        "label": "Kilo Code conversations",          "state": "pending", "detail": "Scanning ~/.local/share/kilo/kilo.db."},
+        "grok":        {"key": "grok",        "label": "Grok Build conversations",         "state": "pending", "detail": "Scanning ~/.grok/sessions/ for summaries."},
         "pr_states":   {"key": "pr_states",   "label": "Refreshing pull-request status",   "state": "pending", "detail": "gh pr view per known PR."},
         "issues":      {"key": "issues",      "label": "Refreshing GitHub issues",         "state": "pending", "detail": "gh issue list per repo."},
         "group_chats": {"key": "group_chats", "label": "Cross-repo group chats",           "state": "pending", "detail": "Reading sidecars."},
@@ -975,7 +976,7 @@ def _archive_load_begin():
             "started_at": now,
             "updated_at": now,
             "steps": steps,
-            "order": ["folders", "transcripts", "infer", "worktrees", "codex", "cursor", "antigravity", "kilo", "pr_states", "issues", "group_chats"],
+            "order": ["folders", "transcripts", "infer", "worktrees", "codex", "cursor", "antigravity", "kilo", "grok", "pr_states", "issues", "group_chats"],
         })
 
 
@@ -1657,10 +1658,10 @@ def _detect_session_engine_uncached(session_id):
     for s in _spawned_sessions:
         if s.get("session_id") == session_id or s.get("resumed_sid") == session_id:
             engine = s.get("engine")
-            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo"):
+            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "grok"):
                 return engine
     spawned = _spawn_registry_entry_for_session(session_id)
-    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo"):
+    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "grok"):
         return spawned.get("engine")
     if _is_codex_session(session_id):
         return "codex"
@@ -2235,7 +2236,7 @@ def _spawn_repo_context(cwd=None, repo_path=None):
     return {"repo_path": resolved, "cwd": str(p)}
 
 
-_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo")
+_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "grok")
 _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "claude": "claude",
     "claude-code": "claude",
@@ -2252,6 +2253,9 @@ _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "kilo": "kilo",
     "kilo-code": "kilo",
     "kilo_code": "kilo",
+    "grok": "grok",
+    "grok-build": "grok",
+    "grok_build": "grok",
 }
 
 
@@ -2282,6 +2286,8 @@ def _spawn_fallback_model_for_engine(engine):
         return os.environ.get("CCC_ANTIGRAVITY_MODEL") or _antigravity_cli_configured_model()
     if engine == "kilo":
         return os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
+    if engine == "grok":
+        return os.environ.get("CCC_GROK_MODEL", "grok-build")
     return ""
 
 
@@ -5787,6 +5793,8 @@ def enqueue_annotation_ux_fixes_queue(
         spawned = spawn_session_gemini(text, name=queue_name, repo_path=repo_path)
     elif engine == "kilo":
         spawned = spawn_session_kilo(text, name=queue_name, repo_path=repo_path)
+    elif engine == "grok":
+        spawned = spawn_session_grok(text, name=queue_name, repo_path=repo_path)
     elif engine == "cursor":
         spawned = spawn_session_cursor(text, name=queue_name, repo_path=repo_path)
     else:
@@ -12857,6 +12865,21 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
         if progress:
             progress("kilo", state="error", detail=f"Kilo session scan failed: {exc}")
 
+    if progress:
+        progress("grok", state="running", detail="Reading Grok Build sessions.")
+    try:
+        conversations.extend(find_grok_conversations(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+        if progress:
+            progress("grok", state="done")
+    except Exception as exc:
+        if progress:
+            progress("grok", state="error", detail=f"Grok session scan failed: {exc}")
+
     # Add pkood agents — and merge in their linked claude-session card, if any.
     # Pkood spawns a claude process in a tmux pty, which produces a regular
     # ~/.claude/projects/*/*.jsonl file. Without dedup the kanban would show
@@ -13368,6 +13391,12 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         return {"events": events_copy, "last_line": result.get("last_line", 0)}
     if engine == "kilo":
         result = _parse_kilo_conversation(conversation_id, after_line=after_line)
+        _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
+        events_copy = list(result.get("events") or [])
+        events_copy.extend(_get_queued_events_for_session(conversation_id))
+        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+    if engine == "grok":
+        result = _parse_grok_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
         events_copy.extend(_get_queued_events_for_session(conversation_id))
@@ -18899,6 +18928,43 @@ def _resolve_kilo_bin():
     }
 
 
+def _resolve_grok_bin():
+    """Locate a usable Grok Build TUI / CLI binary.
+
+    Priority order (mirrors Kilo):
+      1. $CCC_GROK_BIN (env override)
+      2. `shutil.which("grok")`
+      3. ~/.grok/bin/grok (standard self-managed install location for the TUI)
+
+    Same return shape as other _resolve_*_bin helpers.
+    """
+    env_bin = os.environ.get("CCC_GROK_BIN")
+    if env_bin:
+        if os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+            return {"available": True, "bin": env_bin, "source": "env"}
+        return {
+            "available": False,
+            "bin": None,
+            "code": "grok_unavailable",
+            "reason": f"CCC_GROK_BIN is set to {env_bin!r} but it isn't an executable file",
+        }
+    which_bin = shutil.which("grok")
+    if which_bin:
+        return {"available": True, "bin": which_bin, "source": "path"}
+    bundled = Path.home() / ".grok" / "bin" / "grok"
+    if bundled.is_file() and os.access(str(bundled), os.X_OK):
+        return {"available": True, "bin": str(bundled), "source": "bundle"}
+    return {
+        "available": False,
+        "bin": None,
+        "code": "grok_unavailable",
+        "reason": (
+            "Grok Build CLI not found. It is usually at ~/.grok/bin/grok (managed by the TUI itself); "
+            "ensure it is on PATH or set CCC_GROK_BIN."
+        ),
+    }
+
+
 def _antigravity_command_words(resolved):
     words = [resolved["bin"]]
     raw_args = (os.environ.get("CCC_ANTIGRAVITY_ARGS") or "").strip()
@@ -21643,6 +21709,28 @@ def _is_kilo_session(session_id):
     return False
 
 
+def _is_grok_session(session_id):
+    """Check if session_id corresponds to a Grok Build session.
+
+    Matches CCC-spawned entries and externally launched ones by probing for
+    the session's summary.json under ~/.grok/sessions/.../<sid>/ .
+    """
+    for s in _spawned_sessions:
+        if s.get("engine") == "grok" and (
+            s.get("session_id") == session_id or s.get("name") == session_id
+        ):
+            return True
+    if isinstance(session_id, str) and len(session_id) >= 8:
+        try:
+            root = Path.home() / ".grok" / "sessions"
+            for p in root.rglob(f"*{session_id}*/summary.json"):
+                if p.is_file():
+                    return True
+        except Exception:
+            pass
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Kilo Code session ingestion (read-only).
 #
@@ -21656,6 +21744,7 @@ def _is_kilo_session(session_id):
 # ---------------------------------------------------------------------------
 
 KILO_LIVE_WINDOW_S = 180
+GROK_LIVE_WINDOW_S = 120
 
 
 def _kilo_db_path():
@@ -22040,6 +22129,398 @@ def _parse_kilo_conversation(session_id, after_line=0):
     else:
         visible = events
     return {"events": visible, "last_line": line}
+
+
+# ---------------------------------------------------------------------------
+# Grok Build (xAI) session support — spawn + read ingestion.
+#
+# Grok Build TUI stores sessions under ~/.grok/sessions/<urlencoded-cwd>/<sid>/
+# with summary.json (title, model, timestamps, git info) + updates.jsonl
+# (ACP-style session/update events for text/thought/tool-ish content).
+# Primary discovery uses Grok's own session_search.sqlite (fast, indexed,
+# FTS-backed) with FS rglob+summary fallback for robustness. This leverages
+# the engine's own faster storage instead of pure FS walk on every poll.
+# Spawn uses the documented headless shape.
+# Resume parity partial (terminal grok -c / --resume); see matrix.
+# ---------------------------------------------------------------------------
+
+
+def _grok_sessions_root():
+    return Path.home() / ".grok" / "sessions"
+
+
+def _grok_db_path():
+    """Grok's own session search index (sqlite + FTS5). Fast path for discovery."""
+    p = Path.home() / ".grok" / "sessions" / "session_search.sqlite"
+    try:
+        return p if p.exists() else None
+    except OSError:
+        return None
+
+
+def _grok_connect():
+    """Open Grok's session_search.sqlite safely (query-only, like Kilo)."""
+    db = _grok_db_path()
+    if not db:
+        return None
+    try:
+        con = sqlite3.connect(str(db), timeout=0.5)
+        con.execute("PRAGMA query_only=1")
+        con.row_factory = sqlite3.Row
+        return con
+    except sqlite3.Error:
+        return None
+
+
+def _grok_fetch_sessions(con, limit=None):
+    """Lightweight rows from Grok's session_docs (id, cwd-ish path, time, title, prompt)."""
+    try:
+        # session_docs seems to be the main denormalized table for search/docs
+        rows = con.execute(
+            "SELECT id, path, time, title, prompt FROM session_docs ORDER BY time DESC"
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    out = []
+    for r in rows:
+        d = dict(r)
+        out.append({
+            "id": d.get("id") or "",
+            "cwd": d.get("path") or "",
+            "title": (d.get("title") or "").strip(),
+            "prompt": (d.get("prompt") or "").strip(),
+            "modified": d.get("time") or 0,
+        })
+    if limit and limit > 0:
+        out = out[:int(limit)]
+    return out
+
+
+def _ts_to_epoch(val, default=None):
+    """Best-effort convert unix int/float or ISO string to epoch seconds."""
+    if val is None:
+        return default
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(val.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            pass
+    return default
+
+
+def find_grok_conversations(
+    repo_path=None,
+    include_old=True,
+    repo_only=True,
+    progress=None,
+    limit=None,
+    resolve_pr_states=True,
+    resolve_worktree_dirty=True,
+):
+    """Discover Grok Build sessions.
+
+    Fast path: Grok's session_search.sqlite (session_docs table — indexed + FTS).
+    Fallback: rglob summary.json (for robustness if index is stale/missing).
+    Then applies the same repo scoping, pins, recency, and rich record building
+    as other engines.
+    """
+    if repo_only:
+        repo_path = resolve_repo_path(repo_path)
+        repo_path_obj = Path(repo_path)
+    try:
+        repo_pins = _load_repo_pins()
+    except Exception:
+        repo_pins = {}
+    try:
+        name_overrides = _load_session_name_overrides()
+    except Exception:
+        name_overrides = {}
+    try:
+        archived_set = set(_load_archived_conversations())
+    except Exception:
+        archived_set = set()
+    try:
+        verified_set = set(_load_verified_conversations())
+    except Exception:
+        verified_set = set()
+    try:
+        last_interactions = _load_last_interactions()
+    except Exception:
+        last_interactions = {}
+
+    cutoff = _session_scan_cutoff_ts(include_old)
+    max_rows = _session_scan_file_limit(include_old)
+    git_top_cache = {}
+    now = time.time()
+    out = []
+
+    # --- Fast path via Grok's own sqlite index (preferred) ---
+    con = _grok_connect()
+    sessions = []
+    used_sqlite = False
+    if con is not None:
+        try:
+            sessions = _grok_fetch_sessions(con, limit=limit)
+            used_sqlite = True
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+    if not sessions:
+        # Fallback to FS (original behavior). We parallelize the json loads here
+        # with ThreadPool because a big sessions dir can have hundreds of summaries
+        # and sequential read+parse is noticeably slower on big checkouts.
+        root = _grok_sessions_root()
+        if root.exists():
+            try:
+                paths = list(root.rglob("*/summary.json"))
+            except Exception:
+                paths = []
+            def _load_summary(p):
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+                    info = data.get("info") or {}
+                    sid = info.get("id") or p.parent.name
+                    if not sid:
+                        return None
+                    return {
+                        "id": sid,
+                        "cwd": info.get("cwd") or data.get("cwd") or "",
+                        "title": (data.get("generated_title") or data.get("session_summary") or "").strip(),
+                        "prompt": "",
+                        "modified": data.get("updated_at") or data.get("last_active_at") or data.get("created_at") or 0,
+                        "_summary_path": str(p),
+                        "_summary_data": data,
+                    }
+                except Exception:
+                    return None
+            if paths:
+                try:
+                    with ThreadPoolExecutor(max_workers=min(8, len(paths))) as ex:
+                        for item in ex.map(_load_summary, paths):
+                            if item:
+                                sessions.append(item)
+                except Exception:
+                    # if executor blows up for some reason, fall back to sequential
+                    for p in paths:
+                        item = _load_summary(p)
+                        if item:
+                            sessions.append(item)
+
+    if not sessions:
+        return []
+
+    for s in sessions:
+        sid = s.get("id")
+        if not sid:
+            continue
+        cwd = s.get("cwd") or ""
+        pinned = repo_pins.get(sid)
+        pinned_repo = False
+        if repo_only:
+            if pinned and pinned != repo_path:
+                continue
+            if pinned == repo_path:
+                pinned_repo = True
+            elif not _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
+                continue
+
+        modified = s.get("modified") or 0
+        # Normalize timestamp (sqlite gives int unix; FS summary may be ISO str)
+        modified = _ts_to_epoch(modified, default=now)
+        freshness = max(modified or 0, last_interactions.get(sid) or 0)
+        if not include_old and cutoff > 0 and freshness < cutoff:
+            continue
+        if not include_old and max_rows > 0 and len(out) >= max_rows:
+            continue
+
+        # Rich data: prefer in-memory from sqlite row or preloaded summary
+        data = s.get("_summary_data") or {}
+        title = s.get("title") or (data.get("generated_title") or data.get("session_summary") or "").strip()
+        first_message = (s.get("prompt") or "")[:200]
+        model = data.get("current_model_id") or s.get("model") or ""
+
+        display_name = (
+            name_overrides.get(sid)
+            or _truncate_session_name(title)
+            or (title[:80] if title else "Grok session")
+        )
+        effective_cwd = _first_existing_dir(cwd, pinned) or cwd
+        try:
+            cwd_exists = bool(effective_cwd and Path(effective_cwd).is_dir())
+        except OSError:
+            cwd_exists = False
+        folder_path = pinned or cwd or effective_cwd or ""
+        if folder_path:
+            _git_root = _find_git_root(folder_path)
+            folder_label = _resolve_dir_case(_git_root or folder_path)
+        else:
+            folder_label = "Grok"
+        _wt = None
+        _wti = folder_label.find("-wt-")
+        if _wti > 0:
+            _wt = folder_label[_wti + 4 :]
+            folder_label = folder_label[:_wti]
+        is_live = (now - (modified or 0)) < GROK_LIVE_WINDOW_S
+
+        # Enrich git/model from summary if we have the path and didn't get it from row
+        git_branch = data.get("head_branch") or ""
+        if not git_branch and s.get("_summary_path"):
+            try:
+                extra = json.loads(Path(s["_summary_path"]).read_text(encoding="utf-8", errors="replace"))
+                git_branch = (extra.get("head_branch") or "").strip()
+                if not model:
+                    model = extra.get("current_model_id") or ""
+            except Exception:
+                pass
+
+        out.append({
+            "id": sid,
+            "session_id": sid,
+            "source": "grok",
+            "engine": "grok",
+            "timestamp": "",
+            "branch": "",
+            "git_branch": git_branch or "",
+            "first_message": first_message[:200],
+            "display_name": display_name,
+            "ai_title": title or None,
+            "name_overridden": bool(name_overrides.get(sid)),
+            "last_prompt": first_message[:200],
+            "size": 0,
+            "modified": modified or 0,
+            "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)) if modified else "",
+            "mtime": modified or 0,
+            "jsonl_path": "",
+            "folder_label": folder_label,
+            "folder_path": folder_path,
+            "worktree_label": _wt,
+            "session_cwd": effective_cwd,
+            "session_cwd_exists": cwd_exists,
+            "session_cwd_is_worktree": bool(effective_cwd and (Path(effective_cwd) / ".git").is_file()),
+            "worktree_dirty": (
+                _worktree_dirty_cached(effective_cwd, modified) if resolve_worktree_dirty and effective_cwd else False
+            ),
+            "effective_branch": None,
+            "effective_kind": None,
+            "has_edit": False,
+            "has_commit": False,
+            "has_push": False,
+            "last_edit_pos": 0,
+            "last_commit_pos": 0,
+            "last_push_pos": 0,
+            "last_event_type": None,
+            "pending_tool": None,
+            "pending_file": None,
+            "pending_tool_ts": 0,
+            "last_assistant_text": (data.get("session_summary") or "")[:300],
+            "tail_issue_number": None,
+            "tail_pr_number": None,
+            "tail_pr_url": None,
+            "pr_state": None,
+            "session_state": None,
+            "archived": sid in archived_set,
+            "verified": sid in verified_set,
+            "pinned_repo": pinned_repo,
+            "last_interacted": last_interactions.get(sid),
+            "is_live": is_live,
+            "spawn_pid": None,
+            "needs_approval": False,
+            "needs_approval_message": "",
+            "model": model,
+            "reasoning_effort": "",
+        })
+    out.sort(key=lambda x: x.get("last_interacted") or x.get("modified") or 0, reverse=True)
+    if limit:
+        out = out[:limit]
+    return out
+
+
+def _parse_grok_conversation(session_id, after_line=0):
+    """Map a Grok session's updates.jsonl (ACP-style session/update events) to CCC events."""
+    root = _grok_sessions_root()
+    updates_path = None
+    try:
+        for p in root.rglob(f"*{session_id}*/updates.jsonl"):
+            if p.is_file():
+                updates_path = p
+                break
+    except Exception:
+        pass
+    if not updates_path:
+        return {"events": [], "last_line": 0}
+    events = []
+    line = 0
+    try:
+        with open(updates_path, "r", encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                line += 1
+                if after_line and line <= after_line:
+                    continue
+                s = raw.strip()
+                if not s:
+                    continue
+                try:
+                    ev = json.loads(s)
+                except Exception:
+                    continue
+                # Shape: {"method":"session/update", "params": {"update": {"sessionUpdate": "user_message_chunk", "content": {"type":"text","text":...}} ... }}
+                upd = (ev.get("params") or {}).get("update") or {}
+                sup = upd.get("sessionUpdate") or ""
+                content = upd.get("content") or {}
+                text = ""
+                if isinstance(content, dict):
+                    text = content.get("text") or content.get("data") or ""
+                elif isinstance(content, str):
+                    text = content
+                if not text:
+                    # some events carry text at top level in data
+                    if "data" in upd and isinstance(upd["data"], str):
+                        text = upd["data"]
+                ts = ev.get("timestamp")
+                if isinstance(ts, (int, float)):
+                    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+                else:
+                    ts = ""
+                if not text:
+                    # broader fallbacks seen in Grok/ACP wire
+                    text = ev.get("text") or ev.get("data") or ""
+                if sup == "user_message_chunk" or sup.endswith("user_message") or "user" in sup.lower():
+                    if text:
+                        events.append({"line": line, "ts": ts, "type": "user_text", "text": text})
+                elif "thought" in sup or sup == "agent_thought_chunk":
+                    if text:
+                        events.append({"line": line, "ts": ts, "type": "assistant_thinking", "thinking": text})
+                elif "agent_message" in sup or "assistant" in sup.lower() or sup.endswith("message_chunk"):
+                    if text:
+                        events.append({"line": line, "ts": ts, "type": "assistant", "text": text})
+                elif any(x in sup.lower() for x in ["start_tool", "tool_call", "tool_use"]):
+                    # better fidelity for actual tool invocations Grok logs
+                    tc_id = upd.get("toolCallId") or upd.get("id") or ""
+                    name = upd.get("name") or sup
+                    inp = upd.get("rawInput") or upd.get("input") or {}
+                    events.append({
+                        "line": line, "ts": ts, "type": "tool_use",
+                        "tool_use_id": tc_id,
+                        "name": name,
+                        "input": inp,
+                    })
+                elif "tool" in sup.lower() or "command" in sup.lower():
+                    # results or other tool activity
+                    if text:
+                        events.append({"line": line, "ts": ts, "type": "tool_result", "text": text[:400], "tool_use_id": sup})
+                else:
+                    # Generic text-bearing update
+                    if text:
+                        events.append({"line": line, "ts": ts, "type": "assistant", "text": text})
+    except Exception:
+        pass
+    return {"events": events, "last_line": line}
 
 
 def _load_antigravity_transcript(session_id):
@@ -25393,6 +25874,75 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
         fifo=None, engine="kilo", repo_path=repo_for_logs, model=model_to_use,
     )
     resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "kilo-spawn"}
+    if worktree_path:
+        resp["worktree_path"] = worktree_path
+        resp["worktree_branch"] = worktree_branch
+    return _finalize_spawn_response(resp, entry, ctx)
+
+
+def spawn_session_grok(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None):
+    """Spawn a headless Grok Build run (via `grok -p`) and return tracking info.
+
+    Uses streaming-json + --yolo (auto-approve) for fire-and-forget parity with Kilo.
+    The TUI supports --resume <id> / -c for follow-ups from a terminal.
+    """
+    prompt = _strip_ccc_session_state_instruction(prompt)
+    resolved = _resolve_grok_bin()
+    if not resolved["available"]:
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
+    spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
+    session_name = _slugify(name or prompt) or "unnamed"
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"spawn-grok-{session_name}-{timestamp}.log"
+    model_to_use = _spawn_model_for_engine("grok", model) or os.environ.get("CCC_GROK_MODEL", "grok-build")
+    if model_to_use:
+        _set_session_model(log_filename[:-4], model_to_use, False)
+    log_dir = repo_log_dir(repo_for_logs)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
+    worktree_path = None
+    worktree_branch = None
+    if worktree:
+        try:
+            worktree_path, worktree_branch = _create_worktree_for_spawn(spawn_cwd, session_name)
+            spawn_cwd = worktree_path
+        except RuntimeError as e:
+            return {"ok": False, "error": f"worktree creation failed: {e}"}
+    # Headless per Grok docs: -p for single/headless, --output-format streaming-json,
+    # --yolo for full auto-approve (bypass permissions), -m for model, --cwd .
+    cmd = [resolved["bin"], "-p", prompt, "--cwd", spawn_cwd, "--output-format", "streaming-json", "--yolo"]
+    if model_to_use:
+        cmd.extend(["-m", model_to_use])
+    log_fh = open(log_path, "w")
+    if worktree_path:
+        _run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
+    try:
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
+            cwd=spawn_cwd, start_new_session=True,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log_fh.close()
+        return {"ok": False, "error": str(e), "code": "grok_launch_failed", "via": "grok-spawn"}
+    failure = _spawn_early_failure_payload(proc, log_path, log_fh, engine="grok", via="grok-spawn")
+    if failure:
+        return failure
+    entry = {
+        "pid": proc.pid, "name": session_name, "log": str(log_path),
+        "prompt": prompt[:200], "started": timestamp, "proc": proc,
+        "log_fh": log_fh, "fifo": None, "stdin_fd": None,
+        "engine": "grok", "cwd": spawn_cwd, "repo_path": repo_for_logs,
+        "model": model_to_use or "",
+    }
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid, name=session_name, log_path=log_path, cwd=spawn_cwd,
+        spawned_at=timestamp, command_summary=prompt[:200],
+        fifo=None, engine="grok", repo_path=repo_for_logs, model=model_to_use,
+    )
+    resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "grok-spawn"}
     if worktree_path:
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
@@ -36936,6 +37486,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             info = _resolve_kilo_bin()
             info["model"] = os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
             self.send_json(info)
+        elif path == "/api/sessions/spawn-grok/availability":
+            info = _resolve_grok_bin()
+            info["model"] = os.environ.get("CCC_GROK_MODEL", "grok-build")
+            self.send_json(info)
         elif path == "/api/loading-status":
             self.send_json(_session_load_snapshot())
         elif path == "/api/archive/loading-status":
@@ -39294,6 +39848,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             worktree=worktree_flag,
                             model=model,
                         )
+                    elif engine == "grok":
+                        result = spawn_session_grok(
+                            prompt,
+                            name=name,
+                            cwd=spawn_cwd,
+                            repo_path=payload.get("repo_path"),
+                            worktree=worktree_flag,
+                            model=model,
+                        )
                     else:
                         result = spawn_session(
                             prompt,
@@ -39609,6 +40172,64 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         model=model,
                     )
                     if result.get("code") in ("kilo_unavailable", "kilo_launch_failed"):
+                        self.send_json(result, 503)
+                    else:
+                        self.send_json(result)
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/sessions/spawn-grok":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            prompt = (payload.get("prompt") or "").strip()
+            name = (payload.get("name") or "").strip() or None
+            cwd_raw = payload.get("cwd")
+            cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
+            cwd_resolved = None
+            cwd_error = None
+            if cwd_input:
+                try:
+                    expanded = os.path.expanduser(cwd_input)
+                    candidate = Path(expanded).resolve()
+                except (OSError, RuntimeError) as e:
+                    cwd_error = f"could not resolve path ({e})"
+                else:
+                    home = Path.home().resolve()
+                    try:
+                        st = os.stat(candidate)
+                    except OSError as e:
+                        cwd_error = f"path does not exist ({e.strerror or e})"
+                    else:
+                        if not stat.S_ISDIR(st.st_mode):
+                            cwd_error = f"not a directory: {candidate}"
+                        else:
+                            try:
+                                candidate.relative_to(home)
+                            except ValueError:
+                                cwd_error = f"path is outside $HOME ({home}): {candidate}"
+                            else:
+                                cwd_resolved = candidate
+            model = payload.get("model")
+            if not prompt:
+                self.send_json({"ok": False, "error": "missing prompt"}, 400)
+            elif cwd_error:
+                self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
+            else:
+                try:
+                    result = spawn_session_grok(
+                        prompt,
+                        name=name,
+                        cwd=str(cwd_resolved) if cwd_resolved else None,
+                        repo_path=payload.get("repo_path"),
+                        worktree=bool(payload.get("worktree")),
+                        model=model,
+                    )
+                    if result.get("code") in ("grok_unavailable", "grok_launch_failed"):
                         self.send_json(result, 503)
                     else:
                         self.send_json(result)
@@ -42604,6 +43225,11 @@ def _telemetry_detect_engines():
     try:
         if _resolve_kilo_bin().get("available"):
             out.append("kilo")
+    except Exception:
+        pass
+    try:
+        if _resolve_grok_bin().get("available"):
+            out.append("grok")
     except Exception:
         pass
     return out
