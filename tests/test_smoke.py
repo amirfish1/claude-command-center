@@ -120,6 +120,22 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(server._ship_classify_remaining("snapshot.js"), "infra")
         self.assertEqual(server._ship_classify_remaining("apps/x/page.tsx"), "review")
 
+    def test_acp_adapter_optional_import(self):
+        """The ACP adapter (ccc_acp.py) is an optional companion. When the
+        agent-client-protocol package is installed the module must import
+        cleanly (smoke only; no ACP runtime exercised here). When the dep is
+        absent we simply skip — this mirrors the Morning plugin handling."""
+        for mod in ("server", "morning", "morning_store", "ccc_acp"):
+            sys.modules.pop(mod, None)
+        try:
+            import acp  # noqa: F401
+        except Exception:
+            self.skipTest("agent-client-protocol not installed; ACP adapter is optional")
+        # Import should succeed and expose the expected entry surface.
+        ccc_acp = importlib.import_module("ccc_acp")
+        self.assertTrue(hasattr(ccc_acp, "main"))
+        self.assertTrue(hasattr(ccc_acp, "CCCACPAgent"))
+
     def test_ship_index_attribution_is_wired_and_degrades(self):
         """The conversation-index attribution layer is defined, the verdict +
         ship-flow consult it, and a missing/erroring index degrades silently to

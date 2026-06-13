@@ -1,0 +1,1 @@
+- ACP adapter: clamp client-supplied `new_session` cwd to `$HOME` by default (opt out with `CCC_ACP_ALLOW_OUTSIDE_HOME=1`), and sync the adapter's reported version with the server. The experimental ACP adapter spawns Claude with `--dangerously-skip-permissions` in client-supplied paths; see SECURITY.md for the risk surface.
