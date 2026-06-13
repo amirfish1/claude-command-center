@@ -12120,13 +12120,68 @@ body:has(.gc-reader) .pwa-install-banner {
   border-color: color-mix(in srgb, var(--accent, #58a6ff) 45%, var(--border) 55%);
   box-shadow: 0 6px 18px rgba(0,0,0,0.25);
 }
-/* Adopted CWD controls inside card 1 (CCC-86). */
-.ns-cwd-slot { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
-.ns-cwd-slot .spawn-cwd-row { display: flex; width: 100%; }
-.ns-cwd-slot .spawn-cwd-combo { flex: 1; }
-.ns-cwd-slot .spawn-cwd-picker { width: 100%; }
-/* While adopted, hide the strip's leftover quick chips (the card owns
-   folder choice now) — the strip keeps engine/model controls only. */
+/* Adopted CWD + worktree on one row; chips bare below. */
+.ns-cwd-slot {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: 2px; width: 100%; max-width: 560px;
+}
+.ns-cwd-slot .spawn-cwd-row { flex: 0 0 auto; display: flex; }
+.ns-cwd-slot .spawn-worktree-row { flex: 0 0 auto; }
+.ns-cwd-slot .spawn-cwd-combo { display: flex; }
+/* Narrower, taller, dark-themed picker in the chooser */
+.ns-cwd-slot .spawn-cwd-picker {
+  width: auto; min-width: 200px; max-width: 300px;
+  height: 34px; padding: 0 10px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px 0 0 4px;
+  font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+  outline: none;
+}
+.ns-cwd-slot .spawn-cwd-picker:hover { border-color: var(--accent); }
+.ns-cwd-slot .spawn-cwd-picker:focus { border-color: var(--accent); }
+.ns-cwd-slot .spawn-cwd-menu-btn,
+.ns-cwd-slot .spawn-cwd-browse-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 34px; width: 30px;
+  background: var(--surface); color: var(--text-muted);
+  border: 1px solid var(--border); border-left: 0;
+  cursor: pointer; font-size: 12px;
+}
+.ns-cwd-slot .spawn-cwd-browse-btn { border-radius: 0 4px 4px 0; }
+.ns-cwd-slot .spawn-cwd-menu-btn:hover,
+.ns-cwd-slot .spawn-cwd-menu-btn[aria-expanded="true"],
+.ns-cwd-slot .spawn-cwd-browse-btn:hover {
+  color: var(--text); border-color: var(--accent);
+}
+/* Chips bare below the CWD row */
+.ns-chips-below {
+  flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; padding-top: 2px;
+}
+/* Dropdown from the chooser opens downward */
+.ns-cwd-slot .spawn-cwd-combo { position: relative; }
+.ns-cwd-slot .spawn-cwd-menu {
+  display: none; position: absolute; z-index: 1200;
+  top: calc(100% + 4px); bottom: auto; left: 0;
+  width: min(480px, calc(100vw - 80px)); max-height: min(360px, 60vh);
+  overflow: auto; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+}
+.ns-cwd-slot .spawn-cwd-menu.open { display: grid; gap: 2px; }
+/* Integration recipes: collapsible toggle in mid-screen */
+.ns-recipes-details {
+  width: 100%; max-width: 720px; margin-top: 4px;
+}
+.ns-recipes-summary {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text-muted);
+  cursor: pointer; list-style: none; padding: 5px 0;
+  user-select: none;
+}
+.ns-recipes-summary::-webkit-details-marker { display: none; }
+.ns-recipes-summary::before { content: '▶ '; font-size: 9px; opacity: 0.7; }
+.ns-recipes-details[open] .ns-recipes-summary::before { content: '▼ '; }
+/* While adopted, hide the strip's leftover quick chips */
 #convInputContext.cwd-controls-adopted .spawn-cwd-quick-chips { display: none; }
 
 /* ── Sidebar section tabs (CCC-85) ──────────────────────────────────── */

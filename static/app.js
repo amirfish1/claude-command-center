@@ -34572,16 +34572,7 @@
     if (row) slot.appendChild(row);
     if (wt) slot.appendChild(wt);
     cic.classList.add('cwd-controls-adopted');
-    // Also center the composer itself (CCC-87 follow-up: "I also meant the
-    // input box"). Move the live #convInputBar into the stage so the prompt
-    // sits with the chooser, mid-screen; all handlers ride along.
-    const composerSlot = $view.querySelector('#nsComposerSlot');
-    const bar = document.getElementById('convInputBar');
-    if (composerSlot && bar && !composerSlot.contains(bar)) {
-      _adoptedComposerHome = { parent: bar.parentElement, next: bar.nextElementSibling };
-      composerSlot.appendChild(bar);
-      bar.classList.add('is-centered-stage');
-    }
+    // Composer stays at the bottom of the pane (its normal position).
   }
   function _restoreCwdControlsToInputBar() {
     const cic = document.getElementById('convInputContext');
@@ -34872,33 +34863,28 @@
         return '<button type="button" class="ns-repo-chip' + active + '" data-ns-repo="' + escapeAttr(o.value) + '" title="' + escapeAttr(o.value) + '">' + escapeHtml(o.label || o.value) + '</button>';
       }).join('');
       $view.innerHTML = '<div class="ns-stage">'
-        + '<div class="empty-state ns-hero" style="height:auto;flex-direction:column;gap:10px;text-align:center;">'
+        + '<div class="empty-state ns-hero" style="height:auto;flex-direction:column;gap:14px;text-align:center;">'
         + '<div class="ns-hero-title">🚀 Start a new session</div>'
-        + '<div class="ns-choice-grid">'
-        +   '<div class="ns-choice-card is-primary" id="nsCardExisting">'
-        +     '<div class="ns-choice-title">1 · Existing folder / repo</div>'
-        +     '<div class="ns-repo-chips">' + (repoChipsHtml || '<span class="ns-muted">No folders yet — browse with 📁 below.</span>') + '</div>'
-        +   '</div>'
-        +   '<div class="ns-choice-card is-dimmed" id="nsCardNewProject">'
-        +     '<div class="ns-choice-title">2 · New project</div>'
-        +     '<span class="ns-name-row">'
-        +       '<input type="text" id="nsNewProjectName" class="ns-input" placeholder="Project name…" autocomplete="off" spellcheck="false">'
-        +       '<button type="button" id="nsNewProjectDice" class="ns-dice-btn" title="Roll another name">&#127922;</button>'
-        +     '</span>'
-        +     '<button type="button" id="nsNewProjectCreate" class="ns-create-btn" disabled>Create folder &amp; start</button>'
-        +     '<div class="ns-muted" id="nsNewProjectHint">Folder comes from the CWD field below — we create it, then you describe the project.</div>'
-        +   '</div>'
+        // New project card only — existing folders appear as chips below the CWD row
+        + '<div class="ns-choice-card" id="nsCardNewProject">'
+        +   '<div class="ns-choice-title">New project</div>'
+        +   '<span class="ns-name-row">'
+        +     '<input type="text" id="nsNewProjectName" class="ns-input" placeholder="Project name…" autocomplete="off" spellcheck="false">'
+        +     '<button type="button" id="nsNewProjectDice" class="ns-dice-btn" title="Roll another name">&#127922;</button>'
+        +   '</span>'
+        +   '<button type="button" id="nsNewProjectCreate" class="ns-create-btn" disabled>Create folder &amp; start</button>'
+        +   '<div class="ns-muted" id="nsNewProjectHint">Folder comes from the CWD field below — we create it, then you describe the project.</div>'
         + '</div>'
         + '<div style="font-size:13px;color:var(--text-muted);max-width:480px;line-height:1.5;">' + escapeHtml(newSessionHelp) + '</div>'
-        // ONE CWD field (CCC-102): the spawn-cwd controls are adopted into
-        // this slot, directly above the prompt. Chips and the new-project
-        // name both write into it; it always shows the full effective path.
-        + '<div class="ns-cwd-slot ns-cwd-unified" id="nsCwdSlot"></div>'
-        + '<div class="ns-composer-slot" id="nsComposerSlot"></div>'
-        + '<div class="new-session-template-wrap" id="nsExtensionsWrap" style="display:none;">'
-        +   '<div class="new-session-template-title">Extend CCC · integration recipes</div>'
-        +   '<div class="nsm-gallery inline-new-session-templates" id="nsExtensionsGallery"></div>'
+        // CWD + worktree (adopted inline) with existing-folder chips directly below
+        + '<div class="ns-cwd-slot ns-cwd-unified" id="nsCwdSlot">'
+        +   '<div class="ns-chips-below">' + (repoChipsHtml || '') + '</div>'
         + '</div>'
+        // Integration recipes collapsed by default; revealed once templates load
+        + '<details class="ns-recipes-details" id="nsExtensionsWrap" style="display:none;">'
+        +   '<summary class="ns-recipes-summary">Extend CCC · integration recipes</summary>'
+        +   '<div class="nsm-gallery inline-new-session-templates" id="nsExtensionsGallery"></div>'
+        + '</details>'
         + '</div></div>';
       _wireNewSessionChooser($view, paneId);
       _adoptCwdControlsIntoChooser($view);
