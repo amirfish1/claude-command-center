@@ -27910,16 +27910,22 @@
   function localhostContext() {
     const convId = (typeof currentConversation !== 'undefined') ? currentConversation : '';
     const row = convId ? ((conversationsData || []).find(x => x.id === convId) || null) : null;
-    const rowRepo = row ? (row.repo_path || row.folder_path || '') : '';
+    // Take it from the conversation first: rowRepoPath() scans repo_path /
+    // folder_path / spawn_cwd / session_cwd / cwd for the first ABSOLUTE path,
+    // so Codex/Gemini/external-volume sessions resolve the same as Claude ones.
+    // Only fall back to the sidebar selection when the open conversation has no
+    // usable path of its own. (Previously a non-absolute sidebar value shadowed
+    // a valid conversation path and then got nulled → false "no-repo".)
+    const rowRepo = row ? rowRepoPath(row) : '';
     const selectedRepo = selectedRepoPath();
-    let repoPath = selectedRepo || rowRepo || '';
+    let repoPath = (_isAbsoluteLocalPath(rowRepo) ? rowRepo : '')
+                || (_isAbsoluteLocalPath(selectedRepo) ? selectedRepo : '');
     const mapCwd = (row && typeof sessionCwdByConv !== 'undefined') ? (sessionCwdByConv[row.id] || '') : '';
     let cwd = mapCwd || (row && (row.session_cwd || row.spawn_cwd || row.cwd)) || '';
     // Only an absolute filesystem path is a valid repo_path/cwd for the server's
     // require_repo_context. A dash-encoded project-dir name (e.g. leaked popout
     // state like "-Users-amirfish-GStack-test") 400s every 15s — drop it and let
     // the pill fall back to "no-repo" instead of spamming failed calls.
-    if (repoPath && !repoPath.startsWith('/')) repoPath = '';
     if (cwd && !cwd.startsWith('/')) cwd = '';
     if (repoPath && cwd && cwd !== repoPath) {
       const root = repoPath.replace(/\/+$/, '');
@@ -27995,6 +28001,24 @@
       return;
     }
     if (!res.ok) {
+      // A 400 with a structured repo-context error (code: repo_required /
+      // not_a_repo / …) means the ROUTE works — we just didn't hand it a
+      // resolvable repo (e.g. a session on a path CCC doesn't treat as a
+      // repo). That's a no-repo state, NOT a stale-server condition. Only a
+      // genuinely missing route (404) warrants the "restart ./run.sh" nudge.
+      let body = null;
+      try { body = await res.clone().json(); } catch (_) {}
+      if (res.status === 400 && body && body.code) {
+        _localhostState = 'no-repo';
+        setLocalhostPill({
+          dotClass: '',
+          label: 'localhost',
+          title: 'No dev-server repo here (' + body.code + '). ' +
+                 'Pick a repo with a package.json to use the localhost pill.',
+          href: '',
+        });
+        return;
+      }
       _localhostState = 'unreachable';
       setLocalhostPill({
         dotClass: 'error',
