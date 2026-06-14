@@ -2632,6 +2632,12 @@
     }), 5000);
     liveStatusRenderTicker = setInterval(_gated('liveToolStrip', () => {
       updateLiveToolStrip();
+      // Codex sessions never get sidecar_status==='active' (that branch is
+      // claude-only), so updateLiveToolStrip renders nothing for them — the
+      // open view's only live signal is the codex Working/Idle/Stuck badge.
+      // Re-pin it on the same 1s cadence so the view stops disagreeing with
+      // the sidebar row, which shows WIP from the bulk poll. (Idempotent.)
+      updateCodexStateBadge();
       // Age the "checked Xs ago · HH:MM:SS" label every second so it never
       // lies. The 5s poll pauses when the tab is hidden / on fetch failure;
       // without this re-render the label froze at "just now" even after
@@ -2749,8 +2755,29 @@
     _optimisticAgentTick = setInterval(() => {
       const el = $view && $view.querySelector('.conv-live-tool-inline.optimistic');
       if (!el) { _stopOptimisticAgeTicker(); return; }
+      const ms = Date.now() - _optimisticAgentStart;
       const age = el.querySelector('.cl-age');
-      if (age) age.textContent = _optimisticAgeLabel(Date.now() - _optimisticAgentStart);
+      if (age) age.textContent = _optimisticAgeLabel(ms);
+      // Long-think reassurance: during a pre-tool thinking phase nothing
+      // streams (no hook fires), so a lone "🧠 Thinking…" with only a ticking
+      // counter reads as a hang past a minute. Escalate the copy so it's
+      // visibly alive, not stuck.
+      if (el.classList.contains('is-thinking')) {
+        const secs = Math.round(ms / 1000);
+        const hint = secs >= 120 ? 'still working — long reasoning step'
+          : (secs >= 30 ? 'still working…' : '');
+        let hintEl = el.querySelector('.cl-hint');
+        if (hint) {
+          if (!hintEl) {
+            hintEl = document.createElement('span');
+            hintEl.className = 'cl-hint';
+            el.insertBefore(hintEl, age || null);
+          }
+          if (hintEl.textContent !== hint) hintEl.textContent = hint;
+        } else if (hintEl) {
+          hintEl.remove();
+        }
+      }
     }, 1000);
   }
   function showOptimisticAgentIndicator($view) {
@@ -27974,9 +28001,16 @@
       const root = repoPath.replace(/\/+$/, '');
       if (cwd !== root && !cwd.startsWith(root + '/')) cwd = '';
     }
+    // Carry the open session id as a last-resort key: when the client can't
+    // assemble an absolute repo/cwd (Codex/Gemini rows, unshaped data), the
+    // server resolves the session's cwd itself (find_session_cwd) so the
+    // localhost pill still works. Only a real UUID-ish id, never a popout
+    // project-dir slug.
+    const sessionId = (typeof convId === 'string' && /^[0-9a-f-]{8,}$/i.test(convId)) ? convId : '';
     return {
       repoPath,
       cwd: cwd && cwd !== repoPath ? cwd : '',
+      sessionId,
     };
   }
 
@@ -27984,6 +28018,7 @@
     const u = new URL(path, window.location.href);
     if (ctx && ctx.repoPath) u.searchParams.set('repo_path', ctx.repoPath);
     if (ctx && ctx.cwd) u.searchParams.set('cwd', ctx.cwd);
+    if (ctx && ctx.sessionId) u.searchParams.set('session_id', ctx.sessionId);
     return u.pathname + u.search;
   }
 
@@ -27991,6 +28026,7 @@
     const body = {};
     if (ctx && ctx.repoPath) body.repo_path = ctx.repoPath;
     if (ctx && ctx.cwd) body.cwd = ctx.cwd;
+    if (ctx && ctx.sessionId) body.session_id = ctx.sessionId;
     return body;
   }
 
@@ -28020,7 +28056,7 @@
   async function pollLocalhost() {
     if (!$localhostPill) return;
     const ctx = localhostContext();
-    if (!ctx.repoPath && !ctx.cwd) {
+    if (!ctx.repoPath && !ctx.cwd && !ctx.sessionId) {
       _localhostState = 'no-repo';
       setLocalhostPill({
         dotClass: '',
@@ -28228,7 +28264,7 @@
       }
 
       const ctx = localhostContext();
-      if (!ctx.repoPath && !ctx.cwd) {
+      if (!ctx.repoPath && !ctx.cwd && !ctx.sessionId) {
         showOpToast('Pick a repo first.', 'info');
         return;
       }
