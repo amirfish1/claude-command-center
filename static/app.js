@@ -14108,13 +14108,15 @@
     body.style.cssText = 'flex:1 1 auto;min-width:0;word-break:break-word;';
     body.innerHTML = '<span style="color:' + color + '">' + mark + '</span> ' + msg;
     toast.appendChild(body);
-    // Error toasts carry text the user often needs verbatim (a "restart with
-    // ./run.sh" hint, a stack-ish reason). Give them a Copy + close affordance
-    // and pause auto-dismiss on hover so the message can't vanish mid-copy.
+    // Error AND info toasts carry text the user often needs verbatim (a
+    // "restart with ./run.sh" hint, a "pick a repo" instruction, a stack-ish
+    // reason). Give them a Copy + close affordance and pause auto-dismiss on
+    // hover so the message can't vanish mid-copy. Success stays ephemeral.
     let timer = null;
     const arm = (ms) => { if (timer) clearTimeout(timer); timer = setTimeout(() => toast.remove(), ms); };
-    if (kind === 'error') {
-      const plain = (body.textContent || msg || '').replace(/^!\s*/, '').trim();
+    const actionable = kind === 'error' || kind === 'info';
+    if (actionable) {
+      const plain = (body.textContent || msg || '').replace(/^[!⋯]\s*/, '').trim();
       const copyBtn = document.createElement('button');
       copyBtn.type = 'button';
       copyBtn.textContent = 'Copy';
@@ -14142,9 +14144,9 @@
       toast.addEventListener('mouseleave', () => arm(5000));
     }
     document.body.appendChild(toast);
-    // Errors linger 15s (vs 3s for success/info) so there's time to read +
-    // copy; hover pauses that, and the \u00d7 dismisses instantly.
-    arm(kind === 'error' ? 15000 : 3000);
+    // Errors linger 15s, info 10s (time to read + copy); success stays 3s.
+    // Hover pauses the timer, and the \u00d7 dismisses instantly.
+    arm(kind === 'error' ? 15000 : (kind === 'info' ? 10000 : 3000));
   }
 
   async function moveCardToColumn(cardId, targetCol) {
@@ -28201,11 +28203,11 @@
       // Explicit feedback for every non-actionable state, so a click is
       // never silent.
       if (_localhostState === 'starting') {
-        showOpToast('Already waiting on: ' + (_localhostLastCommand || 'dev command'));
+        showOpToast('Already waiting on: ' + (_localhostLastCommand || 'dev command'), 'info');
         return;
       }
       if (_localhostState === 'no-repo') {
-        showOpToast('Pick a repo from the sidebar before starting a dev server.');
+        showOpToast('Pick a repo from the sidebar before starting a dev server.', 'info');
         return;
       }
       if (_localhostState === 'no-nextjs') {
@@ -28227,7 +28229,7 @@
 
       const ctx = localhostContext();
       if (!ctx.repoPath && !ctx.cwd) {
-        showOpToast('Pick a repo first.');
+        showOpToast('Pick a repo first.', 'info');
         return;
       }
       if (_localhostState === 'stuck') {
