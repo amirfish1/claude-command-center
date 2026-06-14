@@ -2187,6 +2187,15 @@
   }
   .conv-input-context .wp-kind-worktree { color: var(--accent); background: rgba(88,166,255,0.10); }
   .conv-input-context .wp-kind-clone { color: var(--orange); background: rgba(210,153,34,0.10); }
+  /* CCC-128: the "cwd missing" chip is an actionable button (set folder). */
+  .conv-input-context button.wp-set-cwd {
+    cursor: pointer; border: 1px solid rgba(210,153,34,0.45);
+    color: var(--orange); background: rgba(210,153,34,0.10);
+    text-transform: none; letter-spacing: 0; font-family: inherit;
+  }
+  .conv-input-context button.wp-set-cwd:hover {
+    background: rgba(210,153,34,0.20); border-color: var(--orange);
+  }
   /* Usage pill — sits at the right end of the input-context row. The
      wp-usage wrapper is a flex item with margin-left:auto so the pill
      hugs the right edge regardless of how much workspace info renders. */

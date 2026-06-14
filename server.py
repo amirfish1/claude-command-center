@@ -6747,6 +6747,15 @@ def extract_session_id(path):
 
 # Cache of session_id -> cwd so we don't rescan ~/.claude/projects on every request
 _session_cwd_cache = {}
+# CCC-128: user-supplied cwd overrides (sid -> abs path). When CCC can't resolve
+# a session's folder (recorded cwd moved/gone → "CWD MISSING"), the user points
+# it at the real directory via the workspace pill; this wins over all automatic
+# resolution. Persisted so it survives restart. Display/resolution only — the
+# session's JSONL is never rewritten (same philosophy as the visual /move).
+_session_cwd_override = {}
+_SESSION_CWD_OVERRIDE_FILE = (
+    Path.home() / ".claude" / "command-center" / "session-cwd-overrides.json"
+)
 _session_cwd_relocation_cache = {}
 _session_cwd_relocation_cache_dirty = False
 _session_cwd_relocation_cache_lock = threading.Lock()
@@ -10216,6 +10225,46 @@ def _first_existing_dir(*paths):
     return None
 
 
+def _load_session_cwd_overrides():
+    """Load persisted user cwd overrides (CCC-128). Best-effort."""
+    try:
+        data = json.loads(_SESSION_CWD_OVERRIDE_FILE.read_text())
+    except (OSError, json.JSONDecodeError, ValueError):
+        return
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if k and v:
+                _session_cwd_override[str(k)] = str(v)
+
+
+def _save_session_cwd_overrides():
+    """Atomic write of the cwd-override map. Best-effort."""
+    try:
+        _SESSION_CWD_OVERRIDE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = str(_SESSION_CWD_OVERRIDE_FILE) + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(_session_cwd_override, f, indent=2)
+        os.replace(tmp, _SESSION_CWD_OVERRIDE_FILE)
+    except OSError:
+        pass
+
+
+def _set_session_cwd_override(session_id, cwd):
+    """Point a session at a user-chosen folder. Raises ValueError if the path
+    isn't an existing directory. Invalidates the resolution cache so the new
+    cwd takes effect immediately for the workspace pill, file-open, resume."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        raise ValueError("missing session_id")
+    p = Path(str(cwd or "").strip()).expanduser().resolve()
+    if not p.is_dir():
+        raise ValueError(f"not a directory: {p}")
+    _session_cwd_override[sid] = str(p)
+    _session_cwd_cache.pop(sid, None)
+    _save_session_cwd_overrides()
+    return str(p)
+
+
 def _relocate_missing_session_cwd(session_id, cwd):
     """Best-effort repair for transcripts whose recorded cwd was moved.
 
@@ -10392,6 +10441,10 @@ def find_session_cwd(session_id):
     """
     if not session_id:
         return None
+    # CCC-128: a user-set override wins over all automatic resolution.
+    override = _session_cwd_override.get(session_id)
+    if override:
+        return override
     if session_id in _session_cwd_cache:
         return _session_cwd_cache[session_id]
     codex_row = _codex_thread_row(session_id)
@@ -39729,6 +39782,29 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing text"})
             else:
                 self.send_json(inject_into_spawned(pid, text))
+        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/cwd$", path):
+            # CCC-128: point a session at a user-chosen folder when CCC can't
+            # resolve its recorded cwd ("CWD MISSING"). Display/resolution only
+            # — the JSONL is untouched. Same-origin is enforced globally for
+            # POST; the path is validated to an existing directory below.
+            sid = path.rsplit("/", 2)[-2]
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            cwd = (payload.get("cwd") or "").strip() if isinstance(payload, dict) else ""
+            if not cwd:
+                self.send_json({"ok": False, "error": "missing cwd"}, 400)
+                return
+            try:
+                resolved = _set_session_cwd_override(sid, cwd)
+            except ValueError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+                return
+            self.send_json({"ok": True, "session_id": sid, "cwd": resolved})
+            return
         elif re.match(r"^/api/sessions/[a-zA-Z0-9-]+/move$", path):
             # Re-bucket a session into a different repo's project dir.
             # Just an `os.rename` of the JSONL — historical `cwd` fields
@@ -43003,6 +43079,7 @@ def main():
     ).start()
     _load_conv_meta_cache()
     _load_cwd_relocation_cache()
+    _load_session_cwd_overrides()
     _load_stats_file_cache()
     start_uxq_nudge_watcher()
     try:

@@ -23511,6 +23511,7 @@
       : '';
     const parts = [];
     let kindCls, kindLabel, kindTitle;
+    let setCwdSid = '';  // CCC-128: non-empty → render the kind chip as a "set folder" button
     if (useEff) {
       if (w.effective_kind === 'worktree') {
         kindCls = 'wp-kind-worktree'; kindLabel = 'worktree';
@@ -23529,10 +23530,15 @@
       kindCls = 'wp-kind-other'; kindLabel = 'not a git repo';
       kindTitle = "cwd exists but is not a git repo — Claude's git commands will fail unless it shells into a repo";
     } else {
-      kindCls = 'wp-kind-other'; kindLabel = 'cwd missing';
-      kindTitle = 'cwd does not exist on disk';
+      kindCls = 'wp-kind-other'; kindLabel = '📁 cwd missing — set folder';
+      kindTitle = "cwd does not exist on disk — click to point this session at the right folder";
+      setCwdSid = _workspaceSessionId || '';
     }
-    parts.push('<span class="wp-kind ' + kindCls + '" title="' + escapeHtml(kindTitle) + '">' + kindLabel + '</span>');
+    if (setCwdSid) {
+      parts.push('<button type="button" class="wp-kind ' + kindCls + ' wp-set-cwd" data-action="set-cwd" data-sid="' + escapeAttr(setCwdSid) + '" title="' + escapeHtml(kindTitle) + '">' + escapeHtml(kindLabel) + '</button>');
+    } else {
+      parts.push('<span class="wp-kind ' + kindCls + '" title="' + escapeHtml(kindTitle) + '">' + kindLabel + '</span>');
+    }
     if (pillBranch) {
       parts.push('<span class="wp-icon">⎇</span><span class="wp-branch">' + escapeHtml(pillBranch) + '</span>');
     }
@@ -34620,6 +34626,56 @@
       if (btn) btn.disabled = false;
     }
   }
+
+  // CCC-128: click the "📁 cwd missing — set folder" pill to point a session at
+  // its real directory. Native folder picker → register the repo → persist the
+  // override server-side → re-fetch the workspace so the pill refreshes.
+  async function setSessionCwdViaPicker(sid, triggerEl) {
+    if (!sid) return;
+    if (triggerEl) triggerEl.disabled = true;
+    try {
+      const r = await fetch('/api/fs/pick-folder', { method: 'POST' });
+      const picked = await r.json().catch(() => ({}));
+      if (picked && picked.cancelled) return;
+      if (!picked || !picked.ok || !picked.path) {
+        showOpToast('Folder picker failed: ' + ((picked && picked.error) || 'unknown'), 'error');
+        return;
+      }
+      const chosen = picked.path;
+      try {
+        const addRes = await fetch('/api/repo/add', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: chosen }),
+        });
+        const addData = await addRes.json().catch(() => ({}));
+        if (addRes.ok && addData && addData.ok && Array.isArray(addData.repos)) {
+          repoListState.repos = addData.repos;
+        }
+      } catch (_) {}
+      const setRes = await fetch('/api/session/' + encodeURIComponent(sid) + '/cwd', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd: chosen }),
+      });
+      const setData = await setRes.json().catch(() => ({}));
+      if (!setRes.ok || !setData.ok) {
+        showOpToast('Could not set folder: ' + ((setData && setData.error) || ('HTTP ' + setRes.status)), 'error');
+        return;
+      }
+      showOpToast('Folder set: ' + setData.cwd, 'success');
+      if (typeof fetchSessionWorkspace === 'function') fetchSessionWorkspace(sid);
+    } catch (err) {
+      showOpToast('Could not set folder: ' + ((err && err.message) || 'network'), 'error');
+    } finally {
+      if (triggerEl) triggerEl.disabled = false;
+    }
+  }
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target && ev.target.closest && ev.target.closest('[data-action="set-cwd"]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    setSessionCwdViaPicker(btn.getAttribute('data-sid') || '', btn);
+  });
 
   function updateNewSessionCwdNotice() {
     if (currentConversation !== '__new__') return;
