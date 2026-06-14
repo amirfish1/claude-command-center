@@ -2231,6 +2231,31 @@ def require_repo_context(payload=None, query=None, *, allow_session=True):
     return ctx
 
 
+def _nextjs_repo_ctx(payload=None, query=None):
+    """Repo context for the localhost dev-server endpoints (status/start/stop/
+    restart). Prefer explicit repo_path/cwd under the strict known-repo gate.
+    Fall back to resolving the cwd from an open session_id so the localhost
+    pill works for ANY engine (Codex/Gemini) or an external-volume session
+    whose folder the browser can't assemble client-side — the server already
+    knows the session's cwd. Uses repo_from_session directly (not
+    allow_session=True) so a 15s status poll doesn't bump recent-repos."""
+    try:
+        return require_repo_context(payload=payload, query=query, allow_session=False)
+    except RepoContextError:
+        sid = None
+        if isinstance(payload, dict):
+            sid = payload.get("session_id")
+        if not sid and isinstance(query, dict):
+            v = query.get("session_id")
+            sid = (v[0] if isinstance(v, list) else v) if v else None
+        if not sid:
+            raise
+        ctx = repo_from_session(str(sid))
+        if not ctx or not ctx.get("cwd"):
+            raise
+        return ctx
+
+
 def _spawn_repo_context(cwd=None, repo_path=None):
     """Resolve spawn cwd/repo context, registering a typed folder if needed.
 
@@ -36860,7 +36885,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/nextjs/status":
             qs = urllib.parse.parse_qs(parsed.query)
             try:
-                ctx = require_repo_context(query=qs, allow_session=False)
+                ctx = _nextjs_repo_ctx(query=qs)
                 self.send_json(nextjs_status(ctx["repo_path"], ctx.get("cwd")))
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
@@ -39096,7 +39121,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 payload = {}
             try:
-                ctx = require_repo_context(payload, allow_session=False)
+                ctx = _nextjs_repo_ctx(payload=payload)
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
                 return
