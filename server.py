@@ -14172,6 +14172,47 @@ def _tool_use_detail(name, tool_input, max_len=200):
     return _prompt_fragment(detail, max_len)
 
 
+def _ask_question_blocking_inject(session_id, status=None):
+    """True if typed input must be HELD because a question awaits an answer.
+
+    This is the gate for the inject queue (the inject path and the resume-queue
+    watcher) — NOT the same question as "is there a question to display."
+
+    Relay sessions (CCC-spawned, headless, no TTY): the PreToolUse hook answers
+    AskUserQuestion via a deny-reason (`_deny` in hooks/pre-tool-use.py), so the
+    tool never runs and NO matching tool_result is ever written to the
+    transcript. A transcript scan can therefore never observe the question
+    clearing. The relay request file is the only reliable signal — the hook
+    writes it for exactly the window it blocks and removes it the instant it
+    resolves. Gating the queue on the transcript instead deadlocks: queued
+    input can't land to supersede the stale question, so the queue never drains
+    and every typed message stays parked on "Queued — will send when the
+    session finishes its current step" forever (the reported bug).
+
+    TTY sessions answer in the native picker and DO get a real tool_result, so
+    the transcript scan stays authoritative there.
+    """
+    req = _read_question_request(session_id)
+    if req:
+        # Answer already relayed this turn — the hook will clear it momentarily.
+        try:
+            with open(QUESTION_RELAY_DIR / f"{session_id}.answer.json") as f:
+                ans = json.load(f)
+            if isinstance(ans, dict) and ans.get("nonce") == req.get("nonce"):
+                return False
+        except (OSError, ValueError):
+            pass
+        return True
+    # No live relay request. For a headless/relay session that means resolved —
+    # do NOT fall back to the transcript (it can't clear a deny-answered
+    # question). Only a TTY session may still have a native picker open.
+    if status is None:
+        status = session_live_status(session_id, find_session_cwd(session_id))
+    if status.get("tty"):
+        return bool(_pending_ask_user_question_for_session(session_id))
+    return False
+
+
 def _pending_ask_user_question_for_session(session_id):
     """Return the latest unanswered AskUserQuestion payload for a session."""
     filepath = _resolve_conversation_path(session_id)
@@ -18278,12 +18319,15 @@ def _start_resume_queue_watcher() -> None:
                     # AskUserQuestion (treating the queued text as the
                     # user's "answer") and continue the conversation —
                     # surfacing as "Claude continued silently past the
-                    # question". The pending-question sidecar payload is
-                    # the authoritative signal; if it exists, hold the
-                    # queue until the user actually answers in the UI.
-                    if _pending_ask_user_question_for_session(sid):
-                        continue
+                    # question". The relay request file is the authoritative
+                    # live signal; if a question is genuinely blocking, hold
+                    # the queue until the user answers in the UI. Once the
+                    # hook resolves it (deny-reply, no tool_result ever lands)
+                    # the request file is gone and the queue drains — a plain
+                    # transcript scan here would deadlock forever.
                     status = session_live_status(sid, find_session_cwd(sid))
+                    if _ask_question_blocking_inject(sid, status):
+                        continue
                     if status.get("live") and status.get("tty") and _session_status_is_busy(status):
                         continue
                     if status.get("live") and status.get("kind") == "bg":
@@ -18420,7 +18464,7 @@ def _uxq_nudge_tick():
             status = session_live_status(sid, find_session_cwd(sid)) or {}
         except Exception:
             continue
-        if _pending_ask_user_question_for_session(sid):
+        if _ask_question_blocking_inject(sid, status):
             continue
         if status.get("live") and (
             _session_status_is_busy(status)
@@ -28670,7 +28714,7 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
     # and the marker clears. Covers direct injects (annotation flows,
     # /api/inject-input) as well as the top-level queue watcher.
     if not _from_terminal_queue and (
-        _pending_ask_user_question_for_session(session_id)
+        _ask_question_blocking_inject(session_id, status)
         or _read_notification_state(session_id)
     ):
         return _queue_terminal_input(session_id, text, {"status": "busy"})

@@ -2559,6 +2559,43 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertIsNone(self.server._pending_ask_user_question_for_session(sid))
 
+    def test_ask_question_blocking_inject_gates_on_relay_request(self):
+        """Inject queue gate uses the relay request file, not the transcript.
+
+        The PreToolUse hook answers AskUserQuestion via a deny-reply, so the
+        tool never runs and no tool_result lands in the transcript — a
+        transcript scan can never see the question clear. Gating the queue on
+        it deadlocks ("messages stuck on Queued forever"). The request file is
+        the authoritative live signal.
+        """
+        sid = "00000000-0000-4000-8000-0000000000aa"
+        relay_dir = self.server.QUESTION_RELAY_DIR
+        relay_dir.mkdir(parents=True, exist_ok=True)
+        req_path = relay_dir / f"{sid}.request.json"
+        ans_path = relay_dir / f"{sid}.answer.json"
+        headless = {}  # no TTY → a relay/headless session
+
+        # No relay request -> nothing blocking, even with a stale transcript.
+        self.assertFalse(self.server._ask_question_blocking_inject(sid, headless))
+
+        # Live request, no answer yet -> hold the queue.
+        req_path.write_text(json.dumps({
+            "nonce": "n-1", "session_id": sid, "pid": os.getpid(),
+            "questions": [{"header": "H", "question": "Q?", "options": []}],
+        }), encoding="utf-8")
+        self.assertTrue(self.server._ask_question_blocking_inject(sid, headless))
+
+        # User relayed a matching-nonce answer -> resolved, drain the queue
+        # (the hook hasn't cleared the request file yet).
+        ans_path.write_text(json.dumps({"nonce": "n-1", "answers": []}),
+                            encoding="utf-8")
+        self.assertFalse(self.server._ask_question_blocking_inject(sid, headless))
+
+        # A stale answer from a previous question must NOT unblock a fresh one.
+        ans_path.write_text(json.dumps({"nonce": "n-OLD", "answers": []}),
+                            encoding="utf-8")
+        self.assertTrue(self.server._ask_question_blocking_inject(sid, headless))
+
     def _write_ask_question_session(self, sid, *, answered):
         """Write a transcript whose last assistant turn asks a question.
 
