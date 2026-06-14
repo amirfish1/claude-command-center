@@ -6637,6 +6637,12 @@
     cursor: pointer;
     user-select: none;
   }
+  .conv-live-tool-inline .cl-hint {
+    color: var(--text-muted);
+    font-weight: 400;
+    font-style: italic;
+    opacity: 0.85;
+  }
   .conv-live-tool-inline.is-expanded .cl-file {
     overflow: visible;
     white-space: normal;
