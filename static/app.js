@@ -27917,11 +27917,20 @@
     // usable path of its own. (Previously a non-absolute sidebar value shadowed
     // a valid conversation path and then got nulled → false "no-repo".)
     const rowRepo = row ? rowRepoPath(row) : '';
+    // currentSession is the authoritative record of the OPEN session's
+    // directory (set by setCurrentSession when a row is clicked open). It's
+    // populated for every engine — Claude, Codex, Gemini — so it resolves
+    // even when conversationsData hasn't been (re)shaped with path fields,
+    // or when the row lookup above misses (id-form mismatch across views).
+    const sess = (typeof currentSession !== 'undefined' && currentSession) ? currentSession : null;
+    const sessRepo = sess ? (sess.repoPath || sess.cwd || '') : '';
     const selectedRepo = selectedRepoPath();
     let repoPath = (_isAbsoluteLocalPath(rowRepo) ? rowRepo : '')
+                || (_isAbsoluteLocalPath(sessRepo) ? sessRepo : '')
                 || (_isAbsoluteLocalPath(selectedRepo) ? selectedRepo : '');
     const mapCwd = (row && typeof sessionCwdByConv !== 'undefined') ? (sessionCwdByConv[row.id] || '') : '';
-    let cwd = mapCwd || (row && (row.session_cwd || row.spawn_cwd || row.cwd)) || '';
+    let cwd = mapCwd || (row && (row.session_cwd || row.spawn_cwd || row.cwd))
+            || (sess && sess.cwd) || '';
     // Only an absolute filesystem path is a valid repo_path/cwd for the server's
     // require_repo_context. A dash-encoded project-dir name (e.g. leaked popout
     // state like "-Users-amirfish-GStack-test") 400s every 15s — drop it and let
