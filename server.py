@@ -31512,6 +31512,18 @@ def _read_pkg_json(path: Path):
         return None
 
 
+def _has_dev_script(path: Path) -> bool:
+    """True when the dir's package.json declares a runnable `dev` script.
+    Catches Vite / CRA / Astro / SvelteKit / Remix / plain-node dev servers —
+    anything started with `npm/pnpm/yarn run dev` — so the localhost pill isn't
+    Next.js-only. `_resolve_dev_invocation` already returns the right `… dev`
+    command for these."""
+    data = _read_pkg_json(path) or {}
+    scripts = data.get("scripts")
+    dev = scripts.get("dev") if isinstance(scripts, dict) else None
+    return isinstance(dev, str) and bool(dev.strip())
+
+
 def _enumerate_workspaces(repo_path: Path):
     """Glob the root package.json's `workspaces` field. Tolerant of dict and
     list forms (yarn classic vs npm/pnpm)."""
@@ -31541,10 +31553,12 @@ def _find_turbo_root(repo_path: Path):
 
 
 def _detect_nextjs(repo_path: Path) -> bool:
-    """True when the repo looks like a Next.js project — directly, or as a
-    turbo/npm-workspaces monorepo root with at least one Next.js workspace."""
+    """True when the repo has a startable dev server. Next.js directly, or as a
+    turbo/npm-workspaces monorepo root with a Next.js workspace, OR any project
+    with a plain `dev` script (Vite/CRA/Astro/etc.). Name kept for history; the
+    localhost pill is engine-agnostic now."""
     repo_path = Path(repo_path)
-    if _has_next_locally(repo_path):
+    if _has_next_locally(repo_path) or _has_dev_script(repo_path):
         return True
     # Monorepo root: if any declared workspace is Next.js, the pill should
     # offer to start it (turbo dev or npm-run-dev with a workspace filter).
@@ -32025,7 +32039,7 @@ def nextjs_start(repo_path, cwd=None):
     _repo_root, target_path = _nextjs_target_paths(repo_path, cwd)
     repo_key = str(target_path)
     if not _detect_nextjs(target_path):
-        return {"ok": False, "error": "not a Next.js project"}, 400
+        return {"ok": False, "error": "no dev server detected (no `dev` script / next config)"}, 400
     with _NEXTJS_LOCK:
         existing = _NEXTJS_PROCS.get(repo_key)
         if existing and _nextjs_proc_alive(existing):

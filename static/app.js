@@ -28126,9 +28126,9 @@
       _localhostState = 'no-nextjs';
       setLocalhostPill({
         dotClass: '',
-        label: 'No Next.js',
-        title: 'This repo isn\'t a Next.js project (no `next` in package.json, no next.config.*). ' +
-               'Click for details.',
+        label: 'No dev server',
+        title: 'No dev server here — needs a `dev` script in package.json ' +
+               '(Vite/Next/CRA/Astro/…) or a next.config.*. Click for details.',
         href: '',
       });
       return;
@@ -28248,9 +28248,10 @@
       }
       if (_localhostState === 'no-nextjs') {
         showOpToast(
-          'No Next.js detected in this repo. The pill looks for `next` in ' +
-          'package.json or a next.config.{js,mjs,ts,cjs} at the repo root.',
-          'error'
+          'No dev server detected here. The pill needs a `dev` script in ' +
+          'package.json (Vite, Next, CRA, Astro, SvelteKit…) or a ' +
+          'next.config.{js,mjs,ts,cjs} at the repo root.',
+          'info'
         );
         return;
       }
