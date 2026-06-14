@@ -1076,24 +1076,30 @@ def _load_recent_repos():
 
 
 def _spawn_cwd_outside_home_allowed(candidate):
-    """A spawn cwd outside $HOME is allowed only if the user explicitly
-    registered it as a known repo (custom or recent). The $HOME clamp is a
-    typo-guard, not a hard security boundary (loopback already grants full
-    command access — see SECURITY.md); honoring the folder-picker opt-in lets
-    sessions spawn on external volumes the user deliberately added.
-    `candidate` must be an already-resolved Path."""
+    """A spawn cwd outside $HOME is allowed if it's an existing directory.
+    The $HOME clamp is a typo-guard, not a hard security boundary (loopback
+    already grants full command access — see SECURITY.md), and the caller has
+    already verified the path exists and is a directory before reaching here,
+    so a typo'd/nonexistent path can never get this far. Any real external
+    volume the user typed/pasted/picked (e.g. /Volumes/Drive/proj) is honored
+    and auto-registered as a recent repo so it surfaces in the picker next
+    time. `candidate` must be an already-resolved Path."""
     try:
         cand = str(candidate)
     except Exception:
         return False
-    for repo in (_load_custom_repos() + _load_recent_repos()):
-        try:
-            r = str(Path(repo).resolve())
-        except (OSError, ValueError):
-            continue
-        if cand == r or cand.startswith(r + os.sep):
-            return True
-    return False
+    try:
+        if not Path(candidate).is_dir():
+            return False
+    except OSError:
+        return False
+    # Already an existing directory — auto-register so future spawns/pickers
+    # see it without a separate "Add repo" step. Best-effort; never blocks.
+    try:
+        _record_recent_repo(cand)
+    except Exception:
+        pass
+    return True
 
 
 def _record_recent_repo(path_str):
@@ -39260,7 +39266,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 if _spawn_cwd_outside_home_allowed(candidate):
                                     cwd_resolved = candidate
                                 else:
-                                    cwd_error = f"path is outside $HOME ({home}) and not a registered repo: {candidate}"
+                                    cwd_error = f"path is not an accessible directory: {candidate}"
                             else:
                                 cwd_resolved = candidate
             worktree_flag = bool(payload.get("worktree"))
@@ -39383,7 +39389,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 if _spawn_cwd_outside_home_allowed(candidate):
                                     cwd_resolved = candidate
                                 else:
-                                    cwd_error = f"path is outside $HOME ({home}) and not a registered repo: {candidate}"
+                                    cwd_error = f"path is not an accessible directory: {candidate}"
                             else:
                                 cwd_resolved = candidate
             model = payload.get("model")
@@ -39448,7 +39454,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 if _spawn_cwd_outside_home_allowed(candidate):
                                     cwd_resolved = candidate
                                 else:
-                                    cwd_error = f"path is outside $HOME ({home}) and not a registered repo: {candidate}"
+                                    cwd_error = f"path is not an accessible directory: {candidate}"
                             else:
                                 cwd_resolved = candidate
             if not prompt:
@@ -39507,7 +39513,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 if _spawn_cwd_outside_home_allowed(candidate):
                                     cwd_resolved = candidate
                                 else:
-                                    cwd_error = f"path is outside $HOME ({home}) and not a registered repo: {candidate}"
+                                    cwd_error = f"path is not an accessible directory: {candidate}"
                             else:
                                 cwd_resolved = candidate
             model = payload.get("model")
@@ -39568,7 +39574,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 if _spawn_cwd_outside_home_allowed(candidate):
                                     cwd_resolved = candidate
                                 else:
-                                    cwd_error = f"path is outside $HOME ({home}) and not a registered repo: {candidate}"
+                                    cwd_error = f"path is not an accessible directory: {candidate}"
                             else:
                                 cwd_resolved = candidate
             model = payload.get("model")
@@ -39629,7 +39635,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 if _spawn_cwd_outside_home_allowed(candidate):
                                     cwd_resolved = candidate
                                 else:
-                                    cwd_error = f"path is outside $HOME ({home}) and not a registered repo: {candidate}"
+                                    cwd_error = f"path is not an accessible directory: {candidate}"
                             else:
                                 cwd_resolved = candidate
             model = payload.get("model")
