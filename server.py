@@ -28471,6 +28471,207 @@ def _compact_result(payload, backup_path=None):
     return payload
 
 
+def _tail_count(path, needle, n=262144):
+    """Count occurrences of `needle` (bytes) in the last `n` bytes of a file.
+
+    `/compact` rewrites the JSONL much smaller, so a new compact_boundary
+    always lands inside the tail whether the transcript was rewritten or
+    appended. Counting (not just presence) lets a caller detect a NEW boundary
+    even when older ones already exist.
+    """
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - n))
+            return fh.read().count(needle)
+    except OSError:
+        return 0
+
+
+def _compact_via_hidden_pty(session_id, cwd):
+    """Run Claude Code's `/compact` in an INVISIBLE pty — no Terminal window.
+
+    Claude Desktop runs the interactive CLI inside an embedded, hidden
+    pseudo-terminal; this does the same. We own a pty, spawn the interactive
+    `claude --resume <sid>` attached to it, wait for the TUI to settle, type
+    `/compact`, watch the transcript for a fresh `compact_boundary` marker, then
+    `/exit` and reap. No window pops, nothing is left running — the compaction
+    is durable on disk the moment the boundary lands, so the next CCC inject or
+    terminal resume cold-reads the compacted transcript with zero loss.
+
+    Returns {ok, via:"hidden-pty", ...}. Any failure returns ok=False with an
+    `error`; the caller falls back to the visible-terminal launch so compaction
+    is never silently dropped.
+    """
+    sid = (session_id or "").strip()
+    if not sid:
+        return {"ok": False, "via": "hidden-pty", "error": "missing session_id"}
+    claude_bin = _resolve_claude_bin()
+    if not claude_bin.get("available"):
+        return {
+            "ok": False,
+            "via": "hidden-pty",
+            "error": claude_bin.get("reason") or "Claude Code CLI not found",
+        }
+
+    status = session_live_status(sid, cwd) or {}
+    tty = status.get("tty")
+    has_tty = bool(tty) and tty != "??"
+    if status.get("live") and has_tty:
+        # A live interactive terminal already owns this session — don't spawn a
+        # competing pty (the caller's tty branch handles that case).
+        return {"ok": False, "via": "hidden-pty", "error": "session has a live terminal"}
+    if status.get("live") and status.get("kind") == "bg":
+        return {"ok": False, "via": "hidden-pty", "error": "session is a live background agent"}
+
+    # Stop a CCC-owned idle headless first so the pty resume isn't a second
+    # writer on the transcript (CCC-96 fork guard). Only retire OUR spawn; an
+    # external headless falls through to the visible path, which surfaces the
+    # stop_headless warning.
+    spawn = _find_live_spawn_entry_for_session(sid)
+    if spawn is not None:
+        if _spawn_entry_active_tool_child(spawn):
+            return {"ok": False, "via": "hidden-pty", "error": "headless is mid-turn"}
+        hpid = spawn.get("pid")
+        _retire_unresponsive_spawn_entry(spawn, terminate=True)
+        if hpid is not None:
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                try:
+                    os.kill(int(hpid), 0)
+                except (ProcessLookupError, ValueError, PermissionError):
+                    break
+                time.sleep(0.2)
+    else:
+        fresh = session_live_status(sid, cwd) or {}
+        fresh_tty = fresh.get("tty")
+        if fresh.get("live") and not (bool(fresh_tty) and fresh_tty != "??"):
+            # External headless we don't own — leave it for the visible
+            # fallback, which warns instead of silently killing it.
+            return {"ok": False, "via": "hidden-pty", "error": "external headless owns this session"}
+
+    import pty
+    import select as _select
+    import fcntl as _fcntl
+    import termios as _termios
+    import struct as _struct
+
+    jsonl = _resolve_conversation_path(sid)
+    n0 = _tail_count(jsonl, b'"compact_boundary"')
+
+    try:
+        master_fd, slave_fd = pty.openpty()
+    except OSError as e:
+        return {"ok": False, "via": "hidden-pty", "error": f"openpty failed: {e}"}
+    try:
+        _fcntl.ioctl(slave_fd, _termios.TIOCSWINSZ, _struct.pack("HHHH", 50, 160, 0, 0))
+    except OSError:
+        pass
+
+    argv = [claude_bin["bin"], "--resume", sid, "--dangerously-skip-permissions"]
+    run_cwd = cwd if (cwd and os.path.isdir(cwd)) else None
+    env = dict(_question_relay_env(), TERM="xterm-256color")
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd=run_cwd,
+            start_new_session=True,
+            env=env,
+            close_fds=True,
+        )
+    except (FileNotFoundError, OSError) as e:
+        _close_fd_quiet(master_fd)
+        _close_fd_quiet(slave_fd)
+        return {"ok": False, "via": "hidden-pty", "error": f"claude failed to start: {e}"}
+    _close_fd_quiet(slave_fd)  # parent keeps only the master end
+
+    def _drain(timeout):
+        """Read+discard available pty output so the child never blocks on a
+        full pty buffer. Returns True if any bytes were seen this call."""
+        saw = False
+        end = time.time() + timeout
+        while True:
+            remaining = end - time.time()
+            if remaining <= 0:
+                break
+            try:
+                r, _, _ = _select.select([master_fd], [], [], remaining)
+            except (OSError, ValueError):
+                break
+            if not r:
+                break
+            try:
+                chunk = os.read(master_fd, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            saw = True
+        return saw
+
+    result = {"ok": False, "via": "hidden-pty"}
+    try:
+        # Let the TUI boot + render the resumed transcript: drain until output
+        # quiets for a full 0.7s poll, capped at 25s.
+        ready_deadline = time.time() + 25.0
+        while time.time() < ready_deadline:
+            if proc.poll() is not None:
+                result["error"] = "claude exited before /compact could run"
+                return result
+            if not _drain(0.7):
+                break
+        os.write(master_fd, b"/compact\r")
+        # Done when a NEW compact_boundary appears in the transcript tail.
+        compact_deadline = time.time() + 180.0
+        while time.time() < compact_deadline:
+            _drain(0.5)
+            if _tail_count(jsonl, b'"compact_boundary"') > n0:
+                result["ok"] = True
+                result["note"] = "Compacted in a hidden terminal — no window opened."
+                break
+            if proc.poll() is not None:
+                if _tail_count(jsonl, b'"compact_boundary"') > n0:
+                    result["ok"] = True
+                    result["note"] = "Compacted in a hidden terminal — no window opened."
+                else:
+                    result["error"] = "claude exited before compaction completed"
+                break
+        else:
+            result["error"] = "compaction did not complete within 180s"
+    finally:
+        try:
+            os.write(master_fd, b"/exit\r")
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            for killer in (
+                lambda: os.killpg(proc.pid, signal.SIGTERM),
+                lambda: proc.terminate(),
+            ):
+                try:
+                    killer()
+                    proc.wait(timeout=3)
+                    break
+                except Exception:
+                    continue
+            else:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+        _close_fd_quiet(master_fd)
+    return result
+
+
 def compact_session_context(session_id, *, terminal_app=None, _from_terminal_queue=False):
     """Run Claude Code's `/compact` slash command through an interactive surface.
 
@@ -28529,6 +28730,12 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
     # mid-turn run isn't abandoned.
     def _launch_terminal_compact(note):
         backup_path = _backup_jsonl_before_compact(sid)
+        # SILENT path first: drive /compact in an invisible pty so no Terminal
+        # window pops (the Claude-Desktop approach). Falls through to the
+        # visible launch on any failure so compaction is never silently dropped.
+        silent = _compact_via_hidden_pty(sid, cwd)
+        if silent.get("ok"):
+            return _compact_result(silent, backup_path)
         # stop_headless: this path only runs when the headless is IDLE, and
         # the whole point is to retire it in favor of the terminal — kill it
         # cleanly instead of tripping the CCC-96 fork guard ("/compact
@@ -28541,6 +28748,7 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
             launched["via"] = "terminal-launch-headless"
             launched["launched"] = True
             launched.setdefault("note", note)
+            launched.setdefault("fallback_from", silent.get("error"))
         return _compact_result(launched, backup_path)
 
     live_spawn = _find_live_spawn_entry_for_session(sid) if not has_tty else None
@@ -28630,6 +28838,10 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
         }
 
     backup_path = _backup_jsonl_before_compact(sid)
+    # SILENT path first for dormant sessions too: no Terminal window pops.
+    silent = _compact_via_hidden_pty(sid, cwd)
+    if silent.get("ok"):
+        return _compact_result(silent, backup_path)
     launched = launch_terminal_for_session(
         sid,
         cwd,
@@ -28640,6 +28852,7 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
     if launched.get("ok"):
         launched["via"] = "terminal-launch"
         launched["launched"] = True
+        launched.setdefault("fallback_from", silent.get("error"))
     return _compact_result(launched, backup_path)
 
 
