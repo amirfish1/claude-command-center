@@ -14103,16 +14103,48 @@
     const color = kind === 'error' ? 'var(--red)'
       : (kind === 'info' ? 'var(--accent, #5b8def)' : 'var(--green)');
     const mark = kind === 'error' ? '!' : (kind === 'info' ? '\u22ef' : '\u2713');
-    toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:12px;color:var(--text);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);max-width:520px;';
-    toast.innerHTML = '<span style="color:' + color + '">' + mark + '</span> ' + msg;
+    toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align-items:flex-start;gap:8px;background:var(--surface);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:12px;color:var(--text);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);max-width:520px;';
+    const body = document.createElement('span');
+    body.style.cssText = 'flex:1 1 auto;min-width:0;word-break:break-word;';
+    body.innerHTML = '<span style="color:' + color + '">' + mark + '</span> ' + msg;
+    toast.appendChild(body);
+    // Error toasts carry text the user often needs verbatim (a "restart with
+    // ./run.sh" hint, a stack-ish reason). Give them a Copy + close affordance
+    // and pause auto-dismiss on hover so the message can't vanish mid-copy.
+    let timer = null;
+    const arm = (ms) => { if (timer) clearTimeout(timer); timer = setTimeout(() => toast.remove(), ms); };
+    if (kind === 'error') {
+      const plain = (body.textContent || msg || '').replace(/^!\s*/, '').trim();
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.textContent = 'Copy';
+      copyBtn.style.cssText = 'flex:0 0 auto;cursor:pointer;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:2px 7px;font-size:11px;line-height:1.4;';
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const done = () => { copyBtn.textContent = 'Copied'; arm(4000); };
+        try {
+          (navigator.clipboard && navigator.clipboard.writeText)
+            ? navigator.clipboard.writeText(plain).then(done).catch(done)
+            : done();
+        } catch (_) { done(); }
+      });
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.setAttribute('aria-label', 'Dismiss');
+      closeBtn.innerHTML = '&times;';
+      closeBtn.style.cssText = 'flex:0 0 auto;cursor:pointer;background:transparent;border:0;color:var(--text-muted);font-size:16px;line-height:1;padding:0 2px;';
+      closeBtn.addEventListener('click', (e) => { e.stopPropagation(); toast.remove(); });
+      toast.appendChild(copyBtn);
+      toast.appendChild(closeBtn);
+      // Hovering anywhere on the toast cancels the dismiss timer; leaving
+      // re-arms a short one so it eventually clears once you're done with it.
+      toast.addEventListener('mouseenter', () => { if (timer) clearTimeout(timer); });
+      toast.addEventListener('mouseleave', () => arm(5000));
+    }
     document.body.appendChild(toast);
-    // Stick longer for messages that signal a permanent fault the user
-    // needs to actually read (cwd gone, automation blocked) instead of
-    // a transient hiccup. 12s gives enough time to notice + comprehend
-    // without being annoyingly modal.
-    const isPersistent = kind === 'error'
-      && (/cwd is gone/i.test(msg) || /macOS blocked/i.test(msg) || /usage limit|get cursor pro/i.test(msg) || /mic|speech|service/i.test(msg));
-    setTimeout(() => toast.remove(), isPersistent ? 12000 : (kind === 'error' ? 5000 : 3000));
+    // Errors linger 15s (vs 3s for success/info) so there's time to read +
+    // copy; hover pauses that, and the \u00d7 dismisses instantly.
+    arm(kind === 'error' ? 15000 : 3000);
   }
 
   async function moveCardToColumn(cardId, targetCol) {
