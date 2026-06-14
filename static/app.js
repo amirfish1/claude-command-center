@@ -19941,6 +19941,17 @@
     return conversationDistanceFromBottom(view) <= CONV_BOTTOM_TOLERANCE;
   }
 
+  // CCC-131: per-conversation transcript scroll memory. Leaving a conversation
+  // (open another, switch view) and coming back used to force-scroll to the
+  // bottom — and, because that scroll fires before async markdown/code reflow,
+  // it often stranded the user mid-transcript ("scrolled to the top"). We save
+  // the scroll position on leave and restore it on reopen, keyed by conv id.
+  const _convScrollByConv = Object.create(null); // id -> { top, atBottom }
+  function rememberConvScroll(convId, view) {
+    if (!convId || !view) return;
+    _convScrollByConv[convId] = { top: view.scrollTop, atBottom: isConversationAtBottom(view) };
+  }
+
   function conversationScrollViews() {
     const seen = new Set();
     const views = Array.from(document.querySelectorAll('.conv-pane .conversations-view'));
@@ -20978,6 +20989,9 @@
     const previousConvId = pane.conversationId;
     if (previousConvId && previousConvId !== id) {
       syncPendingSendsMapForConv(pane, previousConvId);
+      // CCC-131: stash the outgoing transcript's scroll before the view is
+      // wiped, so returning to this conversation restores where we left off.
+      rememberConvScroll(previousConvId, getConvViewForPane(paneId));
     }
     if (typeof ffcUpdateSidebar === 'function') ffcUpdateSidebar(null);
     if (typeof closeStatusRailFileViewer === 'function') closeStatusRailFileViewer();
@@ -26342,7 +26356,22 @@
       _newCompactCard.scrollIntoView({ block: 'start', behavior: 'auto' });
       updateConversationEndAffordance($view);
     } else if (events.length > 0 && wasAtBottom) {
-      scrollConversationToEnd($view);
+      // CCC-131: on a fresh (re)open, prefer the saved scroll position over a
+      // forced bottom-scroll. wasAtBottom is always true here (the view was
+      // just cleared), so without this every reopen jumped to the bottom/top.
+      // Defer to a double-rAF so the write lands after markdown/code reflow,
+      // and clamp (a tail-only reload may be shorter than when we left).
+      const _saved = (opts && opts.initialLoad) ? _convScrollByConv[currentConversation] : null;
+      if (_saved && !_saved.atBottom) {
+        const _top = _saved.top;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const _max = Math.max(0, $view.scrollHeight - $view.clientHeight);
+          $view.scrollTop = Math.min(_top, _max);
+          updateConversationEndAffordance($view);
+        }));
+      } else {
+        scrollConversationToEnd($view);
+      }
     } else {
       updateConversationEndAffordance($view);
     }
