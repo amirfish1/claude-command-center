@@ -18293,11 +18293,18 @@ def _uxq_nudge_tick():
     items = ux_fixes_queue.list_items()
     now = time.time()
     open_by_project = {}
+    # Highest OPEN ticket seq per project. New work arriving (a freshly
+    # enqueued ticket with a seq above what we'd seen) is a legitimate reason
+    # to re-nudge an idle worker even if its closed-ticket progress is flat —
+    # otherwise a worker that already spent its one nudge never learns that
+    # new tickets landed and they sit unworked forever.
+    open_max_seq = {}
     workers = {}  # sid(lower) → {project, progress, last_ts}
     for it in items:
         proj = str(it.get("project") or "?")
         if it.get("status") == "open":
             open_by_project[proj] = open_by_project.get(proj, 0) + 1
+            open_max_seq[proj] = max(open_max_seq.get(proj, 0), int(it.get("seq") or 0))
         sid = str(it.get("claimed_by") or "")
         if not _UXQ_SESSION_ID_RE.match(sid):
             continue
@@ -18319,8 +18326,16 @@ def _uxq_nudge_tick():
         if open_by_project.get(w["project"], 0) <= 0:
             continue  # queue drained for this worker's project
         st = state.get(sid) or {}
-        if st.get("pinged_at_progress") == w["progress"]:
-            continue  # no progress since the last ping — never re-ping (rule 2)
+        cur_open_seq = open_max_seq.get(w["project"], 0)
+        # Rule 2 (refined): re-ping only when something changed since the last
+        # ping — EITHER the worker closed a new ticket (progress advanced) OR a
+        # newer ticket was enqueued for its project (cur_open_seq advanced).
+        # If neither moved, the worker is stuck/dead with no new work: one
+        # nudge per progress level, no drumbeat. (Legacy state lacks
+        # pinged_at_open_seq → defaults to -1 → new work re-pings once.)
+        if (st.get("pinged_at_progress") == w["progress"]
+                and st.get("pinged_at_open_seq", -1) == cur_open_seq):
+            continue
         if st.get("pinged_at") and (now - float(st["pinged_at"])) < _UXQ_NUDGE_MIN_GAP_S:
             continue  # rule 3
         try:
@@ -18341,6 +18356,7 @@ def _uxq_nudge_tick():
             continue
         state[sid] = {
             "pinged_at_progress": w["progress"],
+            "pinged_at_open_seq": cur_open_seq,
             "pinged_at": now,
             "project": w["project"],
         }
