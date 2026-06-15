@@ -28014,14 +28014,22 @@
     // usable path of its own. (Previously a non-absolute sidebar value shadowed
     // a valid conversation path and then got nulled → false "no-repo".)
     const rowRepo = row ? rowRepoPath(row) : '';
-    // currentSession is the authoritative record of the OPEN session's
-    // directory (set by setCurrentSession when a row is clicked open). It's
-    // populated for every engine — Claude, Codex, Gemini — so it resolves
-    // even when conversationsData hasn't been (re)shaped with path fields,
-    // or when the row lookup above misses (id-form mismatch across views).
-    const sess = (typeof currentSession !== 'undefined' && currentSession) ? currentSession : null;
+    // The open session id, computed up front because it gates every fallback
+    // below. Only a real UUID-ish id, never a popout project-dir slug.
+    const sessionId = (typeof convId === 'string' && /^[0-9a-f-]{8,}$/i.test(convId)) ? convId : '';
+    // currentSession is the record of the session setCurrentSession ran for
+    // LAST — it is the open session's record only while its id matches the open
+    // conversation. Across a conversation switch it still holds the PREVIOUS
+    // session's repo/cwd until the new row loads, so trusting it unconditionally
+    // mis-binds the localhost pill to the previously-open repo ("it remembers
+    // the previous conversation"). Gate it on the id match. When it matches it
+    // still resolves every engine (Claude/Codex/Gemini) without a shaped row.
+    const sessRaw = (typeof currentSession !== 'undefined' && currentSession) ? currentSession : null;
+    const sess = (sessRaw && (!sessionId || sessRaw.id === sessionId)) ? sessRaw : null;
     const sessRepo = sess ? (sess.repoPath || sess.cwd || '') : '';
-    const selectedRepo = selectedRepoPath();
+    // The sidebar repo filter describes the LIST, not the open conversation —
+    // only use it when no conversation is open.
+    const selectedRepo = sessionId ? '' : selectedRepoPath();
     let repoPath = (_isAbsoluteLocalPath(rowRepo) ? rowRepo : '')
                 || (_isAbsoluteLocalPath(sessRepo) ? sessRepo : '')
                 || (_isAbsoluteLocalPath(selectedRepo) ? selectedRepo : '');
@@ -28037,12 +28045,12 @@
       const root = repoPath.replace(/\/+$/, '');
       if (cwd !== root && !cwd.startsWith(root + '/')) cwd = '';
     }
-    // Carry the open session id as a last-resort key: when the client can't
-    // assemble an absolute repo/cwd (Codex/Gemini rows, unshaped data), the
-    // server resolves the session's cwd itself (find_session_cwd) so the
-    // localhost pill still works. Only a real UUID-ish id, never a popout
-    // project-dir slug.
-    const sessionId = (typeof convId === 'string' && /^[0-9a-f-]{8,}$/i.test(convId)) ? convId : '';
+    // When a conversation is open but we could not derive its repo from the open
+    // row or a matching currentSession, do NOT send a repo_path/cwd borrowed
+    // from another context — the server prefers repo_path over session_id, so a
+    // stale one wins and binds the pill to the wrong repo. Send session_id alone
+    // and let the server resolve the session's own cwd (works for every engine).
+    if (!repoPath && sessionId) cwd = '';
     return {
       repoPath,
       cwd: cwd && cwd !== repoPath ? cwd : '',
@@ -29425,10 +29433,20 @@
       const prev = lastFixBySession.get(rec.sid);
       if (!prev || rec.closedAt > prev.closedAt) lastFixBySession.set(rec.sid, rec);
     }
-    uxFixesQueueMeta = { projectMaxSeq, byClaimedSession, lastFixBySession };
+    // Content signature of everything the progress chips render — lets the
+    // refresh path repaint the sidebar only when the queue actually changed,
+    // instead of re-rendering on every 15s poll.
+    const sigParts = [];
+    for (const [sid, rec] of byClaimedSession) sigParts.push('c' + sid + ':' + rec.seq + ':' + (rec.claimedAt || 0));
+    for (const [sid, rec] of lastFixBySession) sigParts.push('d' + sid + ':' + rec.seq);
+    for (const [proj, mx] of projectMaxSeq) sigParts.push('m' + proj + ':' + mx);
+    const _sig = sigParts.sort().join('|');
+    uxFixesQueueMeta = { projectMaxSeq, byClaimedSession, lastFixBySession, _sig };
     _uxFixesQueueMetaLoadedAt = Date.now();
     return uxFixesQueueMeta;
   }
+  // Signature of the queue state last painted into the live sessions sidebar.
+  let _uxFixesChipPaintedSig = '';
 
   function _uxFixesQueueProgressForRow(c) {
     if (!uxFixesQueueMeta) return null;
@@ -29443,11 +29461,14 @@
     for (const key of keys) {
       const cur = byClaimed.get(key);
       if (!cur) continue;
-      // Stale claim → parked/between tickets. Fall through to the last-fix chip
-      // instead of freezing a "(10/33)".
-      if (cur.claimedAt && (Date.now() - cur.claimedAt) > UX_FIXES_ACTIVE_CLAIM_MS) break;
+      // Stale claim → parked/between tickets. `continue`, NOT `break`: a row
+      // can carry several identities (UUID + made-up name), and an orphaned
+      // claim under one (e.g. a 6-day-old in_progress CCC-10 under the UUID)
+      // must not abort the search for a FRESH claim under another identity.
+      // If every identity is stale the loop falls through to the last-fix chip.
+      if (cur.claimedAt && (Date.now() - cur.claimedAt) > UX_FIXES_ACTIVE_CLAIM_MS) continue;
       const total = Number(projectMaxSeq.get(cur.project) || 0);
-      if (!Number.isFinite(total) || total <= 0) break;
+      if (!Number.isFinite(total) || total <= 0) continue;
       return { kind: 'working', current: cur.seq, total, lane: cur.lane || 'normal', project: cur.project, ref: cur.ref };
     }
     // 2) Otherwise, credit the session that closed this project's LATEST ticket
@@ -29488,8 +29509,21 @@
         if (!res.ok) return uxFixesQueueMeta;
         const data = await res.json().catch(() => ({}));
         const meta = _setUxFixesQueueMeta(Array.isArray(data.items) ? data.items : []);
-        if (opts.render !== false && typeof _renderArchiveIfLoaded === 'function') {
-          _renderArchiveIfLoaded();
+        if (opts.render !== false) {
+          if (typeof _renderArchiveIfLoaded === 'function') _renderArchiveIfLoaded();
+          // The line above only repaints the Archive view; the progress chips
+          // also live on LIVE session rows, which otherwise update only when an
+          // unrelated poll happens to re-render the sidebar. Repaint here too,
+          // gated on the content signature so an unchanged queue is a no-op.
+          if (meta && meta._sig !== _uxFixesChipPaintedSig) {
+            _uxFixesChipPaintedSig = meta._sig;
+            try {
+              if (typeof renderSidebar === 'function' && typeof filterConversations === 'function') {
+                const $cs = document.getElementById('convSearch');
+                renderSidebar(filterConversations($cs ? $cs.value : ''));
+              }
+            } catch (_) {}
+          }
         }
         return meta;
       } catch (_) {
