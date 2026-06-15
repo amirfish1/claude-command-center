@@ -32008,15 +32008,19 @@ def _nextjs_target_paths(repo_path, cwd=None):
     `repo_path` is the stable API/security boundary. `cwd` lets the UI point
     at a workspace package inside that repo, so turbo filters and dev-script
     ports are resolved from the app that is actually selected.
+
+    A session's live cwd often hops to a non-app package inside a monorepo
+    (e.g. `packages/foo`, `.a5c`) that has no `dev` script. Rather than report
+    "no dev server" there, fall back to a real Next.js workspace, then the repo
+    root, so the localhost pill stays useful wherever the session is parked.
     """
     repo_root = Path(resolve_repo_path(repo_path)).resolve()
     target = Path(cwd or repo_root).expanduser().resolve()
     if not target.is_dir():
         raise RepoContextError("invalid_cwd", f"cwd is not a directory: {target}", path=str(target))
-    if target == repo_root:
-        workspace_target = _pick_nextjs_workspace(repo_root)
-        if workspace_target:
-            target = workspace_target.resolve()
+    # Security boundary: the requested cwd must live inside the repo, checked
+    # before any fallback so an out-of-repo cwd still 403s instead of being
+    # silently swapped for a workspace.
     try:
         target.relative_to(repo_root)
     except ValueError:
@@ -32026,6 +32030,15 @@ def _nextjs_target_paths(repo_path, cwd=None):
             path=str(target),
             status=403,
         )
+    # Prefer the requested cwd when it is itself startable. Otherwise (the repo
+    # root, or a non-app package) resolve to a concrete Next.js workspace, then
+    # fall back to the root if it is startable on its own.
+    if target == repo_root or not _detect_nextjs(target):
+        workspace_target = _pick_nextjs_workspace(repo_root)
+        if workspace_target:
+            target = workspace_target.resolve()
+        elif target != repo_root and _detect_nextjs(repo_root):
+            target = repo_root
     return repo_root, target
 
 
