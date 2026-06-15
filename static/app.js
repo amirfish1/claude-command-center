@@ -27029,9 +27029,30 @@
       const saved = parseInt(localStorage.getItem('ccc-status-rail-width') || '0', 10);
       return saved >= STATUS_RAIL_MIN_WIDTH ? saved : STATUS_RAIL_DEFAULT_WIDTH;
     };
+    // Resizing/collapsing the rail re-flows the conversation reader (its pane
+    // gets wider/narrower → text re-wraps → content height changes), which
+    // drifts the reading position under a fixed scrollTop. Capture each open
+    // reader's top-visible message (or its bottom, if it was tailing), run the
+    // layout mutation, then restore — so the position stays put. Reading
+    // scrollHeight/offsetTop in the restore forces the pending reflow to flush
+    // against the post-mutation layout.
+    const _preserveReadersAcross = (mutate) => {
+      const readers = Array.from(document.querySelectorAll('.conversations-view')).map(($v) => ({
+        $v,
+        atBottom: isConversationAtBottom($v),
+        anchor: _topVisibleAnchor($v),
+      }));
+      mutate();
+      for (const r of readers) {
+        if (r.atBottom) r.$v.scrollTop = r.$v.scrollHeight;
+        else if (r.anchor) _restoreAnchor(r.$v, r.anchor);
+      }
+    };
     const _setStatusRailWidth = (width, persist) => {
       const next = _clampStatusRailWidth(width);
-      document.documentElement.style.setProperty('--status-rail-width', next + 'px');
+      _preserveReadersAcross(() => {
+        document.documentElement.style.setProperty('--status-rail-width', next + 'px');
+      });
       if ($statusRailResizer) {
         $statusRailResizer.setAttribute('aria-valuemin', String(STATUS_RAIL_MIN_WIDTH));
         $statusRailResizer.setAttribute('aria-valuemax', String(_statusRailMaxWidth()));
@@ -27043,8 +27064,10 @@
       return next;
     };
     const _setStatusRailCollapsed = (collapsed, persist) => {
-      document.body.classList.toggle('status-rail-collapsed', !!collapsed);
-      if (!collapsed) _setStatusRailWidth(_savedStatusRailWidth(), false);
+      _preserveReadersAcross(() => {
+        document.body.classList.toggle('status-rail-collapsed', !!collapsed);
+        if (!collapsed) _setStatusRailWidth(_savedStatusRailWidth(), false);
+      });
       if ($statusRailRestore) {
         $statusRailRestore.setAttribute('aria-expanded', String(!collapsed));
       }
