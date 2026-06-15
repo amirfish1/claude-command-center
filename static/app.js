@@ -1466,6 +1466,26 @@
     return !!(sid && liveStatus && liveStatus.forSessionId === sid);
   }
 
+  // The OPEN conversation's row (id-matched) or null. conversationsData loads
+  // async and can be stale/missing during a switch, so code that reads a row's
+  // fields to describe the open conversation should use this rather than scan
+  // the global array — a miss returns null instead of the wrong row.
+  function openConvRow() {
+    const convId = (typeof currentConversation !== 'undefined') ? currentConversation : '';
+    if (!convId) return null;
+    return (conversationsData || []).find(x => x && x.id === convId) || null;
+  }
+
+  // The row for a specific split pane (by its own conversationId), so per-pane
+  // render code never borrows the globally-active conversation's row. Falls back
+  // to the open conversation when the pane has no conversation of its own.
+  function convRowForPane(paneId) {
+    const pane = (typeof paneByPaneId === 'function') ? paneByPaneId(paneId) : null;
+    const cid = pane && pane.conversationId;
+    if (!cid) return openConvRow();
+    return (conversationsData || []).find(x => x && x.id === cid) || null;
+  }
+
   function selectedRepoLabel() {
     const repoPath = selectedRepoPath();
     if (!repoPath) return '';
@@ -1518,7 +1538,7 @@
 
   function repoPathForIssueNumber(issueNum) {
     const num = String(issueNum || '');
-    const row = conversationsData.find(c =>
+    const row = (conversationsData || []).find(c =>
       c && c.source === 'backlog' && String(c.issue_number || '') === num
     );
     return rowRepoPath(row) || selectedRepoPath();
@@ -8078,7 +8098,7 @@
       // previous snapshot — the server can re-derive a default name on the
       // next scan and clobber a rename otherwise.
       const oldBySessionId = {};
-      for (const c of conversationsData) oldBySessionId[c.session_id] = c;
+      for (const c of (conversationsData || [])) oldBySessionId[c.session_id] = c;
       for (const c of fresh) {
         const old = oldBySessionId[c.session_id];
         if (old && old.name_overridden && !c.name_overridden) {
@@ -9899,7 +9919,7 @@
   }
 
   function flowCurrentRepoForDraft() {
-    const selectedRow = (conversationsData || []).find(x => x && x.id === currentConversation);
+    const selectedRow = openConvRow();
     return rowRepoPath(selectedRow) || selectedRepoPath();
   }
 
@@ -21584,7 +21604,7 @@
   let _ffcLastSidebarData = null;
   function _isUxqWorkerSession() {
     try {
-      const row = (conversationsData || []).find(x => x.id === currentConversation);
+      const row = openConvRow();
       return !!(row && typeof _uxFixesQueueProgressForRow === 'function'
         && _uxFixesQueueProgressForRow(row));
     } catch (_) { return false; }
@@ -21609,7 +21629,7 @@
   // BYM worker sees only BYM tickets (CCC-99).
   function _uxqWorkerProject() {
     try {
-      const row = (conversationsData || []).find(x => x.id === currentConversation);
+      const row = openConvRow();
       const prog = row && typeof _uxFixesQueueProgressForRow === 'function'
         ? _uxFixesQueueProgressForRow(row) : null;
       return (prog && prog.project && prog.project !== '?') ? prog.project : '';
@@ -23138,6 +23158,11 @@
         $view.innerHTML = _renderBacklogDetail(c);
         return;
       }
+      // A backlog id whose row hasn't loaded yet (switch/load window). Defer to
+      // the next poll — which renders it — instead of falling through to
+      // /api/conversations/<backlog-id>, which 404s and wedges the pane on
+      // "Loading…".
+      return;
     }
     // github_pr rows are synthetic (no real session transcript).
     // Render an in-pane PR detail card; the ↗ chip on the row opens GitHub.
@@ -25828,8 +25853,10 @@
           sticky.style.position = sticky.style.position || 'sticky';
           const hidden = localStorage.getItem('hideToolCalls') === '1';
           if (hidden) $view.classList.add('hide-tools');
-          // Resolve linked issue number for this conversation (if any)
-          const conv = conversationsData.find(x => x.id === currentConversation) || {};
+          // Resolve linked issue number for THIS pane's conversation (not the
+          // globally-active one) so the issue link + resolve button stamp the
+          // right session/issue in split panes and mid-switch.
+          const conv = convRowForPane(paneId) || {};
           let issueNum = conv.linked_issue || conv.issue_number || '';
           if (!issueNum) {
             const dm = /^issue-(\d+)$/.exec(conv.display_name || '');
@@ -35219,10 +35246,10 @@
   // preamble ("Fix issue #N — TITLE\n\nRun `gh issue view N` …") and
   // appends whatever the user typed as their edit instructions.
   async function spawnFromBacklogIssue(userText) {
-    const row = conversationsData.find(x => x.id === currentConversation) || {};
+    const row = openConvRow() || {};
     const issueNum = row.issue_number || (currentConversation || '').replace('backlog-issue-', '');
     if (!issueNum) return;
-    const conv = row.issue_number ? row : (conversationsData.find(x => x.id === 'backlog-issue-' + issueNum) || {});
+    const conv = row.issue_number ? row : ((conversationsData || []).find(x => x.id === 'backlog-issue-' + issueNum) || {});
     const repoPath = rowRepoPath(conv) || repoPathForIssueNumber(issueNum);
     const title = conv.display_name || conv.first_message || '';
     const cleanTitle = (title || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
@@ -35277,10 +35304,10 @@
   }
 
   async function closeIssueFromInputBar(action, text) {
-    const row = conversationsData.find(x => x.id === currentConversation) || {};
+    const row = openConvRow() || {};
     const issueNum = row.issue_number || (currentConversation || '').replace('backlog-issue-', '');
     if (!issueNum) return;
-    const conv = row.issue_number ? row : (conversationsData.find(x => x.id === 'backlog-issue-' + issueNum) || {});
+    const conv = row.issue_number ? row : ((conversationsData || []).find(x => x.id === 'backlog-issue-' + issueNum) || {});
     const repoPath = rowRepoPath(conv) || repoPathForIssueNumber(issueNum);
     const reason = action === 'not_planned' ? 'not planned' : action; // "not_planned" → "not planned"
     const body = { reason };
@@ -35316,10 +35343,10 @@
   }
 
   async function replyToIssueFromInputBar(action, text) {
-    const row = conversationsData.find(x => x.id === currentConversation) || {};
+    const row = openConvRow() || {};
     const issueNum = row.issue_number || (currentConversation || '').replace('backlog-issue-', '');
     if (!issueNum) return;
-    const conv = row.issue_number ? row : (conversationsData.find(x => x.id === 'backlog-issue-' + issueNum) || {});
+    const conv = row.issue_number ? row : ((conversationsData || []).find(x => x.id === 'backlog-issue-' + issueNum) || {});
     const repoPath = rowRepoPath(conv) || repoPathForIssueNumber(issueNum);
     if ($convSendBtn) $convSendBtn.disabled = true;
     try {
