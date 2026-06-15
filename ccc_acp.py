@@ -196,7 +196,7 @@ class CCCACPAgent(Agent):
             agentInfo=Implementation(
                 name="ccc-acp",
                 title="Claude Command Center",
-                version="4.10.0",
+                version="5.1.0",
             ),
         )
 
@@ -210,6 +210,17 @@ class CCCACPAgent(Agent):
         if cwd is None:
             cwd = os.getcwd()
         cwd = os.path.abspath(cwd)
+        # Security: ACP clients (IDEs) supply the cwd. Per SECURITY.md we note
+        # the experimental adapter accepts client-supplied paths and spawns
+        # Claude with full --dangerously-skip-permissions in them. Clamp to $HOME
+        # by default (power users can opt out via env).
+        _home = str(Path.home())
+        if not (cwd == _home or cwd.startswith(_home + os.sep)):
+            if not os.environ.get("CCC_ACP_ALLOW_OUTSIDE_HOME"):
+                raise RequestError(
+                    code=-32000,
+                    message="ACP new_session cwd must be under user home (override with CCC_ACP_ALLOW_OUTSIDE_HOME=1). See SECURITY.md for the experimental ACP adapter risk surface.",
+                )
         os.makedirs(cwd, exist_ok=True)
 
         log_fh: Optional[Any] = None
