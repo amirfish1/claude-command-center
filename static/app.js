@@ -664,16 +664,23 @@
     try { if (typeof refreshLiveStatus === 'function') refreshLiveStatus(); } catch (_) {}
     try { if (typeof updateLiveToolStrip === 'function') updateLiveToolStrip(); } catch (_) {}
     try { if (typeof updateCodexStateBadge === 'function') updateCodexStateBadge(); } catch (_) {}
-    try { if (typeof pollGcActive === 'function') pollGcActive(); } catch (_) {}
+    // pollGcActive is a DASHBOARD poll (the group-chat sidebar list, not the open
+    // reader). Reader-only popouts must not fire it — see READER_ONLY_POPOUT.
+    if (!READER_ONLY_POPOUT) {
+      try { if (typeof pollGcActive === 'function') pollGcActive(); } catch (_) {}
+    }
     // CCC-46 (same class): the open group-chat reader polls on a 3s timer that
     // the WebView throttles to a crawl while the CCC window is occluded (e.g.
     // you're watching the agent in its terminal). Returning focus must force a
     // reader refresh, or a new post stays invisible until the throttled timer
     // eventually fires. The poll self-guards when no chat is open.
     try { if (typeof pollGroupChatReader === 'function') pollGroupChatReader(); } catch (_) {}
-    try { if (typeof pollVercelDeploy === 'function') pollVercelDeploy(); } catch (_) {}
-    try { if (typeof pollLocalhost === 'function') pollLocalhost(); } catch (_) {}
-    try { if (typeof refreshWorktreesBadge === 'function') refreshWorktreesBadge(); } catch (_) {}
+    // Dashboard-only pollers — skipped in reader-only popouts.
+    if (!READER_ONLY_POPOUT) {
+      try { if (typeof pollVercelDeploy === 'function') pollVercelDeploy(); } catch (_) {}
+      try { if (typeof pollLocalhost === 'function') pollLocalhost(); } catch (_) {}
+      try { if (typeof refreshWorktreesBadge === 'function') refreshWorktreesBadge(); } catch (_) {}
+    }
   }
   document.addEventListener('visibilitychange', _resumeForegroundPollers);
   window.addEventListener('focus', _resumeForegroundPollers);
@@ -1041,6 +1048,15 @@
     document.body.classList.add('groupchat-popout');
     try { document.title = GROUPCHAT_POPOUT_TOPIC || 'Group Chat — CCC'; } catch (_) {}
   }
+  // A "reader-only" popout is a single-conversation OR single-group-chat reader
+  // window: it renders and live-updates exactly one thing and must NOT run the
+  // dashboard's background work (the conversation list / archive walk, issues,
+  // ux-fixes queue, ship/status per repo, worktrees badge, live-activity poll,
+  // group-chat sidebar poll, history-index poll, vercel/localhost pollers, etc).
+  // Both popouts share that constraint, so gate every dashboard POLLER START and
+  // heavy INITIAL LOAD on this predicate instead of CONV_POPOUT_MODE alone.
+  // (FLOW_POPOUT_MODE is intentionally excluded — Flow needs conversation data.)
+  const READER_ONLY_POPOUT = CONV_POPOUT_MODE || GROUPCHAT_POPOUT_MODE;
   // Reader-on-right toggle for the flow popout — persisted across
   // popout reloads. Applied at boot so the layout doesn't flash from
   // full-width-flow → split on first paint.
@@ -1655,6 +1671,12 @@
   }
 
   async function refreshLiveSessionsActivity() {
+    // Dashboard-wide overlay: patches WIP/live chips onto conversation-list
+    // rows. Reader-only popouts have no such list, so this is pure waste —
+    // and openGroupChatReader's setCurrentSession(null,…) would otherwise
+    // start the live-status timer that polls /api/sessions/live-activity
+    // forever in the group-chat popout.
+    if (READER_ONLY_POPOUT) return;
     try {
       const res = await fetch('/api/sessions/live-activity?_=' + Date.now());
       if (!res.ok) return;
@@ -24071,7 +24093,7 @@
         : baseTitle;
     } catch (_) { /* network blip — leave the badge state alone */ }
   }
-  if (!CONV_POPOUT_MODE) {
+  if (!READER_ONLY_POPOUT) {
     refreshWorktreesBadge();
     setInterval(_gated('worktreesBadge', refreshWorktreesBadge), 60000);
   }
@@ -27232,7 +27254,7 @@
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _hiTriggerSetup(); }
       });
     }
-    if (!CONV_POPOUT_MODE) _hiStartPolling();
+    if (!READER_ONLY_POPOUT) _hiStartPolling();
 
     const $fileViewerClose = document.getElementById('fileViewerCloseBtn');
     if ($fileViewerClose) {
@@ -30709,7 +30731,7 @@
   }
 
   (function wireArchiveMode() {
-    if (CONV_POPOUT_MODE) return;
+    if (READER_ONLY_POPOUT) return;
     updateRepoPickerVisibility();
     renderArchiveFolderFilter();
     if ($convFolderFilter) {
@@ -30798,7 +30820,7 @@
   // the In Group Chat section silently never appeared until the user
   // touched the folder picker. Wire-once here is the right home.
   (function wireGroupChatPolling() {
-    if (CONV_POPOUT_MODE) return;
+    if (READER_ONLY_POPOUT) return;
     try { pollGcActive(); } catch (_) {}
     setInterval(_gated('gcActive', () => { try { pollGcActive(); } catch (_) {} }), 15000);
   })();
@@ -31096,7 +31118,7 @@
   // Lives in the layout-agnostic top bar so it shows in both list mode and
   // kanban-split mode. Re-runs on page load only; click Refresh to re-probe.
   (async function renderSetupBanner() {
-    if (CONV_POPOUT_MODE) return;
+    if (READER_ONLY_POPOUT) return;
     const $banner = document.getElementById('setupBanner');
     if (!$banner) return;
     try {
@@ -31435,7 +31457,7 @@
       await refreshEngineAvailability();
     } catch (_) {}
   }
-  if (!CONV_POPOUT_MODE) {
+  if (!READER_ONLY_POPOUT) {
     spawnDefaultsReady.finally(refreshCodexAvailability);
     window.addEventListener('focus', refreshCodexAvailability);
   }
@@ -32080,7 +32102,7 @@
   // Auto-refresh archive/session data on a slower cadence. This payload is
   // multi-MB on long-running installs, so the 5s live-status poll owns
   // real-time row activity while this refresh catches structural changes.
-  if (!CONV_POPOUT_MODE) {
+  if (!READER_ONLY_POPOUT) {
 	  setInterval(async () => {
 		    if (_pollerSkip('sessionsList')) return; if (activeTab !== 'sessions') return;
 			    _pollerTick('sessionsList');
@@ -32247,7 +32269,7 @@
   }
   if ($updNowBtn) $updNowBtn.addEventListener('click', updRunSelfUpdate);
 
-  if (!CONV_POPOUT_MODE) {
+  if (!READER_ONLY_POPOUT) {
     (async () => {
       try {
         const r = await fetch('/api/version/check', { cache: 'no-store' });
@@ -32289,6 +32311,7 @@
   }
 
   (async () => {
+    if (READER_ONLY_POPOUT) return;  // sidebar version label is dashboard chrome
     if (!$cccVersionLabel && !$cccLastUpdated) return;
     try {
       const r = await fetch('/api/version', { cache: 'no-store' });
@@ -32627,7 +32650,7 @@
   }
 
   if ($restartServerBtn) {
-    if (!CONV_POPOUT_MODE) restartServerRefreshPort();
+    if (!READER_ONLY_POPOUT) restartServerRefreshPort();
     $restartServerBtn.addEventListener('click', restartServerRun);
   }
 
@@ -36424,7 +36447,7 @@
     });
   });
 
-  if (!CONV_POPOUT_MODE) {
+  if (!READER_ONLY_POPOUT) {
     pollVercelDeploy();
     setInterval(_gated('vercelDeploy', pollVercelDeploy), 15000);
     pollLocalhost();
