@@ -22956,6 +22956,22 @@
     // before, not pinned to the very top (which lands a few lines too high).
     if (el) $view.scrollTop = el.offsetTop - (anchor.delta || 0);
   }
+  // Run a layout mutation that re-flows the conversation reader(s) — a pane
+  // resize, a rail collapse — without drifting the reading position. Capture
+  // each open reader's top-visible message (or its bottom, if tailing) before
+  // the mutation and restore it after the reflow.
+  function preserveConvReadersAcross(mutate) {
+    const readers = Array.from(document.querySelectorAll('.conversations-view')).map(($v) => ({
+      $v,
+      atBottom: isConversationAtBottom($v),
+      anchor: _topVisibleAnchor($v),
+    }));
+    mutate();
+    for (const r of readers) {
+      if (r.atBottom) r.$v.scrollTop = r.$v.scrollHeight;
+      else if (r.anchor) _restoreAnchor(r.$v, r.anchor);
+    }
+  }
 
   function _insertLoadEarlierBanner($view, id, paneId) {
     if (!$view || $view.querySelector('.conv-load-earlier')) return;
@@ -28444,7 +28460,7 @@
       // Allow sidebar to grow until conv-pane has only 200px left, so the
       // user can squeeze the conversation pane down to a narrow column.
       const w = Math.max(240, Math.min(sidebarMax(), startWidth + (e.clientX - startX)));
-      $sidebar.style.width = w + 'px';
+      preserveConvReadersAcross(() => { $sidebar.style.width = w + 'px'; });
     }
     function onUp() {
       $resizer.classList.remove('dragging');
@@ -28482,7 +28498,7 @@
       // exists for "actually closed".
       const raw = splitStartW - (e.clientX - splitStartX);
       const w = Math.max(40, Math.min(window.innerWidth - 300, raw));
-      $convPanel.style.width = w + 'px';
+      preserveConvReadersAcross(() => { $convPanel.style.width = w + 'px'; });
     }
     function onSplitUp() {
       $splitResizer.classList.remove('dragging');
