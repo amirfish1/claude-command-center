@@ -350,6 +350,16 @@
           const m = localStorage.getItem('ccc-chips-mode');
           if (m === 'muted') document.body.classList.add('chips-muted');
         } catch (_) {}
+        // Conversation-list collapse (CCC-132). Desktop only — on mobile the
+        // list IS the screen, so never hide it there. Restored before paint to
+        // avoid a flash. Persisted as `ccc-conv-list-collapsed` ('1').
+        try {
+          const _isMobileViewport2 = (typeof window.matchMedia === 'function')
+            && window.matchMedia('(max-width: 950px)').matches;
+          if (!_isMobileViewport2 && localStorage.getItem('ccc-conv-list-collapsed') === '1') {
+            document.body.classList.add('conv-list-collapsed');
+          }
+        } catch (_) {}
       } catch (_) {}
     })();
   </script>
@@ -418,6 +428,7 @@
     </div>
     <div class="conv-list-panel" id="convListPanel">
       <div class="conv-list-header">
+        <button type="button" id="convListCollapseBtn" class="conv-list-collapse-btn" title="Collapse conversation list" aria-label="Collapse conversation list" aria-expanded="true">&laquo;</button>
         <div class="search-wrap">
           <input type="text" id="convSearch" class="conv-search-input" placeholder="Search conversations..." autocomplete="off">
           <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
@@ -509,6 +520,7 @@
     </div>
   </div>
   <div class="sidebar-resizer" id="sidebarResizer" title="Drag to resize"></div>
+  <button type="button" id="convListRestoreBtn" class="conv-list-restore" title="Show conversation list" aria-label="Show conversation list">&raquo;</button>
   <div class="main">
     <!-- Anonymous opt-in telemetry bar. Hidden until the server confirms
          opt_in === null (never asked) AND env_disabled is false. Dismissed

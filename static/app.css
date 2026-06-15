@@ -112,6 +112,41 @@
   }
   body.resizing { cursor: col-resize; user-select: none; }
   body.resizing * { pointer-events: none; }
+  /* Conversation-list collapse (CCC-132). The « button (left of search) hides
+     the whole list/sidebar so the reader gets full width; a floating »
+     restore button brings it back. Desktop only — on mobile the list IS the
+     screen (handled by the mobile @media block), so these rules are scoped to
+     wide viewports. */
+  .conv-list-collapse-btn {
+    flex: 0 0 auto;
+    width: 28px; height: 28px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .conv-list-collapse-btn:hover { background: var(--surface-2, rgba(255,255,255,0.04)); color: var(--text); border-color: var(--accent); }
+  .conv-list-restore {
+    display: none;
+    position: fixed; top: 12px; left: 8px; z-index: 950;
+    width: 28px; height: 40px; padding: 0;
+    align-items: center; justify-content: center;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 0 8px 8px 0;
+    color: var(--text-muted); font-size: 16px; line-height: 1; cursor: pointer;
+    box-shadow: 1px 0 6px rgba(0,0,0,0.25);
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .conv-list-restore:hover { background: var(--surface-2, rgba(255,255,255,0.06)); color: var(--text); border-color: var(--accent); }
+  @media (min-width: 951px) {
+    body.conv-list-collapsed .sidebar,
+    body.conv-list-collapsed .sidebar-resizer { display: none !important; }
+    body.conv-list-collapsed .conv-list-restore { display: inline-flex; }
+  }
+  /* On mobile the conv list is full-screen; never hide it via this toggle,
+     and hide both affordances (the mobile back/forward nav owns that flow). */
+  @media (max-width: 950px) {
+    .conv-list-collapse-btn, .conv-list-restore { display: none !important; }
+  }
   .sidebar-header {
     padding: 16px; border-bottom: 1px solid var(--border);
     font-weight: 600; font-size: 14px;

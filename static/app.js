@@ -7305,6 +7305,20 @@
     try { location.reload(true); } catch (_) { location.reload(); }
   });
 
+  // Conversation-list collapse (CCC-132). « hides the list to widen the reader;
+  // a floating » brings it back. Desktop only — the boot script + CSS gate
+  // mobile out. State persists under `ccc-conv-list-collapsed`; boot restores
+  // the body class before paint, so here we only handle clicks.
+  const $convListCollapseBtn = document.getElementById('convListCollapseBtn');
+  const $convListRestoreBtn = document.getElementById('convListRestoreBtn');
+  function setConvListCollapsed(collapsed) {
+    document.body.classList.toggle('conv-list-collapsed', !!collapsed);
+    if ($convListCollapseBtn) $convListCollapseBtn.setAttribute('aria-expanded', String(!collapsed));
+    try { localStorage.setItem('ccc-conv-list-collapsed', collapsed ? '1' : '0'); } catch (_) {}
+  }
+  if ($convListCollapseBtn) $convListCollapseBtn.addEventListener('click', () => setConvListCollapsed(true));
+  if ($convListRestoreBtn) $convListRestoreBtn.addEventListener('click', () => setConvListCollapsed(false));
+
   if ($cpCloseBtn) $cpCloseBtn.addEventListener('click', () => {
     if (isMobile()) { mobileShowConv(false); return; }
     setConvPanelOpen(!convPanelOpen);
