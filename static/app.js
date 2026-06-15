@@ -1023,6 +1023,24 @@
     // Flow embedded inline instead of showing the conversation list/board.
     try { document.title = 'Flow — CCC'; } catch (_) {}
   }
+  // Group-chat popout: same shape as the conversation popout, but the
+  // surface is a single group-chat reader. When set, the page boots
+  // straight into that chat and CSS hides every other piece of chrome.
+  const GROUPCHAT_POPOUT_MODE = _bootUrlParams.get('ccc_popout') === 'groupchat'
+    || _bootUrlParams.get('popout') === 'groupchat';
+  const GROUPCHAT_POPOUT_ID = (
+    _bootUrlParams.get('gc')
+    || _bootUrlParams.get('chat')
+    || _bootUrlParams.get('id')
+    || ''
+  ).trim();
+  const GROUPCHAT_POPOUT_PATH = (_bootUrlParams.get('path') || '').trim();
+  const GROUPCHAT_POPOUT_TOPIC = (_bootUrlParams.get('topic') || '').trim();
+  const GROUPCHAT_POPOUT_MODE_PARAM = (_bootUrlParams.get('mode') || 'topic').trim();
+  if (GROUPCHAT_POPOUT_MODE && document.body) {
+    document.body.classList.add('groupchat-popout');
+    try { document.title = GROUPCHAT_POPOUT_TOPIC || 'Group Chat — CCC'; } catch (_) {}
+  }
   // Reader-on-right toggle for the flow popout — persisted across
   // popout reloads. Applied at boot so the layout doesn't flash from
   // full-width-flow → split on first paint.
@@ -13429,18 +13447,25 @@
     // back in the same chat instead of falling back to the last
     // session row. boot uses `ccc-last-view` to decide which one to
     // restore (gc OR conv).
-    try {
-      const payload = {
-        type: 'gc',
-        path: chatPath || '',
-        id: chatId || '',
-        topic: topic || '',
-        mode: mode || 'topic',
-        includeHuman: !!includeHuman,
-        at: Date.now(),
-      };
-      localStorage.setItem('ccc-last-view', JSON.stringify(payload));
-    } catch (_) {}
+    // Skip the restore-state write inside a popout: this page owns one
+    // chat for its lifetime, and persisting it into the shared
+    // `ccc-last-view` would make the MAIN window reopen on this chat
+    // instead of its own last session/conv (same reason the conversation
+    // popout guards its writes on !CONV_POPOUT_MODE).
+    if (!GROUPCHAT_POPOUT_MODE && !CONV_POPOUT_MODE) {
+      try {
+        const payload = {
+          type: 'gc',
+          path: chatPath || '',
+          id: chatId || '',
+          topic: topic || '',
+          mode: mode || 'topic',
+          includeHuman: !!includeHuman,
+          at: Date.now(),
+        };
+        localStorage.setItem('ccc-last-view', JSON.stringify(payload));
+      } catch (_) {}
+    }
     currentConversation = null;
     if (typeof ffcUpdateSidebar === 'function') ffcUpdateSidebar(null);
     if (typeof syncActivePaneChrome === 'function') syncActivePaneChrome(null);
@@ -13480,6 +13505,14 @@
         + '<button type="button" class="gc-join-link-btn" id="gcJoinLinkBtn"'
         + ' title="Copy a join link — paste it into any session\'s composer in CCC and that session joins this chat">'
         + '🔗 Join link</button>'
+        // Pop the reader into its own window. Skipped inside the popout
+        // itself — no point popping a popout. Click handler is delegated
+        // once at boot (see [data-role="ccc-gc-popout"]).
+        + (GROUPCHAT_POPOUT_MODE ? ''
+          : '<button type="button" class="gc-join-link-btn" id="gcPopoutBtn"'
+            + ' data-role="ccc-gc-popout"'
+            + ' title="Pop this group chat out to its own window" aria-label="Pop out">'
+            + '↗ Pop out</button>')
       + '</div>'
       + '<div class="gc-reader-sticky-meta" id="gcReaderStickyMeta" style="display:none;">'
         + '<div class="csh-col">'
@@ -14153,6 +14186,27 @@
       const errBanner = body.querySelector('.gc-poll-error');
       if (errBanner) errBanner.remove();
       if (!data.ok) { body.innerHTML = '<div class="assistant-text gc-chat-doc" dir="auto">' + renderMarkdown(data.error || 'File not found.') + '</div>'; return; }
+      // Backfill topic/mode from the authoritative read. A group-chat
+      // popout opened by id alone boots with a placeholder topic; once
+      // the real one arrives, sync the header, in-memory state and (in
+      // popout mode) the window title so the tab stops reading "Group
+      // chat".
+      if (data.topic && data.topic !== _gcReaderTopic) {
+        _gcReaderTopic = data.topic;
+        const topicEl = document.querySelector('#gcReader .gc-reader-header .gc-topic');
+        if (topicEl) {
+          topicEl.textContent = data.topic;
+          topicEl.setAttribute('title', data.topic);
+        }
+        if (GROUPCHAT_POPOUT_MODE) {
+          try { document.title = data.topic; } catch (_) {}
+        }
+      }
+      if (data.mode && data.mode !== _gcReaderMode) {
+        _gcReaderMode = data.mode;
+        const modeEl = document.querySelector('#gcReader .gc-reader-header .gc-mode-badge');
+        if (modeEl) modeEl.textContent = data.mode;
+      }
       if (data.mtime !== _gcLastMtime) {
         const isFirstLoad = _gcLastMtime === null;
         _gcLastMtime = data.mtime;
@@ -19315,6 +19369,92 @@
     });
     return false;
   }
+
+  // Build the URL for a group-chat popout window. Prefer the uuid; fall
+  // back to the file path when no id is known. Mirrors
+  // conversationPopoutUrl/flowPopoutUrl.
+  function groupChatPopoutUrl(id, path, topic, mode) {
+    const u = new URL(window.location.pathname || '/', window.location.href);
+    u.search = '';
+    u.hash = '';
+    u.searchParams.set('ccc_popout', 'groupchat');
+    if (id) u.searchParams.set('gc', id);
+    else if (path) u.searchParams.set('path', path);
+    // Seed the title/header before the first poll lands so the new
+    // window doesn't flash the "Group Chat" placeholder. CCCWebWindow
+    // also reads `title=` for the native window label.
+    if (topic) u.searchParams.set('topic', String(topic).slice(0, 180));
+    if (topic) u.searchParams.set('title', String(topic).slice(0, 180));
+    if (mode) u.searchParams.set('mode', String(mode).slice(0, 40));
+    return u.toString();
+  }
+
+  function openGroupChatPopout(id, path, topic, mode, anchor) {
+    if (GROUPCHAT_POPOUT_MODE) return false;  // no point popping a popout
+    if (!id && !path) {
+      try { showOpToast('No group chat to pop out', 'error'); } catch (_) {}
+      return false;
+    }
+    const url = groupChatPopoutUrl(id, path, topic, mode);
+    const name = 'ccc-groupchat-' + String(id || path).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
+    const width = 920;
+    const height = 900;
+    const features = 'popup=yes,width=' + width + ',height=' + height
+      + ',menubar=no,toolbar=no,location=no,status=no,scrollbars=yes,resizable=yes'
+      + popoutPositionFeature(anchor, width, height);
+    if (isCccMacApp()) {
+      const popup = window.open(url, name, features);
+      if (popup) {
+        try { popup.focus(); } catch (_) {}
+        showOpToast('Group chat opened in a new window');
+        return true;
+      }
+      if (tryOpenNativeMacPopout(url, { successToast: 'Group chat opened in a new window' })) return true;
+      fetch('/api/open-browser', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url })
+      }).then(r => r.json()).then(data => {
+        if (data.ok) {
+          showOpToast(data.via === 'ccc-app'
+            ? 'Group chat opened in a new window'
+            : 'Group chat opened in external browser');
+        } else {
+          showOpToast('Could not open a new Command Center window', 'error');
+        }
+      }).catch(() => {
+        showOpToast('Could not open a new Command Center window', 'error');
+      });
+      return false;
+    }
+    const popup = window.open(url, name, features);
+    if (popup) {
+      try { popup.focus(); } catch (_) {}
+      showOpToast('Group chat opened in a pop-up');
+      return true;
+    }
+    fetch('/api/open-browser', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url })
+    }).then(r => r.json()).then(data => {
+      if (data.ok) showOpToast('Group chat opened in external browser');
+      else showOpToast('Pop-up blocked. Allow pop-ups for CCC.', 'error');
+    }).catch(() => {
+      showOpToast('Pop-up blocked. Allow pop-ups for CCC.', 'error');
+    });
+    return false;
+  }
+
+  // Delegated so it survives the reader's innerHTML rewrites. Pops out
+  // whatever chat the reader is currently showing.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target && ev.target.closest && ev.target.closest('[data-role="ccc-gc-popout"]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    openGroupChatPopout(_gcReaderId, _gcReaderPath, _gcReaderTopic, _gcReaderMode, null);
+  });
 
   function pointOutsideViewport(ev) {
     if (!ev) return false;
@@ -36198,7 +36338,30 @@
   }
 
   // Init
-  if (CONV_POPOUT_MODE && CONV_POPOUT_TARGET) {
+  if (GROUPCHAT_POPOUT_MODE && (GROUPCHAT_POPOUT_ID || GROUPCHAT_POPOUT_PATH)) {
+    // Boot straight into the chosen group chat. openGroupChatReader mounts
+    // the reader into #conversationsView (static HTML) and starts the 3s
+    // gcReader poller; topic/mode are seeded from the URL and the first
+    // poll backfills the authoritative values from /api/group-chat/read.
+    try {
+      openGroupChatReader(
+        GROUPCHAT_POPOUT_PATH || '',
+        GROUPCHAT_POPOUT_TOPIC || 'Group chat',
+        GROUPCHAT_POPOUT_MODE_PARAM || 'topic',
+        true,
+        GROUPCHAT_POPOUT_ID || null,
+      );
+    } catch (err) {
+      const view = getConvView();
+      if (view) {
+        view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load group chat: '
+          + escapeHtml(err && err.message ? err.message : String(err))
+          + '</div>';
+      }
+    }
+    hideLoadingOverlay();
+    _markFirstSessionsLoaded();
+  } else if (CONV_POPOUT_MODE && CONV_POPOUT_TARGET) {
     bootConversationPopoutDirect().catch(err => {
       const view = getConvView();
       if (view) {

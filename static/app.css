@@ -424,6 +424,38 @@
     padding-left: 24px;
     padding-right: 24px;
   }
+  /* ── Group-chat popout ───────────────────────────────────────────
+     Same idea as conversation-popout: hide every chrome strip and the
+     sidebar, let the .main pane (which hosts #conversationsView, where
+     the group-chat reader mounts) fill the window. The reader keeps its
+     own input row + TTS/mic controls. */
+  body.groupchat-popout .sidebar,
+  body.groupchat-popout #sidebarResizer,
+  body.groupchat-popout #kanbanLayout,
+  body.groupchat-popout .pwa-install-banner,
+  body.groupchat-popout .ccc-topbar,
+  body.groupchat-popout .font-size-controls,
+  body.groupchat-popout #mobileBackBtn,
+  body.groupchat-popout .toolbar,
+  body.groupchat-popout .conv-pane-drop-overlay,
+  body.groupchat-popout .conv-pane > .conv-pane-header {
+    display: none !important;
+  }
+  body.groupchat-popout .main {
+    display: flex !important;
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    transition: none !important;
+    z-index: auto !important;
+    width: 100vw;
+    height: 100vh;
+    flex: 1 1 auto;
+  }
+  body.groupchat-popout #convSplit {
+    min-height: 0;
+    height: 100%;
+  }
   /* #2 — Mobile-back button: only show on narrow viewports. The button
      is captured into the rail's _railSet, but we don't want it visually
      leaking into desktop. Hide unless the viewport is mobile-narrow. */
