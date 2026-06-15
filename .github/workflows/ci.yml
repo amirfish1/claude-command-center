@@ -27,6 +27,8 @@ jobs:
 
   # Unit tests. Morning tests skip gracefully when no real goals are seeded
   # (they just need morning_store to exist).
+  # Note: switched to pytest (the actual test runner used by the suite) + explicit
+  # install so the job doesn't blow up on "import pytest" in individual test files.
   unittest:
     name: unittest
     runs-on: ubuntu-latest
@@ -35,8 +37,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Run unittest discovery
-        run: python -m unittest discover -s tests -v
+      - name: Install pytest and run tests
+        run: |
+          python -m pip install pytest
+          python -m pytest -q --tb=no tests/
 
   # Cheap smoke test: boot the server on a free port, hit a few read-only
   # endpoints, and verify they return 2xx. Nothing that requires gh auth.
