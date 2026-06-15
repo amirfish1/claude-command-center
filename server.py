@@ -29583,6 +29583,24 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
         spawn_result.setdefault("source", source)
         return spawn_result
     if spawn_result.get("queued"):
+        # Busy codex target: the message was queued/steered into the thread, and
+        # its reply still lands in the thread rollout once the active turn
+        # yields. We bookmarked the rollout offset above, so tail for the reply
+        # instead of bailing — otherwise the answer is produced but has no path
+        # back to the asker (the "both sessions struggling with /ask" bug: the
+        # target replied, but this call had already returned "queued"). Degrades
+        # to a timeout if the turn runs past the window. NOTE: if the target is
+        # mid a long UNRELATED turn, the next rollout message may be that turn's
+        # output rather than the answer — the asker can re-ask.
+        if engine == "codex" and codex_rollout_path is not None:
+            result = _codex_ask_wait_rollout(
+                session_id, codex_rollout_path, codex_rollout_start, timeout_ms, source
+            )
+            # On timeout/failure, surface that it was a busy/queued target so the
+            # asker can distinguish "no reply yet" from a real answer.
+            if isinstance(result, dict) and not result.get("ok"):
+                result.setdefault("queued", True)
+            return result
         return {
             "ok": False,
             "error": "session is busy; message was queued but no synchronous reply is available yet",
