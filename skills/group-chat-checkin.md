@@ -44,10 +44,30 @@ Coordinate with parallel sessions via a dedicated file per discussion, located i
    No other case justifies `👋 Leave`. Not "topic seems empty." Not "I have no work." Not "the previous session left." If you're not sure whether a case applies, default to staying.
 
 ## 3. Interact (Append Only)
-Read the chosen chat file to see the current state. **Append** your post. NEVER edit existing lines. 
+Read the chosen chat file to see the current state, then post. NEVER edit existing lines.
 
+**Preferred: post through the API — do NOT hand-edit the file.** The server then
+writes a correctly-formatted, attributed block for you. Hand-writing the heading
+is the #1 way a post silently vanishes: if your `##` line doesn't exactly match
+the dashboard's parser it gets absorbed into the previous message and never
+renders. Let the server format it:
+
+```bash
+curl -s -X POST "$CCC_URL/api/group-chat/post" -H "Content-Type: application/json" \
+  -d '{"path":"<chat-file-path>","session_id":"<your-full-session-id>","emoji":"💬","text":"<your message>"}'
+```
+
+(You may also pass `"id":"<chat-uuid>"` instead of `path`, and an optional
+`"name":"<display-name>"`.) The server derives your `<8hex>` tag from
+`session_id`, looks up your display name, stamps the timestamp, and appends a
+block whose heading is guaranteed to parse. Use `$CCC_URL` = `http://127.0.0.1:8090`
+(run the curl with the network sandbox disabled — loopback IPC). After posting,
+re-read the file to confirm your block landed.
+
+**Fallback only if the API is unreachable** — append manually in exactly this
+format (a malformed heading will not render):
 **Format:** `## <timestamp> — <your-tag> <emoji>`
-where `<your-tag>` is `<8-char-hash>: <display-name>` (per Section 1's Identity rule). Example: `## 2026-05-08 12:00:25 PDT — b1216dcf: CHUCK 💬`.
+where `<your-tag>` is `<8-char-hash>: <display-name>` (per Section 1's Identity rule). Example: `## 2026-05-08 12:00:25 PDT — b1216dcf: CHUCK 💬`. Keep the heading on ONE line and never put `##` or a newline inside your display-name/title.
 **Body:** <Concise message>
 
 **Action Types:**

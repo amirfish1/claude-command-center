@@ -26816,8 +26816,17 @@ def _group_chat_normalize_whitespace(real_path):
         return False
 
 
-def _group_chat_post(path, text, chat_uuid=""):
-    """Append a human entry to a group-chat file."""
+def _group_chat_post(path, text, chat_uuid="", session_id="", name="", emoji=""):
+    """Append an entry to a group-chat file.
+
+    Default (no ``session_id``) writes a **Human** entry. When ``session_id`` is
+    given, write a canonical **agent** entry — ``## <ts> — <8hex>: <name>
+    <emoji>`` — so a participant can post through the API instead of
+    hand-editing the file. Hand-edited blocks are the source of CCC-133: a
+    free-handed heading that doesn't match the dashboard parser gets absorbed
+    into the previous message and silently vanishes. The server-built heading is
+    guaranteed to match the same regex the reader and snapshot use.
+    """
     real_path = _resolve_group_chat_ref(path, chat_uuid)
     if not real_path:
         return {"ok": False, "error": "forbidden"}
@@ -26828,7 +26837,22 @@ def _group_chat_post(path, text, chat_uuid=""):
     except Exception:
         tz_name = "local"
     full_ts = now.strftime(f"%Y-%m-%d {day_name} %H:%M:%S") + f" {tz_name}"
-    entry = f"\n---\n\n## {full_ts} — Human\n\n{text}\n"
+    sid = str(session_id or "").strip()
+    m = re.match(r"([0-9a-fA-F]{8})", sid)
+    if m:
+        # Agent post. Derive the display name from the sidecar name_map when the
+        # caller didn't supply one. Sanitize the name to a single heading-safe
+        # line — no newlines or '#' — so a participant's title can't inject a
+        # second heading or break the splitter (the other half of CCC-133).
+        hash8 = m.group(1).lower()
+        nm = (_load_group_chat_sidecar(real_path) or {}).get("name_map") or {}
+        disp = str(name or "").strip() or nm.get(sid) or nm.get(hash8) or hash8
+        disp = re.sub(r"\s+", " ", disp).replace("#", "").strip()[:80] or hash8
+        marker = str(emoji or "").strip() or "💬"
+        speaker = f"{hash8}: {disp} {marker}"
+    else:
+        speaker = "Human"
+    entry = f"\n---\n\n## {full_ts} — {speaker}\n\n{text}\n"
     try:
         with open(real_path, "a", encoding="utf-8") as fh:
             fh.write(entry)
@@ -41069,10 +41093,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             chat_path = (payload.get("path") or "").strip()
             chat_uuid = (payload.get("id") or payload.get("uuid") or "").strip()
             text = (payload.get("text") or "").strip()
+            # Optional agent attribution: when session_id is present the server
+            # writes a canonical `## <ts> — <8hex>: <name> <emoji>` block so an
+            # agent never has to hand-edit the file (CCC-133).
+            post_session_id = (payload.get("session_id") or payload.get("sid") or "").strip()
+            post_name = (payload.get("name") or payload.get("display_name") or "").strip()
+            post_emoji = (payload.get("emoji") or payload.get("marker") or "").strip()
             if (not chat_path and not chat_uuid) or not text:
                 self.send_json({"ok": False, "error": "missing path/id or text"})
                 return
-            result = _group_chat_post(chat_path, text, chat_uuid)
+            result = _group_chat_post(
+                chat_path, text, chat_uuid,
+                session_id=post_session_id, name=post_name, emoji=post_emoji,
+            )
             if not result.get("ok") and result.get("error") == "forbidden":
                 self.send_json(result, 403)
             else:
