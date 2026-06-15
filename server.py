@@ -29490,7 +29490,84 @@ def _latest_resume_spawn_entry(session_id, engine):
     return None
 
 
+def _codex_ask_wait_rollout(session_id, rollout_path, start_offset, timeout_ms, source):
+    """Tail a codex thread rollout for the reply to an app-server-driven ask.
+
+    The app-server `turn/start` runs the turn *inside* the codex thread, so
+    there is no spawn subprocess / log to tail (the old code bailed here with
+    "lost track of it", breaking session-to-session /ask). The assistant reply
+    instead appends to the thread's rollout JSONL as an `agent_message` /
+    `task_complete` event — wait for the first such event past `start_offset`
+    and return its text.
+    """
+    if rollout_path is None:
+        rollout_path = _resolve_codex_rollout_path(session_id)
+    if rollout_path is None:
+        return {
+            "ok": False,
+            "error": "codex turn started via app-server but no rollout file was found to read the reply",
+            "source": source,
+        }
+    deadline = time.monotonic() + max(0.5, timeout_ms / 1000.0)
+    started = time.monotonic()
+    pos = max(0, int(start_offset or 0))
+    pending = b""
+    text_chunks = []
+    while time.monotonic() < deadline:
+        chunk = b""
+        try:
+            with open(rollout_path, "rb") as fh:
+                fh.seek(pos)
+                chunk = fh.read()
+                pos = fh.tell()
+        except OSError:
+            chunk = b""
+        if not chunk:
+            time.sleep(0.15)
+            continue
+        pending += chunk
+        while b"\n" in pending:
+            line, pending = pending.split(b"\n", 1)
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                ev = json.loads(stripped)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            piece = _engine_stream_event_text("codex", ev)
+            if piece:
+                text_chunks.append(piece)
+                return {
+                    "ok": True,
+                    "text": "\n".join(text_chunks).strip(),
+                    "duration_ms": int((time.monotonic() - started) * 1000),
+                    "num_turns": 1,
+                    "cost_usd": None,
+                    "source": source,
+                }
+    return {
+        "ok": False,
+        "error": "timeout",
+        "partial": "\n".join(text_chunks).strip(),
+        "source": source,
+    }
+
+
 def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
+    # Codex resumes can complete via the app-server RPC, which runs the turn
+    # inside the codex thread — no tracked subprocess / log to tail. Capture the
+    # thread rollout position BEFORE resuming so, on that path, we can tail the
+    # rollout for the fresh reply instead of bailing with "lost track of it".
+    codex_rollout_path = None
+    codex_rollout_start = 0
+    if engine == "codex":
+        codex_rollout_path = _resolve_codex_rollout_path(session_id)
+        if codex_rollout_path is not None:
+            try:
+                codex_rollout_start = codex_rollout_path.stat().st_size
+            except OSError:
+                codex_rollout_start = 0
     if engine == "codex":
         spawn_result = resume_session_codex(session_id, text)
     elif engine == "gemini":
@@ -29522,6 +29599,12 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
         }
     entry = _latest_resume_spawn_entry(session_id, engine)
     if entry is None:
+        if engine == "codex":
+            # App-server path: the turn runs inside the codex thread, no spawn
+            # log. The reply lands in the thread rollout — tail that instead.
+            return _codex_ask_wait_rollout(
+                session_id, codex_rollout_path, codex_rollout_start, timeout_ms, source
+            )
         return {"ok": False, "error": "spawned subprocess but lost track of it", "source": source}
 
     log_path = entry.get("log")
