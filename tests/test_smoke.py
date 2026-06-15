@@ -120,6 +120,40 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(server._ship_classify_remaining("snapshot.js"), "infra")
         self.assertEqual(server._ship_classify_remaining("apps/x/page.tsx"), "review")
 
+    def test_stale_sidecar_does_not_count_as_live(self):
+        """A Claude liveness sidecar only counts while fresh. The hooks never
+        delete these markers on session end, so a stale marker must NOT keep a
+        long-dead session flagged live (regression: sessions idle for days were
+        still reported is_live)."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        sid = "11111111-2222-3333-4444-555555555555"  # not a real engine session
+        with tempfile.TemporaryDirectory() as d:
+            dpath = pathlib.Path(d)
+            engine_patches = [
+                mock.patch.object(server, name, return_value=False)
+                for name in ("_is_codex_session", "_is_cursor_session",
+                             "_is_gemini_session", "_is_antigravity_session",
+                             "_is_kilo_session")
+            ]
+            with mock.patch.object(server, "SIDECAR_STATE_DIR", dpath), \
+                 mock.patch.object(server, "_live_engine_session_ids", return_value=set()):
+                for p in engine_patches:
+                    p.start()
+                try:
+                    marker = dpath / f"{sid}.json"
+                    marker.write_text("{}")
+                    # Fresh marker → live.
+                    self.assertTrue(server._archive_session_is_live(sid))
+                    # Stale marker (older than the window) → not live.
+                    old = time.time() - (server._SIDECAR_LIVE_WINDOW + 600)
+                    os.utime(marker, (old, old))
+                    self.assertFalse(server._archive_session_is_live(sid))
+                finally:
+                    for p in engine_patches:
+                        p.stop()
+
     def test_ship_index_attribution_is_wired_and_degrades(self):
         """The conversation-index attribution layer is defined, the verdict +
         ship-flow consult it, and a missing/erroring index degrades silently to
