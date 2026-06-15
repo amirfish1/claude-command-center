@@ -665,6 +665,12 @@
     try { if (typeof updateLiveToolStrip === 'function') updateLiveToolStrip(); } catch (_) {}
     try { if (typeof updateCodexStateBadge === 'function') updateCodexStateBadge(); } catch (_) {}
     try { if (typeof pollGcActive === 'function') pollGcActive(); } catch (_) {}
+    // CCC-46 (same class): the open group-chat reader polls on a 3s timer that
+    // the WebView throttles to a crawl while the CCC window is occluded (e.g.
+    // you're watching the agent in its terminal). Returning focus must force a
+    // reader refresh, or a new post stays invisible until the throttled timer
+    // eventually fires. The poll self-guards when no chat is open.
+    try { if (typeof pollGroupChatReader === 'function') pollGroupChatReader(); } catch (_) {}
     try { if (typeof pollVercelDeploy === 'function') pollVercelDeploy(); } catch (_) {}
     try { if (typeof pollLocalhost === 'function') pollLocalhost(); } catch (_) {}
     try { if (typeof refreshWorktreesBadge === 'function') refreshWorktreesBadge(); } catch (_) {}
