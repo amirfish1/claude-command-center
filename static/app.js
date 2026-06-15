@@ -7492,6 +7492,29 @@
     renderSplitLayout();
   }
 
+  // Boot/refresh restore that knows about BOTH surfaces. If the last thing the
+  // user was on was a group-chat reader, re-open it; otherwise fall through to
+  // the conversation restore. Crucially, if a reader is already open (restored
+  // at boot OR opened by the user), never yank it back to a conversation row —
+  // the archive list finishes loading after the initial sessions load and used
+  // to re-run the plain conversation restore, clobbering the open reader on a
+  // refresh.
+  function restoreLastViewOrConversation() {
+    if (CONV_POPOUT_MODE) { return; }
+    if (_gcReaderPath || _gcReaderId) return;  // a reader is open — leave it
+    try {
+      const raw = localStorage.getItem('ccc-last-view');
+      const view = raw ? JSON.parse(raw) : null;
+      if (view && view.type === 'gc' && (view.path || view.id)
+          && typeof openGroupChatReader === 'function') {
+        openGroupChatReader(view.path || '', view.topic || '', view.mode || 'topic',
+          !!view.includeHuman, view.id || '');
+        return;
+      }
+    } catch (_) {}
+    restoreLastConversation();
+  }
+
   async function restoreLastConversation() {
     if (CONV_POPOUT_MODE) return;
     if (!conversationsLoaded) return;
@@ -8257,24 +8280,7 @@
       if (CONV_POPOUT_MODE) {
         maybeSelectPopoutConversation();
       } else {
-        // If the most recent thing the user was on was a group-chat
-        // reader, re-open IT — otherwise fall through to the regular
-        // conversation restore. Decided by the unified ccc-last-view
-        // marker stamped on every reader open and every conv select.
-        let _reopenedGc = false;
-        try {
-          const raw = localStorage.getItem('ccc-last-view');
-          const view = raw ? JSON.parse(raw) : null;
-          if (view && view.type === 'gc' && (view.path || view.id)
-              && typeof openGroupChatReader === 'function') {
-            openGroupChatReader(view.path || '', view.topic || '', view.mode || 'topic',
-              !!view.includeHuman, view.id || '');
-            _reopenedGc = true;
-          }
-        } catch (_) {}
-        if (!_reopenedGc) {
-          restoreLastConversation();
-        }
+        restoreLastViewOrConversation();
       }
     } catch (err) {
       _convListRenderSig = null;
@@ -30667,7 +30673,7 @@
     if (CONV_POPOUT_MODE) {
       maybeSelectPopoutConversation({ allowMissing: archiveLoaded });
     } else {
-      restoreLastConversation();
+      restoreLastViewOrConversation();
     }
     _finishArchiveRender();
   }
