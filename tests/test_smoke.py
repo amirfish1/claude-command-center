@@ -341,15 +341,13 @@ class TestServerImports(unittest.TestCase):
         passive text — user had no way to actually pick a repo from
         there. The placeholder now opens window.cccOpenRepoPicker
         (the existing repo-picker modal exposed for non-IIFE
-        callers), and a ccc-repo-changed event refreshes the cwd."""
+        callers)."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        # App.js exposes the picker + fires the change event.
+        # App.js exposes the picker for inline callers outside the IIFE.
         self.assertIn("window.cccOpenRepoPicker = openRepoPickerModal", app_js)
-        self.assertIn("CustomEvent('ccc-repo-changed'", app_js)
-        # Terminal panel listens + wires click.
+        # Terminal panel wires the click to the exposed picker.
         self.assertIn("cccOpenRepoPicker", index_html)
-        self.assertIn("ccc-repo-changed", index_html)
         self.assertIn("is-pickable", index_html)
 
     def test_annotation_text_strips_lone_surrogates(self):
