@@ -4,6 +4,8 @@
 
 One local dashboard for every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, and **Kilo Code** session on your Mac. Spawn in parallel, ship in parallel.
 
+> 📢 Shipping fast. **Watch → Releases** (top-right) to get pinged on new versions without the noise.
+
 ![Claude Command Center demo](docs/images/demo.png)
 
 Install with curl:
