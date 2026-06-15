@@ -7276,6 +7276,14 @@
   // !isMobile().
   const _mobileMQ = window.matchMedia('(max-width: 950px)');
   function isMobile() { return _mobileMQ.matches; }
+  // Touch-primary devices: HTML5 drag never fires on touch, but a
+  // `draggable="true"` element makes the browser intercept the first tap to
+  // test for a drag gesture, swallowing that tap's synthetic click — the
+  // "I have to tap a conv row twice to open it" bug. Drop draggable here so a
+  // single tap opens; desktop mouse drag-reorder keeps it.
+  const _coarsePointerMQ = window.matchMedia('(pointer: coarse)');
+  function isTouchPrimary() { return _coarsePointerMQ.matches; }
+  function rowDraggableAttr() { return isTouchPrimary() ? 'false' : 'true'; }
   function mobileShowMain(on) {
     document.body.classList.toggle('mobile-show-main', !!on);
   }
@@ -14793,7 +14801,7 @@
             dateInfo = '<span style="font-size:10px;color:var(--text-muted);">' +
                        escapeHtml(abs) + ' &middot; ' + escapeHtml(relativeTime(c.modified)) + '</span>';
           }
-          html += '<div class="kanban-card backlog-card' + (c.backlog_type === 'github' ? ' is-github-issue' : '') + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="backlog">';
+          html += '<div class="kanban-card backlog-card' + (c.backlog_type === 'github' ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="backlog">';
           // Unified badges row — matches session-card layout: GH chip, state, labels, source.
           const badgeRow = backlogIssueBadge + stateBadge + labels + sourceTag;
           if (badgeRow) html += '<div class="kanban-card-badges">' + badgeRow + '</div>';
@@ -14865,7 +14873,7 @@
         const noEditsAttr = hasNoEdits(c) ? ' no-edits' : '';
         const readOnlyAttr = hasReadOnlyWork(c) ? ' read-only' : '';
         const isGithubColIssue = c.backlog_type === 'github' || c.issue_number || c.linked_issue;
-        html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + recentlyBorn + noEditsAttr + readOnlyAttr + (isGithubColIssue ? ' is-github-issue' : '') + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
+        html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + recentlyBorn + noEditsAttr + readOnlyAttr + (isGithubColIssue ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
         // Create-issue button only when no issue is linked. The "view issue" link
         // was removed — tapping the #NNN badge in the title opens the issue.
         const linkedIssue = c.linked_issue || c.issue_number || '';
@@ -16968,7 +16976,7 @@
 
       const groupedRowClass = opts.suppressFolderChip ? ' is-grouped-row' : '';
       const rowRepoAttr = escapeAttr(rowRepoPath(c) || '');
-      return '<div class="conv-item' + active + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="true" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + '<div class="conv-main-row">'
