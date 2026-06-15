@@ -14237,15 +14237,30 @@
       }
       if (data.mtime !== _gcLastMtime) {
         const isFirstLoad = _gcLastMtime === null;
-        _gcLastMtime = data.mtime;
         const atBottom = body.scrollHeight - body.scrollTop <= body.clientHeight + 40;
-        
-        body.innerHTML = renderGroupChatMarkdown(_gcExpandHashIds(data.content));
+
+        // Render into a local FIRST. Previously _gcLastMtime was advanced
+        // before this line, so if renderGroupChatMarkdown threw even once
+        // (e.g. a markdown/regex path some engines choke on) the mtime guard
+        // would then skip the render on every later poll — leaving the body
+        // stuck on "Loading…" forever with no error and no retry. Commit the
+        // mtime only after a successful render, and surface the real error
+        // instead of a silent placeholder (mac-app WKWebView has no devtools).
+        let _html;
+        try {
+          _html = renderGroupChatMarkdown(_gcExpandHashIds(data.content));
+        } catch (renderErr) {
+          body.innerHTML = '<div class="gc-poll-error">⚠ Could not render chat: '
+            + escapeHtml((renderErr && renderErr.message) || String(renderErr)) + '</div>';
+          return;  // leave _gcLastMtime unchanged so the next poll retries
+        }
+        _gcLastMtime = data.mtime;
+        body.innerHTML = _html;
         if (data.name_map) {
-          replaceParticipantMentions(body, data.name_map);
+          try { replaceParticipantMentions(body, data.name_map); } catch (_) {}
           _gcReaderNameMap = data.name_map || {};
         }
-        updateOrchestratorPanel(data, data.content);
+        try { updateOrchestratorPanel(data, data.content); } catch (_) {}
 
         if (atBottom) body.scrollTop = body.scrollHeight;
         else if (!isFirstLoad) _gcShowNewPostsPill(body);
