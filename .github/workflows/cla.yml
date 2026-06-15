@@ -20,21 +20,17 @@ jobs:
         if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
         uses: contributor-assistant/github-action@v2.6.1
         env:
+          # Signatures live on the cla-signatures branch of THIS repo, so the
+          # default GITHUB_TOKEN (granted contents: write above) can write them.
+          # No PERSONAL_ACCESS_TOKEN / maintainer PAT needed — a PAT is only
+          # required when storing signatures in a *different* repo via
+          # remote-organization-name / remote-repository-name.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # PERSONAL_ACCESS_TOKEN is required when using remote-organization-name
-          # / remote-repository-name (as we do here to store signatures in the
-          # cla-signatures branch). Create a classic PAT with `contents: write`
-          # (repo scope) on a maintainer account and add it as a repository secret
-          # named PERSONAL_ACCESS_TOKEN. See the contributor-assistant action
-          # README for details on writing signatures to a remote repo/org.
-          PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
         with:
           path-to-signatures: 'signatures/v1/cla.json'
           path-to-document: 'https://github.com/amirfish1/claude-command-center/blob/main/CLA.md'
           branch: 'cla-signatures'
           allowlist: amirfish1,dependabot[bot]
-          remote-organization-name: amirfish1
-          remote-repository-name: claude-command-center
           create-file-commit-message: 'chore(cla): create signatures file'
           signed-commit-message: 'chore(cla): @$contributorName signed CLA'
           custom-notsigned-prcomment: 'Thank you for your contribution! Before we can merge, please read and sign the [Contributor License Agreement](https://github.com/amirfish1/claude-command-center/blob/main/CLA.md). Comment with the exact sentence below to sign:'
