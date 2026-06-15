@@ -26816,6 +26816,34 @@ def _group_chat_normalize_whitespace(real_path):
         return False
 
 
+def _shorten_display_name(raw, session_id=""):
+    """Return a short, heading-safe display name for a group-chat participant.
+
+    Auto-derived names are often a session's whole first message — a codex
+    task description, sometimes with a leading ``##`` — which renders as an
+    ugly multi-line blob in the chat heading and the wake-status list. Collapse
+    whitespace, drop ``#``/markdown, cut at the first clause, and cap to a few
+    words / 28 chars so the label stays a single tidy token. Falls back to the
+    8-char session hash when nothing usable remains. Pure string work — no
+    session/cwd lookups (this runs in per-participant loops; keep it cheap).
+    """
+    s = re.sub(r"\s+", " ", str(raw or "")).strip()
+    s = s.lstrip("#").strip().replace("#", "").strip()
+    hash8 = (str(session_id or "")[:8]) or "agent"
+    if not s:
+        return hash8
+    if len(s) <= 28:
+        return s[:80]
+    # Too long: first clause, then cap to the first few words / 28 chars.
+    s = re.split(r"[.:;|]\s", s, 1)[0].strip()
+    out = ""
+    for w in s.split(" "):
+        if out and len(out) + 1 + len(w) > 28:
+            break
+        out = (out + " " + w).strip()
+    return (out or s[:28]).strip() or hash8
+
+
 def _group_chat_post(path, text, chat_uuid="", session_id="", name="", emoji=""):
     """Append an entry to a group-chat file.
 
@@ -26847,7 +26875,7 @@ def _group_chat_post(path, text, chat_uuid="", session_id="", name="", emoji="")
         hash8 = m.group(1).lower()
         nm = (_load_group_chat_sidecar(real_path) or {}).get("name_map") or {}
         disp = str(name or "").strip() or nm.get(sid) or nm.get(hash8) or hash8
-        disp = re.sub(r"\s+", " ", disp).replace("#", "").strip()[:80] or hash8
+        disp = _shorten_display_name(disp, sid)
         marker = str(emoji or "").strip() or "💬"
         speaker = f"{hash8}: {disp} {marker}"
     else:
@@ -27114,7 +27142,7 @@ def _coordinate_sessions(payload):
     chat_path = os.path.join(group_chats_dir, f"{slug}-{ts}.md")
     chat_uuid = str(uuid.uuid4())
 
-    name_map = {m["session_id"]: m.get("display_name") or m["session_id"]
+    name_map = {m["session_id"]: _shorten_display_name(m.get("display_name") or m["session_id"], m["session_id"])
                 for m in sessions_meta if isinstance(m, dict) and m.get("session_id")}
     participant_names = [name_map.get(sid, sid) for sid in session_ids]
     if include_human:
@@ -28429,7 +28457,7 @@ def _group_chat_add_participant(raw_path: str, session_id: str, display_name: st
     if not already:
         session_ids.append(sid)
     if display_name and not name_map.get(sid):
-        name_map[sid] = display_name
+        name_map[sid] = _shorten_display_name(display_name, sid)
     elif sid not in name_map:
         name_map[sid] = sid  # fall back to bare sid for the loop-detection map
 
