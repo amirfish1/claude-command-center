@@ -1437,6 +1437,35 @@
     return '';
   }
 
+  // currentSession gated to the OPEN conversation. currentSession is a global
+  // that lags a conversation switch — it holds the PREVIOUS session until
+  // setCurrentSession re-runs — so any timer-driven singleton widget that reads
+  // it can paint the new conversation with the old session's engine/live/tty
+  // state for ~1 poll. Poll/render code should read through this instead of
+  // touching currentSession directly: returns the session only when it belongs
+  // to the open conversation (or is an in-progress new spawn with no id yet),
+  // else null so the caller renders an offline/placeholder shape.
+  function activeConvSession() {
+    const convId = (typeof currentConversation !== 'undefined') ? currentConversation : '';
+    const sess = (typeof currentSession !== 'undefined' && currentSession) ? currentSession : null;
+    if (!sess) return null;
+    if (!sess.id) return sess;            // a new session being composed — keep
+    if (convId && sess.id === convId) return sess;
+    return null;                          // stale: holds a previous conversation
+  }
+
+  // True only when liveStatus actually describes the session that is open now.
+  // liveStatus is fetched async with no session id of its own and is NOT reset
+  // on a conversation switch, so it lags by up to one poll. We tag each fetch
+  // with the session it was for (liveStatus.forSessionId); comparing that to the
+  // open session's id is the only reliable lag check — currentSession.id and
+  // currentConversation both update synchronously on switch, so they can't
+  // detect it. Engine-agnostic: both sides are session ids.
+  function liveStatusMatchesOpenConv() {
+    const sid = (typeof currentSession !== 'undefined' && currentSession) ? currentSession.id : null;
+    return !!(sid && liveStatus && liveStatus.forSessionId === sid);
+  }
+
   function selectedRepoLabel() {
     const repoPath = selectedRepoPath();
     if (!repoPath) return '';
@@ -1516,7 +1545,7 @@
   let sessionSourceByConv = {}; // {convId: 'interactive'|'pkood'|'task'}
   let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
   // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
-  let liveStatus = { live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+  let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
   let liveStatusTimer = null;
   const CODEX_WAKE_TEXT = 'Status check: your last tool call has not returned for a while. If you are stuck, say what you were waiting on, stop polling that command, and continue with the next concrete step.';
   // Separate 1s tick that just re-renders the live-tool strip + inline
@@ -1700,12 +1729,15 @@
   }
 
   function launchTargetsForCurrentSession() {
-    const isCodex = currentSession.source === 'codex';
-    const isGemini = currentSession.source === 'gemini';
-    const isCursor = currentSession.source === 'cursor';
-    const isAntigravity = currentSession.source === 'antigravity';
-    const antigravityTerminalHint = currentSession.can_headless_resume === true ? 'AGY conversation' : '/open in AGY';
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(currentSession.id || '');
+    // Gate to the open conversation; a stale currentSession would offer Launch
+    // targets for a session you've already switched away from.
+    const sess = activeConvSession() || {};
+    const isCodex = sess.source === 'codex';
+    const isGemini = sess.source === 'gemini';
+    const isCursor = sess.source === 'cursor';
+    const isAntigravity = sess.source === 'antigravity';
+    const antigravityTerminalHint = sess.can_headless_resume === true ? 'AGY conversation' : '/open in AGY';
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sess.id || '');
     return [
       { id: 'terminal', label: 'Terminal', hint: isAntigravity ? antigravityTerminalHint : 'default', disabled: false },
       {
@@ -1817,12 +1849,16 @@
 
   function updateAnnounceButton() {
     if (!$announceBtnConv) return;
-    const sid = currentSession.id;
-    const isPkood = currentSession.source === 'pkood';
-    const isCodex = currentSession.source === 'codex';
-    const isGemini = currentSession.source === 'gemini';
-    const isCursor = currentSession.source === 'cursor';
-    const isAntigravity = currentSession.source === 'antigravity';
+    // Read the session only when it belongs to the open conversation, else a
+    // stale currentSession could show "Close & announce" for a session you've
+    // already switched away from.
+    const sess = activeConvSession();
+    const sid = sess && sess.id;
+    const isPkood = sess && sess.source === 'pkood';
+    const isCodex = sess && sess.source === 'codex';
+    const isGemini = sess && sess.source === 'gemini';
+    const isCursor = sess && sess.source === 'cursor';
+    const isAntigravity = sess && sess.source === 'antigravity';
     if (!sid || isPkood || isCodex || isGemini || isCursor || isAntigravity) {
       $announceBtnConv.style.display = 'none';
       delete $announceBtnConv.dataset.sessionId;
@@ -1898,14 +1934,17 @@
   }
   function _renderConvOverflowMenu() {
     if (!$convOverflowMenu) return;
-    const sid = currentSession && currentSession.id;
-    const isPkood = currentSession && currentSession.source === 'pkood';
-    const isCodex = currentSession && currentSession.source === 'codex';
-    const isGemini = currentSession && currentSession.source === 'gemini';
-    const isCursor = currentSession && currentSession.source === 'cursor';
-    const isAntigravity = currentSession && currentSession.source === 'antigravity';
+    // Gate to the open conversation so the menu and its "(current)" repo marker
+    // reflect what you're viewing, not a stale previously-open session.
+    const sess = activeConvSession();
+    const sid = sess && sess.id;
+    const isPkood = sess && sess.source === 'pkood';
+    const isCodex = sess && sess.source === 'codex';
+    const isGemini = sess && sess.source === 'gemini';
+    const isCursor = sess && sess.source === 'cursor';
+    const isAntigravity = sess && sess.source === 'antigravity';
     const repos = (typeof repoListState !== 'undefined' && repoListState.repos) || [];
-    const activeRepo = (currentSession && (currentSession.repoPath || currentSession.cwd)) || '';
+    const activeRepo = activeConvRepoPath();
     let html = '';
     html += '<div class="com-section-label">Move to repo</div>';
     if (!sid) {
@@ -2012,13 +2051,17 @@
   }
 
   function updateJumpButton() {
-    const live = liveStatus.live;
-    const sid = currentSession.id;
-    const isPkood = currentSession.source === 'pkood';
-    const isCodex = currentSession.source === 'codex';
-    const isGemini = currentSession.source === 'gemini';
-    const isCursor = currentSession.source === 'cursor';
-    const isAntigravity = currentSession.source === 'antigravity';
+    // Both liveStatus (terminal jump target) and currentSession (engine/id) must
+    // belong to the open conversation; otherwise the jump/launch buttons point
+    // at a session you've switched away from.
+    const live = liveStatusMatchesOpenConv() && liveStatus.live;
+    const sess = activeConvSession() || {};
+    const sid = sess.id;
+    const isPkood = sess.source === 'pkood';
+    const isCodex = sess.source === 'codex';
+    const isGemini = sess.source === 'gemini';
+    const isCursor = sess.source === 'cursor';
+    const isAntigravity = sess.source === 'antigravity';
     const canJump = live && liveStatus.tty && liveStatus.terminalApp;
     const canShowLaunch = !!sid && !isPkood;
 
@@ -2137,11 +2180,14 @@
   let _lastStatusCheckedAt = 0;
   async function refreshLiveStatus() {
     if (!currentSession.id) {
-      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+      liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
       updateJumpButton();
       updateInputBar();
       return;
     }
+    // Capture the session this fetch is FOR, before the await — currentSession
+    // may change underneath us if the user switches while it's in flight.
+    const _fetchedFor = currentSession.id;
     try {
       const params = new URLSearchParams({
         session_id: currentSession.id,
@@ -2150,6 +2196,7 @@
       const res = await fetch('/api/session-status?' + params.toString());
       const data = await res.json();
       liveStatus = {
+        forSessionId: _fetchedFor,
         live: !!data.live,
         pid: data.pid || null,
         tty: data.tty || null,
@@ -2250,7 +2297,7 @@
         question_option_details: Array.isArray(data.question_option_details) ? data.question_option_details : [],
       });
     } catch (err) {
-      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false };
+      liveStatus = { forSessionId: _fetchedFor, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false };
     }
     updateJumpButton();
     updateInputBar();
@@ -3130,6 +3177,15 @@
     }
     const $view = (typeof getConvView === 'function') ? getConvView() : null;
     if (!$view) return;
+    // liveStatus lags a conversation switch by up to one poll. If it still
+    // describes a different (just-closed) session, tear the strip down rather
+    // than painting the new conversation with the old session's live activity
+    // (and its Antigravity "Push input" wake button).
+    if (!liveStatusMatchesOpenConv()) {
+      document.querySelectorAll('.conv-live-tool-strip, .conv-live-tool-inline:not(.optimistic)').forEach(n => n.remove());
+      if (_liveStripShown) { try { updateLiveStripOffset($view, null); } catch (_) {} _liveStripShown = false; }
+      return;
+    }
     // Idle fast-path: nothing is live, so there's nothing to show. Bail
     // before the per-second document.querySelectorAll + innerHTML below —
     // on a deep conversation that's pure waste when no session is running.
@@ -3270,7 +3326,9 @@
   function updateCodexStateBadge() {
     const $view = (typeof getConvView === 'function') ? getConvView() : null;
     if (!$view) return;
-    const st = liveStatus.codexState;  // only set for codex sessions (server-gated)
+    // Ignore liveStatus until it matches the open conversation, else a codex
+    // badge from the session you just switched AWAY from mounts in the new view.
+    const st = liveStatusMatchesOpenConv() ? liveStatus.codexState : null;  // only set for codex sessions (server-gated)
     let badge = $view.querySelector('.conv-codex-state');
     if (!st) { if (badge) badge.remove(); return; }
     const LABELS = { working: 'Working', idle: 'Idle', stuck: 'Stuck', offline: 'Offline' };
@@ -3422,7 +3480,7 @@
       // Pkood sessions don't need live status polling or resume button
       if (liveStatusTimer) { clearInterval(liveStatusTimer); liveStatusTimer = null; }
       if (liveStatusRenderTicker) { clearInterval(liveStatusRenderTicker); liveStatusRenderTicker = null; }
-      liveStatus = { live: false, pid: null, tty: null, terminalApp: null, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+      liveStatus = { forSessionId: sid, live: false, pid: null, tty: null, terminalApp: null, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
       updateResumeButton();
       updateAnnounceButton();
       updateJumpButton();
@@ -3761,7 +3819,10 @@
     const isCursor = currentSession.source === 'cursor';
     const isAntigravity = currentSession.source === 'antigravity';
     const antigravityCanSendNow = antigravityCanSend(currentSession);
-    const live = liveStatus.live && liveStatus.tty;
+    // liveStatus lags a conversation switch by up to one poll; until it matches
+    // the open conversation, treat the session as not-live so we never show the
+    // PREVIOUS session's terminal/tty in the freshly-opened one.
+    const live = liveStatusMatchesOpenConv() && liveStatus.live && liveStatus.tty;
     const isConvTab = activeTab === 'sessions';
     const hasSession = !!currentSession.id;
     const isNewSession = currentConversation === '__new__';
@@ -4038,7 +4099,8 @@
   function slashCommandUnavailableReason() {
     if ((currentConversation || '').startsWith('backlog-issue-')) return 'Issue actions do not use slash commands';
     if (conversationsData.some(x => x.id === currentConversation && x.source === 'backlog')) return 'Issue actions do not use slash commands';
-    const source = currentSession && currentSession.source;
+    const sess = activeConvSession();
+    const source = sess && sess.source;
     if (source === 'gemini') return 'Slash commands are not wired for Gemini sessions';
     if (source === 'cursor') return 'Slash commands are not wired for Cursor sessions';
     if (source === 'antigravity') return 'Slash commands are not wired for Antigravity sessions';
@@ -4049,7 +4111,7 @@
         ? ''
         : 'Slash commands are not wired for ' + engine + ' sessions';
     }
-    return (currentSession && currentSession.id) ? '' : 'Select a Claude or Codex session first';
+    return (sess && sess.id) ? '' : 'Select a Claude or Codex session first';
   }
 
   async function slashCommandsForCurrentContext() {
@@ -4061,10 +4123,11 @@
       const engine = (typeof getSpawnEngine === 'function') ? getSpawnEngine() : 'claude';
       return slashFallbackCommandsForSource(engine);
     }
-    const sid = currentSession && currentSession.id;
+    const sess = activeConvSession();
+    const sid = sess && sess.id;
     if (!sid) return [];
     if (_slashCommandCache.has(sid)) return _slashCommandCache.get(sid);
-    let commands = slashFallbackCommandsForSource(currentSession && currentSession.source);
+    let commands = slashFallbackCommandsForSource(sess && sess.source);
     try {
       const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/slash-commands', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
@@ -15814,7 +15877,10 @@
   function updateConvProcessIndicator() {
     const el = document.querySelector('[data-role="ccc-breadcrumb-proc"]');
     if (!el) return;
-    const ls = liveStatus || {};
+    // liveStatus lags a conversation switch by up to one poll. Until it matches
+    // the open conversation, render the engine pills as idle rather than painting
+    // the new session with the PREVIOUS session's headless/terminal state.
+    const ls = liveStatusMatchesOpenConv() ? (liveStatus || {}) : {};
     const pill0 = (on, warn, label, title) =>
       '<span class="ccc-proc-pill ' + (on ? (warn ? 'is-stale' : 'is-on') : 'is-off') + '"'
       + ' title="' + escapeHtml(title) + '">'
@@ -21219,11 +21285,14 @@
     const isCursor = currentSession.source === 'cursor';
     const isAntigravity = currentSession.source === 'antigravity';
     const antigravityCanSendNow = antigravityCanSend(currentSession);
-    const live = liveStatus.live && liveStatus.tty;
+    // liveStatus lags a conversation switch by up to one poll — ignore it until
+    // it matches the open conversation so we never show the prior session's tty.
+    const ls = liveStatusMatchesOpenConv() ? liveStatus : {};
+    const live = ls.live && ls.tty;
     const hasSession = !!currentSession.id;
     if (hasSession && kanbanView) {
       $convPanelInput.classList.add('visible');
-      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (isCodex ? (liveStatus.tty || 'codex') : (isGemini ? (liveStatus.tty || 'gemini') : (isCursor ? (liveStatus.tty || 'cursor') : (isAntigravity ? (liveStatus.tty || 'antigravity') : (liveStatus.tty || (live ? '' : 'offline'))))));
+      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (isCodex ? (ls.tty || 'codex') : (isGemini ? (ls.tty || 'gemini') : (isCursor ? (ls.tty || 'cursor') : (isAntigravity ? (ls.tty || 'antigravity') : (ls.tty || (live ? '' : 'offline'))))));
       if ($cpInput) {
         if (isPkood) $cpInput.placeholder = 'Send to pkood agent...';
         else if (isCodex) $cpInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
