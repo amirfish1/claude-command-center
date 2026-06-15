@@ -27554,6 +27554,7 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
                 last_reminder_targets=[sid[:8] for sid in target_sids],
             )
 
+    failed_labels = []
     for sid in target_sids:
         text = _group_chat_inject_text(real_path, topic, mode, sid)
         r = _inject_text_into_session(sid, text)
@@ -27561,15 +27562,28 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
         if r.get("ok"):
             label = name_map.get(sid) or sid
             pinged_labels.append(f"`{label}` ({sid[:8]})")
+        else:
+            # Surface the failure in-chat. A silently-dropped nudge (offline
+            # Codex routed through resume, a tty-less Claude session, a dead
+            # spawn) used to leave NO trace at all — the chat looked idle
+            # while CCC quietly failed to wake anyone. Log a short reason so
+            # "pinging doesn't work" is observable instead of invisible.
+            label = name_map.get(sid) or sid
+            reason = str(r.get("code") or r.get("error") or "delivery failed").strip()
+            reason = re.sub(r"\s+", " ", reason)[:120]
+            failed_labels.append(f"`{label}` ({sid[:8]}): {reason}")
+    # Log AFTER the inject so the baseline-mtime bump doesn't race
+    # with the inject's own potential file changes. The bump prevents
+    # the watcher from seeing this admin write as a real activity tick
+    # — without it, the watcher would re-fire a nudge after the
+    # debounce window, this function would log it again, and the
+    # chat would gain a "pinged" line every minute even when nothing
+    # else is happening. The last_reminder_key dedup above caps this at
+    # one pinged/failed line per new post, so failures don't spam either.
     if pinged_labels:
-        # Log AFTER the inject so the baseline-mtime bump doesn't race
-        # with the inject's own potential file changes. The bump prevents
-        # the watcher from seeing this admin write as a real activity tick
-        # — without it, the watcher would re-fire a nudge after the
-        # debounce window, this function would log it again, and the
-        # chat would gain a "pinged" line every minute even when nothing
-        # else is happening.
         _group_chat_log_system(real_path, f"pinged {', '.join(pinged_labels)}")
+    if failed_labels:
+        _group_chat_log_system(real_path, f"nudge FAILED — {'; '.join(failed_labels)}")
     return {"ok": True, "results": results}
 
 
