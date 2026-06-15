@@ -1399,11 +1399,13 @@
   }
   const $convFolderFilter = document.getElementById('convFolderFilter');
   let repoListState = { repos: [], current: '', recent: [] };
-  let archiveFolderFilter = (() => {
-    if (CONV_POPOUT_MODE && CONV_POPOUT_REPO_PATH) return CONV_POPOUT_REPO_PATH;
-    try { return localStorage.getItem(ARCHIVE_FOLDER_FILTER_KEY) || ARCHIVE_FOLDER_ALL; }
-    catch (_) { return ARCHIVE_FOLDER_ALL; }
-  })();
+  // Folder filtering removed: the conversation list always shows everything.
+  // Popout mode still scopes to its one repo. Normal mode is always ALL — a
+  // stale saved filter must not silently hide conversations now the dropdown
+  // is gone.
+  let archiveFolderFilter = (CONV_POPOUT_MODE && CONV_POPOUT_REPO_PATH)
+    ? CONV_POPOUT_REPO_PATH
+    : ARCHIVE_FOLDER_ALL;
 
   function _pathLeaf(path) {
     const parts = String(path || '').split('/').filter(Boolean);
@@ -1414,6 +1416,25 @@
     return archiveFolderFilter && archiveFolderFilter !== ARCHIVE_FOLDER_ALL
       ? archiveFolderFilter
       : '';
+  }
+
+  // The repo of the OPEN conversation — the correct source for topbar/session
+  // widgets (localhost pill, Vercel pill, worktrees badge) now that the global
+  // folder filter is gone. Prefer the open row's own path; trust currentSession
+  // only when its id matches the open conversation (it holds the PREVIOUS
+  // conversation's repo across a switch until the new row loads); otherwise ''.
+  function activeConvRepoPath() {
+    const convId = (typeof currentConversation !== 'undefined') ? currentConversation : '';
+    const row = convId ? (conversationsData || []).find(x => x && x.id === convId) : null;
+    const rowRepo = row ? rowRepoPath(row) : '';
+    if (_isAbsoluteLocalPath(rowRepo)) return rowRepo;
+    const sessionId = (typeof convId === 'string' && /^[0-9a-f-]{8,}$/i.test(convId)) ? convId : '';
+    const sess = (typeof currentSession !== 'undefined' && currentSession) ? currentSession : null;
+    if (sess && (!sessionId || sess.id === sessionId)) {
+      const sr = sess.repoPath || sess.cwd || '';
+      if (_isAbsoluteLocalPath(sr)) return sr;
+    }
+    return '';
   }
 
   function selectedRepoLabel() {
@@ -3767,7 +3788,7 @@
         $convInput.placeholder = issueInputPlaceholder(n);
       } else if (isNewSession) {
         $convTtyLabel.textContent = 'new';
-        const cwdForPrompt = (typeof getSpawnCwd === 'function' && getSpawnCwd()) || selectedRepoPath();
+        const cwdForPrompt = (typeof getSpawnCwd === 'function' && getSpawnCwd()) || activeConvRepoPath();
         const repoLabel = (typeof spawnCwdLabel === 'function' && spawnCwdLabel(cwdForPrompt)) || _pathLeaf(cwdForPrompt);
         const spawnEngine = getSpawnEngine();
         if (spawnEngine === 'antigravity') {
@@ -23749,7 +23770,7 @@
   async function refreshWorktreesBadge() {
     const $btn = document.getElementById('kptWorktreesBtn');
     if (!$btn) return;
-    const repoPath = selectedRepoPath();
+    const repoPath = activeConvRepoPath();
     if (!repoPath) {
       $btn.classList.remove('has-agent-worktrees');
       $btn.title = 'Pick a repo to show worktrees.';
@@ -26637,7 +26658,7 @@
     // The "Broaden outside of repo" toggle (when wired) will flip this.
     const params = new URLSearchParams({ q, limit: '50', since: '90d' });
     if (!_historyState.broaden) {
-      const cwd = (typeof selectedRepoPath === 'function' && selectedRepoPath()) || '';
+      const cwd = (typeof activeConvRepoPath === 'function' && activeConvRepoPath()) || '';
       if (cwd) params.set('cwd', cwd);
     }
     // Auto-enable semantic when the local index has embeddings — the user
@@ -27689,7 +27710,7 @@
   }
 
   async function pollVercelDeploy() {
-    const repoPath = selectedRepoPath();
+    const repoPath = activeConvRepoPath();
     if (!repoPath) {
       setDeployPill({
         dotClass: '',
@@ -28667,58 +28688,18 @@
   }
 
   function setArchiveFolderFilter(value, opts = {}) {
-    const oldRepo = selectedRepoPath();
-    const newValue = value || ARCHIVE_FOLDER_ALL;
-    const newRepo = newValue !== ARCHIVE_FOLDER_ALL ? newValue : '';
-    const repoChanged = oldRepo !== newRepo;
-
-    if (repoChanged) {
-      for (const p of splitState.panes) {
-        if (p.eventSource) {
-          try { p.eventSource.close(); } catch (e) {}
-          p.eventSource = null;
-        }
-      }
-      if (typeof stopSpawnStream === 'function') stopSpawnStream();
-      if (typeof stopCodexLogPoller === 'function') stopCodexLogPoller();
+    // Folder filtering was removed: the conversation list always shows every
+    // conversation, and per-conversation repo context comes from the OPEN
+    // session (see activeConvRepoPath), never a global list filter — that
+    // global was the source of the localhost/Vercel "wrong repo" poisoning.
+    // Kept as a no-op so any orphaned caller (e.g. the repo-picker modal) is
+    // harmless. Force ALL so a stray call can never re-engage filtering.
+    if (archiveFolderFilter !== ARCHIVE_FOLDER_ALL) {
+      archiveFolderFilter = ARCHIVE_FOLDER_ALL;
+      try { localStorage.removeItem(ARCHIVE_FOLDER_FILTER_KEY); } catch (_) {}
     }
-
-    archiveFolderFilter = newValue;
-    try { localStorage.setItem(ARCHIVE_FOLDER_FILTER_KEY, archiveFolderFilter); } catch (_) {}
-    renderArchiveFolderFilter();
-    updateRepoPickerVisibility();
     if (opts.render !== false) {
-      renderArchiveList(document.getElementById('convSearch')?.value || '');
-    }
-    // Folder change → refresh archived-group-chat list scoped to the new
-    // folder, then re-render so rows for the right repo show up.
-    try {
-      refreshArchivedGroupChats().then(() => {
-        if (opts.render !== false) {
-          const $s = document.getElementById('convSearch');
-          renderArchiveList($s ? $s.value : '');
-        }
-      }).catch(() => {});
-    } catch (_) {}
-    loadAttentionList();
-    refreshWorktreesBadge();
-    pollVercelDeploy();
-    pollLocalhost();
-    // Note: the In Group Chat polling is set up once at boot via
-    // wireGroupChatPolling() — not here. Calling setInterval inside this
-    // handler used to leak a fresh 15s timer on every folder-filter change.
-    pollGcActive();
-
-    if (repoChanged) {
-      restoreSplitState();
-      loadConversationList();
-      // Notify subscribers outside this IIFE (terminal panel etc.) so
-      // they can react to a fresh repo selection without polling.
-      try {
-        window.dispatchEvent(new CustomEvent('ccc-repo-changed', {
-          detail: { repoPath: newRepo },
-        }));
-      } catch (_) {}
+      try { renderArchiveList(document.getElementById('convSearch')?.value || ''); } catch (_) {}
     }
   }
 
