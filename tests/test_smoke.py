@@ -10,6 +10,7 @@ import json
 import os
 import pathlib
 import shutil
+import sqlite3
 import socket
 import stat
 import subprocess
@@ -1016,6 +1017,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Cursor usage limit hit. Cursor says:", app_js)
         self.assertIn(".source-badge.cursor", app_css)
         self.assertIn(".event.system.send-failure", app_css)
+
+    def test_hermes_history_is_wired_in_static_ui(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn("source-badge hermes", app_js)
+        self.assertIn("is-hermes-session", app_js)
+        self.assertIn("Hermes history is read-only in CCC", app_js)
+        self.assertIn("hermes_lineage", app_js)
+        self.assertIn("conv-signal hermes-platform", app_js)
+        self.assertIn(".conv-session-icon.hermes", app_css)
+        self.assertIn(".conv-item .source-badge.hermes", app_css)
+        self.assertIn(".event.system.system-hermes", app_css)
 
     def test_cursor_sidebar_visibility_rejects_bad_input(self):
         for mod in ("server", "morning", "morning_store"):
@@ -4661,7 +4674,176 @@ class TestRepoContextHelpers(unittest.TestCase):
             sys.modules.pop(mod, None)
         import server
         src = pathlib.Path(server.__file__).read_text()
-        self.assertIn("/api/conversations/(?:[a-f0-9-]+|ses_[A-Za-z0-9]+)/files", src)
+        self.assertIn("/api/conversations/[^/]+/files", src)
+
+    def test_hermes_history_reads_sqlite_lineage(self):
+        """Hermes history should read native state.db rows and collapse
+        parent_session_id continuations into a single visible row."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        parent = "20260601_120000_parent"
+        child = "20260601_121000_child"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            db = root / "state.db"
+            gateway = root / "sessions" / "sessions.json"
+            gateway.parent.mkdir(parents=True)
+            gateway.write_text(json.dumps({
+                "agent:cli:test": {
+                    "session_id": child,
+                    "platform": "cli",
+                    "origin": "cli",
+                    "chat_type": "dm",
+                    "display_name": "Hermes gateway title",
+                    "updated_at": "2026-06-01T12:10:00Z",
+                },
+            }))
+            con = sqlite3.connect(db)
+            try:
+                con.executescript("""
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY,
+                        source TEXT,
+                        user_id TEXT,
+                        model TEXT,
+                        title TEXT,
+                        started_at REAL,
+                        ended_at REAL,
+                        parent_session_id TEXT,
+                        message_count INTEGER,
+                        tool_call_count INTEGER,
+                        input_tokens INTEGER,
+                        output_tokens INTEGER,
+                        cache_read_tokens INTEGER,
+                        cache_write_tokens INTEGER,
+                        reasoning_tokens INTEGER,
+                        cwd TEXT,
+                        archived INTEGER
+                    );
+                    CREATE TABLE messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT,
+                        role TEXT,
+                        content TEXT,
+                        tool_call_id TEXT,
+                        tool_calls TEXT,
+                        tool_name TEXT,
+                        timestamp REAL,
+                        token_count INTEGER,
+                        finish_reason TEXT,
+                        reasoning TEXT,
+                        active INTEGER
+                    );
+                    CREATE VIRTUAL TABLE messages_fts USING fts5(content);
+                """)
+                con.execute(
+                    "INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (parent, "cli", "test-user", "hermes-test-model", "Investigate deployment",
+                     1780315200.0, 1780315500.0, "", 2, 0, 100, 20, 5, 0, 0, str(root), 0),
+                )
+                con.execute(
+                    "INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (child, "whatsapp", "test-user", "hermes-test-model", "Investigate deployment #2",
+                     1780315800.0, 1780316100.0, parent, 3, 1, 120, 40, 10, 2, 0, str(root), 0),
+                )
+                con.execute(
+                    "INSERT INTO messages (session_id, role, content, timestamp, reasoning, active) VALUES (?,?,?,?,?,1)",
+                    (parent, "user", "Original Hermes request", 1780315210.0, "",),
+                )
+                con.execute(
+                    "INSERT INTO messages (session_id, role, content, timestamp, reasoning, active) VALUES (?,?,?,?,?,1)",
+                    (parent, "assistant", "Parent answer before compression", 1780315220.0, "hidden chain of thought",),
+                )
+                con.execute(
+                    "INSERT INTO messages (session_id, role, content, timestamp, reasoning, active) VALUES (?,?,?,?,?,1)",
+                    (child, "user", json.dumps({"text": "Please run status"}), 1780315810.0, "",),
+                )
+                tool_calls = json.dumps([{
+                    "id": "call_1",
+                    "function": {
+                        "name": "Bash",
+                        "arguments": json.dumps({"command": "git status --short"}),
+                    },
+                }])
+                con.execute(
+                    "INSERT INTO messages (session_id, role, content, tool_calls, timestamp, reasoning, active) VALUES (?,?,?,?,?,?,1)",
+                    (child, "assistant", "I'll inspect.", tool_calls, 1780315820.0, "more hidden reasoning"),
+                )
+                con.execute(
+                    "INSERT INTO messages (session_id, role, content, tool_call_id, tool_name, timestamp, active) VALUES (?,?,?,?,?,?,1)",
+                    (child, "tool", " M server.py", "call_1", "Bash", 1780315830.0),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            orig_db = server.HERMES_STATE_DB
+            orig_gateway = server.HERMES_GATEWAY_SESSIONS
+            server.HERMES_STATE_DB = db
+            server.HERMES_GATEWAY_SESSIONS = gateway
+            server._HERMES_ID_CACHE["key"] = None
+            server._HERMES_ID_CACHE["ids"] = set()
+            server._HERMES_GATEWAY_CACHE["key"] = None
+            server._HERMES_GATEWAY_CACHE["by_session"] = {}
+            server._ENGINE_DETECT_CACHE.clear()
+            try:
+                rows = server.find_hermes_conversations(repo_only=False)
+                self.assertEqual([r["session_id"] for r in rows], [child])
+                row = rows[0]
+                self.assertEqual(row["source"], "hermes")
+                self.assertEqual(row["engine"], "hermes")
+                self.assertEqual(row["source_platform"], "whatsapp")
+                self.assertEqual(row["model"], "hermes-test-model")
+                self.assertEqual(row["parent_session_id"], parent)
+                self.assertEqual(row["hermes_lineage_session_ids"], [parent, child])
+                self.assertEqual(row["hermes_lineage_count"], 2)
+                self.assertIn("Please run status", row["first_message"])
+
+                parsed = server.parse_conversation(child, use_cache=False)
+                events = parsed["events"]
+                self.assertEqual(parsed["last_line"], 7)
+                self.assertEqual(events[0]["subtype"], "hermes_lineage")
+                self.assertEqual(events[0]["lineage_session_ids"], [parent, child])
+                self.assertTrue(any(e.get("type") == "system" and e.get("subtype") == "hermes_segment" for e in events))
+                self.assertTrue(any(e.get("type") == "user_text" and e.get("text") == "Original Hermes request" for e in events))
+                self.assertTrue(any(e.get("type") == "user_text" and e.get("text") == "Please run status" for e in events))
+                tool_blocks = [
+                    b
+                    for e in events if e.get("type") == "assistant"
+                    for b in e.get("blocks", [])
+                    if b.get("kind") == "tool_use"
+                ]
+                self.assertEqual(tool_blocks[0]["name"], "Bash")
+                self.assertIn("git status", tool_blocks[0]["detail"])
+                self.assertTrue(any(e.get("type") == "tool_result" and "server.py" in e.get("text", "") for e in events))
+                self.assertNotIn("hidden chain", json.dumps(events))
+            finally:
+                server.HERMES_STATE_DB = orig_db
+                server.HERMES_GATEWAY_SESSIONS = orig_gateway
+                server._HERMES_ID_CACHE["key"] = None
+                server._HERMES_ID_CACHE["ids"] = set()
+                server._HERMES_GATEWAY_CACHE["key"] = None
+                server._HERMES_GATEWAY_CACHE["by_session"] = {}
+                server._ENGINE_DETECT_CACHE.clear()
+
+    def test_hermes_history_missing_db_is_empty(self):
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        with tempfile.TemporaryDirectory() as tmp:
+            orig_db = server.HERMES_STATE_DB
+            server.HERMES_STATE_DB = pathlib.Path(tmp) / "missing-state.db"
+            server._HERMES_ID_CACHE["key"] = None
+            server._HERMES_ID_CACHE["ids"] = set()
+            try:
+                self.assertEqual(server.find_hermes_conversations(repo_only=False), [])
+            finally:
+                server.HERMES_STATE_DB = orig_db
+                server._HERMES_ID_CACHE["key"] = None
+                server._HERMES_ID_CACHE["ids"] = set()
 
     def test_session_initial_scan_keeps_recent_and_live_rows(self):
         """Initial /api/sessions scans should avoid cold history while keeping
@@ -4894,7 +5076,7 @@ class TestModelPicker(unittest.TestCase):
         src = pathlib.Path(server.__file__).read_text()
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
-        self.assertIn("/api/conversations/(?:[a-f0-9-]+|ses_[A-Za-z0-9]+)/files", src)
+        self.assertIn("/api/conversations/[^/]+/files", src)
         self.assertIn("class=\"conv-pin-btn", js)
         self.assertIn("mergeBtn + startBtn + pinBtn + archiveBtn", js)
         self.assertIn("Pinned to top", js)
@@ -4999,7 +5181,7 @@ class TestModelPicker(unittest.TestCase):
             sys.modules.pop(mod, None)
         import server
         src = pathlib.Path(server.__file__).read_text()
-        self.assertIn("/api/session/[a-zA-Z0-9-]+/slash-commands", src)
+        self.assertIn("/api/session/[a-zA-Z0-9_-]+/slash-commands", src)
 
     def test_extract_session_usage_resets_at_compact_boundary(self):
         """`/compact` emits a `compact_boundary` system event; assistant

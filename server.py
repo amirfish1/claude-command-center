@@ -711,6 +711,12 @@ def _session_load_begin(repo_path=None):
             "state": "pending",
             "detail": "Waiting.",
         },
+        "hermes": {
+            "key": "hermes",
+            "label": "Hermes sessions",
+            "state": "pending",
+            "detail": "Waiting.",
+        },
         "agents": {
             "key": "agents",
             "label": "Pkood agents",
@@ -764,7 +770,7 @@ def _session_load_begin(repo_path=None):
             "updated_at": now,
             "steps": steps,
             "order": [
-                "repo", "transcripts", "sessions", "antigravity", "agents", "github",
+                "repo", "transcripts", "sessions", "antigravity", "hermes", "agents", "github",
                 "issue_states", "todo", "parking", "native_tasks", "cards",
             ],
         })
@@ -962,6 +968,7 @@ def _archive_load_begin():
         "cursor":      {"key": "cursor",      "label": "Cursor conversations",             "state": "pending", "detail": "Scanning ~/.cursor/projects/."},
         "antigravity": {"key": "antigravity", "label": "Antigravity conversations",        "state": "pending", "detail": "Scanning ~/.gemini/antigravity/brain/."},
         "kilo":        {"key": "kilo",        "label": "Kilo Code conversations",          "state": "pending", "detail": "Scanning ~/.local/share/kilo/kilo.db."},
+        "hermes":      {"key": "hermes",      "label": "Hermes conversations",             "state": "pending", "detail": "Scanning ~/.hermes/state.db."},
         "pr_states":   {"key": "pr_states",   "label": "Refreshing pull-request status",   "state": "pending", "detail": "gh pr view per known PR."},
         "issues":      {"key": "issues",      "label": "Refreshing GitHub issues",         "state": "pending", "detail": "gh issue list per repo."},
         "group_chats": {"key": "group_chats", "label": "Cross-repo group chats",           "state": "pending", "detail": "Reading sidecars."},
@@ -975,7 +982,7 @@ def _archive_load_begin():
             "started_at": now,
             "updated_at": now,
             "steps": steps,
-            "order": ["folders", "transcripts", "infer", "worktrees", "codex", "cursor", "antigravity", "kilo", "pr_states", "issues", "group_chats"],
+            "order": ["folders", "transcripts", "infer", "worktrees", "codex", "cursor", "antigravity", "kilo", "hermes", "pr_states", "issues", "group_chats"],
         })
 
 
@@ -1684,10 +1691,10 @@ def _detect_session_engine_uncached(session_id):
     for s in _spawned_sessions:
         if s.get("session_id") == session_id or s.get("resumed_sid") == session_id:
             engine = s.get("engine")
-            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo"):
+            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "hermes"):
                 return engine
     spawned = _spawn_registry_entry_for_session(session_id)
-    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo"):
+    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "hermes"):
         return spawned.get("engine")
     if _is_codex_session(session_id):
         return "codex"
@@ -1699,6 +1706,8 @@ def _detect_session_engine_uncached(session_id):
         return "gemini"
     if _is_kilo_session(session_id):
         return "kilo"
+    if _is_hermes_session(session_id):
+        return "hermes"
     return "claude"
 
 
@@ -4156,6 +4165,16 @@ def find_all_conversations(
         ))
     except Exception:
         pass
+    try:
+        out.extend(find_hermes_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+            resolve_pr_states=resolve_pr_states,
+            resolve_worktree_dirty=resolve_worktree_dirty,
+        ))
+    except Exception:
+        pass
 
     if resolve_pr_states:
         # Parallel-resolve PR states for every row that recorded a PR URL.
@@ -4435,6 +4454,7 @@ def _build_archive_conversations(
     progress("codex",       state="running")
     progress("cursor",      state="running")
     progress("antigravity", state="running")
+    progress("hermes",      state="running")
     raw_convs = find_all_conversations(
         resolve_pr_states=resolve_pr_states,
         resolve_effective=resolve_effective,
@@ -4454,6 +4474,7 @@ def _build_archive_conversations(
     progress("codex",       state="done")
     progress("cursor",      state="done")
     progress("antigravity", state="done")
+    progress("hermes",      state="done")
     if include_prs:
         progress("pr_states",   state="running", detail="gh pr view per known PR URL.")
         convs = conversations_with_open_prs(raw_convs)
@@ -10465,6 +10486,13 @@ def find_session_cwd(session_id):
         return override
     if session_id in _session_cwd_cache:
         return _session_cwd_cache[session_id]
+    hermes_row = _hermes_session_row(session_id)
+    if hermes_row:
+        cwd = hermes_row.get("cwd")
+        if cwd:
+            cwd = _resolve_session_cwd(session_id, cwd)
+            _session_cwd_cache[session_id] = cwd
+            return cwd
     codex_row = _codex_thread_row(session_id)
     if codex_row:
         cwd = codex_row.get("cwd")
@@ -12980,6 +13008,19 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
         if progress:
             progress("kilo", state="error", detail=f"Kilo session scan failed: {exc}")
 
+    if progress:
+        progress("hermes", state="running", detail="Reading Hermes sessions.")
+    try:
+        conversations.extend(find_hermes_conversations(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+    except Exception as exc:
+        if progress:
+            progress("hermes", state="error", detail=f"Hermes session scan failed: {exc}")
+
     # Add pkood agents — and merge in their linked claude-session card, if any.
     # Pkood spawns a claude process in a tmux pty, which produces a regular
     # ~/.claude/projects/*/*.jsonl file. Without dedup the kanban would show
@@ -13110,7 +13151,7 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
         )
     desktop_meta = _load_desktop_app_metadata()
     for c in conversations:
-        if c.get("source") not in ("codex", "gemini", "cursor", "antigravity"):
+        if c.get("source") not in ("codex", "gemini", "cursor", "antigravity", "hermes"):
             _add_sidecar_fields(c)
         # Desktop-app metadata decoration: use human-friendly title if present,
         # and flag the session as having been touched by the desktop app.
@@ -13364,6 +13405,8 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
             resolved = _cursor_transcript_path(conversation_id)
         elif _is_antigravity_session(conversation_id):
             resolved = _antigravity_transcript_path(conversation_id)
+        elif _is_hermes_session(conversation_id):
+            return _hermes_db_cache_key()
         else:
             resolved, _ = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
         if resolved and Path(resolved).is_file():
@@ -13495,6 +13538,10 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         events_copy = list(result.get("events") or [])
         events_copy.extend(_get_queued_events_for_session(conversation_id))
         return {"events": events_copy, "last_line": result.get("last_line", 0)}
+    if engine == "hermes":
+        result = _parse_hermes_conversation(conversation_id, after_line=after_line)
+        _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
+        return {"events": list(result.get("events") or []), "last_line": result.get("last_line", 0)}
     filepath, parser = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
     if parser is _parse_conversation_event and not Path(filepath).is_file():
         stub = _registry_only_conversation_stub(conversation_id, after_line=after_line)
@@ -14384,6 +14431,8 @@ def _extract_files_from_conversation(conversation_id):
         return _extract_files_from_cursor_conversation(conversation_id)
     if _is_antigravity_session(conversation_id):
         return _extract_files_from_antigravity_conversation(conversation_id)
+    if _is_hermes_session(conversation_id):
+        return _extract_files_from_hermes_conversation(conversation_id)
 
     filepath = _resolve_conversation_path(conversation_id)
     seen = {}  # target -> {label, target, kind, category, first_line}
@@ -21824,6 +21873,988 @@ def _is_kilo_session(session_id):
             finally:
                 con.close()
     return False
+
+
+# ---------------------------------------------------------------------------
+# Hermes conversation ingestion (read-only).
+#
+# Hermes keeps canonical history in ~/.hermes/state.db. Older JSONL exports are
+# legacy, so CCC reads SQLite directly and folds parent_session_id continuation
+# chains into one visible conversation row per lineage leaf.
+#
+# TODO(hermes-search): merge Hermes messages_fts into /api/search-history so
+# Hermes full-text hits surface alongside the claude-index results. Row/list and
+# transcript viewing are wired first because they do not require changing the
+# cross-provider search result contract.
+# ---------------------------------------------------------------------------
+
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
+HERMES_STATE_DB = Path(
+    os.environ.get("CCC_HERMES_STATE_DB")
+    or os.environ.get("HERMES_STATE_DB")
+    or (HERMES_HOME / "state.db")
+).expanduser()
+HERMES_GATEWAY_SESSIONS = Path(
+    os.environ.get("CCC_HERMES_GATEWAY_SESSIONS")
+    or (HERMES_HOME / "sessions" / "sessions.json")
+).expanduser()
+HERMES_CONTEXT_LIMIT = 200_000
+_HERMES_SESSION_ID_RE = re.compile(r"^\d{8}_\d{6}_[A-Za-z0-9]+$")
+_HERMES_ID_CACHE = {"key": None, "ids": set()}
+_HERMES_GATEWAY_CACHE = {"key": None, "by_session": {}}
+
+
+def _hermes_db_path():
+    try:
+        p = Path(HERMES_STATE_DB).expanduser()
+        return p if p.is_file() else None
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return None
+
+
+def _hermes_db_cache_key():
+    db = _hermes_db_path()
+    if not db:
+        return (0, 0)
+    mtime_ns = 0
+    size = 0
+    for p in (db, Path(str(db) + "-wal")):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        mtime_ns = max(mtime_ns, st.st_mtime_ns)
+        size += st.st_size
+    return (mtime_ns, size)
+
+
+def _hermes_connect():
+    db = _hermes_db_path()
+    if not db:
+        return None
+    try:
+        con = sqlite3.connect(str(db), timeout=0.5)
+        con.execute("PRAGMA query_only=1")
+        con.row_factory = sqlite3.Row
+        return con
+    except sqlite3.Error:
+        return None
+
+
+def _hermes_columns(con, table):
+    if not con or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table or ""):
+        return set()
+    try:
+        return {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.Error:
+        return set()
+
+
+def _hermes_session_ids():
+    key = _hermes_db_cache_key()
+    if _HERMES_ID_CACHE.get("key") == key:
+        return set(_HERMES_ID_CACHE.get("ids") or set())
+    ids = set()
+    con = _hermes_connect()
+    if con is not None:
+        try:
+            cols = _hermes_columns(con, "sessions")
+            if "id" in cols:
+                for row in con.execute("SELECT id FROM sessions"):
+                    sid = row["id"]
+                    if sid:
+                        ids.add(str(sid))
+        except sqlite3.Error:
+            pass
+        finally:
+            con.close()
+    _HERMES_ID_CACHE["key"] = key
+    _HERMES_ID_CACHE["ids"] = set(ids)
+    return ids
+
+
+def _is_hermes_session(session_id):
+    sid = str(session_id or "").strip()
+    if not sid or not _HERMES_SESSION_ID_RE.match(sid):
+        return False
+    return sid in _hermes_session_ids()
+
+
+def _hermes_epoch(value):
+    if value is None or isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        try:
+            v = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        if v <= 0:
+            return 0.0
+        if v > 1e17:
+            v /= 1_000_000_000.0
+        elif v > 1e14:
+            v /= 1_000_000.0
+        elif v > 1e11:
+            v /= 1_000.0
+        return v
+    text = str(value).strip()
+    if not text:
+        return 0.0
+    try:
+        return _hermes_epoch(float(text))
+    except (TypeError, ValueError, OverflowError):
+        pass
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except (TypeError, ValueError, OverflowError):
+        pass
+    m = re.match(r"^(\d{8})_(\d{6})_", text)
+    if m:
+        try:
+            dt = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+            return dt.replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            pass
+    return 0.0
+
+
+def _hermes_iso(value):
+    ts = _hermes_epoch(value)
+    if not ts:
+        return ""
+    try:
+        return datetime.fromtimestamp(ts, timezone.utc).isoformat().replace("+00:00", "Z")
+    except (OSError, OverflowError, ValueError):
+        return ""
+
+
+def _hermes_jsonish(value):
+    cur = value
+    for _ in range(2):
+        if isinstance(cur, bytes):
+            cur = cur.decode("utf-8", errors="replace")
+        if not isinstance(cur, str):
+            return cur
+        text = cur.strip()
+        if not text:
+            return ""
+        if text[0] not in "{[\"" and text not in ("null", "true", "false"):
+            return cur
+        try:
+            cur = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return cur
+    return cur
+
+
+def _hermes_join_text(parts):
+    cleaned = []
+    for part in parts:
+        text = re.sub(r"\s+\n", "\n", str(part or "")).strip()
+        if text:
+            cleaned.append(text)
+    return "\n".join(cleaned).strip()
+
+
+def _hermes_visible_text(value):
+    value = _hermes_jsonish(value)
+
+    def walk(v):
+        v = _hermes_jsonish(v)
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [v]
+        if isinstance(v, list):
+            out = []
+            for item in v:
+                out.extend(walk(item))
+            return out
+        if isinstance(v, dict):
+            out = []
+            # Prefer human-authored content fields. Do not dump arbitrary dicts:
+            # gateway/platform metadata can include customer-facing WhatsApp ids.
+            for key in (
+                "text", "content", "message", "body", "caption",
+                "output_text", "input_text", "response", "result", "output",
+            ):
+                val = v.get(key)
+                if isinstance(val, (str, list, dict)):
+                    out.extend(walk(val))
+            return out
+        return []
+
+    return _strip_ccc_session_state_instruction(_hermes_join_text(walk(value))).strip()
+
+
+def _hermes_tool_args(raw):
+    parsed = _hermes_jsonish(raw)
+    if isinstance(parsed, dict):
+        return parsed
+    if isinstance(parsed, str) and parsed.strip():
+        return {"value": parsed.strip()}
+    return {}
+
+
+def _hermes_tool_calls(raw):
+    parsed = _hermes_jsonish(raw)
+    if not parsed:
+        return []
+    if isinstance(parsed, dict) and isinstance(parsed.get("tool_calls"), list):
+        parsed = parsed.get("tool_calls")
+    elif isinstance(parsed, dict) and not any(k in parsed for k in ("name", "tool", "tool_name", "function")):
+        vals = [v for v in parsed.values() if isinstance(v, dict)]
+        if vals:
+            parsed = vals
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    if not isinstance(parsed, list):
+        return []
+    out = []
+    for call in parsed:
+        call = _hermes_jsonish(call)
+        if not isinstance(call, dict):
+            continue
+        fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+        name = (
+            call.get("name") or call.get("tool_name") or call.get("tool")
+            or call.get("function_name") or fn.get("name") or ""
+        )
+        args_raw = (
+            call.get("arguments") if "arguments" in call else
+            call.get("args") if "args" in call else
+            call.get("input") if "input" in call else
+            call.get("parameters") if "parameters" in call else
+            fn.get("arguments")
+        )
+        args = _hermes_tool_args(args_raw)
+        out.append({
+            "id": call.get("id") or call.get("call_id") or call.get("tool_call_id") or "",
+            "name": str(name or "tool"),
+            "args": args,
+        })
+    return out
+
+
+def _hermes_tool_display_name(name):
+    raw = str(name or "").strip()
+    low = raw.lower()
+    if low in ("bash", "shell", "terminal", "run_command", "exec"):
+        return "Bash"
+    return raw or "tool"
+
+
+def _hermes_tool_command(name, args):
+    if not isinstance(args, dict):
+        return ""
+    for key in ("command", "cmd", "shell", "script"):
+        val = args.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    low = str(name or "").lower()
+    if low in ("bash", "shell", "terminal", "run_command", "exec"):
+        val = args.get("value")
+        if isinstance(val, str):
+            return val
+    return ""
+
+
+def _hermes_tool_detail(name, args):
+    display = _hermes_tool_display_name(name)
+    command = _hermes_tool_command(display, args)
+    if command:
+        return _shell_command_activity_label(command, max_len=1200)
+    detail = _tool_use_detail(display, args, max_len=240)
+    if detail:
+        return detail
+    if isinstance(args, dict) and args:
+        try:
+            return _prompt_fragment(json.dumps(args, ensure_ascii=False), 240)
+        except (TypeError, ValueError):
+            pass
+    return ""
+
+
+def _hermes_tool_block(call):
+    name = _hermes_tool_display_name(call.get("name"))
+    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+    detail = _hermes_tool_detail(name, args)
+    block = {
+        "kind": "tool_use",
+        "name": name,
+        "detail": detail,
+        "id": call.get("id") or "",
+    }
+    command = _hermes_tool_command(name, args)
+    if command:
+        redacted = _redacted_shell_command_text(command, max_len=12000)
+        if redacted and (
+            "\n" in redacted
+            or len(redacted) > 160
+            or re.sub(r"\s+", " ", redacted).strip() != (detail or "")
+        ):
+            block["command"] = redacted
+            here = _extract_shell_heredoc(command)
+            block["command_kind"] = _shell_script_label(here.get("head", "")) if here else "Shell command"
+    return block
+
+
+def _hermes_gateway_index():
+    try:
+        p = Path(HERMES_GATEWAY_SESSIONS).expanduser()
+        st = p.stat()
+        key = (st.st_mtime_ns, st.st_size)
+    except (OSError, RuntimeError, ValueError, TypeError):
+        _HERMES_GATEWAY_CACHE["key"] = None
+        _HERMES_GATEWAY_CACHE["by_session"] = {}
+        return {}
+    if _HERMES_GATEWAY_CACHE.get("key") == key:
+        return dict(_HERMES_GATEWAY_CACHE.get("by_session") or {})
+    by_session = {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        data = None
+    entries = data.values() if isinstance(data, dict) else data if isinstance(data, list) else []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        sid = str(entry.get("session_id") or "").strip()
+        if not sid:
+            continue
+        by_session[sid] = {
+            "platform": entry.get("platform") or entry.get("origin") or "",
+            "origin": entry.get("origin") or "",
+            "chat_type": entry.get("chat_type") or "",
+            "display_name": entry.get("display_name") or "",
+            "updated_at": entry.get("updated_at") or entry.get("created_at") or "",
+        }
+    _HERMES_GATEWAY_CACHE["key"] = key
+    _HERMES_GATEWAY_CACHE["by_session"] = dict(by_session)
+    return by_session
+
+
+def _hermes_fetch_sessions(con, limit=None):
+    cols = _hermes_columns(con, "sessions")
+    if "id" not in cols:
+        return []
+    rows = []
+    try:
+        for row in con.execute("SELECT * FROM sessions"):
+            rows.append(dict(row))
+    except sqlite3.Error:
+        return []
+    rows.sort(key=_hermes_session_epoch, reverse=True)
+    if limit and int(limit) > 0:
+        rows = rows[:int(limit)]
+    return rows
+
+
+def _hermes_fetch_messages(con, session_id):
+    cols = _hermes_columns(con, "messages")
+    if "session_id" not in cols:
+        return []
+    if "id" in cols:
+        order = "id"
+    elif "timestamp" in cols:
+        order = "timestamp"
+    elif "created_at" in cols:
+        order = "created_at"
+    else:
+        order = "rowid"
+    sql = "SELECT * FROM messages WHERE session_id=?"
+    if "active" in cols:
+        sql += " AND active != 0"
+    sql += f" ORDER BY {order}"
+    try:
+        return [dict(r) for r in con.execute(sql, (session_id,))]
+    except sqlite3.Error:
+        return []
+
+
+def _hermes_session_epoch(row):
+    if not isinstance(row, dict):
+        return 0.0
+    for key in ("last_active_at", "updated_at", "ended_at", "started_at", "created_at"):
+        ts = _hermes_epoch(row.get(key))
+        if ts:
+            return ts
+    return _hermes_epoch(row.get("id"))
+
+
+def _hermes_session_row(session_id):
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    con = _hermes_connect()
+    if con is None:
+        return None
+    try:
+        cols = _hermes_columns(con, "sessions")
+        if "id" not in cols:
+            return None
+        row = con.execute("SELECT * FROM sessions WHERE id=? LIMIT 1", (sid,)).fetchone()
+        return dict(row) if row else None
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+
+
+def _hermes_lineage_chain(session_id, rows_by_id):
+    sid = str(session_id or "").strip()
+    if not sid:
+        return []
+    chain = []
+    seen = set()
+    cur = sid
+    while cur and cur not in seen:
+        row = rows_by_id.get(cur)
+        if not row:
+            if cur == sid:
+                chain.append(cur)
+            break
+        chain.append(cur)
+        seen.add(cur)
+        cur = str(row.get("parent_session_id") or "").strip()
+    chain.reverse()
+    return chain
+
+
+def _hermes_message_summary(con, sid):
+    summary = {
+        "first_user": "",
+        "last_user": "",
+        "last_assistant": "",
+        "last_ts": 0.0,
+        "size": 0,
+        "has_edit": False,
+        "has_commit": False,
+        "has_push": False,
+        "tail_pr_number": None,
+        "tail_pr_url": None,
+        "last_event_type": None,
+    }
+    pr_re = re.compile(r"github\.com/([^/\s]+/[^/\s]+)/pull/(\d{1,7})")
+    for msg in _hermes_fetch_messages(con, sid):
+        role = str(msg.get("role") or "").lower()
+        ts = _hermes_epoch(msg.get("timestamp") or msg.get("created_at"))
+        if ts:
+            summary["last_ts"] = max(summary["last_ts"], ts)
+        content = msg.get("content")
+        calls_raw = msg.get("tool_calls")
+        summary["size"] += len(str(content or "")) + len(str(calls_raw or "")) + len(str(msg.get("reasoning") or ""))
+        text = _hermes_visible_text(content)
+        if role in ("user", "human"):
+            if text:
+                summary["first_user"] = summary["first_user"] or text
+                summary["last_user"] = text
+            summary["last_event_type"] = "user"
+        elif role == "assistant":
+            if text:
+                summary["last_assistant"] = text
+            summary["last_event_type"] = "assistant"
+        elif role in ("tool", "function"):
+            summary["last_event_type"] = "tool"
+        for call in _hermes_tool_calls(calls_raw):
+            name = _hermes_tool_display_name(call.get("name"))
+            args = call.get("args") if isinstance(call.get("args"), dict) else {}
+            cmd = _hermes_tool_command(name, args)
+            if name in ("Edit", "Write", "NotebookEdit") or name.lower() in (
+                "edit", "write", "write_file", "replace", "patch",
+            ):
+                summary["has_edit"] = True
+            if cmd:
+                signals = _shell_command_signals(cmd)
+                summary["has_edit"] = summary["has_edit"] or signals["edit"]
+                summary["has_commit"] = summary["has_commit"] or signals["commit"]
+                summary["has_push"] = summary["has_push"] or signals["push"]
+                mp = pr_re.search(cmd)
+                if mp:
+                    summary["tail_pr_number"] = int(mp.group(2))
+                    summary["tail_pr_url"] = "https://github.com/" + mp.group(1) + "/pull/" + mp.group(2)
+        if text:
+            mp = pr_re.search(text)
+            if mp:
+                summary["tail_pr_number"] = int(mp.group(2))
+                summary["tail_pr_url"] = "https://github.com/" + mp.group(1) + "/pull/" + mp.group(2)
+    return summary
+
+
+def _hermes_folder_for_row(row, pinned=None):
+    cwd = row.get("cwd") or ""
+    effective_cwd = _first_existing_dir(cwd, pinned) or cwd
+    folder_path = pinned or cwd or effective_cwd or ""
+    if folder_path:
+        _git_root = _find_git_root(folder_path)
+        folder_label = _resolve_dir_case(_git_root or folder_path)
+    else:
+        folder_label = "Hermes"
+    worktree_label = None
+    idx = folder_label.find("-wt-")
+    if idx > 0:
+        worktree_label = folder_label[idx + 4:]
+        folder_label = folder_label[:idx]
+    try:
+        cwd_exists = bool(effective_cwd and Path(effective_cwd).is_dir())
+    except OSError:
+        cwd_exists = False
+    return folder_path, folder_label, effective_cwd, cwd_exists, worktree_label
+
+
+def find_hermes_conversations(
+    repo_path=None,
+    include_old=True,
+    repo_only=True,
+    progress=None,
+    limit=None,
+    resolve_pr_states=True,
+    resolve_worktree_dirty=True,
+):
+    con = _hermes_connect()
+    if con is None:
+        if progress:
+            progress("hermes", state="done", count=0, detail="Hermes state.db not found.")
+        return []
+    try:
+        sessions = _hermes_fetch_sessions(con, limit=None)
+        if not sessions:
+            if progress:
+                progress("hermes", state="done", count=0, detail="No Hermes sessions found.")
+            return []
+        rows_by_id = {str(r.get("id")): r for r in sessions if r.get("id")}
+        parent_ids = {
+            str(r.get("parent_session_id"))
+            for r in sessions
+            if r.get("parent_session_id") and str(r.get("parent_session_id")) in rows_by_id
+        }
+        visible = [r for r in sessions if str(r.get("id")) not in parent_ids]
+        if limit and int(limit) > 0:
+            visible = visible[:int(limit)]
+        if repo_only:
+            repo_path = resolve_repo_path(repo_path)
+            repo_path_obj = Path(repo_path)
+        try:
+            repo_pins = _load_repo_pins()
+        except Exception:
+            repo_pins = {}
+        try:
+            name_overrides = _load_session_name_overrides()
+        except Exception:
+            name_overrides = {}
+        try:
+            archived_set = set(_load_archived_conversations())
+        except Exception:
+            archived_set = set()
+        try:
+            verified_set = set(_load_verified_conversations())
+        except Exception:
+            verified_set = set()
+        try:
+            last_interactions = _load_last_interactions()
+        except Exception:
+            last_interactions = {}
+
+        cutoff = _session_scan_cutoff_ts(include_old)
+        max_rows = _session_scan_file_limit(include_old)
+        gateway = _hermes_gateway_index()
+        git_top_cache = {}
+        out = []
+        scanned = 0
+        for row in visible:
+            sid = str(row.get("id") or "").strip()
+            if not sid:
+                continue
+            scanned += 1
+            pinned = repo_pins.get(sid)
+            pinned_repo = False
+            cwd = row.get("cwd") or ""
+            if repo_only:
+                if pinned and pinned != repo_path:
+                    continue
+                if pinned == repo_path:
+                    pinned_repo = True
+                elif cwd and not _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
+                    continue
+            summary = _hermes_message_summary(con, sid)
+            modified = (
+                summary.get("last_ts")
+                or _hermes_session_epoch(row)
+                or (_hermes_db_cache_key()[0] / 1_000_000_000.0 if _hermes_db_cache_key()[0] else 0)
+            )
+            freshness = max(modified, last_interactions.get(sid) or 0)
+            if not include_old and cutoff > 0 and freshness < cutoff:
+                continue
+            if not include_old and max_rows > 0 and len(out) >= max_rows:
+                continue
+            gw = gateway.get(sid) or {}
+            source_platform = (
+                row.get("source") or gw.get("platform") or gw.get("origin") or ""
+            ).strip() or "hermes"
+            title = _strip_ccc_session_state_instruction(row.get("title") or "").strip()
+            gateway_title = _strip_ccc_session_state_instruction(gw.get("display_name") or "").strip()
+            first_message = summary.get("first_user") or ""
+            ai_title = title if title and title != first_message else None
+            display_name = (
+                name_overrides.get(sid)
+                or _truncate_session_name(title)
+                or _truncate_session_name(gateway_title)
+                or (first_message[:80] if first_message else None)
+                or "Hermes session"
+            )
+            folder_path, folder_label, effective_cwd, cwd_exists, wt_label = _hermes_folder_for_row(row, pinned)
+            branch = _git_branch_for_cwd(effective_cwd)
+            lineage = _hermes_lineage_chain(sid, rows_by_id)
+            parent_id = str(row.get("parent_session_id") or "").strip()
+            try:
+                cwd_is_worktree = bool(effective_cwd and (Path(effective_cwd) / ".git").is_file())
+            except OSError:
+                cwd_is_worktree = False
+            out.append({
+                "id": sid,
+                "session_id": sid,
+                "source": "hermes",
+                "engine": "hermes",
+                "timestamp": "",
+                "branch": branch,
+                "git_branch": branch,
+                "first_message": first_message[:200],
+                "display_name": display_name,
+                "ai_title": ai_title,
+                "name_overridden": bool(name_overrides.get(sid)),
+                "last_prompt": (summary.get("last_user") or "")[:200],
+                "size": int(summary.get("size") or 0),
+                "modified": modified,
+                "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)) if modified else "",
+                "mtime": modified,
+                "jsonl_path": "",
+                "folder_label": folder_label,
+                "folder_path": folder_path,
+                "folder_label_chip": "Hermes" if not folder_path else "",
+                "worktree_label": wt_label,
+                "session_cwd": effective_cwd,
+                "session_cwd_exists": cwd_exists,
+                "session_cwd_is_worktree": cwd_is_worktree,
+                "worktree_dirty": (
+                    _worktree_dirty_cached(effective_cwd, modified)
+                    if resolve_worktree_dirty and effective_cwd else False
+                ),
+                "effective_branch": None,
+                "effective_kind": None,
+                "has_edit": bool(summary.get("has_edit")),
+                "has_commit": bool(summary.get("has_commit")),
+                "has_push": bool(summary.get("has_push")),
+                "last_edit_pos": 0,
+                "last_commit_pos": 0,
+                "last_push_pos": 0,
+                "last_event_type": summary.get("last_event_type"),
+                "pending_tool": None,
+                "pending_file": None,
+                "last_assistant_text": summary.get("last_assistant") or "",
+                "tail_issue_number": None,
+                "tail_pr_number": summary.get("tail_pr_number"),
+                "tail_pr_url": summary.get("tail_pr_url"),
+                "pr_state": None,
+                "session_state": _parse_session_state(summary.get("last_assistant")),
+                "archived": sid in archived_set or bool(row.get("archived")),
+                "verified": sid in verified_set,
+                "pinned_repo": pinned_repo,
+                "last_interacted": last_interactions.get(sid),
+                "is_live": False,
+                "spawn_pid": None,
+                "needs_approval": False,
+                "needs_approval_message": "",
+                "model": row.get("model") or "",
+                "reasoning_effort": "",
+                "latest_input_tokens": _codex_int(row.get("input_tokens"))
+                    + _codex_int(row.get("cache_read_tokens"))
+                    + _codex_int(row.get("cache_write_tokens")),
+                "context_limit": HERMES_CONTEXT_LIMIT,
+                "source_platform": source_platform,
+                "hermes_source": source_platform,
+                "hermes_origin": gw.get("origin") or "",
+                "hermes_chat_type": gw.get("chat_type") or "",
+                "parent_session_id": parent_id,
+                "hermes_parent_session_id": parent_id,
+                "hermes_lineage_session_ids": lineage,
+                "hermes_lineage_count": len(lineage),
+                "hermes_lineage_collapsed": len(lineage) > 1,
+                "hermes_lineage_root_id": lineage[0] if lineage else sid,
+                "hermes_continued_from": parent_id,
+            })
+        if resolve_pr_states:
+            _prime_pr_states(c.get("tail_pr_url") for c in out)
+            for c in out:
+                if c.get("tail_pr_url"):
+                    c["pr_state"] = _get_pr_state(c["tail_pr_url"])
+        out.sort(key=lambda x: x.get("last_interacted") or x.get("modified") or 0, reverse=True)
+        if progress:
+            progress(
+                "hermes",
+                state="done",
+                count=len(out),
+                total=scanned,
+                detail=f"{len(out)} Hermes session card(s) ready.",
+            )
+        return out
+    finally:
+        con.close()
+
+
+def _hermes_reasoning_visible():
+    return os.environ.get("CCC_HERMES_SHOW_REASONING", "0").lower() in ("1", "true", "yes", "on")
+
+
+def _parse_hermes_message(msg, line_num, session_row=None):
+    role = str(msg.get("role") or "").lower()
+    ts = _hermes_iso(msg.get("timestamp") or msg.get("created_at"))
+    text = _hermes_visible_text(msg.get("content"))
+    if role in ("user", "human"):
+        if text:
+            return {"line": line_num, "ts": ts, "type": "user_text", "text": text, "images": []}
+        return None
+    if role == "assistant":
+        blocks = []
+        if _hermes_reasoning_visible():
+            reasoning = _hermes_visible_text(
+                msg.get("reasoning") or msg.get("reasoning_content") or msg.get("reasoning_details")
+            )
+            if reasoning:
+                blocks.append({
+                    "kind": "thinking",
+                    "text": reasoning[:4000] + ("..." if len(reasoning) > 4000 else ""),
+                    "signature_only": False,
+                })
+        if text:
+            blocks.append({"kind": "text", "text": text})
+        for call in _hermes_tool_calls(msg.get("tool_calls")):
+            blocks.append(_hermes_tool_block(call))
+        if blocks:
+            ev = {
+                "line": line_num,
+                "ts": ts,
+                "type": "assistant",
+                "message_id": f"hermes-{msg.get('id') or line_num}",
+                "blocks": blocks,
+            }
+            model = (session_row or {}).get("model")
+            if model:
+                ev["model"] = model
+            return ev
+        return None
+    if role in ("tool", "function") or msg.get("tool_name") or msg.get("tool_call_id"):
+        if not text:
+            text = _hermes_visible_text(msg.get("tool_calls"))
+        if len(text) > 800:
+            text = text[:800] + "\n..."
+        return {
+            "line": line_num,
+            "ts": ts,
+            "type": "tool_result",
+            "text": text,
+            "tool_use_id": msg.get("tool_call_id") or msg.get("id") or "",
+            "is_error": str(msg.get("finish_reason") or "").lower() == "error",
+        }
+    return None
+
+
+def _parse_hermes_conversation(session_id, after_line=0):
+    con = _hermes_connect()
+    if con is None:
+        return {"events": [], "last_line": 0}
+    events = []
+    line = 0
+    try:
+        sessions = _hermes_fetch_sessions(con, limit=None)
+        rows_by_id = {str(r.get("id")): r for r in sessions if r.get("id")}
+        if session_id not in rows_by_id:
+            return {"events": [], "last_line": 0}
+        chain = _hermes_lineage_chain(session_id, rows_by_id) or [session_id]
+        if len(chain) > 1:
+            current = rows_by_id.get(session_id) or {}
+            line += 1
+            events.append({
+                "line": line,
+                "ts": _hermes_iso(current.get("started_at") or current.get("created_at")),
+                "type": "system",
+                "subtype": "hermes_lineage",
+                "session": session_id,
+                "parent_session_id": current.get("parent_session_id") or "",
+                "lineage_session_ids": chain,
+                "source_platform": current.get("source") or "",
+                "model": current.get("model") or "",
+            })
+        for idx, sid in enumerate(chain):
+            row = rows_by_id.get(sid) or {}
+            if idx > 0:
+                line += 1
+                events.append({
+                    "line": line,
+                    "ts": _hermes_iso(row.get("started_at") or row.get("created_at")),
+                    "type": "system",
+                    "subtype": "hermes_segment",
+                    "session": sid,
+                    "parent_session_id": row.get("parent_session_id") or "",
+                    "source_platform": row.get("source") or "",
+                    "model": row.get("model") or "",
+                })
+            for msg in _hermes_fetch_messages(con, sid):
+                line += 1
+                parsed = _parse_hermes_message(msg, line, row)
+                if parsed:
+                    events.append(parsed)
+    finally:
+        con.close()
+    try:
+        after = int(after_line or 0)
+    except (TypeError, ValueError):
+        after = 0
+    visible = [e for e in events if e.get("line", 0) > after] if after > 0 else events
+    return {"events": visible, "last_line": line}
+
+
+def _extract_hermes_usage(session_id):
+    empty = {
+        "latest_input_tokens": 0,
+        "peak_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_input_tokens": 0,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": 0,
+        "model": "",
+        "context_limit": HERMES_CONTEXT_LIMIT,
+        "compact_count": 0,
+        "live_context_tokens": 0,
+        "live_context_limit": 0,
+        "live_context_percent": 0,
+        "live_context_timestamp": "",
+        "live_context_source": "",
+        "engine": "hermes",
+        "override": None,
+        "cost_usd": 0.0,
+        "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
+                               "cache_read": 0.0, "output": 0.0},
+    }
+    row = _hermes_session_row(session_id) or {}
+    input_tokens = _codex_int(row.get("input_tokens"))
+    cache_read = _codex_int(row.get("cache_read_tokens"))
+    cache_write = _codex_int(row.get("cache_write_tokens"))
+    output_tokens = _codex_int(row.get("output_tokens"))
+    window = input_tokens + cache_read + cache_write
+    cost = row.get("actual_cost_usd")
+    if cost is None:
+        cost = row.get("estimated_cost_usd")
+    try:
+        cost_usd = float(cost or 0.0)
+    except (TypeError, ValueError):
+        cost_usd = 0.0
+    return {
+        **empty,
+        "latest_input_tokens": window,
+        "peak_input_tokens": window,
+        "total_input_tokens": input_tokens,
+        "total_cache_read_tokens": cache_read,
+        "total_cache_creation_tokens": cache_write,
+        "total_output_tokens": output_tokens,
+        "model": row.get("model") or "",
+        "cost_usd": cost_usd,
+    }
+
+
+def _extract_hermes_timeline(session_id):
+    result = _parse_hermes_conversation(session_id, after_line=0)
+    events = []
+    turn = 0
+    for ev in result.get("events") or []:
+        if ev.get("type") != "assistant":
+            continue
+        turn += 1
+        for block in ev.get("blocks") or []:
+            if block.get("kind") != "tool_use":
+                continue
+            cmd = block.get("command") or block.get("detail") or ""
+            if not cmd:
+                continue
+            kind = None
+            subject = ""
+            if _TIMELINE_PR_CREATE_RE.search(cmd):
+                kind = "pr"
+                m = _TIMELINE_PR_TITLE_RE.search(cmd)
+                if m:
+                    subject = m.group(1)
+            elif _TIMELINE_PUSH_RE.search(cmd):
+                kind = "push"
+            elif _TIMELINE_COMMIT_RE.search(cmd):
+                kind = "commit"
+                m = _TIMELINE_COMMIT_MSG_RE.search(cmd)
+                if m:
+                    subject = m.group(1)
+            if kind:
+                events.append({
+                    "kind": kind,
+                    "turn": turn,
+                    "ts": ev.get("ts") or "",
+                    "subject": subject,
+                    "success": None,
+                })
+    return {"events": events, "total_turns": turn}
+
+
+def _extract_files_from_hermes_conversation(session_id):
+    result = _parse_hermes_conversation(session_id, after_line=0)
+    seen = {}
+    truncated = False
+
+    def consider(target, kind, line):
+        nonlocal truncated
+        if not target or target in seen:
+            return
+        category = _categorize_file_target(target)
+        if not category:
+            return
+        if len(seen) >= _FFC_MAX_ENTRIES:
+            truncated = True
+            return
+        label = target
+        if kind == "url":
+            try:
+                parsed = urllib.parse.urlsplit(target)
+                label = parsed.path.rstrip("/").rsplit("/", 1)[-1] or parsed.netloc or target
+            except ValueError:
+                pass
+        else:
+            label = os.path.basename(target) or target
+        seen[target] = {
+            "label": label,
+            "target": target,
+            "kind": kind,
+            "category": category,
+            "first_line": line,
+        }
+
+    for ev in result.get("events") or []:
+        line = ev.get("line") or 0
+        if ev.get("type") in ("user_text", "tool_result"):
+            for target, kind in _ffc_iter_targets(ev.get("text") or ""):
+                consider(target, kind, line)
+        elif ev.get("type") == "assistant":
+            for block in ev.get("blocks") or []:
+                if block.get("kind") == "text":
+                    for target, kind in _ffc_iter_targets(block.get("text") or ""):
+                        consider(target, kind, line)
+                elif block.get("kind") == "tool_use":
+                    for raw in (block.get("detail"), block.get("command")):
+                        for target, kind in _ffc_iter_targets(raw or ""):
+                            consider(target, kind, line)
+    groups = {}
+    for row in seen.values():
+        groups.setdefault(row["category"], []).append(row)
+    for rows in groups.values():
+        rows.sort(key=lambda r: r["first_line"])
+    return {"count": len(seen), "truncated": truncated, "groups": groups}
 
 
 # ---------------------------------------------------------------------------
@@ -34437,6 +35468,8 @@ def extract_session_timeline(session_id):
         return _extract_cursor_timeline(session_id)
     if _is_antigravity_session(session_id):
         return _extract_antigravity_timeline(session_id)
+    if _is_hermes_session(session_id):
+        return _extract_hermes_timeline(session_id)
     if not PROJECTS_ROOT.is_dir():
         return {"events": [], "total_turns": 0}
     jsonl = None
@@ -34754,6 +35787,8 @@ def extract_session_usage(session_id):
         result = _extract_antigravity_usage(session_id)
         result.setdefault("engine", "antigravity")
         return result
+    if _is_hermes_session(session_id):
+        return _extract_hermes_usage(session_id)
     desktop_meta = _load_desktop_app_metadata().get(session_id) or {}
     if not PROJECTS_ROOT.is_dir():
         return {**empty, "model": desktop_meta.get("model") or ""}
@@ -37796,23 +38831,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             after_line = int(qs.get("after", ["0"])[0])
             self.send_json(parse_conversation_by_sid(sid, after_line))
-        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/timeline$", path):
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/timeline$", path):
             # Chronological strip of commit / push / PR events for a session,
             # with the assistant-turn position of each. Powers the activity
             # log under the conv pane's "Original ask" header.
             sid = path.rsplit("/", 2)[-2]
             self.send_json(extract_session_timeline(sid))
-        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/usage$", path):
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/usage$", path):
             # Token-usage stats for the conv pane's "Context: 142k / 200k" pill.
             sid = path.rsplit("/", 2)[-2]
             self.send_json(extract_session_usage(sid))
-        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/slash-commands$", path):
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/slash-commands$", path):
             # Slash commands reported by Claude's system/init event. The
             # composer uses this for `/` suggestions, including project and
             # personal custom skills.
             sid = path.rsplit("/", 2)[-2]
             self.send_json(extract_session_slash_commands(sid))
-        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/workspace$", path):
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/workspace$", path):
             # Workspace info — cwd, branch, worktree?, ahead/behind, co-tenants.
             sid = path.rsplit("/", 2)[-2]
             self.send_json(extract_session_workspace(sid))
@@ -37850,7 +38885,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             is_codex_status = _is_codex_session(sid) if sid else False
             is_gemini_status = _is_gemini_session(sid) if sid else False
             is_antigravity_status = _is_antigravity_session(sid) if sid else False
-            notif = None if (is_codex_status or is_gemini_status or is_antigravity_status) else (_read_notification_state(sid) if sid else None)
+            is_hermes_status = _is_hermes_session(sid) if sid else False
+            notif = None if (is_codex_status or is_gemini_status or is_antigravity_status or is_hermes_status) else (_read_notification_state(sid) if sid else None)
             if is_codex_status:
                 path = _resolve_codex_rollout_path(sid)
                 tail = _extract_codex_tail_meta(path) if path else {}
@@ -37874,6 +38910,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 path = _antigravity_transcript_path(sid)
                 tail = _extract_antigravity_tail_meta(path) if path else {}
                 status.update(_antigravity_activity_fields_from_tail(tail, status.get("live")))
+            elif is_hermes_status:
+                status.update({
+                    "live": False,
+                    "status": "history",
+                    "engine": "hermes",
+                    "sidecar_tool": None,
+                    "sidecar_file": None,
+                    "sidecar_status": None,
+                    "sidecar_ts": 0,
+                    "sidecar_in_flight": False,
+                    "question_waiting": False,
+                    "question_text": "",
+                    "question_header": "",
+                    "question_preamble": "",
+                    "question_options": [],
+                    "question_option_details": [],
+                    "pending_tool": None,
+                    "pending_file": None,
+                    "needs_approval": False,
+                    "needs_approval_message": "",
+                })
             else:
                 sc = _read_sidecar_state(sid) if sid else None
                 inflight = _live_in_flight_or_none(sid, _read_in_flight_state(sid)) if sid else None
@@ -38017,7 +39074,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             status["headless_pid"] = None
             status["headless_stale"] = False
             status["terminal_present"] = False
-            if sid and not (is_codex_status or is_gemini_status or is_antigravity_status):
+            if sid and not (is_codex_status or is_gemini_status or is_antigravity_status or is_hermes_status):
                 try:
                     _spawn = _find_live_spawn_entry_for_session(sid)
                     if _spawn and _spawn.get("engine") == "claude":
@@ -38045,11 +39102,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass
             self.send_json(status)
-        elif re.match(r"^/api/conversations/(?:[a-f0-9-]+|ses_[A-Za-z0-9]+)/files$", path):
+        elif re.match(r"^/api/conversations/[^/]+/files$", path):
             conv_id = path.split("/")[-2]
             payload = _extract_files_from_conversation(conv_id)
             self.send_json(payload)
-        elif re.match(r"^/api/conversations/(?:[a-f0-9-]+(?::agent-[a-f0-9]+)?|ses_[A-Za-z0-9]+)/stream$", path):
+        elif re.match(r"^/api/conversations/[^/]+/stream$", path):
             conv_id = path.split("/")[-2]
             qs = urllib.parse.parse_qs(parsed.query)
             after_line = int(qs.get("after", ["0"])[0])
@@ -38072,7 +39129,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif re.match(r"^/api/session/[a-f0-9-]+/spawn-stream$", path):
             sid = path.split("/")[-2]
             self._stream_spawn_deltas(sid)
-        elif re.match(r"^/api/conversations/(?:[a-f0-9-]+(?::agent-[a-f0-9]+)?|ses_[A-Za-z0-9]+)$", path):
+        elif re.match(r"^/api/conversations/(?!all$|order$)[^/]+$", path):
             conv_id = path.split("/")[-1]
             qs = urllib.parse.parse_qs(parsed.query)
             after_line = int(qs.get("after", ["0"])[0])
@@ -40588,7 +41645,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(result)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
-        elif re.match(r"^/api/conversations/[a-f0-9-]+/rename$", path) or re.match(r"^/api/conversations/issue-\d+/rename$", path) or re.match(r"^/api/conversations/pkood-[^/]+/rename$", path):
+        elif re.match(r"^/api/conversations/[^/]+/rename$", path):
             conv_id = path.split("/")[-2]
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -40634,7 +41691,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 })
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
-        elif re.match(r"^/api/conversations/[a-f0-9-]+/archive$", path) or re.match(r"^/api/conversations/issue-\d+/archive$", path) or re.match(r"^/api/conversations/pkood-[^/]+/archive$", path) or re.match(r"^/api/conversations/backlog-(issue|todo)-\d+/archive$", path) or re.match(r"^/api/conversations/xrepo-issue-[^/]+-\d+/archive$", path):
+        elif re.match(r"^/api/conversations/[^/]+/archive$", path):
             conv_id = path.split("/")[-2]
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -41927,6 +42984,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
 
     def _stream_conversation(self, conversation_id, after_line):
         """SSE endpoint for real-time conversation tailing."""
+        if _is_hermes_session(conversation_id):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            try:
+                self.wfile.write(b"event: keepalive\ndata: {}\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            return
         if _is_gemini_session(conversation_id) or _is_antigravity_session(conversation_id):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")

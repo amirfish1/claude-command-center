@@ -3884,6 +3884,7 @@
     const isGemini = currentSession.source === 'gemini';
     const isCursor = currentSession.source === 'cursor';
     const isAntigravity = currentSession.source === 'antigravity';
+    const isHermes = currentSession.source === 'hermes';
     const antigravityCanSendNow = antigravityCanSend(currentSession);
     // liveStatus lags a conversation switch by up to one poll; until it matches
     // the open conversation, treat the session as not-live so we never show the
@@ -3944,6 +3945,9 @@
         $convInput.placeholder = antigravityCanSendNow
           ? antigravityInputPlaceholder(currentSession)
           : 'Type a follow-up — Antigravity will resume headless…';
+      } else if (isHermes) {
+        $convTtyLabel.textContent = 'hermes';
+        $convInput.placeholder = 'Hermes history is read-only in CCC';
       } else if (live) {
         $convTtyLabel.textContent = liveStatus.tty;
         $convInput.placeholder = 'Send to terminal...';
@@ -3966,17 +3970,17 @@
       // order. Previously we readOnly'd the input when both
       // can_headless_resume and can_app_resume were false, leaving the
       // user with a dead input bar and no way to type a follow-up.
-      const canSend = !isAntigravity || antigravityCanSendNow;
+      const canSend = !isHermes && (!isAntigravity || antigravityCanSendNow);
       if ($convInput) {
-        const blockTyping = !canSend && !isAntigravity;
+        const blockTyping = isHermes || (!canSend && !isAntigravity);
         $convInput.readOnly = blockTyping;
         $convInput.classList.toggle('is-readonly', blockTyping);
       }
       if ($convSendBtn) {
-        const blockSend = !canSend && !isAntigravity;
+        const blockSend = isHermes || (!canSend && !isAntigravity);
         $convSendBtn.disabled = blockSend;
         $convSendBtn.title = blockSend
-          ? 'Open Antigravity to continue this app session'
+          ? (isHermes ? 'Hermes history is read-only in CCC' : 'Open Antigravity to continue this app session')
           : (isAntigravity && !antigravityCanSendNow
               ? 'Send — runs AGY headless on this session'
               : 'Send');
@@ -4859,6 +4863,10 @@
     }
     const sid = currentSession.id;
     if (!sid) return;
+    if (currentSession.source === 'hermes') {
+      showOpToast('Hermes history is read-only in CCC.', 'info');
+      return;
+    }
     if (injectMode === 'steer' && currentSession.source !== 'codex') {
       showOpToast('Steer is only available for Codex sessions.', 'error');
       return;
@@ -16659,7 +16667,8 @@
       const isGeminiRow = c.source === 'gemini' || c.engine === 'gemini';
       const isCursorRow = c.source === 'cursor' || c.engine === 'cursor';
       const isAntigravityRow = c.source === 'antigravity' || c.engine === 'antigravity';
-      const isFable5Row = !isCodexRow && !isGeminiRow && !isCursorRow && !isAntigravityRow
+      const isHermesRow = c.source === 'hermes' || c.engine === 'hermes';
+      const isFable5Row = !isCodexRow && !isGeminiRow && !isCursorRow && !isAntigravityRow && !isHermesRow
         && !!c.model && /fable-5/i.test(c.model);
       let sourceBadge = '';
       if (c.source === 'pkood') sourceBadge = '<span class="source-badge pkood">pkood</span>';
@@ -16667,6 +16676,7 @@
       else if (isGeminiRow) sourceBadge = '<span class="source-badge gemini">gemini</span>';
       else if (isCursorRow) sourceBadge = '<span class="source-badge cursor">cursor</span>';
       else if (isAntigravityRow) sourceBadge = '<span class="source-badge antigravity">antigravity</span>';
+      else if (isHermesRow) sourceBadge = '<span class="source-badge hermes">hermes</span>';
       let iconType = 'claude';
       let iconTitleType = 'Claude';
       let svgMarkup = '';
@@ -16693,6 +16703,10 @@
         svgMarkup = '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">'
             + '<path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" />'
             + '</svg>';
+      } else if (isHermesRow) {
+        iconType = 'hermes';
+        iconTitleType = 'Hermes';
+        svgMarkup = getEngineSvg('hermes');
       } else if (c.source === 'pkood') {
         iconType = 'pkood';
         iconTitleType = 'Pkood';
@@ -16785,6 +16799,23 @@
       const _rowSid = c.session_id || c.id || '';
       if (_rowSid && _inGroupChatIds.has(_rowSid)) {
         signals += '<span class="conv-signal in-group-chat is-icon-only" title="In group chat" aria-label="In group chat">💬</span>';
+      }
+      if (isHermesRow) {
+        const hermesPlatform = String(c.source_platform || c.hermes_source || '').trim();
+        if (hermesPlatform && hermesPlatform !== 'hermes') {
+          signals += '<span class="conv-signal hermes-platform" title="Hermes source platform">' + escapeHtml(hermesPlatform) + '</span>';
+        }
+        if (c.model) {
+          const hermesModel = String(c.model).replace(/^hermes[-_]?/i, '').slice(0, 36);
+          signals += '<span class="conv-signal hermes-model" title="' + escapeAttr(c.model) + '">' + escapeHtml(hermesModel) + '</span>';
+        }
+        const lineageCount = Number(c.hermes_lineage_count || 0);
+        if (lineageCount > 1) {
+          const parent = c.hermes_continued_from || c.parent_session_id || '';
+          signals += '<span class="conv-signal hermes-lineage" title="Continuation session'
+            + (parent ? ' continued from ' + escapeAttr(parent) : '')
+            + '">continued +' + escapeHtml(String(lineageCount - 1)) + '</span>';
+        }
       }
       // Subagent chip — surfaces Claude Code Task tool spawns. Shows total
       // count plus an `▶ N` suffix when any spawn is still in flight, so
@@ -17100,7 +17131,7 @@
 
       const groupedRowClass = opts.suppressFolderChip ? ' is-grouped-row' : '';
       const rowRepoAttr = escapeAttr(rowRepoPath(c) || '');
-      return '<div class="conv-item' + active + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + '<div class="conv-main-row">'
@@ -20120,6 +20151,7 @@
     if (source === 'gemini') return 'gemini';
     if (source === 'cursor') return 'cursor';
     if (source === 'antigravity') return 'antigravity';
+    if (source === 'hermes') return 'hermes';
     if (source === 'pkood') return 'pkood';
     if (source === 'backlog') return row && row.issue_number ? 'issue' : 'backlog';
     if (source === 'github_pr') return 'pull request';
@@ -21440,6 +21472,7 @@
       paneEl.classList.toggle('is-gemini-session', source === 'gemini');
       paneEl.classList.toggle('is-cursor-session', source === 'cursor');
       paneEl.classList.toggle('is-antigravity-session', source === 'antigravity');
+      paneEl.classList.toggle('is-hermes-session', source === 'hermes');
     }
     const isPendingSpawn = !!(selectedConv && selectedConv.pending_spawn);
     if (source === 'backlog') {
@@ -21498,12 +21531,12 @@
         stopPkoodTailPoller();
         if ($pkoodKillBtn) $pkoodKillBtn.style.display = 'none';
         await fetchConversationEvents(paneId);
-        if (source !== 'backlog' && !isPendingSpawn) startConvStream(paneId);
+        if (source !== 'backlog' && source !== 'hermes' && !isPendingSpawn) startConvStream(paneId);
         // Block-level streaming from the spawn log — only succeeds if the
         // backend finds a CCC-spawned headless process for this session.
         // No-op for externally launched, IDE-launched, or pkood sessions.
         const sid = sessionIdByConv[id] || '';
-        if (sid && source !== 'codex' && source !== 'cursor' && source !== 'antigravity' && source !== 'backlog') startSpawnStream(sid, paneId);
+        if (sid && source !== 'codex' && source !== 'cursor' && source !== 'antigravity' && source !== 'hermes' && source !== 'backlog') startSpawnStream(sid, paneId);
       }
     } finally {
       finishConversationPaneLoad();
@@ -21522,6 +21555,7 @@
     const isGemini = currentSession.source === 'gemini';
     const isCursor = currentSession.source === 'cursor';
     const isAntigravity = currentSession.source === 'antigravity';
+    const isHermes = currentSession.source === 'hermes';
     const antigravityCanSendNow = antigravityCanSend(currentSession);
     // liveStatus lags a conversation switch by up to one poll — ignore it until
     // it matches the open conversation so we never show the prior session's tty.
@@ -21530,17 +21564,19 @@
     const hasSession = !!currentSession.id;
     if (hasSession && kanbanView) {
       $convPanelInput.classList.add('visible');
-      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (isCodex ? (ls.tty || 'codex') : (isGemini ? (ls.tty || 'gemini') : (isCursor ? (ls.tty || 'cursor') : (isAntigravity ? (ls.tty || 'antigravity') : (ls.tty || (live ? '' : 'offline'))))));
+      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (isCodex ? (ls.tty || 'codex') : (isGemini ? (ls.tty || 'gemini') : (isCursor ? (ls.tty || 'cursor') : (isAntigravity ? (ls.tty || 'antigravity') : (isHermes ? 'hermes' : (ls.tty || (live ? '' : 'offline')))))));
       if ($cpInput) {
         if (isPkood) $cpInput.placeholder = 'Send to pkood agent...';
         else if (isCodex) $cpInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
         else if (isGemini) $cpInput.placeholder = live ? 'Send to Gemini terminal...' : 'Resume Gemini and send...';
         else if (isCursor) $cpInput.placeholder = live ? 'Send to Cursor terminal...' : 'Resume Cursor and send...';
         else if (isAntigravity) $cpInput.placeholder = antigravityInputPlaceholder(currentSession);
+        else if (isHermes) $cpInput.placeholder = 'Hermes history is read-only in CCC';
         else if (live) $cpInput.placeholder = 'Send to terminal...';
         else $cpInput.placeholder = 'Send to terminal (offline)...';
-        $cpInput.readOnly = isAntigravity && !antigravityCanSendNow;
-        $cpInput.classList.toggle('is-readonly', isAntigravity && !antigravityCanSendNow);
+        const readOnly = isHermes || (isAntigravity && !antigravityCanSendNow);
+        $cpInput.readOnly = readOnly;
+        $cpInput.classList.toggle('is-readonly', readOnly);
       }
     } else {
       $convPanelInput.classList.remove('visible');
@@ -21563,9 +21599,10 @@
     const sid = currentSession.id;
     const live = liveStatus.live;
     const isPkood = currentSession.source === 'pkood';
+    const isHermes = currentSession.source === 'hermes';
     // Jump is still useful for live terminals, while Launch now owns the
     // terminal/app resume destinations as a split button.
-    const hasLiveTty = live && !!liveStatus.tty && !isPkood;
+    const hasLiveTty = live && !!liveStatus.tty && !isPkood && !isHermes;
     $cpJumpBtn.style.display = hasLiveTty ? '' : 'none';
     $cpJumpBtn.onclick = async () => {
       if (!liveStatus.tty) return;
@@ -21576,16 +21613,16 @@
         });
       } catch (_) {}
     };
-    if ($cpLaunchSplit) $cpLaunchSplit.style.display = (sid && !isPkood) ? 'inline-flex' : 'none';
+    if ($cpLaunchSplit) $cpLaunchSplit.style.display = (sid && !isPkood && !isHermes) ? 'inline-flex' : 'none';
     if ($cpLaunchBtn) {
       $cpLaunchBtn.style.display = '';
       $cpLaunchBtn.title = 'Launch in terminal';
       $cpLaunchBtn.innerHTML = '<span>&#43;</span> Launch';
-      $cpLaunchBtn.disabled = false;
+      $cpLaunchBtn.disabled = isHermes;
     }
     renderLaunchChoiceMenu($cpLaunchChoiceMenu);
     $cpLaunchBtn.onclick = async () => {
-      if (!sid) return;
+      if (!sid || isHermes) return;
       await launchTerminal({ currentTarget: $cpLaunchBtn });
       // Refresh live status on a quick schedule so the button flips to Jump
       // without waiting for the 5s poll. Claude cold-start can take ~3-5s.
@@ -22864,6 +22901,13 @@
     if (engine === 'codex') {
       return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">'
         + '<path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z" />'
+        + '</svg>';
+    }
+    if (engine === 'hermes') {
+      return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="M12 3.5 19 7.5v8L12 20.5 5 15.5v-8L12 3.5Z" />'
+        + '<path d="M8 9.2h8M8 12h8M8 14.8h5.5" />'
+        + '<path d="M5 7.5 12 12l7-4.5" />'
         + '</svg>';
     }
     if (engine === 'cursor') {
@@ -24483,7 +24527,7 @@
         + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
         + (queued ? ' <span class="wp-model-pending">→ next</span>' : '')
         + ' <span class="wp-model-chevron">&#x25be;</span>';
-      if (engine === 'antigravity') {
+      if (engine === 'antigravity' || engine === 'hermes') {
         modelPill = ' <span class="wp-model-pill is-static" title="' + escapeHtml(modelTip) + '">'
           + modelInner
           + '</span>';
@@ -26222,7 +26266,46 @@
       }
 
       if (ev.type === 'system') {
-        if (ev.subtype === 'compact_boundary') {
+        if (ev.subtype === 'hermes_lineage') {
+          const lineage = Array.isArray(ev.lineage_session_ids) ? ev.lineage_session_ids : [];
+          const parent = ev.parent_session_id || '';
+          const shortSession = ev.session ? String(ev.session).slice(0, 19) : '';
+          const bits = [];
+          if (ev.source_platform) bits.push(String(ev.source_platform));
+          if (ev.model) bits.push(String(ev.model));
+          const meta = bits.length ? ' · ' + escapeHtml(bits.join(' · ')) : '';
+          const tip = 'Hermes compression created a continuation session.'
+            + (parent ? '\nContinued from: ' + parent : '')
+            + (lineage.length ? '\nLineage: ' + lineage.join(' -> ') : '');
+          const countText = lineage.length > 1
+            ? (lineage.length + ' linked sessions')
+            : 'linked session';
+          div.classList.add('system-compact', 'system-hermes');
+          div.innerHTML = '<span class="label">Hermes</span>'
+            + '<span class="line-num">L' + ev.line + '</span>'
+            + tsSpan(ev.ts)
+            + '<span class="system-compact-text" title="' + escapeAttr(tip) + '">Continuation history'
+            + (shortSession ? ': ' + escapeHtml(shortSession) : '')
+            + ' · ' + escapeHtml(countText)
+            + meta
+            + ' <span class="system-compact-help" aria-hidden="true">?</span></span>';
+        } else if (ev.subtype === 'hermes_segment') {
+          const parent = ev.parent_session_id || '';
+          const bits = [];
+          if (ev.source_platform) bits.push(String(ev.source_platform));
+          if (ev.model) bits.push(String(ev.model));
+          const meta = bits.length ? ' · ' + escapeHtml(bits.join(' · ')) : '';
+          const tip = 'Messages below were recorded in a Hermes continuation segment.'
+            + (parent ? '\nContinued from: ' + parent : '');
+          div.classList.add('system-compact', 'system-hermes');
+          div.innerHTML = '<span class="label">Hermes</span>'
+            + '<span class="line-num">L' + ev.line + '</span>'
+            + tsSpan(ev.ts)
+            + '<span class="system-compact-text" title="' + escapeAttr(tip) + '">Continued session'
+            + (ev.session ? ': ' + escapeHtml(String(ev.session).slice(0, 19)) : '')
+            + meta
+            + ' <span class="system-compact-help" aria-hidden="true">?</span></span>';
+        } else if (ev.subtype === 'compact_boundary') {
           const compact = ev.compact || {};
           const preTokens = Number(compact.pre_tokens || 0);
           const postTokens = Number(compact.post_tokens || 0);
@@ -31961,6 +32044,10 @@
       const text = ($cpInput.value || '').trim();
       const sid = currentSession.id;
       if (!text || !sid) return;
+      if (currentSession.source === 'hermes') {
+        showOpToast('Hermes history is read-only in CCC.', 'info');
+        return;
+      }
       hideSlashCommandMenu();
       $cpSendBtn.disabled = true;
       const flashRed = () => {
@@ -32074,9 +32161,12 @@
       // CLI-headless / running app / fresh app launch with the prompt
       // prefilled. Don't gate send on antigravityCanSend any more.
       const isAGY = currentSession.source === 'antigravity';
+      const isHermes = currentSession.source === 'hermes';
       const agyCanSendNow = !isAGY || antigravityCanSend(currentSession);
-      $cpSendBtn.disabled = !hasText || !currentSession.id;
-      $cpSendBtn.title = isAGY && !agyCanSendNow
+      $cpSendBtn.disabled = !hasText || !currentSession.id || isHermes;
+      $cpSendBtn.title = isHermes
+        ? 'Hermes history is read-only in CCC'
+        : isAGY && !agyCanSendNow
         ? 'Send — runs AGY headless on this session'
         : 'Send';
     };
