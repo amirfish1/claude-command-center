@@ -28324,9 +28324,19 @@
     _shipLogRepo = repo;
     $panel.classList.remove('collapsed');   // surface it; restored on dismiss
     const phase = job.phase || '';
-    const done = !job.running;
-    const phaseCls = job.running ? 'is-busy'
-      : (['error', 'deploy_error', 'needs_you', 'diverged'].indexOf(phase) >= 0 ? 'is-error' : 'is-ok');
+    // Stalled detection (CCC-139): a Push-all job runs in the server process.
+    // If that process exits mid-run (crash, restart), the job is orphaned —
+    // running stays true forever, so the spinner spins and there's no dismiss
+    // button, leaving the user stuck with no feedback. Treat a running job whose
+    // newest log line is older than the longest single git step (180s) plus a
+    // buffer as stalled: surface the close button and an explanation. The poll
+    // keeps running, so a job that genuinely resumes clears this on its own.
+    const _lastLogT = (job.log || []).reduce((m, e) => Math.max(m, Number(e.t) || 0), 0);
+    const isStalled = !!job.running && _lastLogT > 0 && (Date.now() / 1000 - _lastLogT) > 240;
+    const done = !job.running || isStalled;
+    const phaseCls = isStalled ? 'is-error'
+      : (job.running ? 'is-busy'
+      : (['error', 'deploy_error', 'needs_you', 'diverged'].indexOf(phase) >= 0 ? 'is-error' : 'is-ok'));
     const lines = (job.log || []).map(e => {
       const d = new Date((e.t || 0) * 1000);
       const ts = [d.getHours(), d.getMinutes(), d.getSeconds()]
@@ -28359,12 +28369,15 @@
     $list.innerHTML =
       '<div class="ship-log">'
       + '<div class="ship-log-head">'
-        + (job.running ? '<span class="ship-log-spin"></span>' : '')
+        + (job.running && !isStalled ? '<span class="ship-log-spin"></span>' : '')
         + '<span class="ship-log-title">Push all · ' + escapeHtml(repo.split('/').pop()) + '</span>'
-        + '<span class="ship-log-phase ' + phaseCls + '">' + escapeHtml(phase) + '</span>'
+        + '<span class="ship-log-phase ' + phaseCls + '">' + escapeHtml(isStalled ? (phase ? phase + ' · stalled' : 'stalled') : phase) + '</span>'
         + (done ? '<button type="button" class="ship-log-dismiss" data-role="ship-log-dismiss">✕ close</button>' : '')
       + '</div>'
       + actionsHtml
+      + (isStalled
+          ? '<div class="ship-log-line warn"><span class="ship-log-txt">⚠ No progress for a while — the run looks interrupted (the CCC server may have restarted). Close this and run Push all again.</span></div>'
+          : '')
       + '<div class="ship-log-body" id="shipLogBody">' + (lines || '<div class="ship-log-line info"><span class="ship-log-txt">…</span></div>') + '</div>'
       + '</div>';
     if ($count) $count.textContent = '';
