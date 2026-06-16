@@ -1031,6 +1031,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-session-icon.hermes", app_css)
         self.assertIn(".conv-item .source-badge.hermes", app_css)
         self.assertIn(".event.system.system-hermes", app_css)
+        # Agentic-vs-chat chip: tool-using Hermes sessions get a distinct chip
+        # from plain conversations.
+        self.assertIn("hermes_tool_calls", app_js)
+        self.assertIn("conv-signal hermes-agent", app_js)
+        self.assertIn("conv-signal hermes-chat", app_js)
+        self.assertIn(".conv-signal.hermes-agent", app_css)
+        self.assertIn(".conv-signal.hermes-chat", app_css)
 
     def test_sidebar_filter_matches_hermes_platform_metadata(self):
         """The local sidebar filter must match Hermes engine/platform/model
@@ -5039,6 +5046,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 self.assertEqual(row["engine"], "hermes")
                 self.assertEqual(row["source_platform"], "whatsapp")
                 self.assertEqual(row["model"], "hermes-test-model")
+                self.assertIn("hermes_tool_calls", row)
                 self.assertEqual(row["parent_session_id"], parent)
                 self.assertEqual(row["hermes_lineage_session_ids"], [parent, child])
                 self.assertEqual(row["hermes_lineage_count"], 2)

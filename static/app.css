@@ -4222,6 +4222,20 @@
     color: #2dd4bf;
     border: 1px solid rgba(45, 212, 191, 0.25);
   }
+  /* Agentic Hermes session (LLM used tools) — stands out so the
+     interesting sessions are scannable against plain chat rows. */
+  .conv-signal.hermes-agent {
+    background: rgba(139, 87, 215, 0.14);
+    color: #bd93f7;
+    border: 1px solid rgba(139, 87, 215, 0.28);
+    font-weight: 600;
+  }
+  /* Plain Hermes conversation (no tool calls) — muted so it reads as
+     low-signal and is easy to skip. */
+  .conv-signal.hermes-chat {
+    background: rgba(139, 148, 158, 0.10);
+    color: var(--text-muted);
+  }
   /* "#N" issue-link chip on sidebar rows tied to a GH issue. Muted on
    * purpose — it's an identifier, not a state — so it doesn't compete
    * with the lifecycle chip (committed/pushed/PR/uncommitted) on the

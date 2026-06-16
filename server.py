@@ -23301,6 +23301,10 @@ def find_hermes_conversations(
                 "hermes_source": source_platform,
                 "hermes_origin": gw.get("origin") or "",
                 "hermes_chat_type": gw.get("chat_type") or "",
+                # Tool-call count distinguishes agentic (LLM-with-tools) Hermes
+                # sessions from plain chat conversations — see the "tools"/"chat"
+                # chip in the sidebar. Lives on the session row already.
+                "hermes_tool_calls": _codex_int(row.get("tool_call_count")),
                 "parent_session_id": parent_id,
                 "hermes_parent_session_id": parent_id,
                 "hermes_lineage_session_ids": lineage,

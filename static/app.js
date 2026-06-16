@@ -17675,6 +17675,17 @@
         if (hermesPlatform && hermesPlatform !== 'hermes') {
           signals += '<span class="conv-signal hermes-platform" title="Hermes source platform">' + escapeHtml(hermesPlatform) + '</span>';
         }
+        // Agentic vs plain-chat chip. tool_call_count distinguishes
+        // LLM-with-tools sessions (the interesting ones) from messaging
+        // conversations that never invoked a tool — independent of platform
+        // (whatsapp sessions can be agentic too). The "chat" chip is muted so
+        // plain conversations are easy to skip at a glance.
+        const hermesToolCalls = Number(c.hermes_tool_calls || 0);
+        if (hermesToolCalls > 0) {
+          signals += '<span class="conv-signal hermes-agent" title="LLM-with-tools session — ' + hermesToolCalls + ' tool call' + (hermesToolCalls === 1 ? '' : 's') + '">⚒ ' + escapeHtml(String(hermesToolCalls)) + '</span>';
+        } else {
+          signals += '<span class="conv-signal hermes-chat" title="Plain conversation — no tool calls">chat</span>';
+        }
         if (c.model) {
           const hermesModel = String(c.model).replace(/^hermes[-_]?/i, '').slice(0, 36);
           signals += '<span class="conv-signal hermes-model" title="' + escapeAttr(c.model) + '">' + escapeHtml(hermesModel) + '</span>';
