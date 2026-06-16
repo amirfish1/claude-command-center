@@ -2119,6 +2119,34 @@ class TestRepoContextHelpers(unittest.TestCase):
         resume.assert_called_once_with(sid, "hello")
         inject.assert_not_called()
 
+    def test_linux_question_mark_tty_routes_claude_to_headless_fifo(self):
+        """Linux ps reports no controlling tty as '?', not '??'."""
+        sid = "00000000-0000-4000-8000-000000000009"
+        spawn = {"pid": 4242, "engine": "claude"}
+        with mock.patch.object(self.server, "_is_codex_session", return_value=False), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "_is_cursor_session", return_value=False), \
+             mock.patch.object(self.server, "_is_antigravity_session", return_value=False), \
+             mock.patch.object(self.server, "_is_hermes_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={"live": True, "tty": "?", "pid": 4242, "kind": "interactive"},
+             ), \
+             mock.patch.object(self.server, "_find_live_spawn_entry_for_session", return_value=spawn), \
+             mock.patch.object(self.server, "_spawn_entry_active_tool_child", return_value=None), \
+             mock.patch.object(self.server, "_write_stream_json_user_message", return_value=True) as write, \
+             mock.patch.object(self.server, "_update_spawn_transcript_watermark") as watermark, \
+             mock.patch.object(self.server, "inject_input_via_keystroke") as inject:
+            result = self.server._inject_text_into_session(sid, "hello")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["via"], "spawn-fifo")
+        write.assert_called_once_with(spawn, "hello")
+        watermark.assert_called_once_with(spawn, sid)
+        inject.assert_not_called()
+
     def test_antigravity_resume_falls_back_to_app_when_cli_missing(self):
         sid = "00000000-0000-4000-8000-000000000001"
         with mock.patch.object(

@@ -8597,7 +8597,7 @@ def find_live_claude_processes():
             tty_by_pid[parts[0]] = parts[1]
     for pid in pids:
         tty = tty_by_pid.get(pid)
-        if not tty or tty == "??":
+        if not _is_real_tty(tty):
             continue
         cwd = _proc_cwd(pid)
         if not cwd:
@@ -8687,7 +8687,7 @@ def find_live_codex_processes():
         term_app, _term_pid = _proc_ancestor_terminal(pid)
         procs.append({
             "pid": pid,
-            "tty": tty if tty != "??" else None,
+            "tty": _normalized_tty(tty),
             "cwd": cwd,
             "terminal_app": term_app,
             "command": args,
@@ -8725,7 +8725,7 @@ def find_live_gemini_processes():
         term_app, _term_pid = _proc_ancestor_terminal(pid)
         procs.append({
             "pid": pid,
-            "tty": tty if tty != "??" else None,
+            "tty": _normalized_tty(tty),
             "cwd": cwd,
             "terminal_app": term_app,
             "command": args,
@@ -8763,7 +8763,7 @@ def find_live_cursor_processes():
         term_app, _term_pid = _proc_ancestor_terminal(pid)
         procs.append({
             "pid": pid,
-            "tty": tty if tty != "??" else None,
+            "tty": _normalized_tty(tty),
             "cwd": cwd,
             "terminal_app": term_app,
             "command": args,
@@ -8801,7 +8801,7 @@ def find_live_antigravity_processes():
         term_app, _term_pid = _proc_ancestor_terminal(pid)
         procs.append({
             "pid": pid,
-            "tty": tty if tty != "??" else None,
+            "tty": _normalized_tty(tty),
             "cwd": cwd,
             "terminal_app": term_app,
             "command": args,
@@ -8870,6 +8870,17 @@ def _process_comm_is_claude(comm):
     except (OSError, ValueError):
         return False
     return bool(re.match(r"^\d+\.\d+\.\d+(?:[-+].*)?$", name))
+
+
+def _normalized_tty(tty):
+    value = str(tty or "").strip()
+    if not value or value in ("??", "?", "-"):
+        return None
+    return value
+
+
+def _is_real_tty(tty):
+    return _normalized_tty(tty) is not None
 
 
 @_ttl_memo(3.0)
@@ -9198,7 +9209,7 @@ def session_live_status(session_id, session_cwd):
                     capture_output=True, text=True, timeout=1,
                 )
                 tty = (ps_out.stdout or "").strip()
-                if tty and tty != "??":
+                if _is_real_tty(tty):
                     result["tty"] = tty
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                 pass
@@ -10063,7 +10074,7 @@ def focus_terminal_by_tty(tty, terminal_app):
     `tty` is like "ttys008". `terminal_app` is the friendly name from
     _TERMINAL_APPS. Returns {ok, error}.
     """
-    if not tty or tty == "??":
+    if not _is_real_tty(tty):
         return {"ok": False, "error": "No tty available"}
     if not terminal_app:
         return {"ok": False, "error": "Unknown terminal app"}
@@ -27738,7 +27749,7 @@ def _process_tty(pid):
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
     tty = (ps_out.stdout or "").strip()
-    return tty if tty and tty != "??" else None
+    return _normalized_tty(tty)
 
 
 def _save_spawn_registry(entries):
@@ -29842,7 +29853,7 @@ def _compact_via_hidden_pty(session_id, cwd):
 
     status = session_live_status(sid, cwd) or {}
     tty = status.get("tty")
-    has_tty = bool(tty) and tty != "??"
+    has_tty = _is_real_tty(tty)
     if status.get("live") and has_tty:
         # A live interactive terminal already owns this session — don't spawn a
         # competing pty (the caller's tty branch handles that case).
@@ -29871,7 +29882,7 @@ def _compact_via_hidden_pty(session_id, cwd):
     else:
         fresh = session_live_status(sid, cwd) or {}
         fresh_tty = fresh.get("tty")
-        if fresh.get("live") and not (bool(fresh_tty) and fresh_tty != "??"):
+        if fresh.get("live") and not _is_real_tty(fresh_tty):
             # External headless we don't own — leave it for the visible
             # fallback, which warns instead of silently killing it.
             return {"ok": False, "via": "hidden-pty", "error": "external headless owns this session"}
@@ -30031,7 +30042,7 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
     status = session_live_status(sid, cwd) or {}
     tty = status.get("tty")
     term_app = terminal_app or status.get("terminal_app") or "Terminal"
-    has_tty = bool(tty) and tty != "??"
+    has_tty = _is_real_tty(tty)
     # A live headless spawn blocks /compact only when there's NO terminal to run
     # it in (headless-only — there's no TUI for the slash command). When the
     # session ALSO has a terminal (the concurrent case), we no longer block:
@@ -30213,7 +30224,7 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
     status = session_live_status(session_id, cwd)
     tty = status.get("tty")
     term_app = status.get("terminal_app")
-    has_tty = bool(tty) and tty != "??"
+    has_tty = _is_real_tty(tty)
     is_cursor = _is_cursor_session(session_id)
     is_hermes = _is_hermes_session(session_id)
     # Codex: only its OWN TUI commands need a live interactive terminal.
@@ -30486,7 +30497,7 @@ def _set_session_model(session_id, model, context_1m):
     cwd = find_session_cwd(session_id)
     status = session_live_status(session_id, cwd) or {}
     tty = status.get("tty")
-    has_tty = bool(tty) and tty != "??"
+    has_tty = _is_real_tty(tty)
     spawn = _find_live_spawn_entry_for_session(session_id) if not has_tty else None
     if not (status.get("live") and has_tty) and spawn is None:
         payload["applied"] = "queued"
@@ -30565,7 +30576,7 @@ def _interrupt_session(session_id):
         return {"ok": False, "error": "Codex session is not live — nothing to interrupt"}
     tty = status.get("tty")
     term_app = status.get("terminal_app")
-    has_tty = bool(tty) and tty != "??"
+    has_tty = _is_real_tty(tty)
     if status.get("live") and has_tty:
         result = interrupt_input_via_keystroke(tty, term_app or "Terminal")
         result["via"] = "tty-esc"
