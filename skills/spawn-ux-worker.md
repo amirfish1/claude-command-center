@@ -47,6 +47,10 @@ Optional fields:
   basename, so you rarely need this).
 - `"model"`: model for the spawned session (omit to use CCC's spawn default).
 - `"name"`: session name (default `UX worker · <PROJECT>`).
+- `"message"`: extra context appended to the worker's starting prompt (e.g.
+  `"dev server runs on :3001"`, `"prioritise mobile tickets"`). It is added as
+  its own section and does not change how the worker claims/closes tickets.
+  Aliases: `"note"`, `"extra"`.
 
 The response is the standard spawn shape plus the resolved project:
 `{"ok": true, "session_id": "...", "spawn_id": "123", "engine": "claude",

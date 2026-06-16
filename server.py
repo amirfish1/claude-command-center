@@ -25183,13 +25183,26 @@ def _ux_fixes_scope_project(payload):
     return ux_fixes_queue._project_for(repo_path=repo_path, project=project)
 
 
-def _ux_fixes_worker_prompt(project, repo_path, ccc_url):
+def _ux_fixes_worker_prompt(project, repo_path, ccc_url, extra_message=""):
     """Build the starting prompt for a repo-scoped UX-fixes worker session.
 
     The spawned session loops forever via idle self-wakeups (ScheduleWakeup),
     claims only its own project's tickets, applies the fix, then closes and
     advances — never a busy loop.
+
+    ``extra_message`` is optional caller-supplied context appended verbatim as
+    its own section (e.g. "dev server runs on :3001", "prioritise mobile
+    tickets"). It does not replace the loop instructions.
     """
+    extra = ""
+    msg = re.sub(r"\s+$", "", str(extra_message or "")).strip()
+    if msg:
+        extra = (
+            "\n## Extra instructions from whoever started you\n"
+            "Treat the following as additional context/priorities on top of the "
+            "loop above (it does not change how you claim/close tickets):\n\n"
+            f"{msg[:4000]}\n"
+        )
     return f"""You are the UX-fixes WORKER for project `{project}`, working in the \
 repo at `{repo_path}`. Your job: drain this project's UX-fixes queue, one ticket \
 at a time, forever — without a human pushing anything.
@@ -25232,7 +25245,7 @@ matching this repo's slugified path; its basename (minus `.jsonl`) is your sessi
 Follow THIS repo's own CLAUDE.md git rules. Commit only the paths you changed \
 (`git commit --only <paths> -m "..."`), keep commits small, never `git add -A`/`.`, \
 never branch, and do NOT push unless explicitly asked.
-"""
+{extra}"""
 
 
 # A "return address" is the dispatching session's UUID. Validate loosely —
@@ -39284,8 +39297,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             )
             name = (payload.get("name") or "").strip() or f"UX worker · {project}"
             model = (payload.get("model") or "").strip() or None
+            extra_message = str(
+                payload.get("message") or payload.get("note") or payload.get("extra") or ""
+            ).strip()
             ccc_url = "http://127.0.0.1:8090"
-            prompt = _ux_fixes_worker_prompt(project, repo_path, ccc_url)
+            prompt = _ux_fixes_worker_prompt(project, repo_path, ccc_url, extra_message)
             try:
                 result = spawn_session(
                     prompt,
