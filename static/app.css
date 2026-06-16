@@ -4915,7 +4915,12 @@
     background: var(--bg);
   }
   .flow-toolbar {
-    position: sticky; top: 0; z-index: 4;
+    /* Sticky on BOTH axes: the toolbar lives inside .flow-board, which pans
+       via scrollLeft/scrollTop. With only top:0 it stayed put vertically but
+       slid sideways on horizontal pan/resize — the left buttons (search,
+       + Session…) got cut off the viewport (CCC-135). left:0 pins it to the
+       viewport's left so it always spans the visible width. */
+    position: sticky; top: 0; left: 0; z-index: 4;
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
     padding: 8px; border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--surface) 92%, transparent);
