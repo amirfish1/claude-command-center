@@ -18128,8 +18128,11 @@
     const _ipWindowCutoff = _ipWindowDays
       ? Math.floor(Date.now() / 1000) - (_ipWindowDays * 24 * 3600)
       : null;
+    // Hermes rows are exempt from the In Progress window too (see the archive
+    // window above) so a first-class Hermes conversation never gets windowed
+    // out of the active list regardless of age.
     const _visibleSessionConvs = _hasFolderChips
-      ? (_ipWindowCutoff ? _sessionConvs.filter(c => c.pinned || (c.modified || 0) >= _ipWindowCutoff) : _sessionConvs)
+      ? (_ipWindowCutoff ? _sessionConvs.filter(c => c.pinned || c.source === 'hermes' || c.engine === 'hermes' || (c.modified || 0) >= _ipWindowCutoff) : _sessionConvs)
       : _sessionConvs;
     // User-controlled grouping preference for the In Progress section.
     // 'project' (default): group by folder. 'time': flat chrono
@@ -28258,7 +28261,7 @@
       if (c.pinned) return true;
       // Recent-only filter (last N hours) — applies to everything, backlog included.
       // Backlog items use issue_created_at (falls back to modified).
-      if (showRecentOnly) {
+      if (showRecentOnly && c.source !== 'hermes' && c.engine !== 'hermes') {
         const ts = (c.source === 'backlog')
           ? (c.issue_created_at || c.modified || 0)
           : (c.modified || 0);
@@ -32001,8 +32004,13 @@
     // `modified` timestamp) is silently unsearchable by title. Bypass the
     // window when `q` is set; the substring filter + history union below
     // narrow it back down.
+    // Hermes rows are exempt from the time window (like pinned rows). A Hermes
+    // session is a conversation, not transient coding work, and is first-class
+    // / always-visible by design (matches the server-side non-repo-scoping).
+    // Without this, old Hermes chats silently vanish in the all-repos view and
+    // the only window control lives in the Archived section header.
     const _windowed = (_arcWindowCutoff && !q)
-      ? archiveRows.filter(c => c.pinned || ((c.modified || c.mtime || 0) >= _arcWindowCutoff))
+      ? archiveRows.filter(c => c.pinned || c.source === 'hermes' || c.engine === 'hermes' || ((c.modified || c.mtime || 0) >= _arcWindowCutoff))
       : archiveRows;
     // Never filter by folder — the folder picker controls grouping and the
     // active-chip highlight only. Hiding sessions from other repos breaks
@@ -32013,7 +32021,12 @@
       // session_id + id let users paste a session UUID into the search box
       // and find the conversation directly — useful when CCC tooling, logs
       // or external scripts surface a UUID without a title.
-      ((c.display_name || '') + ' ' + (c.first_message || '') + ' ' + (c.folder_label || '') + ' ' + (c.git_branch || '') + ' ' + (c.branch || '') + ' ' + (c.session_id || '') + ' ' + (c.id || ''))
+      // Engine/model/platform metadata mirrors filterConversations() so the
+      // all-repos archive view matches Hermes rows by provider ("hermes"),
+      // source platform ("cli"/"whatsapp"/"cron"/...), and model — the
+      // single-repo path alone had this, leaving the default view unable to
+      // surface Hermes rows by platform.
+      ((c.display_name || '') + ' ' + (c.first_message || '') + ' ' + (c.folder_label || '') + ' ' + (c.git_branch || '') + ' ' + (c.branch || '') + ' ' + (c.session_id || '') + ' ' + (c.id || '') + ' ' + (c.engine || '') + ' ' + (c.model || '') + ' ' + (c.source_platform || '') + ' ' + (c.hermes_source || '') + ' ' + (c.hermes_origin || '') + ' ' + (c.hermes_chat_type || ''))
         .toLowerCase().includes(q)
     ) : byFolder;
 

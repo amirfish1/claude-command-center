@@ -1052,6 +1052,35 @@ class TestServerImports(unittest.TestCase):
         ):
             self.assertIn(field, body, f"filterConversations should search {field}")
 
+    def test_archive_view_search_matches_hermes_platform_metadata(self):
+        """The all-repos archive view (renderArchiveList) has its own inline
+        search separate from filterConversations. It must also match Hermes
+        platform/model metadata so `cli`/`whatsapp`/`cron` surface Hermes rows
+        in the default (all-repos) view, not just single-repo mode."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        start = app_js.index("function renderArchiveList(filter, opts) {")
+        body = app_js[start:start + 8000]
+        for field in ("c.source_platform", "c.hermes_source", "c.model", "c.engine"):
+            self.assertIn(field, body, f"renderArchiveList search should include {field}")
+
+    def test_hermes_rows_exempt_from_recency_windows(self):
+        """Hermes rows are first-class / always-visible: they must be exempt
+        from every client-side recency window (global recency, In Progress
+        window, archive window) the same way pinned rows are. Otherwise old
+        Hermes conversations silently vanish from the default view even though
+        the API returns them."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        # All three window filters use the hermes exemption clause.
+        self.assertIn(
+            "c.pinned || c.source === 'hermes' || c.engine === 'hermes' || ((c.modified || c.mtime || 0) >= _arcWindowCutoff)",
+            app_js, "archive window must exempt Hermes rows")
+        self.assertIn(
+            "c.pinned || c.source === 'hermes' || c.engine === 'hermes' || (c.modified || 0) >= _ipWindowCutoff",
+            app_js, "In Progress window must exempt Hermes rows")
+        self.assertIn(
+            "showRecentOnly && c.source !== 'hermes' && c.engine !== 'hermes'",
+            app_js, "global recency filter must exempt Hermes rows")
+
     def test_cursor_sidebar_visibility_rejects_bad_input(self):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
