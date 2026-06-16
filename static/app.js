@@ -6807,6 +6807,13 @@
     if (!INLINE_CODE_PATH_RE.test(target)) return false;
     if (_isPlaceholderPathToken(target)) return false;
     if (_isInternalApiPathToken(target)) return false;
+    // Don't linkify a bare filename with no directory separator (e.g.
+    // `prospects-austin.csv`): it can't be resolved reliably — the name may be
+    // mentioned in prose while the real file lives in another repo this session
+    // never opened, so the click dead-ends on "file not found" (CCC-134). This
+    // matches the bare-prose rule, which also requires a separator. URLs are
+    // already accepted above; the ~/… and /… branches always contain a slash.
+    if (!/^https?:\/\//i.test(target) && target.indexOf('/') === -1) return false;
     return true;
   }
 
