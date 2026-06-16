@@ -25167,6 +25167,74 @@ def _finalize_spawn_response(resp, entry, ctx, *, wait_for_session_id=True):
     return resp
 
 
+def _ux_fixes_scope_project(payload):
+    """Resolve a repo-scoping project code from a claim/next payload.
+
+    Returns the normalized project code when the caller supplied `project`
+    and/or `repo_path`, else `None` (which keeps the global queue behavior so
+    existing un-scoped callers are unaffected).
+    """
+    if not isinstance(payload, dict):
+        return None
+    project = str(payload.get("project") or "").strip()
+    repo_path = str(payload.get("repo_path") or "").strip()
+    if not project and not repo_path:
+        return None
+    return ux_fixes_queue._project_for(repo_path=repo_path, project=project)
+
+
+def _ux_fixes_worker_prompt(project, repo_path, ccc_url):
+    """Build the starting prompt for a repo-scoped UX-fixes worker session.
+
+    The spawned session loops forever via idle self-wakeups (ScheduleWakeup),
+    claims only its own project's tickets, applies the fix, then closes and
+    advances — never a busy loop.
+    """
+    return f"""You are the UX-fixes WORKER for project `{project}`, working in the \
+repo at `{repo_path}`. Your job: drain this project's UX-fixes queue, one ticket \
+at a time, forever — without a human pushing anything.
+
+CCC server: {ccc_url}
+
+## How you run (idle loop, NOT a busy loop)
+Never stop waiting for tickets. Poll the queue once, and when it is empty, schedule \
+an idle self-wakeup (ScheduleWakeup) a few minutes out and re-check on the next \
+wakeup. Do NOT sit in a tight `while`/`sleep` loop and do NOT end the session — \
+stay alive via wakeups so new tickets get picked up automatically.
+
+## Network sandbox
+Run every curl with the Bash network sandbox DISABLED (these are loopback/IPC calls \
+to {ccc_url}; the sandbox blocks loopback and the curl will spuriously fail otherwise).
+
+## Your own session id
+You need your full session id for claim/close calls. Use `$CLAUDE_SESSION_ID` if set. \
+If it is empty, find the newest `*.jsonl` under the `~/.claude/projects/` directory \
+matching this repo's slugified path; its basename (minus `.jsonl`) is your session id.
+
+## The loop
+1. Claim a ticket scoped to YOUR project:
+   curl -s -X POST {ccc_url}/api/ux-fixes/claim \\
+     -H 'Content-Type: application/json' \\
+     -d '{{"session_id": "<your-full-session-id>", "project": "{project}"}}'
+   The response is `{{"ok": true, "item": <ticket|null>}}`. If `item` is null the \
+   queue is drained — schedule a wakeup and stop for now.
+2. Apply the fix described by the claimed ticket. Fields you get: `number` (the global \
+   ticket id), `title`, `detail`, optional `screenshot_path`, and `repo_path`. Read the \
+   screenshot if present. Make the change in this repo.
+3. Close the finished ticket AND claim the next one in one call:
+   curl -s -X POST {ccc_url}/api/ux-fixes/next \\
+     -H 'Content-Type: application/json' \\
+     -d '{{"session_id": "<your-full-session-id>", "close_number": <the number you just finished>, "project": "{project}"}}'
+   The response is `{{"ok": true, "closed": ..., "next": <ticket|null>}}`. If `next` is \
+   non-null, go to step 2 with it. If null, schedule a wakeup and stop for now.
+
+## Git hygiene
+Follow THIS repo's own CLAUDE.md git rules. Commit only the paths you changed \
+(`git commit --only <paths> -m "..."`), keep commits small, never `git add -A`/`.`, \
+never branch, and do NOT push unless explicitly asked.
+"""
+
+
 # A "return address" is the dispatching session's UUID. Validate loosely —
 # Claude/Codex/Gemini/Cursor session ids are UUID-ish (hex + dashes), but stay
 # permissive enough for any reasonable engine id. The value lands in prompt
@@ -39139,8 +39207,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not sid:
                 self.send_json({"ok": False, "error": "session_id required"}, 400)
                 return
+            # Optional repo-scoping: a worker can drain only its own project's
+            # queue by passing `project` and/or `repo_path`. When neither is
+            # given we keep the historical global behavior for back-compat.
+            scope_project = _ux_fixes_scope_project(payload)
             try:
-                item = ux_fixes_queue.claim_next(sid, lane=payload.get("lane") or None)
+                item = ux_fixes_queue.claim_next(
+                    sid, lane=payload.get("lane") or None, project=scope_project
+                )
                 self.send_json({"ok": True, "item": item})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -39157,11 +39231,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "session_id required"}, 400)
                 return
             close_n = payload.get("close_number")
+            scope_project = _ux_fixes_scope_project(payload)
             try:
                 result = ux_fixes_queue.next_item(
                     sid,
-                    close_number=int(close_n) if close_n is not None else None,
+                    close_ident=int(close_n) if close_n is not None else None,
                     lane=payload.get("lane") or None,
+                    project=scope_project,
                 )
                 self.send_json({"ok": True, **result})
             except Exception as e:
@@ -39183,6 +39259,53 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": bool(item), "item": item})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+        if path == "/api/ux-fixes/spawn-worker":
+            # Spawn a repo-scoped UX-fixes worker session that drains only this
+            # repo's project queue. Same-origin is already enforced at the top
+            # of do_POST; repo_path is validated by spawn_session ->
+            # _spawn_repo_context -> require_repo_context, exactly like
+            # /api/sessions/spawn. We do not invent looser validation here.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            repo_path = str(payload.get("repo_path") or "").strip()
+            if not repo_path:
+                self.send_json({"ok": False, "error": "repo_path required"}, 400)
+                return
+            project = ux_fixes_queue._project_for(
+                repo_path=repo_path, project=str(payload.get("project") or "").strip()
+            )
+            name = (payload.get("name") or "").strip() or f"UX worker · {project}"
+            model = (payload.get("model") or "").strip() or None
+            ccc_url = "http://127.0.0.1:8090"
+            prompt = _ux_fixes_worker_prompt(project, repo_path, ccc_url)
+            try:
+                result = spawn_session(
+                    prompt,
+                    name=name,
+                    repo_path=repo_path,
+                    model=model,
+                )
+                if isinstance(result, dict):
+                    result.setdefault("engine", "claude")
+                    result["project"] = project
+                if isinstance(result, dict) and result.get("code") in (
+                    "claude_unavailable",
+                ):
+                    self.send_json(result, 503)
+                else:
+                    self.send_json(result)
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
             return
         if path == "/api/bug-report":
             # Submit a bug report as a GitHub issue against the CCC repo.
