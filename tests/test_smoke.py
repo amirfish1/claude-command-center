@@ -5042,6 +5042,96 @@ class TestRepoContextHelpers(unittest.TestCase):
                 server._HERMES_GATEWAY_CACHE["by_session"] = {}
                 server._ENGINE_DETECT_CACHE.clear()
 
+    def test_hermes_rows_are_not_repo_scoped(self):
+        """Hermes is a non-repo-scoped source: a session whose cwd is outside
+        the requested repo (or empty) must still surface under repo_only=True,
+        so CLI/whatsapp/cron rows appear in every repo's sidebar rather than
+        only when their home-dir cwd is selected."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            # A real, unrelated repo dir to scope to. The sessions below live
+            # at `root` (its parent) or have no cwd — neither is inside it.
+            other_repo = root / "unrelated_repo"
+            other_repo.mkdir()
+            (other_repo / ".git").mkdir()  # looks-like-repo → resolve_repo_path accepts it
+            db = root / "state.db"
+            gateway = root / "sessions" / "sessions.json"
+            gateway.parent.mkdir(parents=True)
+            gateway.write_text("{}")
+            con = sqlite3.connect(db)
+            try:
+                con.executescript("""
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY, source TEXT, user_id TEXT,
+                        model TEXT, title TEXT, started_at REAL, ended_at REAL,
+                        parent_session_id TEXT, message_count INTEGER,
+                        tool_call_count INTEGER, input_tokens INTEGER,
+                        output_tokens INTEGER, cache_read_tokens INTEGER,
+                        cache_write_tokens INTEGER, reasoning_tokens INTEGER,
+                        cwd TEXT, archived INTEGER
+                    );
+                    CREATE TABLE messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT,
+                        role TEXT, content TEXT, tool_call_id TEXT,
+                        tool_calls TEXT, tool_name TEXT, timestamp REAL,
+                        token_count INTEGER, finish_reason TEXT,
+                        reasoning TEXT, active INTEGER
+                    );
+                    CREATE VIRTUAL TABLE messages_fts USING fts5(content);
+                """)
+                cli_sid = "20260601_120000_cli"
+                wa_sid = "20260601_121000_wa"
+                # CLI session rooted at the home-dir-like parent (outside repo).
+                con.execute(
+                    "INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (cli_sid, "cli", "u", "m", "CLI chat", 1780315200.0, 0.0,
+                     "", 1, 0, 0, 0, 0, 0, 0, str(root), 0),
+                )
+                # WhatsApp session with no cwd at all.
+                con.execute(
+                    "INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (wa_sid, "whatsapp", "u", "m", "WA chat", 1780315800.0, 0.0,
+                     "", 1, 0, 0, 0, 0, 0, 0, "", 0),
+                )
+                for sid in (cli_sid, wa_sid):
+                    con.execute(
+                        "INSERT INTO messages (session_id, role, content, timestamp, active) VALUES (?,?,?,?,1)",
+                        (sid, "user", "hi", 1780315210.0),
+                    )
+                con.commit()
+            finally:
+                con.close()
+
+            orig_db = server.HERMES_STATE_DB
+            orig_gateway = server.HERMES_GATEWAY_SESSIONS
+            server.HERMES_STATE_DB = db
+            server.HERMES_GATEWAY_SESSIONS = gateway
+            server._HERMES_ID_CACHE["key"] = None
+            server._HERMES_ID_CACHE["ids"] = set()
+            server._HERMES_GATEWAY_CACHE["key"] = None
+            server._HERMES_GATEWAY_CACHE["by_session"] = {}
+            try:
+                rows = server.find_hermes_conversations(
+                    repo_path=str(other_repo), repo_only=True,
+                    resolve_pr_states=False, resolve_worktree_dirty=False,
+                )
+                sids = {r["session_id"] for r in rows}
+                self.assertIn(cli_sid, sids, "CLI row with out-of-repo cwd must still show")
+                self.assertIn(wa_sid, sids, "empty-cwd whatsapp row must still show")
+                platforms = {r["source_platform"] for r in rows}
+                self.assertEqual(platforms, {"cli", "whatsapp"})
+            finally:
+                server.HERMES_STATE_DB = orig_db
+                server.HERMES_GATEWAY_SESSIONS = orig_gateway
+                server._HERMES_ID_CACHE["key"] = None
+                server._HERMES_ID_CACHE["ids"] = set()
+                server._HERMES_GATEWAY_CACHE["key"] = None
+                server._HERMES_GATEWAY_CACHE["by_session"] = {}
+
     def test_hermes_history_accepts_non_timestamp_session_ids(self):
         """Gateway-created Hermes sessions may use non-timestamp ids."""
         for mod in ("server",):

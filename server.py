@@ -23194,13 +23194,15 @@ def find_hermes_conversations(
             pinned = repo_pins.get(sid)
             pinned_repo = False
             cwd = row.get("cwd") or ""
-            if repo_only:
-                if pinned and pinned != repo_path:
-                    continue
-                if pinned == repo_path:
-                    pinned_repo = True
-                elif cwd and not _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
-                    continue
+            # Hermes is a non-repo-scoped source. A Hermes session (whatsapp,
+            # cli, cron, ...) is a conversation, not a checkout: its cwd is
+            # often the home dir or empty and must never hide it when another
+            # repo is selected. So unlike Claude/Codex we do NOT `continue` on
+            # a cwd/pin mismatch under repo_only — every Hermes row surfaces in
+            # every repo's sidebar. We still resolve `pinned_repo` so an
+            # explicit pin to the current repo keeps driving the repo chip.
+            if repo_only and pinned == repo_path:
+                pinned_repo = True
             summary = _hermes_message_summary(con, sid)
             modified = (
                 summary.get("last_ts")
