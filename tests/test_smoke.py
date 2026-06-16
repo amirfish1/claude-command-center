@@ -1030,6 +1030,26 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-item .source-badge.hermes", app_css)
         self.assertIn(".event.system.system-hermes", app_css)
 
+    def test_sidebar_filter_matches_hermes_platform_metadata(self):
+        """The local sidebar filter must match Hermes engine/platform/model
+        metadata so `cli`, `whatsapp`, `cron`, and `hermes` all surface the
+        right rows. Isolate the filterConversations() body so a stray match
+        elsewhere in app.js can't satisfy the assertion."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        start = app_js.index("function filterConversations(q) {")
+        # The function ends at the closing of its returned/sorted block; grab a
+        # generous slice and stop at the next top-level function declaration.
+        body = app_js[start:start + 4000]
+        for field in (
+            "c.engine",
+            "c.model",
+            "c.source_platform",
+            "c.hermes_source",
+            "c.hermes_origin",
+            "c.hermes_chat_type",
+        ):
+            self.assertIn(field, body, f"filterConversations should search {field}")
+
     def test_cursor_sidebar_visibility_rejects_bad_input(self):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)

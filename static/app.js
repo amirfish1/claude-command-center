@@ -26873,7 +26873,19 @@
         || (c.branch || '').toLowerCase().includes(q)
         || (c.source || '').toLowerCase().includes(q)
         || (c.session_id || '').toLowerCase().includes(q)
-        || (c.id || '').toLowerCase().includes(q);
+        || (c.id || '').toLowerCase().includes(q)
+        // Engine/model/platform metadata. Lets Hermes rows surface by their
+        // provider ("hermes"), source platform ("cli", "whatsapp",
+        // "whatsapp_cloud", "cron", or any future value), and model. The
+        // gateway origin/chat_type are matched too so internal routing keys
+        // stay searchable without ever being rendered (see req: no
+        // phone-like IDs / gateway internals in the UI).
+        || (c.engine || '').toLowerCase().includes(q)
+        || (c.model || '').toLowerCase().includes(q)
+        || (c.source_platform || '').toLowerCase().includes(q)
+        || (c.hermes_source || '').toLowerCase().includes(q)
+        || (c.hermes_origin || '').toLowerCase().includes(q)
+        || (c.hermes_chat_type || '').toLowerCase().includes(q);
     });
     const sorted = _prioritizeSessionIdMatches(applyConvSort(filtered), q);
     return _decorateWithHistoryMatches(sorted, q);
