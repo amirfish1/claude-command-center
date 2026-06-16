@@ -3947,7 +3947,7 @@
           : 'Type a follow-up — Antigravity will resume headless…';
       } else if (isHermes) {
         $convTtyLabel.textContent = 'hermes';
-        $convInput.placeholder = 'Hermes history is read-only in CCC';
+        $convInput.placeholder = 'Resume Hermes and send...';
       } else if (live) {
         $convTtyLabel.textContent = liveStatus.tty;
         $convInput.placeholder = 'Send to terminal...';
@@ -3970,17 +3970,17 @@
       // order. Previously we readOnly'd the input when both
       // can_headless_resume and can_app_resume were false, leaving the
       // user with a dead input bar and no way to type a follow-up.
-      const canSend = !isHermes && (!isAntigravity || antigravityCanSendNow);
+      const canSend = !isAntigravity || antigravityCanSendNow;
       if ($convInput) {
-        const blockTyping = isHermes || (!canSend && !isAntigravity);
+        const blockTyping = !canSend && !isAntigravity;
         $convInput.readOnly = blockTyping;
         $convInput.classList.toggle('is-readonly', blockTyping);
       }
       if ($convSendBtn) {
-        const blockSend = isHermes || (!canSend && !isAntigravity);
+        const blockSend = !canSend && !isAntigravity;
         $convSendBtn.disabled = blockSend;
         $convSendBtn.title = blockSend
-          ? (isHermes ? 'Hermes history is read-only in CCC' : 'Open Antigravity to continue this app session')
+          ? 'Open Antigravity to continue this app session'
           : (isAntigravity && !antigravityCanSendNow
               ? 'Send — runs AGY headless on this session'
               : 'Send');
@@ -4546,12 +4546,33 @@
     // merely "picking it up" — a new process is loading the whole transcript
     // first, which can take a while on big sessions. Say so.
     const waking = !!(data && data.resumed && !data.reused);
+    const engine = String((data && data.engine) || (currentSession && currentSession.source) || 'Claude').toLowerCase();
+    const engineLabel = engine === 'codex' ? 'Codex'
+      : engine === 'gemini' ? 'Gemini'
+      : engine === 'cursor' ? 'Cursor'
+      : engine === 'antigravity' ? 'Antigravity'
+      : engine === 'hermes' ? 'Hermes'
+      : 'Claude';
     note.textContent = waking
       ? '⏻ Waking the headless agent — it reloads the conversation first, so the reply can take a minute.'
-      : '✓ Delivered — waiting for Claude to pick it up.';
+      : '✓ Delivered — waiting for ' + engineLabel + ' to pick it up.';
     // Tier 2: the agent now has the message — advance the live turn status from
     // "Sending…" to "🧠 Thinking…" (or "Waking up…"). Clears when the response lands.
     setOptimisticAgentThinking(div.parentNode, waking ? '⏻ Waking up headless&hellip;' : null);
+  }
+
+  function scheduleFireAndWatchRefresh(paneId) {
+    const convId = currentConversation;
+    const targetPaneId = paneId || (typeof activePaneId === 'function' ? activePaneId() : 'p1');
+    [1500, 3500, 7000, 12000].forEach(ms => {
+      setTimeout(() => {
+        refreshConversationList();
+        if (currentConversation !== convId) return;
+        try {
+          Promise.resolve(fetchConversationEvents(targetPaneId)).catch(() => {});
+        } catch (_) {}
+      }, ms);
+    });
   }
 
   function isCursorUsageLimitFailure(data, reason) {
@@ -4863,10 +4884,6 @@
     }
     const sid = currentSession.id;
     if (!sid) return;
-    if (currentSession.source === 'hermes') {
-      showOpToast('Hermes history is read-only in CCC.', 'info');
-      return;
-    }
     if (injectMode === 'steer' && currentSession.source !== 'codex') {
       showOpToast('Steer is only available for Codex sessions.', 'error');
       return;
@@ -4999,6 +5016,10 @@
           showOpToast('Sent to Antigravity app.');
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
+        } else if (data.via === 'hermes-resume') {
+          markPendingSendDelivered(pendingSend, data);
+          showOpToast('Hermes follow-up started.');
+          scheduleFireAndWatchRefresh(paneId || activePaneId());
         } else if (compactCommand) {
           showOpToast(compactRequestSuccessMessage(data, currentSession.source));
           if (currentSession.source !== 'codex') {
@@ -21571,10 +21592,10 @@
         else if (isGemini) $cpInput.placeholder = live ? 'Send to Gemini terminal...' : 'Resume Gemini and send...';
         else if (isCursor) $cpInput.placeholder = live ? 'Send to Cursor terminal...' : 'Resume Cursor and send...';
         else if (isAntigravity) $cpInput.placeholder = antigravityInputPlaceholder(currentSession);
-        else if (isHermes) $cpInput.placeholder = 'Hermes history is read-only in CCC';
+        else if (isHermes) $cpInput.placeholder = 'Resume Hermes and send...';
         else if (live) $cpInput.placeholder = 'Send to terminal...';
         else $cpInput.placeholder = 'Send to terminal (offline)...';
-        const readOnly = isHermes || (isAntigravity && !antigravityCanSendNow);
+        const readOnly = isAntigravity && !antigravityCanSendNow;
         $cpInput.readOnly = readOnly;
         $cpInput.classList.toggle('is-readonly', readOnly);
       }
@@ -32056,10 +32077,6 @@
       const text = ($cpInput.value || '').trim();
       const sid = currentSession.id;
       if (!text || !sid) return;
-      if (currentSession.source === 'hermes') {
-        showOpToast('Hermes history is read-only in CCC.', 'info');
-        return;
-      }
       hideSlashCommandMenu();
       $cpSendBtn.disabled = true;
       const flashRed = () => {
@@ -32138,6 +32155,10 @@
             showOpToast('Sent to Antigravity app.');
             setTimeout(refreshConversationList, 1500);
             setTimeout(refreshConversationList, 3500);
+          } else if (data.via === 'hermes-resume') {
+            markPendingSendDelivered(pendingSend, data);
+            showOpToast('Hermes follow-up started.');
+            scheduleFireAndWatchRefresh(activePaneId());
           }
         } else {
           const reason = formatInjectFailure(data, res.status);
@@ -32173,12 +32194,9 @@
       // CLI-headless / running app / fresh app launch with the prompt
       // prefilled. Don't gate send on antigravityCanSend any more.
       const isAGY = currentSession.source === 'antigravity';
-      const isHermes = currentSession.source === 'hermes';
       const agyCanSendNow = !isAGY || antigravityCanSend(currentSession);
-      $cpSendBtn.disabled = !hasText || !currentSession.id || isHermes;
-      $cpSendBtn.title = isHermes
-        ? 'Hermes history is read-only in CCC'
-        : isAGY && !agyCanSendNow
+      $cpSendBtn.disabled = !hasText || !currentSession.id;
+      $cpSendBtn.title = isAGY && !agyCanSendNow
         ? 'Send — runs AGY headless on this session'
         : 'Send';
     };

@@ -1023,7 +1023,9 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("source-badge hermes", app_js)
         self.assertIn("is-hermes-session", app_js)
-        self.assertIn("Hermes history is read-only in CCC", app_js)
+        self.assertIn("Resume Hermes and send...", app_js)
+        self.assertIn("hermes-resume", app_js)
+        self.assertIn("scheduleFireAndWatchRefresh", app_js)
         self.assertIn("hermes_lineage", app_js)
         self.assertIn("conv-signal hermes-platform", app_js)
         self.assertIn(".conv-session-icon.hermes", app_css)
@@ -4608,6 +4610,84 @@ class TestRepoContextHelpers(unittest.TestCase):
             server._pending_resume_queue.clear()
             server._pending_resume_queue.update(original_queue)
 
+    def test_resume_hermes_builds_resume_command(self):
+        server = self.server
+        sid = "20260601_121000_child"
+        proc = mock.Mock(pid=4251)
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        spawned_entry = None
+        try:
+            with mock.patch.object(
+                server,
+                "_resolve_hermes_bin",
+                return_value={"available": True, "bin": "/usr/bin/hermes-test"},
+            ), mock.patch.object(
+                server,
+                "_hermes_session_row",
+                return_value={"cwd": str(self.repo), "model": "hermes-test-model"},
+            ), mock.patch.object(server, "_git_toplevel_for_existing_dir", return_value=str(self.repo)), \
+                 mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
+                 mock.patch.object(server, "_record_spawn_to_registry") as record:
+                result = server.resume_session_hermes(sid, "second")
+                spawned_entry = dict(server._spawned_sessions[0])
+        finally:
+            for entry in server._spawned_sessions:
+                fh = entry.get("log_fh")
+                if fh:
+                    fh.close()
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["via"], "hermes-resume")
+        self.assertEqual(result["engine"], "hermes")
+        self.assertEqual(result["model"], "hermes-test-model")
+        cmd = popen.call_args.args[0]
+        self.assertEqual(cmd[:2], ["/usr/bin/hermes-test", "chat"])
+        self.assertEqual(cmd[cmd.index("--resume") + 1], sid)
+        self.assertEqual(cmd[cmd.index("--query") + 1], "second")
+        self.assertIn("--quiet", cmd)
+        self.assertEqual(popen.call_args.kwargs["cwd"], str(self.repo))
+        self.assertEqual(spawned_entry["engine"], "hermes")
+        record.assert_called_once()
+        self.assertEqual(record.call_args.kwargs["engine"], "hermes")
+        self.assertEqual(record.call_args.kwargs["session_id"], sid)
+
+    def test_resume_hermes_queues_when_resume_already_running(self):
+        server = self.server
+        sid = "20260601_121000_child"
+        original_spawns = list(server._spawned_sessions)
+        with server._pending_resume_lock:
+            original_queue = dict(server._pending_resume_queue)
+            server._pending_resume_queue.clear()
+        server._spawned_sessions[:] = [{
+            "engine": "hermes",
+            "resumed_sid": sid,
+            "pid": 4252,
+        }]
+        try:
+            with mock.patch.object(
+                server,
+                "_resolve_hermes_bin",
+                return_value={"available": True, "bin": "/usr/bin/hermes-test"},
+            ), mock.patch.object(server, "_poll_spawn_entry", return_value=None), \
+                 mock.patch.object(server.subprocess, "Popen") as popen:
+                result = server.resume_session_hermes(sid, "second")
+        finally:
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["queued"])
+        self.assertEqual(result["via"], "hermes-resume-queued")
+        self.assertEqual(result["engine"], "hermes")
+        popen.assert_not_called()
+        with server._pending_resume_lock:
+            self.assertEqual(server._pending_resume_queue.get(sid), ["second"])
+            server._pending_resume_queue.clear()
+            server._pending_resume_queue.update(original_queue)
+
     def test_open_target_allows_executable_session_cwd_files(self):
         """Post-sandbox-removal: scripts in the session cwd resolve cleanly."""
         for mod in ("server",):
@@ -4846,6 +4926,68 @@ class TestRepoContextHelpers(unittest.TestCase):
                 server._HERMES_ID_CACHE["ids"] = set()
                 server._HERMES_GATEWAY_CACHE["key"] = None
                 server._HERMES_GATEWAY_CACHE["by_session"] = {}
+                server._ENGINE_DETECT_CACHE.clear()
+
+    def test_hermes_history_accepts_non_timestamp_session_ids(self):
+        """Gateway-created Hermes sessions may use non-timestamp ids."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        sid = "cron_789eec75aeaa_20260616_100045"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            db = root / "state.db"
+            con = sqlite3.connect(db)
+            try:
+                con.executescript("""
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY,
+                        source TEXT,
+                        model TEXT,
+                        title TEXT,
+                        started_at REAL,
+                        cwd TEXT
+                    );
+                    CREATE TABLE messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT,
+                        role TEXT,
+                        content TEXT,
+                        timestamp REAL,
+                        active INTEGER
+                    );
+                """)
+                con.execute(
+                    "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+                    (sid, "cron", "hermes-test-model", "Scheduled check", 1780315200.0, str(root)),
+                )
+                con.execute(
+                    "INSERT INTO messages (session_id, role, content, timestamp, active) VALUES (?,?,?,?,1)",
+                    (sid, "user", "Run the scheduled check", 1780315210.0),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            orig_db = server.HERMES_STATE_DB
+            server.HERMES_STATE_DB = db
+            server._HERMES_ID_CACHE["key"] = None
+            server._HERMES_ID_CACHE["ids"] = set()
+            server._ENGINE_DETECT_CACHE.clear()
+            try:
+                self.assertTrue(server._is_hermes_session(sid))
+                rows = server.find_hermes_conversations(repo_only=False)
+                self.assertEqual([r["session_id"] for r in rows], [sid])
+                parsed = server.parse_conversation(sid, use_cache=False)
+                self.assertTrue(any(
+                    e.get("type") == "user_text" and e.get("text") == "Run the scheduled check"
+                    for e in parsed["events"]
+                ))
+            finally:
+                server.HERMES_STATE_DB = orig_db
+                server._HERMES_ID_CACHE["key"] = None
+                server._HERMES_ID_CACHE["ids"] = set()
                 server._ENGINE_DETECT_CACHE.clear()
 
     def test_hermes_history_missing_db_is_empty(self):

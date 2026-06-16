@@ -18347,7 +18347,7 @@ def _start_resume_queue_watcher() -> None:
                 busy = any(
                     s.get("resumed_sid") == sid and _poll_spawn_entry(s) is None
                     for s in _spawned_sessions
-                    if s.get("engine") in ("codex", "gemini", "cursor", "antigravity")
+                    if s.get("engine") in ("codex", "gemini", "cursor", "antigravity", "hermes")
                 )
                 if busy:
                     continue
@@ -18370,6 +18370,8 @@ def _start_resume_queue_watcher() -> None:
                         resume_session_cursor(sid, text)
                     elif _is_antigravity_session(sid):
                         resume_session_antigravity(sid, text)
+                    elif _is_hermes_session(sid):
+                        resume_session_hermes(sid, text)
                 except Exception:
                     pass
             with _pending_terminal_input_lock:
@@ -21899,7 +21901,6 @@ HERMES_GATEWAY_SESSIONS = Path(
     or (HERMES_HOME / "sessions" / "sessions.json")
 ).expanduser()
 HERMES_CONTEXT_LIMIT = 200_000
-_HERMES_SESSION_ID_RE = re.compile(r"^\d{8}_\d{6}_[A-Za-z0-9]+$")
 _HERMES_ID_CACHE = {"key": None, "ids": set()}
 _HERMES_GATEWAY_CACHE = {"key": None, "by_session": {}}
 
@@ -21975,9 +21976,39 @@ def _hermes_session_ids():
 
 def _is_hermes_session(session_id):
     sid = str(session_id or "").strip()
-    if not sid or not _HERMES_SESSION_ID_RE.match(sid):
+    if not sid:
         return False
     return sid in _hermes_session_ids()
+
+
+def _resolve_hermes_bin():
+    """Locate a usable Hermes CLI binary."""
+    env_bin = os.environ.get("CCC_HERMES_BIN")
+    if env_bin:
+        expanded = os.path.expanduser(env_bin)
+        if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
+            return {"available": True, "bin": expanded, "source": "env"}
+        return {
+            "available": False,
+            "bin": None,
+            "code": "hermes_unavailable",
+            "reason": f"CCC_HERMES_BIN is set to {env_bin!r} but it isn't an executable file",
+        }
+    which_bin = shutil.which("hermes")
+    if which_bin:
+        return {"available": True, "bin": which_bin, "source": "path"}
+    for candidate in _iter_common_cli_candidates("hermes"):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return {"available": True, "bin": str(candidate), "source": "candidate"}
+    local_bin = Path.home() / ".local" / "bin" / "hermes"
+    if local_bin.is_file() and os.access(local_bin, os.X_OK):
+        return {"available": True, "bin": str(local_bin), "source": "candidate"}
+    return {
+        "available": False,
+        "bin": None,
+        "code": "hermes_unavailable",
+        "reason": "Hermes CLI not found. Install Hermes or set CCC_HERMES_BIN.",
+    }
 
 
 def _hermes_epoch(value):
@@ -22855,6 +22886,104 @@ def _extract_files_from_hermes_conversation(session_id):
     for rows in groups.values():
         rows.sort(key=lambda r: r["first_line"])
     return {"count": len(seen), "truncated": truncated, "groups": groups}
+
+
+def resume_session_hermes(session_id, text):
+    """Resume a Hermes conversation with a one-shot CLI prompt."""
+    text = _strip_ccc_session_state_instruction(text)
+    if not session_id or not text:
+        return {"ok": False, "error": "missing session_id or text"}
+    resolved = _resolve_hermes_bin()
+    if not resolved["available"]:
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    for s in _spawned_sessions:
+        if s.get("engine") == "hermes" and s.get("resumed_sid") == session_id:
+            try:
+                if _poll_spawn_entry(s) is None:
+                    with _pending_resume_lock:
+                        _pending_resume_queue.setdefault(session_id, []).append(text)
+                    _save_pending_inputs()
+                    return {
+                        "ok": True,
+                        "queued": True,
+                        "pid": s.get("pid"),
+                        "via": "hermes-resume-queued",
+                        "queued_reason": "waiting for the current Hermes turn to finish",
+                        "engine": "hermes",
+                    }
+            except Exception:
+                pass
+    row = _hermes_session_row(session_id) or {}
+    spawned_ctx = _spawn_registry_entry_for_session(session_id, "hermes") or {}
+    cwd = spawned_ctx.get("cwd") or row.get("cwd") or find_session_cwd(session_id) or str(Path.home())
+    if not Path(cwd).is_dir():
+        cwd = str(Path.home())
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"resume-hermes-{str(session_id)[:8]}-{timestamp}.log"
+    repo_for_logs = _git_toplevel_for_existing_dir(cwd) or cwd
+    log_dir = repo_log_dir(repo_for_logs)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
+    cmd = [
+        resolved["bin"],
+        "chat",
+        "--resume", str(session_id),
+        "--query", text,
+        "--quiet",
+    ]
+    model = row.get("model") or spawned_ctx.get("model") or ""
+    log_fh = open(log_path, "w")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            cwd=cwd,
+            start_new_session=True,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log_fh.close()
+        return {"ok": False, "error": str(e), "via": "hermes-resume", "engine": "hermes"}
+    entry = {
+        "pid": proc.pid,
+        "name": f"resume-hermes-{str(session_id)[:8]}",
+        "log": str(log_path),
+        "prompt": text[:200],
+        "started": timestamp,
+        "proc": proc,
+        "log_fh": log_fh,
+        "resumed_sid": session_id,
+        "fifo": None,
+        "stdin_fd": None,
+        "engine": "hermes",
+        "cwd": cwd,
+        "repo_path": repo_for_logs,
+        "model": model,
+    }
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid,
+        name=entry["name"],
+        log_path=log_path,
+        cwd=cwd,
+        spawned_at=timestamp,
+        command_summary=text[:200],
+        fifo=None,
+        engine="hermes",
+        session_id=session_id,
+        repo_path=repo_for_logs,
+        model=model,
+    )
+    return {
+        "ok": True,
+        "pid": proc.pid,
+        "log": str(log_path),
+        "resumed": True,
+        "via": "hermes-resume",
+        "engine": "hermes",
+        "model": model,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -30086,6 +30215,7 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
     term_app = status.get("terminal_app")
     has_tty = bool(tty) and tty != "??"
     is_cursor = _is_cursor_session(session_id)
+    is_hermes = _is_hermes_session(session_id)
     # Codex: only its OWN TUI commands need a live interactive terminal.
     # Slash-shaped text that isn't one (e.g. /group-chat-checkin from the
     # group-chat flow) is just prompt text — route it through the normal
@@ -30202,6 +30332,8 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
         return resume_session_cursor(session_id, text)
     if _is_antigravity_session(session_id):
         return resume_session_antigravity(session_id, text)
+    if is_hermes:
+        return resume_session_hermes(session_id, text)
     if not status.get("live") or not has_tty:
         spawn = _find_live_spawn_entry_for_session(session_id)
         if spawn is not None:
