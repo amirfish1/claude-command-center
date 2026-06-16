@@ -3202,6 +3202,63 @@
     }
   });
 
+  // CCC-138: click the UX-fixes queue-progress pill on a worker row to nudge
+  // that worker to re-check its queue — but only when a nudge is actually
+  // warranted. Rules: a working pill means it's mid-fix (no nudge needed); an
+  // idle (done) pill is a candidate, throttled so a click-spam doesn't inject
+  // a wake every second. /api/inject-input is the same wake channel the
+  // engine wake badges use.
+  const _uxNudgeLast = {};            // session_id → last nudge ts (ms)
+  const _UX_NUDGE_THROTTLE_MS = 5 * 60 * 1000;
+  async function _handleUxQueueNudge(el) {
+    const item = el.closest('.conv-item');
+    const sid = item ? item.getAttribute('data-session-id') : '';
+    if (!sid) return;
+    if (el.dataset.uxNudge === 'working') {
+      if (typeof showOpToast === 'function') showOpToast('Worker is mid-fix — no nudge needed.', 'info');
+      return;
+    }
+    const now = Date.now();
+    const last = _uxNudgeLast[sid] || 0;
+    if (now - last < _UX_NUDGE_THROTTLE_MS) {
+      const ago = Math.round((now - last) / 1000);
+      if (typeof showOpToast === 'function') showOpToast('Already nudged ' + ago + 's ago — skipping.', 'info');
+      return;
+    }
+    _uxNudgeLast[sid] = now;
+    const WAKE = 'Queue nudge: re-check your UX-fixes queue now — claim the next ticket, '
+      + 'fix + lean-commit + close via /api/ux-fixes/next, then keep draining. '
+      + 'If it is empty, schedule an idle wakeup. Never busy-loop.';
+    try {
+      const res = await fetch('/api/inject-input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid, text: WAKE }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) throw new Error(data.error || 'nudge failed');
+      if (typeof showOpToast === 'function') showOpToast('Nudged worker to re-check the queue.', 'success');
+    } catch (err) {
+      delete _uxNudgeLast[sid];  // failed — allow an immediate retry
+      if (typeof showOpToast === 'function') showOpToast('Nudge failed: ' + (err && err.message || 'unknown'), 'error');
+    }
+  }
+  document.addEventListener('click', (ev) => {
+    const el = ev.target.closest('.conv-ux-fix-progress[data-ux-nudge]');
+    if (!el) return;
+    ev.preventDefault();
+    ev.stopPropagation();   // don't also open/select the conversation row
+    _handleUxQueueNudge(el);
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const el = ev.target.closest && ev.target.closest('.conv-ux-fix-progress[data-ux-nudge]');
+    if (!el) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    _handleUxQueueNudge(el);
+  });
+
   function updateLiveStripOffset($view, strip) {
     if (!$view) return;
     if (!strip) {
@@ -29940,12 +29997,16 @@
     const proj = progress.project && progress.project !== '?' ? progress.project + ' ' : '';
     const count = '(' + escapeHtml(progress.current) + '/' + escapeHtml(progress.total) + ')';
     if (progress.kind === 'done') {
-      const title = 'Last fixed ' + proj + 'fix #' + progress.current + ' of ' + progress.total + ' (idle)';
-      return '<span class="conv-ux-fix-progress conv-ux-fix-done" title="' + escapeAttr(title) + '">'
+      const title = 'Last fixed ' + proj + 'fix #' + progress.current + ' of ' + progress.total
+        + ' (idle) · click to nudge this worker to re-check the queue';
+      return '<span class="conv-ux-fix-progress conv-ux-fix-done" role="button" tabindex="0"'
+        + ' data-ux-nudge="done" style="cursor:pointer" title="' + escapeAttr(title) + '">'
         + '✓ ' + count + '</span>';
     }
-    const title = 'Working ' + proj + 'fix #' + progress.current + ' of ' + progress.total + ' queued';
-    return '<span class="conv-ux-fix-progress" title="' + escapeAttr(title) + '">' + count + '</span>';
+    const title = 'Working ' + proj + 'fix #' + progress.current + ' of ' + progress.total
+      + ' queued · click to check if a nudge is needed';
+    return '<span class="conv-ux-fix-progress" role="button" tabindex="0" data-ux-nudge="working"'
+      + ' style="cursor:pointer" title="' + escapeAttr(title) + '">' + count + '</span>';
   }
 
   async function refreshUxFixesQueueMeta(opts = {}) {
