@@ -30504,9 +30504,13 @@
         + '✓ ' + count + '</span>';
     }
     const title = 'Working ' + proj + 'fix #' + progress.current + ' of ' + progress.total
-      + ' queued · click to check if a nudge is needed';
-    return '<span class="conv-ux-fix-progress" role="button" tabindex="0" data-ux-nudge="working"'
-      + ' style="cursor:pointer" title="' + escapeAttr(title) + '">' + count + '</span>';
+      + ' queued (in progress, not done) · click to check if a nudge is needed';
+    // Prefix the in-flight glyph (▶, the same one the live-tool pill uses) so the
+    // working state can't be misread as complete: "▶ (141/141)" = working the
+    // 141st, vs "✓ (141/141)" = finished it (CCC-142). Without the glyph the two
+    // were identical and an in-progress (often stalled) item looked done.
+    return '<span class="conv-ux-fix-progress conv-ux-fix-working" role="button" tabindex="0" data-ux-nudge="working"'
+      + ' style="cursor:pointer" title="' + escapeAttr(title) + '">▶ ' + count + '</span>';
   }
 
   async function refreshUxFixesQueueMeta(opts = {}) {
