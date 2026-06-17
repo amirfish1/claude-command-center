@@ -13648,7 +13648,7 @@
       + '<div class="gc-reader-body" id="gcReaderBody" tabindex="0">Loading…</div>'
       + (includeHuman
         ? '<div class="gc-reader-input-row" id="gcInputRow">'
-            + '<textarea id="gcHumanInput" rows="1" placeholder="Add to chat…" autocomplete="off" spellcheck="false"></textarea>'
+            + '<textarea id="gcHumanInput" rows="1" placeholder="Add to chat…" autocomplete="off" autocapitalize="sentences" autocorrect="on" spellcheck="true"></textarea>'
             + '<button class="tts-btn gc-tts-btn" id="gcTtsBtn" type="button" title="Read last message" aria-label="Read last message" aria-pressed="false">'
               + '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
                 + '<path d="M11 5 6 9H3v6h3l5 4V5Z"></path>'
