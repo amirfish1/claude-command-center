@@ -434,6 +434,16 @@
           <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
         </div>
       </div>
+      <!-- Today's projects tray (CCC-141). Hidden unless #todayToggleBtn is on.
+           A lightweight session tray — NOT the Flow board's data. Drop conv rows
+           here to plan today's sessions; ids persist in localStorage. -->
+      <div class="today-tray" id="todayTray" hidden>
+        <div class="today-tray-head">
+          <span class="today-tray-title">Today's projects</span>
+          <button type="button" id="todayClearBtn" class="today-clear-btn" title="Remove all sessions from today's tray">Clear</button>
+        </div>
+        <div class="today-tray-body" id="todayTrayBody"></div>
+      </div>
       <div class="log-list" id="convList" style="overflow-y:auto;flex:1;min-height:0;max-height:none;">
         <div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Loading...</div>
       </div>
@@ -572,6 +582,9 @@
         <button type="button" id="updPill" class="upd-pill" title="A new release is available on GitHub. Click to review and update.">
           <span class="upd-pill-dot"></span>
           <span id="updPillText">Update available</span>
+        </button>
+        <button type="button" id="todayToggleBtn" class="bug-link today-toggle-btn" title="Toggle the Today's projects tray — a lightweight list of the sessions you're working on today." aria-label="Toggle Today's projects" aria-pressed="false">
+          <span aria-hidden="true">&#9788;</span><span class="sh-action-label">Today</span>
         </button>
         <button type="button" id="bugReportLink" class="bug-link" title="Report a bug or request a feature. Files a GitHub issue against amirfish1/claude-command-center." aria-label="Report a bug">
           <span aria-hidden="true">&#9873;</span><span class="sh-action-label">Report a bug</span>

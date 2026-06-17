@@ -12873,9 +12873,177 @@
     });
   }
 
+  // ---- Today's projects tray (CCC-141) -------------------------------------
+  // A lightweight, sidebar-local list of the sessions the user is working on
+  // today. Deliberately SEPARATE from the Flow board: it never reads or writes
+  // flowNodeParents / flowNodePositions / any flow state. Sessions are added by
+  // dragging conv-list rows onto the tray; the ordered session-id list persists
+  // in localStorage under 'ccc-today-projects'. The tray's open/closed state
+  // persists under 'ccc-today-open'.
+  //
+  // NOTE: We intentionally do NOT auto-reset the tray at midnight. Wiping the
+  // user's plan on a date rollover risks silently losing work-in-progress; the
+  // Clear button and per-chip × are the explicit ways to reset.
+  const TODAY_OPEN_KEY = 'ccc-today-open';
+  const TODAY_PROJECTS_KEY = 'ccc-today-projects';
+
+  function getTodayProjects() {
+    try {
+      const raw = localStorage.getItem(TODAY_PROJECTS_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : [];
+    } catch (_) { return []; }
+  }
+  function setTodayProjects(ids) {
+    try { localStorage.setItem(TODAY_PROJECTS_KEY, JSON.stringify(ids || [])); } catch (_) {}
+  }
+  function isTodayOpen() {
+    try { return localStorage.getItem(TODAY_OPEN_KEY) === '1'; } catch (_) { return false; }
+  }
+  function setTodayOpen(on) {
+    try { localStorage.setItem(TODAY_OPEN_KEY, on ? '1' : '0'); } catch (_) {}
+  }
+
+  // Resolve a stored session-id to {title, live} from the in-memory conv list.
+  // Conv rows carry data-session-id = (session_id || id); match either field.
+  function _todayResolveConv(sid) {
+    const list = conversationsData || [];
+    return list.find(c => (c.session_id || c.id) === sid || c.id === sid) || null;
+  }
+
+  function addTodayProject(sid) {
+    if (!sid) return;
+    const ids = getTodayProjects();
+    if (ids.includes(sid)) return;
+    ids.push(sid);
+    setTodayProjects(ids);
+    renderTodayTray();
+  }
+  function removeTodayProject(sid) {
+    const ids = getTodayProjects().filter(x => x !== sid);
+    setTodayProjects(ids);
+    renderTodayTray();
+  }
+  function clearTodayProjects() {
+    setTodayProjects([]);
+    renderTodayTray();
+  }
+
+  function renderTodayTray() {
+    const tray = document.getElementById('todayTray');
+    const body = document.getElementById('todayTrayBody');
+    const btn = document.getElementById('todayToggleBtn');
+    if (!tray || !body) return;
+    const open = isTodayOpen();
+    tray.hidden = !open;
+    if (btn) btn.setAttribute('aria-pressed', open ? 'true' : 'false');
+    if (!open) return;
+    const ids = getTodayProjects();
+    if (!ids.length) {
+      body.innerHTML = '<div class="today-empty">Drag sessions here to plan today.</div>';
+      return;
+    }
+    body.innerHTML = ids.map(sid => {
+      const conv = _todayResolveConv(sid);
+      const live = !!(conv && conv.is_live);
+      // Mirror the sidebar's title chain (display_name → ai_title → first
+      // message) so chips read the same as their conv rows. Fall back to a
+      // short id if the session is no longer in the loaded list.
+      let title = '';
+      if (conv) {
+        const raw = conv.display_name || conv.ai_title
+          || (conv.first_message ? String(conv.first_message).slice(0, 60) : '')
+          || conv.title || conv.summary || '';
+        title = String(raw).replace(/-/g, ' ').trim();
+      }
+      if (!title) title = 'Session ' + String(sid).slice(0, 8);
+      return '<div class="today-chip' + (live ? ' is-live' : '') + '" data-today-sid="'
+        + escapeAttr(sid) + '" title="' + escapeAttr(title) + '">'
+        + '<span class="today-chip-dot" aria-hidden="true"></span>'
+        + '<span class="today-chip-label">' + escapeHtml(title) + '</span>'
+        + '<button type="button" class="today-chip-remove" data-today-remove="'
+        + escapeAttr(sid) + '" title="Remove from today" aria-label="Remove from today">&times;</button>'
+        + '</div>';
+    }).join('');
+  }
+
+  let _todayWired = false;
+  function wireTodayTray() {
+    if (_todayWired) return;
+    _todayWired = true;
+    const btn = document.getElementById('todayToggleBtn');
+    const tray = document.getElementById('todayTray');
+    const body = document.getElementById('todayTrayBody');
+    const clearBtn = document.getElementById('todayClearBtn');
+    if (btn) {
+      btn.addEventListener('click', () => {
+        setTodayOpen(!isTodayOpen());
+        renderTodayTray();
+      });
+    }
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => clearTodayProjects());
+    }
+    if (body) {
+      // Click a chip → open its session; click the × → remove it.
+      body.addEventListener('click', (ev) => {
+        const rm = ev.target && ev.target.closest && ev.target.closest('[data-today-remove]');
+        if (rm) {
+          ev.stopPropagation();
+          removeTodayProject(rm.getAttribute('data-today-remove'));
+          return;
+        }
+        const chip = ev.target && ev.target.closest && ev.target.closest('[data-today-sid]');
+        if (!chip) return;
+        const sid = chip.getAttribute('data-today-sid');
+        const conv = _todayResolveConv(sid);
+        const openId = conv ? conv.id : sid;
+        if (typeof selectConversation === 'function') selectConversation(openId);
+      });
+    }
+    if (tray) {
+      // Drop target for conv-list rows. The conv-item dragstart (attachDragHandlers)
+      // sets dragSourceId = el.dataset.id (the conv id) and dataTransfer 'text/plain'
+      // = the same id. We resolve that id to its session_id via conversationsData.
+      // Guard on dragSourceId so we only claim drags that originate from a conv row,
+      // and never swallow Flow/kanban/object drags (those don't target this element).
+      tray.addEventListener('dragover', (ev) => {
+        if (!dragSourceId) return;
+        ev.preventDefault();
+        try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+        tray.classList.add('drop-target');
+      });
+      tray.addEventListener('dragleave', (ev) => {
+        if (ev.target === tray) tray.classList.remove('drop-target');
+      });
+      tray.addEventListener('drop', (ev) => {
+        tray.classList.remove('drop-target');
+        let id = dragSourceId;
+        if (!id) {
+          try { id = ev.dataTransfer.getData('text/plain'); } catch (_) {}
+        }
+        if (!id) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const conv = (conversationsData || []).find(c => c.id === id);
+        const sid = (conv && (conv.session_id || conv.id)) || id;
+        addTodayProject(sid);
+      });
+    }
+    renderTodayTray();
+  }
+  // Wire as soon as the DOM is ready; tolerate being loaded after DOMContentLoaded.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireTodayTray);
+  } else {
+    wireTodayTray();
+  }
+
   function renderSidebar(convs, opts) {
     if (_renameInProgress) return;
     if (deferSidebarRenderIfDragging()) return;
+    // Keep the Today tray's chip statuses in sync with the latest conv data.
+    try { renderTodayTray(); } catch (_) {}
     // User-initiated renders pass {force:true} so a Send → "Sending…"
     // pill shows up while focus is still in the input textarea. The
     // periodic pause guard exists to keep pollers from yanking the

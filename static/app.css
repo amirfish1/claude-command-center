@@ -4883,6 +4883,72 @@
     padding: 0;
   }
   .search-wrap.has-value .conv-search-clear { display: flex; }
+
+  /* Today's projects tray (CCC-141). Sits below the search input and above the
+     conversation list. Lightweight session tray, NOT Flow board state. */
+  .today-toggle-btn[aria-pressed="true"] {
+    background: rgba(88,166,255,0.18);
+    color: var(--text);
+    border-color: rgba(88,166,255,0.45);
+  }
+  .today-tray {
+    margin: 6px 12px 0;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    flex: 0 0 auto;
+  }
+  .today-tray.drop-target {
+    border-color: rgba(88,166,255,0.6);
+    background: rgba(88,166,255,0.08);
+  }
+  .today-tray-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .today-tray-title {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
+    text-transform: uppercase; color: var(--text-muted);
+  }
+  .today-clear-btn {
+    border: 0; background: transparent; color: var(--text-muted);
+    font-size: 11px; cursor: pointer; padding: 2px 4px; border-radius: 4px;
+    font-family: inherit;
+  }
+  .today-clear-btn:hover { background: var(--surface-2); color: var(--text); }
+  .today-tray-body {
+    display: flex; flex-wrap: wrap; gap: 6px;
+  }
+  .today-empty {
+    font-size: 11px; color: var(--text-muted); padding: 2px 0;
+  }
+  .today-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    max-width: 100%;
+    padding: 4px 6px 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg);
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .today-chip:hover { background: var(--surface-2); border-color: rgba(88,166,255,0.4); }
+  .today-chip .today-chip-dot {
+    width: 7px; height: 7px; border-radius: 999px; flex: 0 0 auto;
+    background: var(--text-muted);
+  }
+  .today-chip.is-live .today-chip-dot { background: #3fb950; }
+  .today-chip .today-chip-label {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 140px;
+  }
+  .today-chip-remove {
+    border: 0; background: transparent; color: var(--text-muted);
+    cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px;
+    border-radius: 999px;
+  }
+  .today-chip-remove:hover { color: var(--text); background: var(--surface-2); }
   .conv-search-clear:hover,
   .conv-search-clear:focus-visible {
     background: var(--surface-2);
