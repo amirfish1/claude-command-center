@@ -7504,9 +7504,72 @@
       if (_swipePillEl) _swipePillEl.classList.remove('show');
     }, 900);
   }
+  // Honour the user's reduced-motion preference — skip the slide, keep the
+  // instant switch + pill.
+  const _reducedMotionMQ = window.matchMedia
+    ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
+  function swipeReducedMotion() { return !!_reducedMotionMQ.matches; }
+
+  // Perform the actual recency switch (re-renders the reader synchronously).
+  function _doRecencySwitch(targetId) {
+    _swipeRotating = true;
+    try { Promise.resolve(selectConversation(targetId, activePaneId())).catch(() => {}); }
+    catch (_) {}
+    finally { _swipeRotating = false; }
+  }
+  // Slide the current reader content out in `dir` (>0 left, <0 right), switch
+  // conversations, then slide the fresh content in from the opposite edge and
+  // settle. Transform/opacity only — no layout thrash. `viewEl` is the
+  // `.conversations-view` scroll container; transforming it is purely visual
+  // (scrollTop is untouched) and we always clear the inline styles after.
+  const SWIPE_ANIM_MS = 220;
+  function animateRecencySwitch(viewEl, targetId, dir, startDx) {
+    const W = viewEl.clientWidth || window.innerWidth || 360;
+    const outX = dir > 0 ? -W : W;   // swipe left → content exits left
+    const inX = dir > 0 ? W : -W;    // new content enters from the right
+    const ease = 'cubic-bezier(0.22, 0.61, 0.36, 1)';
+    // Phase 1: continue from the finger position out to the edge + fade.
+    viewEl.style.willChange = 'transform, opacity';
+    viewEl.style.transition = 'none';
+    viewEl.style.transform = 'translateX(' + (startDx || 0) + 'px)';
+    // Force a reflow so the starting transform is committed before we animate.
+    void viewEl.offsetWidth;
+    viewEl.style.transition = 'transform ' + SWIPE_ANIM_MS + 'ms ' + ease + ', opacity ' + SWIPE_ANIM_MS + 'ms ' + ease;
+    viewEl.style.transform = 'translateX(' + outX + 'px)';
+    viewEl.style.opacity = '0.2';
+    let done = false;
+    const finish = () => {
+      if (done) return; done = true;
+      // Phase 2: swap content (synchronous re-render), then drop in from the
+      // far edge and animate to rest.
+      _doRecencySwitch(targetId);
+      const fresh = document.querySelector('.conversations-view[data-swipe-wired="1"]') || viewEl;
+      const node = document.body.contains(viewEl) ? viewEl : fresh;
+      node.style.transition = 'none';
+      node.style.transform = 'translateX(' + inX + 'px)';
+      node.style.opacity = '0.2';
+      void node.offsetWidth;
+      node.style.transition = 'transform ' + SWIPE_ANIM_MS + 'ms ' + ease + ', opacity ' + SWIPE_ANIM_MS + 'ms ' + ease;
+      node.style.transform = 'translateX(0)';
+      node.style.opacity = '1';
+      const clear = () => {
+        node.style.transition = '';
+        node.style.transform = '';
+        node.style.opacity = '';
+        node.style.willChange = '';
+        node.removeEventListener('transitionend', clear);
+      };
+      node.addEventListener('transitionend', clear);
+      setTimeout(clear, SWIPE_ANIM_MS + 80);
+    };
+    viewEl.addEventListener('transitionend', finish, { once: true });
+    setTimeout(finish, SWIPE_ANIM_MS + 40);
+  }
   // Rotate to the recency neighbour. dir>0 == swipe LEFT == next; dir<0 ==
   // swipe RIGHT == previous. Wraps around the ring. No-op with <2 entries.
-  function rotateRecentConv(dir) {
+  // When `viewEl`/`startDx` are supplied (and motion isn't reduced) the switch
+  // plays a slide animation; otherwise it switches instantly.
+  function rotateRecentConv(dir, viewEl, startDx) {
     if (_swipeRecent.length < 2) return;
     let cur = _swipeRecent.indexOf(currentConversation);
     if (cur < 0) cur = 0;
@@ -7516,10 +7579,11 @@
     if (!targetId || targetId === currentConversation) return;
     showSwipePill(next, n, dir);
     try { if (navigator.vibrate) navigator.vibrate(8); } catch (_) {}
-    _swipeRotating = true;
-    try { Promise.resolve(selectConversation(targetId, activePaneId())).catch(() => {}); }
-    catch (_) {}
-    finally { _swipeRotating = false; }
+    if (viewEl && !swipeReducedMotion()) {
+      animateRecencySwitch(viewEl, targetId, dir, startDx);
+      return;
+    }
+    _doRecencySwitch(targetId);
   }
   // Returns true if the touch start target sits inside something that should
   // own horizontal drags (scrollable code/tables) or interactive/editable
@@ -7549,6 +7613,14 @@
     const THRESH = 70;        // px of horizontal travel to commit a switch
     const RATIO = 1.5;        // |dx| must exceed |dy| * RATIO to count as horizontal
     let sx = 0, sy = 0, active = false, committed = false, decided = false;
+    let dragging = false;     // following the finger with a live transform
+    // Reset any in-progress finger-follow transform back to rest.
+    function clearDragStyle() {
+      viewEl.style.transform = '';
+      viewEl.style.transition = '';
+      viewEl.style.willChange = '';
+      dragging = false;
+    }
     viewEl.addEventListener('touchstart', (e) => {
       active = false; committed = false; decided = false;
       if (e.touches.length !== 1) return;
@@ -7569,27 +7641,64 @@
         decided = true;
         committed = Math.abs(dx) > Math.abs(dy) * RATIO;
         if (!committed) { active = false; return; }  // vertical → let it scroll
+        // Own the gesture: prep for a live finger-follow transform (unless the
+        // user prefers reduced motion — then we keep the instant switch).
+        if (!swipeReducedMotion()) {
+          dragging = true;
+          viewEl.style.transition = 'none';
+          viewEl.style.willChange = 'transform';
+        }
       }
       if (committed) {
         // Now that we own the gesture, stop the page from scrolling under it.
         if (e.cancelable) e.preventDefault();
+        if (dragging) {
+          // Translate the reader with the finger. Lightly damp past the
+          // commit threshold so an over-long drag still feels rubbery.
+          let follow = dx;
+          const over = Math.abs(dx) - THRESH;
+          if (over > 0) follow = (dx < 0 ? -1 : 1) * (THRESH + over * 0.4);
+          viewEl.style.transform = 'translateX(' + follow + 'px)';
+        }
       }
     }, { passive: false });
     const end = (e) => {
       if (!active) return;
       active = false;
-      if (!committed) return;
+      if (!committed) { if (dragging) clearDragStyle(); return; }
       const t = (e.changedTouches && e.changedTouches[0]) || null;
-      if (!t) return;
+      if (!t) { if (dragging) clearDragStyle(); return; }
       const dx = t.clientX - sx;
       const dy = t.clientY - sy;
-      if (Math.abs(dx) >= THRESH && Math.abs(dx) > Math.abs(dy) * RATIO) {
-        // swipe left (dx<0) → next; swipe right (dx>0) → previous
-        rotateRecentConv(dx < 0 ? 1 : -1);
+      const commit = Math.abs(dx) >= THRESH && Math.abs(dx) > Math.abs(dy) * RATIO;
+      if (commit) {
+        // swipe left (dx<0) → next; swipe right (dx>0) → previous. Hand the
+        // live transform off to the slide animation (or instant switch).
+        const startDx = dragging
+          ? (parseFloat((viewEl.style.transform.match(/-?\d+(\.\d+)?/) || [0])[0]) || 0)
+          : 0;
+        dragging = false;  // animateRecencySwitch now owns viewEl's styles
+        rotateRecentConv(dx < 0 ? 1 : -1, viewEl, startDx);
+        return;
+      }
+      // Under threshold → spring back to rest.
+      if (dragging) {
+        viewEl.style.transition = 'transform 180ms cubic-bezier(0.22, 0.61, 0.36, 1)';
+        viewEl.style.transform = 'translateX(0)';
+        const onEnd = () => { clearDragStyle(); viewEl.removeEventListener('transitionend', onEnd); };
+        viewEl.addEventListener('transitionend', onEnd);
+        setTimeout(onEnd, 240);
       }
     };
     viewEl.addEventListener('touchend', end, { passive: true });
-    viewEl.addEventListener('touchcancel', () => { active = false; }, { passive: true });
+    viewEl.addEventListener('touchcancel', () => {
+      active = false;
+      if (dragging) {
+        viewEl.style.transition = 'transform 160ms ease-out';
+        viewEl.style.transform = 'translateX(0)';
+        setTimeout(clearDragStyle, 200);
+      }
+    }, { passive: true });
   }
   // Wire any conversations-view present now, and any added later (split panes,
   // popout). One delegated pass on a short interval is cheap and idempotent.
