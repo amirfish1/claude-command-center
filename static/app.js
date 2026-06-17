@@ -35689,13 +35689,16 @@
     setSpawnCwdMenuOpen(false);
   }
 
-  function setSpawnCwdInputValue(path) {
+  function setSpawnCwdInputValue(path, opts = {}) {
     const input = document.getElementById('spawnCwdPicker');
     const value = normalizeSpawnCwdPath(path);
     if (!input || !value) return;
     input.value = value;
     persistSpawnCwdPickerValue({ target: input });
-    input.focus();
+    // Reactive callers (the new-project name field's auto-CWD suggestion) must
+    // NOT steal focus: doing so bounced focus out of #nsNewProjectName on every
+    // keystroke/focus, making the name field read as "not editable" (CCC-144).
+    if (opts.focus !== false) input.focus();
   }
 
   async function chooseSpawnCwdFolder() {
@@ -35972,7 +35975,7 @@
       const cur = (picker.value || '').trim();
       if (!_lastAutoCwd || cur === _lastAutoCwd || cur === '') {
         _lastAutoCwd = '~/dev/' + slug;
-        setSpawnCwdInputValue(_lastAutoCwd);
+        setSpawnCwdInputValue(_lastAutoCwd, { focus: false });
       }
     };
     nameEl.addEventListener('input', () => {
