@@ -4336,6 +4336,17 @@
     border-color: var(--border); cursor: not-allowed; opacity: 0.5;
   }
   .conv-input-bar .send-btn svg { display: block; }
+  /* Mobile: the primary Send button is the rightmost control and a bigger tap
+     target — it sat second-to-last (left of Submit+) and was the same 32px as
+     every secondary icon, easy to miss/mis-tap with a thumb. order pushes it
+     past Submit+; no DOM reorder so desktop and send logic are untouched. */
+  @media (max-width: 950px) {
+    .conv-input-bar .conv-input-buttons .send-btn {
+      order: 99;
+      width: 44px; height: 44px;
+    }
+    .conv-input-bar .conv-input-buttons .send-btn svg { width: 22px; height: 22px; }
+  }
   /* Submit+ — phone-mode send (teal/green to read as "talk", distinct from
      the accent send button next to it). */
   .conv-input-bar .submit-plus-btn {
