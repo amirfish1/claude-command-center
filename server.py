@@ -12703,6 +12703,27 @@ def _read_notification_state(session_id):
     return None
 
 
+def _notification_blocks_inject(session_id):
+    """True only when the Notification marker is a real input-blocking PICKER
+    (a permission/approval prompt) we must not type past.
+
+    The idle "Claude is waiting for your input" Notification is the OPPOSITE —
+    the turn finished and the session is READY for input — so it must NOT block
+    injection. Otherwise an idle session whose marker never cleared (e.g. its
+    tool was killed externally so PostToolUse never ran) silently queues every
+    message forever: the user sends from CCC and it sits "queued — will send
+    when the session finishes its current step" while the session is in fact
+    idle and waiting. Only genuine prompts (permission/approval) should queue.
+    """
+    notif = _read_notification_state(session_id)
+    if not notif:
+        return False
+    msg = str(notif.get("message") or "").lower()
+    if "waiting for your input" in msg or "waiting for input" in msg:
+        return False
+    return True
+
+
 def _cleanup_stale_sidecars(live_session_ids):
     """Remove sidecar files for sessions that are no longer live."""
     if not SIDECAR_STATE_DIR.is_dir():
@@ -30265,7 +30286,7 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
     # /api/inject-input) as well as the top-level queue watcher.
     if not _from_terminal_queue and (
         _ask_question_blocking_inject(session_id, status)
-        or _read_notification_state(session_id)
+        or _notification_blocks_inject(session_id)
     ):
         return _queue_terminal_input(session_id, text, {"status": "busy"})
     if is_codex and mode == "steer":
