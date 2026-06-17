@@ -1,0 +1,1 @@
+First-class headless Linux support: the server and browser UI run on Linux, `./run.sh --install-service` installs a systemd user service, and the macOS-only desktop conveniences (jump-to-terminal, screenshots, open-in-desktop, native folder picker) hide cleanly so there are no dead buttons. The system monitor reads memory and load from `/proc` and stdlib on Linux.
