@@ -8685,14 +8685,14 @@
     const $seeAll = document.getElementById('attentionSeeAllBtn');
     if (!$list) return;
     const repoPath = selectedRepoPath();
-    if (!repoPath) {
-      if ($count) $count.textContent = '';
-      if ($seeAll) $seeAll.textContent = 'See all';
-      $list.innerHTML = '<div class="attention-empty">Pick a repo to see items that need attention.</div>';
-      return;
-    }
+    // No repo selected → drive NYA off the cross-repo attention feed. The repo
+    // dropdown was removed from the UI, so requiring a selection left NYA
+    // permanently empty. The all-repos feed needs no selection (Attention API).
+    const crossRepo = !repoPath;
     try {
-      const url = repoUrl('/api/attention', repoPath, _nyaShowAll ? { all: '1' } : null);
+      const url = crossRepo
+        ? '/api/attention?scope=all'
+        : repoUrl('/api/attention', repoPath, _nyaShowAll ? { all: '1' } : null);
       const res = await fetch(url);
       const data = await res.json();
       const items = (data && data.items) || [];
@@ -8759,11 +8759,22 @@
         const verifyBtn = isSessionRow
           ? '<button class="att-verify-btn" data-verify-sid="' + escapeHtml(sid) + '" title="Mark this session verified: moves its card to the Verified column and drops it from this list. If the session is live and waiting, it also replies &quot;Yes&quot; to it.">&#10003; Verify</button>'
           : '';
+        // Cross-repo feed tags each item with its repo; show it so the user
+        // knows which project the session lives in (no repo is selected).
+        const repoChip = it.repo
+          ? '<span class="att-repo" title="Repo">' + escapeHtml(it.repo) + '</span> '
+          : '';
+        // The detected prose question/checkpoint — the heart of the soft-block
+        // fix. Surface it verbatim so the user can answer without opening.
+        const qLine = it.question_text
+          ? '<div class="att-question" title="Detected question / checkpoint">&#8220;' + escapeHtml(it.question_text) + '&#8221;</div>'
+          : '';
         return '<div class="attention-row" data-sid="' + escapeHtml(sid) + '" data-kind="' + escapeHtml(kind) + '">'
-          + '<div class="att-name">' + sidChip + escapeHtml(it.name || '(untitled)') + (ageChip ? ' ' + ageChip : '') + '</div>'
+          + '<div class="att-name">' + sidChip + repoChip + escapeHtml(it.name || '(untitled)') + (ageChip ? ' ' + ageChip : '') + '</div>'
           + '<span class="att-kind k-' + escapeHtml(kind) + '">' + escapeHtml(label) + '</span>'
           + '<span class="att-col-debug" title="Column the kanban classifier would place this in">col: ' + escapeHtml(classifiedCol) + '</span>'
           + '<div class="att-where">' + escapeHtml(it.where || '') + '</div>'
+          + qLine
           + (it.did     ? '<div class="att-did"><strong>Did:</strong> '     + escapeHtml(it.did)     + '</div>' : '')
           + (it.insight ? '<div class="att-insight"><strong>Insight:</strong> ' + escapeHtml(it.insight) + '</div>' : '')
           + '<div class="att-next">' + escapeHtml(it.next_step || '') + '</div>'
