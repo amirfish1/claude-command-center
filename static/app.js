@@ -16739,6 +16739,20 @@
             + 'title="' + escapeAttr(liveTitle) + '">'
             + '<span class="conv-live-name">' + arrow + escapeHtml(liveActivityCompactToolLabel(c.sidecar_tool)) + '</span>'
             + '</span>';
+        } else if (c.sidecar_in_flight && sidecarAge >= 900) {
+          // CCC-140: the session claims to be mid-tool (in-flight) but the
+          // hook hasn't reported progress in 15m+. The server's stale_tool_call
+          // only catches a hung tool CHILD process; an agent wedged with no
+          // child (e.g. stuck on an API call mid-turn) slips through and the
+          // pill above just goes blank — the row looks idle while the session
+          // is actually stuck. Surface the same Stuck badge so it's visible.
+          const mins = Math.floor(sidecarAge / 60);
+          const stuckTitle = 'This session has shown no progress for ' + mins
+            + 'm while "' + (c.sidecar_tool || 'working') + '" — it may be stuck. Open it to wake or stop it.';
+          liveToolHtml = '<span class="conv-live-tool stale" title="' + escapeAttr(stuckTitle) + '">'
+            + '<span class="conv-live-name">Stuck</span>'
+            + '<span class="conv-live-file">' + escapeHtml(liveActivityCompactToolLabel(c.sidecar_tool)) + '</span>'
+            + '</span>';
         }
       }
       const isCodexRow = c.source === 'codex' || c.engine === 'codex';
