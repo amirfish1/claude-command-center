@@ -6105,9 +6105,11 @@
     }
     $convInput.addEventListener('keydown', (e) => {
       if (handleSlashCommandKeydown($convInput, e)) return;
-      // Enter sends, Shift+Enter inserts a newline. Same as Claude Desktop,
-      // Slack, the kanban variant of CCC, and Omnara.
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // Enter sends, Shift+Enter inserts a newline (desktop). On TOUCH, Enter
+      // must insert a newline instead — the on-screen keyboard's return key is
+      // for line breaks, and Enter-to-send fires constantly mid-typing (and
+      // when accepting autocorrect). Touch users submit with the Send button.
+      if (e.key === 'Enter' && !e.shiftKey && !isTouchPrimary()) {
         e.preventDefault();
         sendToTerminal();
       } else if (e.key === 'Escape') {
@@ -13912,7 +13914,7 @@
           // open — let it handle navigation before falling through to
           // the send-on-Enter behavior.
           if (_gcMentionMenuHandleKeydown(ev)) return;
-          if (ev.key === 'Enter' && !ev.shiftKey) {
+          if (ev.key === 'Enter' && !ev.shiftKey && !isTouchPrimary()) {
             ev.preventDefault();
             sendHumanGcPost();
           }
@@ -20927,7 +20929,7 @@
       input.addEventListener('click', () => refreshSlashCommandMenu(input));
       input.addEventListener('keydown', (ev) => {
         if (handleSlashCommandKeydown(input, ev)) return;
-        if (ev.key === 'Enter' && !ev.shiftKey) {
+        if (ev.key === 'Enter' && !ev.shiftKey && !isTouchPrimary()) {
           ev.preventDefault();
           sendToTerminal(paneId);
         }
@@ -32496,7 +32498,7 @@
       // Enter submits, Shift+Enter inserts a newline. Guard against IME
       // composition (Chinese/Japanese input methods dispatch Enter to commit
       // candidate text — we'd otherwise send the prompt mid-composition).
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !isTouchPrimary()) {
         e.preventDefault();
         sendToSplitTerminal();
       }
