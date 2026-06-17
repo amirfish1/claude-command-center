@@ -41326,6 +41326,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # client asked to launch — the resolver already restricted it to
             # safe media/doc extensions.
             reveal_only = bool(result.get("reveal_only"))
+            # CCC-146: a markdown file located by the CCC-143 bounded walk is
+            # plain text (cannot execute), and markdown is the category we
+            # already permit launching outside the tight sandbox — so honor an
+            # explicit launch request for it instead of only revealing it in
+            # Finder. Every other bounded-walk extension stays reveal-only.
+            reveal_only_block_launch = reveal_only and (
+                _categorize_file_target(str(result.get("path") or "")) != "markdown"
+            )
             if not result.get("ok"):
                 self.send_json(result, status)
             elif payload.get("launch") and not reveal_only and not _open_launch_allowed(result):
@@ -41338,7 +41346,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 try:
                     rp = Path(result["path"])
                     # `open -R` reveals in Finder rather than launching.
-                    launch = payload.get("launch") and not reveal_only
+                    launch = payload.get("launch") and not reveal_only_block_launch
                     cmd = ["open", str(rp)] if launch else ["open", "-R", str(rp)]
                     subprocess.Popen(cmd)
                     self.send_json({"ok": True, "path": str(rp)})
