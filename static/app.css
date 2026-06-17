@@ -4347,6 +4347,37 @@
     }
     .conv-input-bar .conv-input-buttons .send-btn svg { width: 22px; height: 22px; }
   }
+  /* Mobile space reclaim in the conversation header (CCC mobile screenshot).
+     The conv view wasted ~half the viewport on header chrome. */
+  @media (max-width: 950px) {
+    /* #3 — agent/subagent tabs scroll on ONE horizontal line instead of
+       stacking into a tall vertical pile (each tab was claiming its own row). */
+    .conv-tab-strip {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    .conv-tab-strip::-webkit-scrollbar { display: none; }
+    .conv-tab { flex: 0 0 auto; }
+    /* #1 — the toolbar wrapped into ~4 rows (title / meta chips / status pills
+       / Back+Today). Tighten the 16px gap + padding, and keep the engine/status
+       detail on one scrollable line instead of letting it claim a full row. */
+    #convToolbar {
+      gap: 8px;
+      row-gap: 6px;
+      padding: 8px 12px;
+    }
+    #convToolbar #convStatus {
+      font-size: 11px;
+      white-space: nowrap;
+      overflow-x: auto;
+      max-width: 100%;
+      scrollbar-width: none;
+    }
+    #convToolbar #convStatus::-webkit-scrollbar { display: none; }
+  }
   /* Submit+ — phone-mode send (teal/green to read as "talk", distinct from
      the accent send button next to it). */
   .conv-input-bar .submit-plus-btn {
