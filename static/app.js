@@ -5192,7 +5192,16 @@
   function toggleSpeechRecognition(paneId) {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      showOpToast('Your browser does not support speech recognition.', 'error');
+      // The Web Speech API is the usual culprit on mobile: iOS exposes it only
+      // in Safari (not Chrome/Firefox, which are WebKit shells without it), and
+      // any browser needs a secure context — so reaching CCC over plain http
+      // through Tailscale/LAN (not https, not localhost) also disables it.
+      // Point the user at the actual fix instead of a dead "not supported".
+      const insecure = (typeof window.isSecureContext === 'boolean') && !window.isSecureContext;
+      const msg = insecure
+        ? 'Voice input needs a secure connection — open CCC over https or on localhost (plain http over Tailscale/LAN blocks the mic).'
+        : 'Voice input isn’t available in this browser. On iPhone/iPad it only works in Safari — open CCC in Safari to dictate.';
+      showOpToast(msg, 'error');
       return;
     }
 
@@ -19029,17 +19038,40 @@
     // Click on the title element: inactive row titles open the
     // conversation; clicking the already-active title starts inline rename.
     $convList.querySelectorAll('[data-role="title"]').forEach(el => {
+      // Touch: long-press the title to rename. Single tap always OPENS (below),
+      // so mobile no longer needs two taps to enter a session; the rename
+      // affordance the tap-to-open behavior displaced comes back as a ~500ms
+      // hold. Desktop keeps click-the-active-title-to-rename.
+      let _lpTimer = null, _lpFired = false;
+      const _lpClear = () => { if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; } };
+      el.addEventListener('touchstart', () => {
+        _lpFired = false;
+        _lpClear();
+        _lpTimer = setTimeout(() => {
+          _lpFired = true;
+          const item = el.closest('.conv-item');
+          if (item && item.dataset.id) {
+            try { if (navigator.vibrate) navigator.vibrate(10); } catch (_) {}
+            startInlineRename(item);
+          }
+        }, 500);
+      }, { passive: true });
+      el.addEventListener('touchmove', _lpClear, { passive: true });
+      el.addEventListener('touchend', _lpClear, { passive: true });
+      el.addEventListener('touchcancel', _lpClear, { passive: true });
       el.addEventListener('click', (ev) => {
         ev.stopPropagation();
+        // A long-press already opened the rename editor — swallow the click
+        // that the browser fires on touchend so it doesn't also open/select.
+        if (_lpFired) { _lpFired = false; ev.preventDefault(); return; }
         const item = el.closest('.conv-item');
         if (!item || !item.dataset.id) return;
         const alreadyActive = item.classList.contains('active') || currentConversation === item.dataset.id;
         // On touch the title is the primary tap target for ENTERING a session
-        // (it fills the row), so it must always open / slide to the main pane —
-        // never hijack the tap for inline rename. Re-tapping the active row to
-        // re-enter it used to land on rename, forcing a second tap to actually
-        // open it (the "two taps to get into a session" on mobile). Inline
-        // rename stays a desktop affordance (click the active title again).
+        // (it fills the row), so a tap must always open / slide to the main pane —
+        // never hijack it for inline rename (the "two taps to get into a session"
+        // bug). Rename on touch is the long-press above. Desktop keeps
+        // click-the-active-title to rename.
         if (!alreadyActive || isTouchPrimary()) {
           selectConversation(item.dataset.id);
           return;
