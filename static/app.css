@@ -8335,10 +8335,39 @@
       max-width: none !important;
       min-width: 0;
       flex: 1 1 auto;
+      /* Let the chips wrap to a second line so the title always has room
+         on the first. Without this, the proc-pill cluster (often wider
+         than the whole phone screen) steals all the width and squeezes
+         the title to 0px off-screen. */
+      flex-wrap: wrap;
+      row-gap: 4px;
+    }
+    /* The open session's title is the most important thing on the conv
+       screen — make it the dominant, full-width first line and legible.
+       (Previously it rendered after the category + UX + proc chips and got
+       pushed to 0px width / off-screen on a 390px viewport.) */
+    .ccc-breadcrumb .ccc-breadcrumb-title {
+      order: -1;
+      flex: 1 1 100%;
+      min-width: 0;
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 1.25;
     }
     .ccc-breadcrumb .ccc-breadcrumb-category {
+      order: 0;
       max-width: 96px;
     }
+    /* Secondary chips share the second line and yield to the title. */
+    .ccc-breadcrumb .ccc-breadcrumb-ux,
+    .ccc-breadcrumb .ccc-breadcrumb-size { order: 1; }
+    .ccc-breadcrumb .ccc-breadcrumb-proc {
+      order: 2;
+      min-width: 0;
+      flex: 0 1 auto;
+      overflow: hidden;
+    }
+    .ccc-breadcrumb .ccc-breadcrumb-popout { order: 3; }
     /* Push the breadcrumb + pop-out tightly to the left of the toolbar
        so they live with the back button on one row. */
     .ccc-topbar { margin-left: 8px !important; gap: 6px !important; }
