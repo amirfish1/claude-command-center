@@ -532,6 +532,9 @@ def _resolve_open_target(target, *, session_id=None, cwd=None, repo_path=None):
         candidates.append(repo_root / target)
 
     resolved = None
+    # Set when a match comes from the CCC-143 bounded reveal-only search below.
+    # Such results are revealed in Finder, never launched/executed.
+    bounded_reveal_only = False
     tried = []
     for candidate in candidates:
         tried.append(str(candidate))
@@ -623,6 +626,51 @@ def _resolve_open_target(target, *, session_id=None, cwd=None, repo_path=None):
                         resolved = cand
                     break
 
+            # Third pass (CCC-143, REVEAL-ONLY): the link can be relative to a
+            # deeper dir the session cd'd into for one command (e.g. it rendered
+            # `renders/x.png` from inside builder-stack-v3/campaign-linkedin-daily
+            # while only builder-stack-v3 is a known root), so the missing middle
+            # segment makes a direct join miss. Do a BOUNDED, depth-limited walk
+            # under each session root for a file whose path ENDS WITH the clicked
+            # relative path. SAFETY (see SECURITY.md): only Files-panel-safe
+            # extensions match (never scripts/executables, via
+            # _safe_local_file_open_path), AND the hit is flagged
+            # bounded_reveal_only so the /api/open route reveals it in Finder and
+            # NEVER launches/executes it. Strictly capped (depth ≤3 + entry count)
+            # so a click can't trigger an unbounded scan.
+            if not resolved and "/" in rel:
+                rel_suffix = "/" + rel
+                base = os.path.basename(rel)
+                scanned = 0
+                SCAN_CAP = 2500
+                _PRUNE = {".git", "node_modules", ".next", "dist", "build", ".venv", "__pycache__", ".cache"}
+                for root in roots:
+                    if resolved or scanned >= SCAN_CAP:
+                        break
+                    root_path = Path(root).expanduser()
+                    try:
+                        root_depth = len(root_path.parts)
+                        for dirpath, dirnames, filenames in os.walk(root_path):
+                            scanned += 1
+                            if scanned >= SCAN_CAP:
+                                break
+                            if len(Path(dirpath).parts) - root_depth > 3:
+                                dirnames[:] = []
+                                continue
+                            dirnames[:] = [d for d in dirnames if d not in _PRUNE and not d.startswith(".")]
+                            if base in filenames:
+                                cand = Path(dirpath) / base
+                                if str(cand).endswith(rel_suffix) and _safe_local_file_open_path(cand):
+                                    tried.append(str(cand))
+                                    try:
+                                        resolved = cand.resolve(strict=False)
+                                    except (OSError, RuntimeError):
+                                        resolved = cand
+                                    bounded_reveal_only = True
+                                    break
+                    except OSError:
+                        continue
+
     if not resolved:
         return {"ok": False, "error": "not found", "tried": tried, "status": 404}
 
@@ -645,6 +693,7 @@ def _resolve_open_target(target, *, session_id=None, cwd=None, repo_path=None):
         "session_sandbox": session_sandbox,
         "pasted_image_sandbox": pasted_image_sandbox,
         "session_file_sandbox": session_file_sandbox,
+        "reveal_only": bounded_reveal_only,
         "tried": tried,
     }
 
@@ -41130,9 +41179,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 repo_path=str(payload.get("repo_path") or "").strip(),
             )
             status = int(result.pop("status", 200))
+            # A reveal_only result came from the CCC-143 bounded search (a file
+            # found outside the tight sandbox under a session-derived root). It
+            # is ALWAYS revealed in Finder, NEVER launched/executed, even if the
+            # client asked to launch — the resolver already restricted it to
+            # safe media/doc extensions.
+            reveal_only = bool(result.get("reveal_only"))
             if not result.get("ok"):
                 self.send_json(result, status)
-            elif payload.get("launch") and not _open_launch_allowed(result):
+            elif payload.get("launch") and not reveal_only and not _open_launch_allowed(result):
                 self.send_json({
                     "ok": False,
                     "error": "launch outside the repo/log dir is only allowed for markdown files",
@@ -41142,7 +41197,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 try:
                     rp = Path(result["path"])
                     # `open -R` reveals in Finder rather than launching.
-                    cmd = ["open", "-R", str(rp)] if not payload.get("launch") else ["open", str(rp)]
+                    launch = payload.get("launch") and not reveal_only
+                    cmd = ["open", str(rp)] if launch else ["open", "-R", str(rp)]
                     subprocess.Popen(cmd)
                     self.send_json({"ok": True, "path": str(rp)})
                 except Exception as e:
