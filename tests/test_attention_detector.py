@@ -190,6 +190,70 @@ def test_turn_reader_collapses_tools(tmp_path):
     assert turns[-1]["text"] == "Want me to proceed?"
 
 
+# ── Feed tuning: recency window, backlog exclusion, P1 always kept ────────────
+
+def _conv(kind, priority, *, modified, is_live=False):
+    """A conv row carrying the classifier result inline for the stub below."""
+    return {"session_id": str(uuid.uuid4()), "modified": modified,
+            "is_live": is_live, "folder_label": "repo", "jsonl_path": "/x.jsonl",
+            "_kind": kind, "_priority": priority}
+
+
+def _stub_feed(monkeypatch, rows):
+    """Drive compute_attention_feed off `rows` with a controlled classifier so
+    we test the feed's own filtering (recency / exclude / P1), not git state."""
+    monkeypatch.setattr(server, "find_all_conversations", lambda **k: rows)
+    monkeypatch.setattr(server, "_attention_read_turns", lambda *a, **k: [])
+
+    def classify(c):
+        if not c.get("_kind"):
+            return None
+        return {"kind": c["_kind"], "priority": c["_priority"],
+                "session_id": c["session_id"], "name": "n", "where": "w"}
+    monkeypatch.setattr(server, "_classify_attention", classify)
+
+
+def test_feed_default_excludes_committed_not_pushed(monkeypatch):
+    now = time.time()
+    rows = [_conv("committed_not_pushed", 5, modified=now),
+            _conv("soft_block", 2, modified=now)]
+    _stub_feed(monkeypatch, rows)
+    default = server.compute_attention_feed()
+    kinds = {i["kind"] for i in default["items"]}
+    assert kinds == {"soft_block"}, "git-hygiene rows must be out of the default feed"
+    # scope=all keeps the full pool.
+    allf = server.compute_attention_feed(recent_only=False)
+    assert {i["kind"] for i in allf["items"]} == {"committed_not_pushed", "soft_block"}
+
+
+def test_feed_default_time_bounds_soft_block(monkeypatch):
+    now = time.time()
+    stale = now - 100 * 3600   # ~4 days old → outside the 48h window
+    rows = [_conv("soft_block", 2, modified=stale),
+            _conv("soft_block", 2, modified=now)]
+    _stub_feed(monkeypatch, rows)
+    default = server.compute_attention_feed()
+    assert default["shown"] == 1, "stale soft_block should be dropped from default"
+    assert server.compute_attention_feed(recent_only=False)["shown"] == 2, \
+        "scope=all still returns the stale ones for power use"
+
+
+def test_feed_keeps_priority1_regardless_of_age(monkeypatch):
+    now = time.time()
+    old = now - 100 * 3600
+    rows = [_conv("question_blocked", 1, modified=old)]
+    _stub_feed(monkeypatch, rows)
+    assert server.compute_attention_feed()["shown"] == 1, "P1 must always be kept"
+
+
+def test_feed_keeps_live_even_when_old_mtime(monkeypatch):
+    now = time.time()
+    old = now - 100 * 3600
+    rows = [_conv("soft_block", 2, modified=old, is_live=True)]
+    _stub_feed(monkeypatch, rows)
+    assert server.compute_attention_feed()["shown"] == 1, "live sessions stay in"
+
+
 # ── PERF: cross-repo feed must not read tails for every row ───────────────────
 
 def test_attention_feed_bounds_turn_reads(monkeypatch):

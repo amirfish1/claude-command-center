@@ -38643,20 +38643,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             include_all = qs.get("all", ["0"])[0] in ("1", "true")
             # Cross-repo feed for the COO sweep / repo-less NYA. No repo context
             # required — this is the all-repos attention feed (deliverable 2/3).
+            #   scope=all        full historical pool (power / "see all")
+            #   scope=live       tight live + recent-window feed (NYA default)
+            #   (no scope)       per-repo when a repo is in context; otherwise
+            #                    falls through to the tight live feed so the
+            #                    endpoint never renders empty with no selection.
             scope = (qs.get("scope", [""])[0] or "").strip().lower()
+            try:
+                limit = int(qs.get("limit", ["0"])[0] or 0) or None
+            except (TypeError, ValueError):
+                limit = None
             if scope == "all":
-                try:
-                    limit = int(qs.get("limit", ["0"])[0] or 0) or None
-                except (TypeError, ValueError):
-                    limit = None
-                self.send_json(compute_attention_feed(limit=limit))
+                self.send_json(compute_attention_feed(recent_only=False, limit=limit))
+                _save_conv_meta_cache()
+                return
+            if scope in ("live", "recent"):
+                self.send_json(compute_attention_feed(recent_only=True, limit=limit))
                 _save_conv_meta_cache()
                 return
             try:
                 ctx = require_repo_context(query=qs, allow_session=False)
                 self.send_json(compute_attention_items(ctx["repo_path"], include_all=include_all))
-            except RepoContextError as e:
-                self.send_json(e.as_payload(), e.status)
+            except RepoContextError:
+                # No repo selected → the tight cross-repo live feed is the
+                # sensible default (and the bug we are killing: NYA empty).
+                self.send_json(compute_attention_feed(recent_only=True, limit=limit))
+                _save_conv_meta_cache()
         elif re.match(r"^/api/session/[^/]+$", path):
             # Lightweight single-session drill-in: state + last few turns from
             # one file tail, so the COO doesn't re-pull the whole list.
@@ -44103,6 +44115,17 @@ def compute_attention_items(repo_path, include_all=False):
 # rows, only for the bounded output set. The perf-budget test pins this.
 _ATTENTION_FEED_TURN_CAP = 40
 
+# Default feed recency window: an item that isn't live and isn't priority-1
+# only surfaces if it was active within this window. Keeps the default NYA feed
+# a tight live picture instead of a pile of days-old questions. `scope=all`
+# bypasses it for power use.
+_ATTENTION_FEED_RECENT_SECS = 48 * 3600
+
+# Git-hygiene rows (commits sitting unpushed) are real, but they are a backlog
+# tab — not the "a session needs you right now" feed. Pulled out of the default
+# and only returned under scope=all.
+_ATTENTION_FEED_DEFAULT_EXCLUDE = frozenset({"committed_not_pushed"})
+
 
 def _collapse_block_text(block):
     """One content block → display text. Tool calls collapse to [tool:Name],
@@ -44177,7 +44200,8 @@ def _attention_read_turns(jsonl_path, n=3):
     return turns[-n:]
 
 
-def compute_attention_feed(*, limit=None, turn_cap=None):
+def compute_attention_feed(*, recent_only=True, recent_window_secs=None,
+                           exclude_kinds=None, limit=None, turn_cap=None):
     """Cross-repo attention feed — ONLY sessions that need the human.
 
     Runs the same classifier (`_classify_attention`, now soft-block aware) over
@@ -44185,11 +44209,23 @@ def compute_attention_feed(*, limit=None, turn_cap=None):
     priority→recency, and enriches the bounded output set with repo label,
     mtime, the detected question/checkpoint text, and the last 2-3 turns.
 
+    Two modes:
+      - Default (recent_only=True): a tight LIVE feed. An item only surfaces if
+        it is priority-1 (a live blocker — kept exactly as-is), is live, or was
+        active within `recent_window_secs`. Git-hygiene backlog rows
+        (`committed_not_pushed`) are excluded. This is what NYA renders.
+      - scope=all (recent_only=False, no exclude): the full historical pool for
+        power use.
+
     Cheap by construction: classification touches only row dicts (no file IO);
     turn enrichment reads tails for at most `turn_cap` items, never all rows.
     """
     if turn_cap is None:
         turn_cap = _ATTENTION_FEED_TURN_CAP
+    if recent_window_secs is None:
+        recent_window_secs = _ATTENTION_FEED_RECENT_SECS
+    if exclude_kinds is None:
+        exclude_kinds = _ATTENTION_FEED_DEFAULT_EXCLUDE if recent_only else frozenset()
     try:
         convs = find_all_conversations(
             resolve_pr_states=False,
@@ -44198,25 +44234,38 @@ def compute_attention_feed(*, limit=None, turn_cap=None):
         ) or []
     except Exception:
         convs = []
+    now = time.time()
     by_sid = {}
     raw = []
     for c in convs:
         item = _classify_attention(c)
         if not item:
             continue
+        kind = item.get("kind")
+        # Backlog/git-hygiene kinds are pulled out of the default feed; they live
+        # behind scope=all (a "see all" / power view), not the right-now feed.
+        if kind in exclude_kinds:
+            continue
         # COO-feed precision gate: the coarse `sidecar_waiting` kind (any live +
         # idle session) is the dominant source of false positives — loop workers
         # idling between tickets and sessions that shipped or handed off an
         # external task all look "idle". Surface it only when the session
         # actually awaits a human decision. (Feed-only; per-repo NYA unchanged.)
-        if item.get("kind") == "sidecar_waiting" and not _awaits_human_decision(c):
+        if kind == "sidecar_waiting" and not _awaits_human_decision(c):
             continue
+        modified = c.get("modified") or c.get("mtime") or 0
+        # Recency gate. Priority-1 live blockers are ALWAYS kept (P1 stays
+        # exactly as-is). Everything else — soft_block included, so stale
+        # historical questions don't pile up — must be live or recently active.
+        if recent_only and item.get("priority", 9) != 1:
+            if not (c.get("is_live") or (now - modified) <= recent_window_secs):
+                continue
         sid = item.get("session_id")
-        item["_modified"] = c.get("modified") or c.get("mtime") or 0
+        item["_modified"] = modified
         item["repo"] = c.get("folder_label") or ""
         item["folder_label"] = c.get("folder_label") or ""
         item["folder_path"] = c.get("folder_path") or ""
-        item["mtime"] = item["_modified"]
+        item["mtime"] = modified
         item["engine"] = c.get("engine") or "claude"
         if sid:
             by_sid[sid] = c
@@ -44243,7 +44292,9 @@ def compute_attention_feed(*, limit=None, turn_cap=None):
         out.append(item)
     return {
         "ok": True,
-        "scope": "all",
+        "scope": "all" if not recent_only else "live",
+        "recent_only": recent_only,
+        "window_hours": round(recent_window_secs / 3600) if recent_only else None,
         "items": out,
         "shown": len(out),
         "total": len(raw),

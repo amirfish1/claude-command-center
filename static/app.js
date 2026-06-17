@@ -8690,8 +8690,11 @@
     // permanently empty. The all-repos feed needs no selection (Attention API).
     const crossRepo = !repoPath;
     try {
+      // Cross-repo NYA: default to the tight live feed (scope=live — live +
+      // recent window, git-hygiene backlog excluded). "See all" widens to the
+      // full historical pool (scope=all).
       const url = crossRepo
-        ? '/api/attention?scope=all'
+        ? ('/api/attention?scope=' + (_nyaShowAll ? 'all' : 'live'))
         : repoUrl('/api/attention', repoPath, _nyaShowAll ? { all: '1' } : null);
       const res = await fetch(url);
       const data = await res.json();
