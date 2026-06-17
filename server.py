@@ -40543,6 +40543,37 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
+        if path == "/api/ux-fixes/enqueue":
+            # Add a ticket to the queue straight from the UI (CCC-145 — the
+            # queue panel's "+ Add" affordance). Same-origin is already enforced
+            # at the top of do_POST. `project` is honored explicitly so the new
+            # ticket lands in the same project scope the panel is showing; it
+            # falls back to repo_path / source routing when omitted.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            note = str(payload.get("note") or payload.get("text") or "").strip()
+            if not note:
+                self.send_json({"ok": False, "error": "note required"}, 400)
+                return
+            try:
+                item = ux_fixes_queue.enqueue(
+                    note=note,
+                    source=str(payload.get("source") or "ccc"),
+                    project=str(payload.get("project") or "").strip(),
+                    repo_path=str(payload.get("repo_path") or "").strip(),
+                    lane=str(payload.get("lane") or "normal"),
+                )
+                self.send_json({"ok": True, "item": item})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            return
         if path == "/api/ux-fixes/spawn-worker":
             # Spawn a repo-scoped UX-fixes worker session that drains only this
             # repo's project queue. Same-origin is already enforced at the top

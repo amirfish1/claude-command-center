@@ -22536,6 +22536,8 @@
     const queueMode = mode === 'queue';
     $files.style.display = queueMode ? 'none' : '';
     $queue.style.display = queueMode ? '' : 'none';
+    const $qadd = document.getElementById('filesQueueAdd');
+    if ($qadd) $qadd.style.display = queueMode ? '' : 'none';
     if ($search) $search.style.display = queueMode ? 'none' : '';
     if ($label) $label.textContent = queueMode ? 'Queue' : 'Files';
     if (queueMode) {
@@ -22554,6 +22556,38 @@
         _filesViewChoiceConv = currentConversation;
         _uxqItemsCache.ts = 0;  // fresh fetch on flip
         ffcUpdateSidebar(_ffcLastSidebarData);
+      });
+    }
+  }
+  // Add a ticket to the queue straight from the panel header (CCC-145). Routes
+  // into the same project scope the panel is showing (_uxqWorkerProject), so a
+  // BYM worker's add lands as a BYM ticket. Refreshes the list on success.
+  {
+    const $qadd = document.getElementById('filesQueueAdd');
+    if ($qadd) {
+      $qadd.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const note = (window.prompt('New queue ticket — describe the fix:') || '').trim();
+        if (!note) return;
+        const proj = _uxqWorkerProject();
+        try {
+          const res = await fetch('/api/ux-fixes/enqueue', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(proj ? { note, project: proj } : { note }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (data && data.ok) {
+            const ref = (data.item && data.item.ref) || 'ticket';
+            showOpToast('Added ' + ref + ' to queue');
+            _uxqItemsCache.ts = 0;  // bust cache so the new row shows
+            _renderQueueListInFilesPanel();
+          } else {
+            showOpToast('Add failed: ' + ((data && data.error) || 'unknown'));
+          }
+        } catch (e) {
+          showOpToast('Add failed: ' + e);
+        }
       });
     }
   }

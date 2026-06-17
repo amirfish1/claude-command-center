@@ -718,6 +718,9 @@
                 <button type="button" data-fv="queue" title="Show the UX-fixes queue tickets">Queue</button>
               </span>
               <input type="text" id="filesSearchInput" class="files-search-input" placeholder="Search..." aria-label="Search files">
+              <!-- Add a ticket to the queue from here (CCC-145). Only visible
+                   in queue mode; wired in app.js. -->
+              <button class="files-queue-add" id="filesQueueAdd" type="button" style="display:none;" title="Add a ticket to this queue" aria-label="Add a queue item">&#43;</button>
               <button class="files-toggle" id="filesToggle" title="Collapse / expand" aria-label="Toggle Files panel">&#9662;</button>
             </div>
             <div class="files-list" id="sidebarFilesList"></div>
