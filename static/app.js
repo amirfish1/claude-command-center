@@ -19034,7 +19034,13 @@
         const item = el.closest('.conv-item');
         if (!item || !item.dataset.id) return;
         const alreadyActive = item.classList.contains('active') || currentConversation === item.dataset.id;
-        if (!alreadyActive) {
+        // On touch the title is the primary tap target for ENTERING a session
+        // (it fills the row), so it must always open / slide to the main pane —
+        // never hijack the tap for inline rename. Re-tapping the active row to
+        // re-enter it used to land on rename, forcing a second tap to actually
+        // open it (the "two taps to get into a session" on mobile). Inline
+        // rename stays a desktop affordance (click the active title again).
+        if (!alreadyActive || isTouchPrimary()) {
           selectConversation(item.dataset.id);
           return;
         }
