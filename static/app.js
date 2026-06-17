@@ -7453,6 +7453,155 @@
     try { location.reload(true); } catch (_) { location.reload(); }
   });
 
+  // ---------------------------------------------------------------------------
+  // Mobile swipe-to-rotate among recently-opened conversations.
+  //
+  // Approach: FULL-AREA swipe on the conversation reader body
+  // (`.conversations-view`). Tried this first per spec and it proved robust
+  // because the guards below cleanly exclude every conflicting gesture:
+  //   - vertical scroll (the reader's own scroll) — gated by dx>dy*1.5
+  //   - horizontal scroll inside `pre`/`code`/tables — gated by ancestor check
+  //   - text selection, taps on inputs/buttons/links — gated by target check
+  //   - the composer input bar lives OUTSIDE `.conversations-view`, so it is
+  //     untouched.
+  // We only `preventDefault` once a move is *committed* as horizontal, so
+  // vertical scrolling is never blocked. An edge-strip fallback proved
+  // unnecessary; the full-area version does not fight scroll or selection.
+  //
+  // Recency list: most-recent-first, de-duped, capped at 4. Updated from
+  // selectConversation() via rememberRecentConv(); persisted to localStorage so
+  // it survives reloads but in-memory is the source of truth.
+  const SWIPE_RECENT_CAP = 4;
+  const SWIPE_RECENT_KEY = 'ccc-recent-convs';
+  let _swipeRecent = [];
+  let _swipeRotating = false;  // true while rotateRecentConv drives a switch
+  try {
+    const raw = JSON.parse(localStorage.getItem(SWIPE_RECENT_KEY) || '[]');
+    if (Array.isArray(raw)) _swipeRecent = raw.filter(x => typeof x === 'string').slice(0, SWIPE_RECENT_CAP);
+  } catch (_) {}
+  function rememberRecentConv(id) {
+    if (!id) return;
+    _swipeRecent = [id].concat(_swipeRecent.filter(x => x !== id)).slice(0, SWIPE_RECENT_CAP);
+    try { localStorage.setItem(SWIPE_RECENT_KEY, JSON.stringify(_swipeRecent)); } catch (_) {}
+  }
+  // Transient "‹ 2/4 ›" pill so the user knows the rotation happened + where
+  // they are in the recency ring.
+  let _swipePillEl = null, _swipePillTimer = null;
+  function showSwipePill(idx, total, dir) {
+    if (!_swipePillEl) {
+      _swipePillEl = document.createElement('div');
+      _swipePillEl.className = 'conv-swipe-pill';
+      document.body.appendChild(_swipePillEl);
+    }
+    const left = dir < 0 ? '‹' : ' ';
+    const right = dir > 0 ? '›' : ' ';
+    _swipePillEl.textContent = left + ' ' + (idx + 1) + '/' + total + ' ' + right;
+    _swipePillEl.classList.add('show');
+    if (_swipePillTimer) clearTimeout(_swipePillTimer);
+    _swipePillTimer = setTimeout(() => {
+      if (_swipePillEl) _swipePillEl.classList.remove('show');
+    }, 900);
+  }
+  // Rotate to the recency neighbour. dir>0 == swipe LEFT == next; dir<0 ==
+  // swipe RIGHT == previous. Wraps around the ring. No-op with <2 entries.
+  function rotateRecentConv(dir) {
+    if (_swipeRecent.length < 2) return;
+    let cur = _swipeRecent.indexOf(currentConversation);
+    if (cur < 0) cur = 0;
+    const n = _swipeRecent.length;
+    const next = ((cur + dir) % n + n) % n;
+    const targetId = _swipeRecent[next];
+    if (!targetId || targetId === currentConversation) return;
+    showSwipePill(next, n, dir);
+    try { if (navigator.vibrate) navigator.vibrate(8); } catch (_) {}
+    _swipeRotating = true;
+    try { Promise.resolve(selectConversation(targetId, activePaneId())).catch(() => {}); }
+    catch (_) {}
+    finally { _swipeRotating = false; }
+  }
+  // Returns true if the touch start target sits inside something that should
+  // own horizontal drags (scrollable code/tables) or interactive/editable
+  // controls — in which case we never start a swipe.
+  function swipeStartBlocked(target) {
+    if (!target || !target.closest) return true;
+    if (target.closest('input, textarea, button, a, select, [contenteditable="true"], .ask-user-block, .conv-input-bar')) return true;
+    // Walk up looking for a horizontally-scrollable ancestor (code blocks,
+    // tables, anything with overflow-x that can actually scroll sideways).
+    let el = target;
+    while (el && el.nodeType === 1 && !el.classList.contains('conversations-view')) {
+      if (el.matches && el.matches('pre, code, table, .md-code, .md-table-wrap')) return true;
+      try {
+        const ov = getComputedStyle(el).overflowX;
+        if ((ov === 'auto' || ov === 'scroll') && el.scrollWidth > el.clientWidth + 2) return true;
+      } catch (_) {}
+      el = el.parentElement;
+    }
+    return false;
+  }
+  // Wire the gesture onto one `.conversations-view` element. Idempotent per
+  // element (guarded by a dataset flag). The element persists across conv
+  // switches (only its innerHTML is replaced), so one wiring lasts.
+  function wireConvSwipeRotate(viewEl) {
+    if (!viewEl || !isTouchPrimary() || viewEl.dataset.swipeWired === '1') return;
+    viewEl.dataset.swipeWired = '1';
+    const THRESH = 70;        // px of horizontal travel to commit a switch
+    const RATIO = 1.5;        // |dx| must exceed |dy| * RATIO to count as horizontal
+    let sx = 0, sy = 0, active = false, committed = false, decided = false;
+    viewEl.addEventListener('touchstart', (e) => {
+      active = false; committed = false; decided = false;
+      if (e.touches.length !== 1) return;
+      // A live text selection means the user is selecting, not swiping.
+      const sel = window.getSelection && window.getSelection();
+      if (sel && !sel.isCollapsed && String(sel).length) return;
+      if (swipeStartBlocked(e.target)) return;
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      active = true;
+    }, { passive: true });
+    viewEl.addEventListener('touchmove', (e) => {
+      if (!active || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - sx;
+      const dy = e.touches[0].clientY - sy;
+      if (!decided) {
+        // Wait until the gesture is unambiguous before committing either way.
+        if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+        decided = true;
+        committed = Math.abs(dx) > Math.abs(dy) * RATIO;
+        if (!committed) { active = false; return; }  // vertical → let it scroll
+      }
+      if (committed) {
+        // Now that we own the gesture, stop the page from scrolling under it.
+        if (e.cancelable) e.preventDefault();
+      }
+    }, { passive: false });
+    const end = (e) => {
+      if (!active) return;
+      active = false;
+      if (!committed) return;
+      const t = (e.changedTouches && e.changedTouches[0]) || null;
+      if (!t) return;
+      const dx = t.clientX - sx;
+      const dy = t.clientY - sy;
+      if (Math.abs(dx) >= THRESH && Math.abs(dx) > Math.abs(dy) * RATIO) {
+        // swipe left (dx<0) → next; swipe right (dx>0) → previous
+        rotateRecentConv(dx < 0 ? 1 : -1);
+      }
+    };
+    viewEl.addEventListener('touchend', end, { passive: true });
+    viewEl.addEventListener('touchcancel', () => { active = false; }, { passive: true });
+  }
+  // Wire any conversations-view present now, and any added later (split panes,
+  // popout). One delegated pass on a short interval is cheap and idempotent.
+  function wireAllConvSwipe() {
+    if (!isTouchPrimary()) return;
+    document.querySelectorAll('.conversations-view').forEach(wireConvSwipeRotate);
+  }
+  wireAllConvSwipe();
+  if (isTouchPrimary()) {
+    document.addEventListener('DOMContentLoaded', wireAllConvSwipe);
+    // Panes can be created after boot; re-scan occasionally (idempotent).
+    setInterval(wireAllConvSwipe, 3000);
+  }
+
   // Conversation-list collapse (CCC-132). « hides the list to widen the reader;
   // a floating » brings it back. Desktop only — the boot script + CSS gate
   // mobile out. State persists under `ccc-conv-list-collapsed`; boot restores
@@ -21507,6 +21656,13 @@
     }
     mobileShowForCurrentMode();
     currentConversation = id;
+    // Track recently-opened conversations for the mobile swipe-rotate gesture
+    // (see _swipeRecent / wireConvSwipeRotate). Most-recent-first, de-duped,
+    // capped at 4. Real conversation ids only — skip the new-session sentinel.
+    // Suppress the re-sort while a swipe is rotating the ring, so swipe-left
+    // and swipe-right stay true inverses (a stable ring). A normal open still
+    // promotes the conversation to the front.
+    if (id && id !== '__new__' && !_swipeRotating) rememberRecentConv(id);
     // A read in progress for a DIFFERENT conversation keeps playing; surface
     // the floating pause/resume/stop control now that its conversation is no
     // longer focused (and hide the control if we just refocused it).

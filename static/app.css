@@ -12559,3 +12559,29 @@ body:has(.gc-reader) .pwa-install-banner {
   width: 100%; font-size: 13px;
   border-color: color-mix(in srgb, var(--accent, #58a6ff) 45%, var(--border) 55%);
 }
+
+/* Mobile swipe-to-rotate feedback pill (see wireConvSwipeRotate in app.js).
+   Brief "‹ 2/4 ›" indicator on a recency switch, then fades out. */
+.conv-swipe-pill {
+  position: fixed;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-6px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  padding: 5px 14px;
+  border-radius: 999px;
+  z-index: 9998;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+.conv-swipe-pill.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
