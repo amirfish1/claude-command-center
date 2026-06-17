@@ -4175,6 +4175,17 @@ def find_all_conversations(
                 # the subtitle in archive can see it. Currently hidden via
                 # _hideAskHtml flag in the UI shaper.
                 "last_assistant_text": tail_meta.get("last_assistant_text") or "",
+                # Attention API: the soft-block detector + ?state= filter read
+                # these terminal-vs-working signals. All already computed by
+                # _extract_tail_meta above, so surfacing them is free (no extra
+                # parse / no subprocess). Without them the cross-repo attention
+                # feed can't tell a paused-for-question session from a working
+                # one whose sub-agent is still running.
+                "last_event_type": tail_meta.get("last_event_type"),
+                "pending_tool": tail_meta.get("pending_tool"),
+                "pending_file": tail_meta.get("pending_file"),
+                "subagent_in_flight_count": tail_meta.get("subagent_in_flight_count", 0),
+                "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
                 # Context % badge — same fields as find_conversations so
                 # archive rows can render sidebar usage without opening the
                 # session pane.
@@ -38699,11 +38710,40 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/attention":
             qs = urllib.parse.parse_qs(parsed.query)
             include_all = qs.get("all", ["0"])[0] in ("1", "true")
+            # Cross-repo feed for the COO sweep / repo-less NYA. No repo context
+            # required — this is the all-repos attention feed (deliverable 2/3).
+            #   scope=all        full historical pool (power / "see all")
+            #   scope=live       tight live + recent-window feed (NYA default)
+            #   (no scope)       per-repo when a repo is in context; otherwise
+            #                    falls through to the tight live feed so the
+            #                    endpoint never renders empty with no selection.
+            scope = (qs.get("scope", [""])[0] or "").strip().lower()
+            try:
+                limit = int(qs.get("limit", ["0"])[0] or 0) or None
+            except (TypeError, ValueError):
+                limit = None
+            if scope == "all":
+                self.send_json(compute_attention_feed(recent_only=False, limit=limit))
+                _save_conv_meta_cache()
+                return
+            if scope in ("live", "recent"):
+                self.send_json(compute_attention_feed(recent_only=True, limit=limit))
+                _save_conv_meta_cache()
+                return
             try:
                 ctx = require_repo_context(query=qs, allow_session=False)
                 self.send_json(compute_attention_items(ctx["repo_path"], include_all=include_all))
-            except RepoContextError as e:
-                self.send_json(e.as_payload(), e.status)
+            except RepoContextError:
+                # No repo selected → the tight cross-repo live feed is the
+                # sensible default (and the bug we are killing: NYA empty).
+                self.send_json(compute_attention_feed(recent_only=True, limit=limit))
+                _save_conv_meta_cache()
+        elif re.match(r"^/api/session/[^/]+$", path):
+            # Lightweight single-session drill-in: state + last few turns from
+            # one file tail, so the COO doesn't re-pull the whole list.
+            sid = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+            payload, status = compute_session_detail(sid)
+            self.send_json(payload, status)
         elif path == "/api/config":
             self.send_json(get_app_config())
         elif path == "/api/onboarding/status":
@@ -38948,6 +38988,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     rows = [r for r in rows if (r.get("engine") or r.get("source") or "").lower() == engine_filter]
                     spawned = [r for r in spawned if (r.get("engine") or "").lower() == engine_filter]
                 _save_conv_meta_cache()
+                rows = _apply_session_query_params(rows, qs)
                 self.send_json({
                     "ok": True,
                     "sessions": rows,
@@ -38968,7 +39009,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 progress=True,
             )
             _save_conv_meta_cache()
-            self.send_json(rows)
+            self.send_json(_apply_session_query_params(rows, qs))
         elif path == "/api/conversations":
             qs = urllib.parse.parse_qs(parsed.query)
             if qs.get("all", ["0"])[0] in ("1", "true"):
@@ -43621,6 +43662,216 @@ _app_config_cache = None
 _app_config_cache_ts = 0
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Soft-block detector (Attention API)
+#
+# CCC's formal flags (question_waiting / needs_approval) only fire on the
+# AskUserQuestion tool and permission prompts. Real agents far more often END A
+# TURN WITH A PROSE QUESTION ("paused for review", "want me to…", "pick one of
+# these", "plan before I write?"). This is a transparent, tunable scored
+# heuristic — NOT a black box — that flags a terminal session whose last
+# assistant text is awaiting human input. See docs/attention-api.md.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Closing-intent phrases an assistant uses when it hands the turn back to the
+# human. Matched case-insensitively against the trailing prose. Each adds to the
+# soft-block score; the trailing "?" and an enumerated choice set add more.
+_SOFT_BLOCK_PHRASES = (
+    "want me to", "shall i", "should i", "do you want", "would you like",
+    "for your review", "please review", "your review", "ready for review",
+    "review the plan", "review this", "let me know", "lmk",
+    "pick one", "pick a", "choose one",
+    "which option", "which approach", "which one", "which direction",
+    "which route", "your call", "up to you", "waiting on you", "waiting for you",
+    "waiting for your", "awaiting your", "paused for", "paused — ", "paused -",
+    "plan before", "before i start", "before i write", "before i proceed",
+    "before i continue", "before i implement", "before i build",
+    "sound good", "look right", "what do you think", "wdyt", "thoughts?",
+    "go ahead?", "proceed?", "sign off", "confirm", "approve",
+    "let me know which", "let me know if", "want me", "should we", "shall we",
+)
+
+# An enumerated set of options/routes the assistant laid out for a choice.
+_SOFT_BLOCK_ENUM_RE = re.compile(
+    r"(?m)^\s*(?:[1-9][.)]|[-*•]|option\s+[a-z0-9]|[a-d][.)])\s+\S",
+    re.IGNORECASE,
+)
+_SOFT_BLOCK_CHOICE_WORDS_RE = re.compile(
+    r"\b(pick|choose|which|option|options|route|routes|direction|directions|"
+    r"approach|approaches|prefer|preference|decide)\b",
+    re.IGNORECASE,
+)
+
+# A session's own structured next_step_user is a strong, intentional signal. We
+# split it three ways for the COO feed's precision gate:
+#   - DECISION: the session wants the human to decide about ITS work → needs you.
+#   - HANDOFF/WAIT/DONE: the session shipped, or handed the human an external
+#     task (export data, run a script), or is blocked on a third party → not an
+#     immediate human decision; don't surface a coarse "live + idle" row for it.
+# This gate runs ONLY in the cross-repo feed (compute_attention_feed); the
+# per-repo compute_attention_items path is unchanged.
+_NS_DECISION_WORDS = (
+    "review", "approve", "confirm", "pick", "choose", "which", "want me",
+    "should i", "should we", "redirect", "your call", "let me know", "sign off",
+    "decide", "answer", "respond", "reply", "approve or", "go deep",
+)
+_NS_SKIP_PREFIXES = (
+    # done / shipped
+    "nothing to ", "no action", "done", "no changes", "already ",
+    "ready to close", "ship", "merge", "push",
+    # waiting on a third party / blocked
+    "wait ", "wait for", "waiting", "awaiting", "blocked on", "blocked by", "tbd",
+    # external task the human must perform elsewhere, then come back
+    "export ", "run ", "open ", "unzip", "install", "download", "go to",
+    "visit ", "paste ", "deploy ", "monitor", "watch ", "verify the deploy",
+    "hard-refresh", "refresh ", "test ", "try ",
+)
+
+
+def _next_step_requests_decision(next_step):
+    """True when a session's structured next_step_user asks the human to make a
+    DECISION about the session's own work (vs handing off an external task,
+    shipping, or blocking on a third party)."""
+    ns = (next_step or "").strip().lower()
+    if not ns:
+        return False
+    if ns.startswith(_NS_SKIP_PREFIXES):
+        return False
+    return any(w in ns for w in _NS_DECISION_WORDS)
+
+
+def _awaits_human_decision(c):
+    """Precision gate for the COO feed's coarse `sidecar_waiting` (live + idle)
+    rows: keep only sessions that actually await the human — either the
+    soft-block detector fires on the last assistant prose, or the session's
+    structured next_step_user requests a decision. Drops loop workers idling
+    between tickets and sessions that handed off an external task."""
+    if _detect_soft_block(c):
+        return True
+    return _next_step_requests_decision(
+        (c.get("session_state") or {}).get("next_step_user"))
+
+
+def _strip_for_question_scan(text):
+    """Return the human-facing trailing prose of an assistant message — the
+    `<session-state>` block and CCC's own prompt trailer removed. Those trailers
+    can contain a "?" or imperative wording that would falsely score."""
+    if not text:
+        return ""
+    t = _SESSION_STATE_RE.sub("", text)
+    t = _strip_ccc_session_state_instruction(t)
+    return (t or "").strip()
+
+
+def _score_soft_block(text):
+    """Score how strongly a trailing assistant prose blob is awaiting a human.
+
+    Returns (score, reasons, question_text). Transparent + tunable: callers can
+    log `reasons` to see exactly why a session was (or was not) flagged.
+    Threshold lives in _detect_soft_block (score >= 3).
+    """
+    prose = _strip_for_question_scan(text)
+    if not prose:
+        return 0, [], ""
+    # Only the tail matters — the question/checkpoint lands at the end of a turn.
+    tail = prose[-700:]
+    low = tail.lower()
+    score = 0
+    reasons = []
+
+    stripped = tail.rstrip().rstrip(")*_`\"'>").rstrip()
+    if stripped.endswith("?"):
+        score += 3
+        reasons.append("ends_with_question")
+    elif "?" in tail[-400:]:
+        score += 1
+        reasons.append("has_question_mark")
+
+    matched = [p for p in _SOFT_BLOCK_PHRASES if p in low]
+    if matched:
+        score += 2 * min(len(matched), 2)  # cap phrase contribution at +4
+        reasons.append("phrases:" + ",".join(matched[:4]))
+
+    if _SOFT_BLOCK_ENUM_RE.search(tail) and _SOFT_BLOCK_CHOICE_WORDS_RE.search(low):
+        score += 2
+        reasons.append("enumerated_choice")
+
+    # Question text = the last sentence/line that carries the ask, for the COO.
+    question_text = ""
+    for line in reversed([l.strip() for l in prose.splitlines() if l.strip()]):
+        if "?" in line or any(p in line.lower() for p in _SOFT_BLOCK_PHRASES):
+            question_text = line
+            break
+    if not question_text:
+        question_text = prose.splitlines()[-1].strip() if prose.splitlines() else ""
+    return score, reasons, question_text[:400]
+
+
+def _detect_soft_block(c):
+    """Decide whether a terminal session is awaiting human input.
+
+    Returns {score, reasons, question_text, guaranteed} or None. Two parts:
+      (a) terminal gate — last turn is an assistant turn, no tool call pending,
+          no sub-agent in flight, not mid-write. This is what separates a
+          genuinely WORKING session (sub-agent running) from one that stopped
+          and is waiting on the human.
+      (b) prose score — _score_soft_block(last_assistant_text) >= 3.
+    The formal flags (question_waiting / needs_approval) are GUARANTEED hits —
+    they short-circuit the score so the detector is a strict superset of the old
+    behavior.
+    """
+    # Guaranteed hits — formal AskUserQuestion / permission prompt.
+    if c.get("question_waiting"):
+        qt = (c.get("question_text") or c.get("question_preamble") or "").strip()
+        return {"score": 99, "reasons": ["question_waiting"],
+                "question_text": qt[:400], "guaranteed": True}
+    if c.get("needs_approval"):
+        qt = (c.get("needs_approval_message") or "").strip()
+        return {"score": 99, "reasons": ["needs_approval"],
+                "question_text": qt[:400], "guaranteed": True}
+
+    # (a) terminal gate.
+    if c.get("pending_tool"):
+        return None
+    if (c.get("subagent_in_flight_count") or 0) > 0:
+        return None
+    if c.get("sidecar_in_flight"):
+        return None
+    if c.get("last_event_type") == "user":
+        return None  # human already replied; awaiting the assistant, not us
+    text = c.get("last_assistant_text") or ""
+    if not text.strip():
+        return None
+
+    # (b) prose score.
+    score, reasons, question_text = _score_soft_block(text)
+    if score < 3:
+        return None
+    return {"score": score, "reasons": reasons,
+            "question_text": question_text, "guaranteed": False}
+
+
+def _session_state_label(c):
+    """Coarse session state for /api/sessions ?state= filtering.
+
+    working — live and actively executing (tool pending, mid-write, or a
+              sub-agent in flight).
+    waiting — needs the human (formal flag or detected soft block).
+    idle    — neither.
+    """
+    if c.get("is_live") and (
+        c.get("pending_tool")
+        or c.get("sidecar_in_flight")
+        or (c.get("subagent_in_flight_count") or 0) > 0
+        or c.get("sidecar_status") == "active"
+    ):
+        return "working"
+    if (c.get("question_waiting") or c.get("needs_approval")
+            or _detect_soft_block(c)):
+        return "waiting"
+    return "idle"
+
+
 def _classify_attention(c):
     """For a single conv, decide whether it needs user attention and in what way.
     Returns a dict {kind, priority, where, did, insight, next_step} or None.
@@ -43677,6 +43928,28 @@ def _classify_attention(c):
         last_event = c.get("last_event_type")
         sidecar_status = c.get("sidecar_status")
 
+        # ── Attention API: formal block (guaranteed) + prose soft-block ──────
+        # The core fix. _detect_soft_block honors question_waiting/needs_approval
+        # as guaranteed hits AND scores a terminal session whose last assistant
+        # turn ended awaiting the human (a prose question the old flags missed).
+        sb = _detect_soft_block(c)
+        if sb and sb.get("guaranteed"):
+            _qt = sb.get("question_text") or ""
+            return {
+                "kind": "question_blocked", "priority": 1,
+                "session_id": sid, "name": name,
+                "where": "Needs you · question waiting"
+                         if c.get("question_waiting")
+                         else "Needs you · approval requested",
+                "did": state.get("did"),
+                "insight": state.get("insight"),
+                "next_step": state.get("next_step_user") or
+                    (("Answer: " + _qt) if _qt else "Open the session and answer"),
+                "question_text": _qt,
+                "soft_block": sb,
+                "has_structured": has_structured,
+            }
+
         if c.get("stale_tool_call"):
             tool_age = c.get("stale_tool_age_s") or 0
             age_minutes = max(1, round(tool_age / 60)) if tool_age else None
@@ -43729,6 +44002,24 @@ def _classify_attention(c):
                 "insight": state.get("insight"),
                 "next_step": state.get("next_step_user") or
                     "Open the session and send the next instruction",
+                "has_structured": has_structured,
+            }
+
+        # Prose soft-block: a terminal session ended its last turn with a
+        # question/checkpoint awaiting the human. This is the most common block
+        # type and the formal flags never caught it.
+        if sb and not sb.get("guaranteed"):
+            _qt = sb.get("question_text") or ""
+            return {
+                "kind": "soft_block", "priority": 2,
+                "session_id": sid, "name": name,
+                "where": "Needs you · awaiting your reply",
+                "did": state.get("did"),
+                "insight": state.get("insight"),
+                "next_step": state.get("next_step_user") or
+                    (("Reply: " + _qt) if _qt else "Open the session and reply"),
+                "question_text": _qt,
+                "soft_block": sb,
                 "has_structured": has_structured,
             }
 
@@ -43922,6 +44213,284 @@ def _log_macos_only(feature):
         return
     _MACOS_ONLY_LOGGED.add(feature)
     print(f"[ccc] {feature}: macOS-only feature, skipped on {platform.system()}.")
+
+
+# Cap on how many attention items get the (file-tail-reading) turn enrichment in
+# the cross-repo feed. Keeps the feed cheap — we never read tails for all 1268
+# rows, only for the bounded output set. The perf-budget test pins this.
+_ATTENTION_FEED_TURN_CAP = 40
+
+# Default feed recency window: an item that isn't live and isn't priority-1
+# only surfaces if it was active within this window. Keeps the default NYA feed
+# a tight live picture instead of a pile of days-old questions. `scope=all`
+# bypasses it for power use.
+_ATTENTION_FEED_RECENT_SECS = 48 * 3600
+
+# Git-hygiene rows (commits sitting unpushed) are real, but they are a backlog
+# tab — not the "a session needs you right now" feed. Pulled out of the default
+# and only returned under scope=all.
+_ATTENTION_FEED_DEFAULT_EXCLUDE = frozenset({"committed_not_pushed"})
+
+
+def _collapse_block_text(block):
+    """One content block → display text. Tool calls collapse to [tool:Name],
+    tool results to [tool_result]. Text blocks pass through."""
+    if isinstance(block, str):
+        return block
+    if not isinstance(block, dict):
+        return ""
+    bt = block.get("type")
+    if bt == "text":
+        return block.get("text", "") or ""
+    if bt == "tool_use":
+        return "[tool:" + (block.get("name") or "?") + "]"
+    if bt == "tool_result":
+        return "[tool_result]"
+    if bt == "thinking":
+        return ""
+    return ""
+
+
+def _attention_read_turns(jsonl_path, n=3):
+    """Last `n` human/assistant turns of a transcript as [{role, text}].
+
+    Reads only the file TAIL (never a full parse). Tool calls collapse to
+    [tool:Name] so the payload stays cheap. Used by the cross-repo attention
+    feed and /api/session/<id>.
+    """
+    if not jsonl_path:
+        return []
+    try:
+        p = Path(jsonl_path)
+        size = p.stat().st_size
+        with open(p, "rb") as fh:
+            # ~64 KiB tail is plenty for the last few turns even with big tool
+            # results; the cap keeps a runaway transcript from blowing memory.
+            window = 65536
+            if size > window:
+                fh.seek(-window, os.SEEK_END)
+                fh.readline()  # drop the partial first line
+            raw = fh.read().decode("utf-8", "replace")
+    except (OSError, ValueError):
+        return []
+
+    turns = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or '"type"' not in line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        et = ev.get("type")
+        if et not in ("user", "assistant"):
+            continue
+        if et == "user" and ev.get("isMeta"):
+            continue
+        msg = _safe_parse_message(ev.get("message", {}))
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            text = content
+        else:
+            parts = [_collapse_block_text(b) for b in (content or [])]
+            text = "\n".join(s for s in parts if s).strip()
+        if et == "user":
+            if _is_transcript_control_text(text):
+                continue
+            text = _strip_ccc_session_state_instruction(text).strip()
+        if not text:
+            continue
+        turns.append({"role": et, "text": text[:1200]})
+    return turns[-n:]
+
+
+def compute_attention_feed(*, recent_only=True, recent_window_secs=None,
+                           exclude_kinds=None, limit=None, turn_cap=None):
+    """Cross-repo attention feed — ONLY sessions that need the human.
+
+    Runs the same classifier (`_classify_attention`, now soft-block aware) over
+    the cached cross-repo archive rows (the `?all=1` source), sorts
+    priority→recency, and enriches the bounded output set with repo label,
+    mtime, the detected question/checkpoint text, and the last 2-3 turns.
+
+    Two modes:
+      - Default (recent_only=True): a tight LIVE feed. An item only surfaces if
+        it is priority-1 (a live blocker — kept exactly as-is), is live, or was
+        active within `recent_window_secs`. Git-hygiene backlog rows
+        (`committed_not_pushed`) are excluded. This is what NYA renders.
+      - scope=all (recent_only=False, no exclude): the full historical pool for
+        power use.
+
+    Cheap by construction: classification touches only row dicts (no file IO);
+    turn enrichment reads tails for at most `turn_cap` items, never all rows.
+    """
+    if turn_cap is None:
+        turn_cap = _ATTENTION_FEED_TURN_CAP
+    if recent_window_secs is None:
+        recent_window_secs = _ATTENTION_FEED_RECENT_SECS
+    if exclude_kinds is None:
+        exclude_kinds = _ATTENTION_FEED_DEFAULT_EXCLUDE if recent_only else frozenset()
+    try:
+        convs = find_all_conversations(
+            resolve_pr_states=False,
+            resolve_effective=False,
+            resolve_worktree_dirty=False,
+        ) or []
+    except Exception:
+        convs = []
+    now = time.time()
+    by_sid = {}
+    raw = []
+    for c in convs:
+        item = _classify_attention(c)
+        if not item:
+            continue
+        kind = item.get("kind")
+        # Backlog/git-hygiene kinds are pulled out of the default feed; they live
+        # behind scope=all (a "see all" / power view), not the right-now feed.
+        if kind in exclude_kinds:
+            continue
+        # COO-feed precision gate: the coarse `sidecar_waiting` kind (any live +
+        # idle session) is the dominant source of false positives — loop workers
+        # idling between tickets and sessions that shipped or handed off an
+        # external task all look "idle". Surface it only when the session
+        # actually awaits a human decision. (Feed-only; per-repo NYA unchanged.)
+        if kind == "sidecar_waiting" and not _awaits_human_decision(c):
+            continue
+        modified = c.get("modified") or c.get("mtime") or 0
+        # Recency gate. Priority-1 live blockers are ALWAYS kept (P1 stays
+        # exactly as-is). Everything else — soft_block included, so stale
+        # historical questions don't pile up — must be live or recently active.
+        if recent_only and item.get("priority", 9) != 1:
+            if not (c.get("is_live") or (now - modified) <= recent_window_secs):
+                continue
+        sid = item.get("session_id")
+        item["_modified"] = modified
+        item["repo"] = c.get("folder_label") or ""
+        item["folder_label"] = c.get("folder_label") or ""
+        item["folder_path"] = c.get("folder_path") or ""
+        item["mtime"] = modified
+        item["engine"] = c.get("engine") or "claude"
+        if sid:
+            by_sid[sid] = c
+        raw.append(item)
+    raw.sort(key=lambda i: (i.get("priority", 9), -(i.get("_modified") or 0)))
+    if limit:
+        raw = raw[:limit]
+
+    enriched = 0
+    out = []
+    for item in raw:
+        item.pop("_modified", None)
+        sid = item.get("session_id")
+        c = by_sid.get(sid)
+        if c and enriched < turn_cap:
+            item["turns"] = _attention_read_turns(c.get("jsonl_path"), n=3)
+            enriched += 1
+        else:
+            item["turns"] = []
+        # Fall back to the conv's last text when no explicit question was parsed.
+        if not item.get("question_text") and c:
+            item["question_text"] = _strip_for_question_scan(
+                c.get("last_assistant_text") or "")[-400:]
+        out.append(item)
+    return {
+        "ok": True,
+        "scope": "all" if not recent_only else "live",
+        "recent_only": recent_only,
+        "window_hours": round(recent_window_secs / 3600) if recent_only else None,
+        "items": out,
+        "shown": len(out),
+        "total": len(raw),
+        "turns_enriched": enriched,
+    }
+
+
+def compute_session_detail(session_id):
+    """Lightweight single-session drill-in for /api/session/<id>.
+
+    Returns state + last few turns from one file tail — no whole-list rebuild.
+    """
+    sid = (session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}, 400
+    path = _find_session_jsonl(sid)
+    if not path:
+        return {"ok": False, "error": "session not found", "session_id": sid}, 404
+    try:
+        tail_meta = _extract_tail_meta(path) or {}
+    except Exception:
+        tail_meta = {}
+    # Live-state overlay (sidecar flags) so ?state and soft-block match the list.
+    row = {
+        "session_id": sid,
+        "last_assistant_text": tail_meta.get("last_assistant_text") or "",
+        "last_event_type": tail_meta.get("last_event_type"),
+        "pending_tool": tail_meta.get("pending_tool"),
+        "subagent_in_flight_count": tail_meta.get("subagent_in_flight_count", 0),
+        "is_live": _archive_session_is_live(sid),
+    }
+    if row["is_live"]:
+        try:
+            _add_sidecar_fields(row)
+        except Exception:
+            pass
+    sb = _detect_soft_block(row)
+    return {
+        "ok": True,
+        "session_id": sid,
+        "state": _session_state_label(row),
+        "is_live": bool(row.get("is_live")),
+        "question_text": (sb or {}).get("question_text", "") if sb else "",
+        "soft_block": sb,
+        "last_assistant_text": (tail_meta.get("last_assistant_text") or "")[:2000],
+        "turns": _attention_read_turns(path, n=3),
+    }, 200
+
+
+def _apply_session_query_params(rows, qs):
+    """Additive filter/projection pass for /api/sessions.
+
+    Optional, all default to no-op so the existing payload is unchanged:
+      ?since=<epoch>            keep rows with modified/mtime >= since
+      ?state=waiting|working|idle  keep rows whose _session_state_label matches
+      ?limit=N                 cap row count (after the rows' own sort)
+      ?fields=a,b,c            project each row to a CSV subset (session_id kept)
+    """
+    if not isinstance(rows, list):
+        return rows
+    out = rows
+
+    since_raw = (qs.get("since", [""])[0] or "").strip()
+    if since_raw:
+        try:
+            since = float(since_raw)
+            out = [r for r in out
+                   if (r.get("modified") or r.get("mtime") or 0) >= since]
+        except (TypeError, ValueError):
+            pass
+
+    state = (qs.get("state", [""])[0] or "").strip().lower()
+    if state in ("waiting", "working", "idle"):
+        out = [r for r in out if _session_state_label(r) == state]
+
+    limit_raw = (qs.get("limit", [""])[0] or "").strip()
+    if limit_raw:
+        try:
+            n = int(limit_raw)
+            if n >= 0:
+                out = out[:n]
+        except (TypeError, ValueError):
+            pass
+
+    fields_raw = (qs.get("fields", [""])[0] or "").strip()
+    if fields_raw:
+        keep = {f.strip() for f in fields_raw.split(",") if f.strip()}
+        keep.add("session_id")  # always keep the identity key
+        out = [{k: r.get(k) for k in keep if k in r} for r in out]
+
+    return out
 
 
 def get_app_config():
