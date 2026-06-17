@@ -1772,6 +1772,7 @@ def _native_pick_folder(prompt_text="Pick a repo folder for Command Center"):
     error so the client can show an explanatory message instead of crashing.
     """
     if platform.system() != "Darwin":
+        _log_macos_only("folderPicker")
         return {"ok": False, "error": "native folder picker is macOS-only today; type a path instead"}
     # Two -e args: activate brings the chooser to front (otherwise it can
     # appear behind the browser on some setups). `with prompt` sets the title
@@ -3030,11 +3031,21 @@ _SYS_HOG_CPU = 80.0          # process CPU% to count as a sustained hog
 _SYS_HOG_MIN_AGE = 2.0       # minutes alive, to skip brief compile/encode spikes
 _SYS_UNIT_MB = {"K": 1 / 1024, "M": 1.0, "G": 1024.0, "T": 1024 * 1024.0}
 # Absolute tool paths: the launchd daemon's PATH lacks /usr/sbin, so bare
-# `sysctl`/`lsof` silently fail (FileNotFoundError -> "").
-_SYS_PS = "/bin/ps"
-_SYS_LSOF = "/usr/sbin/lsof"
-_SYS_SYSCTL = "/usr/sbin/sysctl"
-_SYS_VM_STAT = "/usr/bin/vm_stat"
+# `sysctl`/`lsof` silently fail (FileNotFoundError -> ""). On Linux the same
+# tools live elsewhere (or not at all), so resolve per platform: prefer the
+# shipped macOS path when it exists, else a PATH lookup, else the bare name.
+# Missing tools degrade to "" in _sys_run rather than crashing. sysctl and
+# vm_stat are macOS-only; on Linux _sys_memory/_sys_cpu use /proc + os instead.
+def _resolve_sys_tool(macos_path, name):
+    if os.path.exists(macos_path):
+        return macos_path
+    return shutil.which(name) or name
+
+
+_SYS_PS = _resolve_sys_tool("/bin/ps", "ps")
+_SYS_LSOF = _resolve_sys_tool("/usr/sbin/lsof", "lsof")
+_SYS_SYSCTL = _resolve_sys_tool("/usr/sbin/sysctl", "sysctl")
+_SYS_VM_STAT = _resolve_sys_tool("/usr/bin/vm_stat", "vm_stat")
 
 
 def _sys_run(cmd, timeout=3):
@@ -3070,9 +3081,49 @@ def _sys_parse_etime(s):
     return days * 1440 + h * 60 + m + sec / 60.0
 
 
+def _sys_memory_linux():
+    """Memory + swap from /proc/meminfo (Linux). Mirrors the macOS shape so the
+    same UI panel renders. 'available' uses MemAvailable, the kernel's own
+    estimate of reclaimable memory."""
+    info = {}
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m = re.match(r"(\w+):\s+(\d+)\s*kB", line)
+                if m:
+                    info[m.group(1)] = int(m.group(2)) / 1024.0  # kB -> MB
+    except OSError:
+        return {
+            "total_mb": None, "used_mb": None, "available_mb": 0,
+            "compressed_mb": 0, "swap_used_mb": None, "swap_total_mb": None,
+            "pressure": None,
+        }
+    total = info.get("MemTotal")
+    available = info.get("MemAvailable", info.get("MemFree", 0))
+    used = (total - available) if total else None
+    swap_total = info.get("SwapTotal")
+    swap_free = info.get("SwapFree")
+    swap_used = (swap_total - swap_free) if (swap_total is not None and swap_free is not None) else None
+    pressure = None
+    if total:
+        ap = available / total
+        pressure = "critical" if ap < 0.05 else ("elevated" if ap < 0.20 else "ok")
+    return {
+        "total_mb": round(total) if total else None,
+        "used_mb": round(used) if used is not None else None,
+        "available_mb": round(available),
+        "compressed_mb": 0,  # no direct /proc equivalent
+        "swap_used_mb": round(swap_used) if swap_used is not None else None,
+        "swap_total_mb": round(swap_total) if swap_total is not None else None,
+        "pressure": pressure,
+    }
+
+
 def _sys_memory():
     """Memory + swap, matching Activity Monitor's pressure bar (kernel pressure
     level + available = free+inactive+speculative+purgeable, not top's 'used')."""
+    if platform.system() != "Darwin":
+        return _sys_memory_linux()
     total_mb = None
     try:
         total_mb = int(_sys_run([_SYS_SYSCTL, "-n", "hw.memsize"]).strip()) / (1024 * 1024)
@@ -3114,6 +3165,14 @@ def _sys_memory():
 
 
 def _sys_cpu():
+    if platform.system() != "Darwin":
+        # Linux: sysctl keys don't exist; use stdlib (also avoids 2 forks).
+        try:
+            load = list(os.getloadavg())
+        except (OSError, AttributeError):
+            load = [None, None, None]
+        return {"load1": load[0], "load5": load[1], "load15": load[2],
+                "cores": os.cpu_count()}
     cores = None
     try:
         cores = int(_sys_run([_SYS_SYSCTL, "-n", "hw.ncpu"]).strip())
@@ -4953,6 +5012,7 @@ def _capture_screenshot_native(timeout=120):
     return an explanatory error so the UI can hide / explain the feature.
     """
     if platform.system() != "Darwin":
+        _log_macos_only("screenshots")
         return {"ok": False, "error": "Screenshots are macOS-only."}
     screencapture_bin = _resolve_screencapture_bin()
     if not screencapture_bin:
@@ -5311,6 +5371,7 @@ def _reveal_bug_screenshot(path_str):
     bug-screenshots dir so this can't be abused to reveal arbitrary files.
     Used by the manual-attach fallback after the issue is filed."""
     if platform.system() != "Darwin":
+        _log_macos_only("revealFile")
         return {"ok": False, "error": "macOS-only"}
     if not path_str:
         return {"ok": False, "error": "missing path"}
@@ -9416,6 +9477,7 @@ def open_session_in_claude_desktop(session_id):
     if not _SESSION_UUID_RE.match(session_id):
         return {"ok": False, "error": "invalid session_id (expected UUID)"}
     if sys.platform != "darwin":
+        _log_macos_only("desktopDeepLinks")
         return {"ok": False, "error": "Claude Desktop deep-link is macOS-only"}
     url = f"claude://resume?session={session_id}"
     try:
@@ -9445,6 +9507,7 @@ def open_session_in_codex_desktop(session_id, cwd=None):
     if not _is_codex_session(session_id):
         return {"ok": False, "error": "Codex launch only handles Codex sessions"}
     if sys.platform != "darwin":
+        _log_macos_only("desktopDeepLinks")
         return {"ok": False, "error": "Codex app launch is macOS-only"}
     params = {"session": session_id}
     if cwd:
@@ -9481,6 +9544,9 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None, post_sl
 
     Returns {ok, terminal_app, command, error?, existing?, headless_live?}.
     """
+    if platform.system() != "Darwin":
+        _log_macos_only("launchTerminal")
+        return {"ok": False, "error": "opening a visible terminal is macOS-only today"}
     if not session_id:
         return {"ok": False, "error": "missing session_id"}
     post_slash_commands = [
@@ -10123,6 +10189,9 @@ def focus_terminal_by_tty(tty, terminal_app):
     `tty` is like "ttys008". `terminal_app` is the friendly name from
     _TERMINAL_APPS. Returns {ok, error}.
     """
+    if platform.system() != "Darwin":
+        _log_macos_only("terminalJump")
+        return {"ok": False, "error": "jump to terminal is macOS-only today"}
     if not _is_real_tty(tty):
         return {"ok": False, "error": "No tty available"}
     if not terminal_app:
@@ -43819,6 +43888,42 @@ def compute_attention_items(repo_path, include_all=False):
     }
 
 
+def _platform_capabilities():
+    """Desktop conveniences that only work on macOS today.
+
+    The frontend hides the matching control when a flag is false, so a
+    Linux / headless user never sees a button that does nothing. Every flag
+    is True on Darwin (no behavior change) and False elsewhere. One flag
+    drives both the server-side stub and the UI visibility, so there is no
+    per-desktop-environment code. See docs/linux-support-plan.md.
+    """
+    is_mac = platform.system() == "Darwin"
+    return {
+        "platform": platform.system().lower(),
+        "screenshots": is_mac,        # bug-report / annotation capture
+        "annotate": is_mac,           # Flow annotate (window capture)
+        "terminalJump": is_mac,       # bring the session's terminal to front
+        "launchTerminal": is_mac,     # open a session in a visible terminal
+        "folderPicker": is_mac,       # native GUI folder chooser
+        "desktopDeepLinks": is_mac,   # open in Claude / Codex desktop apps
+        "revealFile": is_mac,         # reveal a file in Finder
+        "openBrowser": is_mac,        # open a URL via the OS `open` command
+        "notifications": is_mac,      # desktop banner notifications (hooks)
+    }
+
+
+_MACOS_ONLY_LOGGED = set()
+
+
+def _log_macos_only(feature):
+    """Emit one clear log line the first time a macOS-only feature is invoked
+    on another platform. Keeps the stubs honest without spamming the log."""
+    if feature in _MACOS_ONLY_LOGGED:
+        return
+    _MACOS_ONLY_LOGGED.add(feature)
+    print(f"[ccc] {feature}: macOS-only feature, skipped on {platform.system()}.")
+
+
 def get_app_config():
     """Surface the detected environment to the frontend so the UI can
     conditionally render panels (Vercel, pkood) and avoid hardcoded
@@ -43836,6 +43941,7 @@ def get_app_config():
         "pkood_enabled": bool(shutil.which("pkood")),
         "gh_enabled": bool(shutil.which("gh")),
         "orgs": [label for label, _ in ORG_PATTERNS],
+        "capabilities": _platform_capabilities(),
     }
     _app_config_cache = config
     _app_config_cache_ts = time.time()

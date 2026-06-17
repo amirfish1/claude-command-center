@@ -5,9 +5,13 @@
 # bug — keep it that way.
 #
 # Caveats vs. the native `./run.sh` path on macOS:
-#   - AppleScript "jump to terminal" no-ops (no osascript in Linux container).
-#   - `--install-service` launchd agent does not apply.
-#   - `attach`, Claude Desktop deep links, and other host-only glue do nothing.
+#   - macOS-only desktop conveniences (jump-to-terminal, screenshots, native
+#     folder picker, Claude/Codex Desktop deep links) are unavailable on Linux.
+#     The server reports a capabilities flag and the UI hides those controls,
+#     so nothing is a broken button. See docs/linux-support-plan.md.
+#   - No service install inside the container: the container IS the service.
+#     On a native (non-container) Linux host, `./run.sh --install-service`
+#     installs a systemd user service instead of a launchd agent.
 #
 # This image is for *evaluating* CCC. The kanban view + transcript ingestion
 # work as long as ~/.claude is volume-mounted from the host (see compose file).

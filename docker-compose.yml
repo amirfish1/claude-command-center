@@ -5,9 +5,12 @@
 #   open http://localhost:8090
 #
 # This is the "I just want to try it" path. The hero install remains
-# ./run.sh on macOS (see README). macOS-only features (AppleScript
-# jump-to-terminal, attach, Claude Desktop deep links, launchd
-# `--install-service`) do not work inside the container — see docs/docker.md.
+# ./run.sh on macOS (see README). macOS-only desktop conveniences
+# (jump-to-terminal, screenshots, Claude/Codex Desktop deep links, native
+# folder picker) are unavailable on Linux; the UI hides those controls so
+# nothing is a dead button. On a native Linux host, ./run.sh --install-service
+# installs a systemd user service. See docs/docker.md and
+# docs/linux-support-plan.md.
 
 services:
   ccc:

@@ -1243,6 +1243,87 @@ class TestRunScript(unittest.TestCase):
         self.assertIn("--uninstall-service", result.stdout)
         self.assertIn("--service-status", result.stdout)
 
+    def test_run_script_help_mentions_systemd_for_linux(self):
+        """--install-service now ports to systemd on Linux; --help should say so."""
+        script = pathlib.Path(PROJECT_ROOT, "run.sh")
+        result = subprocess.run(["bash", str(script), "--help"],
+                                cwd=PROJECT_ROOT,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("systemd", result.stdout)
+
+
+class TestLinuxCapabilities(unittest.TestCase):
+    """Headless-Linux support: macOS-only desktop features must stub cleanly
+    (no crash, structured no-op) and the server must report a capabilities
+    flag so the UI can hide dead controls. See docs/linux-support-plan.md."""
+
+    def _server(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        return importlib.import_module("server")
+
+    def test_capabilities_all_true_on_darwin(self):
+        server = self._server()
+        with mock.patch.object(server.platform, "system", return_value="Darwin"):
+            caps = server._platform_capabilities()
+        self.assertEqual(caps["platform"], "darwin")
+        for key in ("screenshots", "annotate", "terminalJump", "launchTerminal",
+                    "folderPicker", "desktopDeepLinks", "revealFile",
+                    "openBrowser", "notifications"):
+            self.assertTrue(caps[key], f"{key} should be True on Darwin")
+
+    def test_capabilities_all_false_on_linux(self):
+        server = self._server()
+        with mock.patch.object(server.platform, "system", return_value="Linux"):
+            caps = server._platform_capabilities()
+        self.assertEqual(caps["platform"], "linux")
+        for key in ("screenshots", "annotate", "terminalJump", "launchTerminal",
+                    "folderPicker", "desktopDeepLinks", "revealFile",
+                    "openBrowser", "notifications"):
+            self.assertFalse(caps[key], f"{key} should be False on Linux")
+
+    def test_app_config_exposes_capabilities(self):
+        server = self._server()
+        server._app_config_cache = None
+        server._app_config_cache_ts = 0
+        cfg = server.get_app_config()
+        self.assertIn("capabilities", cfg)
+        self.assertIsInstance(cfg["capabilities"], dict)
+        self.assertIn("screenshots", cfg["capabilities"])
+
+    def test_desktop_features_stub_cleanly_on_linux(self):
+        """Each gated entry point returns a structured no-op on non-Darwin
+        instead of raising or shelling out to a missing macOS tool."""
+        server = self._server()
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server.sys, "platform", "linux"):
+            for result in (
+                server._native_pick_folder(),
+                server._capture_screenshot_native(),
+                server._reveal_bug_screenshot("/tmp/x.png"),
+                server.launch_terminal_for_session("sess-1"),
+                server.focus_terminal_by_tty("ttys001", "Terminal"),
+            ):
+                self.assertIsInstance(result, dict)
+                self.assertFalse(result.get("ok", False))
+                self.assertIn("error", result)
+
+    def test_sys_memory_and_cpu_work_on_linux(self):
+        """The system-monitor stats must not go blank on Linux: memory comes
+        from /proc/meminfo and load/cores from stdlib."""
+        server = self._server()
+        with mock.patch.object(server.platform, "system", return_value="Linux"):
+            mem = server._sys_memory()
+            cpu = server._sys_cpu()
+        self.assertIsInstance(mem, dict)
+        for key in ("total_mb", "used_mb", "available_mb", "swap_total_mb",
+                    "pressure"):
+            self.assertIn(key, mem)
+        self.assertIsInstance(cpu, dict)
+        for key in ("load1", "load5", "load15", "cores"):
+            self.assertIn(key, cpu)
+
 
 class TestRepoContextHelpers(unittest.TestCase):
     def setUp(self):

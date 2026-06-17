@@ -1336,6 +1336,19 @@
     document.querySelectorAll('.pkood-toggle-label').forEach(el => {
       if (!APP_CONFIG.pkood_enabled) el.style.display = 'none';
     });
+    // Desktop conveniences that only work on macOS today (see
+    // docs/linux-support-plan.md). The server reports a capabilities object;
+    // when a flag is explicitly false we add a body class and CSS hides the
+    // matching control, so a Linux/headless user never sees a dead button.
+    // `=== false` (not falsy) keeps the macOS default and is safe against an
+    // older server that omits capabilities entirely.
+    const caps = (APP_CONFIG && APP_CONFIG.capabilities) || {};
+    const noTerminalLaunch = caps.launchTerminal === false
+      && caps.terminalJump === false
+      && caps.desktopDeepLinks === false;
+    document.body.classList.toggle('ccc-no-terminal-launch', noTerminalLaunch);
+    document.body.classList.toggle('ccc-no-screenshots', caps.screenshots === false);
+    document.body.classList.toggle('ccc-no-annotate', caps.annotate === false);
   }
   loadAppConfig();
 

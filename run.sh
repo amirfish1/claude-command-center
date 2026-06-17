@@ -16,6 +16,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 PLIST_LABEL="com.github.claude-command-center"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 SERVICE_LOG_DIR="$HOME/.claude/command-center/logs"
+# Linux (systemd user service) equivalents of the launchd agent above.
+SYSTEMD_UNIT_NAME="ccc.service"
+SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${SYSTEMD_UNIT_NAME}"
 
 is_port_bound() {
   (echo > "/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
@@ -141,10 +144,136 @@ EOF
   fi
 }
 
+# ── Linux: systemd user service ─────────────────────────────────────────────
+systemd_available() {
+  command -v systemctl >/dev/null 2>&1
+}
+
+write_systemd_unit() {
+  local target_port="$1"
+  mkdir -p "$(dirname "$SYSTEMD_UNIT_PATH")" "$SERVICE_LOG_DIR"
+
+  # PORT plus any CCC_* (and VERCEL_PROJECT) from the current env, baked in as
+  # Environment= lines so the service runs with the same config as this shell.
+  local env_lines=""
+  env_lines+="Environment=\"PORT=$target_port\""$'\n'
+  if [ -n "${VERCEL_PROJECT:-}" ]; then
+    env_lines+="Environment=\"VERCEL_PROJECT=$VERCEL_PROJECT\""$'\n'
+  fi
+  while IFS='=' read -r var val; do
+    case "$var" in
+      CCC_*) env_lines+="Environment=\"$var=$val\""$'\n' ;;
+    esac
+  done < <(env | sort)
+
+  # Logs go to journald (journalctl --user -u ccc). Kept version-safe: no
+  # append: directive, which needs systemd v240+.
+  cat > "$SYSTEMD_UNIT_PATH" <<EOF
+[Unit]
+Description=Claude Command Center
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$HERE
+ExecStart=$HERE/run.sh
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=2048
+${env_lines}
+[Install]
+WantedBy=default.target
+EOF
+}
+
+install_service_linux() {
+  if ! systemd_available; then
+    cat >&2 <<EOF
+Error: systemctl not found. --install-service needs systemd user services.
+Run CCC in the foreground, or under your own process manager, instead:
+
+  nohup ./run.sh > "$SERVICE_LOG_DIR/service.out.log" 2>&1 &
+EOF
+    exit 1
+  fi
+
+  local target_port="${PORT:-8090}"
+
+  if is_port_bound "$target_port"; then
+    cat >&2 <<EOF
+Error: port $target_port is already in use — looks like CCC (or something else)
+is running outside the service. Stop it first, then re-run:
+
+  pkill -f 'python3.*server\\.py'   # if it's a foreground ./run.sh
+  ./run.sh --install-service
+EOF
+    exit 1
+  fi
+
+  echo "→ Installing CCC as a systemd user service"
+  echo "  unit  : $SYSTEMD_UNIT_PATH"
+  echo "  port  : $target_port"
+
+  write_systemd_unit "$target_port"
+  systemctl --user daemon-reload
+  systemctl --user enable --now "$SYSTEMD_UNIT_NAME"
+
+  for _ in 1 2 3 4 5; do
+    sleep 0.5
+    if is_port_bound "$target_port"; then
+      echo "✓ Service started. Open: http://localhost:$target_port"
+      echo "  Status   : systemctl --user status $SYSTEMD_UNIT_NAME"
+      echo "  Logs     : journalctl --user -u $SYSTEMD_UNIT_NAME -f"
+      echo "  Uninstall: ./run.sh --uninstall-service"
+      echo
+      echo "Headless box, or want it running after you log out and at boot?"
+      echo "Enable lingering once (needs sudo):"
+      echo "  sudo loginctl enable-linger $USER"
+      return 0
+    fi
+  done
+
+  echo "⚠ Unit started but port $target_port didn't bind in 2.5s." >&2
+  echo "  Check: journalctl --user -u $SYSTEMD_UNIT_NAME" >&2
+  exit 1
+}
+
+uninstall_service_linux() {
+  if ! systemd_available; then
+    echo "systemctl not found; nothing to uninstall."
+    exit 0
+  fi
+  if [ ! -f "$SYSTEMD_UNIT_PATH" ]; then
+    echo "Service is not installed (no unit at $SYSTEMD_UNIT_PATH)."
+    exit 0
+  fi
+  echo "→ Removing CCC systemd user service"
+  systemctl --user disable --now "$SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
+  rm -f "$SYSTEMD_UNIT_PATH"
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  echo "✓ Service removed."
+}
+
+service_status_linux() {
+  echo "CCC systemd user service"
+  echo "  unit  : $SYSTEMD_UNIT_PATH"
+  if [ -f "$SYSTEMD_UNIT_PATH" ]; then
+    echo "  state : installed"
+  else
+    echo "  state : not installed"
+  fi
+  if systemd_available && systemctl --user is-active "$SYSTEMD_UNIT_NAME" >/dev/null 2>&1; then
+    echo "  active: yes"
+  else
+    echo "  active: no"
+  fi
+}
+
 install_service() {
   if [ "$(uname -s)" != "Darwin" ]; then
-    echo "Error: --install-service supports macOS only." >&2
-    exit 1
+    install_service_linux
+    return
   fi
 
   local target_port="${PORT:-8090}"
@@ -189,6 +318,10 @@ EOF
 }
 
 uninstall_service() {
+  if [ "$(uname -s)" != "Darwin" ]; then
+    uninstall_service_linux
+    return
+  fi
   if [ ! -f "$PLIST_PATH" ]; then
     echo "Service is not installed (no plist at $PLIST_PATH)."
     exit 0
@@ -204,8 +337,8 @@ uninstall_service() {
 
 service_status() {
   if [ "$(uname -s)" != "Darwin" ]; then
-    echo "Error: --service-status supports macOS only." >&2
-    exit 1
+    service_status_linux
+    return
   fi
 
   echo "CCC launchd agent"
@@ -239,9 +372,10 @@ case "${1:-}" in
 Usage: ./run.sh [OPTION]
 
   (no args)            Run CCC in the foreground
-  --install-service    Install as a launchd agent that starts at login
-  --uninstall-service  Remove the launchd agent
-  --service-status     Show launchd install/load status
+  --install-service    Install as a background service that starts at login
+                       (launchd on macOS, systemd user service on Linux)
+  --uninstall-service  Remove the background service
+  --service-status     Show service install/load status
   --app [...]          Open the dashboard in a chromeless app window.
                        Forwards extra args to scripts/open-app.sh.
                        Example: ./run.sh --app --size 1600x1000

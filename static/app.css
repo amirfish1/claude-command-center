@@ -12719,3 +12719,21 @@ body:has(.gc-reader) .pwa-install-banner {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+
+/* Linux / headless: hide macOS-only desktop conveniences. Driven by body
+   classes set in applyConfigToDom() from the server capabilities flag, so the
+   server stub and the UI hide stay in lockstep. macOS keeps every control. */
+.ccc-no-terminal-launch #jumpBtnConv,
+.ccc-no-terminal-launch #launchChoiceBtnConv,
+.ccc-no-terminal-launch #launchChoiceMenuConv,
+.ccc-no-terminal-launch #cpJumpBtn,
+.ccc-no-terminal-launch #cpLaunchChoiceBtn,
+.ccc-no-terminal-launch #cpLaunchChoiceMenu {
+  display: none !important;
+}
+.ccc-no-screenshots #bugReportShotSection {
+  display: none !important;
+}
+.ccc-no-annotate [data-flow-action="annotate"] {
+  display: none !important;
+}

@@ -79,8 +79,9 @@ that already exists.
 
 **Try the demo:** [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/) — read-only kanban with seeded fake data, no install required.
 
-Requirements: macOS, Python 3, and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed.
+Requirements: macOS or Linux, Python 3, and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed.
 Optional: [`gh`](https://cli.github.com/) for GitHub integration, `vercel` for deploy status.
+Linux is supported for headless / remote-box use (see [Running on Linux](#running-on-linux)); the macOS-only desktop conveniences degrade cleanly there.
 
 **curl** — clones into `~/.ccc/claude-command-center` and runs in foreground. Re-running does a `git pull`.
 
@@ -126,6 +127,38 @@ Service logs go to `~/.claude/command-center/logs/service.{out,err}.log`.
 Normal CCC app updates keep using the same checkout path; re-run
 `./run.sh --install-service` only when you want to change baked-in env vars or
 pick up a release that changes the launchd plist itself.
+
+### Running on Linux
+
+CCC runs on Linux as a headless service you reach from the browser on another
+machine. The core (kanban, `~/.claude` transcript ingestion, session spawn and
+drive) works the same as on macOS. The macOS-only desktop conveniences
+(screenshots, jump-to-terminal, open-in-desktop, native folder picker) are
+not available on Linux yet; the UI hides those controls automatically, so you
+never see a button that does nothing.
+
+```bash
+git clone https://github.com/amirfish1/claude-command-center
+cd claude-command-center
+
+# Try it in the foreground
+./run.sh
+
+# Keep it. Installs a systemd user service that starts now and at login
+./run.sh --install-service
+```
+
+`--install-service` writes a systemd user unit to
+`~/.config/systemd/user/ccc.service` and runs `systemctl --user enable --now`.
+Check it with `./run.sh --service-status` (or `systemctl --user status ccc`),
+follow logs with `journalctl --user -u ccc -f`, and remove it with
+`./run.sh --uninstall-service`. On a headless box with no active login session,
+run `sudo loginctl enable-linger $USER` once so the service survives logout and
+starts at boot. If `systemctl` is not available, run CCC in the foreground or
+under your own process manager instead.
+
+To reach the dashboard from another machine, see `SECURITY.md` for the
+`CCC_BIND_HOST` and same-origin options before exposing the port.
 
 First launch (foreground or service) copies two hook scripts into
 `~/.claude/command-center/hooks/` and registers them in
@@ -334,8 +367,11 @@ The `CCC_BIND_HOST`, `CCC_ALLOWED_ORIGIN`, and `CCC_TRUST_TAILNET` knobs can als
   bends eventually; it hasn't yet.
 
 **Out of scope**
-- Linux / Windows. The macOS-specific AppleScript glue is why attach and
-  jump-to-terminal work end-to-end. Porting means stubbing those out.
+- Desktop-Linux parity. Linux is supported headless (see
+  [Running on Linux](#running-on-linux)) with a systemd service and clean
+  degradation of the macOS-only desktop glue. Native Linux equivalents for
+  screenshots, jump-to-terminal, and deep links (X11/Wayland, wmctrl/tmux) are
+  a possible follow-on, not a current goal. Windows is unsupported.
 - Multi-user / network-exposed mode. This is a local dev tool. If you're
   looking at it on a remote host, something has gone wrong.
 - Electron / native wrap. Browser is the UI on purpose.
