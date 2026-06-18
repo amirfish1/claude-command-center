@@ -1714,6 +1714,11 @@ class TestRepoContextHelpers(unittest.TestCase):
              mock.patch.object(self.server, "_backup_jsonl_before_compact", return_value="/tmp/backup.jsonl"), \
              mock.patch.object(
                  self.server,
+                 "_compact_via_hidden_pty",
+                 return_value={"ok": False, "via": "hidden-pty", "error": "stubbed in test"},
+             ), \
+             mock.patch.object(
+                 self.server,
                  "launch_terminal_for_session",
                  return_value={"ok": True, "terminal_app": "Terminal", "command": "claude --resume ..."},
              ) as launch:
