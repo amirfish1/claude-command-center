@@ -2116,6 +2116,29 @@ def _resolve_repo_path_check(raw, *, known):
     return s, None
 
 
+def _decode_over_url_encoded_text(value):
+    """Repair a free-text value a caller wrongly URL-encoded.
+
+    Some orchestration callers percent-encode the ``prompt`` VALUE inside a JSON
+    body (JSON values are not URL-encoded), so a spawned session would receive
+    ``fix%20the%20bug`` instead of ``fix the bug``. Decode ONLY when the value is
+    unambiguously over-encoded: it carries no raw whitespace of its own but
+    contains a percent-escape that decodes to whitespace. A genuine human prompt
+    always has spaces, so this never rewrites a real prompt. Idempotent: a
+    decoded value (now containing whitespace) passes straight through.
+    """
+    s = str(value or "")
+    if "%" not in s or any(ch.isspace() for ch in s):
+        return s
+    try:
+        decoded = urllib.parse.unquote(s)
+    except Exception:
+        return s
+    if decoded != s and any(ch.isspace() for ch in decoded):
+        return decoded
+    return s
+
+
 def resolve_repo_path(value):
     """Validate and canonicalize one concrete repo path.
 
@@ -2146,6 +2169,20 @@ def resolve_repo_path(value):
     canon, err = _resolve_repo_path_check(raw, known=known)
     if err is None:
         return canon
+
+    # Fallback for JSON-body over-encoding. A caller may URL-encode the
+    # repo_path VALUE inside a JSON body (wrong: JSON values are not percent-
+    # encoded), so /Users/.../BYM+Finie arrives as /Users/.../BYM%2BFinie. If
+    # the as-given raw failed but its percent-decoded form resolves to a known
+    # repo, accept that. Only fires when raw carries a literal '%' escape, so a
+    # legitimate path is never altered.
+    if "%" in raw:
+        for variant in (urllib.parse.unquote(raw), urllib.parse.unquote_plus(raw)):
+            if variant == raw:
+                continue
+            cand, cand_err = _resolve_repo_path_check(variant, known=known)
+            if cand_err is None and cand:
+                return cand
 
     # Fallback for query-string `+` decoding. A repo at /Users/.../BYM+Finie
     # arrives over the wire as /Users/.../BYM Finie because `+` decodes to a
@@ -41418,7 +41455,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
-            prompt = (payload.get("prompt") or "").strip()
+            prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             engine_raw = payload.get("engine")
             engine, model = _spawn_request_engine_and_model(payload)
@@ -41548,7 +41585,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
-            prompt = (payload.get("prompt") or "").strip()
+            prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
             cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
@@ -41613,7 +41650,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
-            prompt = (payload.get("prompt") or "").strip()
+            prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
             cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
@@ -41672,7 +41709,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
-            prompt = (payload.get("prompt") or "").strip()
+            prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
             cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
@@ -41733,7 +41770,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
-            prompt = (payload.get("prompt") or "").strip()
+            prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
             cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
@@ -41794,7 +41831,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
-            prompt = (payload.get("prompt") or "").strip()
+            prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
             cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
@@ -42679,7 +42716,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
-            prompt = (payload.get("prompt") or "").strip()
+            prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             if not prompt:
                 self.send_json({"ok": False, "error": "missing prompt"})
             else:
