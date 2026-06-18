@@ -43940,8 +43940,14 @@ def _classify_attention(c):
         # The core fix. _detect_soft_block honors question_waiting/needs_approval
         # as guaranteed hits AND scores a terminal session whose last assistant
         # turn ended awaiting the human (a prose question the old flags missed).
+        #
+        # Liveness gate: a "needs you" block means a session is parked inside an
+        # LLM call waiting on the human. A DEAD process cannot be waiting — its
+        # last turn merely happened to end on a question. So both the guaranteed
+        # hit and the prose soft-block require is_live; otherwise an ended session
+        # is a false positive ("Needs you · awaiting your reply" on a corpse).
         sb = _detect_soft_block(c)
-        if sb and sb.get("guaranteed"):
+        if live and sb and sb.get("guaranteed"):
             _qt = sb.get("question_text") or ""
             return {
                 "kind": "question_blocked", "priority": 1,
@@ -44013,10 +44019,11 @@ def _classify_attention(c):
                 "has_structured": has_structured,
             }
 
-        # Prose soft-block: a terminal session ended its last turn with a
+        # Prose soft-block: a LIVE terminal session ended its last turn with a
         # question/checkpoint awaiting the human. This is the most common block
-        # type and the formal flags never caught it.
-        if sb and not sb.get("guaranteed"):
+        # type and the formal flags never caught it. Dead sessions are gated out
+        # above (a stopped process is not waiting on you).
+        if live and sb and not sb.get("guaranteed"):
             _qt = sb.get("question_text") or ""
             return {
                 "kind": "soft_block", "priority": 2,

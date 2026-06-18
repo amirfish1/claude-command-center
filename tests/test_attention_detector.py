@@ -85,6 +85,41 @@ def test_formal_needs_approval_is_guaranteed():
     assert sb and sb["guaranteed"]
 
 
+# ── Liveness gate — a DEAD session is never "needs you" ───────────────────────
+# _detect_soft_block is a pure prose/flag scorer (liveness-agnostic). The needs-
+# you classification lives in _classify_attention, which must require is_live:
+# an ended process cannot be parked in an LLM call waiting on the human, so a
+# trailing-question last turn on a dead session is a false positive.
+
+def test_ended_session_with_trailing_question_not_flagged():
+    """The core regression: an ended (is_live False) session whose last turn
+    ends on a prose question must NOT be classified needs-you."""
+    item = server._classify_attention(_row("Want me to proceed?"))
+    assert item is None or item.get("kind") not in (
+        "question_blocked", "soft_block", "sidecar_waiting"), (
+        "ended session with a trailing question must not surface as needs-you")
+
+
+def test_live_session_with_trailing_question_is_flagged():
+    """The live counterpart still surfaces — the gate only drops dead ones."""
+    item = server._classify_attention(_row("Want me to proceed?", is_live=True))
+    assert item and item["kind"] == "soft_block" and item["priority"] == 2
+
+
+def test_ended_formal_question_waiting_not_flagged():
+    """Even a formal guaranteed flag does not surface on a dead process."""
+    item = server._classify_attention(
+        _row("anything", question_waiting=True, question_text="Pick an option"))
+    assert item is None or item.get("kind") != "question_blocked"
+
+
+def test_live_formal_question_waiting_is_flagged():
+    item = server._classify_attention(
+        _row("anything", is_live=True,
+             question_waiting=True, question_text="Pick an option"))
+    assert item and item["kind"] == "question_blocked" and item["priority"] == 1
+
+
 # ── MUST NOT flag ─────────────────────────────────────────────────────────────
 
 def test_working_subagent_not_flagged():
@@ -264,9 +299,11 @@ def test_attention_feed_bounds_turn_reads(monkeypatch):
     now = time.time()
     rows = []
     for i in range(n):
-        # Every row is a terminal prose block → every row classifies as
+        # Every row is a LIVE terminal prose block → every row classifies as
         # soft_block, so without a cap the feed would read 300 file tails.
+        # (is_live is required now that the needs-you tiers gate on liveness.)
         rows.append(_row("Want me to proceed?", session_id=str(uuid.uuid4()),
+                         is_live=True,
                          jsonl_path=f"/nonexistent/{i}.jsonl",
                          folder_label="repo", modified=now - i))
     monkeypatch.setattr(server, "find_all_conversations", lambda **k: rows)
