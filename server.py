@@ -44504,11 +44504,25 @@ def compute_session_detail(session_id):
         except Exception:
             pass
     sb = _detect_soft_block(row)
+    # Cheap display fields so a card UI can render off this one-tail read instead
+    # of re-pulling the whole /api/sessions?all=1 list (O(1) stat + slug parse,
+    # no scan, no subprocess).
+    try:
+        _mtime = os.path.getmtime(path)
+    except OSError:
+        _mtime = None
+    try:
+        _label = _slug_to_label(os.path.basename(os.path.dirname(path)))
+    except Exception:
+        _label = None
     return {
         "ok": True,
         "session_id": sid,
         "state": _session_state_label(row),
         "is_live": bool(row.get("is_live")),
+        "mtime": _mtime,
+        "folder_label": _label,
+        "sidecar_in_flight": bool(row.get("sidecar_in_flight")),
         "question_text": (sb or {}).get("question_text", "") if sb else "",
         "soft_block": sb,
         "last_assistant_text": (tail_meta.get("last_assistant_text") or "")[:2000],
