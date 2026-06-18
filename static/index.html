@@ -61,6 +61,17 @@
     window.__CCC_CONVERSATION_POPOUT__ = params.get('ccc_popout') === 'conversation'
       || params.get('popout') === 'conversation';
     if (window.__CCC_CONVERSATION_POPOUT__) return;
+    // Optional local-only COO board launcher. Gated on a localStorage opt-in so
+    // public installs never load it (the button + board live under the
+    // gitignored static/morning/ plugin). Independent of the Morning flag.
+    try {
+      if (localStorage.getItem('ccc-coo-button') === '1') {
+        const cs = document.createElement('script');
+        cs.src = '/static/morning/coo-button.js';
+        cs.defer = true;
+        (document.head || document.documentElement).appendChild(cs);
+      }
+    } catch (e) {}
     const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
       window.matchMedia('(display-mode: window-controls-overlay)').matches ||
