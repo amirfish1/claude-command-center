@@ -1,0 +1,1 @@
+Added a **COO board** — an at-a-glance live-status view of the sessions you're tracking, opened from a new **COO** button in the topbar (left of Today) or the `/coo` route. Starts empty and tracks whichever sessions you add.
