@@ -3940,6 +3940,13 @@
    * drop-target highlight while a conv row is dragged over it, and a per-row ×
    * to send the row back to In progress. */
   #convList .conv-done-label { color: var(--text-muted); }
+  /* Empty-state hint — also the drop zone before the first item exists. */
+  #convList .conv-done-empty {
+    padding: 8px 12px; font-size: 11px; color: var(--text-muted);
+    opacity: 0.7; font-style: italic;
+    border: 1px dashed var(--border); border-radius: 6px; margin: 2px 6px 4px;
+    text-align: center;
+  }
   #convList .conv-done-section.drop-target {
     background: color-mix(in srgb, var(--accent, #58a6ff) 9%, transparent);
     border-radius: 6px;

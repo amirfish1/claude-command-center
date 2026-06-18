@@ -18505,9 +18505,11 @@
     // Done section (CCC-151): a purely MANUAL bucket rendered ABOVE In progress.
     // The user drags an In-progress row in (drop handler calls addDone) and
     // removes it via the per-row × (delegated click → removeDone). Mirrors the
-    // Ready-to-merge section's collapsible shape. Only shown when non-empty.
+    // Ready-to-merge section's collapsible shape. ALWAYS rendered (on the
+    // default tab) so there is a drop target for the FIRST item — a section that
+    // only appears once non-empty is impossible to drag the first row into.
     let _doneHtml = '';
-    if (_doneConvs.length > 0) {
+    {
       const _doneCollapsed = localStorage.getItem('ccc-done-collapsed') === '1';
       const _doneArrow = _doneCollapsed ? '▸' : '▾';
       const _doneRows = _doneConvs.map(c => {
@@ -18518,14 +18520,19 @@
           +   ' title="Move back to In progress" aria-label="Remove from Done">×</button>'
           + '</div>';
       }).join('');
+      // Empty-state hint doubles as the drop zone before any item exists.
+      const _doneBody = _doneConvs.length > 0
+        ? _doneRows
+        : '<div class="conv-done-empty">Drag a session here to mark it done</div>';
       _doneHtml =
-        '<div class="conv-done-section' + (_doneCollapsed ? ' collapsed' : '') + '" data-role="done-section">'
+        '<div class="conv-done-section' + (_doneCollapsed ? ' collapsed' : '')
+        +   (_doneConvs.length === 0 ? ' is-empty' : '') + '" data-role="done-section">'
         + '<button type="button" class="conv-done-header" data-role="done-toggle" aria-expanded="' + (!_doneCollapsed) + '">'
         +   '<span class="conv-done-arrow">' + _doneArrow + '</span>'
         +   '<span class="conv-done-label">Done</span>'
         +   '<span class="conv-done-count">' + _doneConvs.length + '</span>'
         + '</button>'
-        + '<div class="conv-done-list">' + _doneRows + '</div>'
+        + '<div class="conv-done-list">' + _doneBody + '</div>'
         + '</div>';
     }
     // GH Issues section: open issues + TODO/PARKING_LOT cards with no
