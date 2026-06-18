@@ -2701,6 +2701,18 @@
     });
 
     refreshSendEnabled();
+    // CCC-150: a waiting question blocks the agent, so the answer card is the
+    // one thing the user needs to act on. It mounts at the END of the conv view
+    // (appendChild), which on a long transcript is off-screen — so it looked
+    // like "the question UI doesn't open until I click on it." Bring it into
+    // view the moment it mounts. This runs once per question (the function
+    // early-returns when a card for the same session+nonce is already open).
+    try {
+      requestAnimationFrame(function () {
+        try { modal.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+        catch (_) { try { modal.scrollIntoView(); } catch (_) {} }
+      });
+    } catch (_) {}
   }
 
   function submitRelayedQuestionAnswers(modal, sendBtn, errEl, refreshSendEnabled) {
