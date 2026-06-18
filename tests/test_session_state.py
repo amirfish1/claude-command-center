@@ -163,6 +163,53 @@ class TestSessionStateLabel(unittest.TestCase):
         self.assertEqual(self.server._WORKING_GAP_WINDOW, 120)
 
 
+class TestEndedBlocked(unittest.TestCase):
+    """`ended_blocked` distinguishes a process that died WHILE blocked on a
+    human (real open question/approval, now orphaned) from a clean finish —
+    both read state=="ended", but only the former had a pending ask to the
+    user. No 5th state value; recency is the consumer's job (mtime is on row).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = _fresh_server()
+
+    def blocked(self, **over):
+        return self.server._session_ended_blocked(_row(**over))
+
+    def test_not_live_question_is_ended_blocked(self):
+        self.assertTrue(self.blocked(is_live=False, question_waiting=True))
+
+    def test_not_live_needs_approval_is_ended_blocked(self):
+        self.assertTrue(self.blocked(is_live=False, needs_approval=True))
+
+    def test_not_live_soft_block_text_is_ended_blocked(self):
+        self.assertTrue(self.blocked(
+            is_live=False, last_assistant_text="Want me to proceed with the fix?"))
+
+    def test_not_live_clean_stop_is_not_ended_blocked(self):
+        self.assertFalse(self.blocked(
+            is_live=False, last_assistant_text="All done, shipped it."))
+
+    def test_live_session_is_never_ended_blocked(self):
+        # A live blocked session is "waiting", not ended — ended_blocked False.
+        self.assertFalse(self.blocked(is_live=True, question_waiting=True))
+
+    def test_ended_blocked_pairs_with_state_ended(self):
+        row = _row(is_live=False, question_waiting=True)
+        self.assertEqual(self.server._session_state_label(row), "ended")
+        self.assertTrue(self.server._session_ended_blocked(row))
+
+    def test_list_path_stamps_ended_blocked(self):
+        blocked = _row(is_live=False, question_waiting=True)
+        clean = _row(is_live=False, last_assistant_text="All done.")
+        out = self.server._apply_session_query_params([blocked, clean], {})
+        self.assertEqual(out[0]["state"], "ended")
+        self.assertTrue(out[0]["ended_blocked"])
+        self.assertEqual(out[1]["state"], "ended")
+        self.assertFalse(out[1]["ended_blocked"])
+
+
 class TestStaleActiveReadsIdleEndToEnd(unittest.TestCase):
     """The reproduced #1 bug: a live session whose last tool finished 27 min
     ago (sidecar still says 'active' because the Stop hook never fired) must
