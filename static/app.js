@@ -5171,6 +5171,11 @@
   const TTS_TEXT_MAX_CHARS = 12000;
   let _ttsActive = false;
   let _ttsActivePaneId = null;
+  // CCC-157: the conversation selection captured on a TTS button's pointerdown
+  // (capture phase) — used as the read source when the live selection has been
+  // collapsed by the tap before `click` fires (mobile/touch).
+  let _ttsCapturedRange = null;
+  let _ttsCapturedAt = 0;
   // Which conversation the active utterance belongs to. Decouples playback
   // from the focused pane: when the user navigates away mid-read we keep
   // speaking, and we only "rearm on new turn" (resetTtsOnNewTurn) when a
@@ -5558,17 +5563,32 @@
 
   function selectedConversationTtsData(paneId) {
     const sel = window.getSelection && window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
     const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
-    if (!pane) return null;
-    const anchorEl = elementForSelectionNode(sel.anchorNode);
-    const focusEl = elementForSelectionNode(sel.focusNode);
-    const rangeEl = elementForSelectionNode(sel.getRangeAt(0).commonAncestorContainer);
-    const inPane = anchorEl && focusEl && pane.contains(anchorEl) && pane.contains(focusEl);
-    const inComposer = [anchorEl, focusEl, rangeEl].some(el => el && el.closest && el.closest('.conv-input-bar, .gc-reader-input-row'));
-    
-    if (inPane && !inComposer) {
-      return buildTtsDataFromRange(sel.getRangeAt(0));
+    // Live-selection path (desktop: the button's mousedown-preventDefault keeps
+    // the selection alive across the click).
+    if (sel && !sel.isCollapsed && sel.rangeCount && pane) {
+      const anchorEl = elementForSelectionNode(sel.anchorNode);
+      const focusEl = elementForSelectionNode(sel.focusNode);
+      const rangeEl = elementForSelectionNode(sel.getRangeAt(0).commonAncestorContainer);
+      const inPane = anchorEl && focusEl && pane.contains(anchorEl) && pane.contains(focusEl);
+      const inComposer = [anchorEl, focusEl, rangeEl].some(el => el && el.closest && el.closest('.conv-input-bar, .gc-reader-input-row'));
+      if (inPane && !inComposer) return buildTtsDataFromRange(sel.getRangeAt(0));
+    }
+    // Touch fallback (CCC-157): on mobile the tap collapses the live selection
+    // before `click` fires, so reuse the range captured on pointerdown. Bounded
+    // to a fresh capture and validated to still live in conversation content.
+    if (_ttsCapturedRange && (Date.now() - _ttsCapturedAt) < 2500) {
+      const r = _ttsCapturedRange;
+      const cEl = elementForSelectionNode(r.commonAncestorContainer);
+      const startEl = elementForSelectionNode(r.startContainer);
+      const endEl = elementForSelectionNode(r.endContainer);
+      const inView = startEl && endEl && document.contains(startEl) && document.contains(endEl)
+        && !!(cEl && cEl.closest && cEl.closest('.conversations-view, .gc-reader-body'))
+        && !(cEl.closest && cEl.closest('.conv-input-bar, .gc-reader-input-row'));
+      if (inView) {
+        const data = buildTtsDataFromRange(r);
+        if (data && data.text && data.text.trim()) return data;
+      }
     }
     return null;
   }
@@ -5997,6 +6017,19 @@
     $convTtsBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
     $convTtsBtn.addEventListener('click', () => readLastMessageAloud('p1'));
   }
+  // CCC-157: capture the conversation selection on any TTS button's
+  // pointer-DOWN (capture phase, before the tap collapses it on touch) so
+  // "select paragraph → tap speaker" reads the selection instead of silently
+  // falling back to the last message. Delegated so it covers every .tts-btn
+  // (conv panes, group-chat reader) and survives innerHTML rebuilds.
+  document.addEventListener('pointerdown', (ev) => {
+    if (!ev.target || !ev.target.closest || !ev.target.closest('.tts-btn')) return;
+    const sel = window.getSelection && window.getSelection();
+    if (sel && !sel.isCollapsed && sel.rangeCount && String(sel).trim()) {
+      try { _ttsCapturedRange = sel.getRangeAt(0).cloneRange(); _ttsCapturedAt = Date.now(); }
+      catch (_) { _ttsCapturedRange = null; }
+    }
+  }, true);
   if ($convMicBtn) {
     $convMicBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
     $convMicBtn.addEventListener('click', () => toggleSpeechRecognition('p1'));
