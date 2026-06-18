@@ -8239,6 +8239,49 @@
     return true;
   }
 
+  // CCC-147: the conversation popout has no live-status poller — its
+  // currentSession is per-pane and the reader boot path leaves it unset, so the
+  // dashboard's refreshLiveStatus/updateConvProcessIndicator never run here and
+  // the header showed no headless/terminal pills. Drive a dedicated,
+  // single-session /api/session-status poll and render the pills straight into
+  // the pane-proc slot, independent of the closure's liveStatus machinery. One
+  // cheap poll for the one popped-out session; claude-like sources only.
+  function _popoutProcPills() {
+    if (!CONV_POPOUT_MODE || !CONV_POPOUT_TARGET) return;
+    const sid = popoutParam('session_id') || CONV_POPOUT_TARGET;
+    const cwd = popoutParam('cwd') || CONV_POPOUT_REPO_PATH || '';
+    const src = popoutParam('source') || 'interactive';
+    const tick = async () => {
+      const slot = document.querySelector('[data-role="pane-proc"]');
+      if (!slot) return;
+      if (src === 'backlog' || src === 'pkood' || !sid) { slot.innerHTML = ''; return; }
+      let d = {};
+      try {
+        const params = new URLSearchParams({ session_id: sid, cwd });
+        const res = await fetch('/api/session-status?' + params.toString(), { cache: 'no-store' });
+        d = await res.json().catch(() => ({}));
+      } catch (_) { return; }  // keep the last render on a transient failure
+      const pill = (on, warn, label, title) =>
+        '<span class="ccc-proc-pill ' + (on ? (warn ? 'is-stale' : 'is-on') : 'is-off') + '"'
+        + ' title="' + escapeHtml(title) + '"><span class="ccc-proc-dot"></span>'
+        + escapeHtml(label) + '</span>';
+      const headOn = !!d.headless_present;
+      const stale = headOn && !!d.headless_stale;
+      const bgOn = !!d.bg_present;
+      const termOn = !!d.terminal_present || bgOn;
+      slot.innerHTML =
+        pill(headOn, stale, stale ? 'headless ⚠' : 'headless',
+          headOn ? 'A CCC-spawned headless agent is running (pid ' + (d.headless_pid || '?') + ')'
+                 : 'No CCC-spawned headless agent for this session')
+        + pill(termOn, false, bgOn ? 'terminal · Claude app' : 'terminal',
+          termOn ? 'A live terminal (TTY) is attached to this session'
+                 : 'No live terminal attached to this session');
+    };
+    tick();
+    setInterval(tick, 5000);
+  }
+  if (CONV_POPOUT_MODE) { try { _popoutProcPills(); } catch (_) {} }
+
   // Optimistic state overrides for archived/verified/pinned flags. When the user
   // archives, verifies, or pins a card we mutate the in-memory copy, but a /api/sessions
   // poll already in flight will return *pre-click* data and overwrite that

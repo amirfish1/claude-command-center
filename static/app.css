@@ -1468,11 +1468,13 @@
   }
   .ccc-breadcrumb .ccc-breadcrumb-popout svg { display: block; }
   /* Process-presence indicator (headless / terminal pills + freshness). */
-  .ccc-breadcrumb .ccc-breadcrumb-proc {
+  .ccc-breadcrumb .ccc-breadcrumb-proc,
+  .conv-pane-proc {
     flex: 0 0 auto;
     display: inline-flex; align-items: center; gap: 6px;
   }
-  .ccc-breadcrumb .ccc-proc-pill {
+  .conv-pane-proc:empty { display: none; }
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-pill {
     display: inline-flex; align-items: center; gap: 5px;
     height: 20px; padding: 0 8px;
     font: 600 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1481,47 +1483,47 @@
     border: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
     white-space: nowrap;
   }
-  .ccc-breadcrumb .ccc-proc-dot {
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-dot {
     width: 6px; height: 6px; border-radius: 50%;
     background: currentColor;
     box-shadow: 0 0 0 0 currentColor;
   }
   /* On — a live process exists. */
-  .ccc-breadcrumb .ccc-proc-pill.is-on {
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-pill.is-on {
     color: var(--ok, #3fb950);
     background: color-mix(in srgb, var(--ok, #3fb950) 12%, transparent);
     border-color: color-mix(in srgb, var(--ok, #3fb950) 35%, transparent);
   }
   /* Streaming — the headless pill while CCC live-tails its stdout as
      stream-json. Teal so it reads distinctly from the plain-green on-state. */
-  .ccc-breadcrumb .ccc-proc-pill.is-streaming {
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-pill.is-streaming {
     color: var(--accent-teal, #2bb6a6);
     background: color-mix(in srgb, var(--accent-teal, #2bb6a6) 14%, transparent);
     border-color: color-mix(in srgb, var(--accent-teal, #2bb6a6) 40%, transparent);
   }
   /* Off — no such process. Muted, dot hollow. */
-  .ccc-breadcrumb .ccc-proc-pill.is-off {
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-pill.is-off {
     color: var(--text-muted, var(--text-2));
     background: transparent;
     border-color: color-mix(in srgb, var(--text) 12%, transparent);
   }
-  .ccc-breadcrumb .ccc-proc-pill.is-off .ccc-proc-dot {
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-pill.is-off .ccc-proc-dot {
     background: transparent;
     box-shadow: inset 0 0 0 1px currentColor;
   }
   /* Stale — headless alive but another writer advanced the transcript. */
-  .ccc-breadcrumb .ccc-proc-pill.is-stale {
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-pill.is-stale {
     color: var(--warn, #d29922);
     background: color-mix(in srgb, var(--warn, #d29922) 14%, transparent);
     border-color: color-mix(in srgb, var(--warn, #d29922) 40%, transparent);
   }
-  .ccc-breadcrumb .ccc-proc-checked {
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-checked {
     flex: 0 0 auto;
     font-size: 10px;
     color: var(--text-muted, var(--text-2));
     white-space: nowrap;
   }
-  .ccc-breadcrumb .ccc-proc-refresh {
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-refresh {
     flex: 0 0 auto;
     margin-left: 2px;
     padding: 0;
@@ -1532,11 +1534,11 @@
     font-size: 12px; cursor: pointer;
     display: inline-flex; align-items: center; justify-content: center;
   }
-  .ccc-breadcrumb .ccc-proc-refresh:hover {
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-refresh:hover {
     background: color-mix(in srgb, var(--accent) 14%, transparent);
     color: var(--accent);
   }
-  .ccc-breadcrumb .ccc-proc-refresh.is-spinning {
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-refresh.is-spinning {
     animation: ccc-compact-spin 0.6s linear infinite;
     color: var(--accent);
   }

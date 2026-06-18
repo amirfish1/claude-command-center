@@ -654,6 +654,11 @@
         <div class="conv-pane-header" data-role="pane-header">
           <div class="conv-pane-titlebar" data-role="pane-titlebar">
             <span class="conv-pane-category" data-role="pane-category"></span>
+            <!-- Headless/terminal process pills, mirrored from the global
+                 breadcrumb so they show in the conversation popout where the
+                 main toolbar is hidden (CCC-147). Filled by
+                 updateConvProcessIndicator(); empty for non-claude sources. -->
+            <span class="conv-pane-proc ccc-breadcrumb-proc" data-role="pane-proc"></span>
             <span class="conv-pane-title" data-role="pane-title"></span>
           </div>
           <button class="conv-pane-close" data-role="pane-close" title="Close pane" aria-label="Close pane" style="display:none;">&times;</button>
