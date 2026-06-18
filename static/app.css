@@ -3858,6 +3858,7 @@
   #convList .conv-ghissues-section,
   #convList .conv-repo-search-section,
   #convList .conv-readytomerge-section,
+  #convList .conv-done-section,
   #convList .conv-inprogress-section { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 6px; }
   /* The first section in the list (whichever it is — typically GH Issues,
    * but the next section takes the spot if earlier ones are empty) loses
@@ -3865,6 +3866,7 @@
   #convList > .conv-ghissues-section:first-child,
   #convList > .conv-repo-search-section:first-child,
   #convList > .conv-readytomerge-section:first-child,
+  #convList > .conv-done-section:first-child,
   #convList > .conv-inprogress-section:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
   #convList .conv-repo-search-header {
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -3901,6 +3903,7 @@
   #convList .conv-archived-header,
   #convList .conv-ghissues-header,
   #convList .conv-readytomerge-header,
+  #convList .conv-done-header,
   #convList .conv-inprogress-header {
     width: 100%; display: flex; align-items: center; gap: 8px;
     padding: 8px 14px; background: transparent; border: 0; cursor: pointer;
@@ -3910,14 +3913,17 @@
   #convList .conv-archived-header:hover,
   #convList .conv-ghissues-header:hover,
   #convList .conv-readytomerge-header:hover,
+  #convList .conv-done-header:hover,
   #convList .conv-inprogress-header:hover { color: var(--text); }
   #convList .conv-archived-arrow,
   #convList .conv-ghissues-arrow,
   #convList .conv-readytomerge-arrow,
+  #convList .conv-done-arrow,
   #convList .conv-inprogress-arrow { font-size: 11px; opacity: 0.7; }
   #convList .conv-archived-count,
   #convList .conv-ghissues-count,
   #convList .conv-readytomerge-count,
+  #convList .conv-done-count,
   #convList .conv-inprogress-count {
     margin-left: auto;
     background: var(--bg); border: 1px solid var(--border);
@@ -3927,7 +3933,30 @@
   #convList .conv-archived-section.collapsed .conv-archived-list,
   #convList .conv-ghissues-section.collapsed .conv-ghissues-list,
   #convList .conv-readytomerge-section.collapsed .conv-readytomerge-list,
+  #convList .conv-done-section.collapsed .conv-done-list,
   #convList .conv-inprogress-section.collapsed .conv-inprogress-list { display: none; }
+  /* Done section (CCC-151): a manual "moved out of In progress" bucket. Muted
+   * neutral label (it's an archive-ish parking spot, not an action item), a
+   * drop-target highlight while a conv row is dragged over it, and a per-row ×
+   * to send the row back to In progress. */
+  #convList .conv-done-label { color: var(--text-muted); }
+  #convList .conv-done-section.drop-target {
+    background: color-mix(in srgb, var(--accent, #58a6ff) 9%, transparent);
+    border-radius: 6px;
+    outline: 1px dashed color-mix(in srgb, var(--accent, #58a6ff) 55%, transparent);
+    outline-offset: -2px;
+  }
+  #convList .conv-done-row { position: relative; }
+  #convList .conv-done-remove {
+    position: absolute; top: 50%; right: 8px; transform: translateY(-50%);
+    width: 18px; height: 18px; line-height: 16px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border); border-radius: 50%;
+    background: var(--bg); color: var(--text-muted);
+    font-size: 13px; cursor: pointer; opacity: 0; transition: opacity 0.12s, color 0.12s;
+  }
+  #convList .conv-done-row:hover .conv-done-remove { opacity: 1; }
+  #convList .conv-done-remove:hover { color: var(--text); border-color: var(--text-muted); }
   .conv-item .live-dot {
     width: 7px; height: 7px; border-radius: 50%;
     background: var(--green); animation: pulse 2s infinite;
