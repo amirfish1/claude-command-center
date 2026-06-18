@@ -2390,6 +2390,7 @@
     updateConvProcessIndicator();
     if (typeof updateSplitToolbar === 'function') updateSplitToolbar();
     syncRelayedQuestionModal();
+    markStaleStreamingBubbles();
     // A session that just went from live → ended needs its outcome banner
     // recomputed even when no new transcript events arrived.
     try { updateSessionOutcomeBanner(getConvViewForPane(activePaneId()) || $conversationsView); } catch (_) {}
@@ -23548,6 +23549,21 @@
     }
   }
 
+  // CCC-155: a STALE headless process (pid alive but producing no output) keeps
+  // the SSE stream open silently, so the streaming bubble never gets the
+  // completion handoff and pulses "streaming" forever — it looks stuck. When
+  // liveStatus reports the headless as stale, settle any still-active bubble in
+  // the focused view (stop the dot, append "· stalled") so it stops claiming to
+  // stream. ensureStreamingBubble clears this if blocks start flowing again.
+  function markStaleStreamingBubbles() {
+    if (!liveStatus || !liveStatus.headlessStale) return;
+    const $view = getConvView();
+    if (!$view) return;
+    $view.querySelectorAll('.stream-bubble:not(.stream-bubble-stalled)').forEach(node => {
+      node.classList.add('stream-bubble-stalled');
+    });
+  }
+
   function ensureStreamingBubble(msgId, paneId, opts) {
     const $view = paneId ? getConvViewForPane(paneId) : getConvView();
     if (!$view) return null;
@@ -23608,6 +23624,10 @@
     }
     _streamingBubble = node;
     _streamingMsgId = msgId || _streamingMsgId;
+    // Streaming resumed on a bubble we'd marked stalled (CCC-155) — reactivate.
+    if (node.classList.contains('stream-bubble-stalled')) {
+      node.classList.remove('stream-bubble-stalled');
+    }
     // Re-anchor to the bottom in case JSONL events were appended after us.
     if (node.parentNode === $view && node !== $view.lastElementChild) {
       $view.appendChild(node);

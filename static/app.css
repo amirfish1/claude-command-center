@@ -3117,6 +3117,17 @@
     opacity: 0.7;
   }
   .stream-bubble-settled .live-badge-dot { animation: none; opacity: 0.5; }
+  /* CCC-155: a stalled stream (headless went unresponsive mid-stream) — stop
+     the pulsing dot and flag it so a stuck bubble doesn't read as "streaming". */
+  .stream-bubble-stalled { border-style: solid; opacity: 0.75; }
+  .stream-bubble-stalled .live-badge-dot {
+    animation: none; opacity: 0.6; background: var(--yellow, #d29922);
+  }
+  .stream-bubble-stalled .stream-bubble-header { color: var(--yellow, #d29922); }
+  .stream-bubble-stalled .stream-bubble-header span:last-child::after {
+    content: ' · stalled (headless not responding)';
+    opacity: 0.85;
+  }
   .conv-sticky-header .csh-col-activity .session-timeline {
     margin-top: 0;
     flex: 1 1 auto; min-height: 0;
