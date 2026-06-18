@@ -2739,6 +2739,15 @@ _LIVE_MTIME_WINDOW = 600
 # longer; smaller tracks active work more tightly.
 _SIDECAR_LIVE_WINDOW = 1800
 
+# How long a sticky `sidecar_status == "active"` (last-completed-tool marker,
+# only cleared when the Stop hook fires) still counts as "working" in
+# `_session_state_label`. Bridges the between-tools think gap — where no
+# `_in_flight.json` exists yet the turn is mid-flight — without letting an
+# interrupted/abandoned turn read "working" for the full liveness window. Real
+# tool execution (sidecar_in_flight / pending_tool / sub-agent) counts
+# regardless of this bound; this only gates the sticky `active` proxy.
+_WORKING_GAP_WINDOW = 120
+
 
 def _archive_session_is_live(session_id):
     """A session is "live" if any sidecar marker exists for it (Claude only),
@@ -39483,6 +39492,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             status["bg_pid"] = _bg.get("pid")
                 except Exception:
                     pass
+            # Single-source-of-truth coarse state so the per-session live poll
+            # refreshes working/idle/waiting/ended in step with the bulk list
+            # and the detail endpoint. session_live_status uses `live`; map it
+            # to the `is_live` key the classifier reads.
+            status["state"] = _session_state_label({
+                "is_live": status.get("live"),
+                "pending_tool": status.get("pending_tool"),
+                "sidecar_in_flight": status.get("sidecar_in_flight"),
+                "subagent_in_flight_count": status.get("subagent_in_flight_count"),
+                "sidecar_status": status.get("sidecar_status"),
+                "sidecar_ts": status.get("sidecar_ts"),
+                "question_waiting": status.get("question_waiting"),
+                "needs_approval": status.get("needs_approval"),
+                "last_assistant_text": status.get("last_assistant_text"),
+                "last_event_type": status.get("last_event_type"),
+            })
             self.send_json(status)
         elif re.match(r"^/api/conversations/[^/]+/files$", path):
             conv_id = path.split("/")[-2]
@@ -43919,24 +43944,42 @@ def _detect_soft_block(c):
 
 
 def _session_state_label(c):
-    """Coarse session state for /api/sessions ?state= filtering.
+    """Coarse session state — the single source of truth every consumer binds
+    to (`/api/session/<id>.state`, the `/api/sessions` `?state=` filter and
+    per-row `state` field, and the frontend kanban WIP test).
 
-    working — live and actively executing (tool pending, mid-write, or a
-              sub-agent in flight).
-    waiting — needs the human (formal flag or detected soft block).
-    idle    — neither.
+    Four states, precedence top-down:
+
+    waiting — blocked on a human (formal AskUserQuestion / permission marker,
+              or a detected soft block). Wins even over a live tool, since an
+              AskUserQuestion is "in flight" yet the agent is parked on us.
+    working — live AND a turn/tool is actually executing right now: a real
+              in-flight signal (`sidecar_in_flight`, transcript `pending_tool`,
+              or a sub-agent), OR the between-tools think gap where the sidecar
+              still reads "active" but only if it was touched within
+              `_WORKING_GAP_WINDOW`. The freshness bound is the fix for the #1
+              reliability bug: `sidecar_status` is a sticky last-hook-write that
+              only flips to "waiting" when the Stop hook fires, so an
+              interrupted/abandoned turn left it "active" and — paired with the
+              30-min liveness window — read "working" for up to half an hour.
+    idle    — live, but nothing in flight (Stop fired, or sitting at the prompt).
+    ended   — not live (process gone / liveness window expired).
     """
-    if c.get("is_live") and (
-        c.get("pending_tool")
-        or c.get("sidecar_in_flight")
-        or (c.get("subagent_in_flight_count") or 0) > 0
-        or c.get("sidecar_status") == "active"
-    ):
-        return "working"
     if (c.get("question_waiting") or c.get("needs_approval")
             or _detect_soft_block(c)):
         return "waiting"
-    return "idle"
+    if c.get("is_live"):
+        active_fresh = (
+            c.get("sidecar_status") == "active"
+            and (time.time() - (c.get("sidecar_ts") or 0)) < _WORKING_GAP_WINDOW
+        )
+        if (c.get("pending_tool")
+                or c.get("sidecar_in_flight")
+                or (c.get("subagent_in_flight_count") or 0) > 0
+                or active_fresh):
+            return "working"
+        return "idle"
+    return "ended"
 
 
 def _classify_attention(c):
@@ -44535,13 +44578,22 @@ def _apply_session_query_params(rows, qs):
 
     Optional, all default to no-op so the existing payload is unchanged:
       ?since=<epoch>            keep rows with modified/mtime >= since
-      ?state=waiting|working|idle  keep rows whose _session_state_label matches
+      ?state=waiting|working|idle|ended  keep rows whose _session_state_label matches
       ?limit=N                 cap row count (after the rows' own sort)
       ?fields=a,b,c            project each row to a CSV subset (session_id kept)
     """
     if not isinstance(rows, list):
         return rows
     out = rows
+
+    # Stamp the single-source-of-truth coarse state on every row so the
+    # frontend kanban binds to it instead of re-deriving working/idle from
+    # sidecar_status (which diverged: server's 30-min window vs the board's
+    # 5-min one). Pure string/flag work on fields already merged onto the row
+    # — no subprocess, no transcript parse — so it's safe on the list path.
+    for r in out:
+        if isinstance(r, dict):
+            r["state"] = _session_state_label(r)
 
     since_raw = (qs.get("since", [""])[0] or "").strip()
     if since_raw:
@@ -44553,8 +44605,8 @@ def _apply_session_query_params(rows, qs):
             pass
 
     state = (qs.get("state", [""])[0] or "").strip().lower()
-    if state in ("waiting", "working", "idle"):
-        out = [r for r in out if _session_state_label(r) == state]
+    if state in ("waiting", "working", "idle", "ended"):
+        out = [r for r in out if r.get("state") == state]
 
     limit_raw = (qs.get("limit", [""])[0] or "").strip()
     if limit_raw:

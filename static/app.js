@@ -1631,7 +1631,7 @@
   // chips and bash-command pills keep updating between archive scans.
   const _sessionLiveOverlay = new Map();
   const _LIVE_OVERLAY_KEYS = [
-    'is_live', 'sidecar_status', 'sidecar_has_writes', 'sidecar_tool', 'sidecar_file',
+    'is_live', 'state', 'sidecar_status', 'sidecar_has_writes', 'sidecar_tool', 'sidecar_file',
     'sidecar_ts', 'sidecar_in_flight', 'pending_tool', 'pending_file', 'last_event_type',
     'needs_approval', 'needs_approval_message', 'question_waiting', 'question_text',
     'question_header', 'question_preamble', 'question_options', 'question_option_details',
@@ -2337,6 +2337,10 @@
         );
         if (row) {
           row.is_live = !!data.live;
+          // Server-emitted single-source-of-truth state (working/idle/waiting/
+          // ended). The kanban in-card "agent running" indicator binds to this
+          // instead of re-deriving from sidecar_status + a divergent age gate.
+          if (Object.prototype.hasOwnProperty.call(data, 'state')) row.state = data.state || null;
           row.sidecar_tool = data.sidecar_tool || null;
           row.sidecar_file = data.sidecar_file || null;
           row.sidecar_status = data.sidecar_status || null;
@@ -2363,6 +2367,7 @@
       }
       _rememberLiveOverlay(currentSession.id, {
         is_live: !!data.live,
+        state: Object.prototype.hasOwnProperty.call(data, 'state') ? (data.state || null) : undefined,
         sidecar_tool: data.sidecar_tool || null,
         sidecar_file: data.sidecar_file || null,
         sidecar_status: data.sidecar_status || null,
@@ -10270,10 +10275,8 @@
     const isGeminiRow = c.source === 'gemini' || c.engine === 'gemini';
     const isCursorRow = c.source === 'cursor' || c.engine === 'cursor';
     const isAntigravityRow = c.source === 'antigravity' || c.engine === 'antigravity';
-    const activityAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
     const activityTs = c.sidecar_ts || c.last_interacted || c.modified || 0;
     const rowActivityAge = activityTs ? Math.max(0, Math.floor(Date.now() / 1000 - activityTs)) : 9999;
-    const midTurn = c.last_event_type === 'assistant' || ((isCodexRow || isGeminiRow || isCursorRow || isAntigravityRow) && c.last_event_type === 'user');
     const isQuestionWaiting = c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion'));
     if (isQuestionWaiting) return { key: 'waiting', label: 'QUESTION' };
     if (c.needs_approval) return { key: 'waiting', label: 'needs approval' };
@@ -10287,10 +10290,11 @@
       && (!!c.pending_tool || ((c.last_event_type === 'user' || c.last_event_type === 'assistant') && rowActivityAge < 30 * 60));
     const antigravityOpenTurn = isAntigravityRow && c.is_live && !c.sidecar_status
       && (!!c.pending_tool || ((c.last_event_type === 'user' || c.last_event_type === 'assistant') && rowActivityAge < 30 * 60));
-    const isActiveSidecar = c.is_live && c.sidecar_status === 'active';
-    const isWip = !!c.gh_in_progress || !!c.pending_spawn || (c.is_live && !!c.pending_tool)
-      || codexOpenTurn || geminiOpenTurn || cursorOpenTurn || antigravityOpenTurn
-      || (isActiveSidecar && (activityAge < 300 || midTurn || !c.sidecar_ts));
+    // Claude WIP comes from the server's single-source-of-truth `state` (bounded
+    // at _WORKING_GAP_WINDOW); the per-engine openTurn branches cover Codex /
+    // Gemini / Cursor / Antigravity, whose liveness the server `state` doesn't model.
+    const isWip = !!c.gh_in_progress || !!c.pending_spawn || c.state === 'working'
+      || codexOpenTurn || geminiOpenTurn || cursorOpenTurn || antigravityOpenTurn;
     if (isWip) return { key: 'working', label: 'WIP' };
     if (c.source === 'pkood') {
       const ps = (c.pkood_status || '').toUpperCase();
@@ -10321,10 +10325,11 @@
     // Live activity wins visually — show first.
     const liveTool = c.is_live && (c.pending_tool || c.sidecar_tool || '');
     const isCodexRow = c.source === 'codex' || c.engine === 'codex';
-    const wipActive = c.is_live && (
-      !!c.pending_spawn || !!c.pending_tool || !!c.sidecar_in_flight
-        || c.sidecar_status === 'active'
-    );
+    // Server `state` is the single source of truth for working (bounded at
+    // _WORKING_GAP_WINDOW); pending_spawn is a spawn-in-progress flag, not a
+    // session state, so it's OR'd in separately. Codex rows take the
+    // codex_state branch below.
+    const wipActive = c.state === 'working' || (c.is_live && !!c.pending_spawn);
     if (isCodexRow && c.codex_state) {
       const st = c.codex_state;
       if (st === 'working') {
@@ -17506,11 +17511,8 @@
           : ('🤖 ' + _subCount);
         signals += '<span class="conv-signal subagents' + (_subInFlight > 0 ? ' in-flight' : '') + '" title="' + escapeAttr(_subTip) + '">' + _subInner + '</span>';
       }
-      const _activityAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
       const _rowActivityTs = c.sidecar_ts || c.last_interacted || c.modified || 0;
       const _rowActivityAge = _rowActivityTs ? Math.max(0, Math.floor(Date.now() / 1000 - _rowActivityTs)) : 9999;
-      const _midTurn = c.last_event_type === 'assistant' || ((isCodexRow || isGeminiRow || isCursorRow || isAntigravityRow) && c.last_event_type === 'user');
-      const _isActiveSidecar = c.is_live && c.sidecar_status === 'active';
       const _isQuestionWaiting = c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion'));
       const _isWaitingForUser = c.is_live && (c.needs_approval || _isQuestionWaiting);
       const _knownActivityTool = c.sidecar_tool || c.pending_tool || '';
@@ -17557,18 +17559,15 @@
       // calmer separate chip below instead of dressing the row up like
       // live work.
       //
-      // Active-sidecar branch: cap at 30 min of staleness. The old
-      // `_isActiveSidecar && (_activityAge < 300 || _midTurn || !c.sidecar_ts)`
-      // form let WIP stick *indefinitely* on a session whose sidecar
-      // got wedged in `active` and whose last event was an assistant
-      // turn (`_midTurn` is true for any completed turn). Once nothing
-      // has happened for half an hour, the sidecar is stale and the
-      // session is not working — drop WIP regardless of midTurn /
-      // missing sidecar_ts.
-      const _CLAUDE_WIP_MAX_AGE = 30 * 60;
-      const _claudeWipFromSidecar = _isActiveSidecar
-        && _activityAge < _CLAUDE_WIP_MAX_AGE
-        && (_activityAge < 300 || _midTurn || !c.sidecar_ts);
+      // Trust the server's single-source-of-truth `state` for Claude WIP
+      // instead of re-deriving from the sticky `sidecar_status==='active'`
+      // marker. That marker only flips to "waiting" when the Stop hook fires,
+      // so an interrupted turn left it "active" and — paired with a 30-min
+      // staleness cap and the `_midTurn` escape hatch — read WIP for up to
+      // half an hour after the agent stopped. The server now bounds the same
+      // signal at _WORKING_GAP_WINDOW (120s) and exposes it as `state`, so the
+      // 5-min-board-vs-30-min-server split is gone: both read one value.
+      const _claudeWipFromSidecar = c.state === 'working';
       // Distinguish "agent is actively running" from "agent paused
       // waiting for the user". They render very differently — running
       // is the yellow pulsing WIP chip, waiting is a calm cyan WAITING /

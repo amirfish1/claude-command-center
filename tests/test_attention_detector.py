@@ -165,8 +165,25 @@ def test_state_label_waiting():
 
 
 def test_state_label_idle():
+    # idle = LIVE but nothing in flight (Stop fired / sitting at the prompt).
     assert server._session_state_label(
-        _row("All done, nothing pending.")) == "idle"
+        _row("All done, nothing pending.", is_live=True)) == "idle"
+
+
+def test_state_label_ended():
+    # ended = not live (process gone / liveness window expired). _row defaults
+    # to is_live=False.
+    assert server._session_state_label(
+        _row("All done, nothing pending.")) == "ended"
+
+
+def test_state_label_stale_active_is_idle_not_working():
+    # The #1 reliability bug: a live session whose last tool finished long ago
+    # left sidecar_status=='active' on disk (Stop hook never fired). Bounded by
+    # _WORKING_GAP_WINDOW, that must read idle, not working.
+    assert server._session_state_label(_row(
+        "interrupted mid-run", is_live=True, sidecar_status="active",
+        sidecar_ts=time.time() - 27 * 60)) == "idle"
 
 
 # ── Turn reader collapses tool calls cheaply ─────────────────────────────────
