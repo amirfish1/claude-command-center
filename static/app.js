@@ -13149,21 +13149,39 @@
   // renderSidebar / renderArchiveList directly so they stay immediate.
   let _sidebarRenderRaf = 0;
   let _sidebarRenderPendingWhilePaused = false;
+  // CCC-149: while the pointer is over a row's hover-revealed action buttons
+  // (archive / pin / verify), hold off POLL-driven sidebar rebuilds.
+  // renderSidebar() replaces $convList.innerHTML wholesale, so a poll tick
+  // landing between the user's mousedown and mouseup destroyed the button
+  // mid-click — the first archive click did nothing. The window is refreshed on
+  // pointer movement and auto-expires, so a parked cursor doesn't freeze the
+  // list. User-initiated renders bypass this (they don't go through the
+  // scheduler), so the archive's own re-render still runs immediately.
+  let _convRowActionHoverUntil = 0;
+  document.addEventListener('pointermove', (ev) => {
+    const t = ev.target;
+    if (t && t.closest && t.closest('.conv-row-actions')) {
+      _convRowActionHoverUntil = Date.now() + 1200;
+    }
+  }, true);
+  function _pausePeriodicSidebarRender() {
+    return shouldPausePeriodicUiWork() || Date.now() < _convRowActionHoverUntil;
+  }
   function _flushDeferredSidebarRenderIfAny() {
     if (!_sidebarRenderPendingWhilePaused) return;
-    if (shouldPausePeriodicUiWork()) return;
+    if (_pausePeriodicSidebarRender()) return;
     _sidebarRenderPendingWhilePaused = false;
     _scheduleSidebarRender();
   }
   function _scheduleSidebarRender() {
-    if (shouldPausePeriodicUiWork()) {
+    if (_pausePeriodicSidebarRender()) {
       _sidebarRenderPendingWhilePaused = true;
       return;
     }
     if (_sidebarRenderRaf) return;
     _sidebarRenderRaf = requestAnimationFrame(() => {
       _sidebarRenderRaf = 0;
-      if (shouldPausePeriodicUiWork()) {
+      if (_pausePeriodicSidebarRender()) {
         _sidebarRenderPendingWhilePaused = true;
         return;
       }
