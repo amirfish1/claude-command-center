@@ -16750,10 +16750,6 @@
     // terminal pill instead of reporting "no process" (CCC-104).
     const bgOn = !!ls.bgPresent;
     const termOn = !!ls.terminalPresent || bgOn;
-    const pill = (on, warn, label, title) =>
-      '<span class="ccc-proc-pill ' + (on ? (warn ? 'is-stale' : 'is-on') : 'is-off') + '"'
-      + ' title="' + escapeHtml(title) + '">'
-      + '<span class="ccc-proc-dot"></span>' + escapeHtml(label) + '</span>';
     const headTitle = headOn
       ? (stale
           ? 'A CCC-spawned headless agent is running but STALE — another writer advanced the transcript; it will be auto-retired'
@@ -16778,16 +16774,27 @@
       && currentSession && _spawnLiveSid === currentSession.id);
     const headActive = headOn || streaming;
     const headLabel = (stale ? 'headless ⚠' : 'headless') + (streaming ? ' · stream-json' : '');
-    const headStateCls = headActive ? (stale ? 'is-stale' : 'is-on') : 'is-off';
     const headPillTitle = streaming
       ? headTitle + ' — CCC is live-tailing its stdout as stream-json (block-level)'
       : headTitle + (headOn ? ' — reading the JSONL transcript, not stream-tailing' : '');
-    const headPill = '<span class="ccc-proc-pill ' + headStateCls + (streaming ? ' is-streaming' : '') + '"'
-      + ' title="' + escapeHtml(headPillTitle) + '">'
-      + '<span class="ccc-proc-dot"></span>' + escapeHtml(headLabel) + '</span>';
-    el.innerHTML = headPill
-      + pill(termOn, false, bgOn ? 'terminal · Claude app' : 'terminal', termTitle)
-      + (ago ? '<span class="ccc-proc-checked" title="' + escapeHtml(checkedTitle) + '">checked ' + escapeHtml(ago) + (clock ? ' · ' + escapeHtml(clock) : '') + '</span>' : '')
+    // CCC-156: one merged pill listing only the ACTIVE run modes (headless /
+    // stream-json / terminal) instead of two separate pills with greyed-out
+    // off-states — saves horizontal space. And the clock alone conveys
+    // freshness, so drop the redundant "checked just now ·" prefix, keep time.
+    const modes = [];
+    if (headActive) modes.push(headLabel);
+    if (termOn) modes.push(bgOn ? 'terminal · Claude app' : 'terminal');
+    const procLabel = modes.length ? modes.join(' · ') : 'no process';
+    const procCls = modes.length ? (stale ? 'is-stale' : 'is-on') : 'is-off';
+    const procTitle = [headActive ? headPillTitle : '', termOn ? termTitle : '']
+      .filter(Boolean).join('  •  ') || 'No headless agent or terminal attached to this session';
+    const mergedPill = '<span class="ccc-proc-pill ' + procCls + (streaming ? ' is-streaming' : '') + '"'
+      + ' title="' + escapeHtml(procTitle) + '">'
+      + '<span class="ccc-proc-dot"></span>' + escapeHtml(procLabel) + '</span>';
+    el.innerHTML = mergedPill
+      + (clock
+          ? '<span class="ccc-proc-checked" title="' + escapeHtml(checkedTitle) + '">' + escapeHtml(clock) + '</span>'
+          : (ago ? '<span class="ccc-proc-checked" title="' + escapeHtml(checkedTitle) + '">checked ' + escapeHtml(ago) + '</span>' : ''))
       + '<button type="button" class="ccc-proc-refresh" title="Refresh this session\'s headless / terminal state now" aria-label="Refresh state">↻</button>';
   }
 
