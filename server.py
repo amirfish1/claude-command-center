@@ -39991,6 +39991,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/coo" or path == "/coo-board.html":
+            # COO board — at-a-glance live status of the sessions you track.
+            # Narrow route (the generic static handler refuses arbitrary
+            # *.html), mirroring /throughput and /group-chat-live.html.
+            try:
+                body = (STATIC_DIR / "coo-board.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "coo-board.html missing", "detail": str(e)}, 404)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/group-chat-live.html":
             # Standalone group-chat live view. Keep this as a narrow route
             # instead of allowing arbitrary /static/*.html files.
@@ -40060,11 +40079,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "version": __version__,
                 "morning": MORNING_ENABLED,
-                # Local-only COO board launcher. True iff the gitignored board
-                # file is present on disk, so the topbar button shows in every
-                # local browser/window with no per-browser opt-in — and stays
-                # absent on public installs, which never ship the board.
-                "coo": (MORNING_STATIC_DIR / "coo-board.html").exists(),
+                # COO board launcher. True when the board file is present, so
+                # the topbar button shows wherever the board ships.
+                "coo": (STATIC_DIR / "coo-board.html").exists(),
             })
         elif path == "/api/healthcheck":
             # Surface the state of every external dependency CCC delegates to.

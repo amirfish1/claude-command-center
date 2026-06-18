@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>COO Board</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --line:#272e3a;
+    --txt:#e6edf3; --dim:#8b949e; --accent:#58a6ff;
+    --working:#d29922; --blocked:#f85149; --review:#a371f7;
+    --idle:#6e7681; --ended:#484f58;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{padding:18px 22px 6px;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  h1{margin:0;font-size:20px;font-weight:700}
+  .sub{color:var(--dim);font-size:12px}
+  .counts{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  .pill{padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;
+    background:var(--panel2);border:1px solid var(--line)}
+  .addbar{display:flex;gap:8px;padding:6px 22px 12px;align-items:center;flex-wrap:wrap}
+  .addbar input{background:var(--panel);border:1px solid var(--line);color:var(--txt);
+    border-radius:7px;padding:6px 10px;font-size:13px;min-width:320px}
+  .addbar button{background:var(--accent);color:#04121f;border:0;border-radius:7px;
+    padding:6px 13px;font-size:13px;font-weight:700;cursor:pointer}
+  .addbar .hint{color:var(--dim);font-size:11px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));
+    gap:12px;padding:6px 22px 40px}
+  .card{position:relative;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:13px 14px;border-left:4px solid var(--idle);
+    display:flex;flex-direction:column;gap:7px;cursor:pointer;
+    transition:border-color .12s,transform .12s}
+  .card:hover{border-color:var(--accent)}
+  .card:active{transform:translateY(1px)}
+  .card.working{border-left-color:var(--working)}
+  .card.blocked{border-left-color:var(--blocked)}
+  .card.review{border-left-color:var(--review)}
+  .card.idle{border-left-color:var(--idle)}
+  .card.ended{border-left-color:var(--ended);opacity:.7}
+  .top{display:flex;align-items:center;gap:8px;padding-right:18px}
+  .title{font-weight:700;font-size:14px;flex:1;min-width:0}
+  .repo{font-size:11px;color:var(--dim);background:var(--panel2);
+    padding:1px 7px;border-radius:5px;white-space:nowrap}
+  .badge{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+    padding:2px 8px;border-radius:5px;color:#0d1117;white-space:nowrap}
+  .badge.working{background:var(--working)} .badge.blocked{background:var(--blocked)}
+  .badge.review{background:var(--review)} .badge.idle{background:var(--idle);color:#fff}
+  .badge.ended{background:var(--ended);color:#fff}
+  .xbtn{position:absolute;top:8px;right:9px;width:18px;height:18px;line-height:16px;
+    text-align:center;border-radius:5px;color:var(--dim);cursor:pointer;font-size:13px;
+    border:1px solid transparent}
+  .xbtn:hover{color:var(--blocked);border-color:var(--line);background:var(--panel2)}
+  .where{font-size:11.5px;font-weight:600}
+  .where.blocked{color:var(--blocked)} .where.review{color:var(--review)}
+  .where.working{color:var(--working)} .where.idle,.where.ended{color:var(--dim)}
+  .coo{font-size:12.5px;color:var(--txt)}
+  .coo b{color:var(--accent);font-weight:600}
+  .meta{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--dim);
+    border-top:1px solid var(--line);padding-top:6px;margin-top:1px}
+  .snip{font-size:11.5px;color:var(--dim);font-style:italic;max-height:34px;overflow:hidden}
+  .id{font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--ended)}
+  footer{padding:8px 22px 24px;color:var(--dim);font-size:11px}
+  a{color:var(--accent);text-decoration:none}
+  /* In-page conversation drawer (replaces the old new-tab popout) */
+  :root{--drawer-w:40vw}
+  #drawer{position:fixed;top:0;right:0;height:100vh;width:var(--drawer-w);
+    min-width:320px;max-width:90vw;background:var(--panel);border-left:1px solid var(--line);
+    box-shadow:-12px 0 30px rgba(0,0,0,.45);display:flex;flex-direction:column;
+    transform:translateX(100%);transition:transform .16s ease;z-index:50}
+  body.drawer-open #drawer{transform:translateX(0)}
+  body.drawer-open .grid{margin-right:var(--drawer-w)}
+  #drawer .dhead{display:flex;align-items:center;gap:10px;padding:8px 12px;
+    border-bottom:1px solid var(--line);background:var(--panel2)}
+  #drawer .dtitle{font-weight:700;font-size:13px;flex:1;min-width:0;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #drawer .dopen,#drawer .dclose{cursor:pointer;color:var(--dim);border:1px solid var(--line);
+    background:var(--bg);border-radius:6px;padding:2px 9px;font-size:12px;line-height:18px}
+  #drawer .dopen:hover{color:var(--accent);border-color:var(--accent)}
+  #drawer .dclose:hover{color:var(--blocked);border-color:var(--blocked)}
+  #drawer iframe{flex:1;width:100%;border:0;background:var(--bg)}
+  #drawer .dresize{position:absolute;top:0;left:-3px;width:7px;height:100%;
+    cursor:col-resize;z-index:51}
+  #drawer .dresize:hover{background:var(--accent);opacity:.35}
+  body.drawer-resizing{user-select:none}
+  body.drawer-resizing #drawer iframe{pointer-events:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>COO Board</h1>
+  <span class="sub">live · auto-refresh 30s (paused when hidden) · refreshed <span id="clock">—</span> · <b>last COO sweep <span id="swept">—</span></b></span>
+  <div class="counts" id="counts"></div>
+</header>
+<div class="addbar">
+  <input id="addInput" list="sessList" placeholder="Add a session — pick by name or paste a session id…" autocomplete="off">
+  <datalist id="sessList"></datalist>
+  <button id="addBtn">＋ Add</button>
+  <span class="hint">badges are live from <code>/api/attention</code> + <code>/api/sessions</code>. ✕ removes a card. Your list is saved in this browser.</span>
+</div>
+<div class="grid" id="grid"></div>
+<aside id="drawer" aria-hidden="true">
+  <div class="dresize" id="drawerResize" title="drag to resize"></div>
+  <div class="dhead">
+    <span class="dtitle" id="drawerTitle">—</span>
+    <span class="dopen" id="drawerOpenTab" title="open in new tab">↗ tab</span>
+    <span class="dclose" id="drawerClose" title="close">✕</span>
+  </div>
+  <iframe id="drawerFrame" title="conversation"></iframe>
+</aside>
+<footer>Status: <b style="color:var(--blocked)">blocked</b> (needs you) · <b style="color:var(--review)">review</b> (committed, awaiting push/review) · <b style="color:var(--working)">working</b> (in a call) · <b style="color:var(--idle)">idle</b> · <b style="color:var(--ended)">ended</b>. Live-derived every refresh — no hand-maintained labels.</footer>
+
+<script>
+// No card data is baked in — titles, analysis, swept-time and the seed list all live in coo-notes.json.
+// localStorage holds ONLY the user's chosen id list (add/remove).
+const KEY="cooBoardList.v3";
+let SEED=[];
+function getList(){
+  try{const v=JSON.parse(localStorage.getItem(KEY)); if(Array.isArray(v)&&v.length)return v;}catch(e){}
+  const seeded=SEED.map(id=>({id})); if(seeded.length) localStorage.setItem(KEY, JSON.stringify(seeded));
+  return seeded;
+}
+function setList(l){ localStorage.setItem(KEY, JSON.stringify(l)); }
+function removeId(id){ setList(getList().filter(x=>x.id!==id)); load(); }
+function addId(id,t){
+  const l=getList(); if(l.some(x=>x.id===id))return;
+  l.push(t?{id,t}:{id}); setList(l); load();
+}
+const ORDER={blocked:0,review:1,working:2,idle:3,ended:4};
+function rel(ts){ if(!ts)return "—"; const s=Date.now()/1000-ts;
+  if(s<60)return Math.round(s)+"s"; if(s<3600)return Math.round(s/60)+"m";
+  if(s<86400)return Math.round(s/3600)+"h"; return Math.round(s/86400)+"d";}
+
+let SESS={}, ATT={}, NOTES={}, SWEPT=0;
+function statusOf(id){
+  const L=SESS[id], A=ATT[id], now=Date.now()/1000;
+  if(!L) return {k:"ended", where:"session not found / ended"};
+  if(L.sidecar_in_flight) return {k:"working", where:"in a call — running a tool"};
+  if(L.is_live && (now-(L.mtime||0))<90) return {k:"working", where:"in a call — active"};
+  if(A){ if((A.priority||9)<=2) return {k:"blocked", where:A.where||"needs you"};
+         return {k:"review", where:A.where||"committed, awaiting push/review"}; }
+  if(L.is_live) return {k:"idle", where:"live · idle, nothing pending"};
+  return {k:"ended", where:"process ended"};
+}
+async function load(){
+  try{
+    // Notes first (cheap) — gives us the seed + which ids we track.
+    const rn=await fetch('/static/coo-notes.json?t='+Date.now()).then(r=>r.json()).catch(()=>({cards:{}}));
+    NOTES=rn.cards||{}; SWEPT=rn.swept_global||0; SEED=rn.seed||[];
+    const ids=getList().map(x=>x.id);
+    // Per-tracked-session reads (each is a cheap one-tail read) + one bounded
+    // attention feed. NO /api/sessions?all=1 in the loop — that scanned all 1268.
+    const [ra,details]=await Promise.all([
+      fetch('/api/attention?scope=live').then(r=>r.json()).catch(()=>({items:[]})),
+      Promise.all(ids.map(id=>
+        fetch('/api/session/'+encodeURIComponent(id)).then(r=>r.json())
+          .then(d=>({id,d})).catch(()=>({id,d:null}))))
+    ]);
+    SESS={}; details.forEach(({id,d})=>{ if(d&&d.ok!==false) SESS[id]=d; });
+    ATT={}; (ra.items||[]).forEach(it=>ATT[it.session_id]=it);
+  }catch(e){}
+  const list=getList(), counts={};
+  const rows=list.map(b=>({...b, st:statusOf(b.id)}))
+    .sort((a,b)=>ORDER[a.st.k]-ORDER[b.st.k]);
+  const grid=document.getElementById('grid'); grid.innerHTML='';
+  rows.forEach(b=>{
+    const L=SESS[b.id]||{}, st=b.st, note=NOTES[b.id]; counts[st.k]=(counts[st.k]||0)+1;
+    const flags=[];
+    if(L.is_live)flags.push('●live');
+    if(L.state)flags.push(L.state);
+    const snip=(L.last_assistant_text||'').replace(/\s+/g,' ').slice(0,140);
+    const analysis=(note&&note.analysis)||'';
+    const title=(note&&note.title)||b.t||L.folder_label||b.id.slice(0,8);
+    const card=document.createElement('div'); card.className='card '+st.k;
+    card.innerHTML=
+      `<div class="xbtn" title="remove">✕</div>`+
+      `<div class="top"><span class="title">${title}</span>`+
+      `<span class="repo">${L.folder_label||'—'}</span>`+
+      `<span class="badge ${st.k}">${st.k}</span></div>`+
+      `<div class="where ${st.k}">▸ ${st.where}</div>`+
+      (analysis?`<div class="coo">${analysis}</div>`:'')+
+      (snip?`<div class="snip">“${snip}…”</div>`:'')+
+      `<div class="meta"><span>active ${rel(L.mtime)} ago</span>`+
+      (note&&note.swept?`<span title="when the COO last assessed this card">swept ${rel(note.swept)} ago</span>`:'<span style="color:var(--working)">not yet swept</span>')+
+      (flags.length?`<span>${flags.join(' · ')}</span>`:'')+
+      `<span class="id">${b.id.slice(0,8)}</span></div>`;
+    // Click the card → load that session's conversation popout (read + inject) in the side drawer.
+    card.onclick=()=>openDrawer(b.id,title);
+    // ✕ removes the card without triggering the open.
+    card.querySelector('.xbtn').onclick=(e)=>{e.stopPropagation(); removeId(b.id);};
+    grid.appendChild(card);
+  });
+  const c=document.getElementById('counts'); c.innerHTML='';
+  Object.keys(ORDER).filter(k=>counts[k]).forEach(k=>{
+    const p=document.createElement('span'); p.className='pill';
+    p.style.color=`var(--${k})`; p.textContent=`${counts[k]} ${k}`; c.appendChild(p);});
+  document.getElementById('clock').textContent=new Date().toLocaleTimeString();
+  document.getElementById('swept').textContent=SWEPT?rel(SWEPT)+' ago':'—';
+}
+function doAdd(){
+  const inp=document.getElementById('addInput'); let v=inp.value.trim(); if(!v)return;
+  const m=v.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  const id=m?m[0]:v;
+  if(id.length<8){alert('Pick a session from the list or paste a full session id.');return;}
+  let t=null; const sep=v.indexOf('  ·  '); if(sep>0) t=v.slice(0,sep).trim().slice(0,50);
+  addId(id,t); inp.value='';
+}
+// The full session list (1268 rows) is fetched ONCE, on demand, only when you
+// focus the add box — never in the refresh loop.
+let listLoaded=false;
+async function loadSessionList(){
+  if(listLoaded)return; listLoaded=true;
+  try{
+    const rs=await fetch('/api/sessions?all=1').then(r=>r.json());
+    const dl=document.getElementById('sessList'); dl.innerHTML='';
+    (rs.sessions||[]).forEach(s=>{
+      const nm=(s.display_name||s.ai_title||s.first_message||s.session_id).replace(/\s+/g,' ').slice(0,60);
+      const o=document.createElement('option'); o.value=nm+"  ·  "+s.session_id; dl.appendChild(o);
+    });
+  }catch(e){ listLoaded=false; }
+}
+// ---- Side drawer: load a session's conversation popout in an iframe (read + inject) ----
+let drawerId=null;
+function openDrawer(id,title){
+  const f=document.getElementById('drawerFrame'), src='/?ccc_popout=conversation&conv='+encodeURIComponent(id);
+  if(drawerId!==id){ f.src=src; drawerId=id; }       // don't reload if same session re-clicked
+  document.getElementById('drawerTitle').textContent=title||id.slice(0,8);
+  document.getElementById('drawerOpenTab').onclick=()=>window.open(src,'_blank');
+  const d=document.getElementById('drawer'); d.setAttribute('aria-hidden','false');
+  document.body.classList.add('drawer-open');
+}
+function closeDrawer(){
+  document.body.classList.remove('drawer-open');
+  document.getElementById('drawer').setAttribute('aria-hidden','true');
+}
+document.getElementById('drawerClose').onclick=closeDrawer;
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&document.body.classList.contains('drawer-open')) closeDrawer(); });
+// Drag-resize the drawer from its left edge.
+(function(){
+  const handle=document.getElementById('drawerResize'); let dragging=false;
+  handle.addEventListener('pointerdown',e=>{ dragging=true; handle.setPointerCapture(e.pointerId);
+    document.body.classList.add('drawer-resizing'); e.preventDefault(); });
+  handle.addEventListener('pointermove',e=>{ if(!dragging)return;
+    let w=window.innerWidth-e.clientX; w=Math.max(320,Math.min(w,window.innerWidth*0.9));
+    document.documentElement.style.setProperty('--drawer-w',w+'px'); });
+  const stop=()=>{ dragging=false; document.body.classList.remove('drawer-resizing'); };
+  handle.addEventListener('pointerup',stop); handle.addEventListener('pointercancel',stop);
+})();
+document.getElementById('addBtn').onclick=doAdd;
+document.getElementById('addInput').addEventListener('focus',loadSessionList);
+document.getElementById('addInput').addEventListener('keydown',e=>{if(e.key==='Enter')doAdd();});
+// CPU-friendly polling: 30s, and ONLY when the tab is visible (no work for a background board).
+load();
+setInterval(()=>{ if(!document.hidden) load(); }, 30000);
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) load(); });
+</script>
+</body>
+</html>

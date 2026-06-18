@@ -122,3 +122,6 @@ CLAUDE.local.md
 .a5c/runs/
 .a5c/node_modules/
 # --- end babysitter managed ---
+
+# COO board personal sidecar (curated session list/analysis) — local only
+/static/coo-notes.json

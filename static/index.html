@@ -61,14 +61,13 @@
     window.__CCC_CONVERSATION_POPOUT__ = params.get('ccc_popout') === 'conversation'
       || params.get('popout') === 'conversation';
     if (window.__CCC_CONVERSATION_POPOUT__) return;
-    // Optional local-only COO board launcher. Gated on the server `coo` feature
-    // flag (true only when the gitignored board file exists on disk), so it
-    // shows in every local browser/window with no per-browser opt-in and never
-    // loads on public installs. Independent of the Morning flag.
+    // COO board launcher. Gated on the server `coo` feature flag (true when the
+    // board file is present on disk), so it loads wherever the board ships.
+    // Independent of the Morning flag.
     fetch('/api/features').then(r => r.json()).then(f => {
       if (!f || !f.coo) return;
       const cs = document.createElement('script');
-      cs.src = '/static/morning/coo-button.js';
+      cs.src = '/static/coo-button.js';
       cs.defer = true;
       (document.head || document.documentElement).appendChild(cs);
     }).catch(() => {});
