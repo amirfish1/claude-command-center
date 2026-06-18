@@ -128,6 +128,53 @@ def test_stats_cache_roundtrip_avoids_reparse(big_projects, monkeypatch, tmp_pat
     )
 
 
+def test_conv_meta_cache_roundtrip_avoids_reparse(big_projects, monkeypatch, tmp_path):
+    """The disk tail-meta cache must actually hit after a restart.
+
+    Regression guard for the JSON list-vs-tuple bug: cache_key is built as a
+    tuple (st_mtime_ns, st_size) but JSON has no tuple type, so it reloads as
+    a list — and [a, b] == (a, b) is always False. The freshness check then
+    never matched, so every server restart re-parsed all ~1k+ transcripts
+    (tens of seconds at 100% CPU, GIL-starving every other request thread and
+    wedging the dashboard). _load_conv_meta_cache must coerce the key back to
+    a tuple so warm calls hit.
+    """
+    cache_file = tmp_path / "conv_meta_cache.json"
+    monkeypatch.setattr(server, "_CONV_META_CACHE_FILE", cache_file)
+    server._conv_meta_cache.clear()
+
+    flags = dict(resolve_pr_states=False, resolve_effective=False,
+                 resolve_worktree_dirty=False)
+    server.find_all_conversations(**flags)   # cold build populates the cache
+    server._save_conv_meta_cache()           # persist
+    assert cache_file.is_file(), "conv-meta cache was not persisted"
+
+    server._conv_meta_cache.clear()          # simulate a restart
+    server._load_conv_meta_cache()           # reload from disk
+    assert server._conv_meta_cache, "conv-meta cache reloaded empty"
+    keyed = [e for e in server._conv_meta_cache.values() if e.get("cache_key") is not None]
+    assert keyed, "no cache_key'd entries reloaded — cannot verify the round-trip"
+    for entry in keyed:
+        # The bug: JSON deserializes the (mtime_ns, size) tuple as a list, and
+        # the freshness check ([a, b] == (a, b)) is then always False. A tuple
+        # here proves _load_conv_meta_cache coerced it back so warm calls hit.
+        assert not isinstance(entry["cache_key"], list), (
+            "cache_key reloaded as a list — _extract_tail_meta will never hit "
+            "the disk cache and every restart cold-scans all transcripts"
+        )
+        assert isinstance(entry["cache_key"], tuple)
+
+    # Behavioural: a warm rebuild must not re-parse anything. A cache miss in
+    # _extract_tail_meta rewrites the entry and flips the dirty flag, so a
+    # clean (False) flag after the second build proves every row hit the cache.
+    server._conv_meta_cache_dirty = False
+    server.find_all_conversations(**flags)
+    assert server._conv_meta_cache_dirty is False, (
+        "warm find_all_conversations re-parsed transcripts after a cache "
+        "reload — the disk tail-meta cache regressed (every restart cold-scans)"
+    )
+
+
 # ── Latency budget (lenient smoke on the scale fixture) ───────────────────────
 
 def test_stats_build_under_budget(big_projects):

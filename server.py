@@ -3903,32 +3903,48 @@ def find_all_conversations(
             timestamp = None
             git_branch = None
             session_cwd = None
-            try:
-                with open(f, "r") as fh:
-                    for i, line in enumerate(fh):
-                        if i >= 20:
-                            break
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            ev = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if not first_message:
-                            text = _extract_user_prompt_text(ev)
-                            if text:
-                                first_message = text
-                        if not git_branch:
-                            git_branch = ev.get("gitBranch") or ev.get("git_branch")
-                        if not timestamp:
-                            timestamp = ev.get("timestamp")
-                        if not session_cwd:
-                            session_cwd = ev.get("cwd")
-                        if first_message and git_branch and timestamp and session_cwd:
-                            break
-            except (OSError, UnicodeDecodeError):
-                pass
+            # Head-parse cache: the first ~20 lines (first_message / launch
+            # branch / timestamp / cwd) never change after the session starts,
+            # but this loop re-opened and re-JSON-parsed every transcript on
+            # every poll — ~1274 file opens + json.loads per call, the dominant
+            # warm cost once the tail-meta cache is hit. Cache by (mtime_ns,
+            # size) just like _extract_tail_meta; archived transcripts resolve
+            # for free. Reuse the already-stat'd `stat` — no extra syscall.
+            _head_key = (stat.st_mtime_ns, stat.st_size)
+            _hc = _conv_head_cache.get(str(f))
+            if _hc is not None and _hc[0] == _head_key:
+                first_message, git_branch, timestamp, session_cwd = _hc[1]
+            else:
+                try:
+                    with open(f, "r") as fh:
+                        for i, line in enumerate(fh):
+                            if i >= 20:
+                                break
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                ev = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            if not first_message:
+                                text = _extract_user_prompt_text(ev)
+                                if text:
+                                    first_message = text
+                            if not git_branch:
+                                git_branch = ev.get("gitBranch") or ev.get("git_branch")
+                            if not timestamp:
+                                timestamp = ev.get("timestamp")
+                            if not session_cwd:
+                                session_cwd = ev.get("cwd")
+                            if first_message and git_branch and timestamp and session_cwd:
+                                break
+                except (OSError, UnicodeDecodeError):
+                    pass
+                _conv_head_cache[str(f)] = (
+                    _head_key,
+                    (first_message, git_branch, timestamp, session_cwd),
+                )
 
             if _is_generated_helper_session(first_message):
                 continue
@@ -7133,6 +7149,16 @@ def _load_conv_meta_cache():
         k: v for k, v in entries.items()
         if isinstance(v, dict) and "mtime" in v
     }
+    # JSON has no tuple type, so a cache_key saved as (mtime_ns, size) comes
+    # back as a list. The freshness check in _extract_tail_meta compares it
+    # against a freshly built tuple, and [a, b] == (a, b) is always False —
+    # so without this coercion the disk cache NEVER hits and every restart
+    # re-parses all ~1k+ transcripts (tens of seconds at 100% CPU, which
+    # starves every other request thread via the GIL and wedges the server).
+    for v in keep.values():
+        ck = v.get("cache_key")
+        if isinstance(ck, list):
+            v["cache_key"] = tuple(ck)
     with _conv_meta_cache_lock:
         _conv_meta_cache.update(keep)
 
@@ -19931,13 +19957,23 @@ def _git_branch_for_cwd(cwd):
     if not cwd:
         return ""
     cwd_s = str(cwd)
+    # Invalidation key — prefer .git/HEAD's mtime; for a worktree (.git is a
+    # *file*) stat .git itself; for a non-git dir fall back to the cwd dir's
+    # own mtime so even the empty "" answer is cacheable. Creating a `.git`
+    # later bumps the parent dir's mtime, so a dir that becomes a repo
+    # self-invalidates. Without a key for these last two cases, every
+    # worktree row AND every non-git gemini/antigravity cwd re-forked
+    # `git rev-parse` on every poll — a subprocess per row.
     try:
         head_path = Path(cwd_s) / ".git" / "HEAD"
-        if not head_path.exists():
-            # `.git` may be a file (worktree) — let `git rev-parse` resolve it.
-            head_mtime = 0.0
-        else:
+        if head_path.exists():
             head_mtime = head_path.stat().st_mtime
+        else:
+            git_path = Path(cwd_s) / ".git"
+            if git_path.exists():
+                head_mtime = git_path.stat().st_mtime
+            else:
+                head_mtime = Path(cwd_s).stat().st_mtime
     except OSError:
         head_mtime = 0.0
     with _git_branch_cache_lock:
@@ -19953,10 +19989,12 @@ def _git_branch_for_cwd(cwd):
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return ""
-    if out.returncode != 0:
-        return ""
-    branch = (out.stdout or "").strip()
-    branch = "" if branch == "HEAD" else branch
+    branch = ""
+    if out.returncode == 0:
+        branch = (out.stdout or "").strip()
+        branch = "" if branch == "HEAD" else branch
+    # Cache positive AND negative ("" for non-git dirs) results — the whole
+    # point is to stop re-forking for cwds that will never be git repos.
     if head_mtime > 0:
         with _git_branch_cache_lock:
             _git_branch_cache[cwd_s] = (head_mtime, branch)
@@ -23804,9 +23842,27 @@ def _antigravity_latest_user_config(session_id):
     return {"ok": False, "rpc": None}
 
 
+_antigravity_cli_log_meta_cache = {}
+
+
 def _antigravity_cli_log_meta(path):
+    # Pure function of the log file's content, but the archive scan calls it
+    # once per antigravity row (~780×) and each call re-reads the tail and runs
+    # several regexes — uncached, this was the dominant antigravity cost on
+    # every poll. Memoise by (mtime, size); a stale/rewritten log invalidates.
+    try:
+        _st = os.stat(path)
+        _key = (_st.st_mtime_ns, _st.st_size)
+    except OSError:
+        _key = None
+    if _key is not None:
+        _cached = _antigravity_cli_log_meta_cache.get(str(path))
+        if _cached is not None and _cached[0] == _key:
+            return _cached[1]
     text = _antigravity_read_log_tail(path)
     if not text:
+        if _key is not None:
+            _antigravity_cli_log_meta_cache[str(path)] = (_key, {})
         return {}
     session_id = ""
     for match in _ANTIGRAVITY_CLI_CONVERSATION_RE.finditer(text):
@@ -23815,7 +23871,10 @@ def _antigravity_cli_log_meta(path):
     for match in _ANTIGRAVITY_CLI_WORKSPACE_RE.finditer(text):
         workspace = match.group(1).strip().strip('"')
     model = _antigravity_model_from_text(text)
-    return {"session_id": session_id, "cwd": workspace, "model": model}
+    result = {"session_id": session_id, "cwd": workspace, "model": model}
+    if _key is not None:
+        _antigravity_cli_log_meta_cache[str(path)] = (_key, result)
+    return result
 
 
 def _antigravity_model_from_text(text):
