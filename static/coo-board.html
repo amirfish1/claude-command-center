@@ -133,14 +133,37 @@ function rel(ts){ if(!ts)return "—"; const s=Date.now()/1000-ts;
   if(s<86400)return Math.round(s/3600)+"h"; return Math.round(s/86400)+"d";}
 
 let SESS={}, ATT={}, NOTES={}, SWEPT=0;
+// The actual, live reason a blocked session is waiting on you — pulled fresh
+// from the session each refresh, never from a hand-maintained note.
+function blockReason(id){
+  const L=SESS[id]||{}, A=ATT[id]||{};
+  const clip=s=>(s||'').replace(/\s+/g,' ').trim().slice(0,180)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  if(L.needs_approval) return "needs approval: "+(clip(L.needs_approval_message)||L.pending_tool||"a tool call");
+  if(L.question_header||L.question_text){
+    const h=L.question_header?('['+clip(L.question_header)+'] '):'';
+    return "asked you: "+h+clip(L.question_text);
+  }
+  const sb=L.soft_block;
+  if(sb&&sb.question_text) return "waiting on your reply — “"+clip(sb.question_text)+"”";
+  if(A.next_step&&A.next_step!=='None') return clip(A.next_step);
+  if(A.where&&A.where!=='None') return clip(A.where);
+  const la=clip(L.last_assistant_text);
+  return la?("last said — “"+la+"”"):"needs you (reason not captured)";
+}
 function statusOf(id){
-  const L=SESS[id], A=ATT[id], now=Date.now()/1000;
+  const L=SESS[id], A=ATT[id];
   if(!L) return {k:"ended", where:"session not found / ended"};
-  if(L.sidecar_in_flight) return {k:"working", where:"in a call — running a tool"};
-  if(L.is_live && (now-(L.mtime||0))<90) return {k:"working", where:"in a call — active"};
-  if(A){ if((A.priority||9)<=2) return {k:"blocked", where:A.where||"needs you"};
-         return {k:"review", where:A.where||"committed, awaiting push/review"}; }
-  if(L.is_live) return {k:"idle", where:"live · idle, nothing pending"};
+  // Trust the server's single-source-of-truth state (working/waiting/idle/ended).
+  const s=L.state;
+  if(s==='working') return {k:"working", where:L.sidecar_in_flight?"in a call — running a tool":"in a call — active"};
+  if(s==='waiting') return {k:"blocked", where:blockReason(id)};
+  if(s==='ended')   return {k:"ended", where:"process ended"};
+  // Server says idle (Stopped, nothing pending). Attention may still flag it as
+  // committed-awaiting-push (review) or a missed block.
+  if(A&&(A.priority||9)<=2) return {k:"blocked", where:blockReason(id)};
+  if(A) return {k:"review", where:(A.next_step&&A.next_step!=='None'?A.next_step:A.where)||"committed, awaiting push/review"};
+  if(L.is_live||s==='idle') return {k:"idle", where:"live · idle, nothing pending"};
   return {k:"ended", where:"process ended"};
 }
 async function load(){
