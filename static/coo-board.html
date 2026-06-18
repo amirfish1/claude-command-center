@@ -39,6 +39,11 @@
   .card.review{border-left-color:var(--review)}
   .card.idle{border-left-color:var(--idle)}
   .card.ended{border-left-color:var(--ended);opacity:.7}
+  /* Died WHILE blocked on you, recently — full opacity + amber edge so a
+     resumable orphaned ask doesn't fade out like a clean-finished session. */
+  .card.ended.orphan{opacity:1;border-left-color:var(--review)}
+  .badge.ended.orphan,.card.orphan .badge.ended{background:var(--review);color:#0d1117}
+  .where.orphan-where{color:var(--review)}
   .top{display:flex;align-items:center;gap:8px;padding-right:18px}
   .title{font-weight:700;font-size:14px;flex:1;min-width:0}
   .repo{font-size:11px;color:var(--dim);background:var(--panel2);
@@ -158,7 +163,14 @@ function statusOf(id){
   const s=L.state;
   if(s==='working') return {k:"working", where:L.sidecar_in_flight?"in a call — running a tool":"in a call — active"};
   if(s==='waiting') return {k:"blocked", where:blockReason(id)};
-  if(s==='ended')   return {k:"ended", where:"process ended"};
+  if(s==='ended'){
+    // A process that died WHILE blocked on you left an orphaned ask. Surface
+    // recent ones (died in the last 48h) distinctly — those are worth resuming;
+    // ancient corpses (median ~48d) stay quietly ended.
+    const recent=L.mtime&&((Date.now()/1000-L.mtime)<48*3600);
+    if(L.ended_blocked&&recent) return {k:"ended", orphan:true, where:"died with an open ask — "+blockReason(id)};
+    return {k:"ended", where:"process ended"};
+  }
   // Server says idle (Stopped, nothing pending). Attention may still flag it as
   // committed-awaiting-push (review) or a missed block.
   if(A&&(A.priority||9)<=2) return {k:"blocked", where:blockReason(id)};
@@ -195,13 +207,13 @@ async function load(){
     const snip=(L.last_assistant_text||'').replace(/\s+/g,' ').slice(0,140);
     const analysis=(note&&note.analysis)||'';
     const title=(note&&note.title)||b.t||L.folder_label||b.id.slice(0,8);
-    const card=document.createElement('div'); card.className='card '+st.k;
+    const card=document.createElement('div'); card.className='card '+st.k+(st.orphan?' orphan':'');
     card.innerHTML=
       `<div class="xbtn" title="remove">✕</div>`+
       `<div class="top"><span class="title">${title}</span>`+
       `<span class="repo">${L.folder_label||'—'}</span>`+
-      `<span class="badge ${st.k}">${st.k}</span></div>`+
-      `<div class="where ${st.k}">▸ ${st.where}</div>`+
+      `<span class="badge ${st.k}">${st.orphan?'ended · open ask':st.k}</span></div>`+
+      `<div class="where ${st.k}${st.orphan?' orphan-where':''}">▸ ${st.where}${st.orphan?' · click to resume':''}</div>`+
       (analysis?`<div class="coo">${analysis}</div>`:'')+
       (snip?`<div class="snip">“${snip}…”</div>`:'')+
       `<div class="meta"><span>active ${rel(L.mtime)} ago</span>`+
