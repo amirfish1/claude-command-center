@@ -66,7 +66,32 @@ class TestSessionStateLabel(unittest.TestCase):
         self.assertEqual(self.label(pending_tool="Bash"), "working")
 
     def test_subagent_in_flight_is_working(self):
-        self.assertEqual(self.label(subagent_in_flight_count=2), "working")
+        """Genuine subagents in flight: fresh, non-waiting sidecar."""
+        self.assertEqual(
+            self.label(subagent_in_flight_count=2, sidecar_status="active",
+                       sidecar_ts=time.time() - 5),
+            "working",
+        )
+
+    # --- THE REOPENED BUG: sticky subagent count must not pin working --------
+    def test_stale_subagent_count_with_clean_stop_is_idle(self):
+        """Mirrors live session 33a6df22: subagents finished, parent Stopped
+        cleanly (sidecar_status=='waiting'), but subagent_in_flight_count never
+        cleared. A clean Stop contradicts in-flight subagents -> idle."""
+        self.assertEqual(
+            self.label(subagent_in_flight_count=5, sidecar_in_flight=False,
+                       sidecar_status="waiting", sidecar_ts=time.time() - 879),
+            "idle",
+        )
+
+    def test_stale_subagent_count_past_window_is_idle(self):
+        """Subagent count > 0 but the sidecar is stale past the window
+        (count wedged after the turn ended) -> idle, not working."""
+        self.assertEqual(
+            self.label(subagent_in_flight_count=3, sidecar_status="active",
+                       sidecar_ts=time.time() - 27 * 60),
+            "idle",
+        )
 
     def test_fresh_active_sidecar_is_working(self):
         """Between-tools think gap: status=='active' and touched just now."""

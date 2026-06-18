@@ -44016,13 +44016,25 @@ def _session_state_label(c):
             or _detect_soft_block(c)):
         return "waiting"
     if c.get("is_live"):
-        active_fresh = (
-            c.get("sidecar_status") == "active"
-            and (time.time() - (c.get("sidecar_ts") or 0)) < _WORKING_GAP_WINDOW
+        sidecar_fresh = (
+            (time.time() - (c.get("sidecar_ts") or 0)) < _WORKING_GAP_WINDOW
+        )
+        active_fresh = c.get("sidecar_status") == "active" and sidecar_fresh
+        # subagent_in_flight_count is the same class of sticky signal as
+        # sidecar_status: it's a transcript-derived count that the parent never
+        # decrements if subagents finish and the parent Stops without a final
+        # bookkeeping pass (live session 33a6df22: count=5 while genuinely idle
+        # 14 min). A clean Stop (sidecar_status=="waiting") is contradictory
+        # with in-flight subagents, and a sidecar stale past the window means
+        # the turn is over — in both cases the count is leftover, not live work.
+        subagents_fresh = (
+            (c.get("subagent_in_flight_count") or 0) > 0
+            and c.get("sidecar_status") != "waiting"
+            and sidecar_fresh
         )
         if (c.get("pending_tool")
                 or c.get("sidecar_in_flight")
-                or (c.get("subagent_in_flight_count") or 0) > 0
+                or subagents_fresh
                 or active_fresh):
             return "working"
         return "idle"
