@@ -27349,7 +27349,12 @@
 
       // Route tool-only assistant events into a fused group so the chat
       // pane reads "Ran N commands ▾" instead of one row per Bash/Read/Edit.
-      const isToolOnly = div.classList.contains('tool-only');
+      // CCC-148: a signature-only-thinking turn is `tool-only` but carries NO
+      // command — it's a `display:none` empty turn. Grouping it produced a
+      // misleading "Ran 1 command" header the user could expand into nothing.
+      // Exclude it so only real tool calls form command groups.
+      const isToolOnly = div.classList.contains('tool-only')
+        && !div.classList.contains('is-silent-thinking-only');
       if (isToolOnly) {
         if (!_currentToolGroup || _currentToolGroup !== $view.lastElementChild) {
           // No open group, or another event closed it — start a new one.
