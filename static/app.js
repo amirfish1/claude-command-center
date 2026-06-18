@@ -4500,6 +4500,7 @@
     pane.pendingSendsByConv[convId] = _pendingSends.map(p => ({
       text: p.text,
       ts: Number(p.ts || Date.now()),
+      delivered: !!p.delivered,
     }));
   }
 
@@ -4646,6 +4647,16 @@
     // Tier 2: the agent now has the message — advance the live turn status from
     // "Sending…" to "🧠 Thinking…" (or "Waking up…"). Clears when the response lands.
     setOptimisticAgentThinking(div.parentNode, waking ? '⏻ Waking up headless&hellip;' : null);
+    // CCC-154: a DELIVERED send is confirmed in the pipeline — its echo must
+    // survive across full re-renders until the agent emits it in the JSONL,
+    // however long the turn runs. Mark + persist `delivered` so
+    // restorePendingSendEchoes stops applying the ~5min unacknowledged-age
+    // cutoff to it (otherwise a long turn made the message vanish "until much
+    // later" when it finally landed).
+    pending.entry.delivered = true;
+    const convId = currentConversation;
+    const pane = paneByPaneId(activePaneId());
+    if (convId && pane) syncPendingSendsMapForConv(pane, convId);
   }
 
   function scheduleFireAndWatchRefresh(paneId) {
@@ -4698,7 +4709,10 @@
     if (!$view) return;
     const sid = sessionIdByConv[convId] || convId;
     const now = Date.now();
-    const fresh = saved.filter(row => row && row.text && Number(row.ts) && (now - Number(row.ts)) <= _PENDING_SEND_ECHO_MAX_MS);
+    // Delivered sends are confirmed — keep them regardless of age (CCC-154);
+    // only optimistic, not-yet-acknowledged echoes expire after the window.
+    const fresh = saved.filter(row => row && row.text && (row.delivered
+      || (Number(row.ts) && (now - Number(row.ts)) <= _PENDING_SEND_ECHO_MAX_MS)));
     if (fresh.length !== saved.length) {
       if (fresh.length) pane.pendingSendsByConv[convId] = fresh;
       else delete pane.pendingSendsByConv[convId];
@@ -4717,7 +4731,12 @@
           break;
         }
       }
-      if (!alreadyShown) appendPendingSendEcho(text, sid, paneId);
+      if (!alreadyShown) {
+        const restored = appendPendingSendEcho(text, sid, paneId);
+        // Re-create it in the delivered state so it keeps the "✓ Delivered"
+        // note and stops re-arming the not-acknowledged timer (CCC-154).
+        if (row.delivered && restored) markPendingSendDelivered(restored, null);
+      }
     }
   }
 
