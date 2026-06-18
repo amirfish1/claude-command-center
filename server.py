@@ -40060,6 +40060,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "version": __version__,
                 "morning": MORNING_ENABLED,
+                # Local-only COO board launcher. True iff the gitignored board
+                # file is present on disk, so the topbar button shows in every
+                # local browser/window with no per-browser opt-in — and stays
+                # absent on public installs, which never ship the board.
+                "coo": (MORNING_STATIC_DIR / "coo-board.html").exists(),
             })
         elif path == "/api/healthcheck":
             # Surface the state of every external dependency CCC delegates to.
