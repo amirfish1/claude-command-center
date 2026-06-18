@@ -1,1 +1,0 @@
-**Throughput dashboard** now deduplicates repeated Claude assistant snapshots, reads every Codex `token_count` event for aggregate usage, prices current Claude/Codex models, and accounts for Anthropic 1-hour prompt-cache writes.

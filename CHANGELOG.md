@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.0] - 2026-06-17
+
+### Added
+- Attention API: a soft-block detector flags sessions that ended a turn awaiting you in prose ("paused for review", "want me to…", "pick one") — not just the formal AskUserQuestion/approval prompts. New cross-repo `GET /api/attention?scope=all` feed (session, repo, detected question, last few turns), a lightweight `GET /api/session/<id>`, optional `?since/state/limit/fields` projection on `/api/sessions`, and "Needs your attention" now renders across all repos with no repo selection.
+- Added native Hermes conversation history rows and transcript viewing from `~/.hermes/state.db`.
+- First-class headless Linux support: the server and browser UI run on Linux, `./run.sh --install-service` installs a systemd user service, and the macOS-only desktop conveniences (jump-to-terminal, screenshots, open-in-desktop, native folder picker) hide cleanly so there are no dead buttons. The system monitor reads memory and load from `/proc` and stdlib on Linux.
+- Deep relative transcript links: a reveal-only bounded search resolves deep relative paths (CCC-143), and bounded-walk markdown links now open the target rather than only revealing it in the file panel (CCC-146).
+- Queue/board controls: an add-to-queue button in the Files/Queue panel header (CCC-145), and a manual Done section above In progress that's always shown so the first drop has a target (CCC-151).
+- `GET /api/session/<id>` now returns `mtime`, `folder_label`, and `sidecar_in_flight` so clients can show freshness, the originating folder, and whether a sidecar write is mid-flight without a second request.
+
+### Fixed
+- `find_all_conversations` no longer re-parses every transcript on each request: a cache-key bug compared a JSON-decoded list against the tuple it was stored under, so the lookup never hit and a busy server — and every restart — paid the full warm-scan cost on every call. Restores the `(mtime, size)` cache hit and clears the restart wedge.
+- Hermes conversation rows can now be resumed from the CCC composer instead of becoming read-only after the first message.
+- Linux headless Claude sessions now route follow-up messages through CCC's FIFO instead of misdetecting `?` as an interactive terminal.
+- Smoke test no longer spawns a real interactive `claude` process when exercising the compact path, so CI and local `pytest` can't hang waiting on a live session.
+- **Throughput dashboard** now opens on the last-hour aggregate view and charts aggregate ranges by hour instead of plotting every model call as an unreadable per-turn line.
+- **Throughput dashboard** now deduplicates repeated Claude assistant snapshots, reads every Codex `token_count` event for aggregate usage, prices current Claude/Codex models, and accounts for Anthropic 1-hour prompt-cache writes.
+- UI polish: the live-question answer card scrolls into view on mount (CCC-150), archive is a one-click action on live rows (CCC-149), empty thinking turns no longer render as "Ran 1 command" (CCC-148), headless/terminal pills show in the conversation popout (CCC-147), the new-project name field stays editable (the CWD suggestion no longer steals focus, CCC-144), the in-progress queue pill is marked with ▶ so it can't read as done (CCC-142), and mobile reclaims conv-header space with scrollable agent tabs and a tighter toolbar.
+
 ## [5.2.0] - 2026-06-12
 
 ### Added
