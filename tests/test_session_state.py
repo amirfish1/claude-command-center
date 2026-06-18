@@ -144,6 +144,21 @@ class TestSessionStateLabel(unittest.TestCase):
             "ended",
         )
 
+    def test_not_live_with_question_is_ended_not_waiting(self):
+        """Mirrors the 183 dead sessions whose last assistant message ended in
+        a question: you cannot reply to unblock a dead process (you'd resume
+        it — a different action), so a not-live session is ended regardless of
+        its last message. waiting is only meaningful for LIVE sessions."""
+        self.assertEqual(self.label(is_live=False, question_waiting=True), "ended")
+        self.assertEqual(self.label(is_live=False, needs_approval=True), "ended")
+
+    def test_not_live_with_soft_block_text_is_ended(self):
+        self.assertEqual(
+            self.label(is_live=False,
+                       last_assistant_text="Want me to proceed with the fix?"),
+            "ended",
+        )
+
     def test_window_constant_is_120s(self):
         self.assertEqual(self.server._WORKING_GAP_WINDOW, 120)
 

@@ -43950,6 +43950,10 @@ def _session_state_label(c):
 
     Four states, precedence top-down:
 
+    ended   — NOT live (process gone / liveness window expired). Checked first:
+              a dead process is ended regardless of how its last turn read —
+              you cannot reply to unblock it, only resume it. The remaining
+              three states are only meaningful for LIVE sessions.
     waiting — blocked on a human (formal AskUserQuestion / permission marker,
               or a detected soft block). Wins even over a live tool, since an
               AskUserQuestion is "in flight" yet the agent is parked on us.
@@ -43963,35 +43967,40 @@ def _session_state_label(c):
               interrupted/abandoned turn left it "active" and — paired with the
               30-min liveness window — read "working" for up to half an hour.
     idle    — live, but nothing in flight (Stop fired, or sitting at the prompt).
-    ended   — not live (process gone / liveness window expired).
     """
+    if not c.get("is_live"):
+        # A dead process is "ended" regardless of how its last turn read. You
+        # cannot reply to unblock it — you would resume it, a different action —
+        # so waiting is only meaningful for LIVE sessions. Without this gate a
+        # dead session whose last assistant message ended in a question was
+        # stamped "waiting" forever (observed: 183 not-live sessions reading
+        # waiting, median ~48 days idle, oldest 96 days).
+        return "ended"
     if (c.get("question_waiting") or c.get("needs_approval")
             or _detect_soft_block(c)):
         return "waiting"
-    if c.get("is_live"):
-        sidecar_fresh = (
-            (time.time() - (c.get("sidecar_ts") or 0)) < _WORKING_GAP_WINDOW
-        )
-        active_fresh = c.get("sidecar_status") == "active" and sidecar_fresh
-        # subagent_in_flight_count is the same class of sticky signal as
-        # sidecar_status: it's a transcript-derived count that the parent never
-        # decrements if subagents finish and the parent Stops without a final
-        # bookkeeping pass (live session 33a6df22: count=5 while genuinely idle
-        # 14 min). A clean Stop (sidecar_status=="waiting") is contradictory
-        # with in-flight subagents, and a sidecar stale past the window means
-        # the turn is over — in both cases the count is leftover, not live work.
-        subagents_fresh = (
-            (c.get("subagent_in_flight_count") or 0) > 0
-            and c.get("sidecar_status") != "waiting"
-            and sidecar_fresh
-        )
-        if (c.get("pending_tool")
-                or c.get("sidecar_in_flight")
-                or subagents_fresh
-                or active_fresh):
-            return "working"
-        return "idle"
-    return "ended"
+    sidecar_fresh = (
+        (time.time() - (c.get("sidecar_ts") or 0)) < _WORKING_GAP_WINDOW
+    )
+    active_fresh = c.get("sidecar_status") == "active" and sidecar_fresh
+    # subagent_in_flight_count is the same class of sticky signal as
+    # sidecar_status: it's a transcript-derived count that the parent never
+    # decrements if subagents finish and the parent Stops without a final
+    # bookkeeping pass (live session 33a6df22: count=5 while genuinely idle
+    # 14 min). A clean Stop (sidecar_status=="waiting") is contradictory
+    # with in-flight subagents, and a sidecar stale past the window means
+    # the turn is over — in both cases the count is leftover, not live work.
+    subagents_fresh = (
+        (c.get("subagent_in_flight_count") or 0) > 0
+        and c.get("sidecar_status") != "waiting"
+        and sidecar_fresh
+    )
+    if (c.get("pending_tool")
+            or c.get("sidecar_in_flight")
+            or subagents_fresh
+            or active_fresh):
+        return "working"
+    return "idle"
 
 
 def _classify_attention(c):
