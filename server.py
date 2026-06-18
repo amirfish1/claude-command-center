@@ -39538,7 +39538,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # refreshes working/idle/waiting/ended in step with the bulk list
             # and the detail endpoint. session_live_status uses `live`; map it
             # to the `is_live` key the classifier reads.
-            status["state"] = _session_state_label({
+            _state_view = {
                 "is_live": status.get("live"),
                 "pending_tool": status.get("pending_tool"),
                 "sidecar_in_flight": status.get("sidecar_in_flight"),
@@ -39549,7 +39549,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "needs_approval": status.get("needs_approval"),
                 "last_assistant_text": status.get("last_assistant_text"),
                 "last_event_type": status.get("last_event_type"),
-            })
+            }
+            status["state"] = _session_state_label(_state_view)
+            status["ended_blocked"] = _session_ended_blocked(_state_view)
             self.send_json(status)
         elif re.match(r"^/api/conversations/[^/]+/files$", path):
             conv_id = path.split("/")[-2]
@@ -44067,6 +44069,23 @@ def _session_state_label(c):
     return "idle"
 
 
+def _session_ended_blocked(c):
+    """True when a NOT-live session died WHILE blocked on a human — i.e. the
+    same human-blocked conditions that would have made it "waiting" if it were
+    still live (formal AskUserQuestion / permission marker, or a detected soft
+    block). Lets a consumer distinguish "process died mid-question, the ask is
+    now orphaned" from a clean finish — both have state=="ended". Recency is
+    the consumer's job (mtime is already on the row); no time window here.
+    """
+    if c.get("is_live"):
+        return False
+    return bool(
+        c.get("question_waiting")
+        or c.get("needs_approval")
+        or _detect_soft_block(c)
+    )
+
+
 def _classify_attention(c):
     """For a single conv, decide whether it needs user attention and in what way.
     Returns a dict {kind, priority, where, did, insight, next_step} or None.
@@ -44647,6 +44666,7 @@ def compute_session_detail(session_id):
         "ok": True,
         "session_id": sid,
         "state": _session_state_label(row),
+        "ended_blocked": _session_ended_blocked(row),
         "is_live": bool(row.get("is_live")),
         "mtime": _mtime,
         "folder_label": _label,
@@ -44679,6 +44699,7 @@ def _apply_session_query_params(rows, qs):
     for r in out:
         if isinstance(r, dict):
             r["state"] = _session_state_label(r)
+            r["ended_blocked"] = _session_ended_blocked(r)
 
     since_raw = (qs.get("since", [""])[0] or "").strip()
     if since_raw:
