@@ -160,8 +160,15 @@ def test_state_label_working():
 
 
 def test_state_label_waiting():
+    # waiting is only meaningful for a LIVE session — a dead process is ended.
     assert server._session_state_label(
-        _row("Want me to proceed?")) == "waiting"
+        _row("Want me to proceed?", is_live=True)) == "waiting"
+
+
+def test_state_label_not_live_with_question_is_ended():
+    # Dead process whose last turn ended in a question: ended, not waiting.
+    assert server._session_state_label(
+        _row("Want me to proceed?")) == "ended"
 
 
 def test_state_label_idle():
