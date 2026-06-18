@@ -15416,14 +15416,19 @@ def _codex_app_server_request_to_proc(proc, method, params=None, timeout=20):
 
 
 def _codex_context_window_args():
-    """Opt every Codex invocation into the model's full 1M context window.
+    """Opt every Codex invocation into the model's full context window.
 
-    gpt-5.x default to a 272K working window but advertise a 1M max in their
-    model metadata ("context_window": 272000, "max_context_window": 1000000),
-    so raising `model_context_window` to 1M is supported (within max), not a
-    foot-gun. Passed as a global `-c` override on spawn, resume, and the
-    app-server so the window is consistent across a session's whole life.
-    Set CCC_CODEX_CONTEXT_1M=0 to fall back to the model default.
+    Codex CLAMPS `model_context_window` to the model's advertised
+    `max_context_window`, so passing 1M is a safe "give me the max" request, not
+    a foot-gun — it is silently capped per model:
+      - gpt-5.0 / gpt-5.1: 272K default, 1M max  → this lifts them to ~1M.
+      - gpt-5.5:           272K max               → clamped to ~272K (the live
+        usage pill then shows ~258K, i.e. 272K minus reserved output/system
+        tokens). 1M is NOT achievable on gpt-5.5; that is the model's ceiling,
+        not a CCC misconfiguration (CCC-153).
+    Passed as a global `-c` override on spawn, resume, and the app-server so the
+    window is consistent across a session's whole life. Set CCC_CODEX_CONTEXT_1M=0
+    to fall back to the model default.
     """
     if os.environ.get("CCC_CODEX_CONTEXT_1M", "1").lower() in ("0", "false", "no"):
         return []
