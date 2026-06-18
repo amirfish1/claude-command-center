@@ -36738,6 +36738,13 @@
 
   const CONV_BG_STORAGE_KEY = 'ccc-conv-bg-by-conversation';
   const CONV_BG_DEFAULT = 'charcoal';
+  // CCC-158: light-theme counterpart to the dark default. An UNpicked
+  // conversation should follow the app colour scheme — charcoal (≈ the dark
+  // --bg) in dark, a bright default in light — instead of forcing dark.
+  const CONV_BG_DEFAULT_LIGHT = 'paper';
+  function _effectiveThemeIsLight() {
+    return document.documentElement.getAttribute('data-theme') === 'light';
+  }
   const CONV_BG_PALETTE = [
     { id: 'charcoal', label: 'Charcoal', bg: '#0d1117' },
     { id: 'midnight', label: 'Midnight', bg: '#101827' },
@@ -36888,7 +36895,9 @@
     for (const key of keys) {
       if (prefs[key] && conversationBgPaletteItem(prefs[key]).id === prefs[key]) return prefs[key];
     }
-    return CONV_BG_DEFAULT;
+    // No explicit pick → theme-aware default so the conversation abides the
+    // colour scheme (CCC-158) instead of always showing the dark charcoal.
+    return _effectiveThemeIsLight() ? CONV_BG_DEFAULT_LIGHT : CONV_BG_DEFAULT;
   }
 
   function persistConversationBgForPane(paneId, colorId) {
@@ -36997,6 +37006,13 @@
       document.documentElement.setAttribute('data-theme', 'light');
     } else {
       document.documentElement.removeAttribute('data-theme');
+    }
+    // CCC-158: unpicked conversations use a theme-aware default background, so
+    // re-resolve every pane when the theme changes (also covers the system-
+    // theme OS flip). Explicitly-picked conversation colours are unaffected —
+    // storedConversationBgForPane returns their stored id, not the default.
+    if (typeof renderAllConversationBackgroundPalettes === 'function') {
+      renderAllConversationBackgroundPalettes();
     }
   }
   function applyFont(pref) {
