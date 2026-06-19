@@ -4610,16 +4610,10 @@
     }
     .conv-sticky-header .csh-col-ask { border-right: none; }
     .conv-sticky-header .csh-col { padding: 4px 0; }
-    /* Refresh: there should be ONE, in the header. Kill the status-pill refresh
-       and lift the page-reload FAB from the bottom to the top-right corner.
-       Pad the toolbar's right edge so the one-row header clears the FAB. */
+    /* Refresh: keep ONE — the page-reload FAB stays floating on the
+       conversation view (its default bottom-right). Just drop the redundant
+       status-pill refresh in the header. */
     #cccBreadcrumb .ccc-proc-refresh { display: none !important; }
-    #mobileReloadBtn.mobile-reload-btn {
-      top: calc(env(safe-area-inset-top) + 6px) !important;
-      bottom: auto !important;
-      width: 34px !important; height: 34px !important; font-size: 17px !important;
-    }
-    #convToolbar { padding-right: 50px; }
     /* Compact button lifted into the header (user request) — small icon, sits
        after the status pill; its base .visible toggle controls show/hide. */
     #convToolbar .compact-btn.in-header {
