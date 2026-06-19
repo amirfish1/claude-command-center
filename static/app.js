@@ -17319,13 +17319,26 @@
     // re-dedup). Each pulled bucket is then sorted newest-mtime-first to match
     // the COO board. Rows with no `state` (older fixtures / pre-stamp data)
     // stay in In-progress untouched.
+    //
+    // Open-ask RECENCY bound: ended_blocked is true for EVERY session that ever
+    // stopped mid-question — unbounded that is overwhelmingly ancient corpses
+    // (observed: 92 matches, 69 of them >30 days old) which buries the handful
+    // that are genuinely recoverable. Gate it to the last 48h — the same window
+    // the COO board / attention feed uses for this concept (server's
+    // _ATTENTION_FEED_RECENT_SECS = 48 * 3600), so the two surfaces stay
+    // consistent. Needs-you (waiting) needs no bound: a waiting session is live
+    // by definition, so it is already recent.
+    const _OPEN_ASK_RECENT_S = 48 * 3600;
+    const _nowSec = Math.floor(Date.now() / 1000);
+    const _openAskCutoff = _nowSec - _OPEN_ASK_RECENT_S;
     for (let _i = _sessionConvs.length - 1; _i >= 0; _i--) {
       const _c = _sessionConvs[_i];
       const _st = (_c && _c.state) || '';
       if (_st === 'waiting') {
         _needsYouConvs.push(_c);
         _sessionConvs.splice(_i, 1);
-      } else if (_st === 'ended' && _c && _c.ended_blocked) {
+      } else if (_st === 'ended' && _c && _c.ended_blocked
+                 && (_c.modified || 0) >= _openAskCutoff) {
         _openAskConvs.push(_c);
         _sessionConvs.splice(_i, 1);
       }
