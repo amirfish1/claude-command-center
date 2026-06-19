@@ -18665,20 +18665,23 @@
         + '</div>';
     }
     // Cross-repo source (CCC-159): once /api/issues/all has resolved,
-    // crossRepoIssuesData holds OPEN+CLOSED issues from EVERY tracked repo,
-    // not just the current one. The partition above only saw current-repo
-    // convs, so _ghIssueConvs is single-repo. When the cross-repo set is
-    // loaded, REPLACE _ghIssueConvs with its OPEN, not-archived rows —
-    // those rows cover the current repo too (same precedence the Archived
-    // view documents in _archiveRowsWithBacklog), so replacing avoids
-    // duplicates. Before /api/issues/all resolves (empty array) we leave
-    // the single-repo rows as a graceful fallback. _crossRepoIssueArchiveRows
-    // is a pure read of already-loaded state — no network/subprocess here.
+    // crossRepoIssuesData holds OPEN+CLOSED issues from EVERY tracked repo.
+    // MERGE the OTHER repos' OPEN issues into the section — do NOT replace
+    // (CCC-163 regression: replacing dropped the current repo's local backlog
+    // rows, which include TODO / parking / native-task cards, not just GH
+    // issues). The current repo's issues already came from the partition above
+    // with full local enrichment, so skip cross-repo rows for the current repo
+    // and any id already present, to avoid duplicates. Pure read of
+    // already-loaded state — no network/subprocess here.
     if (Array.isArray(crossRepoIssuesData) && crossRepoIssuesData.length) {
-      const _openCrossRepoRows = _crossRepoIssueArchiveRows()
-        .filter(r => (r.issue_state || 'OPEN') === 'OPEN' && !r.archived);
-      _ghIssueConvs.length = 0;
-      _ghIssueConvs.push(..._openCrossRepoRows);
+      const _curRepo = (typeof selectedRepoPath === 'function' && selectedRepoPath()) || '';
+      const _seenIssueIds = new Set(_ghIssueConvs.map(c => c && c.id).filter(Boolean));
+      const _otherRepoIssues = _crossRepoIssueArchiveRows().filter(r =>
+        r && (r.issue_state || 'OPEN') === 'OPEN'
+        && !r.archived
+        && r.repo_path !== _curRepo
+        && !_seenIssueIds.has(r.id));
+      for (const r of _otherRepoIssues) _ghIssueConvs.push(r);
     }
     // GH Issues section: open issues + TODO/PARKING_LOT cards with no
     // session yet. Mirrors the kanban "GH Issues" column so the sidebar
