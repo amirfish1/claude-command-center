@@ -57,6 +57,8 @@
     text-align:center;border-radius:5px;color:var(--dim);cursor:pointer;font-size:13px;
     border:1px solid transparent}
   .xbtn:hover{color:var(--blocked);border-color:var(--line);background:var(--panel2)}
+  .updated{font-size:11px;font-weight:600;color:var(--dim);letter-spacing:.2px;
+    margin:1px 0 2px;font-variant-numeric:tabular-nums}
   .where{font-size:11.5px;font-weight:600}
   .where.blocked{color:var(--blocked)} .where.review{color:var(--review)}
   .where.working{color:var(--working)} .where.idle,.where.ended{color:var(--dim)}
@@ -136,6 +138,12 @@ const ORDER={blocked:0,review:1,working:2,idle:3,ended:4};
 function rel(ts){ if(!ts)return "—"; const s=Date.now()/1000-ts;
   if(s<60)return Math.round(s)+"s"; if(s<3600)return Math.round(s/60)+"m";
   if(s<86400)return Math.round(s/3600)+"h"; return Math.round(s/86400)+"d";}
+// Absolute wall-clock of a card's last update — concrete time beats a drifting
+// "1m ago" for spotting staleness at a glance.
+function clock(ts){ if(!ts)return "—"; const d=new Date(ts*1000);
+  let h=d.getHours(); const ap=h>=12?"PM":"AM"; h=h%12||12;
+  const p=n=>String(n).padStart(2,"0");
+  return h+":"+p(d.getMinutes())+":"+p(d.getSeconds())+" "+ap;}
 
 let SESS={}, ATT={}, NOTES={}, SWEPT=0;
 // The actual, live reason a blocked session is waiting on you — pulled fresh
@@ -213,6 +221,7 @@ async function load(){
       `<div class="top"><span class="title">${title}</span>`+
       `<span class="repo">${L.folder_label||'—'}</span>`+
       `<span class="badge ${st.k}">${st.orphan?'ended · open ask':st.k}</span></div>`+
+      `<div class="updated">last update ${clock(L.mtime)}</div>`+
       `<div class="where ${st.k}${st.orphan?' orphan-where':''}">▸ ${st.where}${st.orphan?' · click to resume':''}</div>`+
       (analysis?`<div class="coo">${analysis}</div>`:'')+
       (snip?`<div class="snip">“${snip}…”</div>`:'')+
