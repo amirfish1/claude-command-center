@@ -4442,6 +4442,137 @@
       scrollbar-width: none;
     }
     #convToolbar #convStatus::-webkit-scrollbar { display: none; }
+
+    /* ── Goal #1: collapse the metadata chip row ──────────────────────────
+       The breadcrumb wrapped onto its own tall row carrying low-value chips
+       (the "claude" engine chip + the "15.1MB" size chip). On a phone neither
+       earns its vertical cost. Hide just those two decorations — KEEP the
+       title, the popout, and the merged process pill (rendered into
+       #convStatus) so the user still sees session name + one status pill.
+       Decoration-only display:none — nothing interactive is removed. */
+    #cccBreadcrumb.ccc-breadcrumb .ccc-breadcrumb-category,
+    #cccBreadcrumb.ccc-breadcrumb .ccc-breadcrumb-size {
+      display: none;
+    }
+    /* Let the title claim the freed width instead of truncating to "Disc…". */
+    #cccBreadcrumb.ccc-breadcrumb {
+      max-width: 100%;
+      padding: 1px 4px;
+      gap: 6px;
+    }
+    #cccBreadcrumb.ccc-breadcrumb .ccc-breadcrumb-title {
+      font-size: 13px;
+    }
+
+    /* ── Goal #2: compact the Back / COO / Today / bug nav ────────────────
+       These three topbar buttons (.bug-link covers Today, the injected COO
+       button which mirrors Today's class, and Report-a-bug) each carried a
+       text label that ate horizontal room and forced wrapping. Drop the
+       label text (decoration only — the glyph + title/aria-label remain) and
+       give every button a >=32px tap target so they read as a tidy icon row.
+       Nothing is display:none'd on an interactive element. */
+    #cccTopbar .bug-link .sh-action-label {
+      display: none;
+    }
+    #cccTopbar .bug-link {
+      margin-left: 4px;
+      padding: 0;
+      min-width: 34px;
+      min-height: 34px;
+      justify-content: center;
+      font-size: 16px;
+      gap: 0;
+    }
+    /* Shrink the in-toolbar Back button to match (keep it clearly tappable). */
+    #convToolbar .mobile-back-btn,
+    #convToolbar #mobileBackBtn {
+      padding: 5px 10px;
+      min-height: 32px;
+      font-size: 12px;
+    }
+  }
+
+  /* ── Goal #3: stop the sticky "original ask" card from overlapping ────────
+     .conv-sticky-header is position:sticky at top:0 of .conversations-view —
+     on a phone its 170px .csh-row floated over the first messages. Cap the
+     panel height hard and let the ask body scroll internally so the message
+     stream always starts below it, never behind it. Tighten padding/font to
+     reclaim more of the viewport for actual content. Collapsed default;
+     the user can still tap the chevron to expand to 50vh. */
+  @media (max-width: 950px) {
+    .conv-sticky-header {
+      padding: 8px 12px 8px;
+      margin-bottom: 6px;
+    }
+    .conv-sticky-header .csh-row {
+      height: 96px;
+    }
+    .conv-sticky-header.is-expanded .csh-row {
+      height: 42vh;
+    }
+    .conv-sticky-header .csh-col {
+      padding: 6px 9px;
+    }
+    .conv-sticky-header .user-msg {
+      font-size: 12.5px;
+      line-height: 1.32;
+    }
+    .conv-sticky-header .label {
+      font-size: 10px;
+      margin-bottom: 2px;
+    }
+  }
+
+  /* ── Goal #4: fold the bottom chrome (composer context strip) ─────────────
+     .conv-input-context carries the cwd path + the calc/cost usage line below
+     the composer. On a phone it spent a full row on a label-heavy strip.
+     Tighten padding/font and let it sit on one compact scrollable row.
+     The composer buttons (send/mic/etc.) are untouched here. */
+  @media (max-width: 950px) {
+    .conv-input-context {
+      gap: 6px 8px;
+      padding: 4px 10px;
+      font-size: 11px;
+    }
+    .conv-input-context .wp-usage-peak {
+      display: none;
+    }
+    /* New-session spawn-cwd row keeps its picker; only trim its padding. The
+       row is display:none outside new-session mode (base rule), so no
+       non-essential cwd chrome shows for an existing session anyway. */
+    .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-picker {
+      padding: 7px 10px;
+      font-size: 13px;
+    }
+  }
+
+  /* ── Goal #5: tighten message + status row vertical rhythm ────────────────
+     More message fits per screen once the inter-event margins shrink. */
+  @media (max-width: 950px) {
+    .conversations-view .event {
+      margin-bottom: 2px;
+      padding: 4px 10px;
+    }
+    .conversations-view .event.assistant {
+      margin-bottom: 6px;
+    }
+  }
+
+  /* ── Phone-specific (portrait) extra squeeze ──────────────────────────────
+     Below 600px every pixel counts; push the sticky ask even smaller and
+     drop the topbar gaps further. Still mobile-only, still no base changes. */
+  @media (max-width: 600px) {
+    .conv-sticky-header .csh-row {
+      height: 78px;
+    }
+    #cccTopbar .bug-link {
+      min-width: 32px;
+      min-height: 32px;
+      margin-left: 2px;
+    }
+    .conv-input-context {
+      padding: 3px 8px;
+    }
   }
   /* Submit+ — phone-mode send (teal/green to read as "talk", distinct from
      the accent send button next to it). */
