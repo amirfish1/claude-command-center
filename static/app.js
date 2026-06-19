@@ -6055,6 +6055,19 @@
   if ($convSubmitPlusBtn) $convSubmitPlusBtn.addEventListener('click', () => submitPlus('p1'));
   if ($convSteerBtn) $convSteerBtn.addEventListener('click', () => sendToTerminal('p1', 'steer'));
   if ($convCompactBtn) $convCompactBtn.addEventListener('click', () => compactCurrentSession());
+  // Mobile: lift the Compact button out of the composer into the header so the
+  // input row stays uncluttered (user request). Same node + click handler; its
+  // .visible show/hide toggle keeps working by id from its new parent.
+  (function _liftCompactToHeaderOnMobile() {
+    try {
+      if (typeof isTouchPrimary === 'function' && !isTouchPrimary()) return;
+      const toolbar = document.getElementById('convToolbar');
+      if ($convCompactBtn && toolbar && $convCompactBtn.parentElement !== toolbar) {
+        $convCompactBtn.classList.add('in-header');
+        toolbar.appendChild($convCompactBtn);
+      }
+    } catch (_) {}
+  })();
   if ($convTtsBtn) {
     $convTtsBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
     $convTtsBtn.addEventListener('click', () => readLastMessageAloud('p1'));

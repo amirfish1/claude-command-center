@@ -4620,6 +4620,12 @@
       width: 34px !important; height: 34px !important; font-size: 17px !important;
     }
     #convToolbar { padding-right: 50px; }
+    /* Compact button lifted into the header (user request) — small icon, sits
+       after the status pill; its base .visible toggle controls show/hide. */
+    #convToolbar .compact-btn.in-header {
+      order: 2; flex: 0 0 auto;
+      width: 30px; height: 30px; padding: 0;
+    }
   }
 
   /* Submit+ — phone-mode send (teal/green to read as "talk", distinct from
