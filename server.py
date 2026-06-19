@@ -4772,7 +4772,27 @@ def _archive_serve_rows(key, cache_options):
                 target=_archive_serve_refresh, args=(key, cache_options), daemon=True
             ).start()
         return rows, True
-    # Cold: nothing to serve yet — build once synchronously.
+    # Cold (e.g. just after a restart): the in-memory serve snapshot is empty.
+    # Rather than block this first caller on a full rebuild (~20-30s cold), serve
+    # the persisted response payload from the last run (rehydrated for fresh
+    # live state) and rebuild in the background. Only a truly first-ever run with
+    # no persisted cache builds synchronously.
+    entry = _archive_response_cache_get(key)
+    if entry and entry.get("conversations"):
+        rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
+        with _archive_serve_lock:
+            _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
+            if key not in _archive_serve_refreshing:
+                _archive_serve_refreshing.add(key)
+                spawn = True
+            else:
+                spawn = False
+        if spawn:
+            threading.Thread(
+                target=_archive_serve_refresh, args=(key, cache_options), daemon=True
+            ).start()
+        return [dict(r) for r in rows], True
+    # Nothing persisted yet — build once synchronously.
     return _archive_compute_rows(key, cache_options)
 
 

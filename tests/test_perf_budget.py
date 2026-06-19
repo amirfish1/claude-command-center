@@ -207,42 +207,43 @@ _ALL_OPTS = dict(include_prs=False, resolve_pr_states=False,
                  resolve_effective=False, resolve_worktree_dirty=False)
 
 
-def test_archive_all_warm_serve_skips_rebuild(big_projects, isolated_archive_cache, monkeypatch):
-    """Second ?all=1 on an unchanged corpus must serve from the build cache, no
-    O(all) rebuild.
+_ALL_KEY = server._archive_response_cache_key(**_ALL_OPTS)
 
-    This is the regression guard for the wedge: the warm path must NOT call
-    find_all_conversations (the full per-session scan) again. The serve cache is
-    cleared first so this exercises the durable signature-gated build cache, not
-    the ephemeral time window.
+
+def test_archive_build_cache_skips_rebuild_when_unchanged(big_projects, isolated_archive_cache, monkeypatch):
+    """The signature-gated build cache must NOT re-scan all sessions when the
+    transcript corpus is unchanged.
+
+    This is the regression guard for the wedge: a second pass over an unchanged
+    corpus must NOT call find_all_conversations (the full per-session scan). We
+    drive _archive_compute_rows (the synchronous build layer) directly — the SWR
+    serve layer is exercised separately — so the assertion is deterministic and
+    no background refresh threads leak into other tests.
     """
     n, _ = big_projects
-    rows1, from_cache1 = server._archive_all_rows_cached(_ALL_OPTS)
-    assert from_cache1 is False, "cold call should have built"
+    rows1, from_cache1 = server._archive_compute_rows(_ALL_KEY, _ALL_OPTS)
+    assert from_cache1 is False, "cold pass should have built"
     assert len(rows1) >= n, "cold build should include the synthetic corpus"
 
-    server._archive_serve_cache.clear()  # bypass the time-based serve window
     builds = _count_calls(monkeypatch, "find_all_conversations")
-    rows2, from_cache2 = server._archive_all_rows_cached(_ALL_OPTS)
-    assert from_cache2 is True, "warm call should have served from the build cache"
+    rows2, from_cache2 = server._archive_compute_rows(_ALL_KEY, _ALL_OPTS)
+    assert from_cache2 is True, "unchanged corpus should rehydrate, not rebuild"
     assert builds == [], (
         f"find_all_conversations called {len(builds)}x on an unchanged corpus — "
         "the ?all=1 build cache regressed (every poll re-scans all sessions)"
     )
-    assert len(rows2) == len(rows1), "warm serve must return the same rows as the cold build"
+    assert len(rows2) == len(rows1), "rehydrate must return the same rows as the build"
 
 
-def test_archive_all_cache_invalidates_on_change(big_projects, isolated_archive_cache, monkeypatch, tmp_path):
+def test_archive_build_cache_invalidates_on_change(big_projects, isolated_archive_cache, monkeypatch, tmp_path):
     """Touching a transcript must bust the signature and force exactly one rebuild
     (the build cache must never serve a stale payload after a real change)."""
     n, sids = big_projects
-    cold_rows, _ = server._archive_all_rows_cached(_ALL_OPTS)  # warm the cache
+    cold_rows, _ = server._archive_compute_rows(_ALL_KEY, _ALL_OPTS)  # warm the cache
 
-    # Sanity: with the serve window cleared, an unchanged call serves from the
-    # build cache without rebuilding (proves the bust below is the signature
-    # reacting to the edit, not a cold cache).
-    server._archive_serve_cache.clear()
-    _, warm_from_cache = server._archive_all_rows_cached(_ALL_OPTS)
+    # Sanity: an unchanged pass rehydrates without rebuilding (proves the bust
+    # below is the signature reacting to the edit, not a cold cache).
+    _, warm_from_cache = server._archive_compute_rows(_ALL_KEY, _ALL_OPTS)
     assert warm_from_cache is True
 
     # Mutate one transcript's mtime → corpus signature changes.
@@ -250,10 +251,9 @@ def test_archive_all_cache_invalidates_on_change(big_projects, isolated_archive_
     newer = time.time() - 29 * 86400  # still old enough to stay out of liveness windows
     os.utime(p, (newer, newer))
 
-    server._archive_serve_cache.clear()  # past the serve window → hit the build cache
     builds = _count_calls(monkeypatch, "find_all_conversations")
-    rows, from_cache = server._archive_all_rows_cached(_ALL_OPTS)
-    assert from_cache is False, "a changed corpus must NOT serve the stale cached payload"
+    rows, from_cache = server._archive_compute_rows(_ALL_KEY, _ALL_OPTS)
+    assert from_cache is False, "a changed corpus must rebuild, not rehydrate the stale payload"
     assert len(builds) == 1, (
         f"expected exactly one rebuild after a real change, got {len(builds)}"
     )
