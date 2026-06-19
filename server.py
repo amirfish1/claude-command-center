@@ -4372,7 +4372,7 @@ def find_all_conversations(
     return out
 
 
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 4
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 5
 _ARCHIVE_RESPONSE_CACHE_FILE = COMMAND_CENTER_STATE_DIR / "archive-conversations-cache.json"
 # The all-repos archive payload can be several MB on machines with years of
 # agent history. Refreshing it every 30 seconds keeps the Python server in a
@@ -4433,6 +4433,7 @@ def _load_archive_response_cache():
         keep[key] = {
             "cached_at": float(entry.get("cached_at") or 0),
             "conversations": entry.get("conversations") or [],
+            "signature": entry.get("signature") or None,
         }
     if keep:
         with _ARCHIVE_RESPONSE_CACHE_LOCK:
@@ -4464,15 +4465,17 @@ def _archive_response_cache_get(key):
         return {
             "cached_at": float(entry.get("cached_at") or 0),
             "conversations": [dict(r) for r in (entry.get("conversations") or []) if isinstance(r, dict)],
+            "signature": entry.get("signature") or None,
         }
 
 
-def _archive_response_cache_put(key, conversations):
+def _archive_response_cache_put(key, conversations, signature=None):
     rows = [dict(r) for r in (conversations or []) if isinstance(r, dict)]
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         _ARCHIVE_RESPONSE_CACHE[key] = {
             "cached_at": time.time(),
             "conversations": rows,
+            "signature": signature,
         }
     _save_archive_response_cache()
 
@@ -4497,6 +4500,118 @@ def _archive_response_refresh_begin(key):
 def _archive_response_refresh_end(key):
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         _ARCHIVE_RESPONSE_REFRESHING.discard(key)
+
+
+# Per-cache-key build locks. The ?all=1 endpoints (dashboard + COO board poll
+# them) had no single-flight: on a cold/changed cache, every concurrent poll
+# kicked off its own O(all-sessions) _build_archive_conversations. N parallel
+# full rebuilds pinned every core, GIL-starved click-to-open, and a 14s request
+# wedged the server (ignored SIGTERM, had to be kill -9'd). The lock makes the
+# rebuild single-flight: the first caller builds, the rest wait briefly and
+# share the freshly-cached payload instead of stampeding the CPU.
+_ARCHIVE_BUILD_LOCKS = {}
+_ARCHIVE_BUILD_LOCKS_GUARD = threading.Lock()
+
+
+def _archive_build_lock(key):
+    with _ARCHIVE_BUILD_LOCKS_GUARD:
+        lk = _ARCHIVE_BUILD_LOCKS.get(key)
+        if lk is None:
+            lk = threading.Lock()
+            _ARCHIVE_BUILD_LOCKS[key] = lk
+        return lk
+
+
+def _archive_corpus_signature():
+    """Cheap stat-only fingerprint of the conversation corpus on disk.
+
+    No JSON parse, no subprocess, no per-row liveness probe — just the
+    (mtime_ns, size) of every Claude transcript plus the mtime of the engine
+    transcript roots and CCC state dirs that feed archive rows. Two identical
+    signatures ⇒ nothing the archive build reads has changed, so the persisted
+    response payload can be served as-is without an O(all-sessions) rebuild.
+
+    A new/edited/removed transcript flips a file's mtime (and the dir mtime),
+    so the signature changes and the cache invalidates immediately — no TTL
+    staleness window for the dominant Claude corpus. Engine sources beyond
+    ~/.claude/projects are covered at directory granularity (their root mtime
+    changes when sessions are added/removed); in-place edits there fall back to
+    the build cache's own (mtime,size) gating on the next signature change.
+    """
+    parts = []
+    projects_root = Path.home() / ".claude" / "projects"
+    try:
+        dir_paths = sorted(
+            e.path for e in os.scandir(projects_root) if e.is_dir()
+        )
+    except OSError:
+        dir_paths = []
+    for d in dir_paths:
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    if not e.name.endswith(".jsonl"):
+                        continue
+                    try:
+                        st = e.stat()
+                    except OSError:
+                        continue
+                    parts.append(f"{e.path}|{st.st_mtime_ns}|{st.st_size}")
+        except OSError:
+            continue
+    # Fold in dir-level mtimes of sibling engine stores + CCC state so adds /
+    # removes / renames there also bust the cache. stat() only — cheap.
+    for extra in (
+        Path.home() / ".codex" / "sessions",
+        Path.home() / ".cursor" / "projects",
+        Path.home() / ".gemini" / "antigravity" / "brain",
+        Path.home() / ".hermes" / "state.db",
+        COMMAND_CENTER_STATE_DIR / "spawned-sessions.json",
+        SIDECAR_STATE_DIR,
+    ):
+        try:
+            parts.append(f"{extra}|{os.stat(extra).st_mtime_ns}")
+        except OSError:
+            pass
+    parts.sort()
+    h = hashlib.sha1()
+    for p in parts:
+        h.update(p.encode("utf-8", "replace"))
+        h.update(b"\n")
+    h.update(str(len(parts)).encode())
+    return h.hexdigest()
+
+
+def _archive_all_rows_cached(cache_options):
+    """Archive rows for an ?all=1 request, served from the persisted response
+    cache when the on-disk corpus is unchanged.
+
+    Fast path: corpus signature matches the cached entry → rehydrate the cached
+    rows (cheap: refresh only fast-changing live/sidecar/name/pin state, same as
+    /api/conversations/all's stale-serve) and return with NO O(all-sessions)
+    rebuild. Slow path: signature differs (a session was created / edited /
+    removed) or no cache → rebuild once under a per-key lock so concurrent
+    pollers don't stampede the CPU, persist with the new signature, return raw
+    build rows (identical shape to today's direct-build response).
+
+    Returns (rows, from_cache: bool).
+    """
+    key = _archive_response_cache_key(**cache_options)
+    sig = _archive_corpus_signature()
+    entry = _archive_response_cache_get(key)
+    if entry and entry.get("signature") == sig:
+        return _rehydrate_archive_cached_rows(entry.get("conversations") or []), True
+    lock = _archive_build_lock(key)
+    with lock:
+        # Re-check under the lock: a sibling caller may have just rebuilt for
+        # this exact signature while we waited.
+        entry = _archive_response_cache_get(key)
+        if entry and entry.get("signature") == sig:
+            return _rehydrate_archive_cached_rows(entry.get("conversations") or []), True
+        convs = _build_archive_conversations(**cache_options)
+        _archive_response_cache_put(key, convs, signature=sig)
+        _save_conv_meta_cache()
+        return convs, False
 
 
 _ARCHIVE_SIDECAR_DEFAULTS = {
@@ -39120,17 +39235,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             if qs.get("all", ["0"])[0] in ("1", "true"):
                 engine_filter = (qs.get("engine", [""])[0] or "").strip().lower()
-                rows = _build_archive_conversations(
-                    include_prs=qs.get("include_prs", ["0"])[0] in ("1", "true"),
-                    resolve_pr_states=qs.get("resolve_prs", ["0"])[0] in ("1", "true"),
-                    resolve_effective=qs.get("resolve_effective", ["0"])[0] in ("1", "true"),
-                    resolve_worktree_dirty=qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
-                )
+                rows, _from_cache = _archive_all_rows_cached({
+                    "include_prs": qs.get("include_prs", ["0"])[0] in ("1", "true"),
+                    "resolve_pr_states": qs.get("resolve_prs", ["0"])[0] in ("1", "true"),
+                    "resolve_effective": qs.get("resolve_effective", ["0"])[0] in ("1", "true"),
+                    "resolve_worktree_dirty": qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
+                })
                 spawned = list_spawned_sessions()
                 if engine_filter:
                     rows = [r for r in rows if (r.get("engine") or r.get("source") or "").lower() == engine_filter]
                     spawned = [r for r in spawned if (r.get("engine") or "").lower() == engine_filter]
-                _save_conv_meta_cache()
                 rows = _apply_session_query_params(rows, qs)
                 self.send_json({
                     "ok": True,
@@ -39157,17 +39271,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             if qs.get("all", ["0"])[0] in ("1", "true"):
                 engine_filter = (qs.get("engine", [""])[0] or "").strip().lower()
-                rows = _build_archive_conversations(
-                    include_prs=qs.get("include_prs", ["0"])[0] in ("1", "true"),
-                    resolve_pr_states=qs.get("resolve_prs", ["0"])[0] in ("1", "true"),
-                    resolve_effective=qs.get("resolve_effective", ["0"])[0] in ("1", "true"),
-                    resolve_worktree_dirty=qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
-                )
+                rows, _from_cache = _archive_all_rows_cached({
+                    "include_prs": qs.get("include_prs", ["0"])[0] in ("1", "true"),
+                    "resolve_pr_states": qs.get("resolve_prs", ["0"])[0] in ("1", "true"),
+                    "resolve_effective": qs.get("resolve_effective", ["0"])[0] in ("1", "true"),
+                    "resolve_worktree_dirty": qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
+                })
                 spawned = list_spawned_sessions()
                 if engine_filter:
                     rows = [r for r in rows if (r.get("engine") or r.get("source") or "").lower() == engine_filter]
                     spawned = [r for r in spawned if (r.get("engine") or "").lower() == engine_filter]
-                _save_conv_meta_cache()
                 self.send_json({
                     "ok": True,
                     "conversations": rows,
