@@ -4574,6 +4574,44 @@
       padding: 3px 8px;
     }
   }
+  /* ── Mobile conv-reader header → ONE tidy row (user request) ──────────────
+     Collapse the reader header to a single row:  ‹  Title…  ○status ↻
+     Hide the popout (no popout windows on a phone), COO + Today (they belong in
+     the conversation-LIST top bar, not the reader), the engine/repo chip, the
+     size, and the HH:MM:SS time. Back keeps only its arrow. id-specificity
+     (#cccBreadcrumb…) overrides the earlier full-width title rule so the title
+     shares the row and ellipsizes. Mobile-only — no base/desktop rule touched. */
+  @media (max-width: 950px) {
+    #convToolbar { flex-wrap: nowrap; align-items: center; }
+    #convToolbar .mobile-back-btn { order: -3; padding: 4px 8px; flex: 0 0 auto; }
+    #convToolbar .mobile-back-btn .mb-label { display: none; }
+    #cccBreadcrumb.ccc-breadcrumb {
+      order: -2; flex: 1 1 auto; min-width: 0; flex-wrap: nowrap;
+    }
+    #cccBreadcrumb.ccc-breadcrumb .ccc-breadcrumb-title {
+      order: 0; flex: 1 1 auto; width: auto; min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font-size: 14px;
+    }
+    #cccBreadcrumb .ccc-breadcrumb-category,
+    #cccBreadcrumb .ccc-breadcrumb-size,
+    #cccBreadcrumb .ccc-breadcrumb-popout,
+    #cccBreadcrumb .ccc-proc-checked { display: none !important; }
+    #cccTopbar #cooPopButton,
+    #cccTopbar #todayToggleBtn { display: none !important; }
+    #cccBreadcrumb .ccc-breadcrumb-proc { order: 1; flex: 0 0 auto; }
+    /* Kill the keyboard-hint line (dormant · ⏎ send) — no hardware Enter on a
+       phone; it just steals a row above the composer. */
+    .conv-input-hint { display: none !important; }
+    /* The "last ask" sticky uses full width with fewer boxes — drop the card
+       border / radius / box background and the inner divider. */
+    .conv-sticky-header .csh-row {
+      border: none; border-radius: 0; background: transparent;
+    }
+    .conv-sticky-header .csh-col-ask { border-right: none; }
+    .conv-sticky-header .csh-col { padding: 4px 0; }
+  }
+
   /* Submit+ — phone-mode send (teal/green to read as "talk", distinct from
      the accent send button next to it). */
   .conv-input-bar .submit-plus-btn {
