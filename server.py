@@ -4537,6 +4537,13 @@ def _archive_corpus_signature():
     ~/.claude/projects are covered at directory granularity (their root mtime
     changes when sessions are added/removed); in-place edits there fall back to
     the build cache's own (mtime,size) gating on the next signature change.
+
+    Deliberately EXCLUDES fast-changing live state (sidecar markers, the spawned
+    registry): those mutate on every poll while a session is live, so folding
+    them in would bust the build cache constantly and pin the CPU. Live state is
+    not part of the expensive build — it is layered back on by
+    _rehydrate_archive_cached_rows and coalesced by the serve cache, so it does
+    not need to gate the transcript-parse cache.
     """
     parts = []
     projects_root = Path.home() / ".claude" / "projects"
@@ -4559,15 +4566,14 @@ def _archive_corpus_signature():
                     parts.append(f"{e.path}|{st.st_mtime_ns}|{st.st_size}")
         except OSError:
             continue
-    # Fold in dir-level mtimes of sibling engine stores + CCC state so adds /
-    # removes / renames there also bust the cache. stat() only — cheap.
+    # Fold in dir-level mtimes of sibling engine transcript stores so adds /
+    # removes / renames there also bust the cache. stat() only — cheap. These
+    # are transcript corpora (not live state), so they are safe to gate on.
     for extra in (
         Path.home() / ".codex" / "sessions",
         Path.home() / ".cursor" / "projects",
         Path.home() / ".gemini" / "antigravity" / "brain",
         Path.home() / ".hermes" / "state.db",
-        COMMAND_CENTER_STATE_DIR / "spawned-sessions.json",
-        SIDECAR_STATE_DIR,
     ):
         try:
             parts.append(f"{extra}|{os.stat(extra).st_mtime_ns}")
@@ -4623,43 +4629,47 @@ def _archive_all_rows_cached(cache_options):
     key = _archive_response_cache_key(**cache_options)
     sig = _archive_corpus_signature()
 
-    # Tier 1 — coalesced rehydrated snapshot.
-    if _ARCHIVE_SERVE_TTL > 0:
-        now = time.time()
+    def _fresh_serve():
+        """A copy of the coalesced snapshot if it is fresh for this sig, else None."""
+        if _ARCHIVE_SERVE_TTL <= 0:
+            return None
         with _archive_serve_lock:
             sc = _archive_serve_cache.get(key)
-            if sc and sc.get("sig") == sig and (now - sc.get("ts", 0)) < _ARCHIVE_SERVE_TTL:
-                return [dict(r) for r in sc.get("rows") or []], True
+            if sc and sc.get("sig") == sig and (time.time() - sc.get("ts", 0)) < _ARCHIVE_SERVE_TTL:
+                return [dict(r) for r in sc.get("rows") or []]
+        return None
 
-    def _remember(rows):
+    # Tier 1 — lock-free coalesced serve. The common case: many concurrent
+    # dashboard/COO polls share one ≤TTL-old rehydrated snapshot.
+    hit = _fresh_serve()
+    if hit is not None:
+        return hit, True
+
+    # Tiers 2 & 3 run under a per-key lock so concurrent missers share ONE
+    # rehydrate/rebuild instead of each re-probing liveness (the GIL pile-up
+    # that held the endpoint at ~8s under real polling). Late arrivals re-check
+    # Tier 1 and get the snapshot the winner just populated.
+    lock = _archive_build_lock(key)
+    with lock:
+        hit = _fresh_serve()
+        if hit is not None:
+            return hit, True
+        entry = _archive_response_cache_get(key)
+        if entry and entry.get("signature") == sig:
+            rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
+            from_cache = True
+        else:
+            rows = _build_archive_conversations(**cache_options)
+            _archive_response_cache_put(key, rows, signature=sig)
+            _save_conv_meta_cache()
+            from_cache = False
         if _ARCHIVE_SERVE_TTL > 0:
             with _archive_serve_lock:
                 _archive_serve_cache[key] = {"ts": time.time(), "sig": sig, "rows": rows}
-        return rows
-
-    # Tier 2 — signature-matched persisted response cache.
-    entry = _archive_response_cache_get(key)
-    if entry and entry.get("signature") == sig:
-        return _remember(_rehydrate_archive_cached_rows(entry.get("conversations") or [])), True
-
-    # Tier 3 — rebuild under a per-key lock (single-flight).
-    lock = _archive_build_lock(key)
-    with lock:
-        # Re-check both caches under the lock: a sibling caller may have just
-        # rebuilt for this exact signature while we waited.
-        if _ARCHIVE_SERVE_TTL > 0:
-            now = time.time()
-            with _archive_serve_lock:
-                sc = _archive_serve_cache.get(key)
-                if sc and sc.get("sig") == sig and (now - sc.get("ts", 0)) < _ARCHIVE_SERVE_TTL:
-                    return [dict(r) for r in sc.get("rows") or []], True
-        entry = _archive_response_cache_get(key)
-        if entry and entry.get("signature") == sig:
-            return _remember(_rehydrate_archive_cached_rows(entry.get("conversations") or [])), True
-        convs = _build_archive_conversations(**cache_options)
-        _archive_response_cache_put(key, convs, signature=sig)
-        _save_conv_meta_cache()
-        return _remember(convs), False
+            # Return a copy so caller-side filtering/sorting can't corrupt the
+            # snapshot other concurrent callers will read.
+            return [dict(r) for r in rows], from_cache
+        return rows, from_cache
 
 
 _ARCHIVE_SIDECAR_DEFAULTS = {
