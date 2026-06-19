@@ -128,10 +128,27 @@
 // localStorage holds ONLY the user's chosen id list (add/remove).
 const KEY="cooBoardList.v3";
 let SEED=[];
+// Auto mode: the board tracks the last AUTO_N most-recently-active sessions
+// (newest-touched, not archived) instead of a hand-curated list — so it mirrors
+// the top of the active conversation list without manual add/remove.
+let AUTO_IDS=[]; const AUTO_N=14;
+async function refreshAutoList(){
+  try{
+    const d=await fetch('/api/sessions?all=1').then(r=>r.json());
+    const rows=d.sessions||d.conversations||[];
+    AUTO_IDS=rows
+      .filter(r=>!r.archived)
+      .sort((a,b)=>((b.mtime||b.modified||0)-(a.mtime||a.modified||0)))
+      .slice(0,AUTO_N)
+      .map(r=>r.session_id||r.id)
+      .filter(Boolean);
+  }catch(e){}
+}
 function getList(){
+  if(AUTO_IDS.length) return AUTO_IDS.map(id=>({id}));
+  // fallback before the first auto-list load lands
   try{const v=JSON.parse(localStorage.getItem(KEY)); if(Array.isArray(v)&&v.length)return v;}catch(e){}
-  const seeded=SEED.map(id=>({id})); if(seeded.length) localStorage.setItem(KEY, JSON.stringify(seeded));
-  return seeded;
+  return SEED.map(id=>({id}));
 }
 function setList(l){ localStorage.setItem(KEY, JSON.stringify(l)); }
 function removeId(id){ setList(getList().filter(x=>x.id!==id)); load(); }
@@ -204,6 +221,16 @@ async function load(){
     // Notes first (cheap) — gives us the seed + which ids we track.
     const rn=await fetch('/static/coo-notes.json?t='+Date.now()).then(r=>r.json()).catch(()=>({cards:{}}));
     NOTES=rn.cards||{}; SWEPT=rn.swept_global||0; SEED=rn.seed||[];
+    // Refresh the "last 14 active" id set from the full list — heavy (~all
+    // sessions, currently a few seconds), so NEVER block the paint on it. Run
+    // it in the background on first load + every ATT_EVERY polls (~2 min); when
+    // the first list lands, re-load so the 14 appear. Until then we paint the
+    // seed/last-known set so the board never blanks.
+    POLLN++;
+    if(POLLN===1 || POLLN % ATT_EVERY === 0){
+      const first=(POLLN===1);
+      refreshAutoList().then(()=>{ if(first && AUTO_IDS.length) load(); });
+    }
     const ids=getList().map(x=>x.id);
     // Fast path: the per-session reads land in ~20ms — paint IMMEDIATELY so the
     // board never blanks. /api/attention is ~2.4s, so it must NOT block paint;
@@ -215,17 +242,10 @@ async function load(){
     SESS={}; details.forEach(({id,d})=>{ if(d&&d.ok!==false) SESS[id]=d; });
     VERIFIED=Date.now()/1000;  // state re-confirmed against the live API
     paint();  // instant first paint from the fast session data
-    // /api/attention is the expensive call (~2.4s of server CPU). The primary
-    // state (waiting/working/idle/ended) + block reason all come from the fast
-    // /api/session reads above; attention only ADDS the "review" bucket + a
-    // couple fallbacks. So fetch it rarely — once on first load, then every
-    // ATT_EVERY-th poll (~2 min) — instead of every 30s. This is the CPU fix.
-    POLLN++;
-    if(POLLN===1 || POLLN % ATT_EVERY === 0){
-      fetch('/api/attention?scope=live').then(r=>r.json())
-        .then(ra=>{ ATT={}; (ra.items||[]).forEach(it=>ATT[it.session_id]=it); paint(); })
-        .catch(()=>{});
-    }
+    // (No /api/attention call: the board now sources its id set from the full
+    // list and per-card state from /api/session, so the only thing attention
+    // added — the "review" bucket — isn't worth a second 2.4s call. statusOf
+    // simply never reaches its A-branches now.)
   }catch(e){ paint(); }
 }
 function paint(){
