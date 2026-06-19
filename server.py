@@ -4689,6 +4689,26 @@ def _archive_all_rows_cached(cache_options):
     return _archive_serve_rows(key, cache_options)
 
 
+def _stamp_archive_state(rows):
+    """Stamp the single-source-of-truth coarse `state` + `ended_blocked` onto
+    every archive row, IN PLACE.
+
+    Same stamp /api/sessions applies via _apply_session_query_params, lifted into
+    the snapshot itself so it is cache-safe: it lands in the stale-while-revalidate
+    serve cache and the persisted-rows cold serve, so /api/conversations?all=1
+    (which has no post-serve projection pass) carries `state`/`ended_blocked` on
+    every warm hit, not just on a cold build. Pure string/flag work on fields
+    already merged onto the row — no subprocess, no transcript parse — so it is
+    safe to run at build/rehydrate time on all rows. Additive: touches only the
+    two keys.
+    """
+    for r in rows or []:
+        if isinstance(r, dict):
+            r["state"] = _session_state_label(r)
+            r["ended_blocked"] = _session_ended_blocked(r)
+    return rows
+
+
 def _archive_compute_rows(key, cache_options):
     """Produce archive rows under the per-key build lock (single-flight).
 
@@ -4710,6 +4730,7 @@ def _archive_compute_rows(key, cache_options):
             _archive_response_cache_put(key, rows, signature=sig)
             _save_conv_meta_cache()
             from_cache = False
+    _stamp_archive_state(rows)  # cache-safe: stamp lives in the served snapshot
     if _ARCHIVE_SERVE_TTL > 0:
         with _archive_serve_lock:
             _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
@@ -4780,6 +4801,7 @@ def _archive_serve_rows(key, cache_options):
     entry = _archive_response_cache_get(key)
     if entry and entry.get("conversations"):
         rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
+        _stamp_archive_state(rows)  # cache-safe: stamp lives in the served snapshot
         with _archive_serve_lock:
             _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
             if key not in _archive_serve_refreshing:

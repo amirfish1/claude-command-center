@@ -280,6 +280,32 @@ def test_archive_all_serve_cache_coalesces_concurrent_polls(big_projects, isolat
     )
 
 
+def test_archive_rows_carry_state_stamp_cache_safe(big_projects, isolated_archive_cache, monkeypatch):
+    """state + ended_blocked must be stamped INTO the cached snapshot, so a warm
+    serve (no rebuild, no rehydrate) still carries them.
+
+    /api/conversations?all=1 has no post-serve projection pass, so a stamp applied
+    only at response time would be absent on warm hits. Guard that the stamp lives
+    in the serve cache: a Tier-1 warm serve carries state+ended_blocked on every
+    row without re-running the build.
+    """
+    monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 60.0)
+    cold_rows, _ = server._archive_all_rows_cached(_ALL_OPTS)  # cold build populates the snapshot
+    for r in cold_rows:
+        assert r.get("state") is not None, "cold build row missing state"
+        assert "ended_blocked" in r, "cold build row missing ended_blocked"
+
+    # Warm Tier-1 serve: no rebuild, no rehydrate — must still carry the stamp.
+    builds = _count_calls(monkeypatch, "find_all_conversations")
+    rehydrates = _count_calls(monkeypatch, "_rehydrate_archive_cached_rows")
+    warm_rows, from_cache = server._archive_all_rows_cached(_ALL_OPTS)
+    assert from_cache is True and builds == [] and rehydrates == [], "warm serve should not recompute"
+    assert warm_rows, "warm serve returned no rows"
+    for r in warm_rows:
+        assert r.get("state") is not None, "warm-served row missing state (stamp not cache-safe)"
+        assert "ended_blocked" in r, "warm-served row missing ended_blocked (stamp not cache-safe)"
+
+
 # ── Latency budget (lenient smoke on the scale fixture) ───────────────────────
 
 def test_stats_build_under_budget(big_projects):
