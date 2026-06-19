@@ -4582,36 +4582,84 @@ def _archive_corpus_signature():
     return h.hexdigest()
 
 
+# Short-TTL coalescing cache for the fully-rehydrated ?all=1 payload. The
+# dashboard AND the COO board both poll these endpoints; without coalescing,
+# every concurrent poll re-ran _rehydrate_archive_cached_rows — whose dominant
+# cost is the per-live-session _archive_session_is_live probe (engine
+# classification scans, ~25ms each). Under real polling those probes serialized
+# on the GIL and held the endpoint at 1-2s + a sustained CPU burn. Same fix and
+# rationale as _live_activity_snapshot's 1.5s window: serve one ≤TTL-old
+# rehydrated snapshot to all concurrent callers. Transcript-derived fields
+# (state / ended_blocked / question from JSONL) are signature-gated and stay
+# fresh on any real change; only process-liveness/sidecar lag, by ≤TTL.
+try:
+    _ARCHIVE_SERVE_TTL = max(0.0, float(os.environ.get("CCC_ARCHIVE_SERVE_TTL_SEC", "2")))
+except ValueError:
+    _ARCHIVE_SERVE_TTL = 2.0
+_archive_serve_cache = {}      # key -> {"ts", "sig", "rows"}
+_archive_serve_lock = threading.Lock()
+
+
 def _archive_all_rows_cached(cache_options):
     """Archive rows for an ?all=1 request, served from the persisted response
     cache when the on-disk corpus is unchanged.
 
-    Fast path: corpus signature matches the cached entry → rehydrate the cached
-    rows (cheap: refresh only fast-changing live/sidecar/name/pin state, same as
-    /api/conversations/all's stale-serve) and return with NO O(all-sessions)
-    rebuild. Slow path: signature differs (a session was created / edited /
-    removed) or no cache → rebuild once under a per-key lock so concurrent
-    pollers don't stampede the CPU, persist with the new signature, return raw
-    build rows (identical shape to today's direct-build response).
+    Three tiers, cheapest first:
+      1. Coalescing serve cache: a fully-rehydrated snapshot ≤_ARCHIVE_SERVE_TTL
+         old for the same corpus signature → return a copy immediately, so
+         concurrent dashboard/COO polls share one rehydrate instead of each
+         re-probing liveness.
+      2. Signature-matched response cache: rehydrate the persisted rows (cheap —
+         refresh only fast-changing live/sidecar/name/pin state, same transform
+         /api/conversations/all's stale-serve uses) with NO O(all-sessions)
+         rebuild.
+      3. Miss / changed corpus: rebuild once under a per-key lock so concurrent
+         pollers don't stampede the CPU (the bug that wedged the server),
+         persist with the new signature, return raw build rows (identical shape
+         to today's direct-build response).
 
-    Returns (rows, from_cache: bool).
+    Returns (rows, from_cache: bool). from_cache is False only when tier 3 ran.
     """
     key = _archive_response_cache_key(**cache_options)
     sig = _archive_corpus_signature()
+
+    # Tier 1 — coalesced rehydrated snapshot.
+    if _ARCHIVE_SERVE_TTL > 0:
+        now = time.time()
+        with _archive_serve_lock:
+            sc = _archive_serve_cache.get(key)
+            if sc and sc.get("sig") == sig and (now - sc.get("ts", 0)) < _ARCHIVE_SERVE_TTL:
+                return [dict(r) for r in sc.get("rows") or []], True
+
+    def _remember(rows):
+        if _ARCHIVE_SERVE_TTL > 0:
+            with _archive_serve_lock:
+                _archive_serve_cache[key] = {"ts": time.time(), "sig": sig, "rows": rows}
+        return rows
+
+    # Tier 2 — signature-matched persisted response cache.
     entry = _archive_response_cache_get(key)
     if entry and entry.get("signature") == sig:
-        return _rehydrate_archive_cached_rows(entry.get("conversations") or []), True
+        return _remember(_rehydrate_archive_cached_rows(entry.get("conversations") or [])), True
+
+    # Tier 3 — rebuild under a per-key lock (single-flight).
     lock = _archive_build_lock(key)
     with lock:
-        # Re-check under the lock: a sibling caller may have just rebuilt for
-        # this exact signature while we waited.
+        # Re-check both caches under the lock: a sibling caller may have just
+        # rebuilt for this exact signature while we waited.
+        if _ARCHIVE_SERVE_TTL > 0:
+            now = time.time()
+            with _archive_serve_lock:
+                sc = _archive_serve_cache.get(key)
+                if sc and sc.get("sig") == sig and (now - sc.get("ts", 0)) < _ARCHIVE_SERVE_TTL:
+                    return [dict(r) for r in sc.get("rows") or []], True
         entry = _archive_response_cache_get(key)
         if entry and entry.get("signature") == sig:
-            return _rehydrate_archive_cached_rows(entry.get("conversations") or []), True
+            return _remember(_rehydrate_archive_cached_rows(entry.get("conversations") or [])), True
         convs = _build_archive_conversations(**cache_options)
         _archive_response_cache_put(key, convs, signature=sig)
         _save_conv_meta_cache()
-        return convs, False
+        return _remember(convs), False
 
 
 _ARCHIVE_SIDECAR_DEFAULTS = {
