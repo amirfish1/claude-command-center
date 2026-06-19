@@ -3885,6 +3885,8 @@
   #convList .conv-ghissues-section,
   #convList .conv-repo-search-section,
   #convList .conv-readytomerge-section,
+  #convList .conv-needsyou-section,
+  #convList .conv-openask-section,
   #convList .conv-done-section,
   #convList .conv-inprogress-section { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 6px; }
   /* The first section in the list (whichever it is — typically GH Issues,
@@ -3893,6 +3895,8 @@
   #convList > .conv-ghissues-section:first-child,
   #convList > .conv-repo-search-section:first-child,
   #convList > .conv-readytomerge-section:first-child,
+  #convList > .conv-needsyou-section:first-child,
+  #convList > .conv-openask-section:first-child,
   #convList > .conv-done-section:first-child,
   #convList > .conv-inprogress-section:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
   #convList .conv-repo-search-header {
@@ -3930,6 +3934,8 @@
   #convList .conv-archived-header,
   #convList .conv-ghissues-header,
   #convList .conv-readytomerge-header,
+  #convList .conv-needsyou-header,
+  #convList .conv-openask-header,
   #convList .conv-done-header,
   #convList .conv-inprogress-header {
     width: 100%; display: flex; align-items: center; gap: 8px;
@@ -3940,16 +3946,22 @@
   #convList .conv-archived-header:hover,
   #convList .conv-ghissues-header:hover,
   #convList .conv-readytomerge-header:hover,
+  #convList .conv-needsyou-header:hover,
+  #convList .conv-openask-header:hover,
   #convList .conv-done-header:hover,
   #convList .conv-inprogress-header:hover { color: var(--text); }
   #convList .conv-archived-arrow,
   #convList .conv-ghissues-arrow,
   #convList .conv-readytomerge-arrow,
+  #convList .conv-needsyou-arrow,
+  #convList .conv-openask-arrow,
   #convList .conv-done-arrow,
   #convList .conv-inprogress-arrow { font-size: 11px; opacity: 0.7; }
   #convList .conv-archived-count,
   #convList .conv-ghissues-count,
   #convList .conv-readytomerge-count,
+  #convList .conv-needsyou-count,
+  #convList .conv-openask-count,
   #convList .conv-done-count,
   #convList .conv-inprogress-count {
     margin-left: auto;
@@ -3960,8 +3972,27 @@
   #convList .conv-archived-section.collapsed .conv-archived-list,
   #convList .conv-ghissues-section.collapsed .conv-ghissues-list,
   #convList .conv-readytomerge-section.collapsed .conv-readytomerge-list,
+  #convList .conv-needsyou-section.collapsed .conv-needsyou-list,
+  #convList .conv-openask-section.collapsed .conv-openask-list,
   #convList .conv-done-section.collapsed .conv-done-list,
   #convList .conv-inprogress-section.collapsed .conv-inprogress-list { display: none; }
+  /* "Needs you" = Claude is blocked on the human right now (question /
+   * permission). Orange/amber accent — the strongest "act now" signal in the
+   * list. "Open ask" = a session that ENDED still waiting on the human; purple
+   * accent so it reads as a question left unanswered, distinct from the live
+   * urgency of Needs-you. Both mirror the Ready-to-merge tint treatment. */
+  #convList .conv-needsyou-label { color: var(--orange); }
+  #convList .conv-needsyou-count {
+    background: color-mix(in srgb, var(--orange) 12%, transparent);
+    border-color: color-mix(in srgb, var(--orange) 35%, transparent);
+    color: var(--orange);
+  }
+  #convList .conv-openask-label { color: var(--purple); }
+  #convList .conv-openask-count {
+    background: color-mix(in srgb, var(--purple) 12%, transparent);
+    border-color: color-mix(in srgb, var(--purple) 35%, transparent);
+    color: var(--purple);
+  }
   /* Done section (CCC-151): a manual "moved out of In progress" bucket. Muted
    * neutral label (it's an archive-ish parking spot, not an action item), a
    * drop-target highlight while a conv row is dragged over it, and a per-row ×
