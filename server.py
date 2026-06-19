@@ -7007,6 +7007,7 @@ SESSION_NAMES_FILE = COMMAND_CENTER_STATE_DIR / "session-names.json"  # side-car
 SESSION_NAME_MAX_CHARS = 120
 CONVERSATION_ORDER_FILE = COMMAND_CENTER_STATE_DIR / "conversation-order.json"  # [session_id,...]
 ARCHIVED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "archived-conversations.json"  # [session_id,...]
+ARCHIVE_GRACE_FILE = COMMAND_CENTER_STATE_DIR / "archive-sticky.json"  # {session_id: archived_at_epoch} — manual archives, sticky vs auto-unarchive
 PINNED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "pinned-conversations.json"  # [session_id,...]
 VERIFIED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "verified-conversations.json"  # [session_id,...]
 # {session_id: epoch_seconds} — last time the user interacted with this card
@@ -7798,7 +7799,35 @@ def _save_conversation_order(order):
 
 
 _archive_auto_sweep_last = 0.0
-_archive_grace: dict = {}  # sid → epoch of manual archive; sweep skips these for 10 min
+
+
+def _load_archive_grace() -> dict:
+    """Load the sticky manual-archive map (sid → archived-at epoch).
+
+    A session in this map was deliberately archived by the user and must NOT
+    be auto-unarchived even while it's live and streaming. Persisted so the
+    stickiness survives a server restart ("archive refuses to work" on live
+    rows — CCC-149 follow-up).
+    """
+    try:
+        data = json.loads(ARCHIVE_GRACE_FILE.read_text())
+        if isinstance(data, dict):
+            return {str(k): float(v) for k, v in data.items()
+                    if isinstance(k, str) and isinstance(v, (int, float))}
+    except (OSError, ValueError, TypeError):
+        pass
+    return {}
+
+
+def _save_archive_grace() -> None:
+    try:
+        LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        ARCHIVE_GRACE_FILE.write_text(json.dumps(_archive_grace, indent=2))
+    except OSError:
+        pass
+
+
+_archive_grace: dict = _load_archive_grace()  # sid → epoch; manual archives, sticky vs auto-unarchive
 
 
 def _auto_unarchive_live_sessions(archived):
@@ -7824,7 +7853,11 @@ def _auto_unarchive_live_sessions(archived):
     changed = False
     for sid in archived:
         fresh = False
-        if sid in live and now - _archive_grace.get(sid, 0) > 600:
+        # Sticky manual archives are exempt: a session the user deliberately
+        # archived stays archived even while it streams (CCC-149 follow-up).
+        # Only sessions that entered the archive WITHOUT a manual marker (none
+        # today, but kept for CCC-117's resume-brings-back intent) can bounce.
+        if sid in live and sid not in _archive_grace:
             try:
                 path, _parser = _resolve_conversation_reader(sid)
                 fresh = path and path.is_file() and now - path.stat().st_mtime < 300
@@ -42259,13 +42292,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     archived.remove(sid)
                     now_archived = False
                     _archive_grace.pop(sid, None)
+                    _save_archive_grace()
                 else:
                     archived.append(sid)
                     now_archived = True
-                    # Shield this deliberate archive from the auto-unarchive
-                    # sweep (CCC-117) — the kill below freshens the transcript
-                    # mtime, which would otherwise bounce it right back.
+                    # Make this deliberate archive STICKY against the auto-
+                    # unarchive sweep (CCC-117) — otherwise a live, streaming
+                    # session (its transcript mtime kept fresh by the agent or
+                    # an attached terminal) bounces straight back to active,
+                    # which read as "archive refuses to work" (CCC-149 follow-up).
                     _archive_grace[sid] = time.time()
+                    _save_archive_grace()
                 _save_archived_conversations(archived)
                 # Archiving retires the session — drop any stale Notification-hook
                 # marker so the dashboard doesn't keep classifying it as Waiting
