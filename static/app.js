@@ -18542,6 +18542,34 @@
         + '<div class="conv-inprogress-list">' + _activeRowsHtml + '</div>'
         + '</div>';
     }
+    // Cross-repo source (CCC-160, mirrors CCC-159): the partition above only
+    // saw current-repo convs (renderConversationList gets conversationsData,
+    // scoped to the selected repo), so _readyToMergeConvs is single-repo.
+    // archiveData (loaded from /api/conversations/all elsewhere) carries full
+    // session rows for EVERY tracked repo, each with tail_pr_number / pr_state
+    // / modified / folder-chip fields. When it's loaded, REPLACE
+    // _readyToMergeConvs with its OPEN, PR-bearing, not-archived rows — those
+    // rows cover the current repo too (same precedence CCC-159 used), so
+    // replacing avoids duplicate rows. Before /api/conversations/all resolves
+    // (empty array) we leave the single-repo rows as a graceful fallback.
+    // This is a pure read of already-loaded state — no network/subprocess here.
+    if (Array.isArray(archiveData) && archiveData.length) {
+      const _rtmByPr = new Map();   // pr_num -> row (keep most-recently-modified)
+      for (const r of archiveData) {
+        if (!r) continue;
+        if (String(r.pr_state || '').toUpperCase() !== 'OPEN') continue;
+        if (!r.tail_pr_number) continue;
+        if (r.archived) continue;
+        const existing = _rtmByPr.get(r.tail_pr_number);
+        if (!existing || (r.modified || 0) > (existing.modified || 0)) {
+          _rtmByPr.set(r.tail_pr_number, r);
+        }
+      }
+      const _crossRepoRtm = Array.from(_rtmByPr.values())
+        .sort((a, b) => (b.modified || 0) - (a.modified || 0));
+      _readyToMergeConvs.length = 0;
+      _readyToMergeConvs.push(..._crossRepoRtm);
+    }
     // Ready to merge section: sessions whose work has landed in a PR
     // and is now waiting for the user to click merge. Lifted out of
     // "In progress" so action items don't get buried under live work.
