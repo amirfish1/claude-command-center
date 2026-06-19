@@ -195,10 +195,12 @@ def isolated_archive_cache(monkeypatch, tmp_path):
     server._ARCHIVE_RESPONSE_CACHE_LOADED = True  # skip loading the real cache
     server._ARCHIVE_BUILD_LOCKS.clear()
     server._archive_serve_cache.clear()
+    server._archive_serve_refreshing.clear()
     yield
     server._ARCHIVE_RESPONSE_CACHE.clear()
     server._ARCHIVE_RESPONSE_CACHE_LOADED = False
     server._archive_serve_cache.clear()
+    server._archive_serve_refreshing.clear()
 
 
 _ALL_OPTS = dict(include_prs=False, resolve_pr_states=False,

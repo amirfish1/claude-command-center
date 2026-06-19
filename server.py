@@ -4602,8 +4602,67 @@ try:
     _ARCHIVE_SERVE_TTL = max(0.0, float(os.environ.get("CCC_ARCHIVE_SERVE_TTL_SEC", "2")))
 except ValueError:
     _ARCHIVE_SERVE_TTL = 2.0
-_archive_serve_cache = {}      # key -> {"ts", "sig", "rows"}
+_archive_serve_cache = {}      # key -> {"ts", "rows"}
 _archive_serve_lock = threading.Lock()
+_archive_serve_refreshing = set()  # keys with a background refresh in flight
+
+# Coalescing cache for the spawned-session list on the ?all=1 hot path.
+# list_spawned_sessions() runs best-effort desktop-visibility/registry side
+# effects per spawned entry (_spawn_session_id_from_entry), so a box with a
+# dozen+ spawned agents spends ~1-2s in it — per request, uncoalesced. After the
+# archive build was cached this became the dominant cost of /api/{sessions,
+# conversations}?all=1, which the dashboard AND COO board poll. Coalesce it on
+# the same short window as the serve cache: the side effects still fire (at most
+# once per window) and concurrent polls share one result.
+_archive_spawned_cache = {"ts": 0.0, "data": None}
+_archive_spawned_lock = threading.Lock()
+_archive_spawned_refreshing = False
+
+
+def _archive_spawned_refresh():
+    global _archive_spawned_refreshing
+    try:
+        data = list_spawned_sessions()
+        with _archive_spawned_lock:
+            _archive_spawned_cache["ts"] = time.time()
+            _archive_spawned_cache["data"] = data
+    except Exception as e:
+        print(f"  [spawned-cache] refresh failed: {e}")
+    finally:
+        with _archive_spawned_lock:
+            _archive_spawned_refreshing = False
+
+
+def _archive_spawned_coalesced():
+    """Spawned-session list for the ?all=1 hot path, stale-while-revalidate.
+
+    list_spawned_sessions() costs ~1-2s on a box with a dozen+ spawned agents
+    (best-effort desktop-visibility side effects per entry), so blocking the
+    request on it — even coalesced — leaves one unlucky poll per window stalled.
+    Instead: serve the last known list immediately and refresh in the background
+    when it goes stale. The request path never pays the cost (after a one-time
+    cold build); the side effects run off-thread; staleness is ≤ the serve TTL
+    plus one refresh. Spawned sessions appear/finish slowly, so this is safe.
+    """
+    global _archive_spawned_refreshing
+    if _ARCHIVE_SERVE_TTL <= 0:
+        return list_spawned_sessions()
+    with _archive_spawned_lock:
+        data = _archive_spawned_cache["data"]
+        age = time.time() - _archive_spawned_cache["ts"]
+        if data is None:
+            # Cold: must build once synchronously (nothing to serve yet).
+            pass
+        else:
+            if age >= _ARCHIVE_SERVE_TTL and not _archive_spawned_refreshing:
+                _archive_spawned_refreshing = True
+                threading.Thread(target=_archive_spawned_refresh, daemon=True).start()
+            return [dict(r) for r in data]
+    data = list_spawned_sessions()
+    with _archive_spawned_lock:
+        _archive_spawned_cache["ts"] = time.time()
+        _archive_spawned_cache["data"] = data
+    return [dict(r) for r in data]
 
 
 def _archive_all_rows_cached(cache_options):
@@ -4627,46 +4686,21 @@ def _archive_all_rows_cached(cache_options):
     Returns (rows, from_cache: bool). from_cache is False only when tier 3 ran.
     """
     key = _archive_response_cache_key(**cache_options)
+    return _archive_serve_rows(key, cache_options)
 
-    def _fresh_serve():
-        """A copy of the coalesced snapshot if it is younger than the serve TTL.
 
-        TIME-based, NOT signature-based: in a live environment a session is
-        almost always writing its JSONL, so the corpus signature changes on
-        nearly every poll. Gating the serve cache on the signature would make it
-        miss constantly and every poll would pay a full rebuild+rehydrate (~1.2s
-        of CPU) — exactly the sustained drain we are killing. A ≤TTL-old shared
-        snapshot is the same contract _live_activity_snapshot already uses (its
-        1.5s window): transcript-derived fields (state/ended_blocked/question)
-        and live state lag by at most the serve TTL.
-        """
-        if _ARCHIVE_SERVE_TTL <= 0:
-            return None
-        with _archive_serve_lock:
-            sc = _archive_serve_cache.get(key)
-            if sc and (time.time() - sc.get("ts", 0)) < _ARCHIVE_SERVE_TTL:
-                return [dict(r) for r in sc.get("rows") or []]
-        return None
+def _archive_compute_rows(key, cache_options):
+    """Produce archive rows under the per-key build lock (single-flight).
 
-    # Tier 1 — lock-free coalesced serve. The common case: many concurrent
-    # dashboard/COO polls share one ≤TTL-old rehydrated snapshot for ~free.
-    hit = _fresh_serve()
-    if hit is not None:
-        return hit, True
-
-    # Tiers 2 & 3 run under a per-key lock so concurrent missers share ONE
-    # rehydrate/rebuild instead of each re-probing liveness (the GIL pile-up
-    # that held the endpoint at ~8s under real polling). Late arrivals re-check
-    # Tier 1 and get the snapshot the winner just populated. The signature gates
-    # only the expensive transcript rebuild: unchanged corpus → rehydrate the
-    # persisted rows; changed → rebuild (reusing the per-(mtime,size) parse
-    # cache, so only the touched sessions re-parse).
+    Signature-gated: unchanged transcript corpus → rehydrate the persisted rows
+    (cheap, refreshes only live/sidecar state); changed → rebuild, reusing the
+    per-(mtime,size) parse cache so only the touched sessions re-parse. Updates
+    both the persisted response cache and the in-memory serve snapshot.
+    Returns (rows, from_cache).
+    """
     sig = _archive_corpus_signature()
     lock = _archive_build_lock(key)
     with lock:
-        hit = _fresh_serve()
-        if hit is not None:
-            return hit, True
         entry = _archive_response_cache_get(key)
         if entry and entry.get("signature") == sig:
             rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
@@ -4676,13 +4710,70 @@ def _archive_all_rows_cached(cache_options):
             _archive_response_cache_put(key, rows, signature=sig)
             _save_conv_meta_cache()
             from_cache = False
-        if _ARCHIVE_SERVE_TTL > 0:
-            with _archive_serve_lock:
-                _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
-            # Return a copy so caller-side filtering/sorting can't corrupt the
-            # snapshot other concurrent callers will read.
-            return [dict(r) for r in rows], from_cache
-        return rows, from_cache
+    if _ARCHIVE_SERVE_TTL > 0:
+        with _archive_serve_lock:
+            _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
+    return rows, from_cache
+
+
+def _archive_serve_refresh(key, cache_options):
+    global _archive_serve_refreshing
+    try:
+        _archive_compute_rows(key, cache_options)
+    except Exception as e:
+        print(f"  [archive-serve] background refresh failed: {e}")
+    finally:
+        with _archive_serve_lock:
+            _archive_serve_refreshing.discard(key)
+
+
+def _archive_serve_rows(key, cache_options):
+    """Archive rows for an ?all=1 request, stale-while-revalidate.
+
+    The endpoint is polled continuously by the dashboard AND the COO board, and
+    in a live environment a session is almost always writing its JSONL — so the
+    corpus signature changes on nearly every poll. Blocking each poll on the
+    signature-gated rebuild (~1-2s, GIL-bound) is exactly the sustained CPU
+    drain we are killing. Instead:
+
+      - fresh snapshot (< serve TTL) → return a copy immediately;
+      - stale snapshot → return it immediately AND kick a single background
+        refresh (the request never pays the rebuild);
+      - no snapshot yet (cold) → build once synchronously.
+
+    Same shape and tolerance as _live_activity_snapshot and the sibling
+    /api/conversations/all?stale_ok serve: transcript-derived fields
+    (state/ended_blocked/question) and live state lag by at most the serve TTL
+    plus one background refresh. The signature still gates the actual rebuild, so
+    a changed corpus re-parses only the touched sessions.
+
+    Returns (rows, from_cache). from_cache is False only on the cold build.
+    """
+    global _archive_serve_refreshing
+    if _ARCHIVE_SERVE_TTL <= 0:
+        return _archive_compute_rows(key, cache_options)
+    now = time.time()
+    with _archive_serve_lock:
+        sc = _archive_serve_cache.get(key)
+        if sc is not None:
+            rows = [dict(r) for r in sc.get("rows") or []]
+            stale = (now - sc.get("ts", 0)) >= _ARCHIVE_SERVE_TTL
+            if stale and key not in _archive_serve_refreshing:
+                _archive_serve_refreshing.add(key)
+                spawn = True
+            else:
+                spawn = False
+        else:
+            rows = None
+            spawn = False
+    if rows is not None:
+        if spawn:
+            threading.Thread(
+                target=_archive_serve_refresh, args=(key, cache_options), daemon=True
+            ).start()
+        return rows, True
+    # Cold: nothing to serve yet — build once synchronously.
+    return _archive_compute_rows(key, cache_options)
 
 
 _ARCHIVE_SIDECAR_DEFAULTS = {
@@ -39312,7 +39403,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "resolve_effective": qs.get("resolve_effective", ["0"])[0] in ("1", "true"),
                     "resolve_worktree_dirty": qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
                 })
-                spawned = list_spawned_sessions()
+                spawned = _archive_spawned_coalesced()
                 if engine_filter:
                     rows = [r for r in rows if (r.get("engine") or r.get("source") or "").lower() == engine_filter]
                     spawned = [r for r in spawned if (r.get("engine") or "").lower() == engine_filter]
@@ -39348,7 +39439,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "resolve_effective": qs.get("resolve_effective", ["0"])[0] in ("1", "true"),
                     "resolve_worktree_dirty": qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
                 })
-                spawned = list_spawned_sessions()
+                spawned = _archive_spawned_coalesced()
                 if engine_filter:
                     rows = [r for r in rows if (r.get("engine") or r.get("source") or "").lower() == engine_filter]
                     spawned = [r for r in spawned if (r.get("engine") or "").lower() == engine_filter]
