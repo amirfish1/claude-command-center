@@ -26,8 +26,9 @@
   .addbar button{background:var(--accent);color:#04121f;border:0;border-radius:7px;
     padding:6px 13px;font-size:13px;font-weight:700;cursor:pointer}
   .addbar .hint{color:var(--dim);font-size:11px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));
-    gap:12px;padding:6px 22px 40px}
+  /* Single column, like the conversation list — capped width for readability. */
+  .grid{display:grid;grid-template-columns:minmax(0,820px);
+    gap:10px;padding:6px 22px 40px}
   .card{position:relative;background:var(--panel);border:1px solid var(--line);
     border-radius:10px;padding:13px 14px;border-left:4px solid var(--idle);
     display:flex;flex-direction:column;gap:7px;cursor:pointer;
@@ -219,8 +220,12 @@ async function load(){
 }
 function paint(){
   const list=getList(), counts={};
+  // Reverse-chronological by last touched (most recent first), like the
+  // conversation list. Cards with no live signal (ended/no-data) fall to the
+  // bottom. Status order (ORDER) is no longer the sort key.
+  const touch=id=>{ const L=SESS[id]||{}; return L.mtime || 0; };
   const rows=list.map(b=>({...b, st:statusOf(b.id)}))
-    .sort((a,b)=>ORDER[a.st.k]-ORDER[b.st.k]);
+    .sort((a,b)=>touch(b.id)-touch(a.id));
   const grid=document.getElementById('grid'); grid.innerHTML='';
   rows.forEach(b=>{
     const L=SESS[b.id]||{}, st=b.st, note=NOTES[b.id]; counts[st.k]=(counts[st.k]||0)+1;
