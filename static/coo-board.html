@@ -59,6 +59,10 @@
   .xbtn:hover{color:var(--blocked);border-color:var(--line);background:var(--panel2)}
   .updated{font-size:11px;font-weight:600;color:var(--dim);letter-spacing:.2px;
     margin:1px 0 2px;font-variant-numeric:tabular-nums}
+  /* Live poll-freshness: green = state re-confirmed seconds ago; amber = a
+     refresh is overdue (tab hidden / polling stalled), so trust it less. */
+  .verified{color:#3fb950;font-variant-numeric:tabular-nums}
+  .verified.stale{color:var(--blocked)}
   .where{font-size:11.5px;font-weight:600}
   .where.blocked{color:var(--blocked)} .where.review{color:var(--review)}
   .where.working{color:var(--working)} .where.idle,.where.ended{color:var(--dim)}
@@ -146,6 +150,11 @@ function clock(ts){ if(!ts)return "—"; const d=new Date(ts*1000);
   return h+":"+p(d.getMinutes())+":"+p(d.getSeconds())+" "+ap;}
 
 let SESS={}, ATT={}, NOTES={}, SWEPT=0;
+// Epoch (s) of the last successful live poll — i.e. when each card's state was
+// last RE-VERIFIED against /api/session. Distinct from a card's own "last
+// update" (its last activity): a blocked card is quiet for hours yet its block
+// is re-confirmed every poll. The ticker below makes that freshness visible.
+let VERIFIED=0;
 // The actual, live reason a blocked session is waiting on you — pulled fresh
 // from the session each refresh, never from a hand-maintained note.
 function blockReason(id){
@@ -202,6 +211,7 @@ async function load(){
     ]);
     SESS={}; details.forEach(({id,d})=>{ if(d&&d.ok!==false) SESS[id]=d; });
     ATT={}; (ra.items||[]).forEach(it=>ATT[it.session_id]=it);
+    VERIFIED=Date.now()/1000;  // state just re-confirmed against the live API
   }catch(e){}
   const list=getList(), counts={};
   const rows=list.map(b=>({...b, st:statusOf(b.id)}))
@@ -225,7 +235,8 @@ async function load(){
       `<div class="where ${st.k}${st.orphan?' orphan-where':''}">▸ ${st.where}${st.orphan?' · click to resume':''}</div>`+
       (analysis?`<div class="coo">${analysis}</div>`:'')+
       (snip?`<div class="snip">“${snip}…”</div>`:'')+
-      `<div class="meta"><span>active ${rel(L.mtime)} ago</span>`+
+      `<div class="meta"><span class="verified" title="when this card's state was last re-confirmed against the live API">verified ${rel(VERIFIED)} ago</span>`+
+      `<span>active ${rel(L.mtime)} ago</span>`+
       (note&&note.swept?`<span title="when the COO last assessed this card">swept ${rel(note.swept)} ago</span>`:'<span style="color:var(--working)">not yet swept</span>')+
       (flags.length?`<span>${flags.join(' · ')}</span>`:'')+
       `<span class="id">${b.id.slice(0,8)}</span></div>`;
@@ -298,6 +309,18 @@ document.getElementById('addInput').addEventListener('keydown',e=>{if(e.key==='E
 load();
 setInterval(()=>{ if(!document.hidden) load(); }, 30000);
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden) load(); });
+// Live freshness ticker: every second, update each card's "verified Xs ago"
+// from VERIFIED (the last successful poll). This makes the re-verification
+// visible — a blocked card sits quiet for hours yet you watch its state get
+// re-confirmed. If a poll is overdue (>45s, e.g. tab was hidden), flag it stale.
+setInterval(()=>{
+  if(!VERIFIED) return;
+  const age=Date.now()/1000-VERIFIED, stale=age>45;
+  document.querySelectorAll('.verified').forEach(el=>{
+    el.textContent='verified '+rel(VERIFIED)+' ago';
+    el.classList.toggle('stale', stale);
+  });
+}, 1000);
 </script>
 </body>
 </html>
