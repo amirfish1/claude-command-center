@@ -4627,20 +4627,29 @@ def _archive_all_rows_cached(cache_options):
     Returns (rows, from_cache: bool). from_cache is False only when tier 3 ran.
     """
     key = _archive_response_cache_key(**cache_options)
-    sig = _archive_corpus_signature()
 
     def _fresh_serve():
-        """A copy of the coalesced snapshot if it is fresh for this sig, else None."""
+        """A copy of the coalesced snapshot if it is younger than the serve TTL.
+
+        TIME-based, NOT signature-based: in a live environment a session is
+        almost always writing its JSONL, so the corpus signature changes on
+        nearly every poll. Gating the serve cache on the signature would make it
+        miss constantly and every poll would pay a full rebuild+rehydrate (~1.2s
+        of CPU) — exactly the sustained drain we are killing. A ≤TTL-old shared
+        snapshot is the same contract _live_activity_snapshot already uses (its
+        1.5s window): transcript-derived fields (state/ended_blocked/question)
+        and live state lag by at most the serve TTL.
+        """
         if _ARCHIVE_SERVE_TTL <= 0:
             return None
         with _archive_serve_lock:
             sc = _archive_serve_cache.get(key)
-            if sc and sc.get("sig") == sig and (time.time() - sc.get("ts", 0)) < _ARCHIVE_SERVE_TTL:
+            if sc and (time.time() - sc.get("ts", 0)) < _ARCHIVE_SERVE_TTL:
                 return [dict(r) for r in sc.get("rows") or []]
         return None
 
     # Tier 1 — lock-free coalesced serve. The common case: many concurrent
-    # dashboard/COO polls share one ≤TTL-old rehydrated snapshot.
+    # dashboard/COO polls share one ≤TTL-old rehydrated snapshot for ~free.
     hit = _fresh_serve()
     if hit is not None:
         return hit, True
@@ -4648,7 +4657,11 @@ def _archive_all_rows_cached(cache_options):
     # Tiers 2 & 3 run under a per-key lock so concurrent missers share ONE
     # rehydrate/rebuild instead of each re-probing liveness (the GIL pile-up
     # that held the endpoint at ~8s under real polling). Late arrivals re-check
-    # Tier 1 and get the snapshot the winner just populated.
+    # Tier 1 and get the snapshot the winner just populated. The signature gates
+    # only the expensive transcript rebuild: unchanged corpus → rehydrate the
+    # persisted rows; changed → rebuild (reusing the per-(mtime,size) parse
+    # cache, so only the touched sessions re-parse).
+    sig = _archive_corpus_signature()
     lock = _archive_build_lock(key)
     with lock:
         hit = _fresh_serve()
@@ -4665,7 +4678,7 @@ def _archive_all_rows_cached(cache_options):
             from_cache = False
         if _ARCHIVE_SERVE_TTL > 0:
             with _archive_serve_lock:
-                _archive_serve_cache[key] = {"ts": time.time(), "sig": sig, "rows": rows}
+                _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
             # Return a copy so caller-side filtering/sorting can't corrupt the
             # snapshot other concurrent callers will read.
             return [dict(r) for r in rows], from_cache
