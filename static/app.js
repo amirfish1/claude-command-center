@@ -18594,6 +18594,22 @@
         + '<div class="conv-done-list">' + _doneBody + '</div>'
         + '</div>';
     }
+    // Cross-repo source (CCC-159): once /api/issues/all has resolved,
+    // crossRepoIssuesData holds OPEN+CLOSED issues from EVERY tracked repo,
+    // not just the current one. The partition above only saw current-repo
+    // convs, so _ghIssueConvs is single-repo. When the cross-repo set is
+    // loaded, REPLACE _ghIssueConvs with its OPEN, not-archived rows —
+    // those rows cover the current repo too (same precedence the Archived
+    // view documents in _archiveRowsWithBacklog), so replacing avoids
+    // duplicates. Before /api/issues/all resolves (empty array) we leave
+    // the single-repo rows as a graceful fallback. _crossRepoIssueArchiveRows
+    // is a pure read of already-loaded state — no network/subprocess here.
+    if (Array.isArray(crossRepoIssuesData) && crossRepoIssuesData.length) {
+      const _openCrossRepoRows = _crossRepoIssueArchiveRows()
+        .filter(r => (r.issue_state || 'OPEN') === 'OPEN' && !r.archived);
+      _ghIssueConvs.length = 0;
+      _ghIssueConvs.push(..._openCrossRepoRows);
+    }
     // GH Issues section: open issues + TODO/PARKING_LOT cards with no
     // session yet. Mirrors the kanban "GH Issues" column so the sidebar
     // scan matches the board. Expanded by default — these are pending
@@ -29934,9 +29950,14 @@
         question_preamble: '',
         question_options: [],
         question_option_details: [],
-        // Folder chip — same fields the conversation rows use.
+        // Folder chip — same fields the conversation rows use. The
+        // *_chip fields drive the GH Issues "by project" grouping (a flat
+        // list otherwise); _hashHue keeps colors consistent with the rest
+        // of the UI.
         folder_path: repoPath,
         folder_label: repoLabel,
+        folder_label_chip: repoLabel,
+        folder_chip_hue: _hashHue(repoLabel || repoPath),
         slug: repoPath,
         // Used by the Start handler to spawn into the right folder.
         spawn_cwd: repoPath,
