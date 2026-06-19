@@ -23544,8 +23544,18 @@
   function _convPaneSyncJsonlTaskTabs(view) {
     const state = _convPaneTabState(view);
     if (!state) return;
+    // CCC-164: every JSONL task-notification (sub-agents AND background
+    // commands) is a COMPLETED task — the card is emitted on completion — and
+    // the in-pane tab is redundant with each card's "view transcript" popout
+    // button. Left unbounded they pile up as dead-agent clutter. Keep only the
+    // most-recent few (DOM order is chronological) and prune the rest; the
+    // popout button still opens any of them on demand.
+    const MAX_JSONL_TABS = 3;
+    const btns = Array.from(view.querySelectorAll('.tn-view-transcript[data-task-id]'));
+    const recent = btns.slice(-MAX_JSONL_TABS);
+    const recentIds = new Set(recent.map(b => b.getAttribute('data-task-id')).filter(Boolean));
     let added = false;
-    view.querySelectorAll('.tn-view-transcript[data-task-id]').forEach(btn => {
+    recent.forEach(btn => {
       const tid = btn.getAttribute('data-task-id');
       if (!tid || state.tasks[tid]) return;
       const card = btn.closest('.task-notification-card');
@@ -23554,6 +23564,15 @@
       state.tasks[tid] = { label, lastSeen: Date.now(), closeTimer: null, completed: true, jsonl: true };
       added = true;
     });
+    // Prune older JSONL tabs that fell out of the recent window — but never
+    // yank a tab the user is actively viewing. Live (non-jsonl) subagent tabs
+    // are untouched.
+    for (const tid of Object.keys(state.tasks)) {
+      const t = state.tasks[tid];
+      if (t && t.jsonl && !recentIds.has(tid) && state.active !== ('task-' + tid)) {
+        _convPaneCloseSubagentTab(view, tid);
+      }
+    }
     if (added) _convPaneRenderTabStrip(view);
   }
   function _convPaneActivateTab(view, tabKey) {
