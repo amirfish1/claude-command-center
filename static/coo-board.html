@@ -156,6 +156,9 @@ let SESS={}, ATT={}, NOTES={}, SWEPT=0;
 // update" (its last activity): a blocked card is quiet for hours yet its block
 // is re-confirmed every poll. The ticker below makes that freshness visible.
 let VERIFIED=0;
+// Poll counter + how often to pay the expensive /api/attention call (every
+// ATT_EVERY polls ≈ 2 min, vs the 30s session-state poll).
+let POLLN=0; const ATT_EVERY=4;
 // The actual, live reason a blocked session is waiting on you — pulled fresh
 // from the session each refresh, never from a hand-maintained note.
 function blockReason(id){
@@ -212,10 +215,17 @@ async function load(){
     SESS={}; details.forEach(({id,d})=>{ if(d&&d.ok!==false) SESS[id]=d; });
     VERIFIED=Date.now()/1000;  // state re-confirmed against the live API
     paint();  // instant first paint from the fast session data
-    // Slow attention feed enriches in the background; re-paint when it arrives.
-    fetch('/api/attention?scope=live').then(r=>r.json())
-      .then(ra=>{ ATT={}; (ra.items||[]).forEach(it=>ATT[it.session_id]=it); paint(); })
-      .catch(()=>{});
+    // /api/attention is the expensive call (~2.4s of server CPU). The primary
+    // state (waiting/working/idle/ended) + block reason all come from the fast
+    // /api/session reads above; attention only ADDS the "review" bucket + a
+    // couple fallbacks. So fetch it rarely — once on first load, then every
+    // ATT_EVERY-th poll (~2 min) — instead of every 30s. This is the CPU fix.
+    POLLN++;
+    if(POLLN===1 || POLLN % ATT_EVERY === 0){
+      fetch('/api/attention?scope=live').then(r=>r.json())
+        .then(ra=>{ ATT={}; (ra.items||[]).forEach(it=>ATT[it.session_id]=it); paint(); })
+        .catch(()=>{});
+    }
   }catch(e){ paint(); }
 }
 function paint(){
@@ -324,7 +334,7 @@ document.addEventListener('visibilitychange',()=>{ if(!document.hidden) load(); 
 // visible — a blocked card sits quiet for hours yet you watch its state get
 // re-confirmed. If a poll is overdue (>45s, e.g. tab was hidden), flag it stale.
 setInterval(()=>{
-  if(!VERIFIED) return;
+  if(!VERIFIED || document.hidden) return;  // no work for a hidden board
   const age=Date.now()/1000-VERIFIED, stale=age>45;
   document.querySelectorAll('.verified').forEach(el=>{
     el.textContent='verified '+rel(VERIFIED)+' ago';
