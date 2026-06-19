@@ -201,18 +201,23 @@ async function load(){
     const rn=await fetch('/static/coo-notes.json?t='+Date.now()).then(r=>r.json()).catch(()=>({cards:{}}));
     NOTES=rn.cards||{}; SWEPT=rn.swept_global||0; SEED=rn.seed||[];
     const ids=getList().map(x=>x.id);
-    // Per-tracked-session reads (each is a cheap one-tail read) + one bounded
-    // attention feed. NO /api/sessions?all=1 in the loop — that scanned all 1268.
-    const [ra,details]=await Promise.all([
-      fetch('/api/attention?scope=live').then(r=>r.json()).catch(()=>({items:[]})),
-      Promise.all(ids.map(id=>
-        fetch('/api/session/'+encodeURIComponent(id)).then(r=>r.json())
-          .then(d=>({id,d})).catch(()=>({id,d:null}))))
-    ]);
+    // Fast path: the per-session reads land in ~20ms — paint IMMEDIATELY so the
+    // board never blanks. /api/attention is ~2.4s, so it must NOT block paint;
+    // it only enriches review-state + a couple block-reason fallbacks, folded
+    // in when it lands. (Awaiting both was the "doesn't really load" bug.)
+    const details=await Promise.all(ids.map(id=>
+      fetch('/api/session/'+encodeURIComponent(id)).then(r=>r.json())
+        .then(d=>({id,d})).catch(()=>({id,d:null}))));
     SESS={}; details.forEach(({id,d})=>{ if(d&&d.ok!==false) SESS[id]=d; });
-    ATT={}; (ra.items||[]).forEach(it=>ATT[it.session_id]=it);
-    VERIFIED=Date.now()/1000;  // state just re-confirmed against the live API
-  }catch(e){}
+    VERIFIED=Date.now()/1000;  // state re-confirmed against the live API
+    paint();  // instant first paint from the fast session data
+    // Slow attention feed enriches in the background; re-paint when it arrives.
+    fetch('/api/attention?scope=live').then(r=>r.json())
+      .then(ra=>{ ATT={}; (ra.items||[]).forEach(it=>ATT[it.session_id]=it); paint(); })
+      .catch(()=>{});
+  }catch(e){ paint(); }
+}
+function paint(){
   const list=getList(), counts={};
   const rows=list.map(b=>({...b, st:statusOf(b.id)}))
     .sort((a,b)=>ORDER[a.st.k]-ORDER[b.st.k]);
