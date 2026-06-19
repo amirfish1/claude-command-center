@@ -1015,6 +1015,22 @@
   .tool-call.ask-user-question .ask-user-option-desc {
     color: var(--text-muted);
   }
+  /* CCC-161: clickable transcript options (single-question asks) so the user
+     can answer from the transcript when the relay card doesn't mount. */
+  .tool-call.ask-user-question .ask-user-options.is-pickable { list-style: none; margin-left: 0; }
+  .tool-call.ask-user-question .ask-user-options.is-pickable li { margin: 0 0 5px 0; }
+  .tool-call.ask-user-question .ask-user-option-pick {
+    display: block; width: 100%; text-align: left; cursor: pointer;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; color: var(--text);
+    font: inherit; transition: border-color 0.12s ease, background 0.12s ease;
+  }
+  .tool-call.ask-user-question .ask-user-option-pick:hover {
+    border-color: var(--accent, #58a6ff);
+    background: color-mix(in srgb, var(--accent, #58a6ff) 10%, var(--surface-2));
+  }
+  .tool-call.ask-user-question .ask-user-option-pick:active { transform: translateY(1px); }
+  .tool-call.ask-user-question .ask-user-option-pick.is-submitting { opacity: 0.6; pointer-events: none; }
   a.path-link { color: var(--accent); text-decoration: underline dotted; cursor: pointer; }
   a.path-link:hover { text-decoration: underline; }
   .conv-sticky-header .tools-toggle {

@@ -3205,6 +3205,48 @@
 
   document.addEventListener('click', handleLiveQuestionActionClick);
 
+  // CCC-161: answer a question by clicking an option in the TRANSCRIPT. This is
+  // the fallback for when the relayed answer card fails to mount (the server
+  // relay still fires — verified — so /api/answer-question unblocks the agent).
+  // Gated to the live session's MOST-RECENT waiting question so clicking an old
+  // answered question is a no-op, and only single-question asks render picks.
+  document.addEventListener('click', async (ev) => {
+    const pick = ev.target && ev.target.closest && ev.target.closest('.ask-user-option-pick');
+    if (!pick) return;
+    ev.preventDefault();
+    const sid = currentSession && currentSession.id;
+    if (!sid) return;
+    const view = pick.closest('.conversations-view');
+    const thisBlock = pick.closest('.tool-call.ask-user-question');
+    const allAsk = view ? view.querySelectorAll('.tool-call.ask-user-question') : [];
+    const lastAsk = allAsk.length ? allAsk[allAsk.length - 1] : null;
+    if (!liveStatus || !liveStatus.questionWaiting || !lastAsk || thisBlock !== lastAsk) {
+      showOpToast('This question is no longer waiting for an answer.');
+      return;
+    }
+    if (pick.classList.contains('is-submitting')) return;
+    const oi = parseInt(pick.getAttribute('data-ask-opt') || '0', 10);
+    pick.classList.add('is-submitting');
+    try {
+      const res = await fetch('/api/answer-question', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid, answers: [{ index: oi, text: '' }] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.ok) {
+        showOpToast('Answer sent.');
+        try { closeRelayedQuestionInline(); } catch (_) {}
+      } else {
+        showOpToast('Could not send answer: ' + ((data && data.error) || 'unknown'), 'error');
+      }
+    } catch (e) {
+      showOpToast('Could not send answer: ' + ((e && e.message) || e), 'error');
+    } finally {
+      pick.classList.remove('is-submitting');
+    }
+  });
+
   // Antigravity "Push input" button inside the live tool strip. Uses
   // delegation because the button is inside innerHTML-replaced content.
   document.addEventListener('click', async (ev) => {
@@ -27417,7 +27459,15 @@
             }
             let askBody = '';
             if (askQuestions) {
-              askBody = askQuestions.map(function (askQ) {
+              // CCC-161: for a SINGLE-question ask, render options as clickable
+              // buttons so the user can answer straight from the transcript —
+              // a hook-independent fallback for when the relayed answer card
+              // doesn't mount. The click handler (delegated) gates on the live
+              // session's latest waiting question and POSTs /api/answer-question
+              // (the same path the card uses). Multi-question asks keep static
+              // options and rely on the relay card.
+              const _askPickable = askQuestions.length === 1;
+              askBody = askQuestions.map(function (askQ, qIdx) {
                 const headerHtml = askQ.header
                   ? '<div class="ask-user-header">' + escapeHtml(askQ.header) + '</div>'
                   : '';
@@ -27426,13 +27476,17 @@
                   : '';
                 const opts = Array.isArray(askQ.options) ? askQ.options : [];
                 const optsHtml = opts.length
-                  ? '<ul class="ask-user-options">' + opts.map(function (o) {
+                  ? '<ul class="ask-user-options' + (_askPickable ? ' is-pickable' : '') + '">' + opts.map(function (o, oIdx) {
                       const lbl = (o && typeof o === 'object') ? (o.label || '') : String(o || '');
                       const desc = (o && typeof o === 'object') ? (o.description || '') : '';
-                      return '<li>'
-                        + '<span class="ask-user-option-label">' + escapeHtml(lbl) + '</span>'
-                        + (desc ? '<span class="ask-user-option-desc"> — ' + escapeHtml(desc) + '</span>' : '')
-                        + '</li>';
+                      const inner = '<span class="ask-user-option-label">' + escapeHtml(lbl) + '</span>'
+                        + (desc ? '<span class="ask-user-option-desc"> — ' + escapeHtml(desc) + '</span>' : '');
+                      if (_askPickable) {
+                        return '<li><button type="button" class="ask-user-option-pick"'
+                          + ' data-ask-q="' + qIdx + '" data-ask-opt="' + oIdx + '"'
+                          + ' title="Answer with this option">' + inner + '</button></li>';
+                      }
+                      return '<li>' + inner + '</li>';
                     }).join('') + '</ul>'
                   : '';
                 return '<div class="ask-user-block">' + headerHtml + questionHtml + optsHtml + '</div>';
