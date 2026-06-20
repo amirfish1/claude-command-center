@@ -23025,10 +23025,14 @@
     const $search = document.getElementById('filesSearchInput');
     const $label = $panel && $panel.querySelector('.files-title-label');
     if (!$panel || !$files || !$queue) return false;
-    const uxq = _isUxqWorkerSession();
-    const mode = uxq ? _filesViewEffective() : 'files';
+    // The Queue is always reachable (CCC-167): show the Files⇄Queue toggle for
+    // every session, not just UX-fixes-queue workers. Worker sessions still
+    // default to the Queue view (via _filesViewEffective); everyone else
+    // defaults to Files but can flip to the Queue at any time. The queue list
+    // already renders its own empty state ("Queue is empty.").
+    const mode = _filesViewEffective();
     if ($toggle) {
-      $toggle.style.display = uxq ? '' : 'none';
+      $toggle.style.display = '';
       $toggle.querySelectorAll('[data-fv]').forEach(b =>
         b.classList.toggle('is-active', b.getAttribute('data-fv') === mode));
     }
@@ -23101,7 +23105,13 @@
 
     if (!data || !data.count) {
       if (!_queueMode) {
-        $panel.style.display = 'none';
+        // A selected session that referenced no files (data present, count 0)
+        // keeps the panel visible so the always-present Files⇄Queue toggle
+        // (CCC-167) stays reachable — the Files list just renders empty and
+        // the user can flip to the Queue, which carries its own empty state.
+        // No session context at all (data === null, e.g. a Flow repo/object)
+        // still hides the panel.
+        $panel.style.display = data ? '' : 'none';
         $count.textContent = '';
       }
       $list.innerHTML = '';
