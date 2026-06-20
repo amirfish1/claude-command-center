@@ -6627,6 +6627,19 @@
     transition: background 0.12s ease-out, color 0.12s ease-out;
   }
   .bug-link:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+  /* Client inbox (Report a bug / issue inbox) — colorize the leading flag
+     glyph so it reads as a live, accented affordance instead of muted gray.
+     Only the icon is tinted; the label stays in the muted action-link tone.
+     Orange is this codebase's established "report / attention" accent
+     (conv-outcome banners, exhausted results). CCC-36. */
+  .bug-link > span[aria-hidden="true"] {
+    color: var(--orange);
+    transition: color 0.12s ease-out;
+  }
+  .bug-link:hover > span[aria-hidden="true"] {
+    color: var(--orange);
+    filter: brightness(1.15);
+  }
   .annotation-link {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 3px 8px; margin-left: 4px;
