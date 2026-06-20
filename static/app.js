@@ -32298,7 +32298,7 @@
     $rpmError.textContent = '';
     $rpmError.classList.remove('visible');
   }
-  function renderRpmList($el, repos, current) {
+  function renderRpmList($el, repos, current, opts) {
     $el.innerHTML = '';
     if (!repos.length) {
       const empty = document.createElement('div');
@@ -32307,7 +32307,28 @@
       $el.appendChild(empty);
       return;
     }
-    for (const repo of repos) {
+    const reorderable = !!(opts && opts.reorderable);
+    repos.forEach((repo, idx) => {
+      const row = document.createElement('div');
+      row.className = 'rpm-row';
+      // Move-up control (CCC-136): persists a manual order that wins over the
+      // recency/alphabetical default sort. Only the reorderable list (Recent)
+      // shows it; the top row's button is disabled.
+      if (reorderable) {
+        const up = document.createElement('button');
+        up.type = 'button';
+        up.className = 'rpm-move-up';
+        up.textContent = '↑';
+        up.title = 'Move this repo up';
+        up.setAttribute('aria-label', 'Move ' + (repo.label || repo.path) + ' up');
+        up.disabled = idx === 0;
+        up.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          moveRepoUp(repo.path);
+        });
+        row.appendChild(up);
+      }
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'rpm-item';
@@ -32331,21 +32352,80 @@
         closeRepoPickerModal();
         switchToRepo(repo.path, repo.label || repo.path);
       });
-      $el.appendChild(btn);
+      row.appendChild(btn);
+      $el.appendChild(row);
+    });
+  }
+
+  // CCC-136: a client-side manual repo order that the user sets with the ↑
+  // button in the picker. localStorage-backed (path -> rank), same pattern as
+  // flowNodePositions. Lower rank floats higher. Paths the user never moved
+  // have no entry and fall back to the server recency order — manual wins only
+  // for repos the user explicitly ordered.
+  const REPO_MANUAL_ORDER_KEY = 'ccc-repo-manual-order';
+  function loadRepoManualOrder() {
+    try {
+      const v = JSON.parse(localStorage.getItem(REPO_MANUAL_ORDER_KEY) || '{}');
+      return (v && typeof v === 'object') ? v : {};
+    } catch (_) { return {}; }
+  }
+  function saveRepoManualOrder(order) {
+    try { localStorage.setItem(REPO_MANUAL_ORDER_KEY, JSON.stringify(order)); } catch (_) {}
+  }
+  // Stable sort: manually-ranked repos first (by their rank), then the rest in
+  // their incoming (recency) order. Returns a new array; never mutates input.
+  function applyRepoManualOrder(list) {
+    const order = loadRepoManualOrder();
+    return list
+      .map((repo, i) => ({ repo, i }))
+      .sort((a, b) => {
+        const ra = order[a.repo.path];
+        const rb = order[b.repo.path];
+        const ha = ra !== undefined;
+        const hb = rb !== undefined;
+        if (ha && hb) return ra - rb || a.i - b.i;
+        if (ha) return -1;     // ranked repos float above unranked
+        if (hb) return 1;
+        return a.i - b.i;      // both unranked: keep recency order
+      })
+      .map(x => x.repo);
+  }
+  // Move a repo one slot up in the Recent list and persist the new order so it
+  // survives re-render (which previously re-applied the recency sort and undid
+  // any move — the reason "move up" appeared to do nothing).
+  function moveRepoUp(path) {
+    const current = _rpmRecentOrdered();
+    const idx = current.findIndex(r => r.path === path);
+    if (idx <= 0) return;  // already top or not in the recent list
+    const reordered = current.slice();
+    const [moved] = reordered.splice(idx, 1);
+    reordered.splice(idx - 1, 0, moved);
+    const order = {};
+    reordered.forEach((r, i) => { order[r.path] = i; });
+    saveRepoManualOrder(order);
+    renderRpmLists();
+  }
+
+  // The Recent list as currently ordered (recency from server, then the user's
+  // manual overrides). Shared by render + move so both agree on positions.
+  function _rpmRecentOrdered() {
+    const { repos, recent } = repoListState;
+    const byPath = {};
+    for (const r of repos) byPath[r.path] = r;
+    const recentRepos = [];
+    for (const p of (recent || [])) {
+      if (byPath[p]) recentRepos.push(byPath[p]);
     }
+    return applyRepoManualOrder(recentRepos);
   }
 
   function renderRpmLists() {
     const { repos, recent } = repoListState;
     const current = selectedRepoPath();
     const recentSet = new Set(recent || []);
-    const byPath = {};
-    for (const r of repos) byPath[r.path] = r;
-    // Recent: intersection of recent[] and repos[], preserving recent order.
-    const recentRepos = [];
-    for (const p of recent) {
-      if (byPath[p]) recentRepos.push(byPath[p]);
-    }
+    // Recent: intersection of recent[] and repos[], in recency order, then the
+    // user's manual ↑ overrides applied on top (CCC-136).
+    const recentRepos = _rpmRecentOrdered();
     // Other: everything else, alphabetical by label (load_known_repos already
     // returns them alphabetical but recency-sort may have reordered).
     const other = repos.filter(r => !recentSet.has(r.path))
@@ -32354,7 +32434,7 @@
     if (recentRepos.length) {
       $rpmRecentLabel.style.display = '';
       $rpmRecentList.style.display = '';
-      renderRpmList($rpmRecentList, recentRepos, current);
+      renderRpmList($rpmRecentList, recentRepos, current, { reorderable: true });
     } else {
       $rpmRecentLabel.style.display = 'none';
       $rpmRecentList.style.display = 'none';
