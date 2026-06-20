@@ -1448,7 +1448,16 @@
       const value = localStorage.getItem(ARCHIVE_WINDOW_KEY);
       if (value === '1d' || value === '7d' || value === 'all') return value;
     } catch (_) {}
-    return '1d';
+    // Default to 'all' (CCC-168). The sidebar is ALWAYS in archive mode, so
+    // this window caps the ENTIRE dataset (Active + Archived) before it is
+    // partitioned — a tight '1d' default silently dropped every repo whose
+    // newest session was older than 24h, so a user with 100+ repos saw only
+    // the ~5 touched today and read it as "where are all my projects?". The
+    // 1d/7d/All toggle in the Archived header still narrows on demand. NOTE:
+    // this is the UPSTREAM window; the Active tab's own toggle
+    // (ccc-inprogress-window, defaulted 'all' in CCC-165) is downstream and
+    // cannot recover rows this one already hid — hence the "invisible toggle".
+    return 'all';
   }
   const $convFolderFilter = document.getElementById('convFolderFilter');
   let repoListState = { repos: [], current: '', recent: [] };
