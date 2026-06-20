@@ -97,6 +97,35 @@
   #drawer .dresize:hover{background:var(--accent);opacity:.35}
   body.drawer-resizing{user-select:none}
   body.drawer-resizing #drawer iframe{pointer-events:none}
+  /* Annotate affordance (CCC-166). The COO board is a standalone page that
+     does NOT load app.js, so it cannot reuse the dashboard's annStart flow.
+     This is a minimal self-contained Annotate: a floating button opens a tiny
+     note prompt that POSTs to /api/annotations (server captures the screenshot
+     natively). No dashboard window dependency. */
+  #annBtn{position:fixed;left:16px;bottom:16px;z-index:200;
+    display:inline-flex;align-items:center;gap:5px;
+    padding:7px 13px;border-radius:999px;cursor:pointer;
+    background:var(--panel);color:var(--txt);
+    border:1px solid var(--accent);font:12px/1 inherit;
+    box-shadow:0 2px 10px rgba(0,0,0,.4)}
+  #annBtn:hover{background:#1f2a3a;border-color:#79b8ff}
+  #annPop{position:fixed;left:16px;bottom:60px;z-index:201;display:none;
+    width:300px;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:12px;box-shadow:0 8px 30px rgba(0,0,0,.55)}
+  #annPop.open{display:block}
+  #annPop textarea{width:100%;min-height:74px;resize:vertical;
+    background:var(--bg);color:var(--txt);border:1px solid var(--line);
+    border-radius:7px;padding:8px;font:13px/1.4 inherit;outline:none}
+  #annPop .annrow{display:flex;gap:8px;margin-top:9px;align-items:center}
+  #annPop .annrow button{border:0;border-radius:7px;padding:6px 12px;
+    font:12px/1 inherit;cursor:pointer}
+  #annPop .annsave{background:var(--accent);color:#04121f;margin-left:auto}
+  #annPop .annsave:disabled{opacity:.5;cursor:default}
+  #annPop .anncancel{background:transparent;color:var(--dim);
+    border:1px solid var(--line)}
+  #annPop .annmsg{font-size:11px;color:var(--dim);margin-top:7px;min-height:14px}
+  #annPop .annmsg.err{color:var(--blocked)}
+  #annPop .annmsg.ok{color:var(--working)}
 </style>
 </head>
 <body>
@@ -122,6 +151,18 @@
   <iframe id="drawerFrame" title="conversation"></iframe>
 </aside>
 <footer>Status: <b style="color:var(--blocked)">blocked</b> (needs you) · <b style="color:var(--review)">review</b> (committed, awaiting push/review) · <b style="color:var(--working)">working</b> (in a call) · <b style="color:var(--idle)">idle</b> · <b style="color:var(--ended)">ended</b>. Live-derived every refresh — no hand-maintained labels.</footer>
+
+<!-- Annotate (CCC-166): floating button + tiny note prompt. Self-contained,
+     posts to /api/annotations; the server captures the screenshot natively. -->
+<button id="annBtn" type="button" title="Annotate this view and save a local note for agent context.">✎ Annotate</button>
+<div id="annPop" role="dialog" aria-label="Annotate COO board">
+  <textarea id="annNote" placeholder="What's wrong / worth noting on this view? Saved locally for agent context."></textarea>
+  <div class="annrow">
+    <button type="button" class="anncancel" id="annCancel">Cancel</button>
+    <button type="button" class="annsave" id="annSave">Save</button>
+  </div>
+  <div class="annmsg" id="annMsg"></div>
+</div>
 
 <script>
 // No card data is baked in — titles, analysis, swept-time and the seed list all live in coo-notes.json.
@@ -361,6 +402,57 @@ setInterval(()=>{
     el.classList.toggle('stale', stale);
   });
 }, 1000);
+
+// ── Annotate (CCC-166) ──────────────────────────────────────────────
+// The COO board is standalone (no app.js), so we cannot reuse the dashboard's
+// annStart overlay. This is a minimal, self-contained note prompt that POSTs to
+// the same /api/annotations endpoint. We send capture_screen:true so the server
+// grabs a native screenshot — no dependency on the main dashboard window.
+(function(){
+  const btn=document.getElementById('annBtn');
+  const pop=document.getElementById('annPop');
+  const note=document.getElementById('annNote');
+  const save=document.getElementById('annSave');
+  const cancel=document.getElementById('annCancel');
+  const msg=document.getElementById('annMsg');
+  if(!btn||!pop||!note||!save) return;
+  function setMsg(t,kind){ msg.textContent=t||''; msg.className='annmsg'+(kind?(' '+kind):''); }
+  function open(){ pop.classList.add('open'); setMsg(''); save.disabled=false; save.textContent='Save'; setTimeout(()=>note.focus(),0); }
+  function close(){ pop.classList.remove('open'); }
+  btn.onclick=()=>{ pop.classList.contains('open')?close():open(); };
+  cancel.onclick=close;
+  note.addEventListener('keydown',e=>{
+    if(e.key==='Escape'){ e.preventDefault(); close(); }
+    if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){ e.preventDefault(); doSave(); }
+  });
+  async function doSave(){
+    const text=(note.value||'').trim();
+    if(!text){ setMsg('Note is required.','err'); note.focus(); return; }
+    save.disabled=true; save.textContent='Saving…'; setMsg('');
+    try{
+      const r=await fetch('/api/annotations',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          note:text,
+          url:location.href,
+          title:document.title||'COO Board',
+          source:'coo-board',
+          capture_screen:true
+        })
+      });
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok||!d.ok) throw new Error((d&&d.error)||('HTTP '+r.status));
+      const a=d.annotation||{};
+      setMsg(a.screenshot_path?'Saved with screenshot.':(d.screenshot_warning||'Saved (no screenshot).'), a.screenshot_path?'ok':'err');
+      note.value=''; save.textContent='Saved'; setTimeout(close,1100);
+    }catch(err){
+      setMsg('Save failed: '+((err&&err.message)||'unknown'),'err');
+      save.disabled=false; save.textContent='Save';
+    }
+  }
+  save.onclick=doSave;
+})();
 </script>
 </body>
 </html>

@@ -88,6 +88,14 @@
 </script>
 </head>
 <body>
+  <!-- Floating Annotate button for popout contexts (CCC-166). The topbar
+       Annotate button is hidden by the popout CSS, so this floating affordance
+       surfaces the same flow in a conversation popout window. It reuses the
+       existing annStart handler (wired in app.js) — no duplicated logic.
+       Hidden by default; CSS reveals it only under body.conversation-popout. -->
+  <button type="button" id="annotationFabBtn" class="annotation-fab" title="Annotate the visible page and save a local note for agent context." aria-label="Annotate">
+    &#9998; Annotate
+  </button>
   <!-- Floating TTS playback control. Fixed top-right; shown only while a
        Text-to-Speech read is playing for a conversation the user is NOT
        currently viewing (e.g. a Submit+ reply that landed after they

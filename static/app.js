@@ -34624,6 +34624,7 @@
     if (annotationState.overlay) annotationState.overlay.remove();
     document.removeEventListener('keydown', annHandleKeydown, true);
     if ($annotationStartBtn) $annotationStartBtn.classList.remove('active');
+    if ($annotationFabBtn) $annotationFabBtn.classList.remove('active');
     annotationState = null;
     annReleaseTabCaptureStream();
   }
@@ -35086,6 +35087,7 @@
     overlay.querySelector('.ann-hud-close').addEventListener('click', annStop);
     document.addEventListener('keydown', annHandleKeydown, true);
     if ($annotationStartBtn) $annotationStartBtn.classList.add('active');
+    if ($annotationFabBtn) $annotationFabBtn.classList.add('active');
   }
 
   function annCloseScreenModal() {
@@ -35369,6 +35371,13 @@
   if ($annotationStartBtn) $annotationStartBtn.addEventListener('click', annStart);
   if ($annotationScreenBtn) $annotationScreenBtn.addEventListener('click', annCaptureScreen);
   if ($annotationNotesBtn) $annotationNotesBtn.addEventListener('click', annOpenNotes);
+  // Floating Annotate button for popout windows (CCC-166). The topbar Annotate
+  // button is CSS-hidden in a conversation popout; this FAB drives the exact
+  // same annStart flow so popped-out sessions get the affordance too. The whole
+  // annotation flow (overlay → /api/annotations POST) is self-contained in this
+  // window — it does not depend on the main dashboard window being open.
+  const $annotationFabBtn = document.getElementById('annotationFabBtn');
+  if ($annotationFabBtn) $annotationFabBtn.addEventListener('click', annStart);
 
   // ── In-app bug reporting ────────────────────────────────────────
   // Topbar link → modal → POST /api/bug-report → server shells out

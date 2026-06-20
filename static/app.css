@@ -424,6 +424,29 @@
     padding-left: 24px;
     padding-right: 24px;
   }
+  /* Floating Annotate button (CCC-166). Hidden everywhere by default — the
+     main dashboard uses the topbar Annotate button — and revealed only in a
+     conversation popout, where that topbar is hidden. Styled to match the
+     .annotation-link pill but anchored bottom-left so it does not collide
+     with the bottom-right TTS FAB or the composer. */
+  .annotation-fab { display: none; }
+  body.conversation-popout .annotation-fab {
+    display: inline-flex; align-items: center; gap: 4px;
+    position: fixed; left: 16px; bottom: 16px; z-index: 9000;
+    padding: 6px 12px;
+    background: var(--panel, #161b22); color: var(--text-muted);
+    border: 1px solid rgba(57,210,192,0.35); border-radius: 999px;
+    font-size: 12px; font-family: inherit; cursor: pointer;
+    letter-spacing: 0.2px; white-space: nowrap;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+    transition: background 0.12s ease-out, color 0.12s ease-out, border-color 0.12s ease-out;
+  }
+  body.conversation-popout .annotation-fab:hover,
+  body.conversation-popout .annotation-fab.active {
+    background: rgba(57,210,192,0.16);
+    border-color: rgba(57,210,192,0.55);
+    color: var(--text);
+  }
   /* ── Group-chat popout ───────────────────────────────────────────
      Same idea as conversation-popout: hide every chrome strip and the
      sidebar, let the .main pane (which hosts #conversationsView, where
