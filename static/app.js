@@ -3686,6 +3686,15 @@
       updateAnnounceButton();
       startLiveStatusPolling();
     }
+    // The localhost / dev-server pill is bound to the open session's repo. Its
+    // cached probe result and target path belong to the PREVIOUS session until
+    // the next 15s poll lands — forget them now and re-probe against the new
+    // context so the pill never reflects the prior conversation's repo
+    // (CCC-137).
+    try {
+      if (typeof resetLocalhostPill === 'function') resetLocalhostPill();
+      if (typeof pollLocalhost === 'function') pollLocalhost();
+    } catch (_) {}
   }
 
   async function launchTerminal(ev) {
@@ -29629,6 +29638,29 @@
   let _localhostPollTimer = null;
   let _localhostLastCommand = '';
   let _localhostTargetPath = '';
+  // Identity of the context the cached target/command were resolved FOR.
+  // _localhostTargetPath et al. are module-level and used to be refreshed only
+  // on a successful 200 poll, so after a session switch the previous repo
+  // (e.g. "/Users/amirfish/dev/hermes") kept showing in the pill title and the
+  // click-handler alert until — and only if — the next poll happened to land on
+  // a 200. Any early return (no-repo / unreachable / 400) left the leaked path
+  // in place. Tracking the resolved context here lets us drop the stale target
+  // the instant the context changes (CCC-137).
+  let _localhostCtxKey = '';
+
+  function _localhostCtxKeyOf(ctx) {
+    return ctx ? [ctx.repoPath || '', ctx.cwd || '', ctx.sessionId || ''].join('') : '';
+  }
+
+  // Forget the previous context's cached probe result. Called on a session
+  // switch (setCurrentSession) and whenever pollLocalhost sees the resolved
+  // context change, so the pill can never describe or probe a prior repo.
+  function resetLocalhostPill() {
+    _localhostTargetPath = '';
+    _localhostLastCommand = '';
+    _localhostCtxKey = '';
+    _localhostState = 'idle';
+  }
 
   function localhostContext() {
     const convId = (typeof currentConversation !== 'undefined') ? currentConversation : '';
@@ -29726,6 +29758,16 @@
   async function pollLocalhost() {
     if (!$localhostPill) return;
     const ctx = localhostContext();
+    // If the resolved context changed since the last poll, drop the previous
+    // conversation's cached target/command before deriving any UI from them —
+    // otherwise an early return below (no-repo / unreachable / 400) shows the
+    // old repo path in the title and click alert (CCC-137).
+    const ctxKey = _localhostCtxKeyOf(ctx);
+    if (ctxKey !== _localhostCtxKey) {
+      _localhostTargetPath = '';
+      _localhostLastCommand = '';
+      _localhostCtxKey = ctxKey;
+    }
     if (!ctx.repoPath && !ctx.cwd && !ctx.sessionId) {
       _localhostState = 'no-repo';
       setLocalhostPill({
