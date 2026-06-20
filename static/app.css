@@ -4653,6 +4653,44 @@
     }
   }
 
+  /* ── One-line composer + TTS floater (user request) ─────────────────────────
+     Collapses the two-row composer (textarea on top, buttons below) into one
+     flex row on mobile. The TTS speaker button is pulled out of the button row
+     and floated just above the composer as a small circular FAB — less clutter
+     in the row, thumb-reachable, shows only when the input bar is open. */
+  @media (max-width: 950px) {
+    .conv-input-bar { position: relative; }
+    .conv-input-bar.visible {
+      flex-direction: row;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      margin: 4px 8px 6px;
+    }
+    .conv-input-row-top { flex: 1 1 auto; min-width: 0; }
+    .conv-input-row-bottom { flex: 0 0 auto; }
+    .conv-input-bar textarea { max-height: 80px; }
+    /* TTS: floats as a circle FAB above the right edge of the composer.
+       position:absolute on the input-bar (position:relative) places it above
+       the input row's top edge — it won't be clipped because .conv-pane has
+       no overflow:hidden and .main is fixed/inset on mobile. */
+    .conv-input-bar .tts-btn {
+      position: absolute;
+      bottom: calc(100% + 8px);
+      right: 12px;
+      z-index: 50;
+      width: 38px; height: 38px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    }
+    /* Submit+ is a desktop "phone-style" feature; on an actual phone the
+       regular compose flow IS the phone experience — hide it to slim the row. */
+    .conv-input-bar .submit-plus-btn { display: none !important; }
+  }
+
   /* Submit+ — phone-mode send (teal/green to read as "talk", distinct from
      the accent send button next to it). */
   .conv-input-bar .submit-plus-btn {
