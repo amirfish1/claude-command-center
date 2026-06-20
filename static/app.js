@@ -5751,6 +5751,14 @@
     // matches the one currently being spoken. Unknown convId (legacy callers)
     // falls back to the old unconditional behavior.
     if (forConvId != null && _ttsActiveConvId != null && forConvId !== _ttsActiveConvId) return;
+    // CCC-169: a new turn streaming into the spoken conversation must NOT cut
+    // off an in-progress read. While actively speaking, let the current
+    // utterance finish — when it ends naturally _ttsActive clears, so the next
+    // manual play already reads the newest message; no need to interrupt. Only
+    // rearm when playback is PAUSED (the user stepped away from this read),
+    // where swapping to the newer message on the next play is the helpful
+    // behavior the original stop-on-new-turn was reaching for.
+    if (_ttsActive && !_ttsPaused) return;
     stopTextToSpeech();
   }
 
