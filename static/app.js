@@ -18017,12 +18017,16 @@
         const value = localStorage.getItem('ccc-inprogress-window');
         if (value === '1d' || value === '7d' || value === 'all') return value;
       } catch (_) {}
-      // Fallback on first load (no user preference saved):
-      // Check if any sessions exist within the last 7 days.
-      const nowSec = Math.floor(Date.now() / 1000);
-      const cutoff7d = nowSec - (7 * 24 * 3600);
-      const has7dConvs = _sessionConvs.some(c => (c.modified || 0) >= cutoff7d);
-      return has7dConvs ? '7d' : 'all';
+      // Fallback on first load (no user preference saved): default to 'all'
+      // so EVERY repo/project the user has worked in shows up in the
+      // by-project grouping (CCC-165). A tight default like '7d' silently
+      // dropped whole repos whose newest session was older than the window,
+      // so a user with 1300 sessions saw only ~13 under a few repos and read
+      // it as "all sessions disappeared". The 1d / 7d window toggle is still
+      // available to narrow on demand — it just no longer hides projects by
+      // default. The NYA / attention-feed tightening (scope=live, e080c78)
+      // is a separate path and stays untouched.
+      return 'all';
     })();
     const _ipWindowDays = _ipWindow === '7d' ? 7 : (_ipWindow === '1d' ? 1 : null);
     const _ipWindowCutoff = _ipWindowDays
