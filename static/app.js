@@ -18037,23 +18037,16 @@
     // grouped view with chips.
     const _isSpecificFolderFilter = !!_folderFilterPath;
     const _hasFolderChips = _sessionConvs.some(c => c.folder_label_chip);
-    const _ipWindow = (() => {
-      if (!_hasFolderChips) return 'all';
-      try {
-        const value = localStorage.getItem('ccc-inprogress-window');
-        if (value === '1d' || value === '7d' || value === 'all') return value;
-      } catch (_) {}
-      // Fallback on first load (no user preference saved): default to 'all'
-      // so EVERY repo/project the user has worked in shows up in the
-      // by-project grouping (CCC-165). A tight default like '7d' silently
-      // dropped whole repos whose newest session was older than the window,
-      // so a user with 1300 sessions saw only ~13 under a few repos and read
-      // it as "all sessions disappeared". The 1d / 7d window toggle is still
-      // available to narrow on demand — it just no longer hides projects by
-      // default. The NYA / attention-feed tightening (scope=live, e080c78)
-      // is a separate path and stays untouched.
-      return 'all';
-    })();
+    // CCC-168 (follow-up): the In Progress window and the upstream archive
+    // window are now ONE knob (ccc-archive-window via _archiveWindow). Before,
+    // this read a SEPARATE key (ccc-inprogress-window) while renderArchiveList
+    // capped the actual data by ccc-archive-window — so the user could set this
+    // visible toggle to "All" yet still see only the last 1d (the upstream key
+    // was stuck), and the toggle dishonestly showed "All". Reading the same key
+    // the data feed uses makes the toggle truthful AND the single control: one
+    // click on All widens the real window and persists. Defaults to 'all' (no
+    // projects hidden). NYA / attention feed (scope=live) stays separate.
+    const _ipWindow = _hasFolderChips ? _archiveWindow() : 'all';
     const _ipWindowDays = _ipWindow === '7d' ? 7 : (_ipWindow === '1d' ? 1 : null);
     const _ipWindowCutoff = _ipWindowDays
       ? Math.floor(Date.now() / 1000) - (_ipWindowDays * 24 * 3600)
@@ -19737,14 +19730,17 @@
         if (!opt) return;
         const value = opt.getAttribute('data-window');
         if (value !== '1d' && value !== '7d' && value !== 'all') return;
-        try { localStorage.setItem('ccc-inprogress-window', value); } catch (_) {}
+        // Unified window key (CCC-168 follow-up): write the SAME key the data
+        // feed reads (ccc-archive-window), so this visible Active-tab toggle
+        // controls the real upstream window — not a dead downstream key.
+        try { localStorage.setItem(ARCHIVE_WINDOW_KEY, value); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
     const $ipWindowFooter = $convList.querySelector('[data-role="inprogress-window-footer"]');
     if ($ipWindowFooter) {
       const showAll = () => {
-        try { localStorage.setItem('ccc-inprogress-window', 'all'); } catch (_) {}
+        try { localStorage.setItem(ARCHIVE_WINDOW_KEY, 'all'); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       };
       $ipWindowFooter.addEventListener('click', (ev) => { ev.stopPropagation(); showAll(); });
