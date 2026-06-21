@@ -22956,15 +22956,33 @@
     } catch (_) { /* keep stale cache */ }
     return _uxqItemsCache.items;
   }
-  // Project this worker session serves (e.g. "BYM", "CCC") — from the same
-  // progress record that drives the x/y chip. Scopes the queue view so a
-  // BYM worker sees only BYM tickets (CCC-99).
+  // Repo-basename → project code, mirroring ux_fixes_queue.py `_REPO_PROJECT`
+  // / `_project_for` so the client can scope the Queue by the open session's
+  // repo even when it is not a queue-worker (CCC-175).
+  const _REPO_PROJECT_MAP = {
+    'bym+finie': 'BYM', 'bym-finie': 'BYM', 'bookyourmat': 'BYM',
+    'claude-command-center': 'CCC', 'command-center': 'CCC',
+  };
+  function _projectForRepoPath(repoPath) {
+    if (!repoPath) return '';
+    const base = String(repoPath).replace(/\/+$/, '').split('/').pop().toLowerCase();
+    if (!base) return '';
+    if (_REPO_PROJECT_MAP[base]) return _REPO_PROJECT_MAP[base];
+    // Normalized basename (uppercase, alnum/-/_), mirrors _norm_project.
+    return base.toUpperCase().replace(/[^A-Z0-9\-_]/g, '').replace(/^[-_]+|[-_]+$/g, '');
+  }
+  // Project the open session's Queue should show (e.g. "BYM", "CCC"). A queue
+  // worker uses its progress record (CCC-99); ANY other session falls back to
+  // its repo's project (CCC-175) so a BYM session shows BYM-* tickets instead
+  // of the global, CCC-dominated list.
   function _uxqWorkerProject() {
     try {
       const row = openConvRow();
       const prog = row && typeof _uxFixesQueueProgressForRow === 'function'
         ? _uxFixesQueueProgressForRow(row) : null;
-      return (prog && prog.project && prog.project !== '?') ? prog.project : '';
+      if (prog && prog.project && prog.project !== '?') return prog.project;
+      const rp = row && typeof rowRepoPath === 'function' ? rowRepoPath(row) : '';
+      return _projectForRepoPath(rp);
     } catch (_) { return ''; }
   }
   function _renderQueueListInFilesPanel() {
