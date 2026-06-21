@@ -276,5 +276,51 @@ class TestStaleActiveReadsIdleEndToEnd(unittest.TestCase):
         self.assertEqual(body["state"], "idle")   # ...so: idle, not "working"
 
 
+class TestWaitingStickyHysteresis(unittest.TestCase):
+    """CCC-174: a live session that flicks off "waiting" for a single poll must
+    stay pinned to "waiting" for the demote window, so NEEDS YOU does not bounce.
+    `_session_state_label` stays pure; the stickiness is in `_stamp_session_state`.
+    """
+
+    def setUp(self):
+        self.server = _fresh_server()
+        self.server._waiting_sticky_seen.clear()
+        self.sid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+    def _stamp(self, **over):
+        return self.server._stamp_session_state(_row(session_id=self.sid, **over))
+
+    def test_waiting_is_immediate(self):
+        # Entering waiting must NOT be debounced — a real ask shows at once.
+        self.assertEqual(self._stamp(question_waiting=True), "waiting")
+
+    def test_transient_demotion_is_held(self):
+        self.assertEqual(self._stamp(question_waiting=True), "waiting")
+        # Next poll: the marker flapped off, but a tool is now in flight -> raw
+        # would be "working". Within the window it stays "waiting".
+        self.assertEqual(
+            self._stamp(question_waiting=False, sidecar_in_flight=True), "waiting")
+
+    def test_demotion_releases_after_window(self):
+        self.assertEqual(self._stamp(question_waiting=True), "waiting")
+        # Force the recorded timestamp past the window.
+        self.server._waiting_sticky_seen[self.sid] = (
+            time.monotonic() - self.server._WAITING_STICKY_WINDOW - 1)
+        self.assertEqual(
+            self._stamp(question_waiting=False, sidecar_in_flight=True), "working")
+
+    def test_ended_drops_pin_immediately(self):
+        # A dead process is "ended" even if it was waiting last poll — you resume
+        # it, not reply to it; the pin must not survive death.
+        self.assertEqual(self._stamp(question_waiting=True), "waiting")
+        self.assertEqual(self._stamp(is_live=False, question_waiting=True), "ended")
+        self.assertNotIn(self.sid, self.server._waiting_sticky_seen)
+
+    def test_no_session_id_is_passthrough(self):
+        row = _row(question_waiting=True)
+        row.pop("session_id", None)
+        self.assertEqual(self.server._stamp_session_state(row), "waiting")
+
+
 if __name__ == "__main__":
     unittest.main()

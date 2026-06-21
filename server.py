@@ -2785,6 +2785,53 @@ _SIDECAR_LIVE_WINDOW = 1800
 # regardless of this bound; this only gates the sticky `active` proxy.
 _WORKING_GAP_WINDOW = 120
 
+# CCC-174 anti-flicker: how long a LIVE session stays pinned to "waiting" after
+# the underlying waiting signal transiently disappears. The three waiting
+# triggers (`question_waiting`, `needs_approval`, soft-block prose) are all
+# recomputed fresh every poll from flap-prone live state: the Notification
+# `_needs_approval` marker is set by the hook and cleared by PostToolUse, and
+# the soft-block terminal gate flips the moment a tool starts/stops between
+# polls — so a session genuinely parked on the human bounces NEEDS YOU ⇄ IN
+# PROGRESS with no real change. We DEMOTE-debounce only: entering "waiting" is
+# always immediate (a real ask shows at once); LEAVING it is held for this
+# window so a single transient poll can't flicker the section. An ended process
+# (state=="ended") drops the pin instantly — you resume, not reply.
+_WAITING_STICKY_WINDOW = 90  # seconds
+_waiting_sticky_seen = {}    # session_id -> monotonic ts of last real "waiting"
+
+
+def _stamp_session_state(c):
+    """`_session_state_label` plus demote-only "waiting" hysteresis (CCC-174).
+
+    `_session_state_label` stays a pure function (every unit test binds to it
+    directly); the stickiness lives here, at the row-stamping sites that own a
+    session_id and run once per poll. Returns the coarse state to stamp.
+
+    Rules:
+      - raw == "waiting"            → record now, return "waiting".
+      - raw != "waiting", live, and last real "waiting" was within the window
+                                    → hold "waiting" (damp the transient demotion).
+      - otherwise                   → forget the session, return raw.
+    """
+    raw = _session_state_label(c)
+    sid = c.get("session_id") or c.get("id")
+    if not sid:
+        return raw
+    now = time.monotonic()
+    if raw == "waiting":
+        _waiting_sticky_seen[sid] = now
+        return raw
+    # A dead process is "ended" — never hold it as waiting (you resume it, you
+    # do not reply to it). Drop the pin and report the real state.
+    if raw == "ended" or not c.get("is_live"):
+        _waiting_sticky_seen.pop(sid, None)
+        return raw
+    seen = _waiting_sticky_seen.get(sid)
+    if seen is not None and (now - seen) < _WAITING_STICKY_WINDOW:
+        return "waiting"
+    _waiting_sticky_seen.pop(sid, None)
+    return raw
+
 
 def _archive_session_is_live(session_id):
     """A session is "live" if any sidecar marker exists for it (Claude only),
@@ -4704,7 +4751,7 @@ def _stamp_archive_state(rows):
     """
     for r in rows or []:
         if isinstance(r, dict):
-            r["state"] = _session_state_label(r)
+            r["state"] = _stamp_session_state(r)
             r["ended_blocked"] = _session_ended_blocked(r)
     return rows
 
@@ -39909,6 +39956,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # and the detail endpoint. session_live_status uses `live`; map it
             # to the `is_live` key the classifier reads.
             _state_view = {
+                "session_id": sid,
                 "is_live": status.get("live"),
                 "pending_tool": status.get("pending_tool"),
                 "sidecar_in_flight": status.get("sidecar_in_flight"),
@@ -39920,7 +39968,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "last_assistant_text": status.get("last_assistant_text"),
                 "last_event_type": status.get("last_event_type"),
             }
-            status["state"] = _session_state_label(_state_view)
+            status["state"] = _stamp_session_state(_state_view)
             status["ended_blocked"] = _session_ended_blocked(_state_view)
             self.send_json(status)
         elif re.match(r"^/api/conversations/[^/]+/files$", path):
@@ -45039,7 +45087,7 @@ def compute_session_detail(session_id):
     return {
         "ok": True,
         "session_id": sid,
-        "state": _session_state_label(row),
+        "state": _stamp_session_state(row),
         "ended_blocked": _session_ended_blocked(row),
         "is_live": bool(row.get("is_live")),
         "mtime": _mtime,
@@ -45072,7 +45120,7 @@ def _apply_session_query_params(rows, qs):
     # — no subprocess, no transcript parse — so it's safe on the list path.
     for r in out:
         if isinstance(r, dict):
-            r["state"] = _session_state_label(r)
+            r["state"] = _stamp_session_state(r)
             r["ended_blocked"] = _session_ended_blocked(r)
 
     since_raw = (qs.get("since", [""])[0] or "").strip()
