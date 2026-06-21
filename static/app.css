@@ -3533,6 +3533,20 @@
     flex: 0 0 auto;            /* override the column-width flex from the base rule */
     transition: opacity 0.12s ease;
   }
+  /* CCC-170: the hover action buttons (pin / archive) sat ON TOP of the branch
+     + context-% chips, which keep their own solid backgrounds and bled out
+     beside the buttons — reading as a messy overlay (e.g. "📌main📥" jammed over
+     "27% main"). Fade the whole meta slot out on hover/focus, the same clean
+     swap the elapsed time already does, so the actions land on an empty area
+     instead of overlapping the chips. Pinned-not-hovered rows are untouched
+     (they show only the pin over visible chips by the is-pinned rules above). */
+  .conv-item:hover .conv-branch-slot,
+  .conv-item:focus-within .conv-branch-slot {
+    opacity: 0;
+  }
+  .conv-item .conv-branch-slot {
+    transition: opacity 0.12s ease;
+  }
   .conv-item .conv-session-icon {
     width: var(--conv-dot-col);
     height: 16px;
