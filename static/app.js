@@ -28964,7 +28964,11 @@
     _captureRailEl(document.getElementById('liveBadgeConv'));
     _captureRailEl(document.getElementById('launchWrapConv'));
     _captureRailEl(document.getElementById('deployPill'));
-    _captureRailEl(document.getElementById('localhostPill'));
+    // Capture the WHOLE localhost wrap (pill + caret dropdown + menu), not just
+    // the pill — otherwise the rail relocates the bare pill and orphans the
+    // CCC-172 caret/menu back in the (hidden) topbar, so the rail view shows no
+    // dropdown. Mirrors launchWrapConv, which is captured as a wrap above.
+    _captureRailEl(document.querySelector('.localhost-wrap') || document.getElementById('localhostPill'));
     _captureRailEl(document.getElementById('announceBtnConv'));
     _captureRailEl(document.getElementById('jumpBtnConv'));
     _captureRailEl(document.getElementById('pkoodKillBtn'));
