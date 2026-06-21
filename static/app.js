@@ -34834,8 +34834,11 @@
         '<button type="button" class="ann-btn" data-ann-enable-shot hidden>Allow screenshot</button>' +
         '<button type="button" class="ann-btn" data-ann-cancel>Cancel</button>' +
         '<button type="button" class="ann-btn" data-ann-open-session>Open new session</button>' +
-        '<button type="button" class="ann-btn ann-queue-btn" data-ann-ux-queue>Add to UX fixes queue</button>' +
-        '<button type="button" class="ann-btn ann-primary" data-ann-save>Save</button>' +
+        '<button type="button" class="ann-btn ann-primary ann-queue-btn" data-ann-ux-queue>Add to UX fixes queue</button>' +
+        // CCC-171: the standalone "Save" button was redundant — both action
+        // buttons above already persist the annotation first (persistAnnotation),
+        // and ⌘/Ctrl+Enter still saves a note-only annotation for agent context.
+        // Dropping it declutters the row; "Add to UX fixes queue" is the primary.
       '</div>';
     annotationState.overlay.appendChild(editor);
     annotationState.editor = editor;
@@ -34845,7 +34848,11 @@
     // — pasted screenshots land as a path token the worker can open.
     try { if (typeof attachImagePaste === 'function') attachImagePaste(noteEl); } catch (_) {}
     const errEl = editor.querySelector('.ann-editor-error');
-    const saveBtn = editor.querySelector('[data-ann-save]');
+    // CCC-171: the visible Save button was removed (redundant — the two action
+    // buttons persist, and ⌘/Ctrl+Enter saves a note-only annotation). Fall
+    // back to a detached <button> so the shared persist flow's busy/label
+    // writes and the click wiring below are harmless no-ops when it's absent.
+    const saveBtn = editor.querySelector('[data-ann-save]') || document.createElement('button');
     const cancelBtn = editor.querySelector('[data-ann-cancel]');
     const openSessionBtn = editor.querySelector('[data-ann-open-session]');
     const uxQueueBtn = editor.querySelector('[data-ann-ux-queue]');
@@ -34930,10 +34937,10 @@
         return null;
       }
       errEl.hidden = true;
-      saveBtn.disabled = true;
+      if (saveBtn) saveBtn.disabled = true;
       if (openSessionBtn) openSessionBtn.disabled = true;
       if (uxQueueBtn) uxQueueBtn.disabled = true;
-      saveBtn.textContent = busyLabel || 'Saving…';
+      if (saveBtn) saveBtn.textContent = busyLabel || 'Saving…';
       let payload = null;
       if (annotationState && annotationState.overlay) {
         const contextRect = annContextRect(annotationState.element, annotationState.rect);
@@ -34972,8 +34979,7 @@
         if (cancelBtn) cancelBtn.hidden = true;
         if (openSessionBtn) openSessionBtn.disabled = false;
         if (uxQueueBtn) uxQueueBtn.disabled = false;
-        saveBtn.disabled = false;
-        saveBtn.textContent = 'Copy';
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Copy'; }
         if (savedAnnotation && savedAnnotation.screenshot_path) {
           showOpToast('Annotation saved with screenshot', 'success');
         } else {
