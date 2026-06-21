@@ -4697,15 +4697,20 @@
      in the row, thumb-reachable, shows only when the input bar is open. */
   @media (max-width: 950px) {
     .conv-input-bar { position: relative; }
+    /* Keep the composer a COLUMN on mobile: textarea full-width on its own
+       line, the button/selector row below. The earlier flex-ROW "one line"
+       layout crushed the textarea to ~8px whenever the bottom row was wide
+       (new-session mode shows engine/model/issue selectors), so the long
+       placeholder wrapped into ~10 lines and the input ballooned to fill the
+       page. Column is robust regardless of how many controls the row holds. */
     .conv-input-bar.visible {
-      flex-direction: row;
-      align-items: center;
+      flex-direction: column;
+      align-items: stretch;
       gap: 6px;
       padding: 8px 10px;
       margin: 4px 8px 6px;
     }
-    .conv-input-row-top { flex: 1 1 auto; min-width: 0; }
-    .conv-input-row-bottom { flex: 0 0 auto; }
+    .conv-input-row-top { width: 100%; min-width: 0; }
     .conv-input-bar textarea { max-height: 80px; }
     /* TTS: floats as a circle FAB above the right edge of the composer.
        position:absolute on the input-bar (position:relative) places it above
