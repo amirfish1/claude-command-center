@@ -30064,6 +30064,65 @@
       _scheduleLocalhostFastPoll();
     });
 
+    // CCC-172: dropdown on the localhost pill. The pill's own click is
+    // state-dependent (open when running, start/restart otherwise), so there
+    // was no way to explicitly restart a RUNNING dev server. This caret menu
+    // exposes "Restart dev server" (always) and "Open in browser" (when
+    // running). Mirrors the sidebar refresh caret/menu pattern.
+    const $localhostCaret = document.getElementById('localhostCaret');
+    const $localhostMenu = document.getElementById('localhostMenu');
+    const $localhostRestartItem = document.getElementById('localhostRestartItem');
+    const $localhostOpenItem = document.getElementById('localhostOpenItem');
+    function hideLocalhostMenu() {
+      if (!$localhostMenu) return;
+      $localhostMenu.style.display = 'none';
+      if ($localhostCaret) $localhostCaret.setAttribute('aria-expanded', 'false');
+    }
+    function toggleLocalhostMenu() {
+      if (!$localhostMenu) return;
+      if ($localhostMenu.style.display !== 'none') { hideLocalhostMenu(); return; }
+      // "Open in browser" only makes sense when the server is running (the pill
+      // carries an href in that state) — disable it otherwise.
+      if ($localhostOpenItem) {
+        const href = $localhostPill && $localhostPill.getAttribute('href');
+        $localhostOpenItem.disabled = !href;
+      }
+      $localhostMenu.style.display = 'block';
+      if ($localhostCaret) $localhostCaret.setAttribute('aria-expanded', 'true');
+    }
+    if ($localhostCaret) {
+      $localhostCaret.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        toggleLocalhostMenu();
+      });
+    }
+    if ($localhostRestartItem) {
+      $localhostRestartItem.addEventListener('click', async () => {
+        hideLocalhostMenu();
+        const ctx = localhostContext();
+        if (!ctx.repoPath && !ctx.cwd && !ctx.sessionId) {
+          showOpToast('Pick a repo first — no dev-server context.', 'info');
+          return;
+        }
+        await restartLocalhostDevServer(ctx);
+      });
+    }
+    if ($localhostOpenItem) {
+      $localhostOpenItem.addEventListener('click', () => {
+        hideLocalhostMenu();
+        const href = $localhostPill && $localhostPill.getAttribute('href');
+        if (href) window.open(href, '_blank', 'noopener');
+        else showOpToast('Dev server is not running.', 'info');
+      });
+    }
+    document.addEventListener('click', (ev) => {
+      if (!$localhostMenu || $localhostMenu.style.display === 'none') return;
+      const wrap = $localhostMenu.closest('.localhost-wrap');
+      if (wrap && wrap.contains(ev.target)) return;
+      hideLocalhostMenu();
+    });
+
   }
 
   // ── Sidebar resizer ──

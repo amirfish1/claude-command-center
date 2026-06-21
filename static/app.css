@@ -8323,6 +8323,30 @@
   }
   .sh-refresh-menu-item:hover { background: var(--surface-2); }
   .sh-refresh-menu-item:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* CCC-172: localhost pill dropdown — mirrors the refresh caret/menu. */
+  .localhost-wrap { position: relative; display: inline-flex; align-items: stretch; }
+  .localhost-wrap #localhostPill { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .localhost-wrap .localhost-caret {
+    border-top-left-radius: 0; border-bottom-left-radius: 0;
+    border-left: none;
+    padding: 0 5px; font-size: 9px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .localhost-menu {
+    position: absolute; top: calc(100% + 4px); right: 0;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px;
+    min-width: 170px; z-index: 200;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+  }
+  .localhost-menu-item {
+    display: block; width: 100%; text-align: left;
+    background: transparent; border: none; color: var(--text);
+    padding: 6px 10px; font-size: 12px; border-radius: 4px;
+    cursor: pointer; font-family: inherit; line-height: 1.3;
+  }
+  .localhost-menu-item:hover { background: var(--surface-2); }
+  .localhost-menu-item:disabled { opacity: 0.5; cursor: not-allowed; }
   #convList .conv-ghissues-tools + .conv-ghissues-count { margin-left: 0; }
   .ccc-setup-banner {
     flex: 1; display: none; align-items: center;
