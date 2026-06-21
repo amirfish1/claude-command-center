@@ -36934,7 +36934,7 @@
         +     '<button type="button" id="nsNewProjectDice" class="ns-dice-btn" title="Roll another name">&#127922;</button>'
         +   '</span>'
         +   '<button type="button" id="nsNewProjectCreate" class="ns-create-btn" disabled>Create folder &amp; start</button>'
-        +   '<div class="ns-muted" id="nsNewProjectHint">Folder comes from the CWD field below — we create it, then you describe the project.</div>'
+        +   '<div class="ns-muted" id="nsNewProjectHint">Creates a fresh folder, then you describe the project. <strong>Already have a repo?</strong> Skip this — pick it in the <strong>Folder</strong> row below and just type your prompt.</div>'
         + '</div>'
         + '<div style="font-size:13px;color:var(--text-muted);max-width:480px;line-height:1.5;">' + escapeHtml(newSessionHelp) + '</div>'
         // Integration recipes collapsed by default; revealed once templates load
