@@ -137,6 +137,71 @@ def test_retire_idle_helper_skips_non_claude(server_mod, tmp_path):
     retire.assert_not_called()
 
 
+def _status_takeover_retire(status):
+    """Mirror of the server status endpoint's CCC-173 on-observe retire gate.
+
+    Kept in lockstep with server.py: when a poll observes a Claude session that
+    has BOTH a live headless and a live terminal, retire the idle headless and
+    clear the headless fields so the proc pill stops showing "headless" the
+    moment a terminal takes the session over.
+    """
+    import server as _srv
+    if status.get("headless_present") and status.get("terminal_present"):
+        retired = _srv._retire_idle_headless_for_session(
+            status["sid"], reason="status-terminal-takeover")
+        if retired.get("retired"):
+            status["headless_present"] = False
+            status["headless_pid"] = None
+            status["headless_stale"] = False
+            status["retired_headless_pid"] = retired.get("pid")
+    return status
+
+
+def test_status_retires_headless_when_terminal_takes_over(server_mod, tmp_path):
+    """CCC-173: headless + live terminal on the same Claude session →
+    the headless is retired on observe and the pill fields clear."""
+    sid, entry, _t, _l = _stage(server_mod, tmp_path, [_event("a")], 0)
+    status = {"sid": sid, "headless_present": True, "headless_pid": 999999,
+              "headless_stale": False, "terminal_present": True}
+    with mock.patch.object(server_mod, "_detect_session_engine", return_value="claude"), \
+         mock.patch.object(server_mod, "_find_live_spawn_entry_for_session", return_value=entry), \
+         mock.patch.object(server_mod, "_spawn_entry_active_tool_child", return_value=None), \
+         mock.patch.object(server_mod, "_retire_unresponsive_spawn_entry") as retire:
+        out = _status_takeover_retire(status)
+    retire.assert_called_once()
+    assert out["headless_present"] is False
+    assert out["headless_pid"] is None
+    assert out["retired_headless_pid"] == 999999
+
+
+def test_status_keeps_headless_with_no_terminal(server_mod, tmp_path):
+    """No terminal owner → never retire; a lone headless must keep running."""
+    sid, entry, _t, _l = _stage(server_mod, tmp_path, [_event("a")], 0)
+    status = {"sid": sid, "headless_present": True, "headless_pid": 999999,
+              "headless_stale": False, "terminal_present": False}
+    with mock.patch.object(server_mod, "_detect_session_engine", return_value="claude"), \
+         mock.patch.object(server_mod, "_find_live_spawn_entry_for_session", return_value=entry), \
+         mock.patch.object(server_mod, "_spawn_entry_active_tool_child", return_value=None), \
+         mock.patch.object(server_mod, "_retire_unresponsive_spawn_entry") as retire:
+        out = _status_takeover_retire(status)
+    retire.assert_not_called()
+    assert out["headless_present"] is True
+
+
+def test_status_keeps_busy_headless_under_terminal(server_mod, tmp_path):
+    """Terminal present but headless is mid-turn → never retire (hard rule)."""
+    sid, entry, _t, _l = _stage(server_mod, tmp_path, [_event("a")], 0)
+    status = {"sid": sid, "headless_present": True, "headless_pid": 999999,
+              "headless_stale": False, "terminal_present": True}
+    with mock.patch.object(server_mod, "_detect_session_engine", return_value="claude"), \
+         mock.patch.object(server_mod, "_find_live_spawn_entry_for_session", return_value=entry), \
+         mock.patch.object(server_mod, "_spawn_entry_active_tool_child", return_value={"pid": 1}), \
+         mock.patch.object(server_mod, "_retire_unresponsive_spawn_entry") as retire:
+        out = _status_takeover_retire(status)
+    retire.assert_not_called()
+    assert out["headless_present"] is True
+
+
 def test_inject_no_concurrency_writes_fifo_unchanged(server_mod, tmp_path):
     """No concurrency: a lone idle headless inject must behave exactly as
     before — a single FIFO write, no retire, no respawn."""

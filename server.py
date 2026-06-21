@@ -39873,6 +39873,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     status["terminal_present"] = bool(
                         _session_has_live_terminal(sid, exclude_pid=status.get("headless_pid"))
                     )
+                    # GH #71 / CCC-173 — terminal-takeover retire, on observe.
+                    # The background watcher (mechanism 5) only sweeps every ~8s,
+                    # so a session that has BOTH a CCC-spawned headless AND a live
+                    # terminal (TTY) keeps showing "headless · terminal" in the
+                    # proc pill until the next sweep. When THIS poll observes that
+                    # exact pair, retire the headless right here so the pill clears
+                    # immediately instead of lingering. The helper is self-guarding:
+                    # Claude-only and NEVER a busy (mid-turn) headless, so it cannot
+                    # kill a session that isn't terminal-owned or is doing real work.
+                    if status["headless_present"] and status["terminal_present"]:
+                        try:
+                            _retired = _retire_idle_headless_for_session(
+                                sid, reason="status-terminal-takeover")
+                            if _retired.get("retired"):
+                                status["headless_present"] = False
+                                status["headless_pid"] = None
+                                status["headless_stale"] = False
+                                status["retired_headless_pid"] = _retired.get("pid")
+                        except Exception:
+                            pass
                     # Claude Code's bg-pty daemon (registry kind "bg") hosts the
                     # REPL with NO controlling tty, yet the session is attached
                     # to an open terminal pane — without this it read as
