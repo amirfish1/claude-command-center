@@ -7429,6 +7429,12 @@ _CONV_META_SCHEMA_VERSION = 13
 # every conversation (~1390 files) on each load; archived transcripts never
 # change, so this collapses that to only the files that actually changed.
 _conv_head_cache = {}
+# Separate cache for the 5-field head shape (session_id, timestamp, git_branch,
+# first_message, head_cwd) used by the live-sessions scan. It MUST NOT share
+# _conv_head_cache, which holds a 4-field shape keyed by the same file path —
+# sharing one dict made the two scans clobber each other's entries and unpack
+# the wrong arity (ValueError: too many values to unpack).
+_conv_head5_cache = {}
 _CONV_META_COMPAT_SCHEMA_VERSIONS = {13}
 _CONV_META_CACHE_FILE = (
     Path.home() / ".claude" / "command-center" / "conv_meta_cache.json"
@@ -12849,7 +12855,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             _head_key = (_hst.st_mtime_ns, _hst.st_size)
         except OSError:
             _head_key = None
-        _hc = _conv_head_cache.get(str(f)) if _head_key is not None else None
+        _hc = _conv_head5_cache.get(str(f)) if _head_key is not None else None
         if _hc is not None and _hc[0] == _head_key:
             session_id, timestamp, git_branch, first_message, head_cwd = _hc[1]
             if _PROFILE:
@@ -12898,7 +12904,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
                     _n_head += 1
                 continue
             if _head_key is not None:
-                _conv_head_cache[str(f)] = (
+                _conv_head5_cache[str(f)] = (
                     _head_key,
                     (session_id, timestamp, git_branch, first_message, head_cwd),
                 )
