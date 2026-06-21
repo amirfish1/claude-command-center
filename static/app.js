@@ -34915,11 +34915,14 @@
         '<button type="button" class="ann-btn" data-ann-enable-shot hidden>Allow screenshot</button>' +
         '<button type="button" class="ann-btn" data-ann-cancel>Cancel</button>' +
         '<button type="button" class="ann-btn" data-ann-open-session>Open new session</button>' +
-        '<button type="button" class="ann-btn ann-primary ann-queue-btn" data-ann-ux-queue>Add to UX fixes queue</button>' +
+        // CCC-179: split the single "Add to UX fixes queue" into two — a 1-click
+        // "Queue" that enqueues the note as-is, and "Queue + edit" that opens the
+        // pre-submit preview to tweak the prompt first (the prior flow).
+        '<button type="button" class="ann-btn ann-queue-btn" data-ann-ux-queue title="Edit the prompt before adding to the UX-fixes queue">Queue + edit</button>' +
+        '<button type="button" class="ann-btn ann-primary ann-queue-btn" data-ann-ux-queue-now title="Add this annotation to the UX-fixes queue immediately, no edit">Queue</button>' +
         // CCC-171: the standalone "Save" button was redundant — both action
         // buttons above already persist the annotation first (persistAnnotation),
         // and ⌘/Ctrl+Enter still saves a note-only annotation for agent context.
-        // Dropping it declutters the row; "Add to UX fixes queue" is the primary.
       '</div>';
     annotationState.overlay.appendChild(editor);
     annotationState.editor = editor;
@@ -34937,6 +34940,7 @@
     const cancelBtn = editor.querySelector('[data-ann-cancel]');
     const openSessionBtn = editor.querySelector('[data-ann-open-session]');
     const uxQueueBtn = editor.querySelector('[data-ann-ux-queue]');
+    const uxQueueNowBtn = editor.querySelector('[data-ann-ux-queue-now]');
     const enableShotBtn = editor.querySelector('[data-ann-enable-shot]');
     const shotHintEl = editor.querySelector('.ann-editor-shot-hint');
     let savedAnnotation = null;
@@ -35097,11 +35101,20 @@
       uxQueueBtn.addEventListener('click', async () => {
         const ann = await persistAnnotation('Saving…');
         if (!ann) return;
-        // Show a pre-submit preview (what's stored + screenshot + truncation +
-        // copy) instead of firing straight at the queue. The annotation is
+        // "Queue + edit": show a pre-submit preview (stored text + screenshot +
+        // truncation + copy) so the user can tweak the prompt. The annotation is
         // already persisted; the overlay can close, the preview is its own modal.
         annStop();
         annShowUxFixesPreview(ann, (editedText) => annOpenUxFixesQueue(ann, null, errEl, editedText));
+      });
+    }
+    if (uxQueueNowBtn) {
+      uxQueueNowBtn.addEventListener('click', async () => {
+        const ann = await persistAnnotation('Saving…');
+        if (!ann) return;
+        // "Queue" (1-click, CCC-179): enqueue immediately with the default
+        // prompt — no preview. annOpenUxFixesQueue closes the editor itself.
+        annOpenUxFixesQueue(ann, annStop, errEl, null);
       });
     }
     saveBtn.addEventListener('click', save);
