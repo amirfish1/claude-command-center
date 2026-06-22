@@ -1459,6 +1459,17 @@
     // cannot recover rows this one already hid — hence the "invisible toggle".
     return 'all';
   }
+  // In-progress "Details" toggle: when on, every In-progress row that has a
+  // matching Needs-your-attention item renders that NYA block underneath it.
+  // Persisted so the choice sticks across renders/reloads.
+  const IP_NYA_DETAILS_KEY = 'ccc-inprogress-nya-details';
+  function _ipNyaDetailsOn() {
+    try { return localStorage.getItem(IP_NYA_DETAILS_KEY) === '1'; }
+    catch (_) { return false; }
+  }
+  // session_id -> attention item, rebuilt every loadAttentionList() pass. Lets
+  // the conversation list look up a row's NYA block without a second fetch.
+  const _nyaItemsBySid = new Map();
   const $convFolderFilter = document.getElementById('convFolderFilter');
   let repoListState = { repos: [], current: '', recent: [] };
   // Folder filtering removed: the conversation list always shows everything.
@@ -8906,6 +8917,13 @@
       const res = await fetch(url);
       const data = await res.json();
       const items = (data && data.items) || [];
+      // Cache by session_id so the In-progress list's "Details" toggle can
+      // render each row's NYA block inline (CCC: NYA-in-list). Rebuilt fresh
+      // every pass so released items drop out.
+      _nyaItemsBySid.clear();
+      for (const it of items) {
+        if (it && it.session_id) _nyaItemsBySid.set(it.session_id, it);
+      }
       const shown = (data && data.shown) || items.length;
       const total = (data && data.total) || 0;
       const grand = (data && data.grand_total) || total;
@@ -9080,6 +9098,11 @@
           focusCardOnBoard(sid);
         });
       });
+      // Fresh NYA cache → repaint the In-progress list so its inline Details
+      // blocks reflect the latest items (only when the toggle is on).
+      if (_ipNyaDetailsOn() && typeof archiveLoaded !== 'undefined' && archiveLoaded) {
+        try { renderArchiveList(document.getElementById('convSearch')?.value || ''); } catch (_) {}
+      }
     } catch (_) {
       // Keep last-known contents on transient errors
     }
@@ -17431,6 +17454,30 @@
     const _byRecencyDesc = (a, b) => (b.modified || 0) - (a.modified || 0);
     _needsYouConvs.sort(_byRecencyDesc);
     _openAskConvs.sort(_byRecencyDesc);
+    // Set true only while the In-progress section's rows are being built (when
+    // the Details toggle is on). _renderRow reads it to decide whether to
+    // append each row's NYA block. Reset to false afterwards so other sections
+    // (ready-to-merge, archived) never grow inline NYA blocks.
+    let _nyaDetailsForRows = false;
+    // The inline NYA block — mirrors the attention-panel row markup so it looks
+    // identical, minus the panel-only chrome (verify button, id chip, debug
+    // column). Display-only; the parent row already handles click-to-open.
+    const _nyaRowBlockHtml = (it) => {
+      if (!it) return '';
+      const kind = it.kind || '';
+      const label = kind.replace(/_/g, ' ');
+      const qLine = it.question_text
+        ? '<div class="att-question" title="Detected question / checkpoint">&#8220;' + escapeHtml(it.question_text) + '&#8221;</div>'
+        : '';
+      return '<div class="conv-nya-detail" data-sid="' + escapeHtml(it.session_id || '') + '">'
+        + '<span class="att-kind k-' + escapeHtml(kind) + '">' + escapeHtml(label) + '</span>'
+        + (it.where ? '<div class="att-where">' + escapeHtml(it.where) + '</div>' : '')
+        + qLine
+        + (it.did     ? '<div class="att-did"><strong>Did:</strong> '         + escapeHtml(it.did)     + '</div>' : '')
+        + (it.insight ? '<div class="att-insight"><strong>Insight:</strong> ' + escapeHtml(it.insight) + '</div>' : '')
+        + (it.next_step ? '<div class="att-next">' + escapeHtml(it.next_step) + '</div>' : '')
+      + '</div>';
+    };
     const _renderRow = (c, opts = {}) => {
       const isBacklogRow = c.source === 'backlog';
       const isGithubPrRow = c.source === 'github_pr';
@@ -18122,7 +18169,14 @@
         + '</div>'
         + ask
         + historySnippetHtml
-      + '</div>';
+      + '</div>'
+      // Inline "Details" block: when the In-progress Details toggle is on and
+      // this row has a matching Needs-your-attention item, render that exact
+      // NYA block as a sibling directly beneath the row. Sibling (not child)
+      // so the row's own click/drag handlers stay intact.
+      + (_nyaDetailsForRows
+          ? _nyaRowBlockHtml(_nyaItemsBySid.get(c.session_id) || _nyaItemsBySid.get(c.id))
+          : '');
     };
     // Active list keeps the date-gap separators so morning/evening
     // boundaries stay visible while scanning.
@@ -18148,6 +18202,7 @@
     // the data feed uses makes the toggle truthful AND the single control: one
     // click on All widens the real window and persists. Defaults to 'all' (no
     // projects hidden). NYA / attention feed (scope=live) stays separate.
+    const _ipNyaOn = _ipNyaDetailsOn();
     const _ipWindow = _hasFolderChips ? _archiveWindow() : 'all';
     const _ipWindowDays = _ipWindow === '7d' ? 7 : (_ipWindow === '1d' ? 1 : null);
     const _ipWindowCutoff = _ipWindowDays
@@ -18525,6 +18580,9 @@
           html: _chatHtml,
         };
       });
+    // Gate inline NYA blocks to the In-progress rows only (the toggle lives in
+    // that header). Turned off again right after _activeRowsHtml is built.
+    _nyaDetailsForRows = _ipNyaOn;
     let _activeRowsHtml;
     if (_shouldGroupByObjects) {
       // Resolve a session to its grouping node (CCC-83 + CCC-88):
@@ -18682,6 +18740,7 @@
     } else {
       _activeRowsHtml = _flatItemsWithSeparators(_visibleSessionConvs, _gcItems, { suppressFolderChip: _isSpecificFolderFilter });
     }
+    _nyaDetailsForRows = false;  // In-progress rows done — no inline NYA elsewhere
     if (!_visibleSessionConvs.length) {
       // Group chats are already in _activeRowsHtml (interleaved by
       // _flatItemsWithSeparators / the by-folder merge), so when chats
@@ -18749,8 +18808,17 @@
           + '<span class="grouping-opt">+ object</span>'
           + '</span>'
         : '';
-      const _ipTools = (_ipWindowToggle || _ipGroupingToggle || _ipAddObjectBtn)
-        ? '<span class="conv-inprogress-tools">' + _ipAddObjectBtn + _ipWindowToggle + _ipGroupingToggle + '</span>'
+      // "Details" toggle (left of 1d/7d/All): flips inline NYA blocks under
+      // every row that has a Needs-your-attention item. Single click flips the
+      // persisted flag. Shown whenever the section renders (NYA is independent
+      // of folder chips, unlike the window/grouping toggles).
+      const _ipDetailsToggle =
+        '<span class="conv-grouping-toggle conv-nya-toggle" data-role="nya-details-toggle"'
+          + ' title="Show the Needs-your-attention block under each row that has one">'
+          + '<span class="grouping-opt' + (_ipNyaOn ? ' is-active' : '') + '" data-nya-details="' + (_ipNyaOn ? 'off' : 'on') + '">Details</span>'
+        + '</span>';
+      const _ipTools = (_ipDetailsToggle || _ipWindowToggle || _ipGroupingToggle || _ipAddObjectBtn)
+        ? '<span class="conv-inprogress-tools">' + _ipAddObjectBtn + _ipDetailsToggle + _ipWindowToggle + _ipGroupingToggle + '</span>'
         : '';
       // Count display: sessions in window + active group chats. Title
       // attribute spells both out so a hover explains the headline number.
@@ -19694,7 +19762,7 @@
       $inProgressToggle.addEventListener('click', (ev) => {
         // The grouping toggle (project / time) lives inside this header
         // button — its own listener stops propagation, but be defensive.
-        if (ev.target.closest('[data-role="grouping-toggle"], [data-role="window-toggle"], [data-role="ip-add-object"]')) return;
+        if (ev.target.closest('[data-role="grouping-toggle"], [data-role="window-toggle"], [data-role="ip-add-object"], [data-role="nya-details-toggle"]')) return;
         ev.stopPropagation();
         const section = $inProgressToggle.closest('[data-role="inprogress-section"]');
         if (!section) return;
@@ -19838,6 +19906,20 @@
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     });
+    const $nyaDetailsToggle = $convList.querySelector('[data-role="nya-details-toggle"]');
+    if ($nyaDetailsToggle) {
+      $nyaDetailsToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const opt = ev.target.closest('[data-nya-details]');
+        if (!opt) return;
+        const next = opt.getAttribute('data-nya-details') === 'on';
+        try { localStorage.setItem(IP_NYA_DETAILS_KEY, next ? '1' : '0'); } catch (_) {}
+        // Pull a fresh NYA pass so blocks appear immediately on enable; the
+        // render below paints whatever is already cached without waiting.
+        if (next && typeof loadAttentionList === 'function') loadAttentionList();
+        renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+    }
     const $windowToggle = $convList.querySelector('[data-role="window-toggle"]');
     if ($windowToggle) {
       $windowToggle.addEventListener('click', (ev) => {

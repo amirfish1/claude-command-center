@@ -8864,6 +8864,45 @@
   }
   .attention-row .att-next::before { content: '→ '; opacity: 0.7; }
   .attention-empty { padding: 10px; font-size: 12px; color: var(--text-muted); text-align: center; }
+  /* Inline NYA block under an In-progress row (the "Details" toggle). Reuses
+     the attention-panel .att-* children but lays them out as a simple indented
+     stack — distinct from the panel's two-column grid. The left accent border
+     ties the block visually to the row it sits under. */
+  .conv-nya-detail {
+    display: flex; flex-direction: column; gap: 3px;
+    margin: -2px 0 6px 26px; padding: 6px 10px;
+    border-left: 2px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    background: var(--surface-2);
+  }
+  .conv-nya-detail .att-kind {
+    align-self: flex-start;
+    font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
+    text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;
+    background: rgba(139,148,158,0.18); color: var(--text-muted);
+  }
+  .conv-nya-detail .att-kind.k-pending_tool         { background: rgba(248,81,73,0.22); color: var(--red); }
+  .conv-nya-detail .att-kind.k-sidecar_waiting      { background: rgba(210,153,34,0.22); color: var(--orange); }
+  .conv-nya-detail .att-kind.k-pushed_open          { background: rgba(57,210,192,0.22); color: var(--cyan); }
+  .conv-nya-detail .att-kind.k-uncommitted_edits    { background: rgba(210,153,34,0.22); color: var(--orange); }
+  .conv-nya-detail .att-kind.k-committed_not_pushed { background: rgba(57,210,192,0.18); color: var(--cyan); }
+  .conv-nya-detail .att-kind.k-needs_attention_label{ background: rgba(248,81,73,0.18); color: var(--red); }
+  .conv-nya-detail .att-kind.k-open_backlog         { background: rgba(139,148,158,0.18); color: var(--text-muted); }
+  .conv-nya-detail .att-where {
+    font-size: 10px; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .conv-nya-detail .att-question {
+    font-size: 12px; color: var(--text); line-height: 1.4;
+    font-style: italic; opacity: 0.92;
+  }
+  .conv-nya-detail .att-did,
+  .conv-nya-detail .att-insight { font-size: 12px; color: var(--text-muted); line-height: 1.35; }
+  .conv-nya-detail .att-insight { color: var(--purple); opacity: 0.85; }
+  .conv-nya-detail .att-next { font-size: 12px; color: var(--accent); font-weight: 600; line-height: 1.35; }
+  .conv-nya-detail .att-next::before { content: '→ '; opacity: 0.7; }
+  /* The Details toggle in the In-progress header — matches the grouping toggles. */
+  .conv-nya-toggle .grouping-opt.is-active { color: var(--accent); }
   /* Mobile / narrow-tablet layout: sidebar fills the viewport, main
      pane is a slide-in overlay toggled by tapping a conv row → back
      button. 950px threshold matches the JS _mobileMQ so iPhone
