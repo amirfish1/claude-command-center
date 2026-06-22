@@ -159,6 +159,38 @@ class TestSessionStateLabel(unittest.TestCase):
             "ended",
         )
 
+    # --- prose soft-block recency bound (CCC follow-up) ---------------------
+    _PROSE_Q = ("Which option do you want — A or B? Let me know how you'd "
+                "like me to proceed.")
+
+    def test_fresh_prose_soft_block_is_waiting(self):
+        """A live session whose RECENT last message reads like a question is a
+        heuristic soft block → waiting."""
+        self.assertEqual(
+            self.label(last_assistant_text=self._PROSE_Q, modified=time.time() - 600),
+            "waiting",
+        )
+
+    def test_stale_prose_soft_block_demotes_to_idle(self):
+        """The prose heuristic has no 'human answered' signal, so a live-but-idle
+        session parked at an OLD question must leave NEEDS YOU once the turn is
+        older than _SOFT_BLOCK_PROSE_MAX_AGE — the 'never taking sessions out'
+        fix. (Formal flags are exempt; see below.)"""
+        self.assertEqual(
+            self.label(last_assistant_text=self._PROSE_Q, modified=time.time() - 3 * 3600),
+            "idle",
+        )
+
+    def test_stale_formal_question_stays_waiting(self):
+        """Formal AskUserQuestion / permission prompts are guaranteed hits — the
+        prose recency bound never demotes them."""
+        old = time.time() - 3 * 3600
+        self.assertEqual(self.label(question_waiting=True, modified=old), "waiting")
+        self.assertEqual(self.label(needs_approval=True, modified=old), "waiting")
+
+    def test_prose_max_age_constant_is_2h(self):
+        self.assertEqual(self.server._SOFT_BLOCK_PROSE_MAX_AGE, 2 * 3600)
+
     def test_window_constant_is_120s(self):
         self.assertEqual(self.server._WORKING_GAP_WINDOW, 120)
 
