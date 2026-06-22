@@ -4006,6 +4006,14 @@
     border-radius: 10px; padding: 1px 8px; font-size: 11px;
     color: var(--text-muted); font-weight: 600;
   }
+  /* CCC-178: "why is this here?" info glyph on the action-section headers. */
+  #convList .conv-needsyou-info,
+  #convList .conv-openask-info {
+    margin-left: 6px; font-size: 12px; line-height: 1;
+    color: var(--text-muted); opacity: 0.7; cursor: help; flex: 0 0 auto;
+  }
+  #convList .conv-needsyou-info:hover,
+  #convList .conv-openask-info:hover { opacity: 1; color: var(--text); }
   #convList .conv-archived-section.collapsed .conv-archived-list,
   #convList .conv-ghissues-section.collapsed .conv-ghissues-list,
   #convList .conv-readytomerge-section.collapsed .conv-readytomerge-list,

@@ -18753,27 +18753,41 @@
     // Rows reuse _renderRow so live pills / branch badges / titles match the
     // rest of the list; folder chips follow the same suppress rule as the
     // other flat sections.
-    const _renderActionSection = (cards, { kind, label, collapseKey }) => {
+    const _renderActionSection = (cards, { kind, label, collapseKey, hint }) => {
       if (!cards.length) return '';
       const collapsed = localStorage.getItem(collapseKey) === '1';
       const arrow = collapsed ? '▸' : '▾';
       const rows = _flatRowsWithSeparators(cards, { suppressFolderChip: _isSpecificFolderFilter });
+      // CCC-178: surface WHY a session lands here. The header carries the
+      // criteria as a tooltip, plus a small ⓘ glyph (its own tooltip) so the
+      // logic is discoverable instead of opaque.
+      const _hintAttr = hint ? ' title="' + escapeAttr(hint) + '"' : '';
+      const _hintGlyph = hint
+        ? '<span class="conv-' + kind + '-info" title="' + escapeAttr(hint) + '" aria-label="' + escapeAttr(hint) + '">&#9432;</span>'
+        : '';
       return '<div class="conv-' + kind + '-section' + (collapsed ? ' collapsed' : '') + '"'
         +   ' data-role="' + kind + '-section">'
         + '<button type="button" class="conv-' + kind + '-header" data-role="' + kind + '-toggle"'
+        +   _hintAttr
         +   ' aria-expanded="' + (!collapsed) + '">'
         +   '<span class="conv-' + kind + '-arrow">' + arrow + '</span>'
         +   '<span class="conv-' + kind + '-label">' + escapeHtml(label) + '</span>'
         +   '<span class="conv-' + kind + '-count">' + cards.length + '</span>'
+        +   _hintGlyph
         + '</button>'
         + '<div class="conv-' + kind + '-list">' + rows + '</div>'
         + '</div>';
     };
     const _needsYouHtml = _renderActionSection(_needsYouConvs, {
       kind: 'needsyou', label: 'Needs you', collapseKey: 'ccc-needsyou-collapsed',
+      hint: 'The agent is blocked on YOU right now — it asked a question, '
+        + 'needs permission, or stalled mid-tool. These move back to Active on '
+        + 'their own once the session resumes.',
     });
     const _openAskHtml = _renderActionSection(_openAskConvs, {
       kind: 'openask', label: 'Open ask', collapseKey: 'ccc-openask-collapsed',
+      hint: 'A session that ENDED while still waiting on your answer (last 48h). '
+        + 'Open it and reply to pick the work back up.',
     });
     // Cross-repo source (CCC-159): once /api/issues/all has resolved,
     // crossRepoIssuesData holds OPEN+CLOSED issues from EVERY tracked repo.
