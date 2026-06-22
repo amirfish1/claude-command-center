@@ -23810,6 +23810,11 @@
   }
 
   let _streamingBubbleLingerTimer = null;
+  // CCC-180: one-shot timer that clears an orphaned "stalled" streaming bubble
+  // (silently-stale headless never fires SSE onerror, so the normal clear path
+  // never runs). Cancelled when a stream resumes (ensureStreamingBubble) or on
+  // any explicit clearStreamingBubble.
+  let _staleBubbleClearTimer = null;
 
   // ── Per-Task subagent tabs ─────────────────────────────────────────────
   // When a Task tool spawns a subagent, its assistant_block events arrive
@@ -24045,6 +24050,10 @@
       clearTimeout(_streamingBubbleLingerTimer);
       _streamingBubbleLingerTimer = null;
     }
+    if (_staleBubbleClearTimer) {
+      clearTimeout(_staleBubbleClearTimer);
+      _staleBubbleClearTimer = null;
+    }
     const linger = opts && typeof opts.lingerMs === 'number' ? opts.lingerMs : 0;
     // Multi-bubble safe: when subagents are running concurrently with the
     // parent, multiple .stream-bubble nodes can be in the DOM. Clear ALL of
@@ -24083,13 +24092,53 @@
   // liveStatus reports the headless as stale, settle any still-active bubble in
   // the focused view (stop the dot, append "· stalled") so it stops claiming to
   // stream. ensureStreamingBubble clears this if blocks start flowing again.
+  // CCC-180: marking a bubble "stalled" stopped the misleading pulse, but the
+  // placeholder then lingered FOREVER — the silently-stale headless never
+  // errors the SSE, so clearStreamingBubble (which fires on SSE onerror) is
+  // never reached. Two clears here: (a) drop any bubble whose msg_id already
+  // has a formatted JSONL counterpart — it's a redundant low-fi duplicate;
+  // (b) for a genuinely orphaned stalled bubble, schedule a one-shot removal
+  // so it doesn't claim "streaming · stalled" indefinitely. A resumed stream
+  // cancels the timer in ensureStreamingBubble.
+  const STALE_BUBBLE_CLEAR_MS = 8000;
+  function _dropStreamBubble(node) {
+    if (!node) return;
+    if (node.parentNode) node.parentNode.removeChild(node);
+    if (_streamingBubble === node) { _streamingBubble = null; _streamingMsgId = null; }
+  }
   function markStaleStreamingBubbles() {
     if (!liveStatus || !liveStatus.headlessStale) return;
     const $view = getConvView();
     if (!$view) return;
-    $view.querySelectorAll('.stream-bubble:not(.stream-bubble-stalled)').forEach(node => {
-      node.classList.add('stream-bubble-stalled');
+    let orphanStalled = false;
+    $view.querySelectorAll('.stream-bubble').forEach(node => {
+      // Handoff already happened for this msg_id → the formatted message is
+      // the authoritative render; the bubble is a duplicate. Drop it now.
+      const mid = node.dataset.msgId;
+      if (mid) {
+        const esc = (window.CSS && CSS.escape) ? CSS.escape(mid) : mid;
+        if ($view.querySelector('.event.assistant[data-msg-id="' + esc + '"]')) {
+          _dropStreamBubble(node);
+          return;
+        }
+      }
+      if (!node.classList.contains('stream-bubble-stalled')) {
+        node.classList.add('stream-bubble-stalled');
+      }
+      orphanStalled = true;
     });
+    // Orphaned stalled bubble with no formatted counterpart — schedule a clear
+    // so the placeholder eventually disappears. Guarded at fire time so a
+    // resumed stream (headlessStale cleared) doesn't get yanked.
+    if (orphanStalled && !_staleBubbleClearTimer) {
+      _staleBubbleClearTimer = setTimeout(() => {
+        _staleBubbleClearTimer = null;
+        if (!liveStatus || !liveStatus.headlessStale) return;
+        const v = getConvView();
+        if (!v) return;
+        v.querySelectorAll('.stream-bubble.stream-bubble-stalled').forEach(_dropStreamBubble);
+      }, STALE_BUBBLE_CLEAR_MS);
+    }
   }
 
   function ensureStreamingBubble(msgId, paneId, opts) {
@@ -24155,6 +24204,12 @@
     // Streaming resumed on a bubble we'd marked stalled (CCC-155) — reactivate.
     if (node.classList.contains('stream-bubble-stalled')) {
       node.classList.remove('stream-bubble-stalled');
+    }
+    // Blocks are flowing again — cancel any pending stale-bubble clear so a
+    // resumed stream isn't yanked out from under the user (CCC-180).
+    if (_staleBubbleClearTimer) {
+      clearTimeout(_staleBubbleClearTimer);
+      _staleBubbleClearTimer = null;
     }
     // Re-anchor to the bottom in case JSONL events were appended after us.
     if (node.parentNode === $view && node !== $view.lastElementChild) {
@@ -35254,13 +35309,21 @@
       if (annotationState && annotationState.overlay) {
         const contextRect = annContextRect(annotationState.element, annotationState.rect);
         const captureElement = annotationState.element;
+        // CCC-180: hide the overlay (incl. the editor dialog + HUD) BEFORE any
+        // capture starts. The tab-capture path crops a full-tab frame, so if
+        // the dialog is still visible when that frame is grabbed it lands in
+        // the screenshot. classList.add is synchronous, so getDisplayMedia is
+        // still requested within the same user-activation task (the comment
+        // below) — the hide just wins the race against the frame grab. The
+        // DOM-clone path already excludes the overlay (it clones only the
+        // annotated element's context ancestor).
+        annotationState.overlay.classList.add('ann-capturing');
         // getDisplayMedia must be requested before the first await or the browser
         // will not show the tab-sharing prompt (user activation expires).
         let tabCapturePromise = null;
         if (annTabCaptureSupported()) {
           tabCapturePromise = annCaptureTabRegionB64(contextRect);
         }
-        annotationState.overlay.classList.add('ann-capturing');
         await annNextPaint();
         let screenshotB64 = await annCaptureDomRegionB64(contextRect, captureElement);
         if (!screenshotB64 && tabCapturePromise) screenshotB64 = await tabCapturePromise;
