@@ -3560,6 +3560,19 @@
   .conv-item:focus-within .conv-row-end > .conv-rel {
     opacity: 0;
   }
+  /* CCC-186: the hover action icons (merge / pin / archive) are an absolutely-
+     positioned overlay whose solid background is meant to mask whatever sits
+     behind them — but the meta slot (PR badge, status chips, WIP) is wider
+     than that mask, so it peeked out next to the icons and read as "icons in
+     the text". Fade the meta on hover too, mirroring the time-fade above, so
+     the icons sit on clean background. opacity keeps layout → no row shift.
+     Pinned rows that show actions at rest aren't hovered, so their meta stays
+     visible. */
+  .conv-item .conv-row-meta { transition: opacity 0.12s ease; }
+  .conv-item:hover .conv-row-meta,
+  .conv-item:focus-within .conv-row-meta {
+    opacity: 0;
+  }
   .conv-item .conv-row-end > .conv-rel {
     flex: 0 0 auto;            /* override the column-width flex from the base rule */
     transition: opacity 0.12s ease;
