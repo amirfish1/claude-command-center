@@ -11,7 +11,7 @@ Usage:
     PORT=9000 ./run.sh       # custom port
 """
 
-__version__ = "5.3.0"
+__version__ = "5.4.0"
 
 import ast
 import base64
@@ -3589,6 +3589,42 @@ def _build_live_sessions_activity_uncached():
             continue
         raw = _live_activity_entry_for_session(sid)
         out[sid] = {k: raw.get(k) for k in _LIVE_ACTIVITY_FIELD_KEYS}
+    return out
+
+
+def _sessions_state_snapshot():
+    """Cheap {session_id: {state, question_waiting, needs_approval}} for every
+    currently-live session, reusing the coalesced live-activity snapshot
+    (candidacy-gated, ≤1.5s old) — no per-call JSONL walk or subprocess. This
+    is the source the /api/sessions/events SSE stream diffs each tick.
+
+    `state` is the canonical four-state label via `_stamp_session_state`, so it
+    carries the same CCC-174 "waiting" hysteresis the dashboard applies.
+    Sessions absent from the live map are simply not present here; the SSE
+    layer treats a disappearance as a transition to "ended".
+
+    Caveat: the sidecar-shaped entry has no `last_assistant_text`, so a
+    prose-only soft-block (no formal question_waiting / needs_approval flag)
+    reads "idle" here. The formal human-input signals — the ones a monitor
+    most cares about — are always reflected.
+    """
+    out = {}
+    try:
+        activity = build_live_sessions_activity()
+    except Exception:
+        return out
+    for sid, fields in (activity or {}).items():
+        entry = dict(fields or {})
+        entry["session_id"] = sid
+        try:
+            state = _stamp_session_state(entry)
+        except Exception:
+            state = "idle" if entry.get("is_live") else "ended"
+        out[sid] = {
+            "state": state,
+            "question_waiting": bool(entry.get("question_waiting")),
+            "needs_approval": bool(entry.get("needs_approval")),
+        }
     return out
 
 
@@ -39705,6 +39741,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Cheap poll target for the sidebar: refresh WIP / tool chips for
             # every live session without re-running the multi-MB archive scan.
             self.send_json({"sessions": build_live_sessions_activity()})
+        elif path == "/api/sessions/events":
+            # SSE: push session-state changes to a subscriber (e.g. a COO /
+            # monitor session) instead of having it poll /api/sessions on a
+            # timer. Long-lived handler — safe under ThreadingHTTPServer.
+            self._stream_sessions_state_events()
         elif path == "/api/session-status":
             qs = urllib.parse.parse_qs(parsed.query)
             sid = qs.get("session_id", [""])[0]
@@ -43784,6 +43825,88 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     last_keepalive = now
 
                 time.sleep(0.25)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _stream_sessions_state_events(self):
+        """SSE: emit one event whenever a session's (state, question_waiting,
+        needs_approval) tuple changes vs the last emitted snapshot for that
+        session. Baseline snapshot on connect, deltas after.
+
+        Perf: the internal poll is ~1/s and reads only the coalesced
+        live-activity snapshot (shared, ≤1.5s-cached, candidacy-gated), so N
+        concurrent subscribers do not multiply the underlying work and no
+        per-tick subprocess / JSONL walk runs. Long-lived handler — safe under
+        ThreadingHTTPServer (daemon thread per request).
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        # Defeat proxy buffering so events arrive promptly (matches nginx hint).
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        def _emit(sid, tup):
+            payload = {
+                "id": sid,
+                "state": tup[0],
+                "question_waiting": tup[1],
+                "needs_approval": tup[2],
+                "ts": round(time.time(), 3),
+            }
+            try:
+                self.wfile.write(("data: " + json.dumps(payload) + "\n\n").encode("utf-8"))
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return False
+
+        def _tuples():
+            return {
+                sid: (v["state"], v["question_waiting"], v["needs_approval"])
+                for sid, v in _sessions_state_snapshot().items()
+            }
+
+        last = {}
+        last_keepalive = time.time()
+        try:
+            # Baseline: emit the current snapshot once so a fresh subscriber
+            # knows the starting state of every live session, then deltas only.
+            for sid, tup in _tuples().items():
+                if not _emit(sid, tup):
+                    return
+                last[sid] = tup
+            while True:
+                cur = _tuples()
+                changed = False
+                for sid, tup in cur.items():
+                    if last.get(sid) != tup:
+                        if not _emit(sid, tup):
+                            return
+                        last[sid] = tup
+                        changed = True
+                # A session that dropped out of the live map transitioned to
+                # "ended" — emit once, then forget it so it isn't re-emitted.
+                for sid in [s for s in last if s not in cur]:
+                    ended = ("ended", False, False)
+                    if last[sid] != ended and not _emit(sid, ended):
+                        return
+                    del last[sid]
+                    changed = True
+                now = time.time()
+                if changed:
+                    last_keepalive = now
+                elif now - last_keepalive >= 20:
+                    # Comment line keeps proxies / idle clients from dropping
+                    # the connection between state changes.
+                    try:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        return
+                    last_keepalive = now
+                time.sleep(1.0)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
