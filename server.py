@@ -40878,6 +40878,47 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 400)
             return
 
+        if path == "/api/coo/tracked":
+            # Persist the COO row-checkbox tracked-set into the shared
+            # coo-notes.json sidecar as a TOP-LEVEL "tracked" array, so a shell
+            # Monitor and the /api/sessions/events SSE stream can key off the
+            # same source of truth as the browser checkboxes. Read-modify-write
+            # so the COO's own keys (swept_global / seed / cards) are preserved.
+            # Same-origin already enforced by do_POST's _check_same_origin.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                tracked = data.get("tracked", [])
+                if not isinstance(tracked, list):
+                    self.send_json({"error": "tracked must be a list of session ids"}, 400)
+                    return
+                # Unique, order-preserving, strings only.
+                seen = set()
+                clean = []
+                for s in tracked:
+                    if isinstance(s, str) and s and s not in seen:
+                        seen.add(s)
+                        clean.append(s)
+                notes_file = STATIC_DIR / "coo-notes.json"
+                existing = {}
+                try:
+                    if notes_file.exists():
+                        existing = json.loads(notes_file.read_text()) or {}
+                        if not isinstance(existing, dict):
+                            existing = {}
+                except (OSError, ValueError):
+                    existing = {}
+                existing["tracked"] = clean
+                # Atomic write so a concurrent reader never sees a half-file.
+                tmp = notes_file.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(existing, indent=1) + "\n")
+                tmp.replace(notes_file)
+                self.send_json({"ok": True, "count": len(clean)})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 400)
+            return
+
         if path == "/api/ingest/gemini":
             try:
                 import uuid

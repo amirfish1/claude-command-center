@@ -13226,7 +13226,21 @@
     return _cooTrackedSet;
   }
   function _persistCooTracked(set) {
-    try { localStorage.setItem(COO_TRACKED_KEY, JSON.stringify(Array.from(set || []))); } catch (_) {}
+    const arr = Array.from(set || []);
+    // localStorage is the instant-UI source of truth (synchronous, no row
+    // re-render needed). Mirror the full set to the server so coo-notes.json
+    // .tracked stays in sync — a shell Monitor and the /api/sessions/events
+    // SSE stream both read that file. Fire-and-forget: never block the toggle
+    // or surface an error to the user.
+    try { localStorage.setItem(COO_TRACKED_KEY, JSON.stringify(arr)); } catch (_) {}
+    try {
+      fetch('/api/coo/tracked', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tracked: arr }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch (_) {}
   }
   function toggleCooTracked(sid, on) {
     if (!sid) return false;
@@ -13252,6 +13266,18 @@
     return fetch('/static/coo-notes.json?t=' + Date.now())
       .then(r => (r.ok ? r.json() : { cards: {} }))
       .then(j => {
+        // Seed the tracked-set from the server ONLY on a fresh browser (no
+        // local value yet) so a new client inherits the COO's tracked set.
+        // Never overwrite an existing local value — the user's own toggles
+        // win, and _persistCooTracked already mirrors them back to the server.
+        try {
+          if (localStorage.getItem(COO_TRACKED_KEY) === null
+              && Array.isArray(j && j.tracked) && j.tracked.length) {
+            const seed = j.tracked.filter(x => typeof x === 'string' && x);
+            localStorage.setItem(COO_TRACKED_KEY, JSON.stringify(seed));
+            _cooTrackedSet = new Set(seed);
+          }
+        } catch (_) {}
         const cards = (j && j.cards) || {};
         const next = {};
         Object.keys(cards).forEach(sid => {
