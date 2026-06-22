@@ -8911,11 +8911,13 @@
   .conv-nya-detail .att-insight { color: var(--purple); opacity: 0.85; }
   .conv-nya-detail .att-next { font-size: 13px; color: var(--accent); font-weight: 600; line-height: 1.45; }
   .conv-nya-detail .att-next::before { content: '→ '; opacity: 0.7; }
-  /* Per-row collapse chevron, sits in the row's right-end cluster. */
+  /* Per-row collapse chevron — first item on the title line, left of the
+     track checkbox, so the right-side hover-action overlay never covers it. */
   .conv-nya-chevron {
+    flex: 0 0 auto; align-self: center;
     background: transparent; border: none; cursor: pointer;
-    color: var(--text-muted); font-size: 11px; line-height: 1;
-    padding: 2px 4px; border-radius: 3px; opacity: 0.7;
+    color: var(--text-muted); font-size: 10px; line-height: 1;
+    padding: 2px 3px; margin-right: 1px; border-radius: 3px; opacity: 0.65;
   }
   .conv-nya-chevron:hover { color: var(--accent); background: rgba(88,166,255,0.12); opacity: 1; }
   /* The Details toggle in the In-progress header — matches the grouping toggles. */

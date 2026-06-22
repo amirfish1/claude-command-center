@@ -18054,6 +18054,7 @@
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + '<div class="conv-main-row">'
+            + _nyaChevronHtml
             + cooTrackHtml
             + leftFolderChipHtml
             + titleFolderChipHtml
@@ -18075,7 +18076,6 @@
             // right, past the elapsed time — experimental placement, easy
             // to walk back by moving sessionIconHtml before the chips.
             + '<span class="conv-row-end">'
-            +   _nyaChevronHtml
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
             +   '<span class="conv-row-actions">' + wakeBtn + mergeBtn + startBtn + pinBtn + archiveBtn + '</span>'
             +   sessionIconHtml
