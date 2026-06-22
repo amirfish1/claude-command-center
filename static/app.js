@@ -18803,6 +18803,13 @@
         }
       }
       const _crossRepoRtm = Array.from(_rtmByPr.values())
+        // CCC-187: archiveData rows are keyed by session_id and can lack `id`.
+        // Without it _renderRow emits data-id="undefined", so clicking the row
+        // calls selectConversation("undefined") — the conversation isn't found
+        // and the breadcrumb/title fall through to "undefined".slice(0,8) =
+        // "undefine". Normalize id to the session_id, matching how shaped
+        // archive rows are keyed (id: c.session_id).
+        .map(r => (r && !r.id && r.session_id) ? Object.assign({}, r, { id: r.session_id }) : r)
         .sort((a, b) => (b.modified || 0) - (a.modified || 0));
       _readyToMergeConvs.length = 0;
       _readyToMergeConvs.push(..._crossRepoRtm);
@@ -22603,7 +22610,13 @@
     }
     if (typeof ffcUpdateSidebar === 'function') ffcUpdateSidebar(null);
     if (typeof closeStatusRailFileViewer === 'function') closeStatusRailFileViewer();
-    const selectedConv = (conversationsData || []).find(x => x.id === id) || {};
+    // CCC-187: cross-repo ready-to-merge rows live in archiveData, not the
+    // repo-scoped conversationsData, so fall back to archiveData (keyed by id
+    // or session_id) — otherwise the title/source resolve to nothing and the
+    // breadcrumb shows the bare id.
+    const selectedConv = (conversationsData || []).find(x => x.id === id)
+      || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null)
+      || {};
     const source = sessionSourceByConv[id] || selectedConv.source || 'interactive';
     rememberComposerDraftForPane(paneId);
     // Make this pane active so the existing globals (which proxy through
@@ -22666,7 +22679,9 @@
     // Detach in-memory pending echoes for the outgoing conv; they are
     // restored from pendingSendsByConv when this pane re-opens that conv.
     _pendingSends = [];
-    const selectedRow = conversationsData.find(x => x.id === id) || null;
+    const selectedRow = conversationsData.find(x => x.id === id)
+      || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null)
+      || null;
     updatePaneHeader(paneId, selectedRow || Object.assign({ id, source }, selectedConv || {}));
     if (selectedRow && selectedRow.source === 'backlog' && selectedRow.issue_number) {
       await renderIssueInConvPane(selectedRow.issue_number, rowRepoPath(selectedRow), selectedRow.id);
