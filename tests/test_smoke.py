@@ -1290,6 +1290,18 @@ class TestServerImports(unittest.TestCase):
                     self.assertEqual(global_data[0]["composerId"], sid)
                     self.assertEqual(global_data[0]["workspaceIdentifier"]["id"], "test-workspace-id")
 
+    def test_queued_send_echo_self_heals_on_real_event(self):
+        """A queued send echo ('⏳ Queued…') has the `pending` class removed, so
+        the user_text reconciliation must clear `.send-queued` (and the other
+        echo states) by text match when the real event lands — otherwise the
+        note sticks forever once the _pendingSends entry is lost (the 'stuck at
+        queued' annotation)."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        # The reconciliation DOM-scan must cover the non-pending echo states.
+        self.assertIn(".event.user_text.send-queued", app_js)
+        self.assertIn(".event.user_text.send-delivered", app_js)
+        self.assertIn(".event.user_text.not-acknowledged", app_js)
+
     def test_slash_command_args_surface_in_user_text(self):
         """A /command user turn must render "/cmd <args>", not a bare "/cmd".
         Claude Code wraps the typed arguments in a <command-args> tag; dropping
