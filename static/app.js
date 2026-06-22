@@ -17875,7 +17875,15 @@
       // currently happening. The optimistic flag is set by
       // markSessionSending on send/inject and auto-clears after
       // _SENDING_TIMEOUT_MS — long enough to bridge most agent turns.
-      const _isOptimisticallySending = sidVal && sessionIsOptimisticallySending(sidVal);
+      // CCC-181: the optimistic-sending flag bridges WIP for up to 5min after
+      // a send/inject, but it was only ever cleared when a live TOOL landed —
+      // never when the turn simply FINISHED. So an injected session that
+      // completed (or went to "waiting") kept flashing WIP for minutes. The
+      // bridge is only needed until the SERVER reflects the turn: once it has
+      // stamped a definitive `state` (idle/waiting/working/ended), trust that
+      // and drop the optimistic override. While `state` is still unknown
+      // (brand-new send, server hasn't scanned yet) the bridge still applies.
+      const _isOptimisticallySending = sidVal && !c.state && sessionIsOptimisticallySending(sidVal);
       let _isAgentRunning = !!c.pending_spawn
         || _hasLivePendingTool
         || _codexOpenTurn
