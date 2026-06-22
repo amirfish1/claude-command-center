@@ -5267,6 +5267,41 @@
     border-radius: 3px; text-transform: uppercase; letter-spacing: 0.04em;
     vertical-align: middle;
   }
+  /* Live status chip — only rendered on COO-tracked rows. Mirrors the badge
+     chrome (small inline pill) and colours by the row's four-state label:
+     working=green, waiting=amber, idle=grey, ended=muted. */
+  .conv-item .coo-status {
+    display: inline-flex; align-items: center;
+    margin-left: 6px; padding: 1px 6px;
+    font-size: 9px; font-weight: 600; line-height: 1.5;
+    white-space: nowrap;
+    border-radius: 3px; text-transform: uppercase; letter-spacing: 0.04em;
+    vertical-align: middle;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  .conv-item .coo-status.is-working {
+    color: var(--green, #3fb950);
+    background: color-mix(in srgb, var(--green, #3fb950) 13%, transparent);
+    border-color: color-mix(in srgb, var(--green, #3fb950) 38%, transparent);
+  }
+  .conv-item .coo-status.is-waiting {
+    color: var(--warn, #d29922);
+    background: color-mix(in srgb, var(--warn, #d29922) 14%, transparent);
+    border-color: color-mix(in srgb, var(--warn, #d29922) 40%, transparent);
+  }
+  .conv-item .coo-status.is-idle {
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+  .conv-item .coo-status.is-ended {
+    color: var(--text-muted);
+    opacity: 0.7;
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
 
   .conv-list-panel {
     display: flex; flex-direction: column;

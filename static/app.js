@@ -18071,6 +18071,23 @@
         cooEscalatedHtml = '<span class="coo-escalated" title="'
           + escapeAttr(_escTip) + '">↑ escalated</span>';
       }
+      // Live status chip — only on COO-tracked rows. Reuses the row's own
+      // four-state label (c.state: working/idle/waiting/ended, stamped
+      // server-side) + the existing relative-age string. No per-row work, so
+      // it auto-refreshes on the same data cycle as the rest of the row.
+      let cooStatusHtml = '';
+      if (_cooTracked) {
+        const _cs = c.state || (c.is_live ? 'idle' : 'ended');
+        const _stateCls = _cs === 'working' ? ' is-working'
+          : _cs === 'waiting' ? ' is-waiting'
+          : _cs === 'ended' ? ' is-ended'
+          : ' is-idle';
+        // working/idle get an age suffix; waiting/ended read on their own.
+        const _showAge = (_cs === 'working' || _cs === 'idle') && rel;
+        const _label = _showAge ? (_cs + ' · ' + rel) : _cs;
+        cooStatusHtml = '<span class="coo-status' + _stateCls
+          + '" title="Live session state">' + escapeHtml(_label) + '</span>';
+      }
       const cooTrackedRowClass = _cooTracked ? ' is-coo-tracked' : '';
 
       return '<div class="conv-item' + active + cooTrackedRowClass + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
@@ -18086,6 +18103,7 @@
             + repoBadgeHtml
             + pinnedHtml
             + rowMetaHtml
+            + cooStatusHtml
             + cooEscalatedHtml
             // Right-edge slot — Omnara-style. Shows the time at rest;
             // swaps to action buttons (merge / start / archive) on hover.
