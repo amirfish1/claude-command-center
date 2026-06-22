@@ -27671,7 +27671,28 @@
       }
 
       if (ev.type === 'system') {
-        if (ev.subtype === 'hermes_lineage') {
+        if (ev.subtype === 'hermes_system_prompt') {
+          // The system prompt Hermes injected into this conversation
+          // (persona + skills + memory + per-conversation context). Read-only,
+          // collapsed by default via native <details> so it doesn't dominate
+          // the transcript.
+          const _spText = String(ev.text || '');
+          const _spChars = Number(ev.char_count || _spText.length) || 0;
+          const _spTip = 'The system prompt Hermes injected into this session — '
+            + 'persona, skills, memory and per-conversation context. Read-only.';
+          div.classList.add('system-hermes', 'system-hermes-prompt');
+          div.innerHTML = '<details class="hermes-sysprompt-details">'
+            + '<summary class="hermes-sysprompt-summary" title="' + escapeAttr(_spTip) + '">'
+            +   '<span class="label">Hermes</span>'
+            +   '<span class="line-num">L' + ev.line + '</span>'
+            +   tsSpan(ev.ts)
+            +   '<span class="system-compact-text">Injected system prompt · '
+            +     escapeHtml(_spChars.toLocaleString()) + ' chars'
+            +     ' <span class="system-compact-help" aria-hidden="true">?</span></span>'
+            + '</summary>'
+            + '<pre class="hermes-sysprompt-body">' + escapeHtml(_spText) + '</pre>'
+            + '</details>';
+        } else if (ev.subtype === 'hermes_lineage') {
           const lineage = Array.isArray(ev.lineage_session_ids) ? ev.lineage_session_ids : [];
           const parent = ev.parent_session_id || '';
           const shortSession = ev.session ? String(ev.session).slice(0, 19) : '';

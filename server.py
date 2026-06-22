@@ -23401,6 +23401,26 @@ def _parse_hermes_conversation(session_id, after_line=0):
         if session_id not in rows_by_id:
             return {"events": [], "last_line": 0}
         chain = _hermes_lineage_chain(session_id, rows_by_id) or [session_id]
+        # Surface the injected system prompt as a collapsible header event.
+        # Hermes assembles a per-session system prompt (persona + skills +
+        # memory + per-conversation context) and persists it on the session
+        # row; CCC otherwise renders only user/assistant/tool messages, so this
+        # priming layer is invisible. Emit it first (line 1) — the after_line
+        # filter below drops it from incremental polls, so it shows once on
+        # open. Read-only.
+        _sys_row = rows_by_id.get(session_id) or {}
+        _sys_prompt = (_sys_row.get("system_prompt") or "").strip()
+        if _sys_prompt:
+            line += 1
+            events.append({
+                "line": line,
+                "ts": _hermes_iso(_sys_row.get("started_at") or _sys_row.get("created_at")),
+                "type": "system",
+                "subtype": "hermes_system_prompt",
+                "session": session_id,
+                "text": _sys_prompt,
+                "char_count": len(_sys_prompt),
+            })
         if len(chain) > 1:
             current = rows_by_id.get(session_id) or {}
             line += 1

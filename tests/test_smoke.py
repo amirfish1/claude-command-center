@@ -1038,6 +1038,88 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("conv-signal hermes-chat", app_js)
         self.assertIn(".conv-signal.hermes-agent", app_css)
         self.assertIn(".conv-signal.hermes-chat", app_css)
+        # Injected system-prompt panel in the Hermes reader.
+        self.assertIn("hermes_system_prompt", app_js)
+        self.assertIn("hermes-sysprompt-body", app_js)
+        self.assertIn(".hermes-sysprompt-body", app_css)
+
+    def test_hermes_system_prompt_surfaced_as_event(self):
+        """The injected per-session system prompt must surface as a
+        hermes_system_prompt system event at the top of the parsed Hermes
+        conversation, so CCC can render the otherwise-invisible priming layer."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        sid = "20260601_120000_sysp"
+        prompt_text = "# Hermes Agent Persona\nYou are helpful.\nMEMORY: user is Elad."
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            db = root / "state.db"
+            gateway = root / "sessions" / "sessions.json"
+            gateway.parent.mkdir(parents=True)
+            gateway.write_text("{}")
+            con = sqlite3.connect(db)
+            try:
+                con.executescript("""
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY, source TEXT, user_id TEXT,
+                        model TEXT, system_prompt TEXT, title TEXT,
+                        started_at REAL, ended_at REAL, parent_session_id TEXT,
+                        message_count INTEGER, tool_call_count INTEGER,
+                        cwd TEXT, archived INTEGER
+                    );
+                    CREATE TABLE messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT,
+                        role TEXT, content TEXT, tool_call_id TEXT,
+                        tool_calls TEXT, tool_name TEXT, timestamp REAL,
+                        token_count INTEGER, finish_reason TEXT,
+                        reasoning TEXT, active INTEGER
+                    );
+                    CREATE VIRTUAL TABLE messages_fts USING fts5(content);
+                """)
+                con.execute(
+                    "INSERT INTO sessions (id, source, model, system_prompt, started_at, cwd, archived) VALUES (?,?,?,?,?,?,0)",
+                    (sid, "whatsapp", "m", prompt_text, 1780315200.0, ""),
+                )
+                con.execute(
+                    "INSERT INTO messages (session_id, role, content, timestamp, active) VALUES (?,?,?,?,1)",
+                    (sid, "user", "hi", 1780315210.0),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            orig_db = server.HERMES_STATE_DB
+            orig_gateway = server.HERMES_GATEWAY_SESSIONS
+            server.HERMES_STATE_DB = db
+            server.HERMES_GATEWAY_SESSIONS = gateway
+            server._HERMES_ID_CACHE["key"] = None
+            server._HERMES_ID_CACHE["ids"] = set()
+            server._HERMES_GATEWAY_CACHE["key"] = None
+            server._HERMES_GATEWAY_CACHE["by_session"] = {}
+            try:
+                parsed = server._parse_hermes_conversation(sid, after_line=0)
+                events = parsed["events"]
+                sp = [e for e in events if e.get("subtype") == "hermes_system_prompt"]
+                self.assertEqual(len(sp), 1, "exactly one system-prompt event expected")
+                self.assertEqual(sp[0]["text"], prompt_text)
+                self.assertEqual(sp[0]["char_count"], len(prompt_text))
+                self.assertEqual(sp[0]["type"], "system")
+                # It must be the FIRST event (line 1) so it renders at the top.
+                self.assertEqual(sp[0]["line"], 1)
+                # Incremental polls past line 1 must NOT repeat the big prompt.
+                later = server._parse_hermes_conversation(sid, after_line=1)
+                self.assertFalse(
+                    any(e.get("subtype") == "hermes_system_prompt" for e in later["events"]),
+                    "system prompt must not repeat on incremental polls")
+            finally:
+                server.HERMES_STATE_DB = orig_db
+                server.HERMES_GATEWAY_SESSIONS = orig_gateway
+                server._HERMES_ID_CACHE["key"] = None
+                server._HERMES_ID_CACHE["ids"] = set()
+                server._HERMES_GATEWAY_CACHE["key"] = None
+                server._HERMES_GATEWAY_CACHE["by_session"] = {}
 
     def test_sidebar_filter_matches_hermes_platform_metadata(self):
         """The local sidebar filter must match Hermes engine/platform/model

@@ -696,6 +696,37 @@
   .event.system.system-hermes .label {
     color: #2dd4bf;
   }
+  /* Injected system-prompt panel — collapsed by default via <details>. The
+     summary reads like the other compact system rows; the expanded body is a
+     scrollable, monospace, read-only dump of what Hermes primed the session
+     with. */
+  .event.system.system-hermes-prompt { display: block; }
+  .hermes-sysprompt-summary {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    list-style: none;
+  }
+  .hermes-sysprompt-summary::-webkit-details-marker { display: none; }
+  .hermes-sysprompt-details[open] .hermes-sysprompt-summary {
+    margin-bottom: 8px;
+  }
+  .hermes-sysprompt-body {
+    margin: 0;
+    max-height: 420px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-muted);
+    background: rgba(0, 0, 0, 0.18);
+    border: 1px solid rgba(45, 212, 191, 0.18);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
 
   .event.assistant { background: rgba(188, 140, 255, 0.06); border-left-color: var(--purple); }
   .event.tool_result { display: none; } /* hide tool results - they're noise */
