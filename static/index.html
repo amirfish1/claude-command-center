@@ -473,15 +473,12 @@
       <div class="kanban-board" id="kanbanBoard" style="display:none;"></div>
       <div class="flow-board" id="flowBoard" style="display:none;"></div>
     </div>
+    <!-- The "Needs your attention" panel was retired: its NYA list now lives
+         inline under each In-progress row (the Details toggle). This container
+         survives ONLY as the host for the transient "Push all" ship-log feed
+         (_renderShipLogPanel), which un-collapses it on demand and re-hides it
+         on dismiss. Hidden by default (collapsed → display:none). -->
     <div class="attention-panel collapsed" id="attentionPanel">
-      <div class="attention-resize-handle" id="attentionResizeHandle" title="Drag up to resize · double-click to reset"></div>
-      <div class="attention-header">
-        <span class="att-title-label">Needs your attention</span>
-        <span class="att-count" id="attentionCount"></span>
-        <button id="attentionRefreshBtn" title="Force refresh — busts GH state cache and re-queries" style="margin-left:auto;font-size:13px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;line-height:1;">&#8634;</button>
-        <button id="attentionSeeAllBtn" title="Show every candidate, including stale ones" style="font-size:11px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;">See all</button>
-        <button class="att-toggle" id="attentionToggle" title="Collapse / expand" aria-label="Toggle Needs Your Attention panel">&#9662;</button>
-      </div>
       <div class="attention-list" id="attentionList"></div>
     </div>
 

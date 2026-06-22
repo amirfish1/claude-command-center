@@ -8902,13 +8902,11 @@
   // ── Attention panel (top-of-kanban "what needs me") ─────────────────────
   let _nyaShowAll = false;
   async function loadAttentionList() {
-    // A live "Push all" log feed temporarily owns this panel (see
-    // _renderShipLogPanel). Don't clobber it until the user dismisses.
+    // The visible NYA panel was retired (its list is now inline under each
+    // In-progress row). This function survives ONLY to fetch the attention
+    // feed and refresh the inline cache (_nyaItemsBySid). The Push-all
+    // ship-log feed borrows the same DOM container, so skip while it owns it.
     if (_shipLogActive) return;
-    const $list = document.getElementById('attentionList');
-    const $count = document.getElementById('attentionCount');
-    const $seeAll = document.getElementById('attentionSeeAllBtn');
-    if (!$list) return;
     const repoPath = selectedRepoPath();
     // No repo selected → drive NYA off the cross-repo attention feed. The repo
     // dropdown was removed from the UI, so requiring a selection left NYA
@@ -8935,186 +8933,9 @@
       for (const it of allItems) {
         if (it && it.session_id) _nyaItemsBySid.set(it.session_id, it);
       }
-      // Panel render set: the live subset unless See-all is on. When the
-      // response is already the tight live feed, every item is live_feed:true
-      // (or undefined on the per-repo path), so this filter is a no-op.
-      const items = _nyaShowAll
-        ? allItems
-        : allItems.filter(it => it.live_feed !== false);
-      const _extra = allItems.length - items.length;  // items behind "See all"
-      if ($count) {
-        if (_nyaShowAll) {
-          $count.textContent = items.length + ' / ' + allItems.length;
-        } else {
-          const moreHint = _extra > 0 ? ' · +' + _extra + ' more' : '';
-          $count.textContent = items.length ? String(items.length) + moreHint : (_extra > 0 ? '+' + _extra + ' more' : '');
-        }
-      }
-      if ($seeAll) {
-        $seeAll.textContent = _nyaShowAll ? 'See fewer' : ('See all' + (_extra > 0 ? ' (' + allItems.length + ')' : ''));
-      }
-      if (!items.length) {
-        $list.innerHTML = '<div class="attention-empty">All clear — nothing needs you right now.</div>';
-        // Panel is empty but the inline cache may still hold In-progress items
-        // (live subset empty ≠ full pool empty), so repaint the list anyway.
-        if (_ipNyaDetailsOn() && typeof archiveLoaded !== 'undefined' && archiveLoaded) {
-          try { renderArchiveList(document.getElementById('convSearch')?.value || ''); } catch (_) {}
-        }
-        return;
-      }
-      $list.innerHTML = items.map(it => {
-        const kind = it.kind || '';
-        const label = kind.replace(/_/g, ' ');
-        // For each attention card, resolve the underlying conversation so we
-        // can print which column the kanban classifier would put it in. This
-        // surfaces discrepancies ("why is this in Needs Attention when the
-        // board puts it in Working?") — the debug label lets the user see both
-        // truths side-by-side.
-        let classifiedCol = '';
-        const sid = it.session_id || '';
-        if (sid.startsWith('backlog-issue-')) {
-          const conv = conversationsData.find(x => x.id === sid);
-          classifiedCol = conv ? classifyKanbanColumn(conv) : '(no backlog card)';
-        } else if (sid) {
-          const conv = conversationsData.find(x => (x.session_id === sid) || (x.id === sid));
-          classifiedCol = conv ? classifyKanbanColumn(conv) : '(no conv loaded)';
-        } else {
-          classifiedCol = '(no session_id)';
-        }
-        const shortSid = sid.startsWith('backlog-issue-')
-          ? '#' + sid.replace('backlog-issue-', '')
-          : sid.slice(0, 8);
-        const sidChip = sid
-          ? '<span class="att-sid" data-full="' + escapeHtml(sid) + '" title="' + escapeHtml(sid) + ' — click to copy">' + escapeHtml(shortSid) + '</span>'
-          : '';
-        // CCC-48: recency chip so the user can gauge at a glance how stale
-        // each item is (the list is priority-then-recency sorted, but age was
-        // invisible before). `modified` is epoch seconds from the server.
-        const ageChip = it.modified
-          ? '<span class="att-age" title="Last activity ' + escapeHtml(new Date(it.modified * 1000).toLocaleString()) + '">'
-              + escapeHtml(timeAgo(it.modified * 1000)) + '</span>'
-          : '';
-        // Verify button only makes sense for session rows. Backlog items
-        // (needs_attention_label, open_backlog) don't have a session to verify.
-        // CCC-48: the tooltip now names the hidden side effect — verifying a
-        // LIVE session also replies "Yes" to whatever it last asked.
-        const isSessionRow = !sid.startsWith('backlog-issue-');
-        const verifyBtn = isSessionRow
-          ? '<button class="att-verify-btn" data-verify-sid="' + escapeHtml(sid) + '" title="Mark this session verified: moves its card to the Verified column and drops it from this list. If the session is live and waiting, it also replies &quot;Yes&quot; to it.">&#10003; Verify</button>'
-          : '';
-        // Cross-repo feed tags each item with its repo; show it so the user
-        // knows which project the session lives in (no repo is selected).
-        const repoChip = it.repo
-          ? '<span class="att-repo" title="Repo">' + escapeHtml(it.repo) + '</span> '
-          : '';
-        // The detected prose question/checkpoint — the heart of the soft-block
-        // fix. Surface it verbatim so the user can answer without opening.
-        const qLine = it.question_text
-          ? '<div class="att-question" title="Detected question / checkpoint">&#8220;' + escapeHtml(it.question_text) + '&#8221;</div>'
-          : '';
-        return '<div class="attention-row" data-sid="' + escapeHtml(sid) + '" data-kind="' + escapeHtml(kind) + '">'
-          + '<div class="att-name">' + sidChip + repoChip + escapeHtml(it.name || '(untitled)') + (ageChip ? ' ' + ageChip : '') + '</div>'
-          + '<span class="att-kind k-' + escapeHtml(kind) + '">' + escapeHtml(label) + '</span>'
-          + '<span class="att-col-debug" title="Column the kanban classifier would place this in">col: ' + escapeHtml(classifiedCol) + '</span>'
-          + '<div class="att-where">' + escapeHtml(it.where || '') + '</div>'
-          + qLine
-          + (it.did     ? '<div class="att-did"><strong>Did:</strong> '     + escapeHtml(it.did)     + '</div>' : '')
-          + (it.insight ? '<div class="att-insight"><strong>Insight:</strong> ' + escapeHtml(it.insight) + '</div>' : '')
-          + '<div class="att-next">' + escapeHtml(it.next_step || '') + '</div>'
-          + verifyBtn
-        + '</div>';
-      }).join('');
-      // Verify buttons: call the same endpoint drag-to-Verified uses, then
-      // optimistically remove the row. Full refresh follows so the kanban
-      // card moves too.
-      $list.querySelectorAll('.att-verify-btn').forEach(btn => {
-        btn.addEventListener('click', async (ev) => {
-          ev.stopPropagation();
-          const fullSid = btn.dataset.verifySid || '';
-          if (!fullSid) return;
-          const row = btn.closest('.attention-row');
-          const conv = conversationsData.find(x => (x.session_id === fullSid) || (x.id === fullSid));
-          const cardId = conv ? conv.id : fullSid;
-          // CCC-48: verifying a LIVE session has a side effect — it replies
-          // "Yes" to whatever the session last asked. That's a real message to
-          // a running agent, so confirm before doing it. A dormant session is
-          // harmless (just marks the card verified) — no confirm needed there.
-          const wouldReply = !!(conv && conv.is_live);
-          if (wouldReply && !window.confirm(
-              'Mark this session verified and reply "Yes" to it?\n\n'
-              + 'It\'s live and waiting, so verifying will also send "Yes" as your answer. '
-              + 'Cancel if you don\'t want to reply.')) {
-            return;
-          }
-          btn.disabled = true;
-          btn.textContent = 'Verifying…';
-          try {
-            await ccPostJson('/api/conversations/' + cardId + '/verify', {
-              verified: true, session_id: fullSid,
-              display_name: (conv && conv.display_name) || '',
-              cwd: (conv && conv.session_cwd) || '',
-              linked_issue: (conv && (conv.linked_issue || conv.issue_number)) || '',
-              tail_issue_number: (conv && conv.tail_issue_number) || '',
-            });
-            if (conv) conv.verified = true;
-            if (row) row.remove();
-            // If the session was live and waiting on the user's next prompt,
-            // close the loop by answering "Yes" to whatever the LLM asked. Most
-            // sidecar_waiting cases are "did this work / should I commit / done
-            // — anything else?" — "Yes" is the safe default reply.
-            const wasLive = conv && conv.is_live;
-            if (wasLive) {
-              fetch('/api/inject-input', {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ session_id: fullSid, text: 'Yes' }),
-              }).then(r => r.json()).then(data => {
-                if (!data.ok) {
-                  showOpToast('Verified, but couldn\'t reply "Yes" to the terminal: ' + (data.error || 'unknown'), 'error');
-                }
-              }).catch(() => {});
-            }
-            refreshConversationList();  // moves the kanban card to Verified
-          } catch (err) {
-            btn.disabled = false;
-            btn.innerHTML = '&#10003; Verify';
-            showOpToast('Verify failed: ' + err.message, 'error');
-          }
-        });
-      });
-      // ID chip: click copies full session_id (stopPropagation so the row click
-      // doesn't also open the session). Brief green flash confirms the copy.
-      $list.querySelectorAll('.att-sid').forEach(chip => {
-        chip.addEventListener('click', async (ev) => {
-          ev.stopPropagation();
-          const full = chip.dataset.full || '';
-          if (!full) return;
-          try {
-            await navigator.clipboard.writeText(full);
-            chip.classList.add('copied');
-            setTimeout(() => chip.classList.remove('copied'), 900);
-          } catch (_) {
-            showOpToast('Copy failed — select and copy manually', 'error');
-          }
-        });
-      });
-      // Wire clicks: open the underlying session AND scroll its column into view.
-      $list.querySelectorAll('.attention-row').forEach(row => {
-        row.addEventListener('click', () => {
-          const sid = row.dataset.sid;
-          if (!sid) return;
-          if (sid.startsWith('backlog-issue-')) {
-            const n = sid.replace('backlog-issue-', '');
-            const row = conversationsData.find(x => x.id === sid);
-            renderIssueInConvPane(n, rowRepoPath(row), sid);
-          } else {
-            const c = conversationsData.find(x => (x.session_id === sid) || (x.id === sid));
-            selectConversation(c ? c.id : sid);
-          }
-          focusCardOnBoard(sid);
-        });
-      });
       // Fresh NYA cache → repaint the In-progress list so its inline Details
-      // blocks reflect the latest items (only when the toggle is on).
+      // blocks reflect the latest items (only when the toggle is on). This is
+      // now the sole consumer of the fetch — the panel render is gone.
       if (_ipNyaDetailsOn() && typeof archiveLoaded !== 'undefined' && archiveLoaded) {
         try { renderArchiveList(document.getElementById('convSearch')?.value || ''); } catch (_) {}
       }
@@ -29764,11 +29585,9 @@
     _shipLogActive = false;
     _shipLogRepo = null;
     const $panel = document.getElementById('attentionPanel');
-    if ($panel) {
-      try {
-        if (localStorage.getItem('ccc-attention-collapsed') !== '0') $panel.classList.add('collapsed');
-      } catch (_) {}
-    }
+    // Always re-hide: the panel has no standalone purpose now (NYA went
+    // inline), it only surfaces while the ship-log feed owns it.
+    if ($panel) $panel.classList.add('collapsed');
     if (typeof loadAttentionList === 'function') loadAttentionList();
   }
 

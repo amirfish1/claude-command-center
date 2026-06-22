@@ -8473,12 +8473,9 @@
     box-sizing: border-box;
   }
   .attention-panel[style*="height"] { max-height: none; }
-  .attention-panel.collapsed { max-height: 32px; height: 32px !important; overflow: hidden; padding-top: 0; padding-bottom: 0; }
-  .attention-panel.collapsed .attention-list { display: none; }
-  .attention-panel.collapsed .attention-resize-handle { display: none; }
-  /* Collapsed bar gets a subtle hover affordance so users know they can click it. */
-  .attention-panel.collapsed .attention-header { cursor: pointer; }
-  .attention-panel.collapsed:hover { background: linear-gradient(rgba(248,81,73,0.08), rgba(248,81,73,0.08)), var(--surface); }
+  /* Collapsed = fully hidden now that the NYA header is gone. The panel only
+     appears when the Push-all ship-log feed un-collapses it. */
+  .attention-panel.collapsed { display: none; }
   .attention-resize-handle {
     position: absolute; left: 0; right: 0; top: 0;
     height: 10px; cursor: ns-resize;
