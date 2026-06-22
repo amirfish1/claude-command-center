@@ -17285,7 +17285,10 @@
     // In-progress mass (working / idle / plain-ended) keeps its existing rich
     // rendering (window filter, folder / object grouping, Push-all, group-chat
     // interleave, hysteresis) untouched.
-    const _needsYouConvs = [];
+    // CCC-182: the "Needs you" bucket is gone. Waiting sessions stay in their
+    // project group (with a blinking in-row marker) instead of being pulled
+    // into a top section that they kept jumping in and out of. Only "Open ask"
+    // (ended-while-blocked) is still partitioned out.
     const _openAskConvs = [];
     const _qActive = (document.getElementById('convSearch')?.value || '').trim().toLowerCase();
     // Group-chat rows are navigation chrome, not conversation search hits.
@@ -17439,20 +17442,24 @@
     const _OPEN_ASK_RECENT_S = 48 * 3600;
     const _nowSec = Math.floor(Date.now() / 1000);
     const _openAskCutoff = _nowSec - _OPEN_ASK_RECENT_S;
+    // CCC-182: the "Needs you" SECTION is gone. Pulling every waiting session
+    // up into a top bucket made rows jump out of their project group and back
+    // the instant a turn paused/resumed — the constant churn the user called
+    // out. A waiting session now STAYS in its project group and surfaces a
+    // blinking in-row "needs you" marker instead (see _renderRow, gated on
+    // state==='waiting'). Only "Open ask" (ended-while-blocked, last 48h) is
+    // still pulled out — those are NOT live, so there's no flapping, and they
+    // would otherwise be buried in the archived tab.
     for (let _i = _sessionConvs.length - 1; _i >= 0; _i--) {
       const _c = _sessionConvs[_i];
       const _st = (_c && _c.state) || '';
-      if (_st === 'waiting') {
-        _needsYouConvs.push(_c);
-        _sessionConvs.splice(_i, 1);
-      } else if (_st === 'ended' && _c && _c.ended_blocked
+      if (_st === 'ended' && _c && _c.ended_blocked
                  && (_c.modified || 0) >= _openAskCutoff) {
         _openAskConvs.push(_c);
         _sessionConvs.splice(_i, 1);
       }
     }
     const _byRecencyDesc = (a, b) => (b.modified || 0) - (a.modified || 0);
-    _needsYouConvs.sort(_byRecencyDesc);
     _openAskConvs.sort(_byRecencyDesc);
     // Set true only while the In-progress section's rows are being built (when
     // the Details toggle is on). _renderRow reads it to decide whether to
@@ -18145,13 +18152,26 @@
       }
       const cooTrackedRowClass = _cooTracked ? ' is-coo-tracked' : '';
 
-      return '<div class="conv-item' + active + cooTrackedRowClass + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      // CCC-182: blinking in-row "needs you" marker. Replaces the old "Needs
+      // you" section — a waiting session now stays in its project group and
+      // just blinks here, so rows no longer jump categories as turns pause /
+      // resume. Gated purely on the server's state==='waiting', so it covers
+      // both formal asks (question / permission) AND soft blocks — a superset
+      // of the formal-only activity-waiting chip.
+      const _needsYouRow = (c.state === 'waiting');
+      const needsYouHtml = _needsYouRow
+        ? '<span class="conv-needs-you" title="Needs you — the agent is blocked on your input" aria-label="Needs you">&#9679;</span>'
+        : '';
+      const needsYouRowClass = _needsYouRow ? ' is-needs-you' : '';
+
+      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + '<div class="conv-main-row">'
             + cooTrackHtml
             + leftFolderChipHtml
             + titleFolderChipHtml
+            + needsYouHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to open; click again to rename">' + escapeHtml(title) + '</div>'
             + uxFixesQueueProgressHtml
             + historyBadgeHtml
@@ -18956,12 +18976,8 @@
         + '<div class="conv-' + kind + '-list">' + rows + '</div>'
         + '</div>';
     };
-    const _needsYouHtml = _renderActionSection(_needsYouConvs, {
-      kind: 'needsyou', label: 'Needs you', collapseKey: 'ccc-needsyou-collapsed',
-      hint: 'The agent is blocked on YOU right now — it asked a question, '
-        + 'needs permission, or stalled mid-tool. These move back to Active on '
-        + 'their own once the session resumes.',
-    });
+    // CCC-182: "Needs you" section removed — waiting sessions now show a
+    // blinking in-row marker and stay in their project group (no jumping).
     const _openAskHtml = _renderActionSection(_openAskConvs, {
       kind: 'openask', label: 'Open ask', collapseKey: 'ccc-openask-collapsed',
       hint: 'A session that ENDED while still waiting on your answer (last 48h). '
@@ -19261,7 +19277,7 @@
     const _tabDefs = [
       ['issues', 'Issues', (_ghIssueConvs && _ghIssueConvs.length) || 0],
       ['merge', 'Merge', (_readyToMergeConvs && _readyToMergeConvs.length) || 0],
-      ['inprogress', 'Active', ((_needsYouConvs && _needsYouConvs.length) || 0) + ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
+      ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
       ['archived', 'Archived', _arcCount || 0],
     ];
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
@@ -19282,7 +19298,7 @@
     const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
       : _sidebarTab === 'merge' ? (_forceOpen(_readyToMergeHtml, 'conv-readytomerge-section') || _tabEmpty('PRs waiting to merge'))
       : _sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('archived sessions'))
-      : (_forceOpen(_needsYouHtml, 'conv-needsyou-section') + _openAskHtml + _doneHtml
+      : (_openAskHtml + _doneHtml
           + (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions')));
     const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
     // Flicker guard. The 10s bulk-sessions poll and the 5s live-status tick both

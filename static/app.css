@@ -4032,6 +4032,20 @@
     border-color: color-mix(in srgb, var(--orange) 35%, transparent);
     color: var(--orange);
   }
+  /* CCC-182: blinking in-row "needs you" marker. The "Needs you" SECTION was
+   * removed (waiting rows kept jumping in/out of it); a waiting session now
+   * stays put in its project group and blinks this orange dot instead. */
+  .conv-item .conv-needs-you {
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-right: 4px;
+    font-size: 11px; line-height: 1;
+    color: var(--orange);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .conv-item .conv-needs-you { animation: none; }
+  }
   #convList .conv-openask-label { color: var(--purple); }
   #convList .conv-openask-count {
     background: color-mix(in srgb, var(--purple) 12%, transparent);
