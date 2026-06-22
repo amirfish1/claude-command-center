@@ -27782,8 +27782,20 @@
           const pane = paneByPaneId(paneId);
           if (pane && currentConversation) syncPendingSendsMapForConv(pane, currentConversation);
         }
-        const pendingDivs = $view.querySelectorAll('.event.user_text.pending');
-        for (const pDiv of pendingDivs) {
+        // Self-heal: clear ANY optimistic-echo state whose text matches the
+        // real event that just arrived — not only `.pending`. A queued echo
+        // (`.send-queued`) has the `pending` class REMOVED, so the old
+        // pending-only scan never saw it; it relied solely on the _pendingSends
+        // array, and once that entry was lost (pane re-render / conv switch) or
+        // the delivered text differed, the "⏳ Queued…" note stuck on the row
+        // forever even though the message had landed. Match send-queued /
+        // send-delivered / not-acknowledged too so the durable event always
+        // wins. Real events never carry these classes, so this can't remove a
+        // genuine transcript row.
+        const echoDivs = $view.querySelectorAll(
+          '.event.user_text.pending, .event.user_text.send-queued,'
+          + ' .event.user_text.send-delivered, .event.user_text.not-acknowledged');
+        for (const pDiv of echoDivs) {
           const userMsgDiv = pDiv.querySelector('.user-msg');
           if (userMsgDiv) {
             const rawText = userMsgDiv.getAttribute('data-raw-text') || userMsgDiv.textContent;
