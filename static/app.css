@@ -859,6 +859,11 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0;
+    /* CCC-188: keep the "TASK NOTIFICATION" label on one line. When the compact
+       in-conversation card lays the kicker + summary out as a baseline-aligned
+       flex row, a kicker that wrapped to two lines could overlap the summary
+       text below it ("what's that"). A short label should never wrap. */
+    white-space: nowrap;
   }
   .task-notification-card .tn-kind {
     color: var(--orange);
