@@ -45171,6 +45171,20 @@ def compute_attention_feed(*, recent_only=True, recent_window_secs=None,
         if recent_only and item.get("priority", 9) != 1:
             if not (c.get("is_live") or (now - modified) <= recent_window_secs):
                 continue
+        # live_feed: would this item survive the tight live gate? In recent_only
+        # mode every survivor is live by definition. In scope=all mode we keep
+        # everything but TAG each item so a single scope=all response can serve
+        # both surfaces: the NYA panel renders the live subset, while the
+        # In-progress "Details" inline blocks consume the full set (every
+        # In-progress session that has an item, not just the live ones). One
+        # fetch, no extra cost — scope=all classification is pure dict work.
+        live_feed = True
+        if kind in _ATTENTION_FEED_DEFAULT_EXCLUDE:
+            live_feed = False
+        elif item.get("priority", 9) != 1 and not (
+                c.get("is_live") or (now - modified) <= recent_window_secs):
+            live_feed = False
+        item["live_feed"] = live_feed
         sid = item.get("session_id")
         item["_modified"] = modified
         item["repo"] = c.get("folder_label") or ""

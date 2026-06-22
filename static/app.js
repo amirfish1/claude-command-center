@@ -8915,43 +8915,51 @@
     // permanently empty. The all-repos feed needs no selection (Attention API).
     const crossRepo = !repoPath;
     try {
-      // Cross-repo NYA: default to the tight live feed (scope=live — live +
-      // recent window, git-hygiene backlog excluded). "See all" widens to the
-      // full historical pool (scope=all).
+      // Cross-repo NYA. We fetch the FULL pool (scope=all) whenever the
+      // In-progress "Details" inline blocks are on (they need every In-progress
+      // session's item, not just live ones) OR the user asked to See all.
+      // scope=all costs the same as scope=live server-side (same
+      // find_all_conversations, capped enrichment), so this is one fetch, no
+      // extra CPU. Each item carries a `live_feed` flag; the panel renders the
+      // live subset while the inline cache keeps everything.
+      const _wantAll = _nyaShowAll || _ipNyaDetailsOn();
       const url = crossRepo
-        ? ('/api/attention?scope=' + (_nyaShowAll ? 'all' : 'live'))
-        : repoUrl('/api/attention', repoPath, _nyaShowAll ? { all: '1' } : null);
+        ? ('/api/attention?scope=' + (_wantAll ? 'all' : 'live'))
+        : repoUrl('/api/attention', repoPath, _wantAll ? { all: '1' } : null);
       const res = await fetch(url);
       const data = await res.json();
-      const items = (data && data.items) || [];
-      // Cache by session_id so the In-progress list's "Details" toggle can
-      // render each row's NYA block inline (CCC: NYA-in-list). Rebuilt fresh
-      // every pass so released items drop out.
+      const allItems = (data && data.items) || [];
+      // Inline cache: the FULL set so the Details toggle can render a block
+      // under every In-progress row that has one. Rebuilt fresh each pass.
       _nyaItemsBySid.clear();
-      for (const it of items) {
+      for (const it of allItems) {
         if (it && it.session_id) _nyaItemsBySid.set(it.session_id, it);
       }
-      const shown = (data && data.shown) || items.length;
-      const total = (data && data.total) || 0;
-      const grand = (data && data.grand_total) || total;
+      // Panel render set: the live subset unless See-all is on. When the
+      // response is already the tight live feed, every item is live_feed:true
+      // (or undefined on the per-repo path), so this filter is a no-op.
+      const items = _nyaShowAll
+        ? allItems
+        : allItems.filter(it => it.live_feed !== false);
+      const _extra = allItems.length - items.length;  // items behind "See all"
       if ($count) {
-        // "8 / 42" in default mode; "82 / 82" in see-all mode. If age-out
-        // hid some, show "(+N stale)" so you know the See-all button matters.
         if (_nyaShowAll) {
-          $count.textContent = items.length + ' / ' + grand;
-        } else if (total > shown) {
-          const staleHint = grand > total ? ' · +' + (grand - total) + ' stale' : '';
-          $count.textContent = shown + ' / ' + total + staleHint;
+          $count.textContent = items.length + ' / ' + allItems.length;
         } else {
-          const staleHint = grand > total ? ' · +' + (grand - total) + ' stale' : '';
-          $count.textContent = shown ? String(shown) + staleHint : '';
+          const moreHint = _extra > 0 ? ' · +' + _extra + ' more' : '';
+          $count.textContent = items.length ? String(items.length) + moreHint : (_extra > 0 ? '+' + _extra + ' more' : '');
         }
       }
       if ($seeAll) {
-        $seeAll.textContent = _nyaShowAll ? 'See fewer' : ('See all' + (grand > total ? ' (' + grand + ')' : ''));
+        $seeAll.textContent = _nyaShowAll ? 'See fewer' : ('See all' + (_extra > 0 ? ' (' + allItems.length + ')' : ''));
       }
       if (!items.length) {
         $list.innerHTML = '<div class="attention-empty">All clear — nothing needs you right now.</div>';
+        // Panel is empty but the inline cache may still hold In-progress items
+        // (live subset empty ≠ full pool empty), so repaint the list anyway.
+        if (_ipNyaDetailsOn() && typeof archiveLoaded !== 'undefined' && archiveLoaded) {
+          try { renderArchiveList(document.getElementById('convSearch')?.value || ''); } catch (_) {}
+        }
         return;
       }
       $list.innerHTML = items.map(it => {
