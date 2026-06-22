@@ -17675,6 +17675,14 @@
         if (hermesPlatform && hermesPlatform !== 'hermes') {
           signals += '<span class="conv-signal hermes-platform" title="Hermes source platform">' + escapeHtml(hermesPlatform) + '</span>';
         }
+        // Profile-worker chip. Sessions from a profile's own state.db
+        // (~/.hermes/profiles/<name>) are the agents that do the real work —
+        // e.g. the "chuckrealtor" worker. Surface the profile so it's clear a
+        // row isn't a plain gateway conversation.
+        const hermesProfile = String(c.hermes_profile || '').trim();
+        if (hermesProfile) {
+          signals += '<span class="conv-signal hermes-profile" title="Hermes profile worker (' + escapeAttr(hermesProfile) + ') — its own state.db">⌥ ' + escapeHtml(hermesProfile) + '</span>';
+        }
         // Agentic vs plain-chat chip. tool_call_count distinguishes
         // LLM-with-tools sessions (the interesting ones) from messaging
         // conversations that never invoked a tool — independent of platform
@@ -28328,6 +28336,7 @@
         || (c.source_platform || '').toLowerCase().includes(q)
         || (c.hermes_source || '').toLowerCase().includes(q)
         || (c.hermes_origin || '').toLowerCase().includes(q)
+        || (c.hermes_profile || '').toLowerCase().includes(q)
         || (c.hermes_chat_type || '').toLowerCase().includes(q);
     });
     const sorted = _prioritizeSessionIdMatches(applyConvSort(filtered), q);
@@ -32058,7 +32067,7 @@
       // source platform ("cli"/"whatsapp"/"cron"/...), and model — the
       // single-repo path alone had this, leaving the default view unable to
       // surface Hermes rows by platform.
-      ((c.display_name || '') + ' ' + (c.first_message || '') + ' ' + (c.folder_label || '') + ' ' + (c.git_branch || '') + ' ' + (c.branch || '') + ' ' + (c.session_id || '') + ' ' + (c.id || '') + ' ' + (c.engine || '') + ' ' + (c.model || '') + ' ' + (c.source_platform || '') + ' ' + (c.hermes_source || '') + ' ' + (c.hermes_origin || '') + ' ' + (c.hermes_chat_type || ''))
+      ((c.display_name || '') + ' ' + (c.first_message || '') + ' ' + (c.folder_label || '') + ' ' + (c.git_branch || '') + ' ' + (c.branch || '') + ' ' + (c.session_id || '') + ' ' + (c.id || '') + ' ' + (c.engine || '') + ' ' + (c.model || '') + ' ' + (c.source_platform || '') + ' ' + (c.hermes_source || '') + ' ' + (c.hermes_origin || '') + ' ' + (c.hermes_profile || '') + ' ' + (c.hermes_chat_type || ''))
         .toLowerCase().includes(q)
     ) : byFolder;
 

@@ -22591,8 +22591,19 @@ HERMES_GATEWAY_SESSIONS = Path(
     os.environ.get("CCC_HERMES_GATEWAY_SESSIONS")
     or (HERMES_HOME / "sessions" / "sessions.json")
 ).expanduser()
+# Profile workers (e.g. the "chuckrealtor" / Becky agent that actually writes
+# code) run under their OWN state.db at ~/.hermes/profiles/<name>/state.db,
+# not the main gateway DB. Those are the sessions that do the real work, so
+# CCC ingests every profile DB alongside the gateway one.
+HERMES_PROFILES_DIR = Path(
+    os.environ.get("CCC_HERMES_PROFILES_DIR")
+    or (HERMES_HOME / "profiles")
+).expanduser()
 HERMES_CONTEXT_LIMIT = 200_000
 _HERMES_ID_CACHE = {"key": None, "ids": set()}
+# session_id -> owning DB path (main gateway DB or a profile DB). Rebuilt by
+# _hermes_session_ids() and keyed by the same (mtime,size) cache key.
+_HERMES_DB_INDEX = {"key": None, "by_session": {}}
 _HERMES_GATEWAY_CACHE = {"key": None, "by_session": {}}
 
 
@@ -22604,24 +22615,70 @@ def _hermes_db_path():
         return None
 
 
+def _hermes_profile_for_db(db):
+    """Profile name for a DB path, or "" for the main gateway DB.
+
+    ~/.hermes/profiles/chuckrealtor/state.db -> "chuckrealtor"."""
+    try:
+        db = Path(db)
+        main = Path(HERMES_STATE_DB).expanduser()
+        if db == main:
+            return ""
+        pdir = Path(HERMES_PROFILES_DIR)
+        if pdir in db.parents:
+            # .../profiles/<name>/state.db -> <name>
+            rel = db.relative_to(pdir)
+            return rel.parts[0] if rel.parts else ""
+    except (OSError, RuntimeError, ValueError, TypeError):
+        pass
+    return ""
+
+
+def _hermes_db_paths():
+    """All Hermes state DBs: the main gateway DB first, then each profile DB.
+
+    Main is first so that on the (unlikely) event of a session-id collision the
+    gateway DB wins in the session->DB index."""
+    paths = []
+    main = _hermes_db_path()
+    if main is not None:
+        paths.append(main)
+    try:
+        pdir = Path(HERMES_PROFILES_DIR)
+        if pdir.is_dir():
+            for child in sorted(pdir.iterdir(), key=lambda p: p.name.lower()):
+                try:
+                    if not child.is_dir() or child.name.startswith("."):
+                        continue
+                    cand = child / "state.db"
+                    if cand.is_file():
+                        paths.append(cand)
+                except OSError:
+                    continue
+    except (OSError, RuntimeError, ValueError, TypeError):
+        pass
+    return paths
+
+
 def _hermes_db_cache_key():
-    db = _hermes_db_path()
-    if not db:
-        return (0, 0)
+    """Combined (mtime,size) across every Hermes DB so caches invalidate when
+    any gateway or profile DB changes."""
     mtime_ns = 0
     size = 0
-    for p in (db, Path(str(db) + "-wal")):
-        try:
-            st = p.stat()
-        except OSError:
-            continue
-        mtime_ns = max(mtime_ns, st.st_mtime_ns)
-        size += st.st_size
+    for db in _hermes_db_paths():
+        for p in (db, Path(str(db) + "-wal")):
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            mtime_ns = max(mtime_ns, st.st_mtime_ns)
+            size += st.st_size
     return (mtime_ns, size)
 
 
-def _hermes_connect():
-    db = _hermes_db_path()
+def _hermes_connect(db=None):
+    if db is None:
+        db = _hermes_db_path()
     if not db:
         return None
     try:
@@ -22631,6 +22688,16 @@ def _hermes_connect():
         return con
     except sqlite3.Error:
         return None
+
+
+def _hermes_db_for_session(session_id):
+    """Return the DB path that owns this session id (gateway or a profile)."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    if _HERMES_DB_INDEX.get("key") != _hermes_db_cache_key():
+        _hermes_session_ids()  # rebuilds the index as a side effect
+    return _HERMES_DB_INDEX.get("by_session", {}).get(sid)
 
 
 def _hermes_columns(con, table):
@@ -22647,21 +22714,28 @@ def _hermes_session_ids():
     if _HERMES_ID_CACHE.get("key") == key:
         return set(_HERMES_ID_CACHE.get("ids") or set())
     ids = set()
-    con = _hermes_connect()
-    if con is not None:
+    by_session = {}
+    for db in _hermes_db_paths():
+        con = _hermes_connect(db)
+        if con is None:
+            continue
         try:
             cols = _hermes_columns(con, "sessions")
             if "id" in cols:
                 for row in con.execute("SELECT id FROM sessions"):
                     sid = row["id"]
                     if sid:
-                        ids.add(str(sid))
+                        sid = str(sid)
+                        ids.add(sid)
+                        by_session.setdefault(sid, db)  # main DB wins on tie
         except sqlite3.Error:
             pass
         finally:
             con.close()
     _HERMES_ID_CACHE["key"] = key
     _HERMES_ID_CACHE["ids"] = set(ids)
+    _HERMES_DB_INDEX["key"] = key
+    _HERMES_DB_INDEX["by_session"] = by_session
     return ids
 
 
@@ -23011,7 +23085,7 @@ def _hermes_session_row(session_id):
     sid = str(session_id or "").strip()
     if not sid:
         return None
-    con = _hermes_connect()
+    con = _hermes_connect(_hermes_db_for_session(sid))
     if con is None:
         return None
     try:
@@ -23136,69 +23210,73 @@ def find_hermes_conversations(
     resolve_pr_states=True,
     resolve_worktree_dirty=True,
 ):
-    con = _hermes_connect()
-    if con is None:
+    db_paths = _hermes_db_paths()
+    if not db_paths:
         if progress:
             progress("hermes", state="done", count=0, detail="Hermes state.db not found.")
         return []
+    if repo_only:
+        repo_path = resolve_repo_path(repo_path)
     try:
-        sessions = _hermes_fetch_sessions(con, limit=None)
-        if not sessions:
-            if progress:
-                progress("hermes", state="done", count=0, detail="No Hermes sessions found.")
-            return []
-        rows_by_id = {str(r.get("id")): r for r in sessions if r.get("id")}
-        parent_ids = {
-            str(r.get("parent_session_id"))
-            for r in sessions
-            if r.get("parent_session_id") and str(r.get("parent_session_id")) in rows_by_id
-        }
-        # Surface EVERY session as its own row — including the parents of a
-        # continuation / handoff / subagent chain. Previously only lineage
-        # leaves were shown and parents were folded into a child's transcript,
-        # which hid ~20% of real sessions (e.g. the WhatsApp thread that spawned
-        # a subagent never appeared as its own row). We still record each row's
-        # direct children (hermes_child_session_ids) and parent flag so a future
-        # pass can re-collapse chains on demand without losing visibility now.
-        children_by_parent = {}
-        for r in sessions:
-            pid = str(r.get("parent_session_id") or "").strip()
-            if pid and pid in rows_by_id:
-                children_by_parent.setdefault(pid, []).append(str(r.get("id")))
-        visible = list(sessions)
+        repo_pins = _load_repo_pins()
+    except Exception:
+        repo_pins = {}
+    try:
+        name_overrides = _load_session_name_overrides()
+    except Exception:
+        name_overrides = {}
+    try:
+        archived_set = set(_load_archived_conversations())
+    except Exception:
+        archived_set = set()
+    try:
+        verified_set = set(_load_verified_conversations())
+    except Exception:
+        verified_set = set()
+    try:
+        last_interactions = _load_last_interactions()
+    except Exception:
+        last_interactions = {}
+    cutoff = _session_scan_cutoff_ts(include_old)
+    max_rows = _session_scan_file_limit(include_old)
+    gateway = _hermes_gateway_index()
+    git_top_cache = {}
+    out = []
+    scanned = 0
+    cons = []
+    work_items = []
+    try:
+        # Gather sessions from the gateway DB AND every profile worker DB
+        # (~/.hermes/profiles/<name>/state.db). Lineage, parent/child maps and
+        # message summaries are per-DB — a parent_session_id only resolves
+        # within the same DB — so build them once per connection and tag each
+        # row with its owning connection + profile. Surface EVERY session as
+        # its own row (parents included); nothing is folded away.
+        for _db in db_paths:
+            con = _hermes_connect(_db)
+            if con is None:
+                continue
+            cons.append(con)
+            sessions = _hermes_fetch_sessions(con, limit=None)
+            if not sessions:
+                continue
+            rows_by_id = {str(r.get("id")): r for r in sessions if r.get("id")}
+            parent_ids = {
+                str(r.get("parent_session_id"))
+                for r in sessions
+                if r.get("parent_session_id") and str(r.get("parent_session_id")) in rows_by_id
+            }
+            children_by_parent = {}
+            for r in sessions:
+                pid = str(r.get("parent_session_id") or "").strip()
+                if pid and pid in rows_by_id:
+                    children_by_parent.setdefault(pid, []).append(str(r.get("id")))
+            profile = _hermes_profile_for_db(_db)
+            for r in sessions:
+                work_items.append((r, con, rows_by_id, parent_ids, children_by_parent, profile))
         if limit and int(limit) > 0:
-            visible = visible[:int(limit)]
-        if repo_only:
-            repo_path = resolve_repo_path(repo_path)
-            repo_path_obj = Path(repo_path)
-        try:
-            repo_pins = _load_repo_pins()
-        except Exception:
-            repo_pins = {}
-        try:
-            name_overrides = _load_session_name_overrides()
-        except Exception:
-            name_overrides = {}
-        try:
-            archived_set = set(_load_archived_conversations())
-        except Exception:
-            archived_set = set()
-        try:
-            verified_set = set(_load_verified_conversations())
-        except Exception:
-            verified_set = set()
-        try:
-            last_interactions = _load_last_interactions()
-        except Exception:
-            last_interactions = {}
-
-        cutoff = _session_scan_cutoff_ts(include_old)
-        max_rows = _session_scan_file_limit(include_old)
-        gateway = _hermes_gateway_index()
-        git_top_cache = {}
-        out = []
-        scanned = 0
-        for row in visible:
+            work_items = work_items[:int(limit)]
+        for row, con, rows_by_id, parent_ids, children_by_parent, profile in work_items:
             sid = str(row.get("id") or "").strip()
             if not sid:
                 continue
@@ -23326,6 +23404,9 @@ def find_hermes_conversations(
                 "hermes_continued_from": parent_id,
                 "hermes_child_session_ids": children_by_parent.get(sid, []),
                 "hermes_is_parent": sid in parent_ids,
+                # "" for the main gateway DB; profile name (e.g. "chuckrealtor")
+                # for a worker session living in a profile's own state.db.
+                "hermes_profile": profile,
             })
         if resolve_pr_states:
             _prime_pr_states(c.get("tail_pr_url") for c in out)
@@ -23343,7 +23424,11 @@ def find_hermes_conversations(
             )
         return out
     finally:
-        con.close()
+        for _c in cons:
+            try:
+                _c.close()
+            except Exception:
+                pass
 
 
 def _hermes_reasoning_visible():
@@ -23404,7 +23489,7 @@ def _parse_hermes_message(msg, line_num, session_row=None):
 
 
 def _parse_hermes_conversation(session_id, after_line=0):
-    con = _hermes_connect()
+    con = _hermes_connect(_hermes_db_for_session(session_id))
     if con is None:
         return {"events": [], "last_line": 0}
     events = []

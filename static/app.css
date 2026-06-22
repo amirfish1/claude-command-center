@@ -4253,6 +4253,14 @@
     color: #2dd4bf;
     border: 1px solid rgba(45, 212, 191, 0.25);
   }
+  /* Profile-worker chip — a session from a profile's own state.db
+     (e.g. the chuckrealtor "Becky" worker), not a plain gateway chat. */
+  .conv-signal.hermes-profile {
+    background: rgba(245, 158, 11, 0.14);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 158, 11, 0.30);
+    font-weight: 600;
+  }
   /* Agentic Hermes session (LLM used tools) — stands out so the
      interesting sessions are scannable against plain chat rows. */
   .conv-signal.hermes-agent {

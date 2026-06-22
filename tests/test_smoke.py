@@ -5173,6 +5173,100 @@ class TestRepoContextHelpers(unittest.TestCase):
                 server._HERMES_GATEWAY_CACHE["by_session"] = {}
                 server._ENGINE_DETECT_CACHE.clear()
 
+    def test_hermes_reads_profile_worker_dbs(self):
+        """Profile workers (e.g. the chuckrealtor 'Becky' agent) keep their own
+        state.db under ~/.hermes/profiles/<name>/. CCC must ingest those too —
+        they're the sessions that actually write code — tag each row with its
+        profile, and route transcript reads to the owning DB."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        def _make_db(path, sid, source, title, msg):
+            con = sqlite3.connect(path)
+            try:
+                con.executescript("""
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY, source TEXT, model TEXT, title TEXT,
+                        started_at REAL, ended_at REAL, parent_session_id TEXT,
+                        tool_call_count INTEGER, cwd TEXT, archived INTEGER
+                    );
+                    CREATE TABLE messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT,
+                        role TEXT, content TEXT, tool_calls TEXT, tool_name TEXT,
+                        tool_call_id TEXT, timestamp REAL, reasoning TEXT, active INTEGER
+                    );
+                """)
+                con.execute(
+                    "INSERT INTO sessions (id,source,model,title,started_at,ended_at,"
+                    "parent_session_id,tool_call_count,cwd,archived) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (sid, source, "gpt-5.5", title, 1780315800.0, 1780316100.0, "", 3, "/tmp", 0),
+                )
+                con.execute(
+                    "INSERT INTO messages (session_id, role, content, timestamp, active) "
+                    "VALUES (?,?,?,?,1)",
+                    (sid, "user", msg, 1780315810.0),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            main_db = root / "state.db"
+            profiles = root / "profiles"
+            worker_db = profiles / "chuckrealtor" / "state.db"
+            worker_db.parent.mkdir(parents=True)
+            gateway = root / "sessions" / "sessions.json"
+            gateway.parent.mkdir(parents=True)
+            gateway.write_text("{}")
+            _make_db(str(main_db), "20260601_120000_gateway", "whatsapp",
+                     "Gateway chat", "hi from the gateway")
+            _make_db(str(worker_db), "20260601_130000_worker", "cli",
+                     "Becky work", "change the price to 785000")
+
+            orig_db = server.HERMES_STATE_DB
+            orig_profiles = getattr(server, "HERMES_PROFILES_DIR", None)
+            orig_gateway = server.HERMES_GATEWAY_SESSIONS
+            server.HERMES_STATE_DB = main_db
+            server.HERMES_PROFILES_DIR = profiles
+            server.HERMES_GATEWAY_SESSIONS = gateway
+            server._HERMES_ID_CACHE["key"] = None
+            server._HERMES_ID_CACHE["ids"] = set()
+            server._HERMES_DB_INDEX["key"] = None
+            server._HERMES_DB_INDEX["by_session"] = {}
+            server._HERMES_GATEWAY_CACHE["key"] = None
+            server._HERMES_GATEWAY_CACHE["by_session"] = {}
+            server._ENGINE_DETECT_CACHE.clear()
+            try:
+                rows = server.find_hermes_conversations(repo_only=False)
+                by_id = {r["session_id"]: r for r in rows}
+                # Both the gateway session and the profile worker surface.
+                self.assertIn("20260601_120000_gateway", by_id)
+                self.assertIn("20260601_130000_worker", by_id)
+                self.assertEqual(by_id["20260601_120000_gateway"]["hermes_profile"], "")
+                self.assertEqual(by_id["20260601_130000_worker"]["hermes_profile"], "chuckrealtor")
+                # The worker session id is owned by the profile DB and its
+                # transcript reads route there.
+                self.assertEqual(
+                    server._hermes_db_for_session("20260601_130000_worker"), worker_db
+                )
+                self.assertTrue(server._is_hermes_session("20260601_130000_worker"))
+                ev = server._parse_hermes_conversation("20260601_130000_worker")
+                self.assertTrue(any("785000" in e.get("text", "") for e in ev["events"]))
+            finally:
+                server.HERMES_STATE_DB = orig_db
+                if orig_profiles is not None:
+                    server.HERMES_PROFILES_DIR = orig_profiles
+                server.HERMES_GATEWAY_SESSIONS = orig_gateway
+                server._HERMES_ID_CACHE["key"] = None
+                server._HERMES_ID_CACHE["ids"] = set()
+                server._HERMES_DB_INDEX["key"] = None
+                server._HERMES_DB_INDEX["by_session"] = {}
+                server._HERMES_GATEWAY_CACHE["key"] = None
+                server._HERMES_GATEWAY_CACHE["by_session"] = {}
+                server._ENGINE_DETECT_CACHE.clear()
+
     def test_hermes_rows_are_not_repo_scoped(self):
         """Hermes is a non-repo-scoped source: a session whose cwd is outside
         the requested repo (or empty) must still surface under repo_only=True,
