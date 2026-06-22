@@ -5236,6 +5236,38 @@
   .conv-item:hover .drag-handle { display: block; }
   .conv-item.dragging .drag-handle { cursor: grabbing; }
 
+  /* COO row layer — per-row tracking checkbox + escalated badge. Row-level
+     only: nothing here reorders or re-buckets a row. The checkbox sits in the
+     left of .conv-main-row as a stable flex item (constant margin so the
+     hover-only drag-handle never makes the row jump). Dimmed at rest so
+     resting rows stay quiet; full strength when checked or on row hover. */
+  .conv-item .coo-track {
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center;
+    margin-left: 4px; margin-right: 1px;
+    cursor: pointer; opacity: 0.45; transition: opacity 0.12s;
+  }
+  .conv-item:hover .coo-track,
+  .conv-item.is-coo-tracked .coo-track { opacity: 1; }
+  .conv-item .coo-track-cb {
+    width: 13px; height: 13px; margin: 0;
+    cursor: pointer; accent-color: var(--purple);
+  }
+  /* Escalated badge — the COO bounced this tracked session back to you.
+     Amber/warn chrome, mirrors the small inline badge style (.conv-wt-badge /
+     .conv-history-badge) so it reads as row chrome, not a new section. */
+  .conv-item .coo-escalated {
+    display: inline-flex; align-items: center;
+    margin-left: 6px; padding: 1px 6px;
+    font-size: 9px; font-weight: 600; line-height: 1.5;
+    white-space: nowrap;
+    color: var(--warn, #d29922);
+    background: color-mix(in srgb, var(--warn, #d29922) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--warn, #d29922) 40%, transparent);
+    border-radius: 3px; text-transform: uppercase; letter-spacing: 0.04em;
+    vertical-align: middle;
+  }
+
   .conv-list-panel {
     display: flex; flex-direction: column;
     flex: 1; min-height: 0;

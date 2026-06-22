@@ -13186,6 +13186,65 @@
     try { renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true }); } catch (_) {}
   }
 
+  // ── COO row layer (row-level only — never moves/reorders rows) ──────────
+  // (1) A per-row checkbox = "COO is tracking this session". Membership lives
+  //     in localStorage under 'ccc-coo-tracked', keyed by session_id. Toggling
+  //     it must NOT re-render or re-sort — the click handler flips one class.
+  //     NOT used as a sort/group key anywhere, so a checked row stays put.
+  const COO_TRACKED_KEY = 'ccc-coo-tracked';
+  let _cooTrackedSet = null;       // in-memory cache — O(1) per-row reads
+  function getCooTrackedSet() {
+    if (_cooTrackedSet) return _cooTrackedSet;
+    try {
+      const raw = localStorage.getItem(COO_TRACKED_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      _cooTrackedSet = new Set(Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : []);
+    } catch (_) { _cooTrackedSet = new Set(); }
+    return _cooTrackedSet;
+  }
+  function _persistCooTracked(set) {
+    try { localStorage.setItem(COO_TRACKED_KEY, JSON.stringify(Array.from(set || []))); } catch (_) {}
+  }
+  function toggleCooTracked(sid, on) {
+    if (!sid) return false;
+    const set = getCooTrackedSet();
+    if (on) set.add(sid); else set.delete(sid);
+    _persistCooTracked(set);
+    return on;
+  }
+
+  // (2) A per-row "escalated to you" badge. The COO writes the marker into the
+  //     SAME sidecar it already owns — static/coo-notes.json — by setting
+  //     cards[session_id].escalated (truthy; may be { reason, ts }). The list
+  //     reads it; the COO writes it. One file, one source of truth.
+  let _cooEscalatedMap = {};       // session_id -> { reason, ts } | true
+  let _cooEscalatedLoaded = false;
+  function getCooEscalated(sid) {
+    return sid ? _cooEscalatedMap[sid] : null;
+  }
+  function loadCooEscalated(opts) {
+    const force = !!(opts && opts.force);
+    if (_cooEscalatedLoaded && !force) return Promise.resolve(_cooEscalatedMap);
+    _cooEscalatedLoaded = true;
+    return fetch('/static/coo-notes.json?t=' + Date.now())
+      .then(r => (r.ok ? r.json() : { cards: {} }))
+      .then(j => {
+        const cards = (j && j.cards) || {};
+        const next = {};
+        Object.keys(cards).forEach(sid => {
+          const esc = cards[sid] && cards[sid].escalated;
+          if (esc) next[sid] = (typeof esc === 'object') ? esc : { };
+        });
+        const changed = JSON.stringify(Object.keys(next).sort()) !== JSON.stringify(Object.keys(_cooEscalatedMap).sort());
+        _cooEscalatedMap = next;
+        if (changed) {
+          try { renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true }); } catch (_) {}
+        }
+        return _cooEscalatedMap;
+      })
+      .catch(() => _cooEscalatedMap);
+  }
+
   function renderTodayTray() {
     const tray = document.getElementById('todayTray');
     const body = document.getElementById('todayTrayBody');
@@ -17991,10 +18050,34 @@
 
       const groupedRowClass = opts.suppressFolderChip ? ' is-grouped-row' : '';
       const rowRepoAttr = escapeAttr(rowRepoPath(c) || '');
-      return '<div class="conv-item' + active + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+
+      // COO row layer — checkbox (tracking) + escalated badge. Row-level only:
+      // neither value reorders or re-buckets the row, so a checked/escalated
+      // row stays exactly where it is. Reads are O(1) (memoised set + map).
+      const _cooSid = c.session_id || c.id;
+      const _cooTracked = getCooTrackedSet().has(_cooSid);
+      const _cooEsc = getCooEscalated(_cooSid);
+      const cooTrackHtml = '<label class="coo-track" title="'
+        + (_cooTracked ? 'COO is tracking this session — click to stop' : 'Track with COO')
+        + '" data-role="coo-track-wrap">'
+        + '<input type="checkbox" class="coo-track-cb" data-role="coo-track"'
+        + (_cooTracked ? ' checked' : '') + ' aria-label="COO tracking"></label>';
+      let cooEscalatedHtml = '';
+      if (_cooEsc) {
+        const _escReason = (_cooEsc && _cooEsc.reason) ? String(_cooEsc.reason) : '';
+        const _escTip = _escReason
+          ? 'COO escalated to you: ' + _escReason
+          : 'COO couldn’t clear this — escalated to you';
+        cooEscalatedHtml = '<span class="coo-escalated" title="'
+          + escapeAttr(_escTip) + '">↑ escalated</span>';
+      }
+      const cooTrackedRowClass = _cooTracked ? ' is-coo-tracked' : '';
+
+      return '<div class="conv-item' + active + cooTrackedRowClass + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + '<div class="conv-main-row">'
+            + cooTrackHtml
             + leftFolderChipHtml
             + titleFolderChipHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to open; click again to rename">' + escapeHtml(title) + '</div>'
@@ -18003,6 +18086,7 @@
             + repoBadgeHtml
             + pinnedHtml
             + rowMetaHtml
+            + cooEscalatedHtml
             // Right-edge slot — Omnara-style. Shows the time at rest;
             // swaps to action buttons (merge / start / archive) on hover.
             // Both share the same screen real estate, so the row stays
@@ -19863,7 +19947,7 @@
         // the context-% badge (its own confirm-and-/compact handler runs
         // below), or that landed on the title (which now triggers rename
         // instead of opening the conversation — the pencil's job moved here).
-        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="pin"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="wake-codex"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('[data-role="conv-pct-compact"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
+        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="pin"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="wake-codex"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('[data-role="conv-pct-compact"]') || ev.target.closest('[data-role="coo-track-wrap"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
         if (ev.metaKey || ev.ctrlKey || ev.shiftKey) {
           ev.preventDefault();
           if (selectedListIds.has(el.dataset.id)) {
@@ -19932,6 +20016,26 @@
       badge.addEventListener('click', runCompact);
       badge.addEventListener('keydown', (ev) => {
         if (ev.key === 'Enter' || ev.key === ' ') runCompact(ev);
+      });
+    });
+    // COO tracking checkbox. Toggle membership in the persisted tracked-set
+    // and flip the row's class IN PLACE — no re-render, no re-sort — so the
+    // row never jumps when you check it. stopPropagation keeps the row's own
+    // click (open conversation) from firing.
+    $convList.querySelectorAll('[data-role="coo-track"]').forEach(cb => {
+      cb.addEventListener('click', (ev) => { ev.stopPropagation(); });
+      cb.addEventListener('change', (ev) => {
+        ev.stopPropagation();
+        const item = cb.closest('.conv-item');
+        const sid = item && item.dataset.sessionId;
+        if (!sid) return;
+        const on = !!cb.checked;
+        toggleCooTracked(sid, on);
+        if (item) {
+          item.classList.toggle('is-coo-tracked', on);
+          const wrap = cb.closest('.coo-track');
+          if (wrap) wrap.title = on ? 'COO is tracking this session — click to stop' : 'Track with COO';
+        }
       });
     });
     // Unpin-repo button on rows whose folder bucket the user pinned.
@@ -31692,6 +31796,9 @@
         const convs = await loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force });
         archiveData = _mergeArchivePrSnapshot(convs, archiveData);
         archiveLoaded = true;
+        // Re-poll COO escalated markers on each data refresh so newly-bounced
+        // sessions surface their badge without a manual reload.
+        loadCooEscalated({ force: true });
         renderArchiveFolderFilter();
         setTimeout(() => {
           _hydrateArchiveSideData();
@@ -31759,6 +31866,9 @@
   function renderArchiveList(filter, opts) {
     const $list = document.getElementById('convList');
     if (!$list) return;
+    // Lazily pull the COO escalated-markers sidecar once; it re-renders itself
+    // (force) if the marker set changed, so badges appear without polling here.
+    loadCooEscalated();
     if (_renameInProgress) return;
     if (deferSidebarRenderIfDragging()) return;
     if (!(opts && opts.force) && shouldPauseSidebarRender()) return;
