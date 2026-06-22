@@ -15445,7 +15445,15 @@ def _parse_conversation_event(ev, line_num):
                         raw = m2.group(1).strip()
                         cmd_name = raw if raw.startswith("/") else ("/" + raw)
                 if cmd_name:
-                    return {"line": line_num, "ts": ts, "type": "user_text", "text": cmd_name, "images": []}
+                    # Append the typed arguments so the turn reads "/goal <args>"
+                    # rather than a bare "/goal". Claude Code wraps the args in a
+                    # separate <command-args> tag; without surfacing it the user
+                    # has no record of WHAT they asked the command to do (e.g.
+                    # the goal text after "/goal" vanished from the transcript).
+                    m_args = re.search(r"<command-args>([^<]*)</command-args>", head)
+                    cmd_args = m_args.group(1).strip() if m_args else ""
+                    full_cmd = (cmd_name + (" " + cmd_args if cmd_args else "")).strip()
+                    return {"line": line_num, "ts": ts, "type": "user_text", "text": full_cmd, "images": []}
             return None
         images = _extract_images_from_content(content, line=line_num)
         if text or images:

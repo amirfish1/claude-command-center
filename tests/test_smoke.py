@@ -1290,6 +1290,26 @@ class TestServerImports(unittest.TestCase):
                     self.assertEqual(global_data[0]["composerId"], sid)
                     self.assertEqual(global_data[0]["workspaceIdentifier"]["id"], "test-workspace-id")
 
+    def test_slash_command_args_surface_in_user_text(self):
+        """A /command user turn must render "/cmd <args>", not a bare "/cmd".
+        Claude Code wraps the typed arguments in a <command-args> tag; dropping
+        it (e.g. the goal text after "/goal") leaves the user with no record of
+        what they asked the command to do."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        ev = {"type": "user", "message": {"role": "user", "content":
+              "<command-name>/goal</command-name>\n<command-message>goal</command-message>\n"
+              "<command-args>fix all issues in CCC-* queue.</command-args>"}}
+        out = server._parse_conversation_event(ev, 5)
+        self.assertIsNotNone(out)
+        self.assertEqual(out["type"], "user_text")
+        self.assertEqual(out["text"], "/goal fix all issues in CCC-* queue.")
+        # Bare command (no args) still renders just the command name.
+        ev2 = {"type": "user", "message": {"role": "user", "content":
+               "<command-name>/compact</command-name>\n<command-message>compact</command-message>"}}
+        out2 = server._parse_conversation_event(ev2, 6)
+        self.assertEqual(out2["text"], "/compact")
 
 
 class TestPrStateResolution(unittest.TestCase):
