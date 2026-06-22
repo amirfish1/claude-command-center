@@ -5689,7 +5689,14 @@
       
       if (nodesToExtract.length > 0) {
         const data = buildTtsDataFromElements(nodesToExtract);
-        if (data && data.text.trim()) return data;
+        if (data && data.text.trim()) {
+          // CCC-184: a bare no-op ack ("No response requested." and friends)
+          // is harness filler, not a real reply — speaking it is useless and
+          // confusing. Skip it and keep walking back to the previous
+          // substantive message so the speaker reads an actual response.
+          if (_isNoopAckText(data.text)) continue;
+          return data;
+        }
       }
     }
     return null;
