@@ -8915,11 +8915,16 @@
      track checkbox, so the right-side hover-action overlay never covers it. */
   .conv-nya-chevron {
     flex: 0 0 auto; align-self: center;
-    background: transparent; border: none; cursor: pointer;
-    color: var(--text-muted); font-size: 10px; line-height: 1;
-    padding: 2px 3px; margin-right: 1px; border-radius: 3px; opacity: 0.65;
+    display: inline-flex; align-items: center; justify-content: center;
+    box-sizing: border-box; width: 16px; height: 16px; margin-right: 2px;
+    padding: 0; border: none; border-radius: 3px;
+    background: transparent; cursor: pointer;
+    color: var(--text-muted); font-size: 10px; line-height: 1; opacity: 0.65;
   }
   .conv-nya-chevron:hover { color: var(--accent); background: rgba(88,166,255,0.12); opacity: 1; }
+  /* Invisible same-width placeholder so rows without attention data keep their
+     title aligned with rows that have a real chevron. */
+  .conv-nya-chevron-spacer { visibility: hidden; pointer-events: none; cursor: default; }
   /* The Details toggle in the In-progress header — matches the grouping toggles. */
   .conv-nya-toggle .grouping-opt.is-active { color: var(--accent); }
   /* Mobile / narrow-tablet layout: sidebar fills the viewport, main

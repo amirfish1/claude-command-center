@@ -17367,11 +17367,16 @@
         : null;
       const _nyaInlineCollapsed = !!_nyaInlineItem
         && (_nyaCollapsedRows.has(c.session_id) || _nyaCollapsedRows.has(c.id));
+      // When Details is on, EVERY In-progress row reserves the chevron slot —
+      // a real button if it has an item, else an equal-width invisible spacer —
+      // so titles/checkboxes line up whether or not a row has attention data.
       const _nyaChevronHtml = _nyaInlineItem
         ? '<button type="button" class="conv-nya-chevron" data-role="nya-collapse"'
           + ' data-nya-sid="' + escapeHtml(c.session_id || c.id) + '"'
           + ' title="Collapse / expand attention details">' + (_nyaInlineCollapsed ? '&#9656;' : '&#9662;') + '</button>'
-        : '';
+        : (_nyaDetailsForRows
+            ? '<span class="conv-nya-chevron conv-nya-chevron-spacer" aria-hidden="true"></span>'
+            : '');
       const isBacklogRow = c.source === 'backlog';
       const isGithubPrRow = c.source === 'github_pr';
       const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
