@@ -23153,7 +23153,19 @@ def find_hermes_conversations(
             for r in sessions
             if r.get("parent_session_id") and str(r.get("parent_session_id")) in rows_by_id
         }
-        visible = [r for r in sessions if str(r.get("id")) not in parent_ids]
+        # Surface EVERY session as its own row — including the parents of a
+        # continuation / handoff / subagent chain. Previously only lineage
+        # leaves were shown and parents were folded into a child's transcript,
+        # which hid ~20% of real sessions (e.g. the WhatsApp thread that spawned
+        # a subagent never appeared as its own row). We still record each row's
+        # direct children (hermes_child_session_ids) and parent flag so a future
+        # pass can re-collapse chains on demand without losing visibility now.
+        children_by_parent = {}
+        for r in sessions:
+            pid = str(r.get("parent_session_id") or "").strip()
+            if pid and pid in rows_by_id:
+                children_by_parent.setdefault(pid, []).append(str(r.get("id")))
+        visible = list(sessions)
         if limit and int(limit) > 0:
             visible = visible[:int(limit)]
         if repo_only:
@@ -23312,6 +23324,8 @@ def find_hermes_conversations(
                 "hermes_lineage_collapsed": len(lineage) > 1,
                 "hermes_lineage_root_id": lineage[0] if lineage else sid,
                 "hermes_continued_from": parent_id,
+                "hermes_child_session_ids": children_by_parent.get(sid, []),
+                "hermes_is_parent": sid in parent_ids,
             })
         if resolve_pr_states:
             _prime_pr_states(c.get("tail_pr_url") for c in out)

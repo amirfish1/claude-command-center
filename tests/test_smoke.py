@@ -5009,8 +5009,9 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("/api/conversations/[^/]+/files", src)
 
     def test_hermes_history_reads_sqlite_lineage(self):
-        """Hermes history should read native state.db rows and collapse
-        parent_session_id continuations into a single visible row."""
+        """Hermes history should read native state.db rows and surface every
+        session — parent and child — as its own row, while recording the
+        parent/child lineage links so chains can be re-collapsed later."""
         for mod in ("server",):
             sys.modules.pop(mod, None)
         import server
@@ -5122,8 +5123,13 @@ class TestRepoContextHelpers(unittest.TestCase):
             server._ENGINE_DETECT_CACHE.clear()
             try:
                 rows = server.find_hermes_conversations(repo_only=False)
-                self.assertEqual([r["session_id"] for r in rows], [child])
-                row = rows[0]
+                # Both parent and child surface as their own rows (no folding);
+                # newest-first, so the child (later messages) sorts ahead.
+                self.assertEqual(
+                    sorted(r["session_id"] for r in rows), sorted([child, parent])
+                )
+                by_id = {r["session_id"]: r for r in rows}
+                row = by_id[child]
                 self.assertEqual(row["source"], "hermes")
                 self.assertEqual(row["engine"], "hermes")
                 self.assertEqual(row["source_platform"], "whatsapp")
@@ -5133,6 +5139,12 @@ class TestRepoContextHelpers(unittest.TestCase):
                 self.assertEqual(row["hermes_lineage_session_ids"], [parent, child])
                 self.assertEqual(row["hermes_lineage_count"], 2)
                 self.assertIn("Please run status", row["first_message"])
+                # Child knows nothing below it; parent lists the child and is
+                # flagged as a parent so the UI can badge / re-collapse later.
+                self.assertEqual(row["hermes_child_session_ids"], [])
+                self.assertFalse(row["hermes_is_parent"])
+                self.assertEqual(by_id[parent]["hermes_child_session_ids"], [child])
+                self.assertTrue(by_id[parent]["hermes_is_parent"])
 
                 parsed = server.parse_conversation(child, use_cache=False)
                 events = parsed["events"]
