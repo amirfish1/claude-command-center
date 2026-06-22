@@ -28301,6 +28301,23 @@
     return true;
   }
 
+  // CCC-185: float rows whose TITLE matches the query to the very top, so a
+  // simple search by session name surfaces that session first instead of
+  // burying it under content / first-message / transcript matches (which the
+  // field-wide filter and history augment also return). Stable partition —
+  // relative order within each band is preserved.
+  function _prioritizeNameMatches(rows, qLower) {
+    if (!qLower || !Array.isArray(rows) || rows.length < 2) return rows;
+    const hit = [];
+    const rest = [];
+    for (const c of rows) {
+      const name = String((c && (c.display_name || c.ai_title)) || '').toLowerCase();
+      if (name && name.indexOf(qLower) !== -1) hit.push(c);
+      else rest.push(c);
+    }
+    return hit.length ? hit.concat(rest) : rows;
+  }
+
   function filterConversations(q) {
     q = (q || '').toLowerCase();
     const recentCutoff = recencyCutoffSec();
@@ -28351,7 +28368,7 @@
         || (c.hermes_profile || '').toLowerCase().includes(q)
         || (c.hermes_chat_type || '').toLowerCase().includes(q);
     });
-    const sorted = _prioritizeSessionIdMatches(applyConvSort(filtered), q);
+    const sorted = _prioritizeNameMatches(_prioritizeSessionIdMatches(applyConvSort(filtered), q), q);
     return _decorateWithHistoryMatches(sorted, q);
   }
 
@@ -32384,7 +32401,14 @@
     // Also keep conversationsData in sync so downstream code (selection
     // restore, etc.) sees a non-empty list while in archive mode. This
     // gets reset on toggle-off via loadConversationList().
-    conversationsData = _prioritizeSessionIdMatches(applyConvSort(_applyOptimisticTouches(rowsForRender), { persist: true }), q);
+    // CCC-185: after the recency sort, float rows whose TITLE matches the
+    // query to the very top so a simple search by session name surfaces the
+    // named session first — instead of burying it under first-message /
+    // transcript / repo-name matches that the filter + history augment also
+    // return.
+    conversationsData = _prioritizeNameMatches(
+      _prioritizeSessionIdMatches(applyConvSort(_applyOptimisticTouches(rowsForRender), { persist: true }), q),
+      q);
     clearInputDraftKeyCache();
 
     // Make sure the active sidebar mode stays active. Archive refreshes run on
