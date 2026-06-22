@@ -44393,9 +44393,6 @@ def _score_soft_block(text):
     return score, reasons, question_text[:400]
 
 
-_SOFT_BLOCK_PROSE_MAX_AGE = 2 * 3600  # 2h — stale prose soft-blocks leave NEEDS YOU
-
-
 def _detect_soft_block(c):
     """Decide whether a terminal session is awaiting human input.
 
@@ -44435,17 +44432,6 @@ def _detect_soft_block(c):
     # (b) prose score.
     score, reasons, question_text = _score_soft_block(text)
     if score < 3:
-        return None
-    # Recency bound on the PROSE heuristic only. Unlike a formal
-    # AskUserQuestion / permission prompt (the guaranteed short-circuits above),
-    # the prose match has no "the human answered" signal — so a live-but-idle
-    # session parked at a question-shaped last message used to sit in NEEDS YOU
-    # forever (the user: "we're never taking sessions out of there"). If that
-    # last turn is older than _SOFT_BLOCK_PROSE_MAX_AGE it is stale: demote out
-    # of "needs you now". It can still surface as Open-ask once the session ends.
-    # Formal flags are unaffected — they returned above before reaching here.
-    _age_src = c.get("modified") or c.get("mtime") or 0
-    if _age_src and (time.time() - _age_src) > _SOFT_BLOCK_PROSE_MAX_AGE:
         return None
     return {"score": score, "reasons": reasons,
             "question_text": question_text, "guaranteed": False}
