@@ -1470,6 +1470,17 @@
   // session_id -> attention item, rebuilt every loadAttentionList() pass. Lets
   // the conversation list look up a row's NYA block without a second fetch.
   const _nyaItemsBySid = new Map();
+  // Per-row collapse state for the inline NYA block. A session_id in the set
+  // means its block is collapsed (hidden). Default = expanded. Read once per
+  // render into _nyaCollapsedRows, never per-row, to stay off the perf path.
+  const NYA_COLLAPSED_KEY = 'ccc-nya-collapsed';
+  function _nyaCollapsedSet() {
+    try { return new Set(JSON.parse(localStorage.getItem(NYA_COLLAPSED_KEY) || '[]')); }
+    catch (_) { return new Set(); }
+  }
+  function _nyaSaveCollapsedSet(s) {
+    try { localStorage.setItem(NYA_COLLAPSED_KEY, JSON.stringify([...s])); } catch (_) {}
+  }
   const $convFolderFilter = document.getElementById('convFolderFilter');
   let repoListState = { repos: [], current: '', recent: [] };
   // Folder filtering removed: the conversation list always shows everything.
@@ -17328,26 +17339,39 @@
     // append each row's NYA block. Reset to false afterwards so other sections
     // (ready-to-merge, archived) never grow inline NYA blocks.
     let _nyaDetailsForRows = false;
+    // Collapsed-block session_ids, read once per render (not per row).
+    let _nyaCollapsedRows = new Set();
     // The inline NYA block — mirrors the attention-panel row markup so it looks
     // identical, minus the panel-only chrome (verify button, id chip, debug
     // column). Display-only; the parent row already handles click-to-open.
-    const _nyaRowBlockHtml = (it) => {
+    const _nyaRowBlockHtml = (it, collapsed) => {
       if (!it) return '';
       const kind = it.kind || '';
       const label = kind.replace(/_/g, ' ');
-      const qLine = it.question_text
-        ? '<div class="att-question" title="Detected question / checkpoint">&#8220;' + escapeHtml(it.question_text) + '&#8221;</div>'
-        : '';
-      return '<div class="conv-nya-detail" data-sid="' + escapeHtml(it.session_id || '') + '">'
+      // Tail (the quoted last-assistant text, it.question_text) is intentionally
+      // omitted — the three actionable paragraphs (Did / Insight / Next) carry
+      // the signal; the tail just repeats the row's own last-message preview.
+      return '<div class="conv-nya-detail' + (collapsed ? ' is-collapsed' : '') + '" data-sid="' + escapeHtml(it.session_id || '') + '">'
         + '<span class="att-kind k-' + escapeHtml(kind) + '">' + escapeHtml(label) + '</span>'
         + (it.where ? '<div class="att-where">' + escapeHtml(it.where) + '</div>' : '')
-        + qLine
         + (it.did     ? '<div class="att-did"><strong>Did:</strong> '         + escapeHtml(it.did)     + '</div>' : '')
         + (it.insight ? '<div class="att-insight"><strong>Insight:</strong> ' + escapeHtml(it.insight) + '</div>' : '')
         + (it.next_step ? '<div class="att-next">' + escapeHtml(it.next_step) + '</div>' : '')
       + '</div>';
     };
     const _renderRow = (c, opts = {}) => {
+      // Inline NYA lookup (In-progress rows only, when Details is on). Resolved
+      // once here so both the row chevron and the appended block agree.
+      const _nyaInlineItem = _nyaDetailsForRows
+        ? (_nyaItemsBySid.get(c.session_id) || _nyaItemsBySid.get(c.id))
+        : null;
+      const _nyaInlineCollapsed = !!_nyaInlineItem
+        && (_nyaCollapsedRows.has(c.session_id) || _nyaCollapsedRows.has(c.id));
+      const _nyaChevronHtml = _nyaInlineItem
+        ? '<button type="button" class="conv-nya-chevron" data-role="nya-collapse"'
+          + ' data-nya-sid="' + escapeHtml(c.session_id || c.id) + '"'
+          + ' title="Collapse / expand attention details">' + (_nyaInlineCollapsed ? '&#9656;' : '&#9662;') + '</button>'
+        : '';
       const isBacklogRow = c.source === 'backlog';
       const isGithubPrRow = c.source === 'github_pr';
       const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
@@ -18051,6 +18075,7 @@
             // right, past the elapsed time — experimental placement, easy
             // to walk back by moving sessionIconHtml before the chips.
             + '<span class="conv-row-end">'
+            +   _nyaChevronHtml
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
             +   '<span class="conv-row-actions">' + wakeBtn + mergeBtn + startBtn + pinBtn + archiveBtn + '</span>'
             +   sessionIconHtml
@@ -18064,8 +18089,8 @@
       // this row has a matching Needs-your-attention item, render that exact
       // NYA block as a sibling directly beneath the row. Sibling (not child)
       // so the row's own click/drag handlers stay intact.
-      + (_nyaDetailsForRows
-          ? _nyaRowBlockHtml(_nyaItemsBySid.get(c.session_id) || _nyaItemsBySid.get(c.id))
+      + (_nyaInlineItem
+          ? _nyaRowBlockHtml(_nyaInlineItem, _nyaInlineCollapsed)
           : '');
     };
     // Active list keeps the date-gap separators so morning/evening
@@ -18473,6 +18498,7 @@
     // Gate inline NYA blocks to the In-progress rows only (the toggle lives in
     // that header). Turned off again right after _activeRowsHtml is built.
     _nyaDetailsForRows = _ipNyaOn;
+    _nyaCollapsedRows = _ipNyaOn ? _nyaCollapsedSet() : new Set();
     let _activeRowsHtml;
     if (_shouldGroupByObjects) {
       // Resolve a session to its grouping node (CCC-83 + CCC-88):
@@ -19804,6 +19830,30 @@
         // render below paints whatever is already cached without waiting.
         if (next && typeof loadAttentionList === 'function') loadAttentionList();
         renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+    }
+    // Per-row NYA collapse chevron. Delegated on the stable $convList, attached
+    // ONCE (the wiring block re-runs each render), so it survives re-renders and
+    // toggles only that one block in place (no full re-render → no scroll jump).
+    if (!$convList._nyaCollapseWired) {
+      $convList._nyaCollapseWired = true;
+      $convList.addEventListener('click', (ev) => {
+        const chev = ev.target.closest('[data-role="nya-collapse"]');
+        if (!chev) return;
+        ev.stopPropagation();   // don't open the conversation
+        ev.preventDefault();
+        const sid = chev.getAttribute('data-nya-sid') || '';
+        if (!sid) return;
+        const set = _nyaCollapsedSet();
+        const nowCollapsed = !set.has(sid);
+        if (nowCollapsed) set.add(sid); else set.delete(sid);
+        _nyaSaveCollapsedSet(set);
+        chev.innerHTML = nowCollapsed ? '&#9656;' : '&#9662;';
+        const row = chev.closest('.conv-item');
+        const block = row && row.nextElementSibling;
+        if (block && block.classList.contains('conv-nya-detail')) {
+          block.classList.toggle('is-collapsed', nowCollapsed);
+        }
       });
     }
     const $windowToggle = $convList.querySelector('[data-role="window-toggle"]');

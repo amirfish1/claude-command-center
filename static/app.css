@@ -8880,12 +8880,13 @@
      stack — distinct from the panel's two-column grid. The left accent border
      ties the block visually to the row it sits under. */
   .conv-nya-detail {
-    display: flex; flex-direction: column; gap: 3px;
-    margin: -2px 0 6px 26px; padding: 6px 10px;
+    display: flex; flex-direction: column; gap: 8px;
+    margin: -2px 0 8px 26px; padding: 9px 12px;
     border-left: 2px solid var(--accent);
     border-radius: 0 6px 6px 0;
     background: var(--surface-2);
   }
+  .conv-nya-detail.is-collapsed { display: none; }
   .conv-nya-detail .att-kind {
     align-self: flex-start;
     font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
@@ -8902,16 +8903,21 @@
   .conv-nya-detail .att-where {
     font-size: 10px; color: var(--text-muted);
     text-transform: uppercase; letter-spacing: 0.4px;
+    margin-bottom: -2px;
   }
-  .conv-nya-detail .att-question {
-    font-size: 12px; color: var(--text); line-height: 1.4;
-    font-style: italic; opacity: 0.92;
-  }
+  /* The three actionable paragraphs — larger than before for readability. */
   .conv-nya-detail .att-did,
-  .conv-nya-detail .att-insight { font-size: 12px; color: var(--text-muted); line-height: 1.35; }
+  .conv-nya-detail .att-insight { font-size: 13px; color: var(--text-muted); line-height: 1.45; }
   .conv-nya-detail .att-insight { color: var(--purple); opacity: 0.85; }
-  .conv-nya-detail .att-next { font-size: 12px; color: var(--accent); font-weight: 600; line-height: 1.35; }
+  .conv-nya-detail .att-next { font-size: 13px; color: var(--accent); font-weight: 600; line-height: 1.45; }
   .conv-nya-detail .att-next::before { content: '→ '; opacity: 0.7; }
+  /* Per-row collapse chevron, sits in the row's right-end cluster. */
+  .conv-nya-chevron {
+    background: transparent; border: none; cursor: pointer;
+    color: var(--text-muted); font-size: 11px; line-height: 1;
+    padding: 2px 4px; border-radius: 3px; opacity: 0.7;
+  }
+  .conv-nya-chevron:hover { color: var(--accent); background: rgba(88,166,255,0.12); opacity: 1; }
   /* The Details toggle in the In-progress header — matches the grouping toggles. */
   .conv-nya-toggle .grouping-opt.is-active { color: var(--accent); }
   /* Mobile / narrow-tablet layout: sidebar fills the viewport, main
