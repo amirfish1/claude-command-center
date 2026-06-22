@@ -19983,7 +19983,7 @@
         // the context-% badge (its own confirm-and-/compact handler runs
         // below), or that landed on the title (which now triggers rename
         // instead of opening the conversation — the pencil's job moved here).
-        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="pin"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="wake-codex"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('[data-role="conv-pct-compact"]') || ev.target.closest('[data-role="coo-track-wrap"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
+        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="pin"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="wake-codex"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('[data-role="conv-pct-compact"]') || ev.target.closest('[data-role="coo-track-wrap"]') || ev.target.closest('[data-role="nya-collapse"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
         if (ev.metaKey || ev.ctrlKey || ev.shiftKey) {
           ev.preventDefault();
           if (selectedListIds.has(el.dataset.id)) {
