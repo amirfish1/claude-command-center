@@ -16322,6 +16322,81 @@ def _codex_compact_via_app_server(session_id, cwd=None, model=None):
     }
 
 
+def _codex_goal_via_app_server(session_id, action, objective=None, cwd=None):
+    """Set or clear a Codex thread goal via the app-server RPC.
+
+    `action` is "clear" (-> `thread/goal/clear`, params `{threadId}`) or "set"
+    (-> `thread/goal/set`, params `{threadId, objective}`). This is the non-live
+    fallback for `/goal clear` / `/goal <objective>`: the codex `goals` feature
+    is native, but its slash command only runs in a live TUI. The RPCs let CCC
+    drive the same native goal store for a dormant thread — mirrors
+    `_codex_compact_via_app_server` (`thread/compact/start`).
+
+    Only reaches threads THIS app-server owns; a goal set in Codex.app's own UI
+    lives in a different app-server and is out of reach. Returns the usual
+    `{ok, via, ...}` shape.
+    """
+    sid = (session_id or "").strip()
+    if not sid:
+        return {"ok": False, "via": "codex-goal", "error": "missing session_id"}
+    action = (action or "").strip().lower()
+    if action not in ("clear", "set"):
+        return {
+            "ok": False,
+            "via": "codex-goal",
+            "code": "codex_goal_unsupported_action",
+            "error": f"unsupported goal action: {action!r}",
+        }
+    if action == "set" and not (objective or "").strip():
+        return {
+            "ok": False,
+            "via": "codex-goal",
+            "code": "codex_goal_empty_objective",
+            "error": "Goal objective must not be empty.",
+        }
+    if os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() in ("0", "false", "no"):
+        return {
+            "ok": False,
+            "via": "codex-goal",
+            "code": "codex_goal_unavailable",
+            "error": "Codex app-server disabled",
+        }
+    # The thread must be loaded into this app-server before its goal can change.
+    resume_params = {"threadId": sid, "excludeTurns": False}
+    if cwd:
+        resume_params["cwd"] = cwd
+    resumed = _codex_app_server_request("thread/resume", resume_params, timeout=20)
+    if resumed.get("error") or (resumed.get("ok") is False and "result" not in resumed):
+        return {
+            "ok": False,
+            "via": "codex-goal",
+            "code": "codex_goal_unavailable",
+            "error": _codex_error_text(resumed) or "Codex app-server unavailable",
+        }
+    if action == "clear":
+        rpc_method = "thread/goal/clear"
+        rpc_params = {"threadId": sid}
+    else:
+        rpc_method = "thread/goal/set"
+        rpc_params = {"threadId": sid, "objective": objective.strip()}
+    result = _codex_app_server_request(rpc_method, rpc_params, timeout=30)
+    if _codex_response_succeeded(result):
+        return {"ok": True, "via": "codex-goal", "action": action, "session_id": sid}
+    if result.get("ok") is False and "result" not in result:
+        return {
+            "ok": False,
+            "via": "codex-goal",
+            "code": "codex_goal_unavailable",
+            "error": result.get("error") or "Codex app-server unavailable",
+        }
+    return {
+        "ok": False,
+        "via": "codex-goal",
+        "code": "codex_goal_failed",
+        "error": _codex_error_text(result) or f"Codex goal {action} failed",
+    }
+
+
 def _codex_state_db_candidates():
     """Existing Codex state DB paths, newest known schema first."""
     base = Path.home() / ".codex"
@@ -31080,6 +31155,25 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
                 text,
                 submit_key=submit_key,
             )
+        # Non-live fallback: `/goal` is codex's native goal command, but its
+        # slash only runs in a live TUI. For a dormant thread, drive the same
+        # native goal store directly through the app-server RPC — `/goal clear`
+        # -> thread/goal/clear, `/goal <objective>` -> thread/goal/set. The
+        # pause/resume/edit subcommands have no RPC, so they still need a live
+        # TUI and fall through to the bounce below. (Mirrors codex /compact.)
+        if _first_tok == "/goal":
+            _goal_rest = text.strip()[len("/goal"):].strip()
+            _goal_sub = _goal_rest.split(None, 1)[0].lower() if _goal_rest else ""
+            if _goal_sub == "clear":
+                res = _codex_goal_via_app_server(session_id, "clear", cwd=cwd)
+                res.setdefault("engine", "codex")
+                return res
+            if _goal_rest and _goal_sub not in ("edit", "pause", "resume"):
+                res = _codex_goal_via_app_server(
+                    session_id, "set", objective=_goal_rest, cwd=cwd
+                )
+                res.setdefault("engine", "codex")
+                return res
         return {
             "ok": False,
             "code": "codex_slash_requires_live_tui",
