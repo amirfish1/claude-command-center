@@ -15,12 +15,13 @@ gaps below are what stop it from feeling like a real day tracker.
 | **GOAL-1** | Object status + immediate objective | Object shows only `title + count` — no "where are we / what's the immediate target", and the already-parsed session outcome (`DID`/`NEXT_STEP`) is never shown on the row | H | M | `todo` |
 | **GOAL-2** | Empty-object copy for sessionless tasks | Sessionless admin (billing, ads) renders as *"Empty — drag sessions here"* — wrong for a standalone to-do; reuse `draft-session` as the task | M | H | `todo` |
 | **GOAL-3** | Persistent storage for the organization | Object defs + parent links live in browser localStorage — lost on clear, not cross-machine, invisible to the server (blocks any automation) | M/H | M | `todo` |
-| **GOAL-4** | Add objects + assign sessions via the conv list | Objects are created/parented mostly through Flow drag; make create + assign first-class in the main conversation list so morning-arrange is fast | H | M | `todo` |
+| **GOAL-4** | Create objects + assign sessions via the CCC API | UI drag already works; there's no programmatic `/api/*` way to create an object or parent a session under it — blocks agents/automation arranging the day. Depends on GOAL-3 (server-side state) | H | M | `todo` |
 
 Legend — Status: `todo` · `exploring` · `building` · `done`. Value / Confidence: L/M/H.
-Suggested order: **GOAL-4 → GOAL-2 → GOAL-1 → GOAL-3** (make arranging fast →
-fit sessionless tasks → status/objective → persist). Reorder once arranging a
-real day reveals the pain.
+Suggested order: **GOAL-2 → GOAL-1 → GOAL-3 → GOAL-4** (fit sessionless tasks →
+status/objective → persist server-side → API on top of it). GOAL-3 + GOAL-4 are
+one server-side effort: the API (GOAL-4) is only meaningful once state is durable
+(GOAL-3). Reorder once arranging a real day reveals the pain.
 
 ---
 
@@ -59,11 +60,15 @@ mirrors to `coo-notes.json`). Enables cross-surface use + server-side daily
 routines/notifications reading your day. Adds an API contract + migration from
 existing localStorage; respect the same-origin POST guard.
 
-### GOAL-4 — Add objects + assign sessions via the conv list
-Make it first-class in the main conversation list: create an object inline and
-drop/assign a session under an object directly from the row list, no Flow detour.
-This is what makes the morning-arrange loop fast enough to actually use. Must
-stay simple — the simplicity bar is the whole reason past attempts failed.
+### GOAL-4 — Create objects + assign sessions via the CCC API
+The in-list UI drag already exists (create object inline, drop a session under
+it). What's missing is the **programmatic** path: `/api/*` endpoints to create an
+object and to parent/unparent a session under it. Enables an agent, a daily
+routine, or another surface to arrange the day without a human dragging — e.g.
+"every morning, group today's live sessions under their objects." Depends on
+GOAL-3: the API mutates server-side state, so it's only meaningful once the
+organization is persisted off localStorage. Respect the `/api/*` contract rules
+and the same-origin POST guard (see CLAUDE.md § API contracts).
 
 ---
 
