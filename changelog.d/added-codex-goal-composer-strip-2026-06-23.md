@@ -1,0 +1,1 @@
+- Show Codex session goals above the composer and distinguish paused or blocked goals in session rows.

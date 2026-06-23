@@ -981,6 +981,27 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".result-copy-agent-answer", app_css)
         self.assertIn(".result-copy-agent-answer.copied", app_css)
 
+    def test_codex_goal_state_renders_near_composer_and_rows(self):
+        """Codex /goal state should be visible where the user types, and
+        paused/blocked goals must read differently from ordinary active goals
+        in both the composer strip and conversation rows."""
+        app_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn('data-role="conv-goal-strip"', app_html)
+        self.assertIn("function goalStatusUi(status)", app_js)
+        self.assertIn("function renderConversationGoalStrip(paneId, row)", app_js)
+        self.assertIn("Goal blocked", app_js)
+        self.assertIn("Goal paused", app_js)
+        self.assertIn("renderConversationGoalStrip(activePaneId(), currentConversationRow())", app_js)
+        self.assertIn("is-paused", app_js)
+        self.assertIn("is-blocked", app_js)
+        self.assertIn(".conv-goal-strip", app_css)
+        self.assertIn(".conv-goal-strip.is-paused", app_css)
+        self.assertIn(".conv-goal-strip.is-blocked", app_css)
+        self.assertIn(".conv-item .conv-goal.is-paused", app_css)
+        self.assertIn(".conv-item .conv-goal.is-blocked", app_css)
+
     def test_live_question_indicator_renders_prompt_and_options(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")

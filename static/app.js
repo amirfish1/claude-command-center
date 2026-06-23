@@ -4110,6 +4110,55 @@
     return 'Add edit instructions; submit to start session for issue #' + issueNum + '…';
   }
 
+  function currentConversationRow() {
+    const id = currentConversation;
+    if (!id) return null;
+    return (conversationsData || []).find(x => x && x.id === id)
+      || (Array.isArray(archiveData)
+        ? archiveData.find(x => x && ((x.id || x.session_id) === id))
+        : null)
+      || null;
+  }
+
+  function goalStatusUi(status) {
+    const key = String(status || 'active').trim().toLowerCase();
+    if (key === 'paused') {
+      return { key, label: 'Goal paused', className: 'is-paused', iconHtml: '&#9208;' };
+    }
+    if (key === 'blocked') {
+      return { key, label: 'Goal blocked', className: 'is-blocked', iconHtml: '&#9888;' };
+    }
+    if (key === 'complete' || key === 'completed') {
+      return { key: 'complete', label: 'Goal complete', className: 'is-complete', iconHtml: '&#10003;' };
+    }
+    if (key && key !== 'active') {
+      const words = key.replace(/[_-]+/g, ' ');
+      return { key, label: 'Goal ' + words, className: 'is-blocked', iconHtml: '&#9888;' };
+    }
+    return { key: 'active', label: 'Goal', className: 'is-active', iconHtml: '&#9678;' };
+  }
+
+  function renderConversationGoalStrip(paneId, row) {
+    const pane = document.querySelector('.conv-pane[data-pane-id="' + (paneId || activePaneId()) + '"]');
+    const strip = pane && pane.querySelector('[data-role="conv-goal-strip"]');
+    if (!strip) return;
+    const objective = row && String(row.goal || '').trim();
+    if (!objective) {
+      strip.hidden = true;
+      strip.innerHTML = '';
+      strip.className = 'conv-goal-strip';
+      return;
+    }
+    const status = String((row && row.goal_status) || 'active').trim();
+    const ui = goalStatusUi(status);
+    strip.hidden = false;
+    strip.className = 'conv-goal-strip ' + ui.className;
+    strip.title = ui.label + ': ' + objective;
+    strip.innerHTML = '<span class="conv-goal-strip-icon" aria-hidden="true">' + ui.iconHtml + '</span>'
+      + '<span class="conv-goal-strip-state">' + escapeHtml(ui.label) + '</span>'
+      + '<span class="conv-goal-strip-objective">' + escapeHtml(objective) + '</span>';
+  }
+
   function updateInputBar() {
     if (!$convInputBar) return;
     const isPkood = currentSession.source === 'pkood';
@@ -4132,6 +4181,8 @@
     // issue-context preamble.
     const currentBacklogRow = conversationsData.find(x => x.id === currentConversation && x.source === 'backlog');
     const isBacklogIssue = !!currentBacklogRow || (currentConversation || '').startsWith('backlog-issue-');
+    const showInputBar = isConvTab && (hasSession || isNewSession || isBacklogIssue);
+    renderConversationGoalStrip(activePaneId(), showInputBar ? currentConversationRow() : null);
     // Show the bar for any selected session — /api/inject-input routes to
     // live-TTY keystroke injection when the session is alive and falls back
     // to headless `claude --resume` when dormant, so the user can always
@@ -4139,7 +4190,7 @@
     // the user with Resume/Launch buttons and no way to just send a message.
     // Also show in "new session" mode where the input doubles as the
     // prompt for spawning a fresh agent.
-    if (isConvTab && (hasSession || isNewSession || isBacklogIssue)) {
+    if (showInputBar) {
       $convInputBar.classList.add('visible');
       if (isBacklogIssue) {
         const n = (currentBacklogRow && currentBacklogRow.issue_number) || currentConversation.replace('backlog-issue-', '');
@@ -13319,6 +13370,7 @@
     if (deferSidebarRenderIfDragging()) return;
     // Keep the Today tray's chip statuses in sync with the latest conv data.
     try { renderTodayTray(); } catch (_) {}
+    try { renderConversationGoalStrip(activePaneId(), currentConversationRow()); } catch (_) {}
     // User-initiated renders pass {force:true} so a Send → "Sending…"
     // pill shows up while focus is still in the input textarea. The
     // periodic pause guard exists to keep pollers from yanking the
@@ -18146,13 +18198,12 @@
       const _goalText = (c.goal || '').trim();
       if (_goalText) {
         const _gs = (c.goal_status || '').trim();
-        const _gcls = _gs === 'active' ? ' is-active'
-          : _gs === 'complete' ? ' is-complete'
-          : _gs ? ' is-blocked' : '';
+        const _gui = goalStatusUi(_gs);
+        const _gcls = ' ' + _gui.className;
         const _gTip = 'Goal' + (_gs ? ' (' + _gs + ')' : '') + ': ' + _goalText;
         goalChipHtml = '<span class="conv-goal' + _gcls + '" data-role="goal" title="'
           + escapeAttr(_gTip) + '">'
-          + '<span class="conv-goal-icon" aria-hidden="true">&#9678;</span>'
+          + '<span class="conv-goal-icon" aria-hidden="true">' + _gui.iconHtml + '</span>'
           + '<span class="conv-goal-text">' + escapeHtml(_goalText) + '</span>'
           + '</span>';
       }
