@@ -18877,6 +18877,12 @@
             + '<span class="grouping-opt' + (_ipGrouping === 'objects' ? ' is-active' : '') + '" data-grouping="objects" title="Group by the Flow object each session is attached to on the Flow board">by objects</span>'
           + '</span>'
         : '';
+      const _ipNewProjectBtn = _hasFolderChips
+        ? '<span class="conv-grouping-toggle conv-new-project" data-role="ip-new-project"'
+          + ' title="Create a new project folder and start a session">'
+          + '<span class="grouping-opt">+ project</span>'
+          + '</span>'
+        : '';
       // "+ object" (CCC-92): create a new (possibly empty) Flow object that
       // immediately appears as a group row in by-objects mode. Replaced the
       // chips knob — chips stay on the auto default (hidden in by-objects).
@@ -18895,8 +18901,8 @@
           + ' title="Show the Needs-your-attention block under each row that has one">'
           + '<span class="grouping-opt' + (_ipNyaOn ? ' is-active' : '') + '" data-nya-details="' + (_ipNyaOn ? 'off' : 'on') + '">Details</span>'
         + '</span>';
-      const _ipTools = (_ipDetailsToggle || _ipWindowToggle || _ipGroupingToggle || _ipAddObjectBtn)
-        ? '<span class="conv-inprogress-tools">' + _ipAddObjectBtn + _ipDetailsToggle + _ipWindowToggle + _ipGroupingToggle + '</span>'
+      const _ipTools = (_ipDetailsToggle || _ipWindowToggle || _ipGroupingToggle || _ipAddObjectBtn || _ipNewProjectBtn)
+        ? '<span class="conv-inprogress-tools">' + _ipNewProjectBtn + _ipAddObjectBtn + _ipDetailsToggle + _ipWindowToggle + _ipGroupingToggle + '</span>'
         : '';
       // Count display: sessions in window + active group chats. Title
       // attribute spells both out so a hover explains the headline number.
@@ -19843,7 +19849,7 @@
       $inProgressToggle.addEventListener('click', (ev) => {
         // The grouping toggle (project / time) lives inside this header
         // button — its own listener stops propagation, but be defensive.
-        if (ev.target.closest('[data-role="grouping-toggle"], [data-role="window-toggle"], [data-role="ip-add-object"], [data-role="nya-details-toggle"]')) return;
+        if (ev.target.closest('[data-role="grouping-toggle"], [data-role="window-toggle"], [data-role="ip-add-object"], [data-role="ip-new-project"], [data-role="nya-details-toggle"]')) return;
         ev.stopPropagation();
         const section = $inProgressToggle.closest('[data-role="inprogress-section"]');
         if (!section) return;
@@ -19882,6 +19888,20 @@
         flowCustomObjects.unshift({ id, title, created_at: now, updated_at: now });
         persistFlowCustomObjects();
         renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+    }
+    const $ipNewProject = $convList.querySelector('[data-role="ip-new-project"]');
+    if ($ipNewProject) {
+      $ipNewProject.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        enterNewSessionMode();
+        setTimeout(() => {
+          const nameEl = document.getElementById('nsNewProjectName');
+          if (!nameEl) return;
+          nameEl.focus();
+          try { nameEl.select(); } catch (_) {}
+        }, 60);
       });
     }
     // Sidebar tab bar (CCC-85): switch the visible section.
