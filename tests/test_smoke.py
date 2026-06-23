@@ -151,6 +151,17 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn('data-role="ip-new-project"', app_js)
         self.assertNotIn(".conv-new-project", app_css)
 
+    def test_by_objects_sort_prioritizes_objects_before_repos(self):
+        """Manual rank must not let repos jump above objects in by-objects mode."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        object_tier_pos = app_js.index("const aObj = a[0].indexOf('object:') === 0 ? 0 : 1;")
+        rank_pos = app_js.index("const aRank = Number.isFinite(_objOrder[a[0]]) ? _objOrder[a[0]] : Infinity;")
+
+        self.assertLess(object_tier_pos, rank_pos)
+        self.assertIn("Custom objects above repo-derived groups; saved rank only orders within each tier.", app_js)
+        self.assertIn("function rankNewObjectFirst(nodeId)", app_js)
+        self.assertIn("rankNewObjectFirst(node);", app_js)
+
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never
         delete these markers on session end, so a stale marker must NOT keep a

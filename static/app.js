@@ -9928,6 +9928,24 @@
     try { localStorage.setItem('ccc-flow-custom-objects', JSON.stringify(flowCustomObjects)); } catch (_) {}
   }
 
+  function rankNewObjectFirst(nodeId) {
+    if (!nodeId) return;
+    try {
+      const raw = JSON.parse(localStorage.getItem('ccc-objects-order') || '{}');
+      const saved = raw && typeof raw === 'object' ? raw : {};
+      const ids = Object.keys(saved)
+        .filter(id => id && id !== nodeId)
+        .sort((a, b) => {
+          const ar = Number.isFinite(saved[a]) ? saved[a] : Infinity;
+          const br = Number.isFinite(saved[b]) ? saved[b] : Infinity;
+          return ar - br;
+        });
+      const next = { [nodeId]: 0 };
+      ids.forEach((id, i) => { next[id] = i + 1; });
+      localStorage.setItem('ccc-objects-order', JSON.stringify(next));
+    } catch (_) {}
+  }
+
   function persistFlowZoom() {
     try { localStorage.setItem('ccc-flow-zoom', String(flowZoom)); } catch (_) {}
   }
@@ -18707,18 +18725,19 @@
         if (!_byObject.has(node)) _byObject.set(node, { title: obj.title || 'Object', cards: [] });
       }
       // User-pinned manual order (drag a group header above/below another).
-      // Purely cosmetic; nodes without a saved rank sort by the default
-      // rule (custom objects first, then freshest) below the ranked ones.
+      // Purely cosmetic. Custom objects stay above repo-derived groups; saved
+      // rank only orders within each tier, so a repo rank cannot jump above an
+      // object group.
       let _objOrder = {};
       try { _objOrder = JSON.parse(localStorage.getItem('ccc-objects-order') || '{}'); } catch (_) {}
       const _objEntries = Array.from(_byObject.entries()).sort((a, b) => {
-        const aRank = Number.isFinite(_objOrder[a[0]]) ? _objOrder[a[0]] : Infinity;
-        const bRank = Number.isFinite(_objOrder[b[0]]) ? _objOrder[b[0]] : Infinity;
-        if (aRank !== bRank) return aRank - bRank;
-        // Custom objects above repo-derived groups, then freshest first.
+        // Custom objects above repo-derived groups; saved rank only orders within each tier.
         const aObj = a[0].indexOf('object:') === 0 ? 0 : 1;
         const bObj = b[0].indexOf('object:') === 0 ? 0 : 1;
         if (aObj !== bObj) return aObj - bObj;
+        const aRank = Number.isFinite(_objOrder[a[0]]) ? _objOrder[a[0]] : Infinity;
+        const bRank = Number.isFinite(_objOrder[b[0]]) ? _objOrder[b[0]] : Infinity;
+        if (aRank !== bRank) return aRank - bRank;
         const aMax = a[1].cards.reduce((m, c) => Math.max(m, c.modified || 0), 0);
         const bMax = b[1].cards.reduce((m, c) => Math.max(m, c.modified || 0), 0);
         return bMax - aMax;
@@ -19881,8 +19900,10 @@
         if (!title) return;
         const now = Date.now();
         const id = 'obj-' + now.toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+        const node = flowNodeKey('object', id);
         flowCustomObjects.unshift({ id, title, created_at: now, updated_at: now });
         persistFlowCustomObjects();
+        rankNewObjectFirst(node);
         try { localStorage.setItem('ccc-inprogress-grouping', 'objects'); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
