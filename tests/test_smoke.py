@@ -957,6 +957,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".ccc-inline-question {", app_css)
         self.assertIn("font: inherit;", app_css)
 
+    def test_original_ask_prefers_canonical_first_message(self):
+        """The right-rail Original ask must not depend on the first user_text
+        in an incremental render batch. A later status-summary user event can
+        be first in that batch; the canonical row first_message is the stable
+        source of truth."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("function originalAskTextForEvent(ev, paneId)", app_js)
+        self.assertIn("const source = (conv && conv.first_message) || ev.text || '';", app_js)
+        self.assertIn("const cleaned = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));", app_js)
+
     def test_live_question_indicator_renders_prompt_and_options(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")

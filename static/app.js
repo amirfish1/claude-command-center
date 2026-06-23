@@ -1299,6 +1299,13 @@
     if (!m) return [s, ''];
     return [m[1].trim(), m[2].trim()];
   }
+
+  function originalAskTextForEvent(ev, paneId) {
+    const conv = convRowForPane(paneId) || {};
+    const source = (conv && conv.first_message) || ev.text || '';
+    return source;
+  }
+
   // Tiny inline-markdown renderer for card descriptions. Handles bold, code,
   // headings and bullet lines — enough to preserve Claude's summary formatting
   // without pulling in a full markdown lib.
@@ -27594,7 +27601,7 @@
             +     '<div class="csh-ask-original">'
             +       '<div class="label">Original ask</div>'
             +       (function () {
-                      const cleaned = cleanIssuePrompt(ev.text);
+                      const cleaned = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));
                       const parts = splitFirstSentence(cleaned);
                       const imagesHtml = renderImageDescriptors(ev.images);
                       let h = '<div class="user-msg" dir="auto">';
