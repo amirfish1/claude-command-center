@@ -3640,6 +3640,33 @@
     return ok;
   }
 
+  function assistantNodeTextForCopy(node) {
+    if (!node) return '';
+    const raw = typeof node._agentAnswerText === 'string' ? node._agentAnswerText.trim() : '';
+    if (raw) return raw;
+    const parts = [];
+    const textEls = node.querySelectorAll ? node.querySelectorAll('.assistant-text') : [];
+    for (const el of textEls) {
+      const clone = el.cloneNode(true);
+      for (const copyBtn of clone.querySelectorAll('.cb-copy')) copyBtn.remove();
+      const text = (clone.innerText || clone.textContent || '').trim();
+      if (text) parts.push(text);
+    }
+    return parts.join('\n\n').trim();
+  }
+
+  function agentAnswerTextBeforeResult(resultEl) {
+    let node = resultEl ? resultEl.previousElementSibling : null;
+    while (node) {
+      if (node.classList && node.classList.contains('assistant')) {
+        const text = assistantNodeTextForCopy(node);
+        if (text) return text;
+      }
+      node = node.previousElementSibling;
+    }
+    return '';
+  }
+
   function setCopyableSessionId(el, sid) {
     if (!el) return;
     const value = sid || '';
@@ -3679,6 +3706,35 @@
       if (el.dataset.copySessionId === sid) el.textContent = sid;
       el.classList.remove('copied');
     }, 1000);
+  });
+
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-copy-agent-answer]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const resultEl = btn.closest('.event.result');
+    const text = agentAnswerTextBeforeResult(resultEl);
+    if (!text) {
+      showOpToast('No agent answer to copy', 'error');
+      return;
+    }
+    const ok = await copyTextValue(text);
+    if (!ok) {
+      showOpToast('Copy failed — select and copy manually', 'error');
+      return;
+    }
+    btn.classList.add('copied');
+    btn.innerHTML = '&#10003;';
+    btn.setAttribute('aria-label', 'Copied agent answer');
+    btn.title = 'Copied agent answer';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      btn.innerHTML = '&#128203;';
+      btn.setAttribute('aria-label', 'Copy agent answer');
+      btn.title = 'Copy agent answer';
+    }, 1200);
+    showOpToast('Copied agent answer', 'ok');
   });
 
   function setCurrentSession(source, sid, cwd, cwdExists, spawnPid, repoPath) {
@@ -27920,6 +27976,7 @@
         // into the end of the last tool-call (CCC-30) instead of floating as
         // its own line below the turn.
         const blockParts = [];
+        const agentAnswerParts = [];
         let lastToolPartIdx = -1;
         for (const b of ev.blocks) {
           if (b.kind === 'tool_use') {
@@ -28012,6 +28069,7 @@
               if (imgHtml) blockParts.push(imgHtml);
             }
           } else if (b.kind === 'text') {
+            if (b.text) agentAnswerParts.push(String(b.text));
             blockParts.push('<div class="assistant-text" dir="auto">' + renderMarkdown(b.text) + '</div>');
             hasNonTool = true;
           } else if (b.kind === 'thinking') {
@@ -28069,6 +28127,7 @@
         const _ackHasTool = _ackBlocks.some(b => b && b.kind === 'tool_use');
         if (!_ackHasTool && _isNoopAckText(_ackText)) div.classList.add('is-noop-ack');
         div.innerHTML = html;
+        div._agentAnswerText = agentAnswerParts.join('\n\n').trim();
       } else if (ev.type === 'result') {
         const dur = typeof ev.duration_ms === 'number' ? (ev.duration_ms / 1000).toFixed(1) + 's' : ev.duration_ms;
         let statsHtml = '';
@@ -28107,6 +28166,7 @@
             + '<div class="stats">' + statsHtml + '</div>';
         } else {
           div.innerHTML = '<span class="label">Done</span>'
+            + '<button type="button" class="result-copy-agent-answer" data-copy-agent-answer title="Copy agent answer" aria-label="Copy agent answer">&#128203;</button>'
             + '<span class="line-num">L' + ev.line + '</span>'
             + tsSpan(ev.ts)
             + '<div class="stats">' + statsHtml + '</div>';

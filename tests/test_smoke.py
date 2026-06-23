@@ -967,6 +967,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const source = (conv && conv.first_message) || ev.text || '';", app_js)
         self.assertIn("const cleaned = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));", app_js)
 
+    def test_done_result_can_copy_agent_answer(self):
+        """Successful Done rows expose a small copy affordance for the last
+        assistant answer, rather than forcing users to select rendered text
+        manually from the transcript."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn("function agentAnswerTextBeforeResult(resultEl)", app_js)
+        self.assertIn("data-copy-agent-answer", app_js)
+        self.assertIn('aria-label="Copy agent answer"', app_js)
+        self.assertIn("copyTextValue(text)", app_js)
+        self.assertIn("Copied agent answer", app_js)
+        self.assertIn(".result-copy-agent-answer", app_css)
+        self.assertIn(".result-copy-agent-answer.copied", app_css)
+
     def test_live_question_indicator_renders_prompt_and_options(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
