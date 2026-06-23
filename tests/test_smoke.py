@@ -138,16 +138,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Show all folder suggestions", index_html)
         self.assertIn(".spawn-cwd-chip-label", app_css)
 
-    def test_inprogress_header_has_new_project_shortcut(self):
-        """The row-list header should keep a fast path to create a project."""
+    def test_inprogress_header_has_object_shortcut(self):
+        """The row-list header should expose + object before by-objects mode."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn('data-role="ip-new-project"', app_js)
-        self.assertIn("+ project", app_js)
-        self.assertIn("enterNewSessionMode();", app_js)
-        self.assertIn("nsNewProjectName", app_js)
-        self.assertIn(".conv-new-project", app_css)
+        self.assertIn('data-role="ip-add-object"', app_js)
+        self.assertIn("+ object", app_js)
+        self.assertIn("const _ipAddObjectBtn = _hasFolderChips", app_js)
+        self.assertIn("localStorage.setItem('ccc-inprogress-grouping', 'objects')", app_js)
+        self.assertNotIn("+ project", app_js)
+        self.assertNotIn('data-role="ip-new-project"', app_js)
+        self.assertNotIn(".conv-new-project", app_css)
 
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never

@@ -18877,16 +18877,11 @@
             + '<span class="grouping-opt' + (_ipGrouping === 'objects' ? ' is-active' : '') + '" data-grouping="objects" title="Group by the Flow object each session is attached to on the Flow board">by objects</span>'
           + '</span>'
         : '';
-      const _ipNewProjectBtn = _hasFolderChips
-        ? '<span class="conv-grouping-toggle conv-new-project" data-role="ip-new-project"'
-          + ' title="Create a new project folder and start a session">'
-          + '<span class="grouping-opt">+ project</span>'
-          + '</span>'
-        : '';
       // "+ object" (CCC-92): create a new (possibly empty) Flow object that
-      // immediately appears as a group row in by-objects mode. Replaced the
-      // chips knob — chips stay on the auto default (hidden in by-objects).
-      const _ipAddObjectBtn = (_hasFolderChips && _shouldGroupByObjects)
+      // immediately appears as a group row in by-objects mode. It is visible
+      // before by-objects mode too; clicking it flips the grouping after the
+      // user names the object so the new empty target is actually visible.
+      const _ipAddObjectBtn = _hasFolderChips
         ? '<span class="conv-grouping-toggle conv-add-object" data-role="ip-add-object"'
           + ' title="Create a new Flow object — appears as an empty group you can drag sessions into">'
           + '<span class="grouping-opt">+ object</span>'
@@ -18901,8 +18896,8 @@
           + ' title="Show the Needs-your-attention block under each row that has one">'
           + '<span class="grouping-opt' + (_ipNyaOn ? ' is-active' : '') + '" data-nya-details="' + (_ipNyaOn ? 'off' : 'on') + '">Details</span>'
         + '</span>';
-      const _ipTools = (_ipDetailsToggle || _ipWindowToggle || _ipGroupingToggle || _ipAddObjectBtn || _ipNewProjectBtn)
-        ? '<span class="conv-inprogress-tools">' + _ipNewProjectBtn + _ipAddObjectBtn + _ipDetailsToggle + _ipWindowToggle + _ipGroupingToggle + '</span>'
+      const _ipTools = (_ipDetailsToggle || _ipWindowToggle || _ipGroupingToggle || _ipAddObjectBtn)
+        ? '<span class="conv-inprogress-tools">' + _ipAddObjectBtn + _ipDetailsToggle + _ipWindowToggle + _ipGroupingToggle + '</span>'
         : '';
       // Count display: sessions in window + active group chats. Title
       // attribute spells both out so a hover explains the headline number.
@@ -19849,7 +19844,7 @@
       $inProgressToggle.addEventListener('click', (ev) => {
         // The grouping toggle (project / time) lives inside this header
         // button — its own listener stops propagation, but be defensive.
-        if (ev.target.closest('[data-role="grouping-toggle"], [data-role="window-toggle"], [data-role="ip-add-object"], [data-role="ip-new-project"], [data-role="nya-details-toggle"]')) return;
+        if (ev.target.closest('[data-role="grouping-toggle"], [data-role="window-toggle"], [data-role="ip-add-object"], [data-role="nya-details-toggle"]')) return;
         ev.stopPropagation();
         const section = $inProgressToggle.closest('[data-role="inprogress-section"]');
         if (!section) return;
@@ -19880,6 +19875,7 @@
     const $ipAddObject = $convList.querySelector('[data-role="ip-add-object"]');
     if ($ipAddObject) {
       $ipAddObject.addEventListener('click', async (ev) => {
+        ev.preventDefault();
         ev.stopPropagation();
         const title = ((await promptModal('Object name', 'New object')) || '').trim();
         if (!title) return;
@@ -19887,21 +19883,8 @@
         const id = 'obj-' + now.toString(36) + '-' + Math.random().toString(36).slice(2, 7);
         flowCustomObjects.unshift({ id, title, created_at: now, updated_at: now });
         persistFlowCustomObjects();
+        try { localStorage.setItem('ccc-inprogress-grouping', 'objects'); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
-      });
-    }
-    const $ipNewProject = $convList.querySelector('[data-role="ip-new-project"]');
-    if ($ipNewProject) {
-      $ipNewProject.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        enterNewSessionMode();
-        setTimeout(() => {
-          const nameEl = document.getElementById('nsNewProjectName');
-          if (!nameEl) return;
-          nameEl.focus();
-          try { nameEl.select(); } catch (_) {}
-        }, 60);
       });
     }
     // Sidebar tab bar (CCC-85): switch the visible section.
