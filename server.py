@@ -4792,6 +4792,32 @@ def _stamp_archive_state(rows):
     return rows
 
 
+def _stamp_archive_goals(rows):
+    """Stamp the current codex `/goal` objective + status onto codex rows, IN
+    PLACE, at serve time.
+
+    Goal lives in ~/.codex/goals_1.sqlite — outside the transcript corpus
+    signature and not re-layered by _rehydrate_archive_cached_rows — so a goal
+    set or cleared after the persisted build would never reach the row without
+    this pass. ONE batched, cached snapshot read (no per-row DB work), so it is
+    cache-safe to run on every warm serve, exactly like _stamp_archive_state.
+    Additive: only touches `goal`/`goal_status`, and only on codex rows.
+    """
+    snap = _codex_goals_snapshot()
+    for r in rows or []:
+        if not isinstance(r, dict) or r.get("engine") != "codex":
+            continue
+        sid = r.get("session_id") or r.get("id")
+        g = snap.get(sid) if sid else None
+        if g:
+            r["goal"] = g.get("objective") or ""
+            r["goal_status"] = g.get("status") or ""
+        else:
+            r["goal"] = ""
+            r["goal_status"] = ""
+    return rows
+
+
 def _archive_compute_rows(key, cache_options):
     """Produce archive rows under the per-key build lock (single-flight).
 
@@ -4814,6 +4840,7 @@ def _archive_compute_rows(key, cache_options):
             _save_conv_meta_cache()
             from_cache = False
     _stamp_archive_state(rows)  # cache-safe: stamp lives in the served snapshot
+    _stamp_archive_goals(rows)  # cache-safe: codex goal layered on at serve time
     if _ARCHIVE_SERVE_TTL > 0:
         with _archive_serve_lock:
             _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
@@ -4885,6 +4912,7 @@ def _archive_serve_rows(key, cache_options):
     if entry and entry.get("conversations"):
         rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
         _stamp_archive_state(rows)  # cache-safe: stamp lives in the served snapshot
+        _stamp_archive_goals(rows)  # cache-safe: codex goal layered on at serve time
         with _archive_serve_lock:
             _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
             if key not in _archive_serve_refreshing:
@@ -5000,6 +5028,10 @@ def _rehydrate_archive_cached_rows(rows):
     _apply_pinned_conversation_fields(hydrated, pinned_list)
     hydrated.sort(key=lambda r: r.get("mtime") or r.get("modified") or 0, reverse=True)
     _sort_pinned_conversations_first(hydrated, pinned_list)
+    # Layer the current codex goal on every rehydrate (one batched, cached read)
+    # so the stale_ok serve the dashboard polls reflects goal set/clear without
+    # waiting for a full transcript-signature rebuild.
+    _stamp_archive_goals(hydrated)
     return hydrated
 
 
@@ -15765,6 +15797,14 @@ def _run_worktree_init_hook(worktree_path, parent_repo, session_name, log_fh):
 
 CODEX_APP_BUNDLE_PATH = "/Applications/Codex.app/Contents/Resources/codex"
 CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
+# Codex stores per-thread goals (the native `/goal` feature) in their own
+# sqlite, separate from the thread index. Table `thread_goals` is keyed by
+# `thread_id` (== our codex session_id). Both the legacy and the sqlite/-nested
+# path have been observed; newest non-empty wins.
+CODEX_GOALS_DB_CANDIDATES = (
+    Path.home() / ".codex" / "goals_1.sqlite",
+    Path.home() / ".codex" / "sqlite" / "goals_1.sqlite",
+)
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 _CODEX_META_VERSION = 3
 _CODEX_APP_SERVER_LOCK = threading.Condition()
@@ -16646,6 +16686,90 @@ def _codex_fetch_threads(where="", params=(), limit=None):
             except sqlite3.Error:
                 pass
     return []
+
+
+_codex_goals_cache = {"key": None, "data": {}, "ts": 0.0}
+_codex_goals_lock = threading.Lock()
+_CODEX_GOALS_TTL = 2.0
+
+
+def _codex_goals_db_path():
+    """Newest existing goals sqlite among the known candidates, or None."""
+    best = None
+    best_mtime = -1.0
+    for cand in CODEX_GOALS_DB_CANDIDATES:
+        try:
+            st = cand.stat()
+        except OSError:
+            continue
+        if st.st_mtime > best_mtime:
+            best_mtime = st.st_mtime
+            best = cand
+    return best
+
+
+def _codex_goals_snapshot():
+    """Map thread_id -> {objective, status, token_budget, tokens_used} for every
+    codex thread that currently has a goal.
+
+    ONE batched read of ~/.codex/goals_1.sqlite, cached by (path, mtime, size)
+    with a short TTL so a full conversation build does at most one stat+read
+    regardless of row count (perf gate: never per-row). Returns {} when no
+    goals DB exists or it's empty — codex clears the row on `/goal clear`.
+    """
+    now = time.monotonic()
+    with _codex_goals_lock:
+        cached_ts = _codex_goals_cache["ts"]
+        cached_key = _codex_goals_cache["key"]
+        cached_data = _codex_goals_cache["data"]
+    db = _codex_goals_db_path()
+    if db is None:
+        with _codex_goals_lock:
+            _codex_goals_cache["key"] = None
+            _codex_goals_cache["data"] = {}
+            _codex_goals_cache["ts"] = now
+        return {}
+    try:
+        st = db.stat()
+        key = (str(db), st.st_mtime, st.st_size)
+    except OSError:
+        return cached_data if cached_key else {}
+    if cached_key == key and (now - cached_ts) < _CODEX_GOALS_TTL:
+        return cached_data
+    data = {}
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.25)
+        con.row_factory = sqlite3.Row
+    except sqlite3.Error:
+        return cached_data if cached_key else {}
+    try:
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(thread_goals)").fetchall()}
+        if "thread_id" in cols and "objective" in cols:
+            sel = [c for c in ("thread_id", "objective", "status",
+                               "token_budget", "tokens_used") if c in cols]
+            for r in con.execute(f"SELECT {', '.join(sel)} FROM thread_goals").fetchall():
+                tid = r["thread_id"]
+                obj = (r["objective"] or "").strip() if "objective" in sel else ""
+                if not tid or not obj:
+                    continue
+                data[tid] = {
+                    "objective": obj,
+                    "status": (r["status"] or "").strip() if "status" in sel else "",
+                    "token_budget": r["token_budget"] if "token_budget" in sel else None,
+                    "tokens_used": r["tokens_used"] if "tokens_used" in sel else None,
+                }
+    except sqlite3.Error:
+        data = cached_data if cached_key else {}
+    finally:
+        try:
+            con.close()
+        except sqlite3.Error:
+            pass
+    with _codex_goals_lock:
+        _codex_goals_cache["key"] = key
+        _codex_goals_cache["data"] = data
+        _codex_goals_cache["ts"] = now
+    return data
 
 
 def _codex_thread_row(thread_id):
@@ -18260,6 +18384,9 @@ def find_codex_conversations(
     cutoff = _session_scan_cutoff_ts(include_old)
     max_rows = _session_scan_file_limit(include_old)
     spawn_by_sid = _codex_spawn_pid_by_thread_id()
+    # One batched, cached read of the codex goals sqlite for the whole scan —
+    # per-row lookups are O(1) dict hits (perf gate: no per-row DB work).
+    goals_by_sid = _codex_goals_snapshot()
     git_top_cache = {}
     out = []
     scanned = 0
@@ -18353,6 +18480,7 @@ def find_codex_conversations(
         spawn_alive = bool(spawn_info.get("alive"))
         codex_activity = _codex_activity_fields_from_tail(tail, spawn_alive)
         codex_stale_tool = _codex_stale_tool_fields(tail)
+        _goal = goals_by_sid.get(sid) or {}
         out.append({
             "id": sid,
             "session_id": sid,
@@ -18415,6 +18543,8 @@ def find_codex_conversations(
             "reasoning_effort": row.get("reasoning_effort") or "",
             "latest_input_tokens": tail.get("latest_input_tokens") or 0,
             "context_limit": tail.get("context_limit") or 0,
+            "goal": _goal.get("objective") or "",
+            "goal_status": _goal.get("status") or "",
         })
     if resolve_pr_states:
         _prime_pr_states(c.get("tail_pr_url") for c in out)
@@ -40971,6 +41101,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     _archive_load_complete(convs)
                 _archive_response_cache_put(cache_key, convs)
                 _save_conv_meta_cache()
+                _stamp_archive_goals(convs)  # serve-time codex goal (cache-safe)
                 self.send_json({"conversations": convs, "count": len(convs)}, etag=True)
             except Exception as e:
                 if not background:

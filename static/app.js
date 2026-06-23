@@ -18074,6 +18074,26 @@
         : '';
       const needsYouRowClass = _needsYouRow ? ' is-needs-you' : '';
 
+      // Current-goal chip — codex sessions only (the native `/goal` feature,
+      // read server-side from ~/.codex/goals_1.sqlite into c.goal). Status
+      // colors mirror codex's enum: active=green, complete=muted, anything
+      // else (paused/blocked/usage_limited/budget_limited) = amber. Truncated
+      // by CSS; full objective + status in the tooltip.
+      let goalChipHtml = '';
+      const _goalText = (c.goal || '').trim();
+      if (_goalText) {
+        const _gs = (c.goal_status || '').trim();
+        const _gcls = _gs === 'active' ? ' is-active'
+          : _gs === 'complete' ? ' is-complete'
+          : _gs ? ' is-blocked' : '';
+        const _gTip = 'Goal' + (_gs ? ' (' + _gs + ')' : '') + ': ' + _goalText;
+        goalChipHtml = '<span class="conv-goal' + _gcls + '" data-role="goal" title="'
+          + escapeAttr(_gTip) + '">'
+          + '<span class="conv-goal-icon" aria-hidden="true">&#9678;</span>'
+          + '<span class="conv-goal-text">' + escapeHtml(_goalText) + '</span>'
+          + '</span>';
+      }
+
       return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
@@ -18084,6 +18104,7 @@
             + titleFolderChipHtml
             + needsYouHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to open; click again to rename">' + escapeHtml(title) + '</div>'
+            + goalChipHtml
             + uxFixesQueueProgressHtml
             + historyBadgeHtml
             + repoBadgeHtml
@@ -32346,6 +32367,11 @@
         pin_rank: Number.isFinite(Number(c.pin_rank)) ? Number(c.pin_rank) : null,
         model: c.model || '',
         engine: c.engine || c.source || '',
+        // Codex current-goal (server reads ~/.codex/goals_1.sqlite). The shaped
+        // object is an explicit allowlist, so goal must be copied through or the
+        // goal chip never renders.
+        goal: c.goal || '',
+        goal_status: c.goal_status || '',
       });
     }).map(_applyLiveOverlayToRow);
 

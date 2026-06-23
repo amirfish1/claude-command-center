@@ -5388,6 +5388,29 @@
     border-color: rgba(255, 255, 255, 0.08);
   }
 
+  /* Current-goal chip (codex /goal). Reads like a soft second column after
+     the title — truncates with ellipsis so it never pushes the row wider. */
+  .conv-item .conv-goal {
+    display: inline-flex; align-items: center; gap: 3px;
+    margin-left: 8px; min-width: 0; max-width: 240px;
+    font-size: 10px; line-height: 1.4;
+    color: var(--text-muted);
+    vertical-align: middle;
+  }
+  .conv-item .conv-goal .conv-goal-icon {
+    flex: 0 0 auto; font-size: 9px; opacity: 0.8;
+  }
+  .conv-item .conv-goal .conv-goal-text {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0;
+  }
+  .conv-item .conv-goal.is-active { color: var(--green, #3fb950); }
+  .conv-item .conv-goal.is-blocked { color: var(--warn, #d29922); }
+  .conv-item .conv-goal.is-complete { color: var(--text-muted); opacity: 0.75; }
+  /* Hover fades the goal like other row meta so action icons stay readable. */
+  .conv-item:hover .conv-goal,
+  .conv-item:focus-within .conv-goal { opacity: 0.45; }
+
   .conv-list-panel {
     display: flex; flex-direction: column;
     flex: 1; min-height: 0;
