@@ -121,6 +121,23 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(server._ship_classify_remaining("snapshot.js"), "infra")
         self.assertEqual(server._ship_classify_remaining("apps/x/page.tsx"), "review")
 
+    def test_new_session_folder_shortcuts_are_labeled(self):
+        """The folder dropdown and recent chips both set the same spawn CWD.
+
+        Keep the UI copy explicit so the chips read as shortcuts for the
+        folder field, not a competing project picker (CCC-190).
+        """
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('placeholder="Pick or type a folder path"', index_html)
+        self.assertIn('aria-label="Recent folder shortcuts"', index_html)
+        self.assertIn("spawn-cwd-chip-label", app_js)
+        self.assertIn("Recent folders", app_js)
+        self.assertIn("Show all folder suggestions", index_html)
+        self.assertIn(".spawn-cwd-chip-label", app_css)
+
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never
         delete these markers on session end, so a stale marker must NOT keep a

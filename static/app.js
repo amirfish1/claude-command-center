@@ -36846,13 +36846,19 @@
     const chips = spawnCwdQuickChipOptions(current);
     wrap.innerHTML = '';
     wrap.style.display = chips.length ? '' : 'none';
+    if (chips.length) {
+      const label = document.createElement('span');
+      label.className = 'spawn-cwd-chip-label';
+      label.textContent = 'Recent folders';
+      wrap.appendChild(label);
+    }
     for (const opt of chips) {
       const active = normalizeSpawnCwdPath(opt.value) === normalizeSpawnCwdPath(current);
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'spawn-cwd-chip' + (active ? ' active' : '');
       btn.textContent = opt.label;
-      btn.title = opt.value;
+      btn.title = 'Use ' + opt.value + ' as the folder';
       btn.setAttribute('aria-pressed', active ? 'true' : 'false');
       if (active) btn.setAttribute('aria-current', 'true');
       btn.addEventListener('click', (ev) => {

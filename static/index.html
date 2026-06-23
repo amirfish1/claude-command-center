@@ -683,7 +683,7 @@
         </div>
         <div class="conv-input-context" id="convInputContext" data-role="input-context">
           <span class="wp-row" data-workspace></span>
-          <span id="spawnCwdQuickChips" class="spawn-cwd-quick-chips" aria-label="Recent repositories"></span>
+          <span id="spawnCwdQuickChips" class="spawn-cwd-quick-chips" aria-label="Recent folder shortcuts"></span>
           <!-- New-session-only cwd picker. Visibility controlled by
                .is-new-session on the context strip; populated by
                populateSpawnCwdPicker(); read by spawnFromInlineInput()
@@ -694,11 +694,12 @@
               <input id="spawnCwdPicker" class="spawn-cwd-picker"
                      title="Folder the new session will be spawned in"
                      aria-label="Folder for new session"
+                     placeholder="Pick or type a folder path"
                      autocomplete="off"
                      spellcheck="false">
               <button id="spawnCwdMenuBtn" class="spawn-cwd-menu-btn" type="button"
-                      title="Show folder suggestions"
-                      aria-label="Show folder suggestions"
+                      title="Show all folder suggestions"
+                      aria-label="Show all folder suggestions"
                       aria-haspopup="listbox"
                       aria-expanded="false">&#9662;</button>
               <button id="spawnCwdBrowseBtn" class="spawn-cwd-browse-btn" type="button"

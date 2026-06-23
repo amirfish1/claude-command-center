@@ -2699,6 +2699,16 @@
     grid-area: chips;
     max-width: none;
   }
+  .conv-input-context .spawn-cwd-chip-label {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
   .conv-input-context .spawn-cwd-chip {
     display: inline-flex;
     align-items: center;
