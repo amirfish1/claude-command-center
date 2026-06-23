@@ -9928,6 +9928,25 @@
     try { localStorage.setItem('ccc-flow-custom-objects', JSON.stringify(flowCustomObjects)); } catch (_) {}
   }
 
+  function isArchivedFlowObjectId(id) {
+    const obj = (flowCustomObjects || []).find(o => o && o.id === id);
+    return !!(obj && obj.archived);
+  }
+
+  function archiveFlowCustomObject(id) {
+    const obj = (flowCustomObjects || []).find(o => o && o.id === id);
+    if (!obj) return;
+    obj.archived = true;
+    obj.archived_at = Date.now();
+    obj.updated_at = obj.archived_at;
+    persistFlowCustomObjects();
+    if (typeof renderArchiveList === 'function') {
+      renderArchiveList(document.getElementById('convSearch')?.value || '');
+    } else {
+      renderSidebar(filterConversations($convSearch ? $convSearch.value : ''));
+    }
+  }
+
   function rankNewObjectFirst(nodeId) {
     if (!nodeId) return;
     try {
@@ -18418,7 +18437,7 @@
       try { return localStorage.getItem(_folderGroupStorageKey(section, key)) === '1'; }
       catch (_) { return false; }
     };
-    const _folderGroupHeaderHtml = (section, folder, count, hue, orphan, collapseKey, extraAttrs = '', repoPath = '') => {
+    const _folderGroupHeaderHtml = (section, folder, count, hue, orphan, collapseKey, extraAttrs = '', repoPath = '', archiveObjectId = '') => {
       const collapsed = _isFolderGroupCollapsed(section, collapseKey);
       // "Push all" ship control — conversation list only, and only when we
       // know the repo's real path. Status text is hydrated client-side after
@@ -18430,6 +18449,12 @@
             + ' title="Commit dormant work, pull --rebase, push (no force)">Push all</button>'
           + '</span>'
         : '';
+      const objectArchive = (section === 'inprogress' && archiveObjectId)
+        ? '<button type="button" class="conv-folder-object-archive-btn" data-role="archive-object"'
+          + ' data-object-id="' + escapeHtml(archiveObjectId) + '"'
+          + ' title="Archive this object from the active by-objects view"'
+          + ' aria-label="Archive object">&#128229;</button>'
+        : '';
       return '<div class="conv-folder-group-header" style="--chip-hue:' + hue + ';"'
         + ' role="button" tabindex="0" data-role="folder-group-toggle"'
         + ' data-collapse-key="' + escapeHtml(_folderGroupStorageKey(section, collapseKey)) + '"'
@@ -18437,6 +18462,7 @@
         + '<span class="conv-folder-group-arrow">' + (collapsed ? '▸' : '▾') + '</span>'
         + '<span class="conv-folder-group-chip' + orphan + '">' + escapeHtml(folder) + '</span>'
         + '<span class="conv-folder-group-count">' + count + '</span>'
+        + objectArchive
         + ship
         + '</div>';
     };
@@ -18695,6 +18721,7 @@
           if (!parent) break;
           if (parent.indexOf('object:') === 0) {
             const oid = parent.slice(7);
+            if (isArchivedFlowObjectId(oid)) return { archived: true };
             const obj = (flowCustomObjects || []).find(o => o && o.id === oid);
             return { node: parent, title: (obj && obj.title) || 'Object' };
           }
@@ -18713,6 +18740,7 @@
       const _unclassified = [];
       for (const c of _visibleSessionConvs) {
         const grp = _groupForSession(c);
+        if (grp && grp.archived) continue;
         if (!grp) { _unclassified.push(c); continue; }
         if (!_byObject.has(grp.node)) _byObject.set(grp.node, { title: grp.title, cards: [] });
         _byObject.get(grp.node).cards.push(c);
@@ -18720,7 +18748,7 @@
       // Every custom object gets a group row even with zero sessions
       // (CCC-92) — a fresh "+ object" target must be visible to drag into.
       for (const obj of (flowCustomObjects || [])) {
-        if (!obj || !obj.id) continue;
+        if (!obj || !obj.id || isArchivedFlowObjectId(obj.id)) continue;
         const node = flowNodeKey('object', obj.id);
         if (!_byObject.has(node)) _byObject.set(node, { title: obj.title || 'Object', cards: [] });
       }
@@ -18752,8 +18780,9 @@
         const body = cards.length
           ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn })).join('')
           : '<div class="conv-object-empty-hint">Empty — drag sessions here.</div>';
+        const archiveObjectId = nodeId.indexOf('object:') === 0 ? nodeId.slice(7) : '';
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
-          + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs)
+          + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs, '', archiveObjectId)
           + body
           + '</div>';
       };
@@ -19908,6 +19937,13 @@
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
+    $convList.querySelectorAll('[data-role="archive-object"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        archiveFlowCustomObject(btn.getAttribute('data-object-id') || '');
+      });
+    });
     // Sidebar tab bar (CCC-85): switch the visible section.
     const $convTabBar = $convList.querySelector('[data-role="conv-tab-bar"]');
     if ($convTabBar) {
@@ -20095,6 +20131,7 @@
       const objNode = hdr.getAttribute('data-object-drop') || '';
       const opensInspector = objNode && objNode !== 'unclassified';
       hdr.addEventListener('click', (ev) => {
+        if (ev.target.closest('[data-role="archive-object"]')) return;
         if (opensInspector && !ev.target.closest('.conv-folder-group-arrow')) {
           ev.stopPropagation();
           let payload = null;

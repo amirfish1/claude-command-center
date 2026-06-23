@@ -162,6 +162,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function rankNewObjectFirst(nodeId)", app_js)
         self.assertIn("rankNewObjectFirst(node);", app_js)
 
+    def test_by_objects_can_archive_custom_object_groups(self):
+        """Archived custom objects leave the active by-objects conversation view."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function archiveFlowCustomObject(id)", app_js)
+        self.assertIn("obj.archived = true", app_js)
+        self.assertIn("isArchivedFlowObjectId(oid)", app_js)
+        self.assertIn("if (isArchivedFlowObjectId(oid)) return { archived: true };", app_js)
+        self.assertIn("if (grp && grp.archived) continue;", app_js)
+        self.assertIn('data-role="archive-object"', app_js)
+        self.assertIn(".conv-folder-object-archive-btn", app_css)
+
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never
         delete these markers on session end, so a stale marker must NOT keep a

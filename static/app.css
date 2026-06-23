@@ -8081,6 +8081,25 @@
     font-size: 10px;
     font-variant-numeric: tabular-nums;
   }
+  .conv-folder-object-archive-btn {
+    grid-column: 5;
+    justify-self: end;
+    padding: 1px 6px;
+    font-size: 11px;
+    line-height: 1.25;
+    color: var(--text-muted);
+    background: rgba(139,148,158,0.10);
+    border: 1px solid rgba(139,148,158,0.28);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .conv-folder-object-archive-btn:hover,
+  .conv-folder-object-archive-btn:focus-visible {
+    color: var(--text);
+    background: rgba(88,166,255,0.16);
+    border-color: rgba(88,166,255,0.45);
+    outline: none;
+  }
   /* "Push all" ship control — lives in the flexible last header column */
   .conv-folder-ship {
     grid-column: 5;
