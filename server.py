@@ -16126,6 +16126,30 @@ def _codex_response_succeeded(response):
     return isinstance(response, dict) and "result" in response and not response.get("error")
 
 
+def _codex_app_server_thread_is_active(session_id):
+    """Best-effort read of whether CCC's live Codex app-server has an active turn.
+
+    This deliberately does not start the app-server; it is used by the durable
+    pending-input watcher to avoid popping and requeueing Codex messages while a
+    volatile app-server turn is still in progress.
+    """
+    if not session_id or not _codex_app_server_is_live():
+        return False
+    try:
+        resumed = _codex_app_server_request(
+            "thread/resume",
+            {"threadId": session_id, "excludeTurns": False},
+            timeout=5,
+        )
+    except Exception:
+        return False
+    if not _codex_response_succeeded(resumed):
+        return False
+    thread = ((resumed.get("result") or {}).get("thread") or {})
+    status = ((thread.get("status") or {}).get("type") or "").lower()
+    return status == "active" or bool(_codex_latest_active_turn(thread))
+
+
 def _codex_turn_params(thread_id, text, cwd=None, model=None, image_paths=None):
     params = {
         "threadId": thread_id,
@@ -16168,30 +16192,11 @@ def _codex_resume_or_steer_via_app_server(
     active_turn = _codex_latest_active_turn(thread)
     status = (thread.get("status") or {}).get("type")
     if status == "active" and active_turn:
-        started = _codex_app_server_request(
-            "turn/start",
-            {
-                "threadId": session_id,
-                "input": _codex_user_input(text, image_paths=image_paths),
-            },
-            timeout=20,
-        )
-        if _codex_response_succeeded(started):
-            turn = ((started.get("result") or {}).get("turn") or {})
-            return {
-                "ok": True,
-                "queued": True,
-                "via": "codex-app-queued",
-                "turn_id": turn.get("id"),
-                "session_id": session_id,
-            }
-        if _codex_error_is_not_steerable(started):
-            return {
-                "ok": False,
-                "fallback": "queue",
-                "error": _codex_error_text(started),
-            }
-        return {"ok": False, "fallback": "exec", "error": _codex_error_text(started)}
+        return {
+            "ok": False,
+            "fallback": "queue",
+            "error": "Codex thread is active; queue the next message durably in CCC",
+        }
     if status == "active":
         return {
             "ok": False,
@@ -19251,6 +19256,18 @@ def _transcript_gains_text(session_id, text, timeout_s=6.0):
     return False
 
 
+def _resume_queue_engine_busy(sid):
+    if any(
+        s.get("resumed_sid") == sid and _poll_spawn_entry(s) is None
+        for s in _spawned_sessions
+        if s.get("engine") in ("codex", "gemini", "cursor", "antigravity", "hermes")
+    ):
+        return True
+    if _is_codex_session(sid) and _codex_app_server_thread_is_active(sid):
+        return True
+    return False
+
+
 def _start_resume_queue_watcher() -> None:
     """Drain queued prompts once fire-and-watch engines or live terminal sessions go idle."""
     _load_pending_inputs()
@@ -19260,12 +19277,7 @@ def _start_resume_queue_watcher() -> None:
             with _pending_resume_lock:
                 queued_sids = list(_pending_resume_queue.keys())
             for sid in queued_sids:
-                busy = any(
-                    s.get("resumed_sid") == sid and _poll_spawn_entry(s) is None
-                    for s in _spawned_sessions
-                    if s.get("engine") in ("codex", "gemini", "cursor", "antigravity", "hermes")
-                )
-                if busy:
+                if _resume_queue_engine_busy(sid):
                     continue
                 with _pending_resume_lock:
                     queue = _pending_resume_queue.get(sid, [])

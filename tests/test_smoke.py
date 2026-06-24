@@ -4794,7 +4794,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(parsed["events"][1]["blocks"][0]["kind"], "tool_use")
         self.assertNotIn("[REDACTED]", json.dumps(parsed["events"]))
 
-    def test_codex_app_server_queues_active_turn(self):
+    def test_codex_app_server_active_turn_falls_back_to_durable_queue(self):
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
         calls = []
@@ -4813,8 +4813,6 @@ class TestRepoContextHelpers(unittest.TestCase):
                         }
                     }
                 }
-            if method == "turn/start":
-                return {"result": {"turn": {"id": "turn-next"}}}
             raise AssertionError(f"unexpected method: {method}")
 
         with mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request):
@@ -4826,24 +4824,75 @@ class TestRepoContextHelpers(unittest.TestCase):
                 image_paths=["/tmp/paste.png"],
             )
 
-        self.assertTrue(result["ok"])
-        self.assertTrue(result["queued"])
-        self.assertEqual(result["via"], "codex-app-queued")
-        self.assertEqual(calls[0][0], "thread/resume")
-        self.assertEqual(calls[1][0], "turn/start")
-        start_params = calls[1][1]
-        self.assertEqual(start_params["threadId"], sid)
-        self.assertNotIn("cwd", start_params)
-        self.assertNotIn("model", start_params)
-        self.assertNotIn("approvalPolicy", start_params)
-        self.assertNotIn("sandboxPolicy", start_params)
-        self.assertEqual(
-            start_params["input"],
-            [
-                {"type": "text", "text": "look here"},
-                {"type": "localImage", "path": "/tmp/paste.png"},
-            ],
-        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["fallback"], "queue")
+        self.assertEqual([call[0] for call in calls], ["thread/resume"])
+
+    def test_resume_codex_active_app_server_turn_uses_durable_queue(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        calls = []
+        with server._pending_resume_lock:
+            original_queue = dict(server._pending_resume_queue)
+            server._pending_resume_queue.clear()
+
+        def fake_request(method, params=None, timeout=20):
+            calls.append(method)
+            if method == "thread/resume":
+                return {
+                    "result": {
+                        "thread": {
+                            "status": {"type": "active", "activeFlags": []},
+                            "turns": [
+                                {"id": "turn-active", "status": "inProgress"},
+                            ],
+                        }
+                    }
+                }
+            if method == "turn/start":
+                return {"result": {"turn": {"id": "turn-next"}}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        try:
+            with mock.patch.object(
+                server,
+                "_resolve_codex_bin",
+                return_value={"available": True, "bin": "/usr/bin/codex-test"},
+            ), mock.patch.object(server, "_codex_thread_row", return_value={"cwd": str(self.repo)}), \
+                 mock.patch.object(server, "_git_toplevel_for_existing_dir", return_value=str(self.repo)), \
+                 mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request):
+                result = server.resume_session_codex(sid, "keep this")
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["queued"])
+            self.assertEqual(result["via"], "codex-resume-queued")
+            self.assertEqual(calls, ["thread/resume"])
+            with server._pending_resume_lock:
+                self.assertEqual(server._pending_resume_queue.get(sid), ["keep this"])
+        finally:
+            with server._pending_resume_lock:
+                server._pending_resume_queue.clear()
+                server._pending_resume_queue.update(original_queue)
+
+    def test_resume_queue_busy_detects_codex_app_server_active_thread(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+
+        def fake_request(method, params=None, timeout=20):
+            self.assertEqual(method, "thread/resume")
+            return {
+                "result": {
+                    "thread": {
+                        "status": {"type": "active", "activeFlags": []},
+                        "turns": [{"id": "turn-active", "status": "inProgress"}],
+                    }
+                }
+            }
+
+        with mock.patch.object(server, "_is_codex_session", return_value=True), \
+             mock.patch.object(server, "_codex_app_server_is_live", return_value=True), \
+             mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request):
+            self.assertTrue(server._resume_queue_engine_busy(sid))
 
     def test_codex_app_server_steers_active_turn(self):
         server = self.server
