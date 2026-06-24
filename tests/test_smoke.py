@@ -607,6 +607,38 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("font-size: 9px;", app_css)
         self.assertIn("border: 1px solid rgba(63,185,80,0.36);", app_css)
 
+    def test_sidebar_rows_have_summary_details_toggle(self):
+        """Session rows with session_state should expose an expand/collapse
+        affordance for the detailed summary block."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function sessionSummaryStorageKey(sid)", app_js)
+        self.assertIn("data-role=\"session-summary-toggle\"", app_js)
+        self.assertIn("data-role=\"session-summary-detail\"", app_js)
+        self.assertIn("localStorage.setItem(sessionSummaryStorageKey(sid), nextOpen ? '1' : '0')", app_js)
+        self.assertIn(".conv-summary-toggle", app_css)
+        self.assertIn(".conv-session-summary-detail", app_css)
+
+    def test_repo_pin_marker_is_not_duplicate_pin_glyph(self):
+        """Repo override rows should use a distinct repo chip, not a second pin."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn(">repo</button>", app_js)
+        self.assertNotIn('class="conv-repo-pin" data-role="unpin-repo" title="Pinned to this repo. Click to reset to the session’s real repo.">&#128204;</button>', app_js)
+        self.assertIn(".conv-repo-pin {\n    display: inline-flex;", app_css)
+
+    def test_toolbar_single_row_and_rail_close_in_flow(self):
+        """The conversation toolbar should not wrap, and the rail close control
+        should not absolutely overlay conversation/rail content."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("display: flex; align-items: center; gap: 10px; flex-wrap: nowrap;", app_css)
+        self.assertIn("overflow: hidden;", app_css)
+        self.assertIn(".status-rail-close {\n    position: sticky;", app_css)
+        self.assertNotIn(".status-rail-close {\n    position: absolute;", app_css)
+
     def test_coo_status_pill_names_its_source(self):
         """The COO activity badge should explain what creates the status."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -1021,6 +1053,17 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".flow-node-work-item", app_css)
         self.assertIn(".flow-inspector", app_css)
         self.assertIn("--flow-accent", app_css)
+
+    def test_flow_object_refresh_reads_parent_map_sessions(self):
+        """Refreshing an object inspector should rebuild auto sections from
+        Flow's source-of-truth parent map, not only from rendered DOM nodes."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function flowInspectorNodeDescendantIds(rootNodeId)", app_js)
+        self.assertIn("const descendantIds = flowInspectorNodeDescendantIds(nodeId);", app_js)
+        self.assertIn("descendantIds.has(flowNodeKey('session', row.session_id || row.id || ''))", app_js)
+        self.assertIn("descendantIds.has(flowNodeKey('draft-session', draft.id || ''))", app_js)
+        self.assertIn("descendantIds.has(flowNodeKey('object', obj.id || ''))", app_js)
 
     def test_flow_state_helpers_create_save_refresh_markdown(self):
         for mod in ("server", "morning", "morning_store"):

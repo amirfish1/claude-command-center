@@ -278,8 +278,9 @@
   }
   .toolbar {
     padding: 12px 16px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 16px; flex-wrap: wrap; row-gap: 8px;
+    display: flex; align-items: center; gap: 10px; flex-wrap: nowrap;
     background: var(--surface); font-size: 13px;
+    min-width: 0; overflow: hidden;
   }
   /* #1 — Collapse the conv toolbar to zero height when JS marks it
      `.is-empty`. Toggled by an observer that watches for visible
@@ -3577,6 +3578,28 @@
     min-width: 0;
     width: 100%;
   }
+  .conv-summary-toggle {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+  }
+  .conv-summary-toggle:hover,
+  .conv-summary-toggle:focus-visible {
+    color: var(--accent, #58a6ff);
+    background: rgba(88,166,255,0.10);
+    outline: none;
+  }
   /* Row-end slot — Omnara-style. Holds the time at rest, swaps to action
      buttons (merge / start / archive) on hover. The two share the same
      screen real estate via `position: absolute` on the actions, so the
@@ -4065,6 +4088,21 @@
     white-space: normal;
     overflow-wrap: anywhere;
     min-width: 0;
+  }
+  .conv-session-summary-detail {
+    margin: 4px 0 0 29px;
+    padding: 7px 9px;
+    border-left: 2px solid rgba(88,166,255,0.28);
+    border-radius: 4px;
+    background: rgba(88,166,255,0.055);
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+  .conv-session-summary-detail strong {
+    color: var(--text);
+    font-weight: 650;
   }
   .compact-rows .conv-item .conv-outcome { display: none; }
   .conv-item .meta {
@@ -5442,11 +5480,23 @@
   /* Pin indicator on rows whose repo bucket the user overrode. The
      button doubles as the unpin affordance. */
   .conv-repo-pin {
-    background: transparent; border: none; cursor: pointer; padding: 0 2px;
-    font-size: 11px; line-height: 1; opacity: 0.85;
-    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    height: 17px;
+    background: rgba(88, 166, 255, 0.10);
+    border: 1px dashed rgba(88, 166, 255, 0.42);
+    border-radius: 4px;
+    cursor: pointer;
+    padding: 0 5px;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--accent, #58a6ff);
+    opacity: 0.82;
   }
-  .conv-repo-pin:hover { opacity: 1; color: var(--accent); }
+  .conv-repo-pin:hover { opacity: 1; background: rgba(88, 166, 255, 0.18); }
   .conv-item.is-repo-pinned .conv-folder-chip {
     outline: 1px dashed var(--accent); outline-offset: 1px;
   }
@@ -11135,25 +11185,27 @@ body.status-pos-right .conv-pane > .status-rail {
   background: var(--accent);
   opacity: 0.95;
 }
-/* Quick-close X — top-right inside the rail. Only visible when the
-   rail itself is shown (the rail's parent .conv-pane is in status-pos-
-   right mode and not collapsed). 22×22 hit target sits above the
-   rail's contents so it's reachable even when the rail is short. */
-.status-rail-close {
-  position: absolute;
-  top: 6px; right: 6px;
-  width: 22px; height: 22px;
-  display: none;
-  align-items: center; justify-content: center;
-  padding: 0;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  color: var(--text-muted);
-  font-size: 16px; line-height: 1;
-  cursor: pointer;
-  z-index: 5;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  /* Quick-close X — top-right inside the rail, in normal flow so it never
+     overlays the conversation or the rail's own content. */
+  .status-rail-close {
+    position: sticky;
+    top: 6px;
+    align-self: flex-end;
+    flex: 0 0 auto;
+    margin: 6px 6px 0 0;
+    width: 20px; height: 20px;
+    display: none;
+    align-items: center; justify-content: center;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--text-muted);
+    font-size: 15px; line-height: 1;
+    cursor: pointer;
+    z-index: 5;
+    opacity: 0.55;
+    transition: color 0.12s, background 0.12s, border-color 0.12s;
 }
 body.status-pos-right:not(.status-rail-collapsed) .status-rail-close {
   display: inline-flex;
@@ -11162,6 +11214,7 @@ body.status-pos-right:not(.status-rail-collapsed) .status-rail-close {
   color: var(--text);
   background: var(--surface-2);
   border-color: var(--border);
+  opacity: 1;
 }
 .status-rail-close:focus-visible {
   outline: 2px solid var(--accent);

@@ -12215,81 +12215,100 @@
     return payload;
   }
 
+  function flowInspectorSessionItemFromRow(row) {
+    const status = flowSessionStatus(row);
+    const branch = row.effective_branch || row.branch || row.git_branch || '';
+    const sid = row.session_id || row.id || '';
+    const col = classifyKanbanColumn(row);
+    return {
+      title: flowRowTitle(row),
+      status: status.label || col || 'active',
+      session: sid ? sid.slice(0, 8) : '',
+      updated: flowLastUpdatedLabel(row.last_interacted || row.modified || row.mtime),
+      notes: branch,
+      done: !!row.archived || col === 'verified' || col === 'archived',
+    };
+  }
+
+  function flowInspectorDraftItem(draft) {
+    return {
+      title: flowDraftPrompt(draft) || 'Draft session',
+      status: 'draft',
+      session: draft.id,
+      updated: flowLastUpdatedLabel(draft.updated_at || draft.created_at),
+      notes: 'saved locally',
+      done: false,
+    };
+  }
+
+  function flowInspectorObjectItem(obj) {
+    const ui = objectStatusUi((obj && obj.status) || '');
+    return {
+      title: (obj && obj.title) || 'Object',
+      status: ui.label || 'object',
+      session: (obj && obj.id) || '',
+      updated: flowLastUpdatedLabel((obj && (obj.updated_at || obj.created_at)) || 0),
+      notes: (obj && obj.objective) || 'child object',
+      done: ((obj && obj.status) || '') === 'done',
+    };
+  }
+
   function flowInspectorRepoItems(repoPath) {
     const items = [];
     (conversationsData || [])
       .filter(row => row && flowIsVisibleSession(row) && (rowRepoPath(row) || row.folder_path || selectedRepoPath() || '__repo__') === repoPath)
       .sort((a, b) => flowRowTime(b) - flowRowTime(a))
-      .forEach(row => {
-        const status = flowSessionStatus(row);
-        const branch = row.effective_branch || row.branch || row.git_branch || '';
-        const sid = row.session_id || row.id || '';
-        const col = classifyKanbanColumn(row);
-        items.push({
-          title: flowRowTitle(row),
-          status: status.label || col || 'active',
-          session: sid ? sid.slice(0, 8) : '',
-          updated: flowLastUpdatedLabel(row.last_interacted || row.modified || row.mtime),
-          notes: branch,
-          done: !!row.archived || col === 'verified' || col === 'archived',
-        });
-      });
+      .forEach(row => items.push(flowInspectorSessionItemFromRow(row)));
     (flowDraftSessions || [])
       .filter(draft => draft && draft.repo_path === repoPath)
-      .forEach(draft => {
-        items.push({
-          title: flowDraftPrompt(draft) || 'Draft session',
-          status: 'draft',
-          session: draft.id,
-          updated: flowLastUpdatedLabel(draft.updated_at || draft.created_at),
-          notes: 'saved locally',
-          done: false,
-        });
-      });
+      .forEach(draft => items.push(flowInspectorDraftItem(draft)));
     return items;
   }
 
-  function flowInspectorObjectItems(nodeId) {
+  function flowInspectorNodeDescendantIds(rootNodeId) {
+    const nodeId = String(rootNodeId || '');
+    const parentMap = Object.assign({}, flowNodeParents || {});
     const board = document.getElementById('flowBoard');
     const world = board && (board.querySelector('.flow-world') || board);
-    if (!world || !nodeId) return [];
-    const parentMap = {};
-    world.querySelectorAll('.flow-node').forEach(el => {
-      const id = el.dataset.flowNodeId;
-      if (!id) return;
-      parentMap[id] = flowNodeParents[id] || el.dataset.flowParent || '';
-    });
-    const isDescendant = childId => {
+    if (world) {
+      world.querySelectorAll('.flow-node').forEach(el => {
+        const id = el.dataset.flowNodeId;
+        if (!id || parentMap[id]) return;
+        parentMap[id] = el.dataset.flowParent || '';
+      });
+    }
+    const out = new Set();
+    if (!nodeId) return out;
+    Object.keys(parentMap).forEach(childId => {
+      if (!childId || childId === nodeId) return;
       const seen = new Set([childId]);
       let cur = parentMap[childId] || '';
       while (cur && !seen.has(cur)) {
-        if (cur === nodeId) return true;
+        if (cur === nodeId) {
+          out.add(childId);
+          return;
+        }
         seen.add(cur);
         cur = parentMap[cur] || '';
       }
-      return false;
-    };
-    const items = [];
-    world.querySelectorAll('.flow-node').forEach(el => {
-      const id = el.dataset.flowNodeId;
-      if (!id || id === nodeId || !isDescendant(id)) return;
-      const kind = el.dataset.flowKind || '';
-      if (kind !== 'session' && kind !== 'draft-session' && kind !== 'object') return;
-      const titleEl = el.querySelector('.flow-node-title');
-      const input = el.querySelector('.flow-draft-input');
-      const title = ((titleEl && titleEl.textContent) || (input && input.value) || '').trim() || kind;
-      const meta = ((el.querySelector('.flow-node-meta') || {}).textContent || '').trim();
-      const chips = Array.from(el.querySelectorAll('.flow-chip')).map(chip => chip.textContent.trim()).filter(Boolean).join(', ');
-      const status = chips || (meta.split(' · ')[0] || kind);
-      items.push({
-        title,
-        status,
-        session: el.dataset.sessionId || el.dataset.id || el.dataset.draftId || '',
-        updated: meta.split(' · ').slice(-1)[0] || '',
-        notes: kind === 'object' ? 'child object' : '',
-        done: el.classList.contains('is-archived') || /\b(done|completed|verified|archived)\b/i.test(status),
-      });
     });
+    return out;
+  }
+
+  function flowInspectorObjectItems(nodeId) {
+    const descendantIds = flowInspectorNodeDescendantIds(nodeId);
+    const items = [];
+    (flowCustomObjects || [])
+      .filter(obj => obj && descendantIds.has(flowNodeKey('object', obj.id || '')))
+      .forEach(obj => items.push(flowInspectorObjectItem(obj)));
+    (conversationsData || [])
+      .filter(row => row && flowIsVisibleSession(row)
+        && descendantIds.has(flowNodeKey('session', row.session_id || row.id || '')))
+      .sort((a, b) => flowRowTime(b) - flowRowTime(a))
+      .forEach(row => items.push(flowInspectorSessionItemFromRow(row)));
+    (flowDraftSessions || [])
+      .filter(draft => draft && descendantIds.has(flowNodeKey('draft-session', draft.id || '')))
+      .forEach(draft => items.push(flowInspectorDraftItem(draft)));
     return items;
   }
 
@@ -18271,6 +18290,14 @@
     let _nyaDetailsForRows = false;
     // Collapsed-block session_ids, read once per render (not per row).
     let _nyaCollapsedRows = new Set();
+    function sessionSummaryStorageKey(sid) {
+      return 'ccc-session-summary-expanded:' + String(sid || '').slice(0, 180);
+    }
+    function isSessionSummaryExpanded(sid) {
+      if (!sid) return false;
+      try { return localStorage.getItem(sessionSummaryStorageKey(sid)) === '1'; }
+      catch (_) { return false; }
+    }
     // The inline NYA block — mirrors the attention-panel row markup so it looks
     // identical, minus the panel-only chrome (verify button, id chip, debug
     // column). Display-only; the parent row already handles click-to-open.
@@ -18309,6 +18336,20 @@
             : '');
       const isBacklogRow = c.source === 'backlog';
       const isGithubPrRow = c.source === 'github_pr';
+      const _summarySid = c.session_id || c.id || '';
+      const _summaryState = c.session_state || null;
+      const _hasSummaryDetails = !!(!isBacklogRow && !isGithubPrRow && _summarySid && _summaryState
+        && (_summaryState.did || _summaryState.insight || _summaryState.next_step_user));
+      const _summaryExpanded = _hasSummaryDetails && isSessionSummaryExpanded(_summarySid);
+      const summaryToggleHtml = _hasSummaryDetails
+        ? '<button type="button" class="conv-summary-toggle" data-role="session-summary-toggle"'
+          + ' data-summary-sid="' + escapeAttr(_summarySid) + '"'
+          + ' aria-expanded="' + (_summaryExpanded ? 'true' : 'false') + '"'
+          + ' title="' + (_summaryExpanded ? 'Hide summary details' : 'Show summary details') + '"'
+          + ' aria-label="' + (_summaryExpanded ? 'Hide summary details' : 'Show summary details') + '">'
+          + (_summaryExpanded ? '&#9662;' : '&#9656;')
+          + '</button>'
+        : '';
       const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
       // Title priority: user rename or CCC spawn name (display_name) >
       // Claude Code's ai_title > raw first user prompt > "(untitled)".
@@ -18911,7 +18952,7 @@
       // Pin indicator — shown when the row's repo bucket has been
       // overridden by the user. Click unpins via /api/repo/pin.
       const pinnedHtml = c.pinned_repo
-        ? '<button class="conv-repo-pin" data-role="unpin-repo" title="Pinned to this repo. Click to reset to the session’s real repo.">&#128204;</button>'
+        ? '<button class="conv-repo-pin" data-role="unpin-repo" title="Pinned to this repo. Click to reset to the session’s real repo.">repo</button>'
         : '';
 
       // History-search match indicators. `_historySnippet` (with HTML <mark>
@@ -19063,12 +19104,20 @@
           + (_next ? '<span class="conv-outcome-next">&#8594; ' + escapeHtml(_next) + '</span>' : '')
           + '</div>';
       }
+      const summaryDetailHtml = (_hasSummaryDetails && _summaryExpanded)
+        ? '<div class="conv-session-summary-detail" data-role="session-summary-detail">'
+          + (_summaryState.did ? '<div><strong>Did:</strong> ' + escapeHtml(_summaryState.did) + '</div>' : '')
+          + (_summaryState.insight ? '<div><strong>Insight:</strong> ' + escapeHtml(_summaryState.insight) + '</div>' : '')
+          + (_summaryState.next_step_user ? '<div><strong>Next:</strong> ' + escapeHtml(_summaryState.next_step_user) + '</div>' : '')
+        + '</div>'
+        : '';
 
       return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + '<div class="conv-main-row">'
             + _nyaChevronHtml
+            + summaryToggleHtml
             + cooTrackHtml
             + leftFolderChipHtml
             + titleFolderChipHtml
@@ -19099,6 +19148,7 @@
         + '</div>'
         + ask
         + outcomeHtml
+        + summaryDetailHtml
         + historySnippetHtml
       + '</div>'
       // Inline "Details" block: when the In-progress Details toggle is on and
@@ -20804,6 +20854,17 @@
         setInProgressObjectGroupsCollapsed(opt.getAttribute('data-objects-collapse') === '1');
       });
     }
+    $convList.querySelectorAll('[data-role="session-summary-toggle"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const sid = btn.getAttribute('data-summary-sid') || '';
+        if (!sid) return;
+        const nextOpen = btn.getAttribute('aria-expanded') !== 'true';
+        try { localStorage.setItem(sessionSummaryStorageKey(sid), nextOpen ? '1' : '0'); } catch (_) {}
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+      });
+    });
     // Grouping toggle (by project / by time). Triggers a re-render via the
     // same path the data came from: archive mode → renderArchiveList,
     // single-repo mode → loadConversationList. (In single-repo mode the
