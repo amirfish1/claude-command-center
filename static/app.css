@@ -8177,6 +8177,19 @@
     font-size: 13px;
     line-height: 1.25;
   }
+  .conv-folder-object-numbered-title,
+  .conv-folder-object-numbered-item {
+    white-space: nowrap;
+  }
+  .conv-folder-object-number {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+  }
+  .conv-folder-object-separator {
+    color: var(--text-muted);
+    opacity: 0.72;
+  }
   .conv-folder-group-chip[data-role="object-title"] { cursor: pointer; }
   .conv-folder-group-header[data-object-drop] .conv-folder-group-count {
     grid-column: 3;

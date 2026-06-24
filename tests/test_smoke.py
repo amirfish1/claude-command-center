@@ -351,6 +351,17 @@ class TestServerImports(unittest.TestCase):
                       "    font: inherit;\n"
                       "    font-size: 13px;", app_css)
 
+    def test_by_object_group_titles_number_slash_separated_items(self):
+        """Task-like object headers should show each slash-separated item in order."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function numberedObjectTitleHtml(title)", app_js)
+        self.assertIn("const parts = raw.split('/').map(s => s.trim()).filter(Boolean);", app_js)
+        self.assertIn("const titleHtml = archiveObjectId ? numberedObjectTitleHtml(folder) : escapeHtml(folder);", app_js)
+        self.assertIn(".conv-folder-object-numbered-title", app_css)
+        self.assertIn(".conv-folder-object-number", app_css)
+
     def test_by_objects_header_has_expand_collapse_all(self):
         """By-objects mode should expose expand-all and collapse-all controls."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

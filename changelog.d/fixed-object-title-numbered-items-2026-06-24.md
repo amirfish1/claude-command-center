@@ -1,0 +1,1 @@
+- Number slash-separated by-objects headers so ordered object task lists are easier to scan.

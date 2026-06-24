@@ -19091,6 +19091,19 @@
     };
     const _folderGroupStorageKey = (section, key) =>
       'ccc-folder-group-collapsed:' + section + ':' + String(key || '').slice(0, 180);
+    function numberedObjectTitleHtml(title) {
+      const raw = String(title || '').trim();
+      const parts = raw.split('/').map(s => s.trim()).filter(Boolean);
+      if (parts.length < 2) return escapeHtml(raw);
+      return '<span class="conv-folder-object-numbered-title">'
+        + parts.map((part, i) =>
+          '<span class="conv-folder-object-numbered-item">'
+            + '<span class="conv-folder-object-number">' + (i + 1) + '.</span> '
+            + escapeHtml(part)
+          + '</span>'
+        ).join('<span class="conv-folder-object-separator"> / </span>')
+        + '</span>';
+    }
     const _isFolderGroupCollapsed = (section, key) => {
       const qActive = !!(document.getElementById('convSearch')?.value || '').trim();
       if (qActive) return false;
@@ -19145,6 +19158,7 @@
       const objectTitleAttrs = archiveObjectId
         ? ' data-role="object-title" data-object-id="' + escapeHtml(archiveObjectId) + '" title="Open object"'
         : '';
+      const titleHtml = archiveObjectId ? numberedObjectTitleHtml(folder) : escapeHtml(folder);
       return '<div class="conv-folder-group-header" style="--chip-hue:' + hue + ';"'
         + ' role="button" tabindex="0" data-role="folder-group-toggle"'
         + ' data-collapse-key="' + escapeHtml(_folderGroupStorageKey(section, collapseKey)) + '"'
@@ -19152,7 +19166,7 @@
         + '<button type="button" class="conv-folder-group-arrow" data-role="folder-group-collapse"'
         + ' title="Collapse or expand group" aria-label="Collapse or expand group">'
         + (collapsed ? '▸' : '▾') + '</button>'
-        + '<span class="conv-folder-group-chip' + orphan + '"' + objectTitleAttrs + '>' + escapeHtml(folder) + '</span>'
+        + '<span class="conv-folder-group-chip' + orphan + '"' + objectTitleAttrs + '>' + titleHtml + '</span>'
         + '<span class="conv-folder-group-count">' + count + '</span>'
         + inlineMetaHtml
         + objectActions
