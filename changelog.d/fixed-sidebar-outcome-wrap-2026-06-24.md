@@ -1,0 +1,1 @@
+- Let sidebar session outcome summaries wrap in a full-width bubble instead of truncating the completed-work text.

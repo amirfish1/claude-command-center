@@ -4016,14 +4016,22 @@
   .conv-item .conv-last .label { color: var(--text-muted); opacity: 0.7; margin-right: 4px; }
   /* GOAL-1 outcome line — the session's own DID / NEXT self-report. */
   .conv-item .conv-outcome {
-    font-size: 12px; margin-top: 3px; line-height: 1.3;
-    display: flex; align-items: baseline; gap: 8px;
-    overflow: hidden; white-space: nowrap;
+    font-size: 12px; margin: 4px 0 0 29px; line-height: 1.35;
+    display: block;
+    padding: 6px 8px;
+    border-left: 2px solid rgba(63,185,80,0.28);
+    border-radius: 4px;
+    background: rgba(63,185,80,0.055);
+    overflow: visible;
+    white-space: normal;
   }
   .conv-item .conv-outcome-did {
     color: var(--text-muted); opacity: 0.86;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    min-width: 0; flex: 1 1 auto;
+    display: block;
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    min-width: 0;
   }
   .conv-item .conv-outcome-did::before {
     content: "DONE";
@@ -4042,8 +4050,13 @@
     vertical-align: 1px;
   }
   .conv-item .conv-outcome-next {
-    color: var(--text-muted); opacity: 0.75; flex: 0 1 auto;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+    display: block;
+    margin-top: 4px;
+    color: var(--text-muted); opacity: 0.75;
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    min-width: 0;
   }
   .compact-rows .conv-item .conv-outcome { display: none; }
   .conv-item .meta {

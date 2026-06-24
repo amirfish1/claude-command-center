@@ -581,10 +581,17 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("pointer-events: auto;", app_css)
 
     def test_sidebar_outcome_line_reads_as_muted_done_metadata(self):
-        """A session DID summary should not compete with the row title."""
+        """A session DID summary should show the full text below the row."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
+        self.assertIn(".conv-item .conv-outcome {\n"
+                      "    font-size: 12px; margin: 4px 0 0 29px; line-height: 1.35;\n"
+                      "    display: block;", app_css)
+        self.assertIn("overflow-wrap: anywhere;", app_css)
         self.assertIn(".conv-item .conv-outcome-did {\n    color: var(--text-muted);", app_css)
+        self.assertNotIn(".conv-item .conv-outcome-did {\n"
+                         "    color: var(--text-muted); opacity: 0.86;\n"
+                         "    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", app_css)
         self.assertIn('content: "DONE";', app_css)
         self.assertIn("font-size: 9px;", app_css)
         self.assertIn("border: 1px solid rgba(63,185,80,0.36);", app_css)
