@@ -8039,7 +8039,7 @@
     border-left-color: var(--border) !important;
   }
   body.chips-level .conv-folder-group[data-object-drop-zone] > .conv-folder-group-header {
-    --chip-hue: calc(205 + (var(--obj-depth, 0) * 46)) !important;
+    --chip-hue: var(--level-chip-hue, 190) !important;
   }
   .conv-folder-group[data-object-drop-zone^="object:"][data-object-depth="0"] > .conv-folder-group-header .conv-folder-object-title-text {
     text-transform: uppercase;
@@ -8506,6 +8506,11 @@
   #convList .conv-folder-group.collapsed > .conv-draft-row,
   #convList .conv-folder-group.collapsed > .conv-object-empty-hint,
   #convList .conv-folder-group.collapsed > .conv-ghissues-more { display: none; }
+  #convList .conv-folder-group.sessions-collapsed > .conv-item,
+  #convList .conv-folder-group.sessions-collapsed > .conv-gap-separator,
+  #convList .conv-folder-group.sessions-collapsed > .conv-draft-row,
+  #convList .conv-folder-group.sessions-collapsed > .conv-object-empty-hint,
+  #convList .conv-folder-group.sessions-collapsed > .conv-ghissues-more { display: none; }
   .conv-ghissues-more {
     display: flex;
     padding: 2px 10px 3px calc(10px + var(--conv-dot-col, 9px) + var(--conv-time-col, 43px) + 6px);

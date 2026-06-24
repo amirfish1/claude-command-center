@@ -477,9 +477,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const next = cur === 'color' ? 'level' : (cur === 'level' ? 'muted' : 'color');", app_js)
         self.assertIn("localStorage.setItem('ccc-chips-mode', next)", app_js)
         self.assertIn("body.chips-level .conv-folder-group[data-object-drop-zone] > .conv-folder-group-header", app_css)
+        self.assertIn("const levelHue = [190, 48, 145, 28, 210][depth % 5];", app_js)
+        self.assertIn("--level-chip-hue:", app_js)
+        self.assertIn("--chip-hue: var(--level-chip-hue, 190) !important;", app_css)
+        self.assertNotIn("--chip-hue: calc(205 + (var(--obj-depth, 0) * 46))", app_css)
 
     def test_by_objects_header_has_expand_collapse_all(self):
-        """By-objects mode should expose expand-all and collapse-all controls."""
+        """By-objects expand/collapse all should hide sessions but keep sub-objects visible."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -487,12 +491,28 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-role="objects-expand-all"', app_js)
         self.assertIn('data-objects-collapse="0"', app_js)
         self.assertIn('data-objects-collapse="1"', app_js)
+        self.assertIn("function _objectSessionsStorageKey(key)", app_js)
+        self.assertIn("function _areObjectSessionsCollapsed(key)", app_js)
         self.assertIn("function setInProgressObjectGroupsCollapsed(collapsed)", app_js)
         self.assertIn("$convList.querySelectorAll('[data-role=\"inprogress-section\"] .conv-folder-group').forEach(group =>", app_js)
-        self.assertIn("localStorage.setItem(key, collapsed ? '1' : '0')", app_js)
+        self.assertIn("localStorage.setItem(key, '0')", app_js)
+        self.assertIn("localStorage.setItem(_objectSessionsStorageKey(nodeId || key), collapsed ? '1' : '0')", app_js)
+        self.assertIn("group.classList.toggle('sessions-collapsed', !!collapsed)", app_js)
         self.assertIn("if (ev.target.closest('[data-role=\"objects-expand-all\"]')) return;", app_js)
         self.assertIn("$objectsExpandAll.addEventListener('click'", app_js)
         self.assertIn(".conv-objects-expand-all", app_css)
+        self.assertIn("#convList .conv-folder-group.sessions-collapsed > .conv-item,", app_css)
+        self.assertNotIn("#convList .conv-folder-group.sessions-collapsed > .conv-folder-group", app_css)
+
+    def test_object_triangle_collapse_rerenders_subtree(self):
+        """Object header chevrons should collapse nested object subtrees immediately."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const objNodeForToggle = hdr.getAttribute('data-object-drop') || '';", app_js)
+        self.assertIn("if (objNodeForToggle) {", app_js)
+        self.assertIn("localStorage.removeItem(_objectSessionsStorageKey(objNodeForToggle));", app_js)
+        self.assertIn("renderArchiveList(document.getElementById('convSearch')?.value || '');", app_js)
+        self.assertIn("if (_isFolderGroupCollapsed('inprogress', nodeId)) return html;", app_js)
 
     def test_object_task_draft_survives_sidebar_refresh(self):
         """Typing in an object task should persist before periodic list refresh

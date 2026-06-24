@@ -19187,6 +19187,9 @@
     };
     const _folderGroupStorageKey = (section, key) =>
       'ccc-folder-group-collapsed:' + section + ':' + String(key || '').slice(0, 180);
+    function _objectSessionsStorageKey(key) {
+      return 'ccc-object-sessions-collapsed:' + String(key || '').slice(0, 180);
+    }
     function numberedObjectTitleHtml(title, ordinal = 0) {
       const raw = String(title || '').trim();
       const prefix = ordinal > 0
@@ -19203,6 +19206,12 @@
       try { return localStorage.getItem(_folderGroupStorageKey(section, key)) === '1'; }
       catch (_) { return false; }
     };
+    function _areObjectSessionsCollapsed(key) {
+      const qActive = !!(document.getElementById('convSearch')?.value || '').trim();
+      if (qActive) return false;
+      try { return localStorage.getItem(_objectSessionsStorageKey(key)) === '1'; }
+      catch (_) { return false; }
+    }
     const _folderGroupHeaderHtml = (section, folder, count, hue, orphan, collapseKey, extraAttrs = '', repoPath = '', archiveObjectId = '', inlineMetaHtml = '', objectOrdinal = 0) => {
       const collapsed = _isFolderGroupCollapsed(section, collapseKey);
       // "Push all" ship control — conversation list only, and only when we
@@ -19579,7 +19588,9 @@
         let hash = 0;
         for (let i = 0; i < nodeId.length; i++) hash = ((hash << 5) - hash + nodeId.charCodeAt(i)) | 0;
         const hue = Math.abs(hash) % 360;
+        const levelHue = [190, 48, 145, 28, 210][depth % 5];
         const collapsed = _isFolderGroupCollapsed('inprogress', nodeId);
+        const sessionsCollapsed = _areObjectSessionsCollapsed(nodeId);
         const attrs = ' data-object-drop="' + escapeAttr(nodeId) + '"';
         const archiveObjectId = nodeId.indexOf('object:') === 0 ? nodeId.slice(7) : '';
         // GOAL-2 — sessionless tasks. Draft-sessions parented to this object
@@ -19636,8 +19647,8 @@
         // built into a tree in the emit loop below; here we just render the
         // depth as a left indent + a guide rail so the day reads as a tree.
         const _nestCls = depth > 0 ? ' is-nested' : '';
-        const _nestStyle = ' style="--obj-depth:' + depth + '"';
-        return '<div class="conv-folder-group' + _nestCls + (collapsed ? ' collapsed' : '') + '"'
+        const _nestStyle = ' style="--obj-depth:' + depth + ';--level-chip-hue:' + levelHue + '"';
+        return '<div class="conv-folder-group' + _nestCls + (collapsed ? ' collapsed' : '') + (sessionsCollapsed ? ' sessions-collapsed' : '') + '"'
           + _nestStyle
           + ' data-object-drop-zone="' + escapeAttr(nodeId) + '" data-object-depth="' + depth + '">'
           + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs, '', archiveObjectId, inlineMetaHtml, ordinal)
@@ -20717,12 +20728,18 @@
         const header = group.querySelector('[data-role="folder-group-toggle"]');
         const key = header && header.getAttribute('data-collapse-key');
         if (!key) return;
-        try { localStorage.setItem(key, collapsed ? '1' : '0'); } catch (_) {}
-        group.classList.toggle('collapsed', !!collapsed);
-        if (header) header.setAttribute('aria-expanded', String(!collapsed));
+        const nodeId = group.getAttribute('data-object-drop-zone') || '';
+        try {
+          localStorage.setItem(key, '0');
+          localStorage.setItem(_objectSessionsStorageKey(nodeId || key), collapsed ? '1' : '0');
+        } catch (_) {}
+        group.classList.remove('collapsed');
+        group.classList.toggle('sessions-collapsed', !!collapsed);
+        if (header) header.setAttribute('aria-expanded', 'true');
         const arrowEl = header && header.querySelector('.conv-folder-group-arrow');
-        if (arrowEl) arrowEl.textContent = collapsed ? '▸' : '▾';
+        if (arrowEl) arrowEl.textContent = '▾';
       });
+      renderArchiveList(document.getElementById('convSearch')?.value || '');
     }
     const $objectsExpandAll = $convList.querySelector('[data-role="objects-expand-all"]');
     if ($objectsExpandAll) {
@@ -21083,6 +21100,7 @@
     $convList.querySelectorAll('[data-role="folder-group-toggle"]').forEach(hdr => {
       const toggleFolderGroup = (ev) => {
         ev.stopPropagation();
+        const objNodeForToggle = hdr.getAttribute('data-object-drop') || '';
         const group = hdr.closest('.conv-folder-group');
         if (!group) return;
         const wasCollapsed = group.classList.toggle('collapsed');
@@ -21090,9 +21108,15 @@
         if (key) {
           try { localStorage.setItem(key, wasCollapsed ? '1' : '0'); } catch (_) {}
         }
+        if (objNodeForToggle) {
+          try { localStorage.removeItem(_objectSessionsStorageKey(objNodeForToggle)); } catch (_) {}
+        }
         const arrowEl = hdr.querySelector('.conv-folder-group-arrow');
         if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         hdr.setAttribute('aria-expanded', String(!wasCollapsed));
+        if (objNodeForToggle) {
+          renderArchiveList(document.getElementById('convSearch')?.value || '');
+        }
       };
       // By-objects headers (CCC-93): the chevron collapses; clicking the
       // name opens the object inspector; the pencil owns rename.
