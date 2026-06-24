@@ -12014,6 +12014,28 @@ _CROSS_REPO_ISSUES_LOCK = threading.Lock()
 _CROSS_REPO_ISSUES_TTL = 300  # 5 minutes — same as the per-repo cache
 
 
+def _cross_repo_feed_repo_paths():
+    """Repos eligible for cross-repo issue/PR feeds.
+
+    `recent-repos.txt` is ordering metadata for the picker, not membership.
+    Use load_known_repos() so stale recent paths do not leak into all-repos
+    issue and ready-to-merge sections.
+    """
+    try:
+        entries = load_known_repos()
+    except Exception:
+        return []
+    out = []
+    seen = set()
+    for entry in entries or []:
+        repo = (entry.get("path") if isinstance(entry, dict) else "") or ""
+        if not repo or repo in seen:
+            continue
+        seen.add(repo)
+        out.append(repo)
+    return out
+
+
 def _fetch_one_repo_issues(repo_path):
     """Fetch open + recently-closed issues for ONE repo. Cached per-repo
     by repo_path. Returns {"issues": list, "error": str|None, "ts": float}.
@@ -12092,12 +12114,7 @@ def fetch_cross_repo_issues():
           "fetched_at": epoch,
         }
     """
-    try:
-        repos = list(dict.fromkeys(  # dedupe, preserve order
-            _load_recent_repos() + _load_custom_repos()
-        ))
-    except Exception:
-        repos = []
+    repos = _cross_repo_feed_repo_paths()
     if not repos:
         return {"issues": [], "errors": {}, "fetched_at": time.time()}
 
@@ -12164,12 +12181,7 @@ def _gh_pr_status_notes(pr):
 
 
 def fetch_cross_repo_prs():
-    try:
-        repos = list(dict.fromkeys(
-            _load_recent_repos() + _load_custom_repos()
-        ))
-    except Exception:
-        repos = []
+    repos = _cross_repo_feed_repo_paths()
     if not repos:
         return {"pull_requests": [], "errors": {}, "fetched_at": time.time()}
 
