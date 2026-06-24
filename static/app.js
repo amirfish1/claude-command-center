@@ -1007,10 +1007,29 @@
     if (!isTextControl) return false;
     return Date.now() - _lastTextKeyTs < 1500;
   }
+  let _convListScrollQuietUntil = 0;
+  let _convListScrollFlushTimer = 0;
+  function isConversationListScrollActive() {
+    const mobileList = (typeof isMobile === 'function' && isMobile())
+      || (typeof isTouchPrimary === 'function' && isTouchPrimary());
+    return mobileList && Date.now() < _convListScrollQuietUntil;
+  }
+  function noteConversationListScrollActivity() {
+    const mobileList = (typeof isMobile === 'function' && isMobile())
+      || (typeof isTouchPrimary === 'function' && isTouchPrimary());
+    if (!mobileList) return;
+    _convListScrollQuietUntil = Date.now() + 550;
+    if (_convListScrollFlushTimer) clearTimeout(_convListScrollFlushTimer);
+    _convListScrollFlushTimer = setTimeout(() => {
+      _convListScrollFlushTimer = 0;
+      try { _flushDeferredSidebarRenderIfAny(); } catch (_) {}
+    }, 600);
+  }
   // Sidebar list renders must still run while #convSearch is focused —
   // otherwise the debounced filter never paints until blur/Enter (the
   // pause guard was written for background pollers, not the search box).
   function shouldPauseSidebarRender() {
+    if (isConversationListScrollActive()) return true;
     const ae = document.activeElement;
     if (ae && ae.id === 'convSearch') return false;
     return shouldPausePeriodicUiWork();
@@ -3642,7 +3661,8 @@
         if (!sid) return;
         badge.classList.add('is-waking');
         setTimeout(() => badge.classList.remove('is-waking'), 1600);
-        wakeCodexSession(sid, null);
+        const wakeFeedback = badge.querySelector('.ccs-wake') || badge;
+        wakeCodexSession(sid, wakeFeedback);
       };
       badge.addEventListener('click', _doWake);
       badge.addEventListener('keydown', (e) => {
@@ -7790,14 +7810,22 @@
   // !isMobile().
   const _mobileMQ = window.matchMedia('(max-width: 950px)');
   function isMobile() { return _mobileMQ.matches; }
-  // Touch-primary devices: HTML5 drag never fires on touch, but a
-  // `draggable="true"` element makes the browser intercept the first tap to
-  // test for a drag gesture, swallowing that tap's synthetic click — the
-  // "I have to tap a conv row twice to open it" bug. Drop draggable here so a
-  // single tap opens; desktop mouse drag-reorder keeps it.
+  // Touch/mobile devices: HTML5 drag never fires reliably on touch, but a
+  // `draggable="true"` element can make the browser intercept the first tap
+  // to test for a drag gesture, swallowing that tap's synthetic click — the
+  // "I have to tap a conv row twice to open it" bug. Drop draggable in any
+  // mobile/touch-like mode so a single tap opens; desktop mouse drag-reorder
+  // keeps it.
   const _coarsePointerMQ = window.matchMedia('(pointer: coarse)');
-  function isTouchPrimary() { return _coarsePointerMQ.matches; }
-  function rowDraggableAttr() { return isTouchPrimary() ? 'false' : 'true'; }
+  const _anyCoarsePointerMQ = window.matchMedia('(any-pointer: coarse)');
+  function isTouchPrimary() { return _coarsePointerMQ.matches || _anyCoarsePointerMQ.matches; }
+  function isTouchLikePointerEvent(ev) {
+    return !!(ev && (ev.pointerType === 'touch' || ev.pointerType === 'pen'));
+  }
+  function shouldUseTouchRowMode(ev) {
+    return isMobile() || isTouchPrimary() || isTouchLikePointerEvent(ev);
+  }
+  function rowDraggableAttr() { return shouldUseTouchRowMode() ? 'false' : 'true'; }
   function mobileShowMain(on) {
     document.body.classList.toggle('mobile-show-main', !!on);
   }
@@ -13826,6 +13854,8 @@
     wireTodayTray();
   }
 
+  let _sidebarRenderRaf = 0;
+  let _sidebarRenderPendingWhilePaused = false;
   function renderSidebar(convs, opts) {
     if (_renameInProgress) return;
     if (deferSidebarRenderIfDragging()) return;
@@ -13837,7 +13867,7 @@
     // periodic pause guard exists to keep pollers from yanking the
     // sidebar around while the user types; it must NOT also suppress
     // explicit "the user just did something, paint it now" updates.
-    if (!(opts && opts.force) && shouldPauseSidebarRender()) return;
+    if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }
     const $kanbanBoard = document.getElementById('kanbanBoard');
     const $flow = document.getElementById('flowBoard');
     const $convList = document.getElementById('convList');
@@ -13865,8 +13895,6 @@
   // one rAF collapses ticks that land in the same frame into a single render
   // (and computes fresh convs at flush time). User-initiated renders still call
   // renderSidebar / renderArchiveList directly so they stay immediate.
-  let _sidebarRenderRaf = 0;
-  let _sidebarRenderPendingWhilePaused = false;
   // CCC-149: while the pointer is over a row's hover-revealed action buttons
   // (archive / pin / verify), hold off POLL-driven sidebar rebuilds.
   // renderSidebar() replaces $convList.innerHTML wholesale, so a poll tick
@@ -13883,7 +13911,7 @@
     }
   }, true);
   function _pausePeriodicSidebarRender() {
-    return shouldPausePeriodicUiWork() || Date.now() < _convRowActionHoverUntil;
+    return shouldPausePeriodicUiWork() || isConversationListScrollActive() || Date.now() < _convRowActionHoverUntil;
   }
   function _flushDeferredSidebarRenderIfAny() {
     if (!_sidebarRenderPendingWhilePaused) return;
@@ -14270,7 +14298,7 @@
   }
 
   function beginMobileConversationRowTap(ev) {
-    if (!isTouchPrimary() || ev.pointerType === 'mouse') return;
+    if (ev.pointerType === 'mouse' || !shouldUseTouchRowMode(ev)) return;
     const row = mobileConversationRowFromEvent(ev);
     if (!row || conversationRowTapIsBlocked(ev.target, { allowTitle: true })) return;
     _mobileRowTap = {
@@ -14316,6 +14344,14 @@
     $convList.addEventListener('pointercancel', cancelMobileConversationRowTap, { passive: true });
   }
   wireMobileConversationRowTaps();
+
+  function wireConversationListScrollPause() {
+    if (!$convList || $convList._mobileScrollPauseWired) return;
+    $convList._mobileScrollPauseWired = true;
+    $convList.addEventListener('scroll', noteConversationListScrollActivity, { passive: true });
+    $convList.addEventListener('touchmove', noteConversationListScrollActivity, { passive: true });
+  }
+  wireConversationListScrollPause();
 
   function openCoordModal() {
     if (selectedListIds.size < 1) return;
@@ -20156,7 +20192,7 @@
     const _activeEl = document.activeElement;
     const _userIsTyping = !!(_activeEl && (_activeEl.tagName === 'TEXTAREA'
       || (_activeEl.tagName === 'INPUT' && /^(text|search|email|url|tel|password)$/i.test(_activeEl.type || 'text'))));
-    const _skipFlipForTouchScroll = isTouchPrimary();
+    const _skipFlipForTouchScroll = shouldUseTouchRowMode();
     if ($convList && !document.hidden && !_userIsTyping && !_skipFlipForTouchScroll) {
       for (const row of $convList.querySelectorAll('[data-id]')) {
         const id = row.getAttribute('data-id');
@@ -33096,7 +33132,7 @@
     loadCooEscalated();
     if (_renameInProgress) return;
     if (deferSidebarRenderIfDragging()) return;
-    if (!(opts && opts.force) && shouldPauseSidebarRender()) return;
+    if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }
     const q = (filter || '').trim().toLowerCase();
     const scrollState = _captureArchiveListScroll(q, $list);
     const _finishArchiveRender = () => {

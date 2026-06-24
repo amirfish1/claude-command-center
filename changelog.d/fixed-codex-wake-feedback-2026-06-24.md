@@ -1,0 +1,1 @@
+- Codex stuck-state wake pills now show in-place feedback while a wake request is being sent.

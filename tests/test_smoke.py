@@ -1216,7 +1216,7 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("renderSidebar(filterConversations($convSearch.value), { force: true });", app_js)
         self.assertIn("function renderSidebar(convs, opts)", app_js)
-        self.assertIn("if (!(opts && opts.force) && shouldPauseSidebarRender()) return;", app_js)
+        self.assertIn("if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
 
     def test_conv_pct_badge_is_clickable_compact_shortcut(self):
         """The context-% badge on each conv row is a one-click shortcut to
@@ -1276,11 +1276,21 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function wireMobileConversationRowTaps()", app_js)
+        self.assertIn("const _anyCoarsePointerMQ = window.matchMedia('(any-pointer: coarse)');", app_js)
+        self.assertIn("function isTouchLikePointerEvent(ev)", app_js)
+        self.assertIn("function shouldUseTouchRowMode(ev)", app_js)
+        self.assertIn("function rowDraggableAttr() { return shouldUseTouchRowMode() ? 'false' : 'true'; }", app_js)
+        self.assertIn("if (ev.pointerType === 'mouse' || !shouldUseTouchRowMode(ev)) return;", app_js)
         self.assertIn("$convList.addEventListener('pointerup', finishMobileConversationRowTap);", app_js)
         self.assertIn("activateConversationRowFromTap(row, ev, { allowTitle: true, source: 'pointer' });", app_js)
         self.assertIn("function shouldSuppressSyntheticRowClick(id)", app_js)
         self.assertIn("if (shouldSuppressSyntheticRowClick(item.dataset.id)) { ev.preventDefault(); return; }", app_js)
-        self.assertIn("const _skipFlipForTouchScroll = isTouchPrimary();", app_js)
+        self.assertIn("function noteConversationListScrollActivity()", app_js)
+        self.assertIn("$convList.addEventListener('scroll', noteConversationListScrollActivity, { passive: true });", app_js)
+        self.assertIn("$convList.addEventListener('touchmove', noteConversationListScrollActivity, { passive: true });", app_js)
+        self.assertIn("if (isConversationListScrollActive()) return true;", app_js)
+        self.assertIn("if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
+        self.assertIn("const _skipFlipForTouchScroll = shouldUseTouchRowMode();", app_js)
         self.assertIn("&& !_skipFlipForTouchScroll", app_js)
         self.assertNotIn("el.classList.add('mobile-active-tap')", app_js)
         self.assertNotIn("el.classList.remove('mobile-active-tap')", app_js)
@@ -7761,6 +7771,8 @@ class TestCodexStateWiring(unittest.TestCase):
         css = (root / "static" / "app.css").read_text()
         self.assertIn("codex_state", js)
         self.assertIn("updateCodexStateBadge", js)
+        self.assertIn("const wakeFeedback = badge.querySelector('.ccs-wake') || badge;", js)
+        self.assertIn("wakeCodexSession(sid, wakeFeedback);", js)
         self.assertIn("flow-chip.offline", css)
         self.assertIn("conv-codex-state", css)
 
