@@ -8216,8 +8216,18 @@
     border-radius: 3px;
     cursor: pointer;
   }
+  .conv-folder-object-rename-icon {
+    display: block;
+    width: 13px;
+    height: 13px;
+  }
   .conv-folder-object-rename-btn:hover,
-  .conv-folder-object-rename-btn:focus-visible,
+  .conv-folder-object-rename-btn:focus-visible {
+    color: var(--text);
+    background: transparent;
+    border-color: transparent;
+    outline: none;
+  }
   .conv-folder-object-playpause-btn:hover,
   .conv-folder-object-playpause-btn:focus-visible,
   .conv-folder-object-archive-btn:hover,

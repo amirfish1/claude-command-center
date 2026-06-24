@@ -18631,11 +18631,12 @@
             + ' title="Commit dormant work, pull --rebase, push (no force)">Push all</button>'
           + '</span>'
         : '';
+      const objectRenameIcon = '<svg class="conv-folder-object-rename-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>';
       const objectRename = (section === 'inprogress' && archiveObjectId)
         ? '<button type="button" class="conv-folder-object-rename-btn" data-role="object-rename"'
           + ' data-object-id="' + escapeHtml(archiveObjectId) + '"'
           + ' title="Rename object"'
-          + ' aria-label="Rename object">&#9998;</button>'
+          + ' aria-label="Rename object">' + objectRenameIcon + '</button>'
         : '';
       let objectPlayPause = '';
       if (section === 'inprogress' && archiveObjectId) {

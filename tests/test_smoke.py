@@ -209,6 +209,8 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn('data-role="object-title"', app_js)
         self.assertIn('data-role="object-rename"', app_js)
+        self.assertIn('class="conv-folder-object-rename-icon"', app_js)
+        self.assertNotIn('aria-label="Rename object">&#9998;', app_js)
         self.assertIn('data-role="object-playpause"', app_js)
         self.assertIn("function setFlowObjectStatus(id, status)", app_js)
         self.assertIn("function startInlineObjectRename(chip)", app_js)
@@ -224,6 +226,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("&#128465;", app_js)
         self.assertIn(".conv-folder-object-title-input", app_css)
         self.assertIn(".conv-folder-object-rename-btn", app_css)
+        self.assertIn(".conv-folder-object-rename-icon", app_css)
+        self.assertIn(".conv-folder-object-rename-btn:hover,\n  .conv-folder-object-rename-btn:focus-visible {\n    color: var(--text);\n    background: transparent;", app_css)
         self.assertIn(".conv-folder-object-playpause-btn", app_css)
         self.assertIn(".conv-folder-object-title-actions", app_css)
         self.assertIn(".conv-folder-group-header[data-object-drop] .conv-folder-group-arrow", app_css)
