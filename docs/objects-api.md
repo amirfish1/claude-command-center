@@ -13,8 +13,8 @@ cache clear, crosses machines, and is readable by server-side automation.
 - **Writer:** `objects_store.py` — atomic temp-file + `os.replace`; an `fcntl`
   lock serialises cross-process writers. Reads are cached by `(mtime, size)`.
 - **Degradation:** a missing or corrupt/wrong-shape file reads as empty state
-  (`{objects: [], parents: {}, order: {}}`) and never throws. The next write
-  overwrites the garbage.
+  (`{objects: [], parents: {}, order: {}, drafts: []}`) and never throws. The
+  next write overwrites the garbage.
 
 ### Schema
 
@@ -31,9 +31,27 @@ cache clear, crosses machines, and is readable by server-side automation.
     }
   ],
   "parents": { "<sessionNodeId>": "object:<objectId>" },
-  "order":   { "<nodeId>": 3 }
+  "order":   { "<nodeId>": 3 },
+  "drafts": [
+    {
+      "id":             "<stable id>",
+      "title":          "Draft the release notes",
+      "repo_path":      "/path/to/repo",
+      "parent_node_id": "object:<objectId>",
+      "prompt":         "write the notes",
+      "created_at":     "2026-06-23T12:00:00Z",
+      "updated_at":     "2026-06-23T12:34:00Z"
+    }
+  ]
 }
 ```
+
+`drafts` are **lightweight not-yet-started tasks** (Flow's "draft-session"
+nodes). `repo_path` may be `""` for a pure reminder; `prompt` is optional.
+`parent_node_id` links a draft to its object (`"object:<id>"`). The client owns
+draft creation/editing and pushes them via `import` — the server only
+**merges** drafts in (additive upsert by id) and **deletes** one by id; there are
+no create/update draft endpoints.
 
 `status` and `objective` are **optional** and owned by a different client
 session. This server never sets them but stores and returns them losslessly —
@@ -56,7 +74,7 @@ other CCC GET.
 Returns the full state.
 
 ```json
-{ "objects": [ ... ], "parents": { ... }, "order": { ... } }
+{ "objects": [ ... ], "parents": { ... }, "order": { ... }, "drafts": [ ... ] }
 ```
 
 ### `POST /api/objects/create`
@@ -100,7 +118,7 @@ Remove a session's parent link (no-op if absent).
 ### `POST /api/objects/import`
 Sync the browser's existing localStorage organization up to the server.
 
-- Request: `{ "objects": [...], "parents": {...}, "order": {...} }` (all optional)
+- Request: `{ "objects": [...], "parents": {...}, "order": {...}, "drafts": [...] }` (all optional)
 - Response: the merged full state.
 
 **Merge, not replace (deliberate):** the import is additive so a browser load
@@ -113,9 +131,24 @@ of moving off per-browser localStorage.
 - `parents`: incoming links **overwrite the same key** (a session has one
   parent); keys absent from the import are left untouched.
 - `order`: incoming ranks **overwrite the same key**; others untouched.
+- `drafts`: **upsert by `id`** (same policy as objects) — incoming fields win
+  per-field for an existing id, new ids are appended, and no server-side draft is
+  ever deleted by an import.
 
 Re-importing the same browser is idempotent; a second browser's import augments
-rather than clobbers. To intentionally drop an object, call `delete`.
+rather than clobbers. To intentionally drop an object, call `delete`; to drop a
+draft, call `draft-delete`.
+
+### `POST /api/objects/draft-delete`
+Remove a draft-session by id (so the client can propagate a deleted task).
+
+- Request: `{ "id": "draft-1" }`
+- Response: `{ "ok": true, "removed": true|false }` (`false` if id was absent)
+- Errors: `400` if `id` missing.
+
+Drafts are created and edited client-side and synced up through `import`
+(additive upsert by id). There are deliberately **no** create/update draft
+endpoints — the server only needs import-merge plus `draft-delete`.
 
 ## Errors (all endpoints)
 

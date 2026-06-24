@@ -41387,14 +41387,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     return
                 if sub == "import":
                     # MERGE, not replace (documented in objects_store.import_state):
-                    # objects upsert by id, parents/order overwrite same keys.
-                    # Safe to re-run; never deletes server-side objects.
+                    # objects/drafts upsert by id, parents/order overwrite same
+                    # keys. Safe to re-run; never deletes server-side rows.
                     state = objects_store.import_state(
                         objects=data.get("objects"),
                         parents=data.get("parents"),
                         order=data.get("order"),
+                        drafts=data.get("drafts"),
                     )
                     self.send_json({"ok": True, **state})
+                    return
+                if sub == "draft-delete":
+                    # Remove a draft-session by id so the client can propagate a
+                    # deleted task. Drafts are created/edited client-side and
+                    # synced via import; the server only needs delete + merge.
+                    did = data.get("id")
+                    if not isinstance(did, str) or not did:
+                        self.send_json({"error": "id is required"}, 400)
+                        return
+                    removed = objects_store.delete_draft(did)
+                    self.send_json({"ok": True, "removed": removed})
                     return
             except ValueError as e:
                 self.send_json({"error": str(e)}, 400)
