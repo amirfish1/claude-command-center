@@ -18863,6 +18863,11 @@
           + ' title="Rename object"'
           + ' aria-label="Rename object">' + objectRenameIcon + '</button>'
         : '';
+      const objectAddTask = (section === 'inprogress' && archiveObjectId)
+        ? '<button type="button" class="conv-folder-object-add-task-btn" data-flow-action="add-draft-session"'
+          + ' data-parent-node="' + escapeHtml(flowNodeKey('object', archiveObjectId)) + '"'
+          + ' title="Add task" aria-label="Add task">+</button>'
+        : '';
       let objectPlayPause = '';
       if (section === 'inprogress' && archiveObjectId) {
         const obj = (flowCustomObjects || []).find(o => o && o.id === archiveObjectId);
@@ -18881,8 +18886,8 @@
           + ' title="Archive this object from the active by-objects view"'
           + ' aria-label="Archive object">&#128465;</button>'
         : '';
-      const objectActions = (objectRename || objectPlayPause || objectArchive)
-        ? '<span class="conv-folder-object-actions">' + objectRename + objectPlayPause + objectArchive + '</span>'
+      const objectActions = (objectRename || objectAddTask || objectPlayPause || objectArchive)
+        ? '<span class="conv-folder-object-actions">' + objectRename + objectAddTask + objectPlayPause + objectArchive + '</span>'
         : '';
       const objectTitleAttrs = archiveObjectId
         ? ' data-role="object-title" data-object-id="' + escapeHtml(archiveObjectId) + '" title="Open object"'
@@ -19236,11 +19241,8 @@
         if (archiveObjectId) {
           const rowsHtml = cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true })).join('');
           const emptyHint = (!cards.length && !_objDrafts.length)
-            ? '<div class="conv-object-empty-hint">Empty — drag a session here, or add a task.</div>' : '';
-          const addTaskHtml = '<button type="button" class="conv-object-add-task"'
-            + ' data-flow-action="add-draft-session" data-parent-node="' + escapeAttr(nodeId) + '"'
-            + ' title="Add a task — becomes a real session when you hit play">+ task</button>';
-          body = rowsHtml + _draftsHtml + emptyHint + addTaskHtml;
+            ? '<div class="conv-object-empty-hint">Empty — drag a session here, or use +.</div>' : '';
+          body = rowsHtml + _draftsHtml + emptyHint;
         } else {
           body = cards.length
             ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true })).join('')

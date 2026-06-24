@@ -8089,13 +8089,6 @@
   }
   .conv-draft-play:hover { color: var(--accent, #3fb950); background: rgba(63,185,80,0.12); }
   .conv-draft-delete:hover { color: #f85149; background: rgba(248,81,73,0.12); }
-  .conv-object-add-task {
-    display: inline-block; margin: 2px 0 4px 30px;
-    background: none; border: 1px dashed rgba(139,148,158,0.35); border-radius: 4px;
-    color: var(--text-muted); cursor: pointer; font: inherit; font-size: 11.5px;
-    padding: 1px 8px; opacity: 0.75;
-  }
-  .conv-object-add-task:hover { opacity: 1; border-color: var(--accent, #58a6ff); color: var(--text); }
   /* Separator before a standalone (ungrouped) session that follows a group */
   .conv-folder-group + .conv-item,
   .conv-item + .conv-folder-group {
@@ -8217,6 +8210,7 @@
     gap: 4px;
   }
   .conv-folder-object-rename-btn,
+  .conv-folder-object-add-task-btn,
   .conv-folder-object-playpause-btn,
   .conv-folder-object-archive-btn {
     display: inline-flex;
@@ -8247,6 +8241,8 @@
   }
   .conv-folder-object-playpause-btn:hover,
   .conv-folder-object-playpause-btn:focus-visible,
+  .conv-folder-object-add-task-btn:hover,
+  .conv-folder-object-add-task-btn:focus-visible,
   .conv-folder-object-archive-btn:hover,
   .conv-folder-object-archive-btn:focus-visible {
     color: var(--text);
@@ -8416,7 +8412,6 @@
   #convList .conv-folder-group.collapsed > .conv-item,
   #convList .conv-folder-group.collapsed > .conv-gap-separator,
   #convList .conv-folder-group.collapsed > .conv-draft-row,
-  #convList .conv-folder-group.collapsed > .conv-object-add-task,
   #convList .conv-folder-group.collapsed > .conv-object-empty-hint,
   #convList .conv-folder-group.collapsed > .conv-ghissues-more { display: none; }
   .conv-ghissues-more {

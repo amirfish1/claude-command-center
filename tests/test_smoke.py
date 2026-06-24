@@ -312,6 +312,20 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("ccc-done-collapsed", app_js)
         self.assertNotIn(".conv-done-section", app_css)
 
+    def test_object_task_add_button_lives_in_header_actions(self):
+        """By-object +task should be a compact object header action."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const objectAddTask = (section === 'inprogress' && archiveObjectId)", app_js)
+        self.assertIn('class="conv-folder-object-add-task-btn"', app_js)
+        self.assertIn("data-parent-node=\"' + escapeHtml(flowNodeKey('object', archiveObjectId)) + '\"", app_js)
+        self.assertIn("objectRename + objectAddTask + objectPlayPause + objectArchive", app_js)
+        self.assertNotIn('class="conv-object-add-task"', app_js)
+        self.assertNotIn(">+ task</button>", app_js)
+        self.assertIn(".conv-folder-object-add-task-btn", app_css)
+        self.assertNotIn(".conv-object-add-task", app_css)
+
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never
         delete these markers on session end, so a stale marker must NOT keep a
