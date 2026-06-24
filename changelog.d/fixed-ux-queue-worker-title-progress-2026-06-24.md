@@ -1,0 +1,1 @@
+- Project-named UX-fixes worker rows now show queue progress even when claims are recorded under a worker alias.

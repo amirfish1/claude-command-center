@@ -746,6 +746,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("/api/ux-fixes/list", app_js)
         self.assertIn("claimed_by", app_js)
         self.assertIn("conv-ux-fix-progress", app_js)
+        self.assertIn("function _uxFixesWorkerProjectForRow(c)", app_js)
+        self.assertIn("activeByProject.set(project,", app_js)
+        self.assertIn("const projectHint = _uxFixesWorkerProjectForRow(c);", app_js)
+        self.assertIn("uxFixesQueueMeta.activeByProject || new Map()", app_js)
+        self.assertIn("uxFixesQueueMeta.lastFixByProject || new Map()", app_js)
         self.assertIn(".conv-item .conv-ux-fix-progress", app_css)
 
     def test_sidebar_refresh_defers_while_dragging(self):

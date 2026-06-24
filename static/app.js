@@ -32448,6 +32448,36 @@
     return String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
   }
 
+  function _uxFixesLooseWords(value) {
+    return String(value || '').trim().toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function _uxFixesWorkerProjectFromName(value) {
+    const text = _uxFixesLooseWords(value);
+    if (!text) return '';
+    let m = text.match(/^([a-z0-9]+) ux fixes queue$/);
+    if (m) return m[1].toUpperCase();
+    m = text.match(/^ux fixes queue ([a-z0-9]+)$/);
+    if (m) return m[1].toUpperCase();
+    m = text.match(/^([a-z0-9]+) ux worker$/);
+    if (m) return m[1].toUpperCase();
+    m = text.match(/^ux worker ([a-z0-9]+)$/);
+    if (m) return m[1].toUpperCase();
+    return '';
+  }
+
+  function _uxFixesWorkerProjectForRow(c) {
+    if (!c) return '';
+    for (const v of [c.display_name, c.ai_title, c.title, c.name]) {
+      const project = _uxFixesWorkerProjectFromName(v);
+      if (project) return project;
+    }
+    return '';
+  }
+
   // Reject values that clearly are NOT a session identity before crediting
   // work to them: CLI-flag typos ("--claimed-by") and bare ticket refs
   // ("CCC-65") have both shown up in claimed_by/closed_by via mistyped close
@@ -32498,6 +32528,7 @@
   }
   function _setUxFixesQueueMeta(items) {
     const byClaimedSession = new Map();
+    const activeByProject = new Map();
     const projectMaxSeq = new Map();
     // Per project, the most recently CLOSED ticket and who closed it. Drives
     // the "last fix" chip so an idle worker row still shows what it finished.
@@ -32538,26 +32569,35 @@
       const claimedAt = _uxFixesClaimedAtMs(item);
       const prev = byClaimedSession.get(sid);
       if (!prev || claimedAt > prev.claimedAt) {
-        byClaimedSession.set(sid, { seq, project, ref: item.ref || '', lane: item.lane || 'normal', claimedAt });
+        const rec = { seq, project, ref: item.ref || '', lane: item.lane || 'normal', claimedAt };
+        byClaimedSession.set(sid, rec);
+        const prevProject = activeByProject.get(project);
+        if (!prevProject || claimedAt > prevProject.claimedAt) {
+          activeByProject.set(project, rec);
+        }
       }
     }
     // Credit each project's latest close to the session that closed it (one
     // row per project). A session that's the latest closer in two projects
     // keeps its most recent close.
     const lastFixBySession = new Map();
+    const lastFixByProject = new Map();
     for (const rec of projectLastClosed.values()) {
       const prev = lastFixBySession.get(rec.sid);
       if (!prev || rec.closedAt > prev.closedAt) lastFixBySession.set(rec.sid, rec);
+      lastFixByProject.set(rec.project, rec);
     }
     // Content signature of everything the progress chips render — lets the
     // refresh path repaint the sidebar only when the queue actually changed,
     // instead of re-rendering on every 15s poll.
     const sigParts = [];
     for (const [sid, rec] of byClaimedSession) sigParts.push('c' + sid + ':' + rec.seq + ':' + (rec.claimedAt || 0));
+    for (const [proj, rec] of activeByProject) sigParts.push('pc' + proj + ':' + rec.seq + ':' + (rec.claimedAt || 0));
     for (const [sid, rec] of lastFixBySession) sigParts.push('d' + sid + ':' + rec.seq);
+    for (const [proj, rec] of lastFixByProject) sigParts.push('pd' + proj + ':' + rec.seq);
     for (const [proj, mx] of projectMaxSeq) sigParts.push('m' + proj + ':' + mx);
     const _sig = sigParts.sort().join('|');
-    uxFixesQueueMeta = { projectMaxSeq, byClaimedSession, lastFixBySession, _sig };
+    uxFixesQueueMeta = { projectMaxSeq, byClaimedSession, activeByProject, lastFixBySession, lastFixByProject, _sig };
     _uxFixesQueueMetaLoadedAt = Date.now();
     return uxFixesQueueMeta;
   }
@@ -32587,6 +32627,21 @@
       if (!Number.isFinite(total) || total <= 0) continue;
       return { kind: 'working', current: cur.seq, total, lane: cur.lane || 'normal', project: cur.project, ref: cur.ref };
     }
+    // 1b) Project-named worker rows ("CCC UX fixes queue", "UX worker · CCC")
+    // are valid queue workers even when the claim/close identity was recorded
+    // under a CLI alias. Fall back to this project-level progress so those
+    // rows still show "xx/xx" instead of looking like ordinary sessions.
+    const projectHint = _uxFixesWorkerProjectForRow(c);
+    const projectActive = uxFixesQueueMeta.activeByProject || new Map();
+    if (projectHint) {
+      const cur = projectActive.get(projectHint);
+      if (cur && !(cur.claimedAt && (Date.now() - cur.claimedAt) > UX_FIXES_ACTIVE_CLAIM_MS)) {
+        const total = Number(projectMaxSeq.get(cur.project) || 0);
+        if (Number.isFinite(total) && total > 0) {
+          return { kind: 'working', current: cur.seq, total, lane: cur.lane || 'normal', project: cur.project, ref: cur.ref };
+        }
+      }
+    }
     // 2) Otherwise, credit the session that closed this project's LATEST ticket
     //    — so an idle worker row still shows the last fix it shipped.
     const lastFix = uxFixesQueueMeta.lastFixBySession || new Map();
@@ -32596,6 +32651,16 @@
       const total = Number(projectMaxSeq.get(done.project) || 0);
       if (!Number.isFinite(total) || total <= 0) break;
       return { kind: 'done', current: done.seq, total, lane: 'normal', project: done.project, ref: done.ref };
+    }
+    const projectLastFix = uxFixesQueueMeta.lastFixByProject || new Map();
+    if (projectHint) {
+      const done = projectLastFix.get(projectHint);
+      if (done) {
+        const total = Number(projectMaxSeq.get(done.project) || 0);
+        if (Number.isFinite(total) && total > 0) {
+          return { kind: 'done', current: done.seq, total, lane: 'normal', project: done.project, ref: done.ref };
+        }
+      }
     }
     return null;
   }
