@@ -301,6 +301,17 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("flowDraftFocusId = id;", app_js)
         self.assertIn("_df.setSelectionRange(flowDraftFocusSelection.start, flowDraftFocusSelection.end);", app_js)
 
+    def test_sidebar_has_no_manual_done_section(self):
+        """The Active sidebar tab should not render the old manual Done bucket."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertNotIn("conv-done-section", app_js)
+        self.assertNotIn("data-role=\"done-section\"", app_js)
+        self.assertNotIn("ccc-done-sessions", app_js)
+        self.assertNotIn("ccc-done-collapsed", app_js)
+        self.assertNotIn(".conv-done-section", app_css)
+
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never
         delete these markers on session end, so a stale marker must NOT keep a

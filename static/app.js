@@ -13517,42 +13517,6 @@
     renderTodayTray();
   }
 
-  // Done bucket (CCC-151): a purely MANUAL set of conv ids the user has
-  // dragged out of "In progress" into the "Done" section. No server state,
-  // no auto-classification — the user moves rows in by drag and out via the
-  // per-row ×. The set persists under 'ccc-done-sessions'; the section's
-  // collapse state under 'ccc-done-collapsed'. Stored ids are the same c.id
-  // used as data-id / dragSourceId (NOT session_id) so the render-time
-  // partition is a cheap Set.has(c.id) lookup — no per-row resolution.
-  const DONE_SESSIONS_KEY = 'ccc-done-sessions';
-
-  function getDoneSet() {
-    try {
-      const raw = localStorage.getItem(DONE_SESSIONS_KEY);
-      const arr = raw ? JSON.parse(raw) : [];
-      return new Set(Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : []);
-    } catch (_) { return new Set(); }
-  }
-  function _setDoneSet(set) {
-    try { localStorage.setItem(DONE_SESSIONS_KEY, JSON.stringify(Array.from(set || []))); } catch (_) {}
-  }
-  function addDone(id) {
-    if (!id) return;
-    const set = getDoneSet();
-    if (set.has(id)) return;
-    set.add(id);
-    _setDoneSet(set);
-    try { renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true }); } catch (_) {}
-  }
-  function removeDone(id) {
-    if (!id) return;
-    const set = getDoneSet();
-    if (!set.has(id)) return;
-    set.delete(id);
-    _setDoneSet(set);
-    try { renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true }); } catch (_) {}
-  }
-
   // ── COO row layer (row-level only — never moves/reorders rows) ──────────
   // (1) A per-row checkbox = "COO is tracking this session". Membership lives
   //     in localStorage under 'ccc-coo-tracked', keyed by session_id. Toggling
@@ -17691,11 +17655,6 @@
     // rows. Keep one row per session key, preferring the live / most-recent.
     const _seenSessionKeys = new Map(); // session key -> index in _sessionConvs
     const _ghIssueConvs = [];
-    // Done bucket (CCC-151): convs the user manually dragged into the Done
-    // section. Partitioned out of _sessionConvs below by a cheap Set.has(c.id)
-    // check so they leave the In-progress list entirely.
-    const _doneSet = getDoneSet();
-    const _doneConvs = [];
     const _readyToMergeConvs = [];
     const _readyToMergeByPr = new Map();   // pr_num -> { idx, conv }
     const _archivedConvs = [];
@@ -17855,10 +17814,6 @@
       // UI, the user wants them VISIBLE in the main list AND in the
       // chat's indented list — with an "IN GROUP CHAT" badge to mark
       // them. Don't partition them out anymore.
-      // Done bucket (CCC-151): the user manually moved this row into the Done
-      // section. Pull it out of the In-progress list entirely; it renders in
-      // its own section above. Pure id-set check — no per-row work.
-      if (_doneSet.has(c.id)) { _doneConvs.push(c); continue; }
       // Dedup by session key — a duplicate replaces the kept row only when it
       // is the better copy (live wins; otherwise the more recently modified).
       const _dupKey = c.session_id || c.id || '';
@@ -19552,41 +19507,8 @@
         + '<div class="conv-readytomerge-list">' + _rtmRows + '</div>'
         + '</div>';
     }
-    // Done section (CCC-151): a purely MANUAL bucket rendered ABOVE In progress.
-    // The user drags an In-progress row in (drop handler calls addDone) and
-    // removes it via the per-row × (delegated click → removeDone). Mirrors the
-    // Ready-to-merge section's collapsible shape. ALWAYS rendered (on the
-    // default tab) so there is a drop target for the FIRST item — a section that
-    // only appears once non-empty is impossible to drag the first row into.
-    let _doneHtml = '';
-    {
-      const _doneCollapsed = localStorage.getItem('ccc-done-collapsed') === '1';
-      const _doneArrow = _doneCollapsed ? '▸' : '▾';
-      const _doneRows = _doneConvs.map(c => {
-        const _row = _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter });
-        return '<div class="conv-done-row">'
-          + _row
-          + '<button type="button" class="conv-done-remove" data-done-remove="' + escapeAttr(c.id) + '"'
-          +   ' title="Move back to In progress" aria-label="Remove from Done">×</button>'
-          + '</div>';
-      }).join('');
-      // Empty-state hint doubles as the drop zone before any item exists.
-      const _doneBody = _doneConvs.length > 0
-        ? _doneRows
-        : '<div class="conv-done-empty">Drag a session here to mark it done</div>';
-      _doneHtml =
-        '<div class="conv-done-section' + (_doneCollapsed ? ' collapsed' : '')
-        +   (_doneConvs.length === 0 ? ' is-empty' : '') + '" data-role="done-section">'
-        + '<button type="button" class="conv-done-header" data-role="done-toggle" aria-expanded="' + (!_doneCollapsed) + '">'
-        +   '<span class="conv-done-arrow">' + _doneArrow + '</span>'
-        +   '<span class="conv-done-label">Done</span>'
-        +   '<span class="conv-done-count">' + _doneConvs.length + '</span>'
-        + '</button>'
-        + '<div class="conv-done-list">' + _doneBody + '</div>'
-        + '</div>';
-    }
     // Action sections ("Needs you" / "Open ask"). Shared builder so both read
-    // the same way as Ready-to-merge / Done: a collapsible header (caret +
+    // the same way as Ready-to-merge: a collapsible header (caret +
     // label + count) over a flat, newest-first row list. Collapse state lives
     // in localStorage under the supplied key. Rendered only when non-empty.
     // Rows reuse _renderRow so live pills / branch badges / titles match the
@@ -19939,7 +19861,7 @@
     const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
       : _sidebarTab === 'merge' ? (_forceOpen(_readyToMergeHtml, 'conv-readytomerge-section') || _tabEmpty('PRs waiting to merge'))
       : _sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('archived sessions'))
-      : (_openAskHtml + _doneHtml
+      : (_openAskHtml
           + (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions')));
     const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
     // Flicker guard. The 10s bulk-sessions poll and the 5s live-status tick both
@@ -20369,58 +20291,6 @@
         $toggle.setAttribute('aria-expanded', String(!wasCollapsed));
       });
     });
-    // Done section (CCC-151): header toggle, drop target, and per-row × remove.
-    const $doneSection = $convList.querySelector('[data-role="done-section"]');
-    if ($doneSection) {
-      const $doneToggle = $doneSection.querySelector('[data-role="done-toggle"]');
-      if ($doneToggle) {
-        $doneToggle.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          const wasCollapsed = $doneSection.classList.toggle('collapsed');
-          try { localStorage.setItem('ccc-done-collapsed', wasCollapsed ? '1' : '0'); } catch (_) {}
-          const arrowEl = $doneToggle.querySelector('.conv-done-arrow');
-          if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
-          $doneToggle.setAttribute('aria-expanded', String(!wasCollapsed));
-        });
-      }
-      // Per-row × → un-done the conv (delegated so it survives row rebuilds).
-      $doneSection.addEventListener('click', (ev) => {
-        const rm = ev.target && ev.target.closest && ev.target.closest('[data-done-remove]');
-        if (!rm) return;
-        ev.preventDefault();
-        ev.stopPropagation();
-        removeDone(rm.getAttribute('data-done-remove'));
-      });
-    }
-    // Done section is a drop target for In-progress conv rows. The conv-item
-    // dragstart (attachDragHandlers) sets dragSourceId = el.dataset.id; we add
-    // that id to the Done set. Mirror the Today-tray drop wiring: guard on
-    // dragSourceId so we only claim conv-row drags, and skip backlog / PR rows
-    // (those aren't real in-progress sessions).
-    if ($doneSection) {
-      $doneSection.addEventListener('dragover', (ev) => {
-        if (!dragSourceId) return;
-        ev.preventDefault();
-        try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
-        $doneSection.classList.add('drop-target');
-      });
-      $doneSection.addEventListener('dragleave', (ev) => {
-        if (ev.target === $doneSection) $doneSection.classList.remove('drop-target');
-      });
-      $doneSection.addEventListener('drop', (ev) => {
-        $doneSection.classList.remove('drop-target');
-        let id = dragSourceId;
-        if (!id) {
-          try { id = ev.dataTransfer.getData('text/plain'); } catch (_) {}
-        }
-        if (!id) return;
-        ev.preventDefault();
-        ev.stopPropagation();
-        const conv = (conversationsData || []).find(c => c.id === id);
-        if (conv && (conv.source === 'backlog' || conv.source === 'github_pr')) return;
-        addDone(id);
-      });
-    }
     // Toggle handler for the In progress section header.
     const $inProgressToggle = $convList.querySelector('[data-role="inprogress-toggle"]');
     if ($inProgressToggle) {
