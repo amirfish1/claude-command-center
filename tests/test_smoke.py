@@ -1405,6 +1405,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function renderSidebar(convs, opts)", app_js)
         self.assertIn("if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
 
+    def test_empty_composer_arrow_up_recalls_last_command(self):
+        """ArrowUp in an empty composer should recall the last sent command."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const COMPOSER_HISTORY_KEY = 'ccc-composer-history';", app_js)
+        self.assertIn("function rememberComposerCommand(text)", app_js)
+        self.assertIn("function recallLastComposerCommand(input, ev)", app_js)
+        self.assertIn("if (ev.key !== 'ArrowUp') return false;", app_js)
+        self.assertIn("if ((input.value || '').trim()) return false;", app_js)
+        self.assertIn("rememberComposerCommand(text);", app_js)
+        self.assertIn("if (recallLastComposerCommand($convInput, e)) return;", app_js)
+        self.assertIn("if (recallLastComposerCommand(input, ev)) return;", app_js)
+
     def test_conv_pct_badge_is_clickable_compact_shortcut(self):
         """The context-% badge on each conv row is a one-click shortcut to
         /compact. Click -> confirm -> run the engine-aware compact helper. The

@@ -4093,6 +4093,8 @@
   const INPUT_DRAFTS_MAX = 200;
   const INPUT_DRAFT_MAX_CHARS = 50000;
   const INPUT_DRAFTS_SAVE_DEBOUNCE_MS = 400;
+  const COMPOSER_HISTORY_KEY = 'ccc-composer-history';
+  const COMPOSER_HISTORY_LIMIT = 50;
   let _inputDraftsSaveTimer = 0;
   const _inputDraftKeyCache = new Map();
   let inputDrafts = (() => {
@@ -4198,6 +4200,48 @@
   function rememberInputDraft(input, convId) {
     if (!input) return;
     setInputDraftForKey(inputDraftKeyForConversation(convId), input.value || '');
+  }
+
+  function loadComposerHistory() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(COMPOSER_HISTORY_KEY) || '[]');
+      if (!Array.isArray(raw)) return [];
+      return raw
+        .filter(item => typeof item === 'string' && item.trim())
+        .slice(-COMPOSER_HISTORY_LIMIT);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function saveComposerHistory(history) {
+    try {
+      localStorage.setItem(COMPOSER_HISTORY_KEY, JSON.stringify((history || []).slice(-COMPOSER_HISTORY_LIMIT)));
+    } catch (_) {}
+  }
+
+  function rememberComposerCommand(text) {
+    const command = String(text || '').trim();
+    if (!command) return;
+    const history = loadComposerHistory().filter(item => item !== command);
+    history.push(command);
+    saveComposerHistory(history);
+  }
+
+  function recallLastComposerCommand(input, ev) {
+    if (!input || !ev) return false;
+    if (ev.key !== 'ArrowUp') return false;
+    if (ev.shiftKey || ev.altKey || ev.ctrlKey || ev.metaKey || ev.isComposing) return false;
+    if (input.readOnly || input.disabled) return false;
+    if ((input.value || '').trim()) return false;
+    const history = loadComposerHistory();
+    const command = history[history.length - 1] || '';
+    if (!command) return false;
+    ev.preventDefault();
+    input.value = command;
+    moveInputCaretToEnd(input);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
   }
 
   function composerInputForPane(paneId) {
@@ -5287,19 +5331,23 @@
       const action = $actionSel ? $actionSel.value : 'fix';
       if (action === 'spawn') {
         if (!text) return;
+        rememberComposerCommand(text);
         if (_ttsActive) await stopTextToSpeech();
         await spawnFromBacklogIssue(text);
       } else if (action === 'needs_attention' || action === 'close') {
         if (!text) return;
+        rememberComposerCommand(text);
         if (_ttsActive) await stopTextToSpeech();
         await replyToIssueFromInputBar(action, text);
       } else {
+        if (text) rememberComposerCommand(text);
         if (_ttsActive) await stopTextToSpeech();
         await closeIssueFromInputBar(action, text);
       }
       return;
     }
     if (!text) return;
+    rememberComposerCommand(text);
     // Join link (CCC-98): `ccc:join-gc:<chat id or path>` pasted into any
     // session's composer joins THAT session to the group chat instead of
     // being sent to the agent as text.
@@ -6566,6 +6614,7 @@
     }
     $convInput.addEventListener('keydown', (e) => {
       if (handleSlashCommandKeydown($convInput, e)) return;
+      if (recallLastComposerCommand($convInput, e)) return;
       // Enter sends, Shift+Enter inserts a newline (desktop). On TOUCH, Enter
       // must insert a newline instead — the on-screen keyboard's return key is
       // for line breaks, and Enter-to-send fires constantly mid-typing (and
@@ -23135,6 +23184,7 @@
       input.addEventListener('click', () => refreshSlashCommandMenu(input));
       input.addEventListener('keydown', (ev) => {
         if (handleSlashCommandKeydown(input, ev)) return;
+        if (recallLastComposerCommand(input, ev)) return;
         if (ev.key === 'Enter' && !ev.shiftKey && !isTouchPrimary()) {
           ev.preventDefault();
           sendToTerminal(paneId);
@@ -35136,6 +35186,7 @@
       const sid = currentSession.id;
       if (!text || !sid) return;
       hideSlashCommandMenu();
+      rememberComposerCommand(text);
       $cpSendBtn.disabled = true;
       const flashRed = () => {
         $cpInput.style.borderColor = 'var(--red)';
@@ -35269,6 +35320,7 @@
     $cpInput.addEventListener('click', () => refreshSlashCommandMenu($cpInput));
     $cpInput.addEventListener('keydown', (e) => {
       if (handleSlashCommandKeydown($cpInput, e)) return;
+      if (recallLastComposerCommand($cpInput, e)) return;
       // Enter submits, Shift+Enter inserts a newline. Guard against IME
       // composition (Chinese/Japanese input methods dispatch Enter to commit
       // candidate text — we'd otherwise send the prompt mid-composition).
