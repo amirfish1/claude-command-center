@@ -8041,6 +8041,9 @@
   body.chips-level .conv-folder-group[data-object-drop-zone] > .conv-folder-group-header {
     --chip-hue: calc(205 + (var(--obj-depth, 0) * 46)) !important;
   }
+  .conv-folder-group[data-object-drop-zone^="object:"][data-object-depth="0"] > .conv-folder-group-header .conv-folder-object-title-text {
+    text-transform: uppercase;
+  }
   .conv-folder-chip.is-orphan {
     opacity: 0.55;
     font-style: italic;
@@ -8167,7 +8170,7 @@
     grid-column: 1;
     width: var(--conv-dot-col);
     min-width: var(--conv-dot-col);
-    height: 22px;
+    height: 24px;
     padding: 0;
     border: 0;
     border-radius: 4px;
@@ -8176,7 +8179,7 @@
     text-align: center;
     /* CCC-93: was 10px — too small to hit/see now that it's the only
        collapse affordance on object headers. */
-    font-size: 14px;
+    font-size: 18px;
     line-height: 1;
     opacity: 0.8;
     cursor: pointer;
@@ -8189,7 +8192,7 @@
     grid-column: 6;
     justify-self: end;
     width: auto;
-    min-width: 22px;
+    min-width: 26px;
   }
   .conv-folder-group-chip {
     grid-column: 2 / 4;

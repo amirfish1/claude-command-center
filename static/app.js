@@ -19639,7 +19639,7 @@
         const _nestStyle = ' style="--obj-depth:' + depth + '"';
         return '<div class="conv-folder-group' + _nestCls + (collapsed ? ' collapsed' : '') + '"'
           + _nestStyle
-          + ' data-object-drop-zone="' + escapeAttr(nodeId) + '">'
+          + ' data-object-drop-zone="' + escapeAttr(nodeId) + '" data-object-depth="' + depth + '">'
           + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs, '', archiveObjectId, inlineMetaHtml, ordinal)
           + body
           + '</div>';
@@ -21103,6 +21103,12 @@
         if (ev.target.closest('[data-role="object-rename"], [data-role="object-playpause"], [data-role="object-rename-editor"]')) return;
         if (ev.target.closest('[data-role="archive-object"]')) return;
         const hitCollapse = ev.target.closest('[data-role="folder-group-collapse"]');
+        const hitObjectTitle = ev.target.closest('[data-role="object-title"]');
+        const group = hdr.closest('.conv-folder-group');
+        if (opensInspector && hitObjectTitle && group && group.classList.contains('collapsed')) {
+          toggleFolderGroup(ev);
+          return;
+        }
         if (opensInspector && !hitCollapse) {
           ev.stopPropagation();
           let payload = null;

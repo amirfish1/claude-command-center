@@ -391,6 +391,37 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("ev.target.closest('[data-role=\"folder-group-collapse\"]')", app_js)
         self.assertIn(".conv-folder-group-arrow {", app_css)
 
+    def test_object_title_click_expands_collapsed_group(self):
+        """Clicking a collapsed object title should expand the object group."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const hitObjectTitle = ev.target.closest('[data-role=\"object-title\"]');", app_js)
+        self.assertIn("if (opensInspector && hitObjectTitle && group && group.classList.contains('collapsed'))", app_js)
+        self.assertIn("toggleFolderGroup(ev);\n          return;", app_js)
+
+    def test_top_level_object_headers_are_uppercase(self):
+        """Top-level custom object titles should render in uppercase."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('data-object-depth="', app_js)
+        self.assertIn('.conv-folder-group[data-object-drop-zone^="object:"][data-object-depth="0"] > .conv-folder-group-header .conv-folder-object-title-text {\n'
+                      '    text-transform: uppercase;\n'
+                      '  }', app_css)
+
+    def test_object_header_chevrons_are_larger(self):
+        """Object collapse chevrons should be easier to see and tap."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("height: 24px;", app_css)
+        self.assertIn("font-size: 18px;", app_css)
+        self.assertIn(".conv-folder-group-header[data-object-drop] .conv-folder-group-arrow {\n"
+                      "    grid-column: 6;\n"
+                      "    justify-self: end;\n"
+                      "    width: auto;\n"
+                      "    min-width: 26px;\n"
+                      "  }", app_css)
+
     def test_by_object_group_titles_use_larger_readable_type(self):
         """Object group headers should not use the tiny project-chip type."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
