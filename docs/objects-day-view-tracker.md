@@ -22,12 +22,14 @@ Legend — Status: `todo` · `exploring` · `building` · `done`. Value / Confid
 ¹ GOAL-1 shipped **manual-first** (commits `3108592` row DID/next line, `5e9b8d1`
 object status chip + objective). Open follow-up: auto-roll the object's
 status/objective from its child sessions' `session_state` instead of by hand.
-³ GOAL-2 done (commits `cdb92ec`, `9185b47`): draft-session tasks under objects
-in the conv list with play-to-spawn, reusing Flow draft infra. Open follow-ups:
-(a) draft tasks persist to `ccc-flow-draft-sessions` localStorage only — not yet
-mirrored to the server like objects/parents are; (b) tasks require a resolvable
-repo (auto-inferred from the object's sessions / any known repo) — a truly
-repo-less reminder is a later change to the Flow draft model.
+³ GOAL-2 done: draft-session tasks under objects with play-to-spawn (`cdb92ec`,
+`9185b47`). Follow-ups since resolved: drafts now sync to the server as a fourth
+key in the objects store (client `6873520`; server `2584c4d`, `d79cc4c` —
+`/api/objects` carries `drafts`, plus `draft-delete`), and tasks can be
+**repo-less reminders** that resolve a repo only at play time. Status + objective
+also moved inline onto the object's name row, and accidental empty-duplicate
+objects now auto-heal on load (`c3c2883`). Remaining open: GOAL-1 auto-roll
+(object status derived from its sessions rather than set by hand).
 
 ² GOAL-4 done. Server side: `objects_store.py` + `/api/objects/*`
 (`docs/objects-api.md`). Client side (commit `204a729`): the browser mirrors
