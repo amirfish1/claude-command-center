@@ -1402,6 +1402,17 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("compact boundary proves the pending compact turn is over", app_js)
         self.assertIn("clearOptimisticAgentIndicator($view);", app_js)
 
+    def test_compact_waits_for_pending_send_echoes(self):
+        """Compaction must not run while a sent message is only an optimistic echo."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function hasPendingSendEchoBeforeCompact($view)", app_js)
+        self.assertIn(".event.user_text.pending, .event.user_text.send-queued, .event.user_text.send-delivered", app_js)
+        self.assertIn("Wait for the pending message to land in the transcript before compacting.", app_js)
+        self.assertIn("if (compactCommand && hasPendingSendEchoBeforeCompact(", app_js)
+        self.assertIn("const pendingCompactEcho = hasPendingSendEchoBeforeCompact();", app_js)
+        self.assertIn("$convCompactBtn.title = pendingCompactEcho", app_js)
+
     def test_codex_spawn_log_hides_bare_error_marker(self):
         """A lone Codex CLI [error] marker should not open the log with a
         scary blank error section before any real output exists."""

@@ -4374,8 +4374,12 @@
       if ($convCompactBtn) {
         const canCompact = hasSession && !isNewSession && !isBacklogIssue && !isPkood
           && isCompactionCapableSource(currentSession.source);
+        const pendingCompactEcho = hasPendingSendEchoBeforeCompact();
         $convCompactBtn.classList.toggle('visible', canCompact);
-        if (!_compactInFlight) $convCompactBtn.disabled = !canCompact;
+        if (!_compactInFlight) $convCompactBtn.disabled = !canCompact || pendingCompactEcho;
+        $convCompactBtn.title = pendingCompactEcho
+          ? 'Wait for the pending message to land in the transcript before compacting.'
+          : 'Compact conversation context';
       }
       // Codex app-server indicator — show only for live Codex sessions; reflect
       // whether CCC is currently driving Codex via its own app-server (RPC,
@@ -4764,6 +4768,14 @@
   });
   window.addEventListener('resize', () => positionSlashCommandMenu(_slashMenuInput));
 
+  function hasPendingSendEchoBeforeCompact($view) {
+    try {
+      if (Array.isArray(window._pendingSends) && window._pendingSends.length) return true;
+    } catch (_) {}
+    const view = $view || (typeof getConvView === 'function' ? getConvView() : null);
+    return !!(view && view.querySelector('.event.user_text.pending, .event.user_text.send-queued, .event.user_text.send-delivered'));
+  }
+
   function syncPendingSendsMapForConv(pane, convId) {
     if (!pane || !convId) return;
     if (!pane.pendingSendsByConv) pane.pendingSendsByConv = {};
@@ -4858,6 +4870,7 @@
     const convId = currentConversation;
     const pane = paneByPaneId(activePaneId());
     if (convId && pane) syncPendingSendsMapForConv(pane, convId);
+    if (typeof updateInputBar === 'function') updateInputBar();
   }
 
   // A send the server *queued* (the session is busy mid-tool, or headless
@@ -5270,6 +5283,10 @@
     }
     const compactCommand = /^\/compact(?:\s|$)/i.test(text);
     const clearCommand = /^\/clear(?:\s|$)/i.test(text);
+    if (compactCommand && hasPendingSendEchoBeforeCompact(getConvViewForPane(paneId || activePaneId()))) {
+      showOpToast('Wait for the pending message to land in the transcript before compacting.', 'error');
+      return;
+    }
     if ($actionBtn) $actionBtn.disabled = true;
     const flashRed = () => {
       $input.style.borderColor = 'var(--red)';
@@ -5281,6 +5298,7 @@
     // teardown was awaited before this line, so sends during playback felt laggy
     // ("sometimes ok" = only when TTS was off).
     const pendingSend = appendPendingSendEcho(text, sid, paneId || activePaneId());
+    updateInputBar();
     $input.value = '';
     clearInputDraftForConversation(draftConversation);
     if (_ttsActive) await stopTextToSpeech();
@@ -17650,6 +17668,11 @@
     const source = currentSession.source;
     if (!isCompactionCapableSource(source)) {
       showOpToast('Compaction is not supported for this engine.', 'error');
+      return;
+    }
+    if (hasPendingSendEchoBeforeCompact(getConvView())) {
+      showOpToast('Wait for the pending message to land in the transcript before compacting.', 'error');
+      updateInputBar();
       return;
     }
     _compactInFlight = true;

@@ -1,0 +1,1 @@
+- Prevent compaction while a sent message is still pending in the transcript.
