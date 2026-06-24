@@ -274,6 +274,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (reparentConversationIdsToObject(target, convIds))", app_js)
         self.assertIn(".conv-folder-group.is-drop-target", app_css)
 
+    def test_nested_object_group_suppresses_empty_hint(self):
+        """A parent object with child objects is not empty even without sessions."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const hasChildObjects = !!((_childrenOf.get(nodeId) || []).length);", app_js)
+        self.assertIn("!hasChildObjects", app_js)
+        self.assertIn("Empty — drag a session here, or use +.", app_js)
+
     def test_custom_object_rename_uses_pencil_save_cancel(self):
         """Custom object header names should rename through explicit controls."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

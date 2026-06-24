@@ -19579,7 +19579,8 @@
         let body;
         if (archiveObjectId) {
           const rowsHtml = cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true })).join('');
-          const emptyHint = (!cards.length && !_objDrafts.length)
+          const hasChildObjects = !!((_childrenOf.get(nodeId) || []).length);
+          const emptyHint = (!cards.length && !_objDrafts.length && !hasChildObjects)
             ? '<div class="conv-object-empty-hint">Empty — drag a session here, or use +.</div>' : '';
           body = rowsHtml + _draftsHtml + emptyHint;
         } else {

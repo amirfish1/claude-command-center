@@ -1,0 +1,1 @@
+- Hide empty object hints when an object contains nested child objects.
