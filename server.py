@@ -18680,12 +18680,15 @@ def _parse_codex_event(ev, line_num, token_usage=None):
                     "blocks": [{"kind": "text", "text": text}],
                 }
         if ptype == "task_complete":
+            text = (payload.get("last_agent_message") or payload.get("message") or "").strip()
             result = {
                 "line": line_num,
                 "ts": ts,
                 "type": "result",
                 "duration_ms": payload.get("duration_ms", "?"),
             }
+            if not text:
+                result["no_agent_output"] = True
             if token_usage:
                 result["token_usage"] = token_usage
             return result

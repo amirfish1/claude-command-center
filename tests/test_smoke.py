@@ -1134,6 +1134,29 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".result-copy-agent-answer", app_css)
         self.assertIn(".result-copy-agent-answer.copied", app_css)
 
+    def test_codex_silent_result_is_labeled_as_no_visible_response(self):
+        """Codex task_complete rows can lack any assistant text. Those should
+        not render as ordinary Done answers, which makes empty turns look like
+        mysterious completed sessions."""
+        server = importlib.import_module("server")
+        parsed = server._parse_codex_event({
+            "timestamp": "2026-06-24T01:59:03.062Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "last_agent_message": None,
+                "duration_ms": 2270,
+            },
+        }, 13)
+        self.assertEqual(parsed["type"], "result")
+        self.assertTrue(parsed["no_agent_output"])
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn("no_agent_output", app_js)
+        self.assertIn("No visible response", app_js)
+        self.assertIn("result-silent", app_js)
+        self.assertIn(".event.result.result-silent", app_css)
+
     def test_codex_goal_state_renders_near_composer_and_rows(self):
         """Codex /goal state should be visible where the user types, and
         paused/blocked goals must read differently from ordinary active goals

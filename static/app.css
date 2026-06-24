@@ -950,6 +950,9 @@
   .event.result.result-exhausted { background: rgba(210, 153, 34, 0.12); border-left-color: var(--orange, #d29922); }
   .event.result.result-exhausted .label,
   .conversations-view .event.result.result-exhausted .label { color: var(--orange, #d29922); }
+  .event.result.result-silent { background: rgba(139, 148, 158, 0.08); border-left-color: var(--text-muted); }
+  .event.result.result-silent .label,
+  .conversations-view .event.result.result-silent .label { color: var(--text-muted); }
   .event.result .result-error-detail { margin-top: 4px; color: var(--text); font-size: 12px; opacity: 0.92; }
 
   .tool-call {

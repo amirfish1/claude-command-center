@@ -28258,6 +28258,13 @@
   // renders the normal "Done".
   function _resultOutcomeInfo(ev) {
     if (!ev) return null;
+    if (ev.no_agent_output) {
+      return {
+        kind: 'silent',
+        label: 'No visible response',
+        detail: 'Codex completed this turn but did not record assistant text.',
+      };
+    }
     const sub = String(ev.subtype || '').toLowerCase();
     const errText = String(ev.error || '').trim();
     const isError = !!ev.is_error || /error|failed|aborted|interrupt/.test(sub);
@@ -28919,7 +28926,11 @@
         // finished.
         const _outcome = _resultOutcomeInfo(ev);
         if (_outcome) {
-          div.classList.add('result-error', 'result-' + _outcome.kind);
+          if (_outcome.kind === 'silent') {
+            div.classList.add('result-silent');
+          } else {
+            div.classList.add('result-error', 'result-' + _outcome.kind);
+          }
           div.innerHTML = '<span class="label">' + escapeHtml(_outcome.label) + '</span>'
             + '<span class="line-num">L' + ev.line + '</span>'
             + tsSpan(ev.ts)
