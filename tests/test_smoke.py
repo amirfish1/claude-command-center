@@ -299,6 +299,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("!hasChildObjects", app_js)
         self.assertIn("Empty — drag a session here, or use +.", app_js)
 
+    def test_search_hides_empty_custom_object_groups(self):
+        """Searching conversations should not show every empty object group."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();", app_js)
+        self.assertIn("const _objectHasVisibleDrafts = (node) =>", app_js)
+        self.assertIn("if (_ipSearchActive && !_byObject.has(node) && !_objectHasVisibleDrafts(node)) continue;", app_js)
+
     def test_custom_object_rename_uses_pencil_save_cancel(self):
         """Custom object header names should rename through explicit controls."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

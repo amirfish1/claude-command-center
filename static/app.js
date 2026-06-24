@@ -19527,6 +19527,9 @@
       };
       const _byObject = new Map();
       const _unclassified = [];
+      const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();
+      const _objectHasVisibleDrafts = (node) =>
+        (flowDraftSessions || []).some(d => d && flowNodeParents[flowNodeKey('draft-session', d.id)] === node);
       for (const c of _visibleSessionConvs) {
         const grp = _groupForSession(c);
         if (grp && grp.archived) continue;
@@ -19539,6 +19542,7 @@
       for (const obj of (flowCustomObjects || [])) {
         if (!obj || !obj.id || isArchivedFlowObjectId(obj.id)) continue;
         const node = flowNodeKey('object', obj.id);
+        if (_ipSearchActive && !_byObject.has(node) && !_objectHasVisibleDrafts(node)) continue;
         if (!_byObject.has(node)) _byObject.set(node, { title: obj.title || 'Object', cards: [] });
       }
       // User-pinned manual order (drag a group header above/below another).

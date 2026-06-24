@@ -1,0 +1,1 @@
+- Hide empty by-objects groups while filtering conversations with search text.
