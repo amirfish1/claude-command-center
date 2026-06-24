@@ -8056,6 +8056,36 @@
   }
   .conv-folder-group-header:first-child { margin-top: 0; border-top: none; }
   .conv-folder-group-header:hover { background: rgba(139,148,158,0.08); color: var(--text); }
+  /* GOAL-1 object status + immediate-objective line. Under the header; stays
+     visible when the group is collapsed (it is not a .conv-item). */
+  .conv-object-meta {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 1px 10px 5px 66px; margin-top: -1px;
+    font-size: 12px; line-height: 1.3; min-width: 0;
+  }
+  .conv-object-status {
+    flex: 0 0 auto; font: inherit; font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.02em; text-transform: uppercase;
+    padding: 1px 7px; border-radius: 999px; border: 1px solid transparent;
+    cursor: pointer; background: rgba(139,148,158,0.14); color: var(--text-muted);
+  }
+  .conv-object-status:hover { filter: brightness(1.15); }
+  .conv-object-status.is-none {
+    background: transparent; border-style: dashed;
+    border-color: rgba(139,148,158,0.4); opacity: 0.7; text-transform: none;
+  }
+  .conv-object-status.is-active  { background: rgba(63,185,80,0.18);  color: #3fb950; }
+  .conv-object-status.is-waiting { background: rgba(210,153,34,0.18); color: #d29922; }
+  .conv-object-status.is-blocked { background: rgba(248,81,73,0.18);  color: #f85149; }
+  .conv-object-status.is-done    { background: rgba(139,148,158,0.14); color: var(--text-muted); }
+  .conv-object-objective {
+    flex: 1 1 auto; min-width: 0; font: inherit; font-size: 12px; text-align: left;
+    background: none; border: none; cursor: text; padding: 0;
+    color: var(--text); opacity: 0.9;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .conv-object-objective:hover { text-decoration: underline; text-underline-offset: 2px; }
+  .conv-object-objective.is-empty { color: var(--text-muted); opacity: 0.55; }
   /* Separator before a standalone (ungrouped) session that follows a group */
   .conv-folder-group + .conv-item,
   .conv-item + .conv-folder-group {

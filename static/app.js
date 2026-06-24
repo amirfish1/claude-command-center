@@ -11597,6 +11597,42 @@
     renderSidebar(filterConversations($convSearch ? $convSearch.value : ''));
   }
 
+  // GOAL-1 — object status + immediate objective. Manual-first cut: the user
+  // sets both by hand (status cycles, objective is a one-liner). Source was
+  // deliberately punted; auto-roll from child sessions' session_state is the
+  // follow-up. Stored on the object itself so it persists with the rest of the
+  // object shape (and rides the server-side import when GOAL-3/4 land).
+  const OBJECT_STATUS_ORDER = ['', 'active', 'waiting', 'blocked', 'done'];
+  function objectStatusUi(status) {
+    switch ((status || '').trim()) {
+      case 'active':  return { cls: 'is-active',  label: 'Active' };
+      case 'waiting': return { cls: 'is-waiting', label: 'Waiting' };
+      case 'blocked': return { cls: 'is-blocked', label: 'Blocked' };
+      case 'done':    return { cls: 'is-done',    label: 'Done' };
+      default:        return { cls: 'is-none',    label: '+ status' };
+    }
+  }
+  function cycleFlowObjectStatus(id) {
+    const obj = flowCustomObjects.find(o => o && o.id === id);
+    if (!obj) return;
+    const cur = (obj.status || '').trim();
+    const idx = OBJECT_STATUS_ORDER.indexOf(cur);
+    obj.status = OBJECT_STATUS_ORDER[(idx + 1) % OBJECT_STATUS_ORDER.length];
+    obj.updated_at = Date.now();
+    persistFlowCustomObjects();
+    renderSidebar(filterConversations($convSearch ? $convSearch.value : ''));
+  }
+  async function setFlowObjectObjective(id) {
+    const obj = flowCustomObjects.find(o => o && o.id === id);
+    if (!obj) return;
+    const next = (await promptModal('Immediate objective — what are we trying to achieve right now?', obj.objective || '') || '').trim();
+    if (!next || next === (obj.objective || '')) return;
+    obj.objective = next;
+    obj.updated_at = Date.now();
+    persistFlowCustomObjects();
+    renderSidebar(filterConversations($convSearch ? $convSearch.value : ''));
+  }
+
   function deleteFlowCustomObject(id) {
     const obj = flowCustomObjects.find(o => o && o.id === id);
     if (!obj) return;
@@ -18895,9 +18931,29 @@
           ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn })).join('')
           : '<div class="conv-object-empty-hint">Empty — drag sessions here.</div>';
         const archiveObjectId = nodeId.indexOf('object:') === 0 ? nodeId.slice(7) : '';
+        // GOAL-1 status + immediate-objective line — real custom objects only
+        // (not repo-derived groups or Unclassified). Sits between header and
+        // body and is NOT a .conv-item, so it stays visible when the object is
+        // collapsed: status at a glance without expanding.
+        let objMetaHtml = '';
+        if (archiveObjectId) {
+          const _obj = (flowCustomObjects || []).find(o => o && o.id === archiveObjectId);
+          const _objective = ((_obj && _obj.objective) || '').trim();
+          const _su = objectStatusUi(_obj && _obj.status);
+          objMetaHtml = '<div class="conv-object-meta">'
+            + '<button type="button" class="conv-object-status ' + _su.cls + '"'
+            +   ' data-role="object-status" data-object-id="' + escapeAttr(archiveObjectId) + '"'
+            +   ' title="Click to cycle status">' + escapeHtml(_su.label) + '</button>'
+            + '<button type="button" class="conv-object-objective' + (_objective ? '' : ' is-empty') + '"'
+            +   ' data-role="object-objective" data-object-id="' + escapeAttr(archiveObjectId) + '"'
+            +   ' title="' + escapeAttr(_objective || 'Set the immediate objective') + '">'
+            +   (_objective ? escapeHtml(_objective) : '+ objective') + '</button>'
+            + '</div>';
+        }
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '"'
           + ' data-object-drop-zone="' + escapeAttr(nodeId) + '">'
           + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs, '', archiveObjectId)
+          + objMetaHtml
           + body
           + '</div>';
       };
@@ -20085,6 +20141,21 @@
         ev.preventDefault();
         ev.stopPropagation();
         archiveFlowCustomObject(btn.getAttribute('data-object-id') || '');
+      });
+    });
+    // GOAL-1 — object status cycles on click; objective opens a one-line prompt.
+    $convList.querySelectorAll('[data-role="object-status"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        cycleFlowObjectStatus(btn.getAttribute('data-object-id') || '');
+      });
+    });
+    $convList.querySelectorAll('[data-role="object-objective"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setFlowObjectObjective(btn.getAttribute('data-object-id') || '');
       });
     });
     // Sidebar tab bar (CCC-85): switch the visible section.
