@@ -9918,6 +9918,7 @@
 
   function persistFlowNodeParents() {
     try { localStorage.setItem('ccc-flow-node-parents', JSON.stringify(flowNodeParents)); } catch (_) {}
+    syncObjectsToServer();
   }
 
   function persistFlowCollapsedNodes() {
@@ -9926,6 +9927,105 @@
 
   function persistFlowCustomObjects() {
     try { localStorage.setItem('ccc-flow-custom-objects', JSON.stringify(flowCustomObjects)); } catch (_) {}
+    syncObjectsToServer();
+  }
+
+  // GOAL-4 client sync — mirror the object organization (objects + parent links
+  // + order) to the server so it stops living only in localStorage and becomes
+  // durable + readable by automation. Uses /api/objects/* (docs/objects-api.md).
+  // Debounced full reconcile: import upserts everything, then deletes/unassigns
+  // whatever the server still holds that the browser dropped (import is additive
+  // and can't remove on its own). Best-effort: never blocks or breaks the UI.
+  let _objectsSyncTimer = null;
+  let _objectsSyncInFlight = false;
+  let _objectsSyncQueued = false;
+
+  function _objectsApiPost(path, body) {
+    return fetch('/api/objects/' + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    }).then(r => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))));
+  }
+
+  function _objectsGet() {
+    return fetch('/api/objects', { headers: { 'Accept': 'application/json' } })
+      .then(r => (r.ok ? r.json() : null))
+      .catch(() => null);
+  }
+
+  function _objectsLocalState() {
+    let order = {};
+    try { order = JSON.parse(localStorage.getItem('ccc-objects-order') || '{}'); } catch (_) {}
+    return {
+      objects: Array.isArray(flowCustomObjects) ? flowCustomObjects : [],
+      parents: flowNodeParents || {},
+      order: order || {},
+    };
+  }
+
+  async function _reconcileObjectsToServer() {
+    if (_objectsSyncInFlight) { _objectsSyncQueued = true; return; }
+    _objectsSyncInFlight = true;
+    try {
+      const local = _objectsLocalState();
+      await _objectsApiPost('import', local);            // upserts objects/parents/order
+      const server = await _objectsGet();                // diff to find removals
+      if (server) {
+        const localIds = new Set(local.objects.map(o => o && o.id).filter(Boolean));
+        for (const so of (server.objects || [])) {
+          if (so && so.id && !localIds.has(so.id)) {
+            await _objectsApiPost('delete', { id: so.id }).catch(() => {});
+          }
+        }
+        const localParents = new Set(Object.keys(local.parents || {}));
+        for (const sid of Object.keys(server.parents || {})) {
+          if (!localParents.has(sid)) {
+            await _objectsApiPost('unassign', { session_node_id: sid }).catch(() => {});
+          }
+        }
+      }
+    } catch (_) {
+      // Offline / server down — localStorage stays source of truth, next change retries.
+    } finally {
+      _objectsSyncInFlight = false;
+      if (_objectsSyncQueued) { _objectsSyncQueued = false; syncObjectsToServer(); }
+    }
+  }
+
+  function syncObjectsToServer() {
+    if (_objectsSyncTimer) clearTimeout(_objectsSyncTimer);
+    _objectsSyncTimer = setTimeout(() => { _objectsSyncTimer = null; _reconcileObjectsToServer(); }, 400);
+  }
+
+  async function bootstrapObjectsFromServer() {
+    // On load, union any server-side objects/parents the browser is missing
+    // (another machine/surface) into localStorage, then push the merged state
+    // back so both converge. Browser wins on field conflicts — the user just
+    // arranged it here. First-ever load: server is empty, so this just seeds it.
+    const server = await _objectsGet();
+    if (server && (Array.isArray(server.objects) || server.parents)) {
+      const byId = new Map((flowCustomObjects || []).filter(o => o && o.id).map(o => [o.id, o]));
+      let changed = false;
+      for (const so of (server.objects || [])) {
+        if (so && so.id && !byId.has(so.id)) { flowCustomObjects.push(so); byId.set(so.id, so); changed = true; }
+      }
+      for (const [sid, parent] of Object.entries(server.parents || {})) {
+        if (!(sid in flowNodeParents)) { flowNodeParents[sid] = parent; changed = true; }
+      }
+      if (changed) {
+        try { localStorage.setItem('ccc-flow-custom-objects', JSON.stringify(flowCustomObjects)); } catch (_) {}
+        try { localStorage.setItem('ccc-flow-node-parents', JSON.stringify(flowNodeParents)); } catch (_) {}
+        try { renderSidebar(filterConversations($convSearch ? $convSearch.value : '')); } catch (_) {}
+      }
+    }
+    syncObjectsToServer();   // seed/refresh the server from local
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { bootstrapObjectsFromServer(); });
+  } else {
+    bootstrapObjectsFromServer();
   }
 
   function isArchivedFlowObjectId(id) {
@@ -10051,6 +10151,7 @@
       ids.forEach((id, i) => { next[id] = i + 1; });
       localStorage.setItem('ccc-objects-order', JSON.stringify(next));
     } catch (_) {}
+    syncObjectsToServer();
   }
 
   function persistFlowZoom() {
@@ -20319,6 +20420,7 @@
             const order = {};
             ids.forEach((id, i) => { order[id] = i; });
             try { localStorage.setItem('ccc-objects-order', JSON.stringify(order)); } catch (_) {}
+            syncObjectsToServer();
           }
           renderArchiveList(document.getElementById('convSearch')?.value || '');
           return;
