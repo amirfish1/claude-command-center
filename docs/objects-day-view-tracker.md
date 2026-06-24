@@ -12,12 +12,21 @@ gaps below are what stop it from feeling like a real day tracker.
 
 | ID | Title | Problem (one line) | Value | Conf. | Status |
 |----|-------|--------------------|:-----:|:-----:|--------|
-| **GOAL-1** | Object status + immediate objective | Object shows only `title + count` — no "where are we / what's the immediate target", and the already-parsed session outcome (`DID`/`NEXT_STEP`) is never shown on the row | H | M | `todo` |
+| **GOAL-1** | Object status + immediate objective | Object shows only `title + count` — no "where are we / what's the immediate target", and the already-parsed session outcome (`DID`/`NEXT_STEP`) is never shown on the row | H | M | `done`¹ |
 | **GOAL-2** | Empty-object copy for sessionless tasks | Sessionless admin (billing, ads) renders as *"Empty — drag sessions here"* — wrong for a standalone to-do; reuse `draft-session` as the task | M | H | `todo` |
-| **GOAL-3** | Persistent storage for the organization | Object defs + parent links live in browser localStorage — lost on clear, not cross-machine, invisible to the server (blocks any automation) | M/H | M | `todo` |
-| **GOAL-4** | Create objects + assign sessions via the CCC API | UI drag already works; there's no programmatic `/api/*` way to create an object or parent a session under it — blocks agents/automation arranging the day. Depends on GOAL-3 (server-side state) | H | M | `todo` |
+| **GOAL-3** | Persistent storage for the organization | Object defs + parent links live in browser localStorage — lost on clear, not cross-machine, invisible to the server (blocks any automation) | M/H | M | `done` |
+| **GOAL-4** | Create objects + assign sessions via the CCC API | UI drag already works; there's no programmatic `/api/*` way to create an object or parent a session under it — blocks agents/automation arranging the day. Depends on GOAL-3 (server-side state) | H | M | `api done · client sync pending`² |
 
 Legend — Status: `todo` · `exploring` · `building` · `done`. Value / Confidence: L/M/H.
+
+¹ GOAL-1 shipped **manual-first** (commits `3108592` row DID/next line, `5e9b8d1`
+object status chip + objective). Open follow-up: auto-roll the object's
+status/objective from its child sessions' `session_state` instead of by hand.
+² GOAL-4 server side is live (`objects_store.py` + `/api/objects/*`, see
+`docs/objects-api.md`). Remaining: client wiring so the browser mirrors its
+localStorage objects/parents to the API (`POST /api/objects/import` on load +
+push on change) — until then `objects.json` stays empty and the API can't see
+the objects you arranged in the browser.
 Suggested order: **GOAL-2 → GOAL-1 → GOAL-3 → GOAL-4** (fit sessionless tasks →
 status/objective → persist server-side → API on top of it). GOAL-3 + GOAL-4 are
 one server-side effort: the API (GOAL-4) is only meaningful once state is durable
