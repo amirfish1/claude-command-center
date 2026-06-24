@@ -22578,7 +22578,12 @@
   function applyCompactRowsState() {
     const compact = localStorage.getItem('ccc-compact-rows') === '1';
     if ($convList) $convList.classList.toggle('compact-rows', compact);
-    if ($convCompactToggle) $convCompactToggle.classList.toggle('active', compact);
+    if ($convCompactToggle) {
+      $convCompactToggle.classList.toggle('active', compact);
+      $convCompactToggle.setAttribute('aria-checked', String(compact));
+      const chk = $convCompactToggle.querySelector('[data-check-compact]');
+      if (chk) chk.textContent = compact ? '✓' : '';
+    }
   }
   if ($convCompactToggle) {
     $convCompactToggle.addEventListener('click', () => {

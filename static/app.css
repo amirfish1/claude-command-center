@@ -3627,7 +3627,7 @@
     gap: 4px;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.12s ease;
+    transition: opacity 0.06s ease;
     /* Solid hover bg + soft fade-out on the left edge so the actions
        fully mask the branch badge / context chips when the overlay
        extends past .conv-row-end's 36px min-width — without this the
@@ -3670,14 +3670,14 @@
      the icons sit on clean background. opacity keeps layout → no row shift.
      Pinned rows that show actions at rest aren't hovered, so their meta stays
      visible. */
-  .conv-item .conv-row-meta { transition: opacity 0.12s ease; }
+  .conv-item .conv-row-meta { transition: opacity 0.06s ease; }
   .conv-item:hover .conv-row-meta,
   .conv-item:focus-within .conv-row-meta {
     opacity: 0;
   }
   .conv-item .conv-row-end > .conv-rel {
     flex: 0 0 auto;            /* override the column-width flex from the base rule */
-    transition: opacity 0.12s ease;
+    transition: opacity 0.06s ease;
   }
   /* CCC-170: the hover action buttons (pin / archive) sat ON TOP of the branch
      + context-% chips, which keep their own solid backgrounds and bled out
@@ -3691,7 +3691,7 @@
     opacity: 0;
   }
   .conv-item .conv-branch-slot {
-    transition: opacity 0.12s ease;
+    transition: opacity 0.06s ease;
   }
   .conv-item .conv-session-icon {
     width: var(--conv-dot-col);
@@ -3859,6 +3859,13 @@
   .compact-rows .conv-item .conv-title-row {
     gap: 0;
   }
+  /* Row diet (de-crowding). Compact = title + time + status only. The two
+     biggest crowders — the session-outcome line (DID / next step) and the
+     meta chip cluster (size / branch / tokens) — are hidden at rest; the
+     full row is one hover/expand away in Comfortable. Reversible: it's a
+     pure display toggle on #convList, no render change. */
+  .compact-rows .conv-item .conv-outcome { display: none; }
+  .compact-rows .conv-item .conv-row-meta { display: none; }
   .conv-folder-group .conv-item.is-grouped-row {
     /* Parity with "by time" rows — same vertical padding (6px) and same
        border-radius (6px). The original tightening (4px / 4px) made the
