@@ -1,0 +1,139 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CCC — Claude Command Center</title>
+<meta name="description" content="One local dashboard for every Claude Code, Codex, Cursor, and Antigravity session on your Mac. Attach, don't own.">
+<meta property="og:title" content="CCC — Claude Command Center">
+<meta property="og:description" content="One local board for every coding agent on your Mac. Attach, don't own.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="/assets/css/site.css">
+</head><body>
+<header class="site-nav"><div class="nav-inner">
+  <a class="nav-brand" href="/">▦ CCC</a>
+  <nav class="nav-links">
+    <a href="/features/">Features</a>
+    <a href="/compare/">Compare</a>
+    <a href="/why/">Why CCC</a>
+    <a href="/changelog/">Changelog</a>
+    <a href="/roadmap/">Roadmap</a>
+    <a href="https://github.com/amirfish1/claude-command-center">GitHub ★ <span data-gh-stars>star</span></a>
+    <a class="btn btn-primary nav-cta" href="/install/">Download</a>
+  </nav>
+  <button class="nav-toggle" aria-label="Menu">☰</button>
+</div></header>
+
+<main>
+<!-- HERO -->
+<section class="section" style="padding-top:72px">
+ <div class="wrap reveal">
+  <a class="pill" href="/changelog/">● CCC v4.6.0 — see what's new →</a>
+  <h1 class="h1">Every coding agent on your Mac.<br><span class="accent">One board.</span></h1>
+  <p class="lede">CCC attaches to every Claude Code, Codex, Cursor, and Antigravity session already running on your machine — terminal, headless, or dashboard-spawned — and turns them into one live kanban. Start the next while the first still builds.</p>
+  <div style="display:flex;gap:12px;margin-top:28px;flex-wrap:wrap">
+    <a class="btn btn-primary" href="/install/">Download for macOS</a>
+    <a class="btn btn-ghost" href="/demo/">Try the live demo →</a>
+  </div>
+  <p class="mono" style="color:var(--fg-dim);margin-top:28px;font-size:.85rem">
+    Works with Claude Code · Codex · Cursor · Antigravity · Kilo Code</p>
+ </div>
+</section>
+
+<!-- LIVE DEMO CENTERPIECE -->
+<section class="section" style="padding-top:0">
+ <div class="wrap reveal">
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border)">
+      <span style="width:11px;height:11px;border-radius:50%;background:#ff5f57"></span>
+      <span style="width:11px;height:11px;border-radius:50%;background:#febc2e"></span>
+      <span style="width:11px;height:11px;border-radius:50%;background:#28c840"></span>
+      <span class="mono" style="color:var(--fg-dim);margin-left:8px;font-size:.8rem">CCC — live demo, seeded data</span>
+    </div>
+    <iframe src="/demo/" title="CCC live demo" loading="lazy"
+      style="width:100%;height:620px;border:0;display:block;background:var(--bg-2)"></iframe>
+  </div>
+  <p style="text-align:center;color:var(--fg-dim);margin-top:14px">
+    Real CCC, seeded with fake data. <a class="accent" href="/demo/">Open it full-screen →</a></p>
+ </div>
+</section>
+
+<!-- TWO BIG BETS -->
+<section class="section" style="background:var(--bg-2)">
+ <div class="wrap">
+  <p class="eyebrow reveal">Two bets nobody else makes</p>
+  <div class="card-grid" style="margin-top:24px">
+    <div class="card reveal">
+      <h2 class="h2">Attach, don't own.</h2>
+      <p style="color:var(--fg-dim)">Most tools only see sessions they launched. CCC reads your agent's on-disk state as the source of truth, so a session you started in any terminal, by any tool, shows up automatically. Nothing slips through.</p>
+    </div>
+    <div class="card reveal">
+      <h2 class="h2">Issues are the state machine.</h2>
+      <p style="color:var(--fg-dim)">Start from a GitHub issue in one click. CCC auto-labels it in-progress, renders the issue and comments on the card, and closes it with the commit SHA when you verify. A full bidirectional loop, not just a list.</p>
+    </div>
+  </div>
+ </div>
+</section>
+
+<!-- FEATURE HIGHLIGHTS -->
+<section class="section">
+ <div class="wrap">
+  <p class="eyebrow reveal">What's on the board</p>
+  <h2 class="h2 reveal">Built for shipping many things at once.</h2>
+  <div class="card-grid reveal" style="margin-top:28px">
+    <div class="card"><h3>Flow canvas</h3><p style="color:var(--fg-dim)">A Miro-style spatial board of repos → objects → sessions. Arrange your work in space, not just a list.</p></div>
+    <div class="card"><h3>Signal-driven kanban</h3><p style="color:var(--fg-dim)">Eight columns, auto-classified from each session's real state. Drag to override; overrides decay back to the truth.</p></div>
+    <div class="card"><h3>Group chat</h3><p style="color:var(--fg-dim)">N sessions coordinate through a shared file — agents talk to each other while they work.</p></div>
+    <div class="card"><h3>Multi-engine</h3><p style="color:var(--fg-dim)">Claude Code, Codex, Cursor, and Antigravity on one board. Spawn across all of them.</p></div>
+    <div class="card"><h3>Auto-fix-deploy</h3><p style="color:var(--fg-dim)">Polls your deploys; on a new production error it spawns a fix session, deduped by SHA. Nobody else ships this.</p></div>
+    <div class="card"><h3>Resume on demand</h3><p style="color:var(--fg-dim)">Wake a dormant session and keep talking to it from the browser — the input pipe stays open.</p></div>
+  </div>
+  <p style="margin-top:24px"><a class="btn btn-ghost reveal" href="/features/">All features →</a></p>
+ </div>
+</section>
+
+<!-- SOCIAL PROOF -->
+<section class="section" style="background:var(--bg-2)">
+ <div class="wrap reveal" style="text-align:center">
+  <p class="eyebrow">Open source · one-person project</p>
+  <h2 class="h2">Read the whole thing in an afternoon.</h2>
+  <p class="lede" style="margin:0 auto">A stdlib-only Python server and a single HTML app. No Electron, no account, no cloud, no DB. <strong><span data-gh-stars>★</span> stars</strong> and counting.</p>
+  <p style="margin-top:24px">
+    <img alt="Star history" loading="lazy"
+      src="https://api.star-history.com/svg?repos=amirfish1/claude-command-center&type=Date"
+      style="max-width:680px;width:100%;border:1px solid var(--border);border-radius:12px"></p>
+ </div>
+</section>
+
+<!-- COMPARE TEASER -->
+<section class="section">
+ <div class="wrap reveal" style="text-align:center">
+  <p class="eyebrow">Honest comparison</p>
+  <h2 class="h2">Where CCC wins — and where it doesn't.</h2>
+  <p class="lede" style="margin:0 auto 24px">Every tool in this space makes different bets. We list where CCC loses too.</p>
+  <a class="btn btn-ghost" href="/compare/">See the full matrix →</a>
+ </div>
+</section>
+
+<!-- INSTALL -->
+<section class="section" style="background:var(--bg-2)">
+ <div class="wrap reveal" style="text-align:center">
+  <h2 class="h2">Install in one line.</h2>
+  <pre class="mono" style="display:inline-block;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 22px;overflow-x:auto;max-width:100%"><code>curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | bash</code></pre>
+  <div style="display:flex;gap:12px;justify-content:center;margin-top:22px;flex-wrap:wrap">
+    <a class="btn btn-primary" href="/install/">All install options</a>
+    <a class="btn btn-ghost" href="https://github.com/amirfish1/claude-command-center/releases/latest">Download DMG</a>
+  </div>
+ </div>
+</section>
+</main>
+
+<footer class="site-footer"><div class="wrap footer-cols">
+  <div><a class="nav-brand" href="/">▦ CCC</a><p style="color:var(--fg-dim);max-width:30ch">
+    A local command center for every coding agent on your Mac. Open source.</p></div>
+  <div><h4>Product</h4><a href="/features/">Features</a><a href="/why/">Why CCC</a><a href="/install/">Download</a><a href="/demo/">Live demo</a></div>
+  <div><h4>Resources</h4><a href="/changelog/">Changelog</a><a href="/roadmap/">Roadmap</a><a href="https://github.com/amirfish1/claude-command-center">GitHub</a></div>
+  <div><h4>Compare</h4><a href="/compare/">All tools</a><a href="/compare/vibe-kanban/">vs Vibe Kanban</a><a href="/compare/conductor/">vs Conductor</a><a href="/compare/omnara/">vs Omnara</a></div>
+  <div><h4>Connect</h4><a href="https://github.com/amirfish1/claude-command-center/issues">Issues</a><a href="https://github.com/amirfish1/claude-command-center/releases">Releases</a></div>
+</div>
+<div class="footer-base"><span>© 2026 Claude Command Center · MIT</span><span class="mono">Built with CCC.</span></div>
+</footer>
+<script src="/assets/js/site.js"></script>
+</body></html>
