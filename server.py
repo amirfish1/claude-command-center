@@ -168,6 +168,7 @@ ANNOTATION_SCREENSHOT_DIR = COMMAND_CENTER_STATE_DIR / "annotation-screenshots"
 ANNOTATION_UX_FIXES_QUEUE_NAME = "UX-fixes-queue"
 _ANNOTATIONS_LOCK = threading.Lock()
 import ux_fixes_queue  # durable numbered/stateful UX-fixes queue (shared w/ BYM)
+import objects_store  # durable server-side Flow object/parent/order state (GOAL-3/4)
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 # User-picked repos that live outside the $HOME scan (e.g. ~/dev/foo, /workspaces/bar).
 # One absolute path per line. Written by /api/repo/add, read by load_known_repos.
@@ -41027,6 +41028,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
                 "codex_context_1m": os.environ.get("CCC_CODEX_CONTEXT_1M", "1").lower() not in ("0", "false", "no"),
             })
+        elif path == "/api/objects":
+            # Durable Flow-object organization (GOAL-3): object defs +
+            # session->object parent links + order ranks, mirrored off browser
+            # localStorage. Read-only, cached by (mtime,size) in objects_store
+            # — no subprocess, no all-conversations scan. Same loopback trust as
+            # every other GET.
+            self.send_json(objects_store.load_state())
         elif path == "/api/repo/list":
             # List of repos the picker offers. There is no server-active repo.
             repos = load_known_repos()
@@ -41275,6 +41283,103 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "count": len(clean)})
             except Exception as e:
                 self.send_json({"error": str(e)}, 400)
+            return
+
+        if path.startswith("/api/objects/"):
+            # Durable Flow-object mutations (GOAL-4): create/update/delete an
+            # object, parent/unparent a session under it, and bulk-import the
+            # browser's existing localStorage organization. All state lives in
+            # objects_store (one small JSON file, atomic writes). Same-origin
+            # already enforced above by do_POST's _check_same_origin — these add
+            # no CSRF surface and touch no path validation / bind host.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                if not isinstance(data, dict):
+                    self.send_json({"error": "expected JSON object"}, 400)
+                    return
+            except (ValueError, OSError) as e:
+                self.send_json({"error": f"invalid JSON: {e}"}, 400)
+                return
+
+            sub = path[len("/api/objects/"):]
+            try:
+                if sub == "create":
+                    title = data.get("title")
+                    if not isinstance(title, str) or not title.strip():
+                        self.send_json({"error": "title is required"}, 400)
+                        return
+                    obj = objects_store.create_object(
+                        title=title,
+                        id=data.get("id"),
+                        status=data.get("status"),
+                        objective=data.get("objective"),
+                    )
+                    self.send_json({"ok": True, "object": obj})
+                    return
+                if sub == "update":
+                    oid = data.get("id")
+                    if not isinstance(oid, str) or not oid:
+                        self.send_json({"error": "id is required"}, 400)
+                        return
+                    obj = objects_store.update_object(
+                        id=oid,
+                        title=data.get("title"),
+                        status=data.get("status"),
+                        objective=data.get("objective"),
+                    )
+                    if obj is None:
+                        self.send_json({"error": "no object with that id"}, 404)
+                        return
+                    self.send_json({"ok": True, "object": obj})
+                    return
+                if sub == "delete":
+                    oid = data.get("id")
+                    if not isinstance(oid, str) or not oid:
+                        self.send_json({"error": "id is required"}, 400)
+                        return
+                    removed = objects_store.delete_object(oid)
+                    self.send_json({"ok": True, "removed": removed})
+                    return
+                if sub == "assign":
+                    snid = data.get("session_node_id")
+                    oid = data.get("object_id")
+                    if not isinstance(snid, str) or not snid:
+                        self.send_json({"error": "session_node_id is required"}, 400)
+                        return
+                    if not isinstance(oid, str) or not oid:
+                        self.send_json({"error": "object_id is required"}, 400)
+                        return
+                    state = objects_store.assign_session(snid, oid)
+                    self.send_json({"ok": True, **state})
+                    return
+                if sub == "unassign":
+                    snid = data.get("session_node_id")
+                    if not isinstance(snid, str) or not snid:
+                        self.send_json({"error": "session_node_id is required"}, 400)
+                        return
+                    state = objects_store.unassign_session(snid)
+                    self.send_json({"ok": True, **state})
+                    return
+                if sub == "import":
+                    # MERGE, not replace (documented in objects_store.import_state):
+                    # objects upsert by id, parents/order overwrite same keys.
+                    # Safe to re-run; never deletes server-side objects.
+                    state = objects_store.import_state(
+                        objects=data.get("objects"),
+                        parents=data.get("parents"),
+                        order=data.get("order"),
+                    )
+                    self.send_json({"ok": True, **state})
+                    return
+            except ValueError as e:
+                self.send_json({"error": str(e)}, 400)
+                return
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            self.send_json({"error": "unknown objects endpoint"}, 404)
             return
 
         if path == "/api/ingest/gemini":
