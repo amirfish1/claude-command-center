@@ -1487,6 +1487,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("sendToTerminal('p1', 'steer')", app_js)
         self.assertIn("mode: injectMode", app_js)
 
+    def test_codex_user_messages_have_inline_steer_action(self):
+        """Codex user-message bubbles should be steerable in place."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function userMessageSteerHtml(text, notification, compactCardHtml)", app_js)
+        self.assertIn('data-steer-user-message', app_js)
+        self.assertIn("postInjectInput(sid, text, 'steer')", app_js)
+        self.assertIn("Steered running Codex turn.", app_js)
+        self.assertIn("div.classList.add('has-user-steer')", app_js)
+        self.assertIn(".conversations-view .event.user_text.has-user-steer .user-msg", app_css)
+        self.assertIn(".user-message-steer", app_css)
+
     def test_cursor_engine_is_wired_in_static_ui(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")

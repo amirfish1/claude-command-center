@@ -2057,6 +2057,7 @@
     max-width: 85%;
     margin-left: auto;
     width: fit-content;
+    position: relative;
   }
   .conversations-view .event.user_text .label { display: none; }
   .conversations-view .event.user_text .line-num,
@@ -2071,6 +2072,34 @@
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
     font-weight: 410;
+  }
+  .conversations-view .event.user_text.has-user-steer .user-msg {
+    padding-right: 44px;
+  }
+  .user-message-steer {
+    position: absolute;
+    top: 5px;
+    right: 7px;
+    height: 21px;
+    padding: 0 7px;
+    border-radius: 4px;
+    border: 1px solid rgba(88,166,255,0.32);
+    background: rgba(13,17,23,0.22);
+    color: var(--text-muted);
+    font: 700 10px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    cursor: pointer;
+    opacity: 0.72;
+  }
+  .user-message-steer:hover,
+  .user-message-steer:focus-visible {
+    opacity: 1;
+    color: var(--text);
+    background: rgba(88,166,255,0.16);
+    outline: none;
+  }
+  .user-message-steer:disabled {
+    opacity: 0.65;
+    cursor: default;
   }
   .conv-pane.has-conv-bg .conversations-view .event.user_text {
     background: var(--conv-user-bg);

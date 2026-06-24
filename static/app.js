@@ -3814,6 +3814,44 @@
     showOpToast('Copied agent answer', 'ok');
   });
 
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-steer-user-message]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const sid = currentSession && currentSession.id;
+    if (!sid || !currentSession || currentSession.source !== 'codex') {
+      showOpToast('Steer is only available for Codex sessions.', 'error');
+      return;
+    }
+    const row = btn.closest('.event.user_text');
+    const msg = row && row.querySelector('.user-msg');
+    const text = (msg && (msg.getAttribute('data-raw-text') || msg.textContent || '')).trim();
+    if (!text) {
+      showOpToast('No message text to steer', 'error');
+      return;
+    }
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '...';
+    try {
+      const data = await postInjectInput(sid, text, 'steer');
+      if (!data || !data.ok) throw new Error((data && (formatInjectFailure(data, 0) || data.error)) || 'steer failed');
+      btn.textContent = '✓';
+      showOpToast(data.via === 'codex-steer' ? 'Steered running Codex turn.' : 'Sent to Codex.');
+      setTimeout(refreshConversationList, 1500);
+      setTimeout(refreshConversationList, 3500);
+    } catch (err) {
+      btn.textContent = '!';
+      showOpToast('Steer failed: ' + ((err && err.message) || 'unknown'), 'error');
+    } finally {
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = original || 'Steer';
+      }, 900);
+    }
+  });
+
   function setCurrentSession(source, sid, cwd, cwdExists, spawnPid, repoPath) {
     const row = (Array.isArray(conversationsData) ? conversationsData : []).find(c => (
       c && (
@@ -6967,6 +7005,14 @@
     html += '</div>';
     return html;
   }
+
+  function userMessageSteerHtml(text, notification, compactCardHtml) {
+    if (!currentSession || currentSession.source !== 'codex') return '';
+    if (notification || compactCardHtml || !String(text || '').trim()) return '';
+    return '<button type="button" class="user-message-steer" data-steer-user-message'
+      + ' title="Steer Codex with this message" aria-label="Steer Codex with this message">Steer</button>';
+  }
+
   document.addEventListener('click', (ev) => {
     const btn = ev.target && ev.target.closest && ev.target.closest('.tn-view-transcript');
     if (!btn) return;
@@ -29008,6 +29054,8 @@
             clearCompactInProgressBanner($view);
           }
         }
+        const userSteerHtml = userMessageSteerHtml(cleanedText, notification, compactCardHtml);
+        if (userSteerHtml) div.classList.add('has-user-steer');
         // data-raw-text preserves the original prose so _dynAskApply can pin
         // the same wording in the "Earlier ask" sticky — reading textContent
         // back would lose any pasted-image path that's been replaced with <img>.
@@ -29022,7 +29070,8 @@
           + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
           + tsSpan(ev.ts)
           + textHtml
-          + imagesHtml;
+          + imagesHtml
+          + userSteerHtml;
 
       } else if (ev.type === 'assistant') {
         let html = '<span class="line-num">L' + ev.line + '</span>' + tsSpan(ev.ts);
