@@ -1580,6 +1580,9 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("text === '[error]'", app_js)
         self.assertIn("A bare [error] marker carries no actionable stderr content", app_js)
+        self.assertIn("function isBenignCodexErrorItem(item)", app_js)
+        self.assertIn("async hooks are not supported yet", app_js)
+        self.assertIn("if (isBenignCodexErrorItem(ev.item)) continue;", app_js)
 
     def test_codex_goal_state_renders_near_composer_and_rows(self):
         """Codex /goal state should be visible where the user types, and

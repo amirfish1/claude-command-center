@@ -1,1 +1,1 @@
-- Codex spawn logs no longer show a bare `[error]` marker above an otherwise normal Thinking state.
+- Codex spawn logs no longer show bare `[error]` noise from benign startup stderr or unsupported async plugin hooks above an otherwise normal Thinking state.

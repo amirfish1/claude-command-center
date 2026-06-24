@@ -25629,6 +25629,14 @@
       || /\bERROR codex_core::session: failed to record rollout items: thread [0-9a-f-]+ not found$/.test(text);
   }
 
+  function isBenignCodexErrorItem(item) {
+    const text = ((item && (item.message || item.text)) || '').trim();
+    return !!item
+      && item.type === 'error'
+      && /\bskipping async hook\b/.test(text)
+      && /\basync hooks are not supported yet\b/.test(text);
+  }
+
   // Build the right-pane HTML for a codex run from /api/sessions/spawned/<pid>/log.
   function renderCodexLogHtml(data) {
     const lines = (data.text || '').split('\n').filter(Boolean);
@@ -25643,6 +25651,10 @@
         else if (ev.type === 'item.completed' && ev.item) {
           if (ev.item.type === 'agent_message' && ev.item.text) {
             messages.push({ role: 'assistant', text: ev.item.text });
+          } else if (ev.item.type === 'error') {
+            if (isBenignCodexErrorItem(ev.item)) continue;
+            const msg = ((ev.item.message || ev.item.text) || '').trim();
+            messages.push({ role: 'system', text: '[error]' + (msg ? ' ' + msg : '') });
           } else if (ev.item.type) {
             // Tool calls / other items — render a compact summary line.
             messages.push({ role: 'system', text: '[' + ev.item.type + ']' });
