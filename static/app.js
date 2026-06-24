@@ -20807,6 +20807,23 @@
     // (or repo / Unclassified) group header to move it there. Mirrors a
     // Flow-board drag without leaving the sidebar; writes the same
     // flowNodeParents map the board reads.
+    // GOAL-5 — nest one object under another (object:<child> -> object:<parent>).
+    // Shared by the header drop AND the whole-group-body drop, so "drag an
+    // object onto another object" nests whether you land on the thin header or
+    // anywhere in the target's cluster. Returns true if it nested.
+    const _nestObjectUnder = (dragged, target) => {
+      if (!dragged || !target || dragged === target) return false;
+      if (dragged.indexOf('object:') !== 0 || target.indexOf('object:') !== 0) return false;
+      // Cycle guard: refuse if target is a descendant of dragged.
+      let n = target;
+      for (let hop = 0; hop < 16 && n; hop++) {
+        if (n === dragged) { showOpToast('That would make a loop — not nesting.', 'error'); return false; }
+        n = flowNodeParents[n];
+      }
+      flowNodeParents[dragged] = target;
+      persistFlowNodeParents();
+      return true;
+    };
     $convList.querySelectorAll('[data-object-drop]').forEach(hdr => {
       // Group headers are themselves draggable: drop on another header's
       // top/bottom third to order above/below (cosmetic, persisted in
@@ -20852,35 +20869,32 @@
         const target = hdr.getAttribute('data-object-drop');
         const raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
         // ── Group-header drop: reorder or nest ──
-        if (raw && raw.indexOf('ccc-objnode:') === 0) {
-          const dragged = raw.slice(12);
+        const isObjDrag = (raw && raw.indexOf('ccc-objnode:') === 0) || !!_draggedObjectNode;
+        if (isObjDrag) {
+          // getData can come back empty mid-drop in some browsers; fall back to
+          // the node captured on dragstart so nesting never silently no-ops.
+          const dragged = (raw && raw.indexOf('ccc-objnode:') === 0) ? raw.slice(12) : _draggedObjectNode;
           if (!dragged || dragged === target) return;
           const zone = dropZoneOf(ev);
-          if (zone === 'nest' && target !== 'unclassified' && dragged !== 'unclassified') {
-            // Cycle guard: refuse if target is a descendant of dragged.
-            let n = target, cyclic = false;
-            for (let hop = 0; hop < 8 && n; hop++) {
-              if (n === dragged) { cyclic = true; break; }
-              n = flowNodeParents[n];
+          if (zone === 'nest') {
+            if (_nestObjectUnder(dragged, target)) {
+              showOpToast('Nested under ' + (hdr.textContent || '').trim().slice(0, 40), 'success');
+              renderArchiveList(document.getElementById('convSearch')?.value || '');
             }
-            if (cyclic) { showOpToast('That would make a loop — not nesting.', 'error'); return; }
-            flowNodeParents[dragged] = target;
-            persistFlowNodeParents();
-            showOpToast('Nested under ' + (hdr.textContent || '').trim().slice(0, 40), 'success');
-          } else {
-            // Reorder: rebuild ranks from current DOM order, splice dragged
-            // around the target. Cosmetic only.
-            const ids = Array.from($convList.querySelectorAll('[data-object-drop]'))
-              .map(n => n.getAttribute('data-object-drop'))
-              .filter(id => id && id !== dragged);
-            const at = ids.indexOf(target);
-            if (at === -1) return;
-            ids.splice(zone === 'above' ? at : at + 1, 0, dragged);
-            const order = {};
-            ids.forEach((id, i) => { order[id] = i; });
-            try { localStorage.setItem('ccc-objects-order', JSON.stringify(order)); } catch (_) {}
-            syncObjectsToServer();
+            return;
           }
+          // Reorder: rebuild ranks from current DOM order, splice dragged
+          // around the target. Cosmetic only.
+          const ids = Array.from($convList.querySelectorAll('[data-object-drop]'))
+            .map(n => n.getAttribute('data-object-drop'))
+            .filter(id => id && id !== dragged);
+          const at = ids.indexOf(target);
+          if (at === -1) return;
+          ids.splice(zone === 'above' ? at : at + 1, 0, dragged);
+          const order = {};
+          ids.forEach((id, i) => { order[id] = i; });
+          try { localStorage.setItem('ccc-objects-order', JSON.stringify(order)); } catch (_) {}
+          syncObjectsToServer();
           renderArchiveList(document.getElementById('convSearch')?.value || '');
           return;
         }
@@ -20908,7 +20922,21 @@
         zone.classList.remove('is-drop-target');
         const target = zone.getAttribute('data-object-drop-zone') || '';
         const raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
-        if (raw && raw.indexOf('ccc-objnode:') === 0) return;
+        // GOAL-5 — an object dropped anywhere on another object's cluster (not
+        // just the thin header) nests under it. This is the gesture users
+        // actually reach for; the body used to reject it outright.
+        const isObjDrag = (raw && raw.indexOf('ccc-objnode:') === 0) || !!_draggedObjectNode;
+        if (isObjDrag) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const dragged = (raw && raw.indexOf('ccc-objnode:') === 0) ? raw.slice(12) : _draggedObjectNode;
+          if (_nestObjectUnder(dragged, target)) {
+            const label = (zone.querySelector('.conv-folder-group-chip')?.textContent || '').trim().slice(0, 40);
+            showOpToast('Nested under ' + label, 'success');
+            renderArchiveList(document.getElementById('convSearch')?.value || '');
+          }
+          return;
+        }
         const convIds = readConvIdsFromDrop(ev);
         if (!convIds.length) return;
         ev.preventDefault();
