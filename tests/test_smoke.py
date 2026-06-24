@@ -175,6 +175,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-role="archive-object"', app_js)
         self.assertIn(".conv-folder-object-archive-btn", app_css)
 
+    def test_sidebar_selected_rows_drag_together_to_objects(self):
+        """Dragging a selected sidebar row should carry every selected row."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function selectedConversationDragIds(leadId)", app_js)
+        self.assertIn("function toggleConversationRowSelection(item)", app_js)
+        self.assertIn("toggleConversationRowSelection(item);", app_js)
+        self.assertIn("dragSourceIds = ids;", app_js)
+        self.assertIn("ev.dataTransfer.setData('text/plain', ids.join(','))", app_js)
+        self.assertIn("function readConvIdsFromDrop(ev)", app_js)
+        self.assertIn("for (const convId of convIds)", app_js)
+        self.assertIn("clearSelectedConversationRows();", app_js)
+        self.assertIn("function startSidebarDragAutoScroll(ev)", app_js)
+        self.assertIn("$convList.addEventListener('dragover', updateSidebarDragAutoScroll);", app_js)
+
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never
         delete these markers on session end, so a stale marker must NOT keep a

@@ -13744,6 +13744,37 @@
   let selectedCardIds = new Set();
   let selectedListIds = new Set();
 
+  function clearSelectedConversationRows() {
+    document.querySelectorAll('.conv-item.list-selected').forEach(el => el.classList.remove('list-selected'));
+    selectedListIds.clear();
+    updateCoordToolbar();
+  }
+
+  function toggleConversationRowSelection(item) {
+    if (!item || !item.dataset || !item.dataset.id) return;
+    const id = item.dataset.id;
+    if (selectedListIds.has(id)) {
+      selectedListIds.delete(id);
+      item.classList.remove('list-selected');
+    } else {
+      selectedListIds.add(id);
+      item.classList.add('list-selected');
+    }
+    updateCoordToolbar();
+  }
+
+  function selectedConversationDragIds(leadId) {
+    if (!leadId) return [];
+    if (!selectedListIds.has(leadId)) return [leadId];
+    const ids = [];
+    $convList.querySelectorAll('.conv-item[data-id]').forEach(row => {
+      const id = row.dataset.id;
+      if (id && selectedListIds.has(id)) ids.push(id);
+    });
+    if (ids.indexOf(leadId) === -1) ids.unshift(leadId);
+    return ids.length ? ids : [leadId];
+  }
+
   function updateCoordToolbar() {
     const toolbar = document.getElementById('coordToolbar');
     const countEl = document.getElementById('coordCount');
@@ -13852,9 +13883,7 @@
         if (!r.ok) showOpToast('Could not reach session — check its terminal (' + (r.error || 'tty not found') + ')', 'error');
       });
       if (backdrop) backdrop.classList.remove('visible');
-      selectedListIds.clear();
-      document.querySelectorAll('.conv-item.list-selected').forEach(el => el.classList.remove('list-selected'));
-      updateCoordToolbar();
+      clearSelectedConversationRows();
       // Refresh the active-coordinations cache + sidebar header immediately
       // so the "In Group Chat" section appears right after creation rather
       // than waiting up to 15s for the next pollGcActive tick.
@@ -20036,14 +20065,17 @@
           return;
         }
         // ── Session-row drop: reparent the session under this group ──
-        const convId = readConvIdFromDrop(ev);
-        if (!convId) return;
-        const row = (conversationsData || []).find(x => x.id === convId) || {};
-        const sid = row.session_id || convId;
-        const key = flowNodeKey('session', sid);
-        if (target === 'unclassified') delete flowNodeParents[key];
-        else flowNodeParents[key] = target;
+        const convIds = readConvIdsFromDrop(ev);
+        if (!convIds.length) return;
+        for (const convId of convIds) {
+          const row = (conversationsData || []).find(x => x.id === convId) || {};
+          const sid = row.session_id || convId;
+          const key = flowNodeKey('session', sid);
+          if (target === 'unclassified') delete flowNodeParents[key];
+          else flowNodeParents[key] = target;
+        }
         persistFlowNodeParents();
+        clearSelectedConversationRows();
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     });
@@ -20216,20 +20248,11 @@
         if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="pin"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="wake-codex"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('[data-role="conv-pct-compact"]') || ev.target.closest('[data-role="coo-track-wrap"]') || ev.target.closest('[data-role="nya-collapse"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
         if (ev.metaKey || ev.ctrlKey || ev.shiftKey) {
           ev.preventDefault();
-          if (selectedListIds.has(el.dataset.id)) {
-            selectedListIds.delete(el.dataset.id);
-            el.classList.remove('list-selected');
-          } else {
-            selectedListIds.add(el.dataset.id);
-            el.classList.add('list-selected');
-          }
-          updateCoordToolbar();
+          toggleConversationRowSelection(el);
           return;
         }
         if (selectedListIds.size > 0) {
-          document.querySelectorAll('.conv-item.list-selected').forEach(n => n.classList.remove('list-selected'));
-          selectedListIds.clear();
-          updateCoordToolbar();
+          clearSelectedConversationRows();
         }
         if (isMobile()) {
           $convList.querySelectorAll('.conv-item.mobile-tapped').forEach(n => n.classList.remove('mobile-tapped'));
@@ -20390,6 +20413,11 @@
         if (_lpFired) { _lpFired = false; ev.preventDefault(); return; }
         const item = el.closest('.conv-item');
         if (!item || !item.dataset.id) return;
+        if (ev.metaKey || ev.ctrlKey || ev.shiftKey) {
+          ev.preventDefault();
+          toggleConversationRowSelection(item);
+          return;
+        }
         const alreadyActive = item.classList.contains('active') || currentConversation === item.dataset.id;
         // On touch the title is the primary tap target for ENTERING a session
         // (it fills the row), so a tap must always open / slide to the main pane —
@@ -21086,8 +21114,61 @@
   }, true);
 
   let dragSourceId = null;
+  let dragSourceIds = [];
   // Object/group header currently being dragged in the by-objects sidebar.
   let _draggedObjectNode = '';
+  let _sidebarDragAutoScrollRaf = 0;
+  let _sidebarDragAutoScrollVelocity = 0;
+
+  function stopSidebarDragAutoScroll() {
+    _sidebarDragAutoScrollVelocity = 0;
+    if (_sidebarDragAutoScrollRaf) {
+      cancelAnimationFrame(_sidebarDragAutoScrollRaf);
+      _sidebarDragAutoScrollRaf = 0;
+    }
+  }
+
+  function sidebarDragAutoScrollStep() {
+    if (!dragSourceId || !_sidebarDragAutoScrollVelocity) {
+      _sidebarDragAutoScrollRaf = 0;
+      return;
+    }
+    $convList.scrollTop += _sidebarDragAutoScrollVelocity;
+    _sidebarDragAutoScrollRaf = requestAnimationFrame(sidebarDragAutoScrollStep);
+  }
+
+  function updateSidebarDragAutoScroll(ev) {
+    if (!dragSourceId) {
+      stopSidebarDragAutoScroll();
+      return;
+    }
+    const rect = $convList.getBoundingClientRect();
+    const edge = Math.min(90, Math.max(40, rect.height * 0.16));
+    let velocity = 0;
+    if (ev.clientY < rect.top + edge) {
+      const pct = 1 - Math.max(0, ev.clientY - rect.top) / edge;
+      velocity = -Math.ceil(pct * 20);
+    } else if (ev.clientY > rect.bottom - edge) {
+      const pct = 1 - Math.max(0, rect.bottom - ev.clientY) / edge;
+      velocity = Math.ceil(pct * 20);
+    }
+    _sidebarDragAutoScrollVelocity = velocity;
+    if (!velocity) {
+      stopSidebarDragAutoScroll();
+    } else if (!_sidebarDragAutoScrollRaf) {
+      _sidebarDragAutoScrollRaf = requestAnimationFrame(sidebarDragAutoScrollStep);
+    }
+  }
+
+  function startSidebarDragAutoScroll(ev) {
+    updateSidebarDragAutoScroll(ev);
+  }
+
+  $convList.addEventListener('dragover', updateSidebarDragAutoScroll);
+  $convList.addEventListener('dragleave', (ev) => {
+    if (!$convList.contains(ev.relatedTarget)) stopSidebarDragAutoScroll();
+  });
+  document.addEventListener('drop', stopSidebarDragAutoScroll, true);
 
   function attachDragHandlers(el) {
     el.addEventListener('dragstart', (ev) => {
@@ -21095,21 +21176,29 @@
         ev.preventDefault();
         return;
       }
-      dragSourceId = el.dataset.id;
+      const ids = selectedConversationDragIds(el.dataset.id);
+      dragSourceId = ids[0] || el.dataset.id;
+      dragSourceIds = ids;
       el.classList.add('dragging');
-      startExternalConversationDrag(el.dataset.id, el.dataset.repoPath || '');
+      if (ids.length > 1) {
+        $convList.querySelectorAll('.conv-item.list-selected').forEach(row => row.classList.add('dragging'));
+      }
+      startExternalConversationDrag(dragSourceId, el.dataset.repoPath || '');
+      startSidebarDragAutoScroll(ev);
       try { ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
-      try { ev.dataTransfer.setData('text/plain', el.dataset.id); } catch (_) {}
+      try { ev.dataTransfer.setData('text/plain', ids.join(',')); } catch (_) {}
     });
     el.addEventListener('dragend', (ev) => {
       finishExternalConversationDrag(ev);
       dragSourceId = null;
+      dragSourceIds = [];
+      stopSidebarDragAutoScroll();
       $convList.querySelectorAll('.conv-item').forEach(n => {
         n.classList.remove('dragging', 'drop-above', 'drop-below');
       });
     });
     el.addEventListener('dragover', (ev) => {
-      if (!dragSourceId || dragSourceId === el.dataset.id) return;
+      if (!dragSourceId || dragSourceIds.indexOf(el.dataset.id) !== -1) return;
       ev.preventDefault();
       try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
       const rect = el.getBoundingClientRect();
@@ -21124,7 +21213,7 @@
       ev.preventDefault();
       const src = dragSourceId;
       const dstId = el.dataset.id;
-      if (!src || src === dstId) return;
+      if (!src || dragSourceIds.indexOf(dstId) !== -1) return;
       const before = el.classList.contains('drop-above');
       el.classList.remove('drop-above', 'drop-below');
       // When src and dst belong to different folder buckets, treat the
@@ -22217,13 +22306,16 @@
 
   // Read the conversation id out of the drop event. Both .conv-item drag
   // and .kanban-card drag set 'text/plain' to a comma-joined id list; we
-  // take the first id. (Multi-select drag from kanban → split is not in
-  // scope; the first id is the lead card.)
-  function readConvIdFromDrop(ev) {
+  // can either take the lead id or process the full selected-row payload.
+  function readConvIdsFromDrop(ev) {
     const raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
-    if (!raw) return null;
-    const first = String(raw).split(',')[0].trim();
-    return first || null;
+    if (!raw) return [];
+    return String(raw).split(',').map(id => id.trim()).filter(Boolean);
+  }
+
+  function readConvIdFromDrop(ev) {
+    const ids = readConvIdsFromDrop(ev);
+    return ids[0] || null;
   }
 
   function attachDropZones(paneEl) {
