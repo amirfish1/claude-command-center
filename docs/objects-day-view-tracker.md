@@ -13,7 +13,7 @@ gaps below are what stop it from feeling like a real day tracker.
 | ID | Title | Problem (one line) | Value | Conf. | Status |
 |----|-------|--------------------|:-----:|:-----:|--------|
 | **GOAL-1** | Object status + immediate objective | Object shows only `title + count` — no "where are we / what's the immediate target", and the already-parsed session outcome (`DID`/`NEXT_STEP`) is never shown on the row | H | M | `done`¹ |
-| **GOAL-2** | Empty-object copy for sessionless tasks | Sessionless admin (billing, ads) renders as *"Empty — drag sessions here"* — wrong for a standalone to-do; reuse `draft-session` as the task | M | H | `todo` |
+| **GOAL-2** | Sessionless tasks under objects | Sessionless admin (billing, ads) had no home — only "drag sessions here". Now each object has a `+ task` adding a draft-session (editable, with play-to-spawn) | M | H | `done`³ |
 | **GOAL-3** | Persistent storage for the organization | Object defs + parent links live in browser localStorage — lost on clear, not cross-machine, invisible to the server (blocks any automation) | M/H | M | `done` |
 | **GOAL-4** | Create objects + assign sessions via the CCC API | UI drag already works; there's no programmatic `/api/*` way to create an object or parent a session under it — blocks agents/automation arranging the day. Depends on GOAL-3 (server-side state) | H | M | `done`² |
 
@@ -22,6 +22,13 @@ Legend — Status: `todo` · `exploring` · `building` · `done`. Value / Confid
 ¹ GOAL-1 shipped **manual-first** (commits `3108592` row DID/next line, `5e9b8d1`
 object status chip + objective). Open follow-up: auto-roll the object's
 status/objective from its child sessions' `session_state` instead of by hand.
+³ GOAL-2 done (commits `cdb92ec`, `9185b47`): draft-session tasks under objects
+in the conv list with play-to-spawn, reusing Flow draft infra. Open follow-ups:
+(a) draft tasks persist to `ccc-flow-draft-sessions` localStorage only — not yet
+mirrored to the server like objects/parents are; (b) tasks require a resolvable
+repo (auto-inferred from the object's sessions / any known repo) — a truly
+repo-less reminder is a later change to the Flow draft model.
+
 ² GOAL-4 done. Server side: `objects_store.py` + `/api/objects/*`
 (`docs/objects-api.md`). Client side (commit `204a729`): the browser mirrors
 objects/parents/order to the API on every change (debounced reconcile — import
