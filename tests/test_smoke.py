@@ -7426,5 +7426,142 @@ class TestSpawnReturnAddress(unittest.TestCase):
         self.assertIn("STATUS", out)
 
 
+class TestObjectsStore(unittest.TestCase):
+    """Durable Flow-object persistence (GOAL-3/4). Drives objects_store
+    directly with a tmpdir-backed file via the CCC_OBJECTS_FILE override, so
+    no HTTP server or external system is involved."""
+
+    def setUp(self):
+        import importlib
+        self.tmpdir = tempfile.mkdtemp(prefix="ccc-objects-")
+        self.objfile = os.path.join(self.tmpdir, "objects.json")
+        self._prev = os.environ.get("CCC_OBJECTS_FILE")
+        os.environ["CCC_OBJECTS_FILE"] = self.objfile
+        # Fresh import each test so the in-process (mtime,size) cache is clean.
+        sys.modules.pop("objects_store", None)
+        self.store = importlib.import_module("objects_store")
+
+    def tearDown(self):
+        if self._prev is None:
+            os.environ.pop("CCC_OBJECTS_FILE", None)
+        else:
+            os.environ["CCC_OBJECTS_FILE"] = self._prev
+        sys.modules.pop("objects_store", None)
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_empty_when_no_file(self):
+        self.assertFalse(os.path.exists(self.objfile))
+        self.assertEqual(
+            self.store.load_state(), {"objects": [], "parents": {}, "order": {}}
+        )
+
+    def test_create_persists_and_round_trips(self):
+        obj = self.store.create_object("Ship billing")
+        self.assertTrue(obj["id"])
+        self.assertEqual(obj["title"], "Ship billing")
+        self.assertIn("created_at", obj)
+        self.assertIn("updated_at", obj)
+        self.assertTrue(os.path.exists(self.objfile))
+        # File on disk is valid JSON in the schema shape.
+        on_disk = json.load(open(self.objfile))
+        self.assertEqual(len(on_disk["objects"]), 1)
+        self.assertEqual(on_disk["objects"][0]["id"], obj["id"])
+
+    def test_create_with_explicit_id_and_optional_fields(self):
+        obj = self.store.create_object(
+            "Admin", id="obj-1", status="todo", objective="file taxes"
+        )
+        self.assertEqual(obj["id"], "obj-1")
+        self.assertEqual(obj["status"], "todo")
+        self.assertEqual(obj["objective"], "file taxes")
+
+    def test_create_same_id_is_upsert_not_duplicate(self):
+        self.store.create_object("First", id="obj-1")
+        self.store.create_object("Second", id="obj-1", status="wip")
+        objs = self.store.load_state()["objects"]
+        self.assertEqual(len(objs), 1)
+        self.assertEqual(objs[0]["title"], "Second")
+        self.assertEqual(objs[0]["status"], "wip")
+
+    def test_update_patches_only_supplied_fields(self):
+        self.store.create_object("Orig", id="obj-1", status="wip", objective="x")
+        updated = self.store.update_object("obj-1", title="Renamed")
+        self.assertEqual(updated["title"], "Renamed")
+        # status/objective owned by a sibling session must survive a rename.
+        self.assertEqual(updated["status"], "wip")
+        self.assertEqual(updated["objective"], "x")
+
+    def test_update_missing_returns_none(self):
+        self.assertIsNone(self.store.update_object("nope", title="x"))
+
+    def test_assign_and_unassign(self):
+        self.store.create_object("Obj", id="obj-1")
+        self.store.assign_session("session:abc", "obj-1")
+        parents = self.store.load_state()["parents"]
+        self.assertEqual(parents["session:abc"], "object:obj-1")
+        self.store.unassign_session("session:abc")
+        self.assertNotIn("session:abc", self.store.load_state()["parents"])
+
+    def test_delete_removes_object_and_its_parent_links(self):
+        self.store.create_object("Obj", id="obj-1")
+        self.store.assign_session("session:abc", "obj-1")
+        self.store.assign_session("session:def", "obj-1")
+        self.assertTrue(self.store.delete_object("obj-1"))
+        state = self.store.load_state()
+        self.assertEqual(state["objects"], [])
+        # Links that pointed at the deleted object are gone too.
+        self.assertNotIn("session:abc", state["parents"])
+        self.assertNotIn("session:def", state["parents"])
+
+    def test_delete_missing_returns_false(self):
+        self.assertFalse(self.store.delete_object("nope"))
+
+    def test_import_merge_upserts_and_does_not_wipe(self):
+        # Server already holds one object + a parent link.
+        self.store.create_object("Server obj", id="srv-1")
+        self.store.assign_session("session:keep", "srv-1")
+        # Browser imports a different object and a new link.
+        merged = self.store.import_state(
+            objects=[{"id": "brow-1", "title": "Browser obj"}],
+            parents={"session:new": "object:brow-1"},
+            order={"object:brow-1": 5},
+        )
+        ids = {o["id"] for o in merged["objects"]}
+        # Both survive — import is additive, never destructive.
+        self.assertEqual(ids, {"srv-1", "brow-1"})
+        self.assertEqual(merged["parents"]["session:keep"], "object:srv-1")
+        self.assertEqual(merged["parents"]["session:new"], "object:brow-1")
+        self.assertEqual(merged["order"]["object:brow-1"], 5)
+
+    def test_import_merge_updates_existing_object_fields(self):
+        self.store.create_object("Old title", id="obj-1")
+        self.store.import_state(
+            objects=[{"id": "obj-1", "title": "New title", "status": "done"}]
+        )
+        objs = self.store.load_state()["objects"]
+        self.assertEqual(len(objs), 1)
+        self.assertEqual(objs[0]["title"], "New title")
+        self.assertEqual(objs[0]["status"], "done")
+
+    def test_malformed_file_degrades_gracefully(self):
+        with open(self.objfile, "w") as f:
+            f.write("{ this is not valid json")
+        # Read does not throw; returns empty state.
+        self.assertEqual(
+            self.store.load_state(), {"objects": [], "parents": {}, "order": {}}
+        )
+        # And a subsequent write still works (overwrites the garbage).
+        obj = self.store.create_object("Recover", id="obj-1")
+        self.assertEqual(obj["id"], "obj-1")
+        self.assertEqual(len(self.store.load_state()["objects"]), 1)
+
+    def test_non_dict_file_degrades_gracefully(self):
+        with open(self.objfile, "w") as f:
+            json.dump([1, 2, 3], f)  # valid JSON, wrong shape
+        self.assertEqual(
+            self.store.load_state(), {"objects": [], "parents": {}, "order": {}}
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
