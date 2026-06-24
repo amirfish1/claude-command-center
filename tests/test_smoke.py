@@ -326,6 +326,34 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-folder-object-add-task-btn", app_css)
         self.assertNotIn(".conv-object-add-task", app_css)
 
+    def test_object_header_actions_are_hover_revealed(self):
+        """Object header actions should stay quiet until hover/focus."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn(".conv-folder-object-actions {\n    grid-column: 5;", app_css)
+        self.assertIn("opacity: 0;", app_css)
+        self.assertIn("pointer-events: none;", app_css)
+        self.assertIn(".conv-folder-group-header:hover .conv-folder-object-actions", app_css)
+        self.assertIn(".conv-folder-group-header:focus-within .conv-folder-object-actions", app_css)
+        self.assertIn("pointer-events: auto;", app_css)
+
+    def test_sidebar_outcome_line_reads_as_muted_done_metadata(self):
+        """A session DID summary should not compete with the row title."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn(".conv-item .conv-outcome-did {\n    color: var(--text-muted);", app_css)
+        self.assertIn('content: "DONE";', app_css)
+        self.assertIn("font-size: 9px;", app_css)
+        self.assertIn("border: 1px solid rgba(63,185,80,0.36);", app_css)
+
+    def test_coo_status_pill_names_its_source(self):
+        """The COO activity badge should explain what creates the status."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const _displayLabel = 'COO · ' + _label;", app_js)
+        self.assertIn("COO status from Command Center's COO tracker", app_js)
+        self.assertIn("aria-label=\"' + escapeAttr(_cooStatusTip) + '\"", app_js)
+
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never
         delete these markers on session end, so a stale marker must NOT keep a
@@ -1234,6 +1262,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("No visible response", app_js)
         self.assertIn("result-silent", app_js)
         self.assertIn(".event.result.result-silent", app_css)
+        self.assertIn(".conversations-view .event.result.result-silent", app_css)
+        self.assertIn("not a live stuck process", app_js)
 
     def test_codex_goal_state_renders_near_composer_and_rows(self):
         """Codex /goal state should be visible where the user types, and

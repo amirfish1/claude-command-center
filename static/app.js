@@ -18597,8 +18597,16 @@
         // working/idle get an age suffix; waiting/ended read on their own.
         const _showAge = (_cs === 'working' || _cs === 'idle') && rel;
         const _label = _showAge ? (_cs + ' · ' + rel) : _cs;
+        const _displayLabel = 'COO · ' + _label;
+        const _cooStatusTip = "COO status from Command Center's COO tracker. "
+          + (_cs === 'working' ? 'The tracked session is currently working.'
+            : _cs === 'waiting' ? 'The tracked session is waiting for input.'
+            : _cs === 'ended' ? 'The tracked session is no longer live.'
+            : 'The tracked session is live but not currently working.');
         cooStatusHtml = '<span class="coo-status' + _stateCls
-          + '" title="Live session state">' + escapeHtml(_label) + '</span>';
+          + '" title="' + escapeAttr(_cooStatusTip)
+          + '" aria-label="' + escapeAttr(_cooStatusTip) + '">'
+          + escapeHtml(_displayLabel) + '</span>';
       }
       const cooTrackedRowClass = _cooTracked ? ' is-coo-tracked' : '';
 
@@ -28219,7 +28227,7 @@
       return {
         kind: 'silent',
         label: 'No visible response',
-        detail: 'Codex completed this turn but did not record assistant text.',
+        detail: 'Codex completed this turn without assistant text; this is not a live stuck process. Send another prompt if you expected an answer.',
       };
     }
     const sub = String(ev.subtype || '').toLowerCase();
