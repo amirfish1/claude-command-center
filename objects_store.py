@@ -33,8 +33,24 @@ Schema::
         ...
       ],
       "parents": { "<sessionNodeId>": "<objectNodeId>", ... },
-      "order":   { "<nodeId>": <rank int|float>, ... }
+      "order":   { "<nodeId>": <rank int|float>, ... },
+      "drafts": [
+        {
+          "id":             "<stable client id>",
+          "title":          "Draft the release notes",
+          "repo_path":      "/path/to/repo",       # may be "" for a reminder
+          "parent_node_id": "object:<objectId>",   # links the draft to its object
+          "prompt":         "...",                 # OPTIONAL kickoff prompt
+          "created_at":     "2026-06-23T12:00:00Z",
+          "updated_at":     "2026-06-23T12:34:00Z"
+        },
+        ...
+      ]
     }
+
+``drafts`` are lightweight not-yet-started tasks (Flow's "draft-session" nodes).
+The client owns their creation/editing and pushes them via ``import_state``; this
+module only merges them in (additive upsert by id) and deletes one by id.
 
 The ``status`` and ``objective`` fields are OPTIONAL and owned by a different
 session's client wiring. This module never sets them, but it stores and returns
@@ -135,7 +151,7 @@ class _FileLock:
 
 
 def _empty_state() -> Dict[str, Any]:
-    return {"objects": [], "parents": {}, "order": {}}
+    return {"objects": [], "parents": {}, "order": {}, "drafts": []}
 
 
 def _coerce_object(raw: Any) -> Optional[Dict[str, Any]]:
@@ -157,6 +173,33 @@ def _coerce_object(raw: Any) -> Optional[Dict[str, Any]]:
     obj["created_at"] = raw.get("created_at") or _now_iso()
     obj["updated_at"] = raw.get("updated_at") or obj["created_at"]
     return obj
+
+
+def _coerce_draft(raw: Any) -> Optional[Dict[str, Any]]:
+    """Normalise one draft-session dict, dropping anything without a usable id.
+
+    A draft is a lightweight not-yet-started task. ``repo_path`` may be empty
+    (a pure reminder) and ``prompt`` is optional. Unknown keys are preserved
+    losslessly so the client can carry extra fields without us dropping them.
+    """
+    if not isinstance(raw, dict):
+        return None
+    did = raw.get("id")
+    if not isinstance(did, str) or not did:
+        return None
+    draft: Dict[str, Any] = dict(raw)  # keep unknown keys losslessly
+    draft["id"] = did
+    title = raw.get("title")
+    draft["title"] = title if isinstance(title, str) else ""
+    repo_path = raw.get("repo_path")
+    draft["repo_path"] = repo_path if isinstance(repo_path, str) else ""
+    parent = raw.get("parent_node_id")
+    draft["parent_node_id"] = parent if isinstance(parent, str) else ""
+    if "prompt" in raw and not isinstance(raw.get("prompt"), str):
+        draft.pop("prompt", None)
+    draft["created_at"] = raw.get("created_at") or _now_iso()
+    draft["updated_at"] = raw.get("updated_at") or draft["created_at"]
+    return draft
 
 
 def _normalise_state(raw: Any) -> Dict[str, Any]:
@@ -183,6 +226,15 @@ def _normalise_state(raw: Any) -> Dict[str, Any]:
         for k, v in order.items():
             if isinstance(k, str) and isinstance(v, (int, float)) and not isinstance(v, bool):
                 state["order"][k] = v
+    drafts = raw.get("drafts")
+    if isinstance(drafts, list):
+        seen_d = set()
+        for item in drafts:
+            draft = _coerce_draft(item)
+            if draft is None or draft["id"] in seen_d:
+                continue
+            seen_d.add(draft["id"])
+            state["drafts"].append(draft)
     return state
 
 
@@ -344,6 +396,50 @@ def delete_object(id: str) -> bool:
         return removed
 
 
+def upsert_draft(raw: Any) -> Optional[Dict[str, Any]]:
+    """Insert or update a draft-session by id (idempotent upsert).
+
+    The incoming dict is normalised; an existing draft with the same id is
+    patched per-field (incoming wins) while preserving its ``created_at`` and
+    any fields the incoming object omitted. Returns the stored draft, or None
+    if ``raw`` had no usable id.
+    """
+    draft = _coerce_draft(raw)
+    if draft is None:
+        return None
+    with _lock, _FileLock(_objects_file().with_suffix(".lock")):
+        state = _read_unlocked()
+        existing = _find(state["drafts"], draft["id"])
+        if existing is not None:
+            merged = dict(existing)
+            merged.update(draft)  # incoming wins per-field, keeps existing extras
+            merged["created_at"] = existing.get("created_at") or draft.get("created_at")
+            merged["updated_at"] = draft.get("updated_at") or _now_iso()
+            stored = merged
+            state["drafts"] = [
+                stored if d.get("id") == draft["id"] else d for d in state["drafts"]
+            ]
+        else:
+            stored = draft
+            state["drafts"].append(stored)
+        _write_unlocked(state)
+        return json.loads(json.dumps(stored))
+
+
+def delete_draft(id: str) -> bool:
+    """Remove a draft-session by id. Returns True if one was removed."""
+    if not isinstance(id, str) or not id:
+        return False
+    with _lock, _FileLock(_objects_file().with_suffix(".lock")):
+        state = _read_unlocked()
+        before = len(state["drafts"])
+        state["drafts"] = [d for d in state["drafts"] if d.get("id") != id]
+        removed = len(state["drafts"]) < before
+        if removed:
+            _write_unlocked(state)
+        return removed
+
+
 def assign_session(session_node_id: str, object_id: str) -> Dict[str, Any]:
     """Parent ``session_node_id`` under the object. The parent value stored is
     the Flow object node id (``'object:' + object_id``). Returns the new state.
@@ -373,6 +469,7 @@ def import_state(
     objects: Any = None,
     parents: Any = None,
     order: Any = None,
+    drafts: Any = None,
 ) -> Dict[str, Any]:
     """Sync the browser's existing localStorage organization up to the server.
 
@@ -390,6 +487,9 @@ def import_state(
       * parents:  incoming links overwrite the same key (a session can only
         have one parent); keys absent from the import are left untouched.
       * order:    incoming ranks overwrite the same key; others untouched.
+      * drafts:   upsert by id (same policy as objects). An incoming draft
+        patches an existing id and is appended if new; no server draft is ever
+        deleted by an import. (To intentionally drop a draft, call delete_draft.)
 
     Net effect: importing is always safe and additive — re-importing the same
     browser is idempotent, and a second browser's import augments rather than
@@ -398,7 +498,12 @@ def import_state(
     Returns the merged state.
     """
     inc = _normalise_state(
-        {"objects": objects or [], "parents": parents or {}, "order": order or {}}
+        {
+            "objects": objects or [],
+            "parents": parents or {},
+            "order": order or {},
+            "drafts": drafts or [],
+        }
     )
     with _lock, _FileLock(_objects_file().with_suffix(".lock")):
         state = _read_unlocked()
@@ -426,5 +531,26 @@ def import_state(
         state["objects"] = ordered
         state["parents"].update(inc["parents"])
         state["order"].update(inc["order"])
+        # Merge drafts by id (upsert), preserving fields not present incoming.
+        d_by_id = {d["id"]: d for d in state["drafts"]}
+        for dr in inc["drafts"]:
+            cur = d_by_id.get(dr["id"])
+            if cur is None:
+                d_by_id[dr["id"]] = dr
+            else:
+                merged = dict(cur)
+                merged.update(dr)  # incoming wins per-field, keeps cur extras
+                merged["created_at"] = cur.get("created_at") or dr.get("created_at")
+                d_by_id[dr["id"]] = merged
+        d_ordered: List[Dict[str, Any]] = []
+        d_emitted = set()
+        for d in state["drafts"]:
+            d_ordered.append(d_by_id[d["id"]])
+            d_emitted.add(d["id"])
+        for dr in inc["drafts"]:
+            if dr["id"] not in d_emitted:
+                d_ordered.append(d_by_id[dr["id"]])
+                d_emitted.add(dr["id"])
+        state["drafts"] = d_ordered
         _write_unlocked(state)
         return json.loads(json.dumps(state))

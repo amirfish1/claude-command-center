@@ -7581,7 +7581,8 @@ class TestObjectsStore(unittest.TestCase):
     def test_empty_when_no_file(self):
         self.assertFalse(os.path.exists(self.objfile))
         self.assertEqual(
-            self.store.load_state(), {"objects": [], "parents": {}, "order": {}}
+            self.store.load_state(),
+            {"objects": [], "parents": {}, "order": {}, "drafts": []},
         )
 
     def test_create_persists_and_round_trips(self):
@@ -7677,7 +7678,8 @@ class TestObjectsStore(unittest.TestCase):
             f.write("{ this is not valid json")
         # Read does not throw; returns empty state.
         self.assertEqual(
-            self.store.load_state(), {"objects": [], "parents": {}, "order": {}}
+            self.store.load_state(),
+            {"objects": [], "parents": {}, "order": {}, "drafts": []},
         )
         # And a subsequent write still works (overwrites the garbage).
         obj = self.store.create_object("Recover", id="obj-1")
@@ -7688,8 +7690,92 @@ class TestObjectsStore(unittest.TestCase):
         with open(self.objfile, "w") as f:
             json.dump([1, 2, 3], f)  # valid JSON, wrong shape
         self.assertEqual(
-            self.store.load_state(), {"objects": [], "parents": {}, "order": {}}
+            self.store.load_state(),
+            {"objects": [], "parents": {}, "order": {}, "drafts": []},
         )
+
+    # --- drafts (lightweight not-yet-started tasks) ---------------------------
+    def test_draft_upsert_persists_and_round_trips(self):
+        draft = self.store.upsert_draft(
+            {
+                "id": "draft-1",
+                "title": "Draft release notes",
+                "repo_path": "/tmp/repo",
+                "parent_node_id": "object:obj-1",
+                "prompt": "write the notes",
+            }
+        )
+        self.assertEqual(draft["id"], "draft-1")
+        self.assertEqual(draft["title"], "Draft release notes")
+        self.assertEqual(draft["repo_path"], "/tmp/repo")
+        self.assertEqual(draft["parent_node_id"], "object:obj-1")
+        self.assertEqual(draft["prompt"], "write the notes")
+        self.assertIn("created_at", draft)
+        self.assertIn("updated_at", draft)
+        # Round-trips through the JSON file and load_state.
+        drafts = self.store.load_state()["drafts"]
+        self.assertEqual(len(drafts), 1)
+        self.assertEqual(drafts[0]["id"], "draft-1")
+        on_disk = json.load(open(self.objfile))
+        self.assertEqual(on_disk["drafts"][0]["id"], "draft-1")
+
+    def test_draft_repo_path_may_be_empty_reminder(self):
+        draft = self.store.upsert_draft({"id": "draft-r", "title": "Call vendor"})
+        self.assertEqual(draft["repo_path"], "")
+        self.assertNotIn("prompt", draft)
+
+    def test_draft_upsert_same_id_is_not_duplicate(self):
+        self.store.upsert_draft({"id": "draft-1", "title": "First"})
+        self.store.upsert_draft({"id": "draft-1", "title": "Second"})
+        drafts = self.store.load_state()["drafts"]
+        self.assertEqual(len(drafts), 1)
+        self.assertEqual(drafts[0]["title"], "Second")
+
+    def test_draft_upsert_without_id_returns_none(self):
+        self.assertIsNone(self.store.upsert_draft({"title": "no id"}))
+
+    def test_draft_delete_removes_one(self):
+        self.store.upsert_draft({"id": "draft-1", "title": "Keep then drop"})
+        self.store.upsert_draft({"id": "draft-2", "title": "Survivor"})
+        self.assertTrue(self.store.delete_draft("draft-1"))
+        ids = [d["id"] for d in self.store.load_state()["drafts"]]
+        self.assertEqual(ids, ["draft-2"])
+
+    def test_draft_delete_missing_returns_false(self):
+        self.assertFalse(self.store.delete_draft("nope"))
+
+    def test_import_merges_drafts_additively(self):
+        # Server already holds one draft; import brings another + updates one.
+        self.store.upsert_draft({"id": "srv-d", "title": "Server draft"})
+        merged = self.store.import_state(
+            drafts=[
+                {"id": "srv-d", "title": "Renamed by browser"},
+                {"id": "brow-d", "title": "Browser draft", "repo_path": "/x"},
+            ]
+        )
+        by_id = {d["id"]: d for d in merged["drafts"]}
+        # Both survive — import is additive, never destructive.
+        self.assertEqual(set(by_id), {"srv-d", "brow-d"})
+        self.assertEqual(by_id["srv-d"]["title"], "Renamed by browser")
+        self.assertEqual(by_id["brow-d"]["repo_path"], "/x")
+
+    def test_import_drafts_does_not_disturb_objects(self):
+        self.store.create_object("Obj", id="obj-1")
+        merged = self.store.import_state(drafts=[{"id": "d1", "title": "T"}])
+        self.assertEqual([o["id"] for o in merged["objects"]], ["obj-1"])
+        self.assertEqual([d["id"] for d in merged["drafts"]], ["d1"])
+
+    def test_drafts_round_trip_via_file_with_objects(self):
+        # Drafts coexist with objects/parents/order in one durable file.
+        self.store.create_object("Obj", id="obj-1")
+        self.store.assign_session("session:abc", "obj-1")
+        self.store.upsert_draft(
+            {"id": "d1", "title": "Task", "parent_node_id": "object:obj-1"}
+        )
+        state = self.store.load_state()
+        self.assertEqual(len(state["objects"]), 1)
+        self.assertEqual(state["parents"]["session:abc"], "object:obj-1")
+        self.assertEqual(state["drafts"][0]["parent_node_id"], "object:obj-1")
 
 
 if __name__ == "__main__":
