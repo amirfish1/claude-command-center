@@ -26895,8 +26895,8 @@
       { id: 'haiku-4-5',  label: 'haiku-4-5',  oneM: false },
     ],
     codex: [
-      { id: 'gpt-5.4',      label: 'gpt-5.4 (1M default)' },
-      { id: 'gpt-5.5',      label: 'gpt-5.5' },
+      { id: 'gpt-5.5',      label: 'gpt-5.5 (default)' },
+      { id: 'gpt-5.4',      label: 'gpt-5.4 (1M-capable)' },
       { id: 'gpt-5-codex',  label: 'gpt-5-codex' },
       { id: 'o4',           label: 'o4' },
       { id: 'o4-mini',      label: 'o4-mini' },
@@ -33782,7 +33782,7 @@
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.4', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free' };
+  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free' };
   let _spawnDefaultsLoaded = false;
   let _spawnDefaultsSaveTimer = null;
   let _spawnDefaultsSaving = false;
@@ -33922,7 +33922,7 @@
     engine = normalizeSpawnDefaultEngine(engine);
     let value = String(model == null ? '' : model).trim();
     if (engine === 'claude' && !value) value = 'opus';
-    if (engine === 'codex' && !value) value = 'gpt-5.4';
+    if (engine === 'codex' && !value) value = 'gpt-5.5';
     if (engine === 'cursor' && !value) value = 'auto';
     if (engine === 'kilo' && !value) value = 'kilo/stepfun/step-3.7-flash:free';
     spawnDefaultsState.models[engine] = value;
@@ -36947,7 +36947,7 @@
       model = ($spawnDefaultsOtherModel && $spawnDefaultsOtherModel.value || '').trim();
     }
     if (engine === 'claude' && !model) model = 'opus';
-    if (engine === 'codex' && !model) model = 'gpt-5.4';
+    if (engine === 'codex' && !model) model = 'gpt-5.5';
     if (engine === 'cursor' && !model) model = 'auto';
     spawnDefaultsDraft.models[engine] = model;
   }

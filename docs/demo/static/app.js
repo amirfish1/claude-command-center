@@ -15530,8 +15530,8 @@
       { id: 'haiku-4-5',  label: 'haiku-4-5',  oneM: false },
     ],
     codex: [
-      { id: 'gpt-5.4',      label: 'gpt-5.4 (1M default)' },
-      { id: 'gpt-5.5',      label: 'gpt-5.5' },
+      { id: 'gpt-5.5',      label: 'gpt-5.5 (default)' },
+      { id: 'gpt-5.4',      label: 'gpt-5.4 (1M-capable)' },
       { id: 'gpt-5-codex',  label: 'gpt-5-codex' },
       { id: 'o3',           label: 'o3' },
       { id: 'o3-mini',      label: 'o3-mini' },

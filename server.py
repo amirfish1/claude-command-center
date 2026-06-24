@@ -2428,11 +2428,6 @@ def _codex_default_model():
     env_model = _clean_spawn_default_model(os.environ.get("CCC_CODEX_MODEL"))
     if env_model:
         return env_model
-    # Codex 0.141 reports gpt-5.5 as capped at ~272K for ChatGPT auth, while
-    # gpt-5.4 honors model_context_window=1000000 and reports a 950K effective
-    # window. Use the 1M-capable listed model when CCC's 1M mode is enabled.
-    if _codex_context_1m_enabled():
-        return "gpt-5.4"
     return "gpt-5.5"
 
 
@@ -2486,14 +2481,6 @@ def _load_spawn_defaults():
             model = _clean_spawn_default_model(value)
             if len(model) <= 200:
                 models[norm] = model
-    if (
-        _codex_context_1m_enabled()
-        and not os.environ.get("CCC_CODEX_MODEL")
-        and models.get("codex") == "gpt-5.5"
-    ):
-        # Existing installs may have persisted the old auto-default. Treat that
-        # exact value as stale so new Codex sessions actually open with 1M.
-        models["codex"] = _codex_default_model()
     for required in ("claude", "codex", "cursor"):
         if not models.get(required):
             models[required] = defaults["models"].get(required) or _spawn_fallback_model_for_engine(required)
@@ -15946,8 +15933,9 @@ def _codex_context_window_args():
     a foot-gun — it is silently capped per model:
       - gpt-5.4: 272K default, 1M max -> reports ~950K effective context.
       - gpt-5.5: 272K max -> clamped to ~258K after reserved output/system
-        tokens. CCC therefore defaults Codex spawns to gpt-5.4 while 1M mode is
-        enabled, unless the user explicitly sets CCC_CODEX_MODEL.
+        tokens. CCC still defaults Codex spawns to gpt-5.5 because it is the
+        stronger general model; choose gpt-5.4 explicitly when the larger
+        window matters more than the 5.5 model quality.
     Passed as a global `-c` override on spawn, resume, and the app-server so the
     window is consistent across a session's whole life. Set CCC_CODEX_CONTEXT_1M=0
     to fall back to the model default.
