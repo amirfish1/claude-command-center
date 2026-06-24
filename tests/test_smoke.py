@@ -202,18 +202,31 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (reparentConversationIdsToObject(target, convIds))", app_js)
         self.assertIn(".conv-folder-group.is-drop-target", app_css)
 
-    def test_custom_object_name_click_starts_inline_rename(self):
-        """Custom object header names should rename inline like session titles."""
+    def test_custom_object_rename_uses_pencil_save_cancel(self):
+        """Custom object header names should rename through explicit controls."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('data-role="object-title"', app_js)
+        self.assertIn('data-role="object-rename"', app_js)
+        self.assertIn('data-role="object-playpause"', app_js)
+        self.assertIn("function setFlowObjectStatus(id, status)", app_js)
         self.assertIn("function startInlineObjectRename(chip)", app_js)
+        self.assertIn("saveBtn.setAttribute('data-role', 'object-rename-save')", app_js)
+        self.assertIn("cancelBtn.setAttribute('data-role', 'object-rename-cancel')", app_js)
         self.assertIn("persistFlowCustomObjects();", app_js)
         self.assertIn("obj.title = newTitle;", app_js)
-        self.assertIn("if (objectTitle) {", app_js)
-        self.assertIn("startInlineObjectRename(objectTitle);", app_js)
+        self.assertIn("const $objectRename = $convList.querySelectorAll('[data-role=\"object-rename\"]');", app_js)
+        self.assertIn("$convList.querySelectorAll('[data-role=\"object-playpause\"]').forEach(btn =>", app_js)
+        self.assertIn("startInlineObjectRename(title);", app_js)
+        self.assertNotIn("startInlineObjectRename(objectTitle);", app_js)
+        self.assertNotIn("input.addEventListener('blur', () => finish(true));", app_js)
+        self.assertIn("&#128465;", app_js)
         self.assertIn(".conv-folder-object-title-input", app_css)
+        self.assertIn(".conv-folder-object-rename-btn", app_css)
+        self.assertIn(".conv-folder-object-playpause-btn", app_css)
+        self.assertIn(".conv-folder-object-title-actions", app_css)
+        self.assertIn(".conv-folder-group-header[data-object-drop] .conv-folder-group-arrow", app_css)
 
     def test_by_objects_header_has_expand_collapse_all(self):
         """By-objects mode should expose expand-all and collapse-all controls."""

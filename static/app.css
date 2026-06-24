@@ -8105,6 +8105,15 @@
     cursor: pointer;
   }
   .conv-folder-group-arrow:hover { opacity: 1; color: var(--accent, #58a6ff); }
+  .conv-folder-group-header[data-object-drop] {
+    grid-template-columns: var(--conv-dot-col) minmax(0, auto) auto minmax(0, 1fr) auto auto;
+  }
+  .conv-folder-group-header[data-object-drop] .conv-folder-group-arrow {
+    grid-column: 6;
+    justify-self: end;
+    width: auto;
+    padding: 0 2px;
+  }
   .conv-folder-group-chip {
     grid-column: 2 / 4;
     justify-self: start;
@@ -8118,7 +8127,23 @@
     border: 1px solid hsla(var(--chip-hue), 45%, 50%, 0.42);
     white-space: nowrap;
   }
-  .conv-folder-group-chip[data-role="object-title"] { cursor: text; }
+  .conv-folder-group-header[data-object-drop] .conv-folder-group-chip {
+    grid-column: 2;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conv-folder-group-chip[data-role="object-title"] { cursor: pointer; }
+  .conv-folder-group-header[data-object-drop] .conv-folder-group-count {
+    grid-column: 3;
+  }
+  .conv-folder-group-header[data-object-drop] .conv-folder-group-chip.is-renaming {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: none;
+    overflow: visible;
+  }
   .conv-folder-object-title-input {
     width: min(220px, 100%);
     min-width: 80px;
@@ -8130,6 +8155,28 @@
     font: inherit;
     font-size: 11px;
     font-weight: 600;
+    outline: none;
+  }
+  .conv-folder-object-title-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .conv-folder-object-title-action {
+    padding: 1px 6px;
+    font-size: 10px;
+    line-height: 1.25;
+    color: var(--text-muted);
+    background: rgba(139,148,158,0.12);
+    border: 1px solid rgba(139,148,158,0.30);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .conv-folder-object-title-action:hover,
+  .conv-folder-object-title-action:focus-visible {
+    color: var(--text);
+    background: rgba(88,166,255,0.16);
+    border-color: rgba(88,166,255,0.45);
     outline: none;
   }
   .conv-folder-group-chip.is-orphan { opacity: 0.55; font-style: italic; }
@@ -8145,18 +8192,34 @@
     font-size: 10px;
     font-variant-numeric: tabular-nums;
   }
-  .conv-folder-object-archive-btn {
+  .conv-folder-object-actions {
     grid-column: 5;
     justify-self: end;
-    padding: 1px 6px;
-    font-size: 11px;
-    line-height: 1.25;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .conv-folder-object-rename-btn,
+  .conv-folder-object-playpause-btn,
+  .conv-folder-object-archive-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 21px;
+    height: 21px;
+    padding: 0;
+    font-size: 12px;
+    line-height: 1;
     color: var(--text-muted);
-    background: rgba(139,148,158,0.10);
-    border: 1px solid rgba(139,148,158,0.28);
+    background: transparent;
+    border: 1px solid transparent;
     border-radius: 3px;
     cursor: pointer;
   }
+  .conv-folder-object-rename-btn:hover,
+  .conv-folder-object-rename-btn:focus-visible,
+  .conv-folder-object-playpause-btn:hover,
+  .conv-folder-object-playpause-btn:focus-visible,
   .conv-folder-object-archive-btn:hover,
   .conv-folder-object-archive-btn:focus-visible {
     color: var(--text);
