@@ -175,6 +175,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-role="archive-object"', app_js)
         self.assertIn(".conv-folder-object-archive-btn", app_css)
 
+    def test_by_objects_can_elevate_session_to_own_object(self):
+        """By-objects rows should have a one-click way to make a session its
+        own custom object, named from the session row."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function elevateConversationToOwnObject(convId)", app_js)
+        self.assertIn('data-role="elevate-to-object"', app_js)
+        self.assertIn("opts.elevateToObject", app_js)
+        self.assertIn("flowCustomObjects.unshift({ id, title, created_at: now, updated_at: now });", app_js)
+        self.assertIn("flowNodeParents[flowNodeKey('session', sid)] = node;", app_js)
+        self.assertIn("rankNewObjectFirst(node);", app_js)
+        self.assertIn("Elevated to object", app_js)
+        self.assertIn(".conv-elevate-object-btn", app_css)
+
     def test_sidebar_selected_rows_drag_together_to_objects(self):
         """Dragging a selected sidebar row should carry every selected row."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

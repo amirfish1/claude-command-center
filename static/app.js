@@ -17707,6 +17707,33 @@
     for (const c of convs) {
       const sid = c.session_id || c.id;
       if (sid) _convById.set(sid, c);
+      if (c.id) _convById.set(c.id, c);
+    }
+    function objectTitleForConversation(c) {
+      if (!c) return 'Object';
+      const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
+      const raw = (c.display_name || c.ai_title || cleanFirst || c.id || 'Object');
+      const title = String(raw).replace(/^\s*[✨›]\s*/, '').replace(/-/g, ' ').trim();
+      return title || 'Object';
+    }
+    function elevateConversationToOwnObject(convId) {
+      const c = _convById.get(convId) || (conversationsData || []).find(row =>
+        row && (row.id === convId || row.session_id === convId));
+      const sid = c && (c.session_id || c.id);
+      if (!sid) return false;
+      const title = objectTitleForConversation(c);
+      const now = Date.now();
+      const id = 'obj-' + now.toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+      const node = flowNodeKey('object', id);
+      flowCustomObjects.unshift({ id, title, created_at: now, updated_at: now });
+      flowNodeParents[flowNodeKey('session', sid)] = node;
+      persistFlowCustomObjects();
+      persistFlowNodeParents();
+      rankNewObjectFirst(node);
+      try { localStorage.setItem('ccc-inprogress-grouping', 'objects'); } catch (_) {}
+      showOpToast('Elevated to object: ' + title, 'success');
+      renderArchiveList(document.getElementById('convSearch')?.value || '');
+      return true;
     }
     const _inGroupChatIds = new Set(_gcActiveChats.flatMap(c => c.session_ids || []));
     // Global one-row-per-session dedup (CCC-41). The same session_id can arrive
@@ -18454,6 +18481,11 @@
       const wakeBtn = (isCodexRow && c.stale_tool_call && !c.archived && !c.verified)
         ? '<button class="conv-wake-btn" data-role="wake-codex" title="Wake Codex with a status check" aria-label="Wake Codex">&#8635;</button>'
         : '';
+      const elevateObjectBtn = (opts.elevateToObject && !isBacklogRow && !isGithubPrRow)
+        ? '<button class="conv-elevate-object-btn" data-role="elevate-to-object"'
+          + ' data-conv-id="' + escapeAttr(c.id) + '"'
+          + ' title="Elevate to its own object" aria-label="Elevate to its own object">&#8593;</button>'
+        : '';
 
       let startBtn = '';
       let archiveBtn;
@@ -18664,7 +18696,7 @@
             // to walk back by moving sessionIconHtml before the chips.
             + '<span class="conv-row-end">'
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
-            +   '<span class="conv-row-actions">' + wakeBtn + mergeBtn + startBtn + pinBtn + archiveBtn + '</span>'
+            +   '<span class="conv-row-actions">' + wakeBtn + mergeBtn + startBtn + pinBtn + archiveBtn + elevateObjectBtn + '</span>'
             +   sessionIconHtml
             + '</span>'
           + '</div>'
@@ -19217,7 +19249,7 @@
         }).join('');
         let body;
         if (archiveObjectId) {
-          const rowsHtml = cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn })).join('');
+          const rowsHtml = cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true })).join('');
           const emptyHint = (!cards.length && !_objDrafts.length)
             ? '<div class="conv-object-empty-hint">Empty — drag a session here, or add a task.</div>' : '';
           const addTaskHtml = '<button type="button" class="conv-object-add-task"'
@@ -19226,7 +19258,7 @@
           body = rowsHtml + _draftsHtml + emptyHint + addTaskHtml;
         } else {
           body = cards.length
-            ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn })).join('')
+            ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true })).join('')
             : '<div class="conv-object-empty-hint">Empty — drag sessions here.</div>';
         }
         // GOAL-1 status + immediate-objective — real custom objects only (not
@@ -20432,6 +20464,13 @@
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
+    $convList.querySelectorAll('[data-role="elevate-to-object"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        elevateConversationToOwnObject(btn.getAttribute('data-conv-id') || '');
+      });
+    });
     $convList.querySelectorAll('[data-role="archive-object"]').forEach(btn => {
       btn.addEventListener('click', (ev) => {
         ev.preventDefault();
@@ -20801,7 +20840,7 @@
         // the context-% badge (its own confirm-and-/compact handler runs
         // below), or that landed on the title (which now triggers rename
         // instead of opening the conversation — the pencil's job moved here).
-        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="pin"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="wake-codex"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('[data-role="conv-pct-compact"]') || ev.target.closest('[data-role="coo-track-wrap"]') || ev.target.closest('[data-role="nya-collapse"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
+        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="pin"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="wake-codex"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="elevate-to-object"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('[data-role="conv-pct-compact"]') || ev.target.closest('[data-role="coo-track-wrap"]') || ev.target.closest('[data-role="nya-collapse"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
         if (ev.metaKey || ev.ctrlKey || ev.shiftKey) {
           ev.preventDefault();
           toggleConversationRowSelection(el);

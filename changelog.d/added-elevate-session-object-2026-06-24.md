@@ -1,0 +1,1 @@
+- Add a by-objects row action to elevate a session into its own new object.

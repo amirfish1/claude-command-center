@@ -3883,6 +3883,7 @@
   .conv-item .conv-edit-btn:hover { opacity: 1; color: var(--accent); background: rgba(88,166,255,0.12); }
   .conv-item .conv-pin-btn,
   .conv-item .conv-wake-btn,
+  .conv-item .conv-elevate-object-btn,
   .conv-item .conv-archive-btn {
     opacity: 0; font-size: 13px; cursor: pointer;
     background: none; border: none; color: var(--text-muted);
@@ -3895,11 +3896,15 @@
   .conv-item:hover .conv-wake-btn,
   .conv-item.active .conv-wake-btn,
   .conv-item .conv-wake-btn:focus-visible,
+  .conv-item:hover .conv-elevate-object-btn,
+  .conv-item.active .conv-elevate-object-btn,
+  .conv-item .conv-elevate-object-btn:focus-visible,
   .conv-item:hover .conv-archive-btn,
   .conv-item.active .conv-archive-btn,
   .conv-item .conv-archive-btn:focus-visible { opacity: 0.7; }
   .conv-item .conv-pin-btn:hover { opacity: 1; color: var(--accent); background: rgba(88,166,255,0.12); }
   .conv-item .conv-wake-btn:hover { opacity: 1; color: var(--red); background: rgba(248,81,73,0.12); }
+  .conv-item .conv-elevate-object-btn:hover { opacity: 1; color: var(--green); background: rgba(63,185,80,0.12); }
   .conv-item .conv-wake-btn:disabled { cursor: progress; opacity: 0.55; }
   .conv-item .conv-pin-btn.is-unpin { color: var(--accent); }
   .conv-item.is-pinned:not(:hover):not(:focus-within) .conv-pin-btn.is-unpin { opacity: 0.9; }
