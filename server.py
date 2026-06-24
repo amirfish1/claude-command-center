@@ -37639,6 +37639,198 @@ def get_history_message(uuid):
     return dict(row) if row else None
 
 
+# ---------------------------------------------------------------------------
+# Total Recall search — optional session-level augmentation for the sidebar
+# conversation search. This does NOT replace the local claude-index path above:
+# Recall is broader and summary-based, so it contributes extra session hits
+# while knowledge/document hits stay out of the "Search conversations" UI.
+# ---------------------------------------------------------------------------
+
+_TOTAL_RECALL_TIMEOUT_SEC = 3.0
+_TOTAL_RECALL_SESSION_SOURCES = {"claude-code", "codex"}
+
+
+def _total_recall_command():
+    """Return the Total Recall CLI command prefix, or None when unavailable."""
+    candidates = []
+    for env_name in ("CCC_TOTAL_RECALL_BRAIN", "TOTAL_RECALL_BRAIN"):
+        raw = (os.environ.get(env_name) or "").strip()
+        if raw:
+            candidates.append(Path(raw).expanduser())
+
+    home = Path.home()
+    tr_home = (os.environ.get("TOTAL_RECALL_HOME") or "").strip()
+    bases = []
+    if tr_home:
+        bases.append(Path(tr_home).expanduser())
+    bases.extend([home / ".claude" / "total-recall", home / ".total-recall"])
+    for base in bases:
+        candidates.append(base / "plugins" / "total-recall" / "brain.dist" / "brain")
+
+    for path in candidates:
+        try:
+            if path.is_file() and os.access(path, os.X_OK):
+                return [str(path)]
+        except OSError:
+            continue
+
+    tr = shutil.which("total-recall")
+    return [tr] if tr else None
+
+
+def _unquote_total_recall_scalar(value):
+    s = (value or "").strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        return s[1:-1]
+    return s
+
+
+def _read_total_recall_summary_meta(path):
+    """Parse the small YAML-ish front matter Total Recall writes to summaries.
+
+    PyYAML is intentionally not a dependency here; CCC's runtime remains
+    stdlib-only. We only need scalar keys such as session_id, source_harness,
+    project, date, and time_start.
+    """
+    try:
+        p = Path(path).expanduser()
+    except (TypeError, ValueError):
+        return {}
+    try:
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read(65536)
+    except OSError:
+        return {}
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end < 0:
+        return {}
+    meta = {}
+    for line in text[3:end].splitlines():
+        m = re.match(r"^([A-Za-z0-9_]+):\s*(.*)$", line)
+        if not m:
+            continue
+        meta[m.group(1)] = _unquote_total_recall_scalar(m.group(2))
+    return meta
+
+
+def _total_recall_snippet(text):
+    s = str(text or "")
+    # Markdown headings/list markers read poorly inside the compact row preview.
+    s = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", s)
+    s = re.sub(r"(?m)^\s*[-*]\s+", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    if len(s) > 360:
+        s = s[:357].rstrip() + "…"
+    return html.escape(s) if s else ""
+
+
+def _total_recall_ts_unix(meta, item):
+    date_s = (meta.get("date") or item.get("date") or "").strip()
+    if not date_s:
+        return 0
+    time_s = (meta.get("time_start") or "00:00").strip() or "00:00"
+    try:
+        if "T" in date_s:
+            dt = datetime.fromisoformat(date_s.replace("Z", "+00:00"))
+        else:
+            dt = datetime.fromisoformat(f"{date_s}T{time_s}")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except (TypeError, ValueError):
+        return 0
+
+
+def search_total_recall_sessions(query, limit=20, cwd_like=None):
+    """Search Total Recall and return only openable session-backed hits.
+
+    The result shape mirrors search_conversation_history enough for the
+    existing sidebar augmentation to consume it: session_id, cwd, ts_unix,
+    snippet, and _source. Knowledge/document matches are filtered out here.
+    """
+    q = (query or "").strip()
+    if not q:
+        return {"results": []}
+    try:
+        limit = max(1, min(int(limit), 50))
+    except (TypeError, ValueError):
+        limit = 20
+    cmd = _total_recall_command()
+    if not cmd:
+        return {"results": []}
+
+    try:
+        proc = subprocess.run(
+            cmd + ["recall", "--query", q, "--limit", str(limit), "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=_TOTAL_RECALL_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": "total recall search timed out", "results": []}
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"error": f"total recall search failed: {e}", "results": []}
+
+    try:
+        data = json.loads(proc.stdout or "{}")
+    except ValueError as e:
+        return {"error": f"total recall returned invalid json: {e}", "results": []}
+    if proc.returncode != 0 and not data:
+        return {"error": (proc.stderr or "total recall search failed").strip(), "results": []}
+
+    raw_results = data.get("results")
+    if not isinstance(raw_results, list):
+        raw_results = [{"path": p} for p in data.get("paths", []) if isinstance(p, str)]
+
+    out = []
+    seen = set()
+    cwd_filter = (cwd_like or "").strip()
+    for idx, item in enumerate(raw_results):
+        if not isinstance(item, dict):
+            continue
+        item_source = str(item.get("source_harness") or "").strip()
+        if item_source == "knowledge":
+            continue
+        meta = _read_total_recall_summary_meta(item.get("path"))
+        source = (
+            meta.get("source_harness")
+            or item_source
+            or ""
+        ).strip()
+        if source == "knowledge":
+            continue
+        if source and source not in _TOTAL_RECALL_SESSION_SOURCES:
+            continue
+        session_id = (meta.get("session_id") or item.get("session_id") or "").strip()
+        if not session_id or session_id in seen:
+            continue
+        cwd = (meta.get("project") or item.get("project") or "").strip()
+        if cwd_filter and cwd_filter not in cwd:
+            continue
+        snippet = _total_recall_snippet(item.get("summary") or item.get("title") or "")
+        if not snippet:
+            snippet = _total_recall_snippet(session_id)
+        ts_unix = _total_recall_ts_unix(meta, item)
+        out.append({
+            "uuid": f"recall:{session_id}",
+            "session_id": session_id,
+            "type": "recall",
+            "cwd": cwd,
+            "git_branch": "",
+            "timestamp": meta.get("date") or item.get("date") or "",
+            "ts_unix": ts_unix,
+            "snippet": snippet,
+            "score": idx,
+            "_source": "recall",
+        })
+        seen.add(session_id)
+        if len(out) >= limit:
+            break
+    return {"results": out}
+
+
 _plan_usage_cache = None
 _plan_usage_cache_time = 0
 _plan_usage_cache_lock = threading.Lock()
@@ -41102,6 +41294,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(search_conversation_history(
                     q, limit=limit_raw, cwd_like=cwd_like, since=since,
                     semantic=semantic,
+                ))
+        elif path == "/api/search-recall-sessions":
+            # Optional Total Recall augmentation for the sidebar search.
+            # Returns only session-backed hits so the "Search conversations"
+            # field never turns into a document/knowledge search.
+            qs = urllib.parse.parse_qs(parsed.query)
+            q = (qs.get("q", [""])[0] or "").strip()
+            if not q:
+                self.send_json({"results": []})
+            else:
+                cwd_like = (qs.get("cwd", [""])[0] or "").strip() or None
+                limit_raw = (qs.get("limit", ["20"])[0] or "20").strip()
+                self.send_json(search_total_recall_sessions(
+                    q, limit=limit_raw, cwd_like=cwd_like,
                 ))
         elif path == "/api/history/status":
             # Lay-of-the-land for the topbar pill: is the index file there,

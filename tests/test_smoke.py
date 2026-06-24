@@ -178,6 +178,17 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Sessions stay on disk", app_js)
         self.assertIn("Hard kill is not offered", app_js)
 
+    def test_total_recall_search_ui_wires_sidebar_augmentation(self):
+        """Conversation search calls the Recall session endpoint and labels
+        Recall-backed sidebar hits without turning the field into doc search."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn("/api/search-recall-sessions", app_js)
+        self.assertIn("c._historySource === 'recall'", app_js)
+        self.assertIn("Total Recall", app_js)
+        self.assertIn("is-recall", app_js)
+        self.assertIn(".conv-history-badge.is-recall", app_css)
+
     def test_new_session_folder_shortcuts_are_labeled(self):
         """The folder dropdown and recent chips both set the same spawn CWD.
 

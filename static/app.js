@@ -18876,8 +18876,14 @@
       // (purple) appears when this row matched via the vector path (vec or
       // fused). "history" (blue) for lexical-only.
       const _historyIsSemantic = c._historySource === 'vec' || c._historySource === 'fused';
+      const _historyIsRecall = c._historySource === 'recall';
+      const _historyBadgeClass = _historyIsSemantic ? ' is-semantic' : (_historyIsRecall ? ' is-recall' : '');
+      const _historyBadgeLabel = _historyIsRecall ? 'recall' : (_historyIsSemantic ? 'semantic history' : 'history');
+      const _historyBadgeTitle = _historyIsRecall
+        ? 'Matched by Total Recall'
+        : 'Matched in conversation history' + (_historyIsSemantic ? ' (semantic)' : '');
       const historyBadgeHtml = c._historyMatch
-        ? '<span class="conv-history-badge' + (_historyIsSemantic ? ' is-semantic' : '') + '" title="Matched in conversation history' + (_historyIsSemantic ? ' (semantic)' : '') + '">' + (_historyIsSemantic ? 'semantic history' : 'history') + '</span>'
+        ? '<span class="conv-history-badge' + _historyBadgeClass + '" title="' + escapeAttr(_historyBadgeTitle) + '">' + _historyBadgeLabel + '</span>'
         : '';
       const repoBadgeHtml = c._repoSearchMatch
         ? '<span class="conv-history-badge" title="Matched repo search; showing latest sessions from ' + escapeHtml(c._repoSearchLabel || 'repo') + '">repo</span>'
@@ -19009,7 +19015,7 @@
           + '</div>';
       }
 
-      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
           + '<div class="conv-main-row">'
@@ -29855,16 +29861,20 @@
     const historyReq = fetch('/api/search-history?' + params.toString())
       .then(r => r.ok ? r.json() : { results: [] })
       .catch(() => ({ results: [] }))
+    const recallReq = fetch('/api/search-recall-sessions?' + params.toString())
+      .then(r => r.ok ? r.json() : { results: [] })
+      .catch(() => ({ results: [] }))
     const matchedRepo = _bestRepoMatchForQuery(qLower);
     const repoReq = matchedRepo
       ? fetch('/api/conversations?repo_path=' + encodeURIComponent(matchedRepo.path) + '&include_old=1')
         .then(r => r.ok ? r.json() : [])
         .catch(() => [])
       : Promise.resolve([]);
-    return Promise.all([historyReq, repoReq]).then(([data, repoRows]) => {
+    return Promise.all([historyReq, recallReq, repoReq]).then(([data, recallData, repoRows]) => {
       // Drop stale responses — newer keystroke already in flight.
       if (seq !== _historyFetchSeq) return;
-      const results = (data && data.results) || [];
+      const results = ((data && data.results) || [])
+        .concat((recallData && recallData.results) || []);
       const bySession = new Map();
       for (const r of results) {
         const sid = r.session_id;

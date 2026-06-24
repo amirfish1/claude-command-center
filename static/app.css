@@ -3516,8 +3516,16 @@
     background: rgba(180, 140, 255, 0.14);
     border-color: rgba(180, 140, 255, 0.40);
   }
+  .conv-history-badge.is-recall {
+    color: rgba(100, 210, 180, 0.95);
+    background: rgba(100, 210, 180, 0.12);
+    border-color: rgba(100, 210, 180, 0.38);
+  }
   .conv-item.is-history-match.is-semantic-match {
     border-left-color: rgba(180, 140, 255, 0.55);
+  }
+  .conv-item.is-history-match.is-recall-match {
+    border-left-color: rgba(100, 210, 180, 0.55);
   }
   /* Topbar history-index status pill. */
   .hi-status-pill {
