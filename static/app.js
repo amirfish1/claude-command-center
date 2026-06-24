@@ -14109,6 +14109,112 @@
     }
   }
 
+  const CONVERSATION_ROW_ACTION_SELECTOR = [
+    '[data-role="edit"]',
+    '[data-role="pin"]',
+    '[data-role="archive"]',
+    '[data-role="merge"]',
+    '[data-role="wake-codex"]',
+    '[data-role="start"]',
+    '[data-role="elevate-to-object"]',
+    '[data-role="unpin-repo"]',
+    '[data-role="conv-pct-compact"]',
+    '[data-role="coo-track-wrap"]',
+    '[data-role="nya-collapse"]',
+    '.conv-title-input',
+  ].join(',');
+  let _mobileRowTap = null;
+  let _lastMobileRowOpenId = '';
+  let _lastMobileRowOpenAt = 0;
+
+  function conversationRowTapIsBlocked(target, opts) {
+    if (!target || !target.closest) return false;
+    if (target.closest(CONVERSATION_ROW_ACTION_SELECTOR)) return true;
+    if (!(opts && opts.allowTitle) && target.closest('[data-role="title"]')) return true;
+    return false;
+  }
+
+  function shouldSuppressSyntheticRowClick(id) {
+    return !!id && id === _lastMobileRowOpenId && Date.now() - _lastMobileRowOpenAt < 700;
+  }
+
+  function activateConversationRowFromTap(el, ev, opts) {
+    if (!el || !el.dataset || !el.dataset.id) return false;
+    if (conversationRowTapIsBlocked(ev && ev.target, opts)) return false;
+    if (ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey)) {
+      ev.preventDefault();
+      toggleConversationRowSelection(el);
+      return true;
+    }
+    if (selectedListIds.size > 0) {
+      clearSelectedConversationRows();
+    }
+    if (isMobile()) {
+      $convList.querySelectorAll('.conv-item.mobile-tapped').forEach(n => n.classList.remove('mobile-tapped'));
+      el.classList.add('mobile-tapped');
+    }
+    selectConversation(el.dataset.id);
+    if (opts && opts.source === 'pointer') {
+      _lastMobileRowOpenId = el.dataset.id;
+      _lastMobileRowOpenAt = Date.now();
+    }
+    return true;
+  }
+
+  function mobileConversationRowFromEvent(ev) {
+    const row = ev && ev.target && ev.target.closest && ev.target.closest('.conv-item[data-id]');
+    if (!row || row.dataset.role === 'archived-gc-row') return null;
+    return row;
+  }
+
+  function beginMobileConversationRowTap(ev) {
+    if (!isTouchPrimary() || ev.pointerType === 'mouse') return;
+    const row = mobileConversationRowFromEvent(ev);
+    if (!row || conversationRowTapIsBlocked(ev.target, { allowTitle: true })) return;
+    _mobileRowTap = {
+      pointerId: ev.pointerId,
+      row,
+      id: row.dataset.id,
+      x: ev.clientX,
+      y: ev.clientY,
+      startedAt: Date.now(),
+      canceled: false,
+    };
+  }
+
+  function moveMobileConversationRowTap(ev) {
+    if (!_mobileRowTap || ev.pointerId !== _mobileRowTap.pointerId) return;
+    const dx = Math.abs(ev.clientX - _mobileRowTap.x);
+    const dy = Math.abs(ev.clientY - _mobileRowTap.y);
+    if (dx > 10 || dy > 10) _mobileRowTap.canceled = true;
+  }
+
+  function finishMobileConversationRowTap(ev) {
+    if (!_mobileRowTap || ev.pointerId !== _mobileRowTap.pointerId) return;
+    const tap = _mobileRowTap;
+    _mobileRowTap = null;
+    if (tap.canceled || Date.now() - tap.startedAt > 450) return;
+    const row = document.contains(tap.row) ? tap.row : mobileConversationRowFromEvent(ev);
+    if (!row || row.dataset.id !== tap.id) return;
+    if (ev.cancelable) ev.preventDefault();
+    activateConversationRowFromTap(row, ev, { allowTitle: true, source: 'pointer' });
+  }
+
+  function cancelMobileConversationRowTap(ev) {
+    if (!_mobileRowTap || (ev && ev.pointerId !== _mobileRowTap.pointerId)) return;
+    _mobileRowTap = null;
+  }
+
+  function wireMobileConversationRowTaps() {
+    if (!$convList || $convList._mobileRowTapWired) return;
+    $convList._mobileRowTapWired = true;
+    $convList.addEventListener('pointerdown', beginMobileConversationRowTap, { passive: true });
+    $convList.addEventListener('pointermove', moveMobileConversationRowTap, { passive: true });
+    $convList.addEventListener('pointerup', finishMobileConversationRowTap);
+    $convList.addEventListener('pointercancel', cancelMobileConversationRowTap, { passive: true });
+  }
+  wireMobileConversationRowTaps();
+
   function openCoordModal() {
     if (selectedListIds.size < 1) return;
     const backdrop = document.getElementById('coordModalBackdrop');
@@ -19913,7 +20019,8 @@
     const _activeEl = document.activeElement;
     const _userIsTyping = !!(_activeEl && (_activeEl.tagName === 'TEXTAREA'
       || (_activeEl.tagName === 'INPUT' && /^(text|search|email|url|tel|password)$/i.test(_activeEl.type || 'text'))));
-    if ($convList && !document.hidden && !_userIsTyping) {
+    const _skipFlipForTouchScroll = isTouchPrimary();
+    if ($convList && !document.hidden && !_userIsTyping && !_skipFlipForTouchScroll) {
       for (const row of $convList.querySelectorAll('[data-id]')) {
         const id = row.getAttribute('data-id');
         if (id) _flipBefore.set(id, row.getBoundingClientRect().top);
@@ -20747,40 +20854,9 @@
       el.addEventListener('mouseleave', () => {
         _convPrefetchCancel(el.dataset.id);
       });
-      el.addEventListener('touchstart', () => {
-        if (isMobile()) {
-          el.classList.add('mobile-active-tap');
-        }
-      }, { passive: true });
-      el.addEventListener('touchend', () => {
-        el.classList.remove('mobile-active-tap');
-      }, { passive: true });
-      el.addEventListener('touchmove', () => {
-        el.classList.remove('mobile-active-tap');
-      }, { passive: true });
-      el.addEventListener('touchcancel', () => {
-        el.classList.remove('mobile-active-tap');
-      }, { passive: true });
       el.addEventListener('click', (ev) => {
-        // Ignore clicks that started the inline editor, archive button,
-        // the context-% badge (its own confirm-and-/compact handler runs
-        // below), or that landed on the title (which now triggers rename
-        // instead of opening the conversation — the pencil's job moved here).
-        if (ev.target.closest('[data-role="edit"]') || ev.target.closest('[data-role="pin"]') || ev.target.closest('[data-role="archive"]') || ev.target.closest('[data-role="merge"]') || ev.target.closest('[data-role="wake-codex"]') || ev.target.closest('[data-role="start"]') || ev.target.closest('[data-role="elevate-to-object"]') || ev.target.closest('[data-role="unpin-repo"]') || ev.target.closest('[data-role="conv-pct-compact"]') || ev.target.closest('[data-role="coo-track-wrap"]') || ev.target.closest('[data-role="nya-collapse"]') || ev.target.closest('.conv-title-input') || ev.target.closest('[data-role="title"]')) return;
-        if (ev.metaKey || ev.ctrlKey || ev.shiftKey) {
-          ev.preventDefault();
-          toggleConversationRowSelection(el);
-          return;
-        }
-        if (selectedListIds.size > 0) {
-          clearSelectedConversationRows();
-        }
-        if (isMobile()) {
-          $convList.querySelectorAll('.conv-item.mobile-tapped').forEach(n => n.classList.remove('mobile-tapped'));
-          el.classList.add('mobile-tapped');
-        }
-        const row = conversationsData.find(c => c.id === el.dataset.id);
-        selectConversation(el.dataset.id);
+        if (shouldSuppressSyntheticRowClick(el.dataset.id)) { ev.preventDefault(); return; }
+        activateConversationRowFromTap(el, ev, { allowTitle: false, source: 'click' });
       });
       attachDragHandlers(el);
     });
@@ -20934,6 +21010,7 @@
         if (_lpFired) { _lpFired = false; ev.preventDefault(); return; }
         const item = el.closest('.conv-item');
         if (!item || !item.dataset.id) return;
+        if (shouldSuppressSyntheticRowClick(item.dataset.id)) { ev.preventDefault(); return; }
         if (ev.metaKey || ev.ctrlKey || ev.shiftKey) {
           ev.preventDefault();
           toggleConversationRowSelection(item);

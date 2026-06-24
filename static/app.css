@@ -9531,8 +9531,8 @@
       padding-bottom: 12px !important;
       margin-bottom: 6px !important;
       position: relative;
-      touch-action: manipulation;
-      transition: background 0.1s ease, transform 0.1s ease;
+      touch-action: pan-y;
+      transition: background-color 0.08s ease;
       -webkit-tap-highlight-color: rgba(188, 140, 255, 0.15);
     }
     .compact-rows .conv-item {
@@ -9545,7 +9545,6 @@
     .conv-item.mobile-active-tap {
       background-color: var(--surface-2) !important;
       opacity: 0.85;
-      transform: scale(0.97);
     }
     .conv-item.mobile-tapped {
       background-color: var(--surface-2) !important;

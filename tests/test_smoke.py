@@ -1150,7 +1150,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("conv-pct-badge is-actionable", app_js)
         # Badge must be in the row-click exclusion list so the row
         # itself doesn't open underneath the /compact confirm.
-        self.assertIn('ev.target.closest(\'[data-role="conv-pct-compact"]\')', app_js)
+        self.assertIn("CONVERSATION_ROW_ACTION_SELECTOR", app_js)
+        self.assertIn("'[data-role=\"conv-pct-compact\"]'", app_js)
+        self.assertIn("conversationRowTapIsBlocked(ev && ev.target, opts)", app_js)
         # Confirm + POST shape — compact is a command operation, not a
         # generic text inject. Both Claude and Codex now route through
         # /api/session/compact (postCompactSession); Codex compaction runs via
@@ -1186,6 +1188,26 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("btn.classList.toggle('selected', selected);", app_js)
         self.assertIn("syncSlashCommandMenuSelection();", app_js)
         self.assertNotIn("renderSlashCommandMenu(input, _slashMenuItems, q);", app_js)
+
+    def test_mobile_conversation_rows_open_on_pointer_tap_without_scroll_jank(self):
+        """Touch rows should open from the real pointer tap, not a later
+        synthetic click, and scrolling the list should not run per-row
+        touchmove/touchstart handlers."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function wireMobileConversationRowTaps()", app_js)
+        self.assertIn("$convList.addEventListener('pointerup', finishMobileConversationRowTap);", app_js)
+        self.assertIn("activateConversationRowFromTap(row, ev, { allowTitle: true, source: 'pointer' });", app_js)
+        self.assertIn("function shouldSuppressSyntheticRowClick(id)", app_js)
+        self.assertIn("if (shouldSuppressSyntheticRowClick(item.dataset.id)) { ev.preventDefault(); return; }", app_js)
+        self.assertIn("const _skipFlipForTouchScroll = isTouchPrimary();", app_js)
+        self.assertIn("&& !_skipFlipForTouchScroll", app_js)
+        self.assertNotIn("el.classList.add('mobile-active-tap')", app_js)
+        self.assertNotIn("el.classList.remove('mobile-active-tap')", app_js)
+        self.assertIn("touch-action: pan-y;", app_css)
+        self.assertIn(".conv-item:active,\n    .conv-item.mobile-active-tap {\n      background-color: var(--surface-2) !important;\n      opacity: 0.85;\n    }", app_css)
+        self.assertNotIn(".conv-item.mobile-active-tap {\n      background-color: var(--surface-2) !important;\n      opacity: 0.85;\n      transform:", app_css)
 
     def test_relayed_question_renders_inline_in_conv_view(self):
         """The "Session is asking a question" surface is an inline card
