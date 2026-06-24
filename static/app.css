@@ -3837,6 +3837,9 @@
        hierarchy is still legible. */
     border-radius: 6px;
   }
+  .conv-folder-group[data-object-drop-zone] > .conv-item.is-grouped-row {
+    padding-left: 29px;
+  }
   .conv-folder-group:not(.collapsed) .conv-item.is-grouped-row::before {
     content: '';
     position: absolute;
@@ -8035,6 +8038,9 @@
   body.chips-muted .conv-folder-group-header {
     border-left-color: var(--border) !important;
   }
+  body.chips-level .conv-folder-group[data-object-drop-zone] > .conv-folder-group-header {
+    --chip-hue: calc(205 + (var(--obj-depth, 0) * 46)) !important;
+  }
   .conv-folder-chip.is-orphan {
     opacity: 0.55;
     font-style: italic;
@@ -8206,18 +8212,17 @@
     font-size: 15px;
     line-height: 1.28;
   }
-  .conv-folder-object-numbered-title,
-  .conv-folder-object-numbered-item {
+  .conv-folder-group-header[data-object-drop]:has(.conv-object-meta) .conv-folder-group-chip {
+    max-width: none;
+  }
+  .conv-folder-object-title-text {
     white-space: nowrap;
   }
   .conv-folder-object-number {
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
     font-weight: 700;
-  }
-  .conv-folder-object-separator {
-    color: var(--text-muted);
-    opacity: 0.72;
+    margin-right: 2px;
   }
   .conv-folder-group-chip[data-role="object-title"] { cursor: pointer; }
   .conv-folder-group-header[data-object-drop] .conv-folder-group-count {

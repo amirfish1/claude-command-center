@@ -1,0 +1,1 @@
+- Refine sidebar object grouping, tab order, merge-row filtering, and chip color modes.

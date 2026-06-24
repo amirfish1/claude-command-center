@@ -225,6 +225,27 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("promptModal('Object name'", handler)
         self.assertNotIn("await promptModal", handler)
 
+    def test_sidebar_tabs_start_with_active_and_archived(self):
+        """The high-traffic Active and Archived tabs should be first."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        tab_block = app_js[app_js.index("const _tabDefs = ["):app_js.index("const _tabBarHtml", app_js.index("const _tabDefs = ["))]
+
+        active_pos = tab_block.index("['inprogress', 'Active'")
+        archived_pos = tab_block.index("['archived', 'Archived'")
+        issues_pos = tab_block.index("['issues', 'Issues'")
+        merge_pos = tab_block.index("['merge', 'Merge'")
+        self.assertLess(active_pos, archived_pos)
+        self.assertLess(archived_pos, issues_pos)
+        self.assertLess(issues_pos, merge_pos)
+
+    def test_ready_to_merge_only_uses_known_repo_rows(self):
+        """Cross-repo Ready to merge should not surface PRs from unknown repos."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function rowBelongsToKnownRepo(row)", app_js)
+        self.assertIn("return known.some(root => repo === root || repo.startsWith(root + '/'));", app_js)
+        self.assertIn("if (!rowBelongsToKnownRepo(r)) continue;", app_js)
+
     def test_by_objects_sort_prioritizes_objects_before_repos(self):
         """Manual rank must not let repos jump above objects in by-objects mode."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -307,6 +328,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _objectHasVisibleDrafts = (node) =>", app_js)
         self.assertIn("if (_ipSearchActive && !_byObject.has(node) && !_objectHasVisibleDrafts(node)) continue;", app_js)
 
+    def test_object_group_rows_align_under_object_titles(self):
+        """Rows inside object groups should start under the object title column."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn(".conv-folder-group[data-object-drop-zone] > .conv-item.is-grouped-row {\n"
+                      "    padding-left: 29px;\n"
+                      "  }", app_css)
+
     def test_custom_object_rename_uses_pencil_save_cancel(self):
         """Custom object header names should rename through explicit controls."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -384,16 +413,39 @@ class TestServerImports(unittest.TestCase):
                       "    font: inherit;\n"
                       "    font-size: 15px;", app_css)
 
-    def test_by_object_group_titles_number_slash_separated_items(self):
-        """Task-like object headers should show each slash-separated item in order."""
+    def test_by_object_group_titles_use_available_space(self):
+        """Object headers should not ellipsize while header space is available."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn(".conv-folder-group-header[data-object-drop]:has(.conv-object-meta) .conv-folder-group-chip {\n"
+                      "    max-width: none;\n"
+                      "  }", app_css)
+
+    def test_by_object_nested_titles_use_sibling_ordinals(self):
+        """Nested object numbering should reflect sibling order under a parent."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("function numberedObjectTitleHtml(title)", app_js)
-        self.assertIn("const parts = raw.split('/').map(s => s.trim()).filter(Boolean);", app_js)
-        self.assertIn("const titleHtml = archiveObjectId ? numberedObjectTitleHtml(folder) : escapeHtml(folder);", app_js)
-        self.assertIn(".conv-folder-object-numbered-title", app_css)
+        self.assertIn("function numberedObjectTitleHtml(title, ordinal = 0)", app_js)
+        self.assertIn("const prefix = ordinal > 0", app_js)
+        self.assertIn("numberedObjectTitleHtml(folder, objectOrdinal)", app_js)
+        self.assertIn("_renderObjGroup(nodeId, group.title, group.cards, depth, ordinal)", app_js)
+        self.assertIn("_emitObjTree(k, depth + 1, i + 1)", app_js)
+        self.assertNotIn("raw.split('/').map", app_js)
+        self.assertIn(".conv-folder-object-title-text", app_css)
         self.assertIn(".conv-folder-object-number", app_css)
+
+    def test_chip_color_toggle_has_hierarchy_level_mode(self):
+        """Chip colors should cycle through per-item, per-level, and muted modes."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("else if (m === 'level') document.body.classList.add('chips-level');", index_html)
+        self.assertIn("document.body.classList.contains('chips-level') ? 'level' : 'color'", app_js)
+        self.assertIn("const next = cur === 'color' ? 'level' : (cur === 'level' ? 'muted' : 'color');", app_js)
+        self.assertIn("localStorage.setItem('ccc-chips-mode', next)", app_js)
+        self.assertIn("body.chips-level .conv-folder-group[data-object-drop-zone] > .conv-folder-group-header", app_css)
 
     def test_by_objects_header_has_expand_collapse_all(self):
         """By-objects mode should expose expand-all and collapse-all controls."""

@@ -1703,6 +1703,20 @@
     return absolute || row.repo_path || row.spawn_cwd || row.session_cwd || row.cwd || row.folder_path || '';
   }
 
+  function _sidebarKnownRepoPaths() {
+    const repos = (repoListState && Array.isArray(repoListState.repos)) ? repoListState.repos : [];
+    return repos
+      .map(r => String((r && r.path) || '').replace(/\/+$/, ''))
+      .filter(Boolean);
+  }
+
+  function rowBelongsToKnownRepo(row) {
+    const repo = String(rowRepoPath(row) || '').replace(/\/+$/, '');
+    const known = _sidebarKnownRepoPaths();
+    if (!repo || !known.length) return true;
+    return known.some(root => repo === root || repo.startsWith(root + '/'));
+  }
+
   function repoPathForIssueNumber(issueNum) {
     const num = String(issueNum || '');
     const row = (conversationsData || []).find(c =>
@@ -19173,17 +19187,14 @@
     };
     const _folderGroupStorageKey = (section, key) =>
       'ccc-folder-group-collapsed:' + section + ':' + String(key || '').slice(0, 180);
-    function numberedObjectTitleHtml(title) {
+    function numberedObjectTitleHtml(title, ordinal = 0) {
       const raw = String(title || '').trim();
-      const parts = raw.split('/').map(s => s.trim()).filter(Boolean);
-      if (parts.length < 2) return escapeHtml(raw);
-      return '<span class="conv-folder-object-numbered-title">'
-        + parts.map((part, i) =>
-          '<span class="conv-folder-object-numbered-item">'
-            + '<span class="conv-folder-object-number">' + (i + 1) + '.</span> '
-            + escapeHtml(part)
-          + '</span>'
-        ).join('<span class="conv-folder-object-separator"> / </span>')
+      const prefix = ordinal > 0
+        ? '<span class="conv-folder-object-number">' + ordinal + '.</span> '
+        : '';
+      return '<span class="conv-folder-object-title-text">'
+        + prefix
+        + escapeHtml(raw || 'Object')
         + '</span>';
     }
     const _isFolderGroupCollapsed = (section, key) => {
@@ -19192,7 +19203,7 @@
       try { return localStorage.getItem(_folderGroupStorageKey(section, key)) === '1'; }
       catch (_) { return false; }
     };
-    const _folderGroupHeaderHtml = (section, folder, count, hue, orphan, collapseKey, extraAttrs = '', repoPath = '', archiveObjectId = '', inlineMetaHtml = '') => {
+    const _folderGroupHeaderHtml = (section, folder, count, hue, orphan, collapseKey, extraAttrs = '', repoPath = '', archiveObjectId = '', inlineMetaHtml = '', objectOrdinal = 0) => {
       const collapsed = _isFolderGroupCollapsed(section, collapseKey);
       // "Push all" ship control — conversation list only, and only when we
       // know the repo's real path. Status text is hydrated client-side after
@@ -19240,7 +19251,7 @@
       const objectTitleAttrs = archiveObjectId
         ? ' data-role="object-title" data-object-id="' + escapeHtml(archiveObjectId) + '" title="Open object"'
         : '';
-      const titleHtml = archiveObjectId ? numberedObjectTitleHtml(folder) : escapeHtml(folder);
+      const titleHtml = archiveObjectId ? numberedObjectTitleHtml(folder, objectOrdinal) : escapeHtml(folder);
       return '<div class="conv-folder-group-header" style="--chip-hue:' + hue + ';"'
         + ' role="button" tabindex="0" data-role="folder-group-toggle"'
         + ' data-collapse-key="' + escapeHtml(_folderGroupStorageKey(section, collapseKey)) + '"'
@@ -19563,7 +19574,7 @@
         const bMax = b[1].cards.reduce((m, c) => Math.max(m, c.modified || 0), 0);
         return bMax - aMax;
       });
-      const _renderObjGroup = (nodeId, title, cards, depth = 0) => {
+      const _renderObjGroup = (nodeId, title, cards, depth = 0, ordinal = 0) => {
         // Stable per-node hue so each group keeps its color across renders.
         let hash = 0;
         for (let i = 0; i < nodeId.length; i++) hash = ((hash << 5) - hash + nodeId.charCodeAt(i)) | 0;
@@ -19625,11 +19636,11 @@
         // built into a tree in the emit loop below; here we just render the
         // depth as a left indent + a guide rail so the day reads as a tree.
         const _nestCls = depth > 0 ? ' is-nested' : '';
-        const _nestStyle = depth > 0 ? ' style="--obj-depth:' + depth + '"' : '';
+        const _nestStyle = ' style="--obj-depth:' + depth + '"';
         return '<div class="conv-folder-group' + _nestCls + (collapsed ? ' collapsed' : '') + '"'
           + _nestStyle
           + ' data-object-drop-zone="' + escapeAttr(nodeId) + '">'
-          + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs, '', archiveObjectId, inlineMetaHtml)
+          + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs, '', archiveObjectId, inlineMetaHtml, ordinal)
           + body
           + '</div>';
       };
@@ -19650,18 +19661,18 @@
         else { _objRoots.push(nodeId); }
       }
       const _emittedObj = new Set();
-      const _emitObjTree = (nodeId, depth) => {
+      const _emitObjTree = (nodeId, depth, ordinal = 0) => {
         if (_emittedObj.has(nodeId)) return '';   // cycle / dup guard
         _emittedObj.add(nodeId);
         const group = _byObject.get(nodeId);
         if (!group) return '';
-        let html = _renderObjGroup(nodeId, group.title, group.cards, depth);
+        let html = _renderObjGroup(nodeId, group.title, group.cards, depth, ordinal);
         // A collapsed parent hides its whole subtree — skip recursing.
         if (_isFolderGroupCollapsed('inprogress', nodeId)) return html;
-        for (const k of (_childrenOf.get(nodeId) || [])) html += _emitObjTree(k, depth + 1);
+        (_childrenOf.get(nodeId) || []).forEach((k, i) => { html += _emitObjTree(k, depth + 1, i + 1); });
         return html;
       };
-      let _objGroupsHtml = _objRoots.map(n => _emitObjTree(n, 0)).join('');
+      let _objGroupsHtml = _objRoots.map(n => _emitObjTree(n, 0, 0)).join('');
       if (_unclassified.length) {
         _objGroupsHtml += _renderObjGroup('unclassified', 'Unclassified', _unclassified);
       }
@@ -19858,6 +19869,7 @@
       const _rtmByPr = new Map();   // pr_num -> row (keep most-recently-modified)
       for (const r of archiveData) {
         if (!r) continue;
+        if (!rowBelongsToKnownRepo(r)) continue;
         if (String(r.pr_state || '').toUpperCase() !== 'OPEN') continue;
         if (!r.tail_pr_number) continue;
         if (r.archived) continue;
@@ -20228,10 +20240,10 @@
       } catch (_) { return 'inprogress'; }
     })();
     const _tabDefs = [
-      ['issues', 'Issues', (_ghIssueConvs && _ghIssueConvs.length) || 0],
-      ['merge', 'Merge', (_readyToMergeConvs && _readyToMergeConvs.length) || 0],
       ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
       ['archived', 'Archived', _arcCount || 0],
+      ['issues', 'Issues', (_ghIssueConvs && _ghIssueConvs.length) || 0],
+      ['merge', 'Merge', (_readyToMergeConvs && _readyToMergeConvs.length) || 0],
     ];
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
@@ -30339,23 +30351,31 @@
         scheduleInputContextFit();
       });
     }
-    // Chip color toggle — flips body.chips-muted, persists, no re-render
-    // needed (CSS handles the palette swap).
+    // Chip color toggle — cycles color → hierarchy-level → muted, persists,
+    // no re-render needed (CSS handles the palette swap).
     const $chipsToggle = document.getElementById('chipsColorToggle');
     const $chipsIcon = document.getElementById('chipsColorIcon');
+    const _chipsMode = () => document.body.classList.contains('chips-muted')
+      ? 'muted'
+      : (document.body.classList.contains('chips-level') ? 'level' : 'color');
+    const _applyChipsMode = (mode) => {
+      document.body.classList.toggle('chips-muted', mode === 'muted');
+      document.body.classList.toggle('chips-level', mode === 'level');
+    };
     const _syncChipsIcon = () => {
       if (!$chipsIcon) return;
-      const muted = document.body.classList.contains('chips-muted');
+      const mode = _chipsMode();
       // 4-dot swatch icon. In colored mode the dots have distinct hues so
-      // the toggle visually mirrors what it controls; in muted mode the
-      // same dots collapse to a uniform grey. State is unambiguous at
-      // a glance — no need to read the tooltip or sample a chip.
-      const dotColors = muted
+      // the toggle visually mirrors what it controls; in level mode pairs
+      // share hues; in muted mode the same dots collapse to a uniform grey.
+      const dotColors = mode === 'muted'
         ? ['var(--text-muted)', 'var(--text-muted)', 'var(--text-muted)', 'var(--text-muted)']
+        : mode === 'level'
+          ? ['#58a6ff', '#58a6ff', '#3fb950', '#3fb950']
         // Saturated-but-not-loud hues. Match the rough palette used by
         // the per-folder chips (orange / green / blue / purple) so the
         // icon previews what the chips will look like.
-        : ['#d29922', '#3fb950', '#58a6ff', '#bc8cff'];
+          : ['#d29922', '#3fb950', '#58a6ff', '#bc8cff'];
       $chipsIcon.innerHTML =
         '<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">' +
           '<circle cx="4"  cy="4"  r="2.4" fill="' + dotColors[0] + '"/>' +
@@ -30364,17 +30384,20 @@
           '<circle cx="12" cy="12" r="2.4" fill="' + dotColors[3] + '"/>' +
         '</svg>';
       if ($chipsToggle) {
-        $chipsToggle.setAttribute('aria-pressed', String(muted));
-        $chipsToggle.title = muted
+        $chipsToggle.setAttribute('aria-pressed', mode === 'level' ? 'mixed' : String(mode === 'muted'));
+        $chipsToggle.title = mode === 'muted'
           ? 'Folder chips are muted. Click to colorize them per-folder.'
-          : 'Folder chips are colored per-folder. Click to mute them.';
+          : mode === 'level'
+            ? 'Object and repo chips share colors by hierarchy level. Click to mute them.'
+            : 'Folder chips are colored per-folder. Click for hierarchy-level colors.';
       }
     };
     if ($chipsToggle) {
       $chipsToggle.addEventListener('click', () => {
-        const next = !document.body.classList.contains('chips-muted');
-        document.body.classList.toggle('chips-muted', next);
-        try { localStorage.setItem('ccc-chips-mode', next ? 'muted' : 'color'); } catch (_) {}
+        const cur = _chipsMode();
+        const next = cur === 'color' ? 'level' : (cur === 'level' ? 'muted' : 'color');
+        _applyChipsMode(next);
+        try { localStorage.setItem('ccc-chips-mode', next); } catch (_) {}
         _syncChipsIcon();
       });
     }
