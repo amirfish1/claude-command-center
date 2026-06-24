@@ -11464,6 +11464,38 @@
     renderSidebar(filterConversations($convSearch ? $convSearch.value : ''));
   }
 
+  // GOAL-2 — resolve a repo for a task added under an object. Drafts require a
+  // repo_path (Flow drops repo-less drafts on reload), so always resolve one:
+  // prefer a repo one of the object's own sessions lives in, else the current
+  // draft repo, else any known repo. For a pure reminder it's just the cwd it
+  // would spawn into if you hit play.
+  function _repoForObjectTask(objNodeId) {
+    const pools = () => {
+      const out = [];
+      if (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData)) out.push(conversationsData);
+      if (typeof archiveData !== 'undefined' && Array.isArray(archiveData)) out.push(archiveData);
+      return out;
+    };
+    const repoOf = (row) => (row && (row.folder_path || row.session_cwd)) || '';
+    if (objNodeId) {
+      for (const [child, parent] of Object.entries(flowNodeParents)) {
+        if (parent !== objNodeId || child.indexOf('session:') !== 0) continue;
+        const sid = child.slice('session:'.length);
+        for (const pool of pools()) {
+          const repo = repoOf(pool.find(c => c && (c.session_id === sid || c.id === sid)));
+          if (repo) return repo;
+        }
+      }
+    }
+    const cur = flowCurrentRepoForDraft();
+    if (cur && cur !== '__repo__') return cur;
+    for (const pool of pools()) {
+      const row = pool.find(c => repoOf(c));
+      if (row) return repoOf(row);
+    }
+    return '';
+  }
+
   async function archiveFlowSession(rowId) {
     if (!rowId) return;
     try {
@@ -20368,7 +20400,8 @@
       btn.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        createFlowDraftSession('', btn.getAttribute('data-parent-node') || '');
+        const _pn = btn.getAttribute('data-parent-node') || '';
+        createFlowDraftSession(_repoForObjectTask(_pn), _pn);
       });
     });
     $convList.querySelectorAll('[data-flow-action="play-draft-session"]').forEach(btn => {
