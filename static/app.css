@@ -3439,7 +3439,7 @@
        (10 → 12) for the Omnara-style breathing room — rows feel less
        cramped without losing scannable density. */
     padding: 6px 12px; border-radius: 6px; cursor: pointer;
-    margin-bottom: 0; transition: background 0.15s;
+    margin-bottom: 0; transition: background 0.06s ease;
     border-left: 3px solid transparent;
   }
   .conv-item:hover { background: var(--surface-2); }
