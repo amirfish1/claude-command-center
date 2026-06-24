@@ -208,6 +208,23 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn('data-role="ip-new-project"', app_js)
         self.assertNotIn(".conv-new-project", app_css)
 
+    def test_inprogress_add_object_creates_inline_rename_draft(self):
+        """+ object should render a draft row and edit it inline, not prompt first."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        start = app_js.index('// "+ object" (CCC-92): create an empty Flow object inline.')
+        end = app_js.index('$convList.querySelectorAll(\'[data-role="elevate-to-object"]\')', start)
+        handler = app_js[start:end]
+
+        self.assertIn("function createDraftFlowCustomObject()", app_js)
+        self.assertIn("const id = createDraftFlowCustomObject();", handler)
+        self.assertIn("flowCustomObjects.unshift(obj);", app_js)
+        self.assertIn("rankNewObjectFirst(flowNodeKey('object', id));", app_js)
+        self.assertIn("localStorage.setItem('ccc-inprogress-collapsed', '0')", handler)
+        self.assertIn("const title = $convList.querySelector('[data-role=\"object-title\"][data-object-id=\"' + id + '\"]');", handler)
+        self.assertIn("startInlineObjectRename(title);", handler)
+        self.assertNotIn("promptModal('Object name'", handler)
+        self.assertNotIn("await promptModal", handler)
+
     def test_by_objects_sort_prioritizes_objects_before_repos(self):
         """Manual rank must not let repos jump above objects in by-objects mode."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

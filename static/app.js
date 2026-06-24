@@ -11967,6 +11967,16 @@
     };
   }
 
+  function createDraftFlowCustomObject() {
+    const now = Date.now();
+    const id = 'obj-' + now.toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    const obj = { id, title: 'New object', created_at: now, updated_at: now };
+    flowCustomObjects.unshift(obj);
+    persistFlowCustomObjects();
+    rankNewObjectFirst(flowNodeKey('object', id));
+    return id;
+  }
+
   async function createFlowCustomObject() {
     // Fire the prompt FIRST (which mounts and shows the modal
     // synchronously inside the Promise body), then capture its rect
@@ -20726,19 +20736,16 @@
     // "+ object" (CCC-92): create an empty Flow object inline.
     const $ipAddObject = $convList.querySelector('[data-role="ip-add-object"]');
     if ($ipAddObject) {
-      $ipAddObject.addEventListener('click', async (ev) => {
+      $ipAddObject.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        const title = ((await promptModal('Object name', 'New object')) || '').trim();
-        if (!title) return;
-        const now = Date.now();
-        const id = 'obj-' + now.toString(36) + '-' + Math.random().toString(36).slice(2, 7);
-        const node = flowNodeKey('object', id);
-        flowCustomObjects.unshift({ id, title, created_at: now, updated_at: now });
-        persistFlowCustomObjects();
-        rankNewObjectFirst(node);
+        const id = createDraftFlowCustomObject();
+        if (!id) return;
         try { localStorage.setItem('ccc-inprogress-grouping', 'objects'); } catch (_) {}
+        try { localStorage.setItem('ccc-inprogress-collapsed', '0'); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
+        const title = $convList.querySelector('[data-role="object-title"][data-object-id="' + id + '"]');
+        startInlineObjectRename(title);
       });
     }
     $convList.querySelectorAll('[data-role="elevate-to-object"]').forEach(btn => {
