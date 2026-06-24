@@ -10009,6 +10009,50 @@
     _objectsSyncTimer = setTimeout(() => { _objectsSyncTimer = null; _reconcileObjectsToServer(); }, 400);
   }
 
+  // Safe auto-dedupe: drop an EMPTY object whose normalized title matches
+  // another object (keep the one that owns sessions; if all empty, keep the
+  // oldest). Only ever removes empty containers — never anything with sessions —
+  // so accidental dupes ("Goal based CCC" vs "Goal-based CCC") self-heal without
+  // data loss. Returns true if it changed anything. O(objects), idempotent.
+  function _dedupeEmptyObjects() {
+    if (!Array.isArray(flowCustomObjects) || flowCustomObjects.length < 2) return false;
+    const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const childCount = (id) => {
+      const node = 'object:' + id;
+      let n = 0;
+      for (const p of Object.values(flowNodeParents)) if (p === node) n++;
+      return n;
+    };
+    const groups = new Map();
+    for (const o of flowCustomObjects) {
+      if (!o || !o.id) continue;
+      const k = norm(o.title);
+      if (!k) continue;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(o);
+    }
+    const drop = new Set();
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      const withChildren = group.filter(o => childCount(o.id) > 0);
+      if (!withChildren.length) {
+        const keep = group.slice().sort((a, b) => (a.created_at || 0) - (b.created_at || 0))[0];
+        group.forEach(o => { if (o.id !== keep.id) drop.add(o.id); });
+      } else {
+        group.forEach(o => { if (childCount(o.id) === 0) drop.add(o.id); });
+      }
+    }
+    if (!drop.size) return false;
+    flowCustomObjects = flowCustomObjects.filter(o => o && !drop.has(o.id));
+    let order = {};
+    try { order = JSON.parse(localStorage.getItem('ccc-objects-order') || '{}'); } catch (_) {}
+    let orderChanged = false;
+    for (const id of drop) { const k = 'object:' + id; if (k in order) { delete order[k]; orderChanged = true; } }
+    try { localStorage.setItem('ccc-flow-custom-objects', JSON.stringify(flowCustomObjects)); } catch (_) {}
+    if (orderChanged) { try { localStorage.setItem('ccc-objects-order', JSON.stringify(order)); } catch (_) {} }
+    return true;
+  }
+
   async function bootstrapObjectsFromServer() {
     // On load, union any server-side objects/parents the browser is missing
     // (another machine/surface) into localStorage, then push the merged state
@@ -10038,6 +10082,11 @@
         try { localStorage.setItem('ccc-flow-draft-sessions', JSON.stringify(flowDraftSessions)); } catch (_) {}
         try { renderSidebar(filterConversations($convSearch ? $convSearch.value : '')); } catch (_) {}
       }
+    }
+    // Heal accidental empty duplicates, then push the (possibly trimmed) state
+    // up — the reconcile deletes the dropped dupes server-side too.
+    if (_dedupeEmptyObjects()) {
+      try { renderSidebar(filterConversations($convSearch ? $convSearch.value : '')); } catch (_) {}
     }
     syncObjectsToServer();   // seed/refresh the server from local
   }
