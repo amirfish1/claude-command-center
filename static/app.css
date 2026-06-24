@@ -3712,6 +3712,28 @@
     word-break: keep-all;
     letter-spacing: -0.005em;
   }
+  /* Fast custom tooltip (JS-driven, body-mounted) for truncated titles —
+     replaces the native title= attribute's fixed ~500ms OS delay. */
+  .ccc-tip {
+    position: fixed;
+    z-index: 9999;
+    max-width: 440px;
+    padding: 4px 8px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border, rgba(127,127,127,0.22));
+    border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.32);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.06s ease;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ccc-tip.show { opacity: 1; }
   .conv-item .conv-ux-fix-progress {
     display: inline-flex;
     align-items: center;

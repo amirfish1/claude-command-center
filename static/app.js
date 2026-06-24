@@ -19122,7 +19122,7 @@
             + leftFolderChipHtml
             + titleFolderChipHtml
             + needsYouHtml
-            + '<div class="conv-title ' + titleClass + '" data-role="title" title="Click to open; click again to rename">' + escapeHtml(title) + '</div>'
+            + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
             + goalChipHtml
             + uxFixesQueueProgressHtml
             + historyBadgeHtml
@@ -22593,6 +22593,55 @@
     });
   }
   applyCompactRowsState();
+  // Fast custom tooltip for truncated conversation titles. The native title=
+  // attribute has a fixed ~500ms OS delay that read as "hover is laggy"; this
+  // shows the full title in ~90ms, and only when the text is actually clipped.
+  // Body-mounted + position:fixed so the scrolling list never clips it.
+  if (!window._cccTitleTipInit) {
+    window._cccTitleTipInit = true;
+    let tipEl = null, timer = 0, curTarget = null;
+    const ensureTip = () => {
+      if (!tipEl) {
+        tipEl = document.createElement('div');
+        tipEl.className = 'ccc-tip';
+        tipEl.setAttribute('role', 'tooltip');
+        document.body.appendChild(tipEl);
+      }
+      return tipEl;
+    };
+    const hideTip = () => {
+      if (timer) { clearTimeout(timer); timer = 0; }
+      curTarget = null;
+      if (tipEl) tipEl.classList.remove('show');
+    };
+    const showTip = (el) => {
+      const txt = (el.textContent || '').trim();
+      if (!txt || el.scrollWidth <= el.clientWidth + 1) return; // only when clipped
+      const tip = ensureTip();
+      tip.textContent = txt;
+      const r = el.getBoundingClientRect();
+      tip.style.left = Math.round(r.left) + 'px';
+      tip.style.top = Math.round(r.bottom + 4) + 'px';
+      tip.classList.add('show');
+      const tr = tip.getBoundingClientRect();
+      if (tr.right > window.innerWidth - 8) {
+        tip.style.left = Math.max(8, window.innerWidth - 8 - tr.width) + 'px';
+      }
+    };
+    document.addEventListener('mouseover', (ev) => {
+      const el = ev.target.closest && ev.target.closest('.conv-title');
+      if (!el || el === curTarget || el.querySelector('input')) return;
+      hideTip();
+      curTarget = el;
+      timer = setTimeout(() => showTip(el), 90);
+    });
+    document.addEventListener('mouseout', (ev) => {
+      const el = ev.target.closest && ev.target.closest('.conv-title');
+      if (el && el === curTarget) hideTip();
+    });
+    document.addEventListener('scroll', hideTip, true);
+    window.addEventListener('blur', hideTip);
+  }
   // Back-to-list button in split toolbar
   const $kptListViewBtn = document.getElementById('kptListViewBtn');
   if ($kptListViewBtn) {
