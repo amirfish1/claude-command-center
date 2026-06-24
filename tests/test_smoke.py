@@ -538,6 +538,21 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("ccc-done-collapsed", app_js)
         self.assertNotIn(".conv-done-section", app_css)
 
+    def test_active_sidebar_inprogress_section_is_headerless(self):
+        """The Active tab should not repeat an In Progress header/count."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const _ipToolbarHtml = _ipTools", app_js)
+        self.assertIn('data-role="inprogress-toolbar"', app_js)
+        self.assertIn("'<div class=\"conv-inprogress-list\">' + _ipToolbarHtml + _activeRowsHtml + '</div>'", app_js)
+        self.assertNotIn('<span class="conv-inprogress-label">In progress</span>', app_js)
+        self.assertNotIn('<span class="conv-inprogress-count"', app_js)
+        self.assertIn("#convList .conv-inprogress-section { margin-top: 0; border-top: 0; padding-top: 0; }", app_css)
+        self.assertIn("#convList .conv-inprogress-toolbar {", app_css)
+        self.assertIn("#convList .conv-inprogress-list > .conv-item {\n"
+                      "    padding-left: 8px;", app_css)
+
     def test_object_task_add_button_lives_in_header_actions(self):
         """By-object +task should be a compact object header action."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -549,6 +564,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("objectRename + objectAddTask + objectPlayPause + objectArchive", app_js)
         self.assertNotIn('class="conv-object-add-task"', app_js)
         self.assertNotIn(">+ task</button>", app_js)
+        self.assertIn("flowDraftSessions.push(draft);", app_js)
+        self.assertNotIn("flowDraftSessions.unshift(draft);", app_js)
         self.assertIn(".conv-folder-object-add-task-btn", app_css)
         self.assertNotIn(".conv-object-add-task", app_css)
 
@@ -7956,6 +7973,13 @@ class TestCodexStateWiring(unittest.TestCase):
         js = (root / "static" / "app.js").read_text()
         css = (root / "static" / "app.css").read_text()
         self.assertIn("codex_state", js)
+        self.assertIn("'codex_state', 'codex_fresh', 'codex_state_reason',", js)
+        self.assertIn("row.codex_state = data.codex_state || null;", js)
+        self.assertIn("codex_state: data.codex_state || null,", js)
+        self.assertIn("const _codexStateWorking = isCodexRow && c.codex_state === 'working';", js)
+        self.assertIn("|| _codexStateWorking", js)
+        self.assertIn("const codexStateWorking = liveStatusMatchesOpenConv() && liveStatus.codexState === 'working';", js)
+        self.assertIn("if (!liveStatus.live && !codexStateWorking)", js)
         self.assertIn("updateCodexStateBadge", js)
         self.assertIn("const wakeFeedback = badge.querySelector('.ccs-wake') || badge;", js)
         self.assertIn("wakeCodexSession(sid, wakeFeedback);", js)

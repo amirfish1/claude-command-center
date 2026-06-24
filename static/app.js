@@ -1763,7 +1763,7 @@
     'sidecar_ts', 'sidecar_in_flight', 'pending_tool', 'pending_file', 'last_event_type',
     'needs_approval', 'needs_approval_message', 'question_waiting', 'question_text',
     'question_header', 'question_preamble', 'question_options', 'question_option_details',
-    'codex_state', 'codex_fresh',
+    'codex_state', 'codex_fresh', 'codex_state_reason',
   ];
 
   function _liveOverlayFieldsFromRow(c) {
@@ -1799,11 +1799,11 @@
     const sid = c.session_id || c.id;
     if (!sid) return c;
     const ov = _sessionLiveOverlay.get(sid);
-    if (!ov || !ov.is_live) return c;
+    if (!ov || (!ov.is_live && !ov.codex_state)) return c;
     const merged = Object.assign({}, c);
     const ovTs = ov.sidecar_ts || 0;
     const rowTs = merged.sidecar_ts || 0;
-    if (ovTs >= rowTs || !merged.is_live) {
+    if (ovTs >= rowTs || !merged.is_live || ov.codex_state) {
       for (const k of _LIVE_OVERLAY_KEYS) {
         if (ov[k] !== undefined) merged[k] = ov[k];
       }
@@ -2481,6 +2481,9 @@
           row.stale_tool_age_s = data.stale_tool_age_s || 0;
           row.stale_tool_threshold_s = data.stale_tool_threshold_s || row.stale_tool_threshold_s || 0;
           row.stale_tool_queued_input = !!data.stale_tool_queued_input;
+          row.codex_state = data.codex_state || null;
+          row.codex_fresh = !!data.codex_fresh;
+          row.codex_state_reason = data.codex_state_reason || '';
           row.question_waiting = !!data.question_waiting;
           row.question_text = data.question_text || '';
           row.question_header = data.question_header || '';
@@ -2507,6 +2510,9 @@
         question_preamble: data.question_preamble || '',
         question_options: Array.isArray(data.question_options) ? data.question_options : [],
         question_option_details: Array.isArray(data.question_option_details) ? data.question_option_details : [],
+        codex_state: data.codex_state || null,
+        codex_fresh: !!data.codex_fresh,
+        codex_state_reason: data.codex_state_reason || '',
       });
     } catch (err) {
       liveStatus = { forSessionId: _fetchedFor, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false };
@@ -3515,7 +3521,8 @@
     // on a deep conversation that's pure waste when no session is running.
     // Tear the indicator down once on the live->idle transition, then do
     // zero DOM work each tick until a session goes live again.
-    if (!liveStatus.live) {
+    const codexStateWorking = liveStatusMatchesOpenConv() && liveStatus.codexState === 'working';
+    if (!liveStatus.live && !codexStateWorking) {
       // Brief "✓ Done" flash for ~4s after session goes idle
       const _doneAge = _liveStripLastLiveTime ? (Date.now() - _liveStripLastLiveTime) : 9999999;
       if (_doneAge < 4000) {
@@ -3566,8 +3573,8 @@
     // an idle session with an open terminal is `live` too, and used to show
     // a permanent "Generating…" (CCC-81). sidecar_status flips off at turn
     // end; the age cap covers a stale sidecar that never got cleared.
-    const isGenerating = liveStatus.live && !tool
-      && liveStatus.sidecarStatus === 'active' && ageSec < 120;
+    const isGenerating = (liveStatus.live || codexStateWorking) && !tool
+      && ((liveStatus.sidecarStatus === 'active' && ageSec < 120) || codexStateWorking);
     const shouldShow = (liveStatus.live && tool && liveStatus.sidecarStatus === 'active'
       && (ageSec < 300 || isQuestion) && !_headlessQuestion)
       || isGenerating;
@@ -11714,7 +11721,7 @@
     const draft = { id, repo_path: targetRepo, parent_node_id: parentId, title: '', created_at: now, updated_at: now };
     const nodeId = flowNodeKey('draft-session', id);
     const pos = flowDraftPositionForParent(parentId, targetRepo);
-    flowDraftSessions.unshift(draft);
+    flowDraftSessions.push(draft);
     flowNodePositions[nodeId] = pos;
     flowNodeParents[nodeId] = parentId;
     if (expandFlowNodeAndAncestors(parentId)) persistFlowCollapsedNodes();
@@ -18607,6 +18614,7 @@
       // when the agent had clearly stopped. 5 min is enough to bridge a
       // slow streaming response without misreading idle sessions.
       const _OPEN_TURN_FRESH_S = 5 * 60;
+      const _codexStateWorking = isCodexRow && c.codex_state === 'working';
       const _codexHasOpenTool = isCodexRow && !c.sidecar_status && !!c.pending_tool;
       const _codexOpenTurn = isCodexRow
         && c.is_live
@@ -18678,6 +18686,7 @@
       let _isAgentRunning = !!c.pending_spawn
         || _hasLivePendingTool
         || _codexOpenTurn
+        || _codexStateWorking
         || _geminiOpenTurn
         || _cursorOpenTurn
         || _antigravityOpenTurn
@@ -18726,7 +18735,7 @@
         const wipTitle = _knownActivityTool
           ? ((c.sidecar_in_flight ? 'Currently running' : 'Last known tool') + ': ' + _knownActivityTool)
           : (isCodexRow ? 'Codex is working' : (isGeminiRow ? 'Gemini is working' : (isCursorRow ? 'Cursor is working' : (isAntigravityRow ? 'Antigravity is working' : 'Agent is working'))));
-        const wipLabel = (_codexOpenTurn || _geminiOpenTurn || _cursorOpenTurn || _antigravityOpenTurn) ? 'WIP' : (_knownActivityTool || 'WIP');
+        const wipLabel = (_codexOpenTurn || _codexStateWorking || _geminiOpenTurn || _cursorOpenTurn || _antigravityOpenTurn) ? 'WIP' : (_knownActivityTool || 'WIP');
         signals += '<span class="conv-signal activity-working" title="' + escapeHtml(wipTitle) + '">' + escapeHtml(wipLabel) + '</span>';
       } else if (c.gh_in_progress && !liveToolHtml) {
         // Calmer "issue is in progress" chip — distinct from live WIP so
@@ -19798,8 +19807,6 @@
     let _inProgressHtml = '';
     const _gcCountForSection = _hideGroupChatsForSearch ? 0 : (_gcActiveChats || []).length;
     if (_sessionConvs.length > 0 || _gcCountForSection > 0) {
-      const _ipCollapsed = localStorage.getItem('ccc-inprogress-collapsed') === '1';
-      const _ipArrow = _ipCollapsed ? '▸' : '▾';
       // 1d / 7d / All and by-project / by-time toggles, only when there are
       // folder chips (otherwise the controls are not meaningful). Inline
       // spans avoid nested-button HTML; click handlers stop propagation.
@@ -19849,20 +19856,12 @@
       const _ipTools = (_ipDetailsToggle || _ipWindowToggle || _ipGroupingToggle || _ipAddObjectBtn || _ipObjectsExpandAll)
         ? '<span class="conv-inprogress-tools">' + _ipAddObjectBtn + _ipObjectsExpandAll + _ipDetailsToggle + _ipWindowToggle + _ipGroupingToggle + '</span>'
         : '';
-      // Count display: sessions in window + active group chats. Title
-      // attribute spells both out so a hover explains the headline number.
-      const _ipCountTitle = _sessionConvs.length + ' total in-progress sessions'
-        + (_gcCountForSection ? ' · ' + _gcCountForSection + ' group chat' + (_gcCountForSection === 1 ? '' : 's') : '');
-      const _ipCountValue = _visibleSessionConvs.length + (_gcCountForSection || 0);
+      const _ipToolbarHtml = _ipTools
+        ? '<div class="conv-inprogress-toolbar" data-role="inprogress-toolbar">' + _ipTools + '</div>'
+        : '';
       _inProgressHtml =
-        '<div class="conv-inprogress-section' + (_ipCollapsed ? ' collapsed' : '') + '" data-role="inprogress-section">'
-        + '<button type="button" class="conv-inprogress-header" data-role="inprogress-toggle" aria-expanded="' + (!_ipCollapsed) + '">'
-        +   '<span class="conv-inprogress-arrow">' + _ipArrow + '</span>'
-        +   '<span class="conv-inprogress-label">In progress</span>'
-        +   '<span class="conv-inprogress-count" title="' + _ipCountTitle + '">' + _ipCountValue + '</span>'
-        +   _ipTools
-        + '</button>'
-        + '<div class="conv-inprogress-list">' + _activeRowsHtml + '</div>'
+        '<div class="conv-inprogress-section" data-role="inprogress-section">'
+        + '<div class="conv-inprogress-list">' + _ipToolbarHtml + _activeRowsHtml + '</div>'
         + '</div>';
     }
     // Cross-repo source (CCC-160, mirrors CCC-159): the partition above only

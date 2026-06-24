@@ -4089,6 +4089,23 @@
   #convList > .conv-needsyou-section:first-child,
   #convList > .conv-openask-section:first-child,
   #convList > .conv-inprogress-section:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+  #convList .conv-inprogress-section { margin-top: 0; border-top: 0; padding-top: 0; }
+  #convList .conv-inprogress-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 0 8px 6px 8px;
+  }
+  #convList .conv-inprogress-toolbar .conv-inprogress-tools {
+    margin-left: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  #convList .conv-inprogress-list > .conv-item {
+    padding-left: 8px;
+  }
   #convList .conv-repo-search-header {
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     padding: 8px 14px; color: var(--text-muted);
