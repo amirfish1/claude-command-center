@@ -288,6 +288,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("$objectsExpandAll.addEventListener('click'", app_js)
         self.assertIn(".conv-objects-expand-all", app_css)
 
+    def test_object_task_draft_survives_sidebar_refresh(self):
+        """Typing in an object task should persist before periodic list refresh
+        replaces the row DOM."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("let flowDraftFocusSelection = null;", app_js)
+        self.assertIn("const _focusDraftIdBefore = (_activeDraftInputBefore && _activeDraftInputBefore.classList.contains('conv-draft-input'))", app_js)
+        self.assertIn("saveFlowDraftInput(_focusDraftIdBefore, _activeDraftInputBefore.value);", app_js)
+        self.assertIn("flowDraftFocusId = _focusDraftIdBefore;", app_js)
+        self.assertIn("inp.addEventListener('input'", app_js)
+        self.assertIn("flowDraftFocusId = id;", app_js)
+        self.assertIn("_df.setSelectionRange(flowDraftFocusSelection.start, flowDraftFocusSelection.end);", app_js)
+
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never
         delete these markers on session end, so a stale marker must NOT keep a

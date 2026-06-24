@@ -9597,6 +9597,7 @@
     }
   } catch (_) {}
   let flowDraftFocusId = '';
+  let flowDraftFocusSelection = null;
   let flowSelectedNodes = {};
   let flowNodeMetaCache = {};
   let flowNodeMetaFetchInFlight = false;
@@ -11510,6 +11511,7 @@
     flowNodeParents[nodeId] = parentId;
     if (expandFlowNodeAndAncestors(parentId)) persistFlowCollapsedNodes();
     flowDraftFocusId = id;
+    flowDraftFocusSelection = null;
     persistFlowDraftSessions();
     persistFlowNodePositions();
     persistFlowNodeParents();
@@ -17614,6 +17616,18 @@
     convs = (Array.isArray(convs) ? convs : []).filter(c => !_isOptimisticallyStartedIssueRow(c)).map(_applyLiveOverlayToRow);
     convs = _prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || '');
     _applyOptimisticTouches(convs);
+    const _activeDraftInputBefore = document.activeElement;
+    const _focusDraftIdBefore = (_activeDraftInputBefore && _activeDraftInputBefore.classList.contains('conv-draft-input'))
+      ? (_activeDraftInputBefore.getAttribute('data-draft-id') || '')
+      : '';
+    if (_focusDraftIdBefore) {
+      saveFlowDraftInput(_focusDraftIdBefore, _activeDraftInputBefore.value);
+      flowDraftFocusId = _focusDraftIdBefore;
+      flowDraftFocusSelection = {
+        start: _activeDraftInputBefore.selectionStart,
+        end: _activeDraftInputBefore.selectionEnd,
+      };
+    }
     if (!convs.length) {
       _convListRenderSig = null;
       $convList.innerHTML =
@@ -20551,6 +20565,12 @@
     });
     $convList.querySelectorAll('.conv-draft-input').forEach(inp => {
       inp.addEventListener('click', ev => ev.stopPropagation());
+      inp.addEventListener('input', () => {
+        const id = inp.getAttribute('data-draft-id') || '';
+        saveFlowDraftInput(id, inp.value);
+        flowDraftFocusId = id;
+        flowDraftFocusSelection = { start: inp.selectionStart, end: inp.selectionEnd };
+      });
       inp.addEventListener('change', () => saveFlowDraftInput(inp.getAttribute('data-draft-id') || '', inp.value));
       inp.addEventListener('blur', () => saveFlowDraftInput(inp.getAttribute('data-draft-id') || '', inp.value));
       inp.addEventListener('keydown', ev => {
@@ -20561,7 +20581,16 @@
     // Focus a freshly-created draft's input (set by createFlowDraftSession).
     if (flowDraftFocusId) {
       const _df = $convList.querySelector('.conv-draft-input[data-draft-id="' + flowDraftFocusId + '"]');
-      if (_df) { try { _df.focus(); } catch (_) {} flowDraftFocusId = null; }
+      if (_df) {
+        try {
+          _df.focus({ preventScroll: true });
+          if (flowDraftFocusSelection && flowDraftFocusSelection.start != null && flowDraftFocusSelection.end != null) {
+            _df.setSelectionRange(flowDraftFocusSelection.start, flowDraftFocusSelection.end);
+          }
+        } catch (_) {}
+        flowDraftFocusId = null;
+        flowDraftFocusSelection = null;
+      }
     }
     // Sidebar tab bar (CCC-85): switch the visible section.
     const $convTabBar = $convList.querySelector('[data-role="conv-tab-bar"]');
