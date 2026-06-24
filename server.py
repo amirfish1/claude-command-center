@@ -39683,6 +39683,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(get_app_config())
         elif path == "/api/onboarding/status":
             self.send_json(_get_onboarding_status())
+        elif path == "/api/onboarding/login/status":
+            qs = urllib.parse.parse_qs(parsed.query)
+            session_id = (qs.get("session_id", [""])[0] or "").strip()
+            offset = (qs.get("offset", ["0"])[0] or "0").strip()
+            if not session_id:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+                return
+            payload = _onboarding_login_status(session_id, offset=offset)
+            self.send_json(payload, 200 if payload.get("ok") else 404)
         elif path == "/api/flow/index":
             self.send_json(_flow_index_payload())
         elif path == "/api/flow/node":
@@ -41477,6 +41486,52 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+            return
+        if path == "/api/onboarding/login/start":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+                engine = payload.get("engine")
+                if not engine:
+                    self.send_json({"ok": False, "error": "missing engine"}, 400)
+                    return
+                res = _start_onboarding_login_session(engine)
+                self.send_json(res, 200 if res.get("ok") else 400)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/onboarding/login/input":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+                session_id = payload.get("session_id")
+                if not session_id:
+                    self.send_json({"ok": False, "error": "missing session_id"}, 400)
+                    return
+                text = payload.get("input", "")
+                if not isinstance(text, str):
+                    self.send_json({"ok": False, "error": "input must be a string"}, 400)
+                    return
+                res = _send_onboarding_login_input(session_id, text)
+                self.send_json(res, 200 if res.get("ok") else 400)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/onboarding/login/cancel":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+                session_id = payload.get("session_id")
+                if not session_id:
+                    self.send_json({"ok": False, "error": "missing session_id"}, 400)
+                    return
+                res = _cancel_onboarding_login_session(session_id)
+                self.send_json(res, 200 if res.get("ok") else 404)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
             return
         if path == "/api/onboarding/login-terminal":
             try:
@@ -45976,7 +46031,7 @@ def _get_onboarding_status():
                 "email": claude_email,
                 "signup_url": "https://docs.claude.com/en/docs/claude-code",
                 "install_instruction": "npm install -g @anthropic-ai/claude-code",
-                "login_instruction": "claude"
+                "login_instruction": "claude auth login"
             },
             "antigravity": {
                 "name": "Antigravity CLI",
@@ -46015,33 +46070,379 @@ def _get_onboarding_status():
     }
 
 
+_ONBOARDING_LOGIN_LOCK = threading.Lock()
+_ONBOARDING_LOGIN_SESSIONS = {}
+_ONBOARDING_LOGIN_MAX_BUFFER_CHARS = 200_000
+_ONBOARDING_LOGIN_RETAIN_SECONDS = 10 * 60
+_ONBOARDING_LOGIN_URL_RE = re.compile(r"https?://[^\s<>'\")\]]+")
+_ONBOARDING_LOGIN_CODE_RE = re.compile(r"\b[A-Z0-9]{4}(?:-[A-Z0-9]{4}){1,5}\b")
+
+
+def _onboarding_login_timeout_seconds():
+    try:
+        value = int(os.environ.get("CCC_ONBOARDING_LOGIN_TIMEOUT_SECONDS", "900"))
+    except ValueError:
+        value = 900
+    return max(60, min(value, 60 * 60))
+
+
+def _onboarding_login_command(engine):
+    """Resolve the CLI auth command used by inline onboarding login."""
+    key = str(engine or "").strip().lower()
+    specs = {
+        "claude": (_resolve_claude_bin, ["auth", "login"]),
+        "codex": (_resolve_codex_bin, ["login"]),
+        "cursor": (_resolve_cursor_bin, ["login"]),
+        "antigravity": (_resolve_antigravity_bin, []),
+    }
+    spec = specs.get(key)
+    if not spec:
+        return {"ok": False, "error": f"Unknown engine: {engine}"}
+    resolver, extra_args = spec
+    info = resolver()
+    if not info.get("available"):
+        return {
+            "ok": False,
+            "engine": key,
+            "code": info.get("code") or f"{key}_unavailable",
+            "error": info.get("reason") or f"{key} CLI not found",
+        }
+    argv = [info["bin"], *extra_args]
+    return {
+        "ok": True,
+        "engine": key,
+        "argv": argv,
+        "command": shlex.join(argv),
+    }
+
+
+def _onboarding_login_output_hints(text):
+    """Extract user-actionable auth URLs and device codes from CLI output."""
+    seen_urls = set()
+    urls = []
+    for match in _ONBOARDING_LOGIN_URL_RE.findall(str(text or "")):
+        clean = match.rstrip(".,;:")
+        if clean and clean not in seen_urls:
+            seen_urls.add(clean)
+            urls.append(clean)
+    seen_codes = set()
+    codes = []
+    for match in _ONBOARDING_LOGIN_CODE_RE.findall(str(text or "")):
+        if match not in seen_codes:
+            seen_codes.add(match)
+            codes.append(match)
+    return {"urls": urls[:5], "codes": codes[:5]}
+
+
+def _append_onboarding_login_output(session_id, chunk):
+    if not chunk:
+        return
+    with _ONBOARDING_LOGIN_LOCK:
+        session = _ONBOARDING_LOGIN_SESSIONS.get(session_id)
+        if not session:
+            return
+        text = session.get("output", "") + chunk
+        offset = session.get("offset", 0) + len(chunk)
+        base_offset = session.get("base_offset", 0)
+        if len(text) > _ONBOARDING_LOGIN_MAX_BUFFER_CHARS:
+            trim = len(text) - _ONBOARDING_LOGIN_MAX_BUFFER_CHARS
+            text = text[trim:]
+            base_offset += trim
+        session["output"] = text
+        session["offset"] = offset
+        session["base_offset"] = base_offset
+        session["last_activity"] = time.time()
+
+
+def _onboarding_login_snapshot(session, offset=0):
+    base_offset = int(session.get("base_offset") or 0)
+    end_offset = int(session.get("offset") or 0)
+    output = session.get("output") or ""
+    try:
+        requested = int(offset or 0)
+    except (TypeError, ValueError):
+        requested = 0
+    start = max(0, min(len(output), requested - base_offset))
+    visible = output[start:]
+    exit_code = session.get("exit_code")
+    running = bool(session.get("running"))
+    if running and session.get("proc") is not None and session["proc"].poll() is not None:
+        running = False
+        exit_code = session["proc"].returncode
+    return {
+        "ok": True,
+        "session_id": session.get("id"),
+        "engine": session.get("engine"),
+        "command": session.get("command"),
+        "running": running,
+        "exit_code": exit_code,
+        "cancelled": bool(session.get("cancelled")),
+        "timed_out": bool(session.get("timed_out")),
+        "output": visible,
+        "offset": end_offset,
+        "base_offset": base_offset,
+        "hints": _onboarding_login_output_hints(output),
+        "started_at": session.get("started_at"),
+        "ended_at": session.get("ended_at"),
+    }
+
+
+def _terminate_onboarding_login_process(session, force=False):
+    proc = session.get("proc")
+    if not proc or proc.poll() is not None:
+        return
+    try:
+        pgid = os.getpgid(proc.pid)
+    except OSError:
+        pgid = None
+    try:
+        if pgid:
+            os.killpg(pgid, signal.SIGKILL if force else signal.SIGTERM)
+        elif force:
+            proc.kill()
+        else:
+            proc.terminate()
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _close_onboarding_login_fd(session):
+    fd = session.get("master_fd")
+    if fd is None:
+        return
+    session["master_fd"] = None
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def _cleanup_onboarding_login_sessions():
+    now = time.time()
+    timeout = _onboarding_login_timeout_seconds()
+    to_timeout = []
+    to_delete = []
+    with _ONBOARDING_LOGIN_LOCK:
+        for sid, session in list(_ONBOARDING_LOGIN_SESSIONS.items()):
+            proc = session.get("proc")
+            running = bool(session.get("running"))
+            if running and proc is not None and proc.poll() is not None:
+                session["running"] = False
+                session["exit_code"] = proc.returncode
+                session["ended_at"] = now
+                running = False
+            if running and now - float(session.get("last_activity") or session.get("started_at") or now) > timeout:
+                session["timed_out"] = True
+                session["running"] = False
+                session["ended_at"] = now
+                session["exit_code"] = -1
+                to_timeout.append(session)
+            elif not running and now - float(session.get("ended_at") or now) > _ONBOARDING_LOGIN_RETAIN_SECONDS:
+                to_delete.append(sid)
+        for sid in to_delete:
+            _ONBOARDING_LOGIN_SESSIONS.pop(sid, None)
+    for session in to_timeout:
+        _terminate_onboarding_login_process(session)
+        _close_onboarding_login_fd(session)
+
+
+def _onboarding_login_reader(session_id, master_fd, proc):
+    try:
+        while True:
+            if proc.poll() is not None:
+                # Drain any final bytes the child wrote before exiting.
+                try:
+                    while True:
+                        data = os.read(master_fd, 4096)
+                        if not data:
+                            break
+                        _append_onboarding_login_output(
+                            session_id,
+                            data.decode("utf-8", errors="replace"),
+                        )
+                except BlockingIOError:
+                    pass
+                except OSError:
+                    pass
+                break
+            try:
+                readable, _, _ = select.select([master_fd], [], [], 0.2)
+            except (OSError, ValueError):
+                break
+            if not readable:
+                continue
+            try:
+                data = os.read(master_fd, 4096)
+            except BlockingIOError:
+                continue
+            except OSError:
+                break
+            if not data:
+                break
+            _append_onboarding_login_output(session_id, data.decode("utf-8", errors="replace"))
+    finally:
+        try:
+            exit_code = proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            exit_code = proc.poll()
+        with _ONBOARDING_LOGIN_LOCK:
+            session = _ONBOARDING_LOGIN_SESSIONS.get(session_id)
+            if session:
+                session["running"] = False
+                session["exit_code"] = exit_code
+                session["ended_at"] = time.time()
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+
+def _start_onboarding_login_session(engine):
+    """Start a short-lived PTY-backed login process for the onboarding modal."""
+    _cleanup_onboarding_login_sessions()
+    command = _onboarding_login_command(engine)
+    if not command.get("ok"):
+        return command
+    key = command["engine"]
+    with _ONBOARDING_LOGIN_LOCK:
+        for session in _ONBOARDING_LOGIN_SESSIONS.values():
+            if session.get("engine") == key and session.get("running"):
+                snap = _onboarding_login_snapshot(session)
+                snap["already_running"] = True
+                return snap
+
+    import pty
+    try:
+        master_fd, slave_fd = pty.openpty()
+    except OSError as e:
+        return {"ok": False, "engine": key, "error": f"openpty failed: {e}"}
+    try:
+        flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+        fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    except OSError:
+        pass
+    try:
+        proc = subprocess.Popen(
+            command["argv"],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd=str(Path.home()),
+            close_fds=True,
+            start_new_session=True,
+        )
+    except (FileNotFoundError, OSError, ValueError) as e:
+        try:
+            os.close(master_fd)
+            os.close(slave_fd)
+        except OSError:
+            pass
+        return {"ok": False, "engine": key, "error": f"login command failed to start: {e}"}
+    try:
+        os.close(slave_fd)
+    except OSError:
+        pass
+
+    session_id = "login-" + uuid.uuid4().hex
+    now = time.time()
+    session = {
+        "id": session_id,
+        "engine": key,
+        "command": command["command"],
+        "argv": command["argv"],
+        "proc": proc,
+        "master_fd": master_fd,
+        "running": True,
+        "exit_code": None,
+        "cancelled": False,
+        "timed_out": False,
+        "output": "",
+        "offset": 0,
+        "base_offset": 0,
+        "started_at": now,
+        "last_activity": now,
+        "ended_at": None,
+    }
+    with _ONBOARDING_LOGIN_LOCK:
+        _ONBOARDING_LOGIN_SESSIONS[session_id] = session
+    thread = threading.Thread(
+        target=_onboarding_login_reader,
+        args=(session_id, master_fd, proc),
+        daemon=True,
+        name=f"onboarding-login-{key}",
+    )
+    thread.start()
+    return _onboarding_login_snapshot(session)
+
+
+def _onboarding_login_status(session_id, offset=0):
+    _cleanup_onboarding_login_sessions()
+    with _ONBOARDING_LOGIN_LOCK:
+        session = _ONBOARDING_LOGIN_SESSIONS.get(str(session_id or ""))
+        if not session:
+            return {"ok": False, "error": "login session not found"}
+        return _onboarding_login_snapshot(session, offset=offset)
+
+
+def _send_onboarding_login_input(session_id, text):
+    with _ONBOARDING_LOGIN_LOCK:
+        session = _ONBOARDING_LOGIN_SESSIONS.get(str(session_id or ""))
+        if not session:
+            return {"ok": False, "error": "login session not found"}
+        if not session.get("running"):
+            return {"ok": False, "error": "login session is not running"}
+        fd = session.get("master_fd")
+        if fd is None:
+            return {"ok": False, "error": "login session input is closed"}
+        session["last_activity"] = time.time()
+    try:
+        os.write(fd, str(text or "").encode("utf-8"))
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
+def _cancel_onboarding_login_session(session_id):
+    with _ONBOARDING_LOGIN_LOCK:
+        session = _ONBOARDING_LOGIN_SESSIONS.get(str(session_id or ""))
+        if not session:
+            return {"ok": False, "error": "login session not found"}
+        session["cancelled"] = True
+        session["running"] = False
+        session["ended_at"] = time.time()
+    _terminate_onboarding_login_process(session)
+    deadline = time.time() + 2
+    proc = session.get("proc")
+    while proc is not None and proc.poll() is None and time.time() < deadline:
+        time.sleep(0.05)
+    if proc is not None and proc.poll() is None:
+        _terminate_onboarding_login_process(session, force=True)
+    with _ONBOARDING_LOGIN_LOCK:
+        if proc is not None:
+            session["exit_code"] = proc.poll()
+        snap = _onboarding_login_snapshot(session)
+    _close_onboarding_login_fd(session)
+    return snap
+
+
+def _cancel_all_onboarding_login_sessions():
+    with _ONBOARDING_LOGIN_LOCK:
+        ids = list(_ONBOARDING_LOGIN_SESSIONS.keys())
+    for sid in ids:
+        _cancel_onboarding_login_session(sid)
+
+
 def _launch_login_terminal(engine):
     """Launch a terminal window and run the login command for the specified engine."""
     import subprocess
-    import shutil
-    import os
-    
-    # 1. Resolve command to run
-    command = None
-    if engine == "claude":
-        claude_info = _resolve_claude_bin()
-        bin_path = claude_info.get("bin") or "claude"
-        command = f"{bin_path}"
-    elif engine == "antigravity":
-        antigravity_info = _resolve_antigravity_bin()
-        bin_path = antigravity_info.get("bin") or "agy"
-        command = f"{bin_path}"
-    elif engine == "cursor":
-        cursor_info = _resolve_cursor_bin()
-        bin_path = cursor_info.get("bin") or "cursor-agent"
-        command = f"{bin_path} login"
-    elif engine == "codex":
-        codex_info = _resolve_codex_bin()
-        bin_path = codex_info.get("bin") or "codex"
-        command = f"{bin_path} login"
-        
-    if not command:
-        return {"ok": False, "error": f"Unknown engine: {engine}"}
+    if platform.system() != "Darwin":
+        _log_macos_only("onboardingLoginTerminal")
+        return {"ok": False, "inline_login": True, "error": "opening a visible terminal is macOS-only"}
+
+    command_info = _onboarding_login_command(engine)
+    if not command_info.get("ok"):
+        return command_info
+    command = command_info["command"]
         
     # AppleScript string needs the command embedded; escape backslashes and double quotes
     cmd_lit = command.replace("\\", "\\\\").replace('"', '\\"')

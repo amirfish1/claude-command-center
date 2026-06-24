@@ -39270,6 +39270,256 @@
   // ── Onboarding premium wizard ──────────────────────────────────────
   let currentOnbStep = 0;
   let onbCliStatus = null;
+  const onbLoginSessions = {};
+
+  function shouldUseInlineOnboardingLogin() {
+    const caps = (APP_CONFIG && APP_CONFIG.capabilities) || {};
+    return caps.launchTerminal === false || caps.terminalJump === false;
+  }
+
+  async function refreshOnboardingCliStatus(rerender) {
+    const res = await fetch('/api/onboarding/status');
+    if (!res.ok) throw new Error('status check failed');
+    const data = await res.json();
+    onbCliStatus = data.clis || onbCliStatus;
+    if (rerender !== false) renderCliChecker();
+    return onbCliStatus;
+  }
+
+  async function copyOnboardingText(text, label) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showOpToast((label || 'Text') + ' copied.', 'ok');
+    } catch (_) {
+      showOpToast('Copy failed. Select the text and copy it manually.', 'error');
+    }
+  }
+
+  function ensureOnboardingLoginPanel(item, engine, cli) {
+    let panel = item.querySelector('.onb-login-panel');
+    if (panel) return panel;
+    panel = document.createElement('div');
+    panel.className = 'onb-login-panel';
+    panel.innerHTML = `
+      <div class="onb-login-head">
+        <div>
+          <div class="onb-login-title">${escapeHtml(cli.name)} login</div>
+          <div class="onb-login-command" data-role="onb-login-command"></div>
+        </div>
+        <button type="button" class="onb-login-cancel" data-role="onb-login-cancel">Cancel</button>
+      </div>
+      <div class="onb-login-hints" data-role="onb-login-hints"></div>
+      <pre class="onb-login-output" data-role="onb-login-output">Starting login...</pre>
+      <form class="onb-login-input-row" data-role="onb-login-form">
+        <input type="text" class="onb-login-input" data-role="onb-login-input" autocomplete="off" placeholder="Type a response for the CLI and press Enter">
+        <button type="submit" class="onb-login-send">Send</button>
+      </form>
+    `;
+    item.appendChild(panel);
+
+    const form = panel.querySelector('[data-role="onb-login-form"]');
+    const input = panel.querySelector('[data-role="onb-login-input"]');
+    const cancelBtn = panel.querySelector('[data-role="onb-login-cancel"]');
+    if (form && input) {
+      form.onsubmit = async (ev) => {
+        ev.preventDefault();
+        const state = onbLoginSessions[engine];
+        const value = input.value;
+        if (!state || !state.sessionId || !value) return;
+        input.value = '';
+        try {
+          const res = await fetch('/api/onboarding/login/input', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: state.sessionId, input: value + '\n' })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) {
+            showOpToast(data.error || 'Could not send input to login process.', 'error');
+          }
+        } catch (e) {
+          showOpToast('Could not send input to login process.', 'error');
+        }
+      };
+    }
+    if (cancelBtn) {
+      cancelBtn.onclick = async () => {
+        const state = onbLoginSessions[engine];
+        if (!state || !state.sessionId) return;
+        try {
+          const res = await fetch('/api/onboarding/login/cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: state.sessionId })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (data && data.ok) {
+            state.running = false;
+            state.output += data.output || '';
+            updateOnboardingLoginPanel(engine);
+            showOpToast('Login process cancelled.', 'ok');
+          } else {
+            showOpToast((data && data.error) || 'Could not cancel login process.', 'error');
+          }
+        } catch (e) {
+          showOpToast('Could not cancel login process.', 'error');
+        }
+      };
+    }
+    return panel;
+  }
+
+  function renderOnboardingLoginHints(hints, host) {
+    if (!host) return;
+    host.innerHTML = '';
+    const urls = (hints && hints.urls) || [];
+    const codes = (hints && hints.codes) || [];
+    urls.forEach(url => {
+      const link = document.createElement('a');
+      link.href = url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.className = 'onb-login-hint-action';
+      link.textContent = 'Open auth URL';
+      host.appendChild(link);
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'onb-login-hint-action';
+      copy.textContent = 'Copy URL';
+      copy.onclick = () => copyOnboardingText(url, 'URL');
+      host.appendChild(copy);
+    });
+    codes.forEach(code => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'onb-login-hint-action onb-login-code';
+      chip.textContent = code;
+      chip.title = 'Copy device code';
+      chip.onclick = () => copyOnboardingText(code, 'Device code');
+      host.appendChild(chip);
+    });
+  }
+
+  function updateOnboardingLoginPanel(engine) {
+    const state = onbLoginSessions[engine];
+    if (!state || !state.panel) return;
+    const panel = state.panel;
+    const cmd = panel.querySelector('[data-role="onb-login-command"]');
+    const out = panel.querySelector('[data-role="onb-login-output"]');
+    const hints = panel.querySelector('[data-role="onb-login-hints"]');
+    const input = panel.querySelector('[data-role="onb-login-input"]');
+    const cancel = panel.querySelector('[data-role="onb-login-cancel"]');
+    if (cmd) {
+      const suffix = state.running ? 'running' : (state.exitCode === 0 ? 'exited 0' : 'exited ' + state.exitCode);
+      cmd.textContent = (state.command || '') + ' · ' + suffix;
+    }
+    if (out) {
+      out.textContent = state.output || 'Waiting for CLI output...';
+      out.scrollTop = out.scrollHeight;
+    }
+    renderOnboardingLoginHints(state.hints, hints);
+    if (input) input.disabled = !state.running;
+    if (cancel) {
+      cancel.disabled = !state.running;
+      cancel.textContent = state.running ? 'Cancel' : 'Closed';
+    }
+  }
+
+  function stopOnboardingLoginPoll(engine) {
+    const state = onbLoginSessions[engine];
+    if (state && state.poller) {
+      clearInterval(state.poller);
+      state.poller = null;
+    }
+  }
+
+  async function pollOnboardingLogin(engine) {
+    const state = onbLoginSessions[engine];
+    if (!state || !state.sessionId) return;
+    try {
+      const url = '/api/onboarding/login/status?session_id='
+        + encodeURIComponent(state.sessionId)
+        + '&offset=' + encodeURIComponent(state.offset || 0);
+      const res = await fetch(url);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        state.running = false;
+        state.output += '\n' + (data.error || 'Login status check failed.');
+        stopOnboardingLoginPoll(engine);
+        updateOnboardingLoginPanel(engine);
+        return;
+      }
+      if (data.output) state.output += data.output;
+      state.offset = data.offset || state.offset || 0;
+      state.hints = data.hints || state.hints || {};
+      state.running = !!data.running;
+      state.exitCode = data.exit_code;
+      updateOnboardingLoginPanel(engine);
+      if (!data.running) {
+        stopOnboardingLoginPoll(engine);
+        try {
+          const nextStatus = await refreshOnboardingCliStatus(false);
+          if (nextStatus && nextStatus[engine] && nextStatus[engine].logged_in) {
+            renderCliChecker();
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      state.output += '\nLogin status check failed.';
+      state.running = false;
+      stopOnboardingLoginPoll(engine);
+      updateOnboardingLoginPanel(engine);
+    }
+  }
+
+  async function startInlineOnboardingLogin(engine, cli, item) {
+    stopOnboardingLoginPoll(engine);
+    const panel = ensureOnboardingLoginPanel(item, engine, cli);
+    onbLoginSessions[engine] = {
+      panel,
+      sessionId: '',
+      command: cli.login_instruction || '',
+      output: '',
+      offset: 0,
+      hints: {},
+      running: true,
+      exitCode: null,
+      poller: null,
+    };
+    updateOnboardingLoginPanel(engine);
+    try {
+      const res = await fetch('/api/onboarding/login/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        onbLoginSessions[engine].running = false;
+        onbLoginSessions[engine].output = data.error || 'Could not start login process.';
+        updateOnboardingLoginPanel(engine);
+        return;
+      }
+      Object.assign(onbLoginSessions[engine], {
+        sessionId: data.session_id,
+        command: data.command,
+        running: !!data.running,
+        exitCode: data.exit_code,
+        output: data.output || '',
+        offset: data.offset || 0,
+        hints: data.hints || {},
+      });
+      updateOnboardingLoginPanel(engine);
+      if (data.running) {
+        onbLoginSessions[engine].poller = setInterval(() => pollOnboardingLogin(engine), 800);
+        pollOnboardingLogin(engine);
+      }
+    } catch (e) {
+      onbLoginSessions[engine].running = false;
+      onbLoginSessions[engine].output = 'Could not start login process.';
+      updateOnboardingLoginPanel(engine);
+    }
+  }
 
   async function checkOnboarding() {
     try {
@@ -39397,8 +39647,14 @@
           btn.type = 'button';
           btn.className = 'onb-setup-action';
           btn.innerHTML = '🔑 Log in';
-          btn.title = 'Start login flow in a new terminal tab';
+          btn.title = shouldUseInlineOnboardingLogin()
+            ? 'Start login flow in this panel'
+            : 'Start login flow in a new terminal tab';
           btn.onclick = async () => {
+            if (shouldUseInlineOnboardingLogin()) {
+              startInlineOnboardingLogin(key, cli, item);
+              return;
+            }
             try {
               const res = await fetch('/api/onboarding/login-terminal', {
                 method: 'POST',
@@ -39408,6 +39664,8 @@
               const data = await res.json();
               if (data && data.ok) {
                 showOpToast('Opened terminal window for ' + cli.name + ' login!', 'ok');
+              } else if (data && data.inline_login) {
+                startInlineOnboardingLogin(key, cli, item);
               } else {
                 navigator.clipboard.writeText(cli.login_instruction);
                 showOpToast('Copied "' + cli.login_instruction + '" to clipboard! Run it in your terminal.', 'ok');
@@ -39427,6 +39685,12 @@
         }
       }
 
+      const loginState = onbLoginSessions[key];
+      if (loginState && loginState.sessionId && !cli.logged_in) {
+        loginState.panel = ensureOnboardingLoginPanel(item, key, cli);
+        updateOnboardingLoginPanel(key);
+      }
+
       listContainer.appendChild(item);
     });
 
@@ -39444,10 +39708,7 @@
     detectBtn.onclick = async () => {
       detectBtn.textContent = 'Scanning...';
       try {
-        const res = await fetch('/api/onboarding/status');
-        const data = await res.json();
-        onbCliStatus = data.clis;
-        renderCliChecker();
+        await refreshOnboardingCliStatus(true);
       } catch (e) {
         console.error('Failed to re-detect CLIs:', e);
       } finally {

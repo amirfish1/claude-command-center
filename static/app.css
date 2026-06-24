@@ -12950,6 +12950,7 @@ body:has(.gc-reader) .pwa-install-banner {
 
 .onb-cli-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   background: var(--bg);
@@ -13041,6 +13042,111 @@ body:has(.gc-reader) .pwa-install-banner {
 .onb-setup-action:hover {
   background: rgba(255,255,255,0.05);
   text-decoration: underline;
+}
+
+.onb-login-panel {
+  flex: 1 0 100%;
+  border-top: 1px solid var(--border);
+  margin-top: 10px;
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.onb-login-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.onb-login-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.onb-login-command {
+  margin-top: 2px;
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.onb-login-cancel,
+.onb-login-send,
+.onb-login-hint-action {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 9px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.onb-login-cancel:hover,
+.onb-login-send:hover,
+.onb-login-hint-action:hover {
+  border-color: var(--accent);
+}
+
+.onb-login-cancel:disabled,
+.onb-login-send:disabled {
+  cursor: default;
+  opacity: 0.55;
+  border-color: var(--border);
+}
+
+.onb-login-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 0;
+}
+
+.onb-login-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0;
+}
+
+.onb-login-output {
+  margin: 0;
+  min-height: 120px;
+  max-height: 210px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #05070a;
+  color: #d7dde8;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.onb-login-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.onb-login-input {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.onb-login-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .onb-cli-footer-note {
