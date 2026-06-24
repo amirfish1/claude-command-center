@@ -19427,7 +19427,7 @@
         const bMax = b[1].cards.reduce((m, c) => Math.max(m, c.modified || 0), 0);
         return bMax - aMax;
       });
-      const _renderObjGroup = (nodeId, title, cards) => {
+      const _renderObjGroup = (nodeId, title, cards, depth = 0) => {
         // Stable per-node hue so each group keeps its color across renders.
         let hash = 0;
         for (let i = 0; i < nodeId.length; i++) hash = ((hash << 5) - hash + nodeId.charCodeAt(i)) | 0;
@@ -19483,14 +19483,48 @@
             +   (_objective ? escapeHtml(_objective) : '+ objective') + '</button>'
             + '</span>';
         }
-        return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '"'
+        // GOAL-5 hierarchy — nested object groups indent by depth. The nesting
+        // is read from flowNodeParents (object:<child> -> object:<parent>),
+        // built into a tree in the emit loop below; here we just render the
+        // depth as a left indent + a guide rail so the day reads as a tree.
+        const _nestCls = depth > 0 ? ' is-nested' : '';
+        const _nestStyle = depth > 0 ? ' style="--obj-depth:' + depth + '"' : '';
+        return '<div class="conv-folder-group' + _nestCls + (collapsed ? ' collapsed' : '') + '"'
+          + _nestStyle
           + ' data-object-drop-zone="' + escapeAttr(nodeId) + '">'
           + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs, '', archiveObjectId, inlineMetaHtml)
           + body
           + '</div>';
       };
-      let _objGroupsHtml = _objEntries.map(([nodeId, group]) =>
-        _renderObjGroup(nodeId, group.title, group.cards)).join('');
+      // GOAL-5 — build the object→object tree from flowNodeParents and emit it
+      // depth-first so nested objects render indented under their parent. Only
+      // object groups nest; repo-derived groups are always roots. _objEntries is
+      // already sorted, so roots and each sibling list inherit that order.
+      const _objParentOf = (nodeId) => {
+        if (nodeId.indexOf('object:') !== 0) return null;
+        const p = flowNodeParents[nodeId];
+        return (p && p.indexOf('object:') === 0 && _byObject.has(p)) ? p : null;
+      };
+      const _childrenOf = new Map();
+      const _objRoots = [];
+      for (const [nodeId] of _objEntries) {
+        const p = _objParentOf(nodeId);
+        if (p) { (_childrenOf.get(p) || _childrenOf.set(p, []).get(p)).push(nodeId); }
+        else { _objRoots.push(nodeId); }
+      }
+      const _emittedObj = new Set();
+      const _emitObjTree = (nodeId, depth) => {
+        if (_emittedObj.has(nodeId)) return '';   // cycle / dup guard
+        _emittedObj.add(nodeId);
+        const group = _byObject.get(nodeId);
+        if (!group) return '';
+        let html = _renderObjGroup(nodeId, group.title, group.cards, depth);
+        // A collapsed parent hides its whole subtree — skip recursing.
+        if (_isFolderGroupCollapsed('inprogress', nodeId)) return html;
+        for (const k of (_childrenOf.get(nodeId) || [])) html += _emitObjTree(k, depth + 1);
+        return html;
+      };
+      let _objGroupsHtml = _objRoots.map(n => _emitObjTree(n, 0)).join('');
       if (_unclassified.length) {
         _objGroupsHtml += _renderObjGroup('unclassified', 'Unclassified', _unclassified);
       }

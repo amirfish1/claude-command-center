@@ -8028,6 +8028,15 @@
     background: var(--folder-tree-color);
     pointer-events: none;
   }
+  /* GOAL-5 object hierarchy — a group nested under another object indents by
+     its depth and carries a guide rail so the day reads as a tree. Depth comes
+     from a --obj-depth inline var set in _renderObjGroup. */
+  .conv-folder-group.is-nested {
+    margin-left: calc(var(--obj-depth, 1) * 18px);
+    border-left: 1px solid var(--folder-tree-color);
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
   .conv-folder-group-header {
     --chip-hue: 0;
     --conv-dot-col: 16px;
