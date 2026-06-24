@@ -1,0 +1,1 @@
+Codex new-session defaults now use the 1M-capable `gpt-5.4` model while `CCC_CODEX_CONTEXT_1M` is enabled, keep explicit `CCC_CODEX_MODEL`/request overrides, and migrate the old saved `gpt-5.5` auto-default so new CCC-spawned Codex sessions actually report a ~950K context window.

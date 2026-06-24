@@ -366,6 +366,32 @@ class TestServerImports(unittest.TestCase):
             finally:
                 server.SPAWN_DEFAULTS_FILE = old_file
 
+    def test_codex_spawn_default_uses_1m_capable_model(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server.SPAWN_DEFAULTS_FILE
+            server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
+            try:
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    self.assertEqual(server._spawn_fallback_model_for_engine("codex"), "gpt-5.4")
+                    defaults = server._load_spawn_defaults()
+                    self.assertEqual(defaults["models"]["codex"], "gpt-5.4")
+
+                    server.SPAWN_DEFAULTS_FILE.write_text(json.dumps({
+                        "engine": "codex",
+                        "models": {"codex": "gpt-5.5"},
+                    }), encoding="utf-8")
+                    defaults = server._load_spawn_defaults()
+                    self.assertEqual(defaults["models"]["codex"], "gpt-5.4")
+
+                with mock.patch.dict(os.environ, {"CCC_CODEX_MODEL": "gpt-5.5"}, clear=True):
+                    self.assertEqual(server._spawn_fallback_model_for_engine("codex"), "gpt-5.5")
+            finally:
+                server.SPAWN_DEFAULTS_FILE = old_file
+
     def test_morning_disabled_when_plugin_absent(self):
         """If morning.py isn't importable, MORNING_ENABLED must be False
         no matter what CCC_ENABLE_MORNING says."""
@@ -4361,6 +4387,43 @@ class TestRepoContextHelpers(unittest.TestCase):
         cmd = popen.call_args.args[0]
         self.assertIn("--image", cmd)
         self.assertEqual(cmd[cmd.index("--image") + 1], str(image))
+
+    def test_spawn_codex_defaults_to_1m_context_model_and_arg(self):
+        """Default Codex spawns should request the 1M-capable model/window."""
+        server = self.server
+        proc = mock.Mock(pid=4244)
+        original_spawns = list(server._spawned_sessions)
+        old_defaults = server.SPAWN_DEFAULTS_FILE
+        server._spawned_sessions.clear()
+        with tempfile.TemporaryDirectory() as td:
+            server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
+            try:
+                with mock.patch.dict(os.environ, {}, clear=True), \
+                     mock.patch.object(
+                         server,
+                         "_resolve_codex_bin",
+                         return_value={"available": True, "bin": "/usr/bin/codex-test"},
+                     ), mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
+                     mock.patch.object(server, "_record_spawn_to_registry"):
+                    result = server.spawn_session_codex(
+                        "say ok",
+                        name="context prompt",
+                        repo_path=str(self.repo),
+                    )
+            finally:
+                for entry in server._spawned_sessions:
+                    fh = entry.get("log_fh")
+                    if fh:
+                        fh.close()
+                server._spawned_sessions.clear()
+                server._spawned_sessions.extend(original_spawns)
+                server.SPAWN_DEFAULTS_FILE = old_defaults
+
+        self.assertTrue(result["ok"])
+        cmd = popen.call_args.args[0]
+        self.assertIn("-c", cmd)
+        self.assertEqual(cmd[cmd.index("-c") + 1], "model_context_window=1000000")
+        self.assertEqual(cmd[cmd.index("--model") + 1], "gpt-5.4")
 
     def test_resume_codex_attaches_command_center_pasted_images(self):
         """Resumed Codex sessions need the same pasted-image attachment path."""

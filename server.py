@@ -2420,11 +2420,27 @@ def _clean_spawn_default_model(value):
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
+def _codex_context_1m_enabled():
+    return os.environ.get("CCC_CODEX_CONTEXT_1M", "1").lower() not in ("0", "false", "no")
+
+
+def _codex_default_model():
+    env_model = _clean_spawn_default_model(os.environ.get("CCC_CODEX_MODEL"))
+    if env_model:
+        return env_model
+    # Codex 0.141 reports gpt-5.5 as capped at ~272K for ChatGPT auth, while
+    # gpt-5.4 honors model_context_window=1000000 and reports a 950K effective
+    # window. Use the 1M-capable listed model when CCC's 1M mode is enabled.
+    if _codex_context_1m_enabled():
+        return "gpt-5.4"
+    return "gpt-5.5"
+
+
 def _spawn_fallback_model_for_engine(engine):
     if engine == "claude":
         return os.environ.get("CCC_CLAUDE_MODEL", "claude-fable-5")
     if engine == "codex":
-        return os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
+        return _codex_default_model()
     if engine == "cursor":
         return os.environ.get("CCC_CURSOR_MODEL", "auto")
     if engine == "antigravity":
@@ -2470,6 +2486,14 @@ def _load_spawn_defaults():
             model = _clean_spawn_default_model(value)
             if len(model) <= 200:
                 models[norm] = model
+    if (
+        _codex_context_1m_enabled()
+        and not os.environ.get("CCC_CODEX_MODEL")
+        and models.get("codex") == "gpt-5.5"
+    ):
+        # Existing installs may have persisted the old auto-default. Treat that
+        # exact value as stale so new Codex sessions actually open with 1M.
+        models["codex"] = _codex_default_model()
     for required in ("claude", "codex", "cursor"):
         if not models.get(required):
             models[required] = defaults["models"].get(required) or _spawn_fallback_model_for_engine(required)
@@ -15920,16 +15944,15 @@ def _codex_context_window_args():
     Codex CLAMPS `model_context_window` to the model's advertised
     `max_context_window`, so passing 1M is a safe "give me the max" request, not
     a foot-gun — it is silently capped per model:
-      - gpt-5.0 / gpt-5.1: 272K default, 1M max  → this lifts them to ~1M.
-      - gpt-5.5:           272K max               → clamped to ~272K (the live
-        usage pill then shows ~258K, i.e. 272K minus reserved output/system
-        tokens). 1M is NOT achievable on gpt-5.5; that is the model's ceiling,
-        not a CCC misconfiguration (CCC-153).
+      - gpt-5.4: 272K default, 1M max -> reports ~950K effective context.
+      - gpt-5.5: 272K max -> clamped to ~258K after reserved output/system
+        tokens. CCC therefore defaults Codex spawns to gpt-5.4 while 1M mode is
+        enabled, unless the user explicitly sets CCC_CODEX_MODEL.
     Passed as a global `-c` override on spawn, resume, and the app-server so the
     window is consistent across a session's whole life. Set CCC_CODEX_CONTEXT_1M=0
     to fall back to the model default.
     """
-    if os.environ.get("CCC_CODEX_CONTEXT_1M", "1").lower() in ("0", "false", "no"):
+    if not _codex_context_1m_enabled():
         return []
     return ["-c", "model_context_window=1000000"]
 
@@ -19513,7 +19536,7 @@ def resume_session_codex(session_id, text, *, steer=False):
     # the env-var default and the previous run's recorded model.
     override = _get_session_override(session_id)
     override_model = (override or {}).get("model") if override else None
-    model = override_model or os.environ.get("CCC_CODEX_MODEL") or row.get("model") or "gpt-5.5"
+    model = override_model or os.environ.get("CCC_CODEX_MODEL") or row.get("model") or _spawn_fallback_model_for_engine("codex")
     if steer:
         return _codex_steer_via_app_server(
             session_id,
@@ -27717,7 +27740,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         session_name = "unnamed"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-codex-{session_name}-{timestamp}.log"
-    model_to_use = _spawn_model_for_engine("codex", model) or os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
+    model_to_use = _spawn_model_for_engine("codex", model) or _spawn_fallback_model_for_engine("codex")
     if model_to_use:
         _set_session_model(log_filename[:-4], model_to_use, False)
     log_dir = repo_log_dir(repo_for_logs)
@@ -39851,7 +39874,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             self.send_json(payload)
         elif path == "/api/sessions/spawn-codex/availability":
             info = _resolve_codex_bin()
-            info["model"] = os.environ.get("CCC_CODEX_MODEL", "gpt-5.5")
+            info["model"] = _spawn_model_for_engine("codex")
             self.send_json(info)
         elif path == "/api/sessions/spawn-gemini/availability":
             info = _resolve_gemini_bin()
