@@ -272,6 +272,28 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("ev.target.closest('[data-role=\"folder-group-collapse\"]')", app_js)
         self.assertIn(".conv-folder-group-arrow {", app_css)
 
+    def test_by_object_group_titles_use_larger_readable_type(self):
+        """Object group headers should not use the tiny project-chip type."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn(".conv-folder-group-header[data-object-drop] .conv-folder-group-chip {\n"
+                      "    grid-column: 2;\n"
+                      "    max-width: 220px;\n"
+                      "    overflow: hidden;\n"
+                      "    text-overflow: ellipsis;\n"
+                      "    font-size: 13px;\n"
+                      "    line-height: 1.25;", app_css)
+        self.assertIn(".conv-folder-object-title-input {\n"
+                      "    width: min(220px, 100%);\n"
+                      "    min-width: 80px;\n"
+                      "    padding: 1px 7px;\n"
+                      "    border-radius: 3px;\n"
+                      "    border: 1px solid var(--accent, #58a6ff);\n"
+                      "    background: var(--bg);\n"
+                      "    color: var(--text);\n"
+                      "    font: inherit;\n"
+                      "    font-size: 13px;", app_css)
+
     def test_by_objects_header_has_expand_collapse_all(self):
         """By-objects mode should expose expand-all and collapse-all controls."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

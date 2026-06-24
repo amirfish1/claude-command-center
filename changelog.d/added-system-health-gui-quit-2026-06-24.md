@@ -1,0 +1,1 @@
+- Added System Health rows for shared GUI app engines with graceful Quit controls for Cursor.app, Antigravity.app, and Codex.app.

@@ -8157,6 +8157,8 @@
     max-width: 220px;
     overflow: hidden;
     text-overflow: ellipsis;
+    font-size: 13px;
+    line-height: 1.25;
   }
   .conv-folder-group-chip[data-role="object-title"] { cursor: pointer; }
   .conv-folder-group-header[data-object-drop] .conv-folder-group-count {
@@ -8178,7 +8180,7 @@
     background: var(--bg);
     color: var(--text);
     font: inherit;
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
     outline: none;
   }

@@ -1,0 +1,1 @@
+- Kept timed-out spawn placeholders visible with retry and dismiss actions instead of silently removing them.
