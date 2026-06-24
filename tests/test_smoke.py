@@ -93,6 +93,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-role="ship-push-all"', app_js)
         self.assertIn("/api/repo/ship", app_js)
         self.assertIn("_startShipPushAll", app_js)
+        self.assertIn("function _isShipRepoPath", app_js)
+        self.assertIn("section === 'inprogress' && _isShipRepoPath(repoPath)", app_js)
+        self.assertIn("if (!_isShipRepoPath(repo)) return;", app_js)
         self.assertIn(".conv-folder-ship", app_css)
         # Editor/cache cruft is junk (gitignore material), not "app/deploy
         # review" — otherwise Push all parks on it every time. The cache/ prefix
@@ -120,6 +123,60 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(server._ship_classify_remaining("snapshot.png"), "infra")
         self.assertEqual(server._ship_classify_remaining("snapshot.js"), "infra")
         self.assertEqual(server._ship_classify_remaining("apps/x/page.tsx"), "review")
+
+    def test_system_health_gui_app_contract(self):
+        """GUI app-server engines are visible but never reapable. Their only
+        server-side control is a fixed graceful AppleScript quit command."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        rows = [
+            {
+                "pid": 101, "ppid": 1, "rss_mb": 200.0, "cpu": 2.5,
+                "etime_min": 30.0, "tty": "??",
+                "cmd": "/Applications/Cursor.app/Contents/MacOS/Cursor",
+            },
+            {
+                "pid": 102, "ppid": 101, "rss_mb": 50.0, "cpu": 1.0,
+                "etime_min": 20.0, "tty": "??",
+                "cmd": "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper.app/Contents/MacOS/Cursor Helper",
+            },
+            {
+                "pid": 201, "ppid": 1, "rss_mb": 100.0, "cpu": 3.0,
+                "etime_min": 10.0, "tty": "??", "cmd": "/usr/local/bin/codex",
+            },
+        ]
+
+        apps = server._sys_gui_apps(rows)
+
+        self.assertEqual([app["id"] for app in apps], ["cursor"])
+        self.assertEqual(apps[0]["name"], "Cursor.app")
+        self.assertFalse(apps[0]["reapable"])
+        self.assertEqual(apps[0]["control"], "quit-app")
+        self.assertEqual(apps[0]["nprocs"], 2)
+        self.assertEqual(apps[0]["rss_mb"], 250)
+        self.assertEqual(apps[0]["pids"], [101, 102])
+
+        fake_proc = subprocess.CompletedProcess(
+            ["/usr/bin/osascript"], 0, stdout="", stderr=""
+        )
+        with mock.patch.object(server.platform, "system", return_value="Darwin"), \
+             mock.patch.object(server.subprocess, "run", return_value=fake_proc) as run:
+            res = server.system_health_quit_app("cursor")
+
+        self.assertTrue(res["ok"])
+        run.assert_called_once()
+        args, kwargs = run.call_args
+        self.assertEqual(args[0], [server._SYS_OSASCRIPT, "-e", 'tell application "Cursor" to quit'])
+        self.assertFalse(kwargs.get("shell", False))
+
+    def test_system_health_ui_wires_gui_app_quit(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("/api/system-health/quit-app", app_js)
+        self.assertIn("data-quit-app", app_js)
+        self.assertIn("function _confirmQuitApp", app_js)
+        self.assertIn("Sessions stay on disk", app_js)
+        self.assertIn("Hard kill is not offered", app_js)
 
     def test_new_session_folder_shortcuts_are_labeled(self):
         """The folder dropdown and recent chips both set the same spawn CWD.
@@ -1674,6 +1731,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".event.user_text.send-queued", app_js)
         self.assertIn(".event.user_text.send-delivered", app_js)
         self.assertIn(".event.user_text.not-acknowledged", app_js)
+
+    def test_pending_spawn_timeout_stays_visible(self):
+        """A Claude pending-spawn placeholder that never materializes must not
+        vanish silently. It should turn into a visible failed/not-acknowledged
+        card with retry/dismiss actions."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("function markPendingSpawnNotAcknowledged", app_js)
+        self.assertIn("Spawn was not acknowledged within 30s", app_js)
+        self.assertIn("markPendingSpawnNotAcknowledged(pid, id)", app_js)
+        self.assertIn("c.pending_spawn || c.spawn_failed", app_js)
+        self.assertIn("data-pending-spawn-retry", app_js)
+        self.assertIn("data-pending-spawn-dismiss", app_js)
+        self.assertIn("const spawnFailed = c.spawn_failed ? ' spawn-failed' : '';", app_js)
 
     def test_slash_command_args_surface_in_user_text(self):
         """A /command user turn must render "/cmd <args>", not a bare "/cmd".

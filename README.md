@@ -354,9 +354,10 @@ The `CCC_BIND_HOST`, `CCC_ALLOWED_ORIGIN`, and `CCC_TRUST_TAILNET` knobs can als
 - ACP adapter — drive Claude Code sessions over the Agent Client Protocol (`ccc_acp.py`, optional)
 
 **Not yet**
-- First-class parity for Codex. Spawn works, but transcript ingestion and UX
-  polish lag behind Claude Code — see the [engine support matrix](#engine-support)
-  and [#57](https://github.com/amirfish1/claude-command-center/issues/57).
+- First-class parity for Codex. Spawn, resume, and JSONL transcript parsing
+  work, but broader UX polish still lags behind Claude Code — see the
+  [engine support matrix](#engine-support) and
+  [#57](https://github.com/amirfish1/claude-command-center/issues/57).
 - Kilo Code resume / follow-up. Spawn and read-only ingestion both work
   (externally-launched sessions appear on the board and open with full
   transcripts); injecting follow-up turns into a Kilo session is not wired yet.

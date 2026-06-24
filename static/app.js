@@ -179,8 +179,9 @@
   // ---- System Health panel -------------------------------------------------
   // Full-screen overlay opened from the footer health cluster. While open it
   // polls /api/system-health (machine memory/swap, CPU hogs, Claude session
-  // trees with last-activity) and can reap a stale session's whole tree. The
-  // reap is guarded server-side — only headless/idle/stale trees can die.
+  // trees with last-activity, plus GUI app servers) and can reap a stale
+  // session tree or gracefully quit a shared GUI app. The reap is guarded
+  // server-side — only headless/idle/stale trees can die.
   let _sysHealthTimer = null;
   function _shFmtMB(mb) {
     if (mb == null) return '—';
@@ -318,6 +319,28 @@
     }
     html += '</div>';
 
+    // GUI app-server engines
+    const apps = d.apps || [];
+    const at = d.app_totals || {};
+    if (apps.length) {
+      html += '<div><div class="sh-sec-title">GUI apps — ' + (at.count || apps.length) + ' · ' + _shFmtMB(at.rss_mb) + '</div>';
+      html += '<div class="sh-def">These are shared app-server processes, not per-session trees. Quit asks macOS to close the app cleanly. Sessions stay on disk and reopen later. Hard kill is not offered.</div>';
+      apps.forEach(function (a) {
+        const quitBtn = a.quit_supported
+          ? '<button class="sh-btn" data-quit-app="' + _shEsc(a.id) + '" data-quit-name="' + _shEsc(a.name || a.app_name || 'app') + '">Quit</button>'
+          : '';
+        html += '<div class="sh-sess"><span class="sh-badge sh-ok" title="Shared GUI app process; non-reapable">app</span>' +
+                '<div class="sh-sesscol">' +
+                  '<div><span class="sh-name">' + _shEsc(a.name || a.app_name || a.id) + '</span></div>' +
+                  '<div class="sh-meta">up ' + _shFmtIdle(a.age_min) + ' · ' + _shFmtMB(a.rss_mb) + ' · ' + (a.cpu || 0) + '% cpu · ' + (a.nprocs || 1) + 'p · PID ' + a.pid + '</div>' +
+                '</div>' +
+                '<span class="sh-spacer"></span>' +
+                quitBtn +
+                '</div>';
+      });
+      html += '</div>';
+    }
+
     // Claude sessions
     const pol = d.policy || {};
     const sm = pol.stale_min || 120;
@@ -364,6 +387,11 @@
         _confirmReap(b, b.getAttribute('data-reap').split(',').map(Number));
       });
     });
+    Array.prototype.forEach.call(body.querySelectorAll('[data-quit-app]'), function (b) {
+      b.addEventListener('click', function () {
+        _confirmQuitApp(b, b.getAttribute('data-quit-app'));
+      });
+    });
     // Session name → open that conversation in CCC and close the panel.
     Array.prototype.forEach.call(body.querySelectorAll('.sh-name[data-open]'), function (el) {
       el.addEventListener('click', function () {
@@ -402,6 +430,31 @@
       body: JSON.stringify({ pids: pids }),
     }).then(function (r) { return r.json(); })
       .then(function () { _pollSystemHealth(); })
+      .catch(function () { _pollSystemHealth(); });
+  }
+  function _confirmQuitApp(btn, appId) {
+    // Two-step confirm: quitting a GUI app is graceful and sessions survive on
+    // disk, but it closes the whole shared app process.
+    if (btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1';
+      btn.dataset.prev = btn.textContent;
+      btn.textContent = 'confirm quit?';
+      btn.title = 'Sessions stay on disk and reopen later. Hard kill is not offered.';
+      setTimeout(function () {
+        if (btn.dataset.armed === '1') { btn.dataset.armed = '0'; btn.textContent = btn.dataset.prev || 'Quit'; }
+      }, 3000);
+      return;
+    }
+    btn.dataset.armed = '0';
+    btn.textContent = 'quitting...';
+    fetch('/api/system-health/quit-app', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ app_id: appId }),
+    }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && !d.ok && typeof showOpToast === 'function') showOpToast('Quit failed: ' + (d.error || 'unknown'), 'error');
+        _pollSystemHealth();
+      })
       .catch(function () { _pollSystemHealth(); });
   }
 
@@ -1618,6 +1671,10 @@
 
   function _isAbsoluteLocalPath(value) {
     return typeof value === 'string' && value.startsWith('/');
+  }
+
+  function _isShipRepoPath(value) {
+    return _isAbsoluteLocalPath(value);
   }
 
   function rowRepoPath(row) {
@@ -8648,6 +8705,7 @@
     const $view = getConvViewForPane(paneId || activePaneId()) || $conversationsView;
     if (!$view || !card) return;
     const prompt = (card.first_message || card.prompt || card.display_name || '').trim();
+    const failed = !!card.spawn_failed;
     const engineLabel = card.source === 'codex' ? 'Codex'
       : card.source === 'gemini' ? 'Gemini'
       : card.source === 'cursor' ? 'Cursor'
@@ -8661,13 +8719,44 @@
     const promptHtml = prompt
       ? linkifyPastedImages(escapeHtml(prompt))
       : escapeHtml(card.display_name || 'New session');
-    $view.innerHTML = '<div class="event user_text pending">'
+    const failureHtml = failed
+      ? '<div class="not-ack-note">'
+        + '<span class="not-ack-label">' + escapeHtml(card.spawn_error || 'Spawn was not acknowledged within 30s.') + '</span>'
+        + '<button type="button" class="not-ack-retry" data-pending-spawn-retry>Retry</button>'
+        + '<button type="button" class="not-ack-dismiss" data-pending-spawn-dismiss title="Dismiss this placeholder">Dismiss</button>'
+        + '</div>'
+      : '';
+    $view.innerHTML = '<div class="event user_text ' + (failed ? 'not-acknowledged' : 'pending') + '">'
       + '<span class="label">User</span>'
       + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(prompt || card.display_name || 'New session') + '">' + promptHtml + '</div>'
       + (meta ? '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">' + escapeHtml(meta) + '</div>' : '')
       + (card.source === 'antigravity' ? '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">Antigravity is running headless with AGY print mode. Use Launch on a completed row for manual /resume in the TUI.</div>' : '')
+      + failureHtml
       + '</div>';
-    showOptimisticAgentIndicator($view);
+    if (failed) {
+      clearOptimisticAgentIndicator($view);
+      const retryBtn = $view.querySelector('[data-pending-spawn-retry]');
+      if (retryBtn) retryBtn.addEventListener('click', async () => {
+        const retryPrompt = prompt || card.first_message || card.prompt || card.display_name || '';
+        const retryPid = card.spawn_pid || String(card.id || '').replace(/^spawning-/, '');
+        const retryCwd = card.spawn_cwd || card.repo_path || card.folder_path || card.cwd || '';
+        const retryEngine = card.source === 'interactive' ? 'claude' : card.source;
+        _removePendingSpawnCard(retryPid);
+        if (retryCwd && typeof setSpawnCwdInputValue === 'function') setSpawnCwdInputValue(retryCwd, { focus: false });
+        if (retryEngine && typeof setSpawnEngine === 'function') setSpawnEngine(retryEngine);
+        if (retryPrompt && typeof spawnFromInlineInput === 'function') await spawnFromInlineInput(retryPrompt);
+        else if (typeof enterNewSessionMode === 'function') enterNewSessionMode(retryPrompt);
+      });
+      const dismissBtn = $view.querySelector('[data-pending-spawn-dismiss]');
+      if (dismissBtn) dismissBtn.addEventListener('click', () => {
+        const dismissPid = card.spawn_pid || String(card.id || '').replace(/^spawning-/, '');
+        _removePendingSpawnCard(dismissPid);
+        $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Spawn placeholder dismissed.</div>';
+        updateConversationEndAffordance($view);
+      });
+    } else {
+      showOptimisticAgentIndicator($view);
+    }
     scrollConversationToEnd($view);
   }
 
@@ -8778,6 +8867,29 @@
     updateSplitToolbar();
   }
 
+  function markPendingSpawnNotAcknowledged(pid, fallbackId) {
+    const direct = pendingSpawns.has(pid) ? [pid, pendingSpawns.get(pid)] : null;
+    const adopted = direct || Array.from(pendingSpawns.entries()).find(([, c]) => c && c.id === fallbackId);
+    if (!adopted) return;
+    const key = adopted[0];
+    const card = adopted[1];
+    const id = (card && card.id) || fallbackId || ('spawning-' + pid);
+    pendingSpawns.delete(key);
+    if (!card) return;
+    card.pending_spawn = false;
+    card.is_live = false;
+    card.spawn_failed = true;
+    card.sidecar_status = '';
+    card.pending_tool = null;
+    card.last_event_type = 'result';
+    card.spawn_error = 'Spawn was not acknowledged within 30s. The process may have exited before CCC saw its session.';
+    delete columnOverrides[id];
+    try { localStorage.setItem('ccc-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
+    renderSidebar(filterConversations($convSearch.value));
+    if (currentConversation === id) renderPendingSpawnConversation(card, activePaneId());
+    if (typeof showOpToast === 'function') showOpToast('Spawn was not acknowledged within 30s. The placeholder was kept so you can retry.', 'error');
+  }
+
   function insertPendingSpawnCard(pid, subject, sourceOrEngine, logPath, meta) {
     if (!pid) return;
     const id = 'spawning-' + pid;
@@ -8835,17 +8947,7 @@
     // as a fallback if the CLI exits before creating a thread.
     if (source !== 'codex' && source !== 'gemini' && source !== 'cursor' && source !== 'antigravity' && source !== 'kilo') {
       setTimeout(() => {
-        const direct = pendingSpawns.has(pid) ? [pid, pendingSpawns.get(pid)] : null;
-        const adopted = direct || Array.from(pendingSpawns.entries()).find(([, c]) => c && c.id === id);
-        if (adopted) {
-          const staleKey = adopted[0];
-          const stale = adopted[1];
-          const staleId = (stale && stale.id) || id;
-          pendingSpawns.delete(staleKey);
-          delete columnOverrides[staleId];
-          conversationsData = conversationsData.filter(x => x.id !== staleId);
-          renderSidebar(filterConversations($convSearch.value));
-        }
+        markPendingSpawnNotAcknowledged(pid, id);
       }, 30000);
     }
   }
@@ -16355,11 +16457,12 @@
         const _antigravityKanbanWip = _isKanbanAntigravity && c.is_live && (c.last_event_type === 'user' || c.last_event_type === 'assistant') && _kanbanActivityAge < 30 * 60;
         const trulyActive = (c.is_live && c.sidecar_status === 'active' && (sidecarAge < 300 || midTurn)) || _codexKanbanWip || _geminiKanbanWip || _cursorKanbanWip || _antigravityKanbanWip ? ' truly-active' : '';
         const pendingSpawn = c.pending_spawn ? ' pending-spawn' : '';
+        const spawnFailed = c.spawn_failed ? ' spawn-failed' : '';
         const recentlyBorn = isRecentlyBorn(c.session_id) ? ' recently-born' : '';
         const noEditsAttr = hasNoEdits(c) ? ' no-edits' : '';
         const readOnlyAttr = hasReadOnlyWork(c) ? ' read-only' : '';
         const isGithubColIssue = c.backlog_type === 'github' || c.issue_number || c.linked_issue;
-        html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + recentlyBorn + noEditsAttr + readOnlyAttr + (isGithubColIssue ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
+        html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + spawnFailed + recentlyBorn + noEditsAttr + readOnlyAttr + (isGithubColIssue ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
         // Create-issue button only when no issue is linked. The "view issue" link
         // was removed — tapping the #NNN badge in the title opens the issue.
         const linkedIssue = c.linked_issue || c.issue_number || '';
@@ -18963,7 +19066,7 @@
       // "Push all" ship control — conversation list only, and only when we
       // know the repo's real path. Status text is hydrated client-side after
       // render (see _hydrateShipControls / _refreshShipStatus).
-      const ship = (section === 'inprogress' && repoPath)
+      const ship = (section === 'inprogress' && _isShipRepoPath(repoPath))
         ? '<span class="conv-folder-ship" data-ship-repo="' + escapeHtml(repoPath) + '">'
             + '<span class="conv-folder-ship-status" data-role="ship-status"></span>'
             + '<button type="button" class="conv-folder-ship-btn" data-role="ship-push-all"'
@@ -20819,7 +20922,7 @@
     // "Push all" ship controls in folder headers (conv list only).
     $convList.querySelectorAll('.conv-folder-ship').forEach(box => {
       const repo = box.getAttribute('data-ship-repo') || '';
-      if (!repo) return;
+      if (!_isShipRepoPath(repo)) return;
       // Don't let clicks/keys on the control toggle the folder collapse.
       box.addEventListener('click', (ev) => ev.stopPropagation());
       box.addEventListener('keydown', (ev) => {
@@ -25764,7 +25867,7 @@
         }, 1500);
         return;
       }
-      if (c && c.pending_spawn) {
+      if (c && (c.pending_spawn || c.spawn_failed)) {
         renderPendingSpawnConversation(c, fetchPaneId);
         return;
       }

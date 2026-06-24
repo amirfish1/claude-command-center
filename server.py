@@ -3151,6 +3151,27 @@ _SYS_PS = _resolve_sys_tool("/bin/ps", "ps")
 _SYS_LSOF = _resolve_sys_tool("/usr/sbin/lsof", "lsof")
 _SYS_SYSCTL = _resolve_sys_tool("/usr/sbin/sysctl", "sysctl")
 _SYS_VM_STAT = _resolve_sys_tool("/usr/bin/vm_stat", "vm_stat")
+_SYS_OSASCRIPT = _resolve_sys_tool("/usr/bin/osascript", "osascript")
+_SYS_GUI_APPS = (
+    {
+        "id": "cursor",
+        "name": "Cursor.app",
+        "app_name": "Cursor",
+        "bundle": "Cursor.app",
+    },
+    {
+        "id": "antigravity",
+        "name": "Antigravity.app",
+        "app_name": "Antigravity",
+        "bundle": "Antigravity.app",
+    },
+    {
+        "id": "codex",
+        "name": "Codex.app",
+        "app_name": "Codex",
+        "bundle": "Codex.app",
+    },
+)
 
 
 def _sys_run(cmd, timeout=3):
@@ -3321,6 +3342,36 @@ def _sys_process_rows():
         except ValueError:
             continue
     return rows
+
+
+def _sys_gui_apps(rows):
+    """Running GUI app-server engines, aggregated separately from session
+    process trees. These are intentionally non-reapable: all conversations live
+    inside the shared app process, so the only exposed control is graceful quit."""
+    apps = []
+    for spec in _SYS_GUI_APPS:
+        marker = "/" + spec["bundle"] + "/Contents/"
+        matches = [r for r in rows if marker in r.get("cmd", "")]
+        if not matches:
+            continue
+        matches.sort(key=lambda r: r["pid"])
+        main = next((r for r in matches if "/Contents/MacOS/" in r.get("cmd", "")), matches[0])
+        apps.append({
+            "id": spec["id"],
+            "name": spec["name"],
+            "app_name": spec["app_name"],
+            "bundle": spec["bundle"],
+            "pid": main["pid"],
+            "pids": [r["pid"] for r in matches],
+            "rss_mb": round(sum(r["rss_mb"] for r in matches)),
+            "cpu": round(sum(r["cpu"] for r in matches), 1),
+            "age_min": round(max((r["etime_min"] for r in matches), default=0.0), 1),
+            "nprocs": len(matches),
+            "reapable": False,
+            "control": "quit-app",
+            "quit_supported": platform.system() == "Darwin",
+        })
+    return apps
 
 
 def _sys_last_activity_min(uuid, now, proj_dirs):
@@ -3504,6 +3555,7 @@ def _build_system_health_uncached():
     now = time.time()
     rows = _sys_process_rows()
     sessions = _sys_sessions(rows, now)
+    apps = _sys_gui_apps(rows)
     reap = [s for s in sessions if s["reapable"]]
     return {
         "ts": now,
@@ -3511,11 +3563,16 @@ def _build_system_health_uncached():
         "cpu": _sys_cpu(),
         "hogs": _sys_hogs(rows),
         "sessions": sessions,
+        "apps": apps,
         "session_totals": {
             "count": len(sessions),
             "tree_rss_mb": round(sum(s["tree_rss_mb"] for s in sessions)),
             "reapable": len(reap),
             "reapable_rss_mb": round(sum(s["tree_rss_mb"] for s in reap)),
+        },
+        "app_totals": {
+            "count": len(apps),
+            "rss_mb": round(sum(app["rss_mb"] for app in apps)),
         },
         # The reap policy, so the UI can state exactly what "stale" means
         # without hardcoding (and drifting from) these thresholds.
@@ -3568,6 +3625,43 @@ def system_health_reap(pids):
     # Invalidate so the next poll reflects the kill immediately.
     _system_health_snapshot["data"] = None
     return {"ok": True, "killed": killed, "blocked": blocked}
+
+
+def system_health_quit_app(app_id, timeout=8):
+    spec = next((s for s in _SYS_GUI_APPS if s["id"] == app_id), None)
+    if not spec:
+        return {"ok": False, "error": "unknown app"}
+    if platform.system() != "Darwin":
+        return {"ok": False, "error": "graceful app quit is only supported on macOS"}
+    script = f'tell application "{spec["app_name"]}" to quit'
+    try:
+        proc = subprocess.run(
+            [_SYS_OSASCRIPT, "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        _system_health_snapshot["data"] = None
+        return {
+            "ok": False,
+            "app_id": spec["id"],
+            "app_name": spec["app_name"],
+            "error": "quit timed out",
+        }
+    _system_health_snapshot["data"] = None
+    ok = proc.returncode == 0
+    out = {
+        "ok": ok,
+        "app_id": spec["id"],
+        "app_name": spec["app_name"],
+        "returncode": proc.returncode,
+        "hard_kill_offered": False,
+    }
+    if not ok:
+        err = (proc.stderr or proc.stdout or "").strip()
+        out["error"] = err or "quit failed"
+    return out
 
 
 def build_live_sessions_activity():
@@ -43886,6 +43980,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing pids"})
             else:
                 self.send_json(system_health_reap(pids))
+        elif path == "/api/system-health/quit-app":
+            # GUI app-server engines host many conversations in one app process.
+            # Do not SIGTERM/SIGKILL them from System Health; ask macOS to quit
+            # the fixed allowlisted app so it can flush state cleanly.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            app_id = (payload.get("app_id") or "").strip()
+            if not app_id:
+                self.send_json({"ok": False, "error": "missing app_id"}, 400)
+            else:
+                res = system_health_quit_app(app_id)
+                self.send_json(res, 200 if res.get("ok") else 400)
         elif path in ("/api/coordinate", "/api/group-chat/create", "/api/group-chats/create"):
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

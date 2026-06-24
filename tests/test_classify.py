@@ -1053,6 +1053,9 @@ class TestCodexConversationAdapter(unittest.TestCase):
             sys.modules.pop(mod, None)
         shutil.rmtree(cls.tmp_home, ignore_errors=True)
 
+    def setUp(self):
+        self.server._reset_ttl_memo_caches()
+
     def _set_codex_thread_source(self, session_id, thread_source):
         db_path = Path(self.tmp_home) / ".codex" / "state_5.sqlite"
         con = sqlite3.connect(db_path)

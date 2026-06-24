@@ -6381,6 +6381,14 @@
     content: ' · spawning...';
     font-weight: 400; color: var(--accent); font-size: 11px;
   }
+  .kanban-card.spawn-failed {
+    border: 1px dashed rgba(248, 81, 73, 0.6) !important;
+    background: rgba(248, 81, 73, 0.08);
+  }
+  .kanban-card.spawn-failed .kanban-card-title::after {
+    content: ' · failed';
+    font-weight: 400; color: var(--red); font-size: 11px;
+  }
   @keyframes pending-shimmer {
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
