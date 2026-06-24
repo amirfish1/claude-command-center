@@ -116,6 +116,7 @@ CLAUDE.local.md
 /git_log.txt
 
 # --- babysitter managed ---
+.a5c/
 .a5c/creds.env
 .a5c/creds.env.tmp.*
 .a5c/logs/

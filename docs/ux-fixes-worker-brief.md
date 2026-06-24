@@ -27,11 +27,12 @@ thing that differs per project is **which repo the session runs in** and
 ## The tooling lives in the CCC repo
 
 The `ux_fixes_queue` Python module is **only** in the CCC checkout
-(`/Users/amirfish/Apps/claude-command-center/ux_fixes_queue.py`), not in your
-project repo. Drive it cross-repo by putting the CCC repo on `sys.path`:
+(`ux_fixes_queue.py` at the repo root), not in your project repo. Drive it
+cross-repo by putting the CCC repo on `sys.path`:
 
 ```bash
-python3 -c "import sys; sys.path.insert(0,'/Users/amirfish/Apps/claude-command-center'); \
+CCC_REPO="${CCC_REPO:-$HOME/.ccc/claude-command-center}"
+python3 -c "import os, sys; sys.path.insert(0, os.environ['CCC_REPO']); \
   import ux_fixes_queue as q; print(q.list_items(status='open', project='<PROJECT>'))"
 ```
 
@@ -41,10 +42,39 @@ python3 -c "import sys; sys.path.insert(0,'/Users/amirfish/Apps/claude-command-c
 
 | Call | Does |
 |------|------|
+| `q.enqueue(project='<PROJECT>', note=..., text=..., ...)` | File a NEW ticket → returns it (with assigned ref) |
 | `q.list_items(status='open', project='<PROJECT>')` | List open tickets for your project |
 | `q.claim_next(SID, project='<PROJECT>')` | Atomically claim the oldest open item → returns it (or `None`) |
 | `q.update_status(ref, 'in_progress', SID)` | Claim a specific ref (e.g. `'BYM-87'`) |
 | `q.close(ref, SID)` | Mark a ticket fixed |
+
+### Filing a ticket (`enqueue`)
+
+A fixer drains; any session can **file**. Pass `project=` explicitly to pick the
+lane (`OPS`, `BYM`, `CCC`, …) — an unknown code like `OPS` is accepted as-is and
+gets its own `OPS-N` ref series. If you omit `project`, it routes by `repo_path`
+basename, then `source`, else `GEN`. `note` (short, ≤4000 chars) or `text`
+(detailed, ≤24000) is required; everything else is optional.
+
+```bash
+CCC_REPO="${CCC_REPO:-$HOME/.ccc/claude-command-center}"
+python3 -c "import os, sys; sys.path.insert(0, os.environ['CCC_REPO']); \
+import ux_fixes_queue as q; \
+item = q.enqueue( \
+    project='OPS', \
+    title='Short headline', \
+    note='One-line summary of the problem.', \
+    text='Full detail: problem, impact, a concrete instance, suggested fix.', \
+    url='https://example.com',           # optional: where it shows up \
+    selector='',                          # optional: CSS path to the element \
+    screenshot_path='',                   # optional: evidence image \
+    repo_path='',                         # optional: routes project if project= omitted \
+    lane='normal'); \
+print('FILED:', item['ref'], '-', item['title'])"
+```
+
+`enqueue` is append-only and file-locked, so it is safe to call from any session
+without colliding with a fixer that is draining the same file.
 
 ### Ticket shape
 
@@ -78,8 +108,7 @@ Never busy-wait. Poll, act, then idle and re-check on a wakeup.
 
 ## Before you touch anything
 
-Read the project's own `CLAUDE.md` (e.g.
-`/Users/amirfish/Apps/BYM+Finie/CLAUDE.md`) for that repo's house rules —
+Read the target project's own `CLAUDE.md` for that repo's house rules:
 deploy/CI, test commands, security-sensitive paths. House rules win.
 
 ## Canonical `/goal` (paste this to spawn a fixer)
@@ -89,9 +118,9 @@ Fill in `<PROJECT>` and the repo path:
 ```
 /goal Drain the <PROJECT>-* UX-fixes queue and keep it empty. Read
 docs/ux-fixes-worker-brief.md in the CCC repo
-(/Users/amirfish/Apps/claude-command-center) for exactly where the queue is,
-the ux_fixes_queue API (list_items / claim_next / update_status / close,
-scoped to project='<PROJECT>'), and the claim → fix → verify → commit --only
-→ close loop. Also read this repo's CLAUDE.md before touching deploy/CI.
-Never busy-wait — idle-poll for new tickets. Don't push unless asked.
+for exactly where the queue is, the ux_fixes_queue API (list_items /
+claim_next / update_status / close, scoped to project='<PROJECT>'), and the
+claim → fix → verify → commit --only → close loop. Also read this repo's
+CLAUDE.md before touching deploy/CI. Never busy-wait — idle-poll for new
+tickets. Don't push unless asked.
 ```
