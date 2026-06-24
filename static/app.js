@@ -19085,10 +19085,40 @@
         const hue = Math.abs(hash) % 360;
         const collapsed = _isFolderGroupCollapsed('inprogress', nodeId);
         const attrs = ' data-object-drop="' + escapeAttr(nodeId) + '"';
-        const body = cards.length
-          ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn })).join('')
-          : '<div class="conv-object-empty-hint">Empty — drag sessions here.</div>';
         const archiveObjectId = nodeId.indexOf('object:') === 0 ? nodeId.slice(7) : '';
+        // GOAL-2 — sessionless tasks. Draft-sessions parented to this object
+        // (reusing Flow's draft infra) render as editable task rows with a play
+        // that spawns a real session. Gives billing/ads/admin a home instead of
+        // an "Empty — drag sessions here" dead end. Real objects only.
+        const _objDrafts = archiveObjectId
+          ? (flowDraftSessions || []).filter(d => d && flowNodeParents[flowNodeKey('draft-session', d.id)] === nodeId)
+          : [];
+        const _draftsHtml = _objDrafts.map(d => {
+          const did = escapeAttr(d.id);
+          return '<div class="conv-draft-row" data-draft-id="' + did + '">'
+            + '<span class="conv-draft-dot" aria-hidden="true">&#9675;</span>'
+            + '<input type="text" class="conv-draft-input" data-draft-id="' + did + '"'
+            +   ' value="' + escapeAttr(d.title || '') + '" placeholder="Task — what needs doing?" />'
+            + '<button type="button" class="conv-draft-play" data-flow-action="play-draft-session"'
+            +   ' data-draft-id="' + did + '" title="Start a session for this task" aria-label="Start session">&#9654;</button>'
+            + '<button type="button" class="conv-draft-delete" data-flow-action="delete-draft-session"'
+            +   ' data-draft-id="' + did + '" title="Delete task" aria-label="Delete task">&times;</button>'
+            + '</div>';
+        }).join('');
+        let body;
+        if (archiveObjectId) {
+          const rowsHtml = cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn })).join('');
+          const emptyHint = (!cards.length && !_objDrafts.length)
+            ? '<div class="conv-object-empty-hint">Empty — drag a session here, or add a task.</div>' : '';
+          const addTaskHtml = '<button type="button" class="conv-object-add-task"'
+            + ' data-flow-action="add-draft-session" data-parent-node="' + escapeAttr(nodeId) + '"'
+            + ' title="Add a task — becomes a real session when you hit play">+ task</button>';
+          body = rowsHtml + _draftsHtml + emptyHint + addTaskHtml;
+        } else {
+          body = cards.length
+            ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn })).join('')
+            : '<div class="conv-object-empty-hint">Empty — drag sessions here.</div>';
+        }
         // GOAL-1 status + immediate-objective line — real custom objects only
         // (not repo-derived groups or Unclassified). Sits between header and
         // body and is NOT a .conv-item, so it stays visible when the object is
@@ -20333,6 +20363,42 @@
         setFlowObjectObjective(btn.getAttribute('data-object-id') || '');
       });
     });
+    // GOAL-2 — draft-session tasks inside the object list (Flow draft infra).
+    $convList.querySelectorAll('[data-flow-action="add-draft-session"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        createFlowDraftSession('', btn.getAttribute('data-parent-node') || '');
+      });
+    });
+    $convList.querySelectorAll('[data-flow-action="play-draft-session"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        playFlowDraftSession(btn.getAttribute('data-draft-id') || '');
+      });
+    });
+    $convList.querySelectorAll('[data-flow-action="delete-draft-session"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        deleteFlowDraftSession(btn.getAttribute('data-draft-id') || '');
+      });
+    });
+    $convList.querySelectorAll('.conv-draft-input').forEach(inp => {
+      inp.addEventListener('click', ev => ev.stopPropagation());
+      inp.addEventListener('change', () => saveFlowDraftInput(inp.getAttribute('data-draft-id') || '', inp.value));
+      inp.addEventListener('blur', () => saveFlowDraftInput(inp.getAttribute('data-draft-id') || '', inp.value));
+      inp.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter') { ev.preventDefault(); inp.blur(); }
+        else if (ev.key === 'Escape') { ev.preventDefault(); inp.blur(); }
+      });
+    });
+    // Focus a freshly-created draft's input (set by createFlowDraftSession).
+    if (flowDraftFocusId) {
+      const _df = $convList.querySelector('.conv-draft-input[data-draft-id="' + flowDraftFocusId + '"]');
+      if (_df) { try { _df.focus(); } catch (_) {} flowDraftFocusId = null; }
+    }
     // Sidebar tab bar (CCC-85): switch the visible section.
     const $convTabBar = $convList.querySelector('[data-role="conv-tab-bar"]');
     if ($convTabBar) {
@@ -26796,7 +26862,8 @@
       { id: 'haiku-4-5',  label: 'haiku-4-5',  oneM: false },
     ],
     codex: [
-      { id: 'gpt-5.5',      label: 'gpt-5.5 (default)' },
+      { id: 'gpt-5.4',      label: 'gpt-5.4 (1M default)' },
+      { id: 'gpt-5.5',      label: 'gpt-5.5' },
       { id: 'gpt-5-codex',  label: 'gpt-5-codex' },
       { id: 'o4',           label: 'o4' },
       { id: 'o4-mini',      label: 'o4-mini' },
@@ -33682,7 +33749,7 @@
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free' };
+  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.4', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free' };
   let _spawnDefaultsLoaded = false;
   let _spawnDefaultsSaveTimer = null;
   let _spawnDefaultsSaving = false;
@@ -33822,7 +33889,7 @@
     engine = normalizeSpawnDefaultEngine(engine);
     let value = String(model == null ? '' : model).trim();
     if (engine === 'claude' && !value) value = 'opus';
-    if (engine === 'codex' && !value) value = 'gpt-5.5';
+    if (engine === 'codex' && !value) value = 'gpt-5.4';
     if (engine === 'cursor' && !value) value = 'auto';
     if (engine === 'kilo' && !value) value = 'kilo/stepfun/step-3.7-flash:free';
     spawnDefaultsState.models[engine] = value;
@@ -36847,7 +36914,7 @@
       model = ($spawnDefaultsOtherModel && $spawnDefaultsOtherModel.value || '').trim();
     }
     if (engine === 'claude' && !model) model = 'opus';
-    if (engine === 'codex' && !model) model = 'gpt-5.5';
+    if (engine === 'codex' && !model) model = 'gpt-5.4';
     if (engine === 'cursor' && !model) model = 'auto';
     spawnDefaultsDraft.models[engine] = model;
   }
