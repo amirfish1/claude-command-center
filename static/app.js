@@ -9976,7 +9976,22 @@
     input.className = 'conv-folder-object-title-input';
     input.value = currentTitle;
     input.placeholder = 'Object name...';
-    chip.replaceChildren(input);
+    const actions = document.createElement('span');
+    actions.className = 'conv-folder-object-title-actions';
+    actions.setAttribute('data-role', 'object-rename-editor');
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'conv-folder-object-title-action';
+    saveBtn.setAttribute('data-role', 'object-rename-save');
+    saveBtn.textContent = 'Save';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'conv-folder-object-title-action';
+    cancelBtn.setAttribute('data-role', 'object-rename-cancel');
+    cancelBtn.textContent = 'Cancel';
+    actions.append(saveBtn, cancelBtn);
+    chip.classList.add('is-renaming');
+    chip.replaceChildren(input, actions);
     const hdr = chip.closest('[data-object-drop]');
     const previousDraggable = hdr ? hdr.getAttribute('draggable') : null;
     if (hdr) hdr.draggable = false;
@@ -10003,11 +10018,21 @@
     }
 
     input.addEventListener('click', ev => ev.stopPropagation());
+    actions.addEventListener('click', ev => ev.stopPropagation());
+    saveBtn.addEventListener('click', ev => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      finish(true);
+    });
+    cancelBtn.addEventListener('click', ev => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      finish(false);
+    });
     input.addEventListener('keydown', ev => {
       if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
       else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
     });
-    input.addEventListener('blur', () => finish(true));
   }
 
   function rankNewObjectFirst(nodeId) {
@@ -11618,6 +11643,16 @@
     const cur = (obj.status || '').trim();
     const idx = OBJECT_STATUS_ORDER.indexOf(cur);
     obj.status = OBJECT_STATUS_ORDER[(idx + 1) % OBJECT_STATUS_ORDER.length];
+    obj.updated_at = Date.now();
+    persistFlowCustomObjects();
+    renderSidebar(filterConversations($convSearch ? $convSearch.value : ''));
+  }
+  function setFlowObjectStatus(id, status) {
+    const obj = flowCustomObjects.find(o => o && o.id === id);
+    if (!obj) return;
+    const next = OBJECT_STATUS_ORDER.includes(status) ? status : '';
+    if ((obj.status || '').trim() === next) return;
+    obj.status = next;
     obj.updated_at = Date.now();
     persistFlowCustomObjects();
     renderSidebar(filterConversations($convSearch ? $convSearch.value : ''));
@@ -18596,14 +18631,35 @@
             + ' title="Commit dormant work, pull --rebase, push (no force)">Push all</button>'
           + '</span>'
         : '';
+      const objectRename = (section === 'inprogress' && archiveObjectId)
+        ? '<button type="button" class="conv-folder-object-rename-btn" data-role="object-rename"'
+          + ' data-object-id="' + escapeHtml(archiveObjectId) + '"'
+          + ' title="Rename object"'
+          + ' aria-label="Rename object">&#9998;</button>'
+        : '';
+      let objectPlayPause = '';
+      if (section === 'inprogress' && archiveObjectId) {
+        const obj = (flowCustomObjects || []).find(o => o && o.id === archiveObjectId);
+        const isActive = ((obj && obj.status) || '').trim() === 'active';
+        objectPlayPause = '<button type="button" class="conv-folder-object-playpause-btn" data-role="object-playpause"'
+          + ' data-object-id="' + escapeHtml(archiveObjectId) + '"'
+          + ' data-object-status-next="' + (isActive ? 'waiting' : 'active') + '"'
+          + ' title="' + (isActive ? 'Mark object waiting' : 'Mark object active') + '"'
+          + ' aria-label="' + (isActive ? 'Pause object' : 'Play object') + '">'
+          + (isActive ? '&#9208;' : '&#9654;')
+          + '</button>';
+      }
       const objectArchive = (section === 'inprogress' && archiveObjectId)
         ? '<button type="button" class="conv-folder-object-archive-btn" data-role="archive-object"'
           + ' data-object-id="' + escapeHtml(archiveObjectId) + '"'
           + ' title="Archive this object from the active by-objects view"'
-          + ' aria-label="Archive object">&#128229;</button>'
+          + ' aria-label="Archive object">&#128465;</button>'
+        : '';
+      const objectActions = (objectRename || objectPlayPause || objectArchive)
+        ? '<span class="conv-folder-object-actions">' + objectRename + objectPlayPause + objectArchive + '</span>'
         : '';
       const objectTitleAttrs = archiveObjectId
-        ? ' data-role="object-title" data-object-id="' + escapeHtml(archiveObjectId) + '" title="Rename object"'
+        ? ' data-role="object-title" data-object-id="' + escapeHtml(archiveObjectId) + '" title="Open object"'
         : '';
       return '<div class="conv-folder-group-header" style="--chip-hue:' + hue + ';"'
         + ' role="button" tabindex="0" data-role="folder-group-toggle"'
@@ -18612,7 +18668,7 @@
         + '<span class="conv-folder-group-arrow">' + (collapsed ? '▸' : '▾') + '</span>'
         + '<span class="conv-folder-group-chip' + orphan + '"' + objectTitleAttrs + '>' + escapeHtml(folder) + '</span>'
         + '<span class="conv-folder-group-count">' + count + '</span>'
-        + objectArchive
+        + objectActions
         + ship
         + '</div>';
     };
@@ -20143,6 +20199,23 @@
         archiveFlowCustomObject(btn.getAttribute('data-object-id') || '');
       });
     });
+    const $objectRename = $convList.querySelectorAll('[data-role="object-rename"]');
+    $objectRename.forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const hdr = btn.closest('[data-role="folder-group-toggle"]');
+        const title = hdr && hdr.querySelector('[data-role="object-title"]');
+        startInlineObjectRename(title);
+      });
+    });
+    $convList.querySelectorAll('[data-role="object-playpause"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setFlowObjectStatus(btn.getAttribute('data-object-id') || '', btn.getAttribute('data-object-status-next') || 'active');
+      });
+    });
     // GOAL-1 — object status cycles on click; objective opens a one-line prompt.
     $convList.querySelectorAll('[data-role="object-status"]').forEach(btn => {
       btn.addEventListener('click', (ev) => {
@@ -20362,18 +20435,12 @@
         hdr.setAttribute('aria-expanded', String(!wasCollapsed));
       };
       // By-objects headers (CCC-93): the chevron collapses; clicking the
-      // NAME opens the object's MD doc in the same inspector Flow uses.
+      // name opens the object inspector; the pencil owns rename.
       // Plain folder headers keep whole-header collapse.
       const objNode = hdr.getAttribute('data-object-drop') || '';
       const opensInspector = objNode && objNode !== 'unclassified';
       hdr.addEventListener('click', (ev) => {
-        const objectTitle = ev.target.closest('[data-role="object-title"]');
-        if (objectTitle) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          startInlineObjectRename(objectTitle);
-          return;
-        }
+        if (ev.target.closest('[data-role="object-rename"], [data-role="object-playpause"], [data-role="object-rename-editor"]')) return;
         if (ev.target.closest('[data-role="archive-object"]')) return;
         if (opensInspector && !ev.target.closest('.conv-folder-group-arrow')) {
           ev.stopPropagation();
@@ -32772,6 +32839,11 @@
         ai_title: c.ai_title || null,
         name_overridden: !!c.name_overridden,
         last_assistant_text: '',
+        // GOAL-1: carry the server-parsed end-of-turn self-report through the
+        // archive-shaping allowlist so the row's outcome line (DID / next) can
+        // render. Dropped here previously — which is why it only ever showed in
+        // the transcript pane, never on the row.
+        session_state: c.session_state || null,
         modified: c.mtime || c.modified || 0,
         last_interacted: c.mtime || c.modified || c.last_interacted || 0,
         size: c.size || 0,
