@@ -25416,6 +25416,10 @@
 
   function isBenignCodexStderrLine(line) {
     const text = (line || '').trim();
+    // A bare [error] marker carries no actionable stderr content; keeping it
+    // at the top of a still-running spawn log makes a healthy Thinking turn
+    // look like it started broken.
+    if (text === '[error]') return true;
     return text === 'Reading additional input from stdin...'
       || text === 'Reading prompt from stdin...'
       || /\bWARN codex_core_plugins::manifest: ignoring interface\.defaultPrompt:/.test(text)

@@ -1,0 +1,1 @@
+- Codex spawn logs no longer show a bare `[error]` marker above an otherwise normal Thinking state.

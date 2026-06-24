@@ -1366,6 +1366,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conversations-view .event.result.result-silent", app_css)
         self.assertIn("not a live stuck process", app_js)
 
+    def test_codex_spawn_log_hides_bare_error_marker(self):
+        """A lone Codex CLI [error] marker should not open the log with a
+        scary blank error section before any real output exists."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("text === '[error]'", app_js)
+        self.assertIn("A bare [error] marker carries no actionable stderr content", app_js)
+
     def test_codex_goal_state_renders_near_composer_and_rows(self):
         """Codex /goal state should be visible where the user types, and
         paused/blocked goals must read differently from ordinary active goals
