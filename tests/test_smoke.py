@@ -1392,6 +1392,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conversations-view .event.result.result-silent", app_css)
         self.assertIn("not a live stuck process", app_js)
 
+    def test_compact_completion_clears_optimistic_thinking(self):
+        """A completed compaction should not leave the optimistic Thinking pill."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("Codex compact has completed; any optimistic Thinking pill is stale.", app_js)
+        self.assertIn("clearOptimisticAgentIndicator(getConvView());", app_js)
+        self.assertIn("clearSessionSending(sid);", app_js)
+        self.assertIn("compact boundary proves the pending compact turn is over", app_js)
+        self.assertIn("clearOptimisticAgentIndicator($view);", app_js)
+
     def test_codex_spawn_log_hides_bare_error_marker(self):
         """A lone Codex CLI [error] marker should not open the log with a
         scary blank error section before any real output exists."""

@@ -17667,6 +17667,9 @@
           showCompactInProgressBanner(sid);
           scheduleCompactUsageRefresh(sid);
         } else {
+          // Codex compact has completed; any optimistic Thinking pill is stale.
+          clearOptimisticAgentIndicator(getConvView());
+          clearSessionSending(sid);
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
         }
@@ -29318,6 +29321,9 @@
     if (typeof updateCodexStateBadge === 'function') updateCodexStateBadge();
     const compactBoundary = events.find(e => e && e.type === 'system' && e.subtype === 'compact_boundary');
     if (compactBoundary) {
+      // The compact boundary proves the pending compact turn is over.
+      clearOptimisticAgentIndicator($view);
+      if (currentSession.id) clearSessionSending(currentSession.id);
       const sid = compactBoundary.session || (currentSession && currentSession.id) || '';
       if (sid && currentSession && currentSession.id === sid) fetchSessionUsage(sid);
     }
