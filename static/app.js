@@ -9589,7 +9589,11 @@
   try {
     const savedDrafts = JSON.parse(localStorage.getItem('ccc-flow-draft-sessions') || '[]');
     if (Array.isArray(savedDrafts)) {
-      flowDraftSessions = savedDrafts.filter(d => d && d.id && d.repo_path);
+      // Keep repo-less reminders (GOAL-2): a task under an object may have no
+      // repo until you play it. Normalize a missing repo_path to ''.
+      flowDraftSessions = savedDrafts
+        .filter(d => d && d.id)
+        .map(d => (d.repo_path ? d : Object.assign({}, d, { repo_path: '' })));
     }
   } catch (_) {}
   let flowDraftFocusId = '';
@@ -9961,6 +9965,7 @@
       objects: Array.isArray(flowCustomObjects) ? flowCustomObjects : [],
       parents: flowNodeParents || {},
       order: order || {},
+      drafts: Array.isArray(flowDraftSessions) ? flowDraftSessions : [],
     };
   }
 
@@ -9982,6 +9987,12 @@
         for (const sid of Object.keys(server.parents || {})) {
           if (!localParents.has(sid)) {
             await _objectsApiPost('unassign', { session_node_id: sid }).catch(() => {});
+          }
+        }
+        const localDraftIds = new Set((local.drafts || []).map(d => d && d.id).filter(Boolean));
+        for (const sd of (server.drafts || [])) {
+          if (sd && sd.id && !localDraftIds.has(sd.id)) {
+            await _objectsApiPost('draft-delete', { id: sd.id }).catch(() => {});
           }
         }
       }
@@ -10013,9 +10024,18 @@
       for (const [sid, parent] of Object.entries(server.parents || {})) {
         if (!(sid in flowNodeParents)) { flowNodeParents[sid] = parent; changed = true; }
       }
+      const draftById = new Map((flowDraftSessions || []).filter(d => d && d.id).map(d => [d.id, d]));
+      for (const sd of (server.drafts || [])) {
+        if (sd && sd.id && !draftById.has(sd.id)) {
+          flowDraftSessions.push(Object.assign({ repo_path: '' }, sd));
+          draftById.set(sd.id, sd);
+          changed = true;
+        }
+      }
       if (changed) {
         try { localStorage.setItem('ccc-flow-custom-objects', JSON.stringify(flowCustomObjects)); } catch (_) {}
         try { localStorage.setItem('ccc-flow-node-parents', JSON.stringify(flowNodeParents)); } catch (_) {}
+        try { localStorage.setItem('ccc-flow-draft-sessions', JSON.stringify(flowDraftSessions)); } catch (_) {}
         try { renderSidebar(filterConversations($convSearch ? $convSearch.value : '')); } catch (_) {}
       }
     }
@@ -10160,6 +10180,7 @@
 
   function persistFlowDraftSessions() {
     try { localStorage.setItem('ccc-flow-draft-sessions', JSON.stringify(flowDraftSessions)); } catch (_) {}
+    if (typeof syncObjectsToServer === 'function') syncObjectsToServer();
   }
 
   function clampFlowZoom(value) {
@@ -11412,18 +11433,25 @@
   }
   window._flowOpenAttachPicker = _flowOpenAttachPicker;
 
-  function createFlowDraftSession(repoPath, parentNodeId) {
-    const targetRepo = repoPath || flowCurrentRepoForDraft();
+  function createFlowDraftSession(repoPath, parentNodeId, allowReminder) {
+    let targetRepo = repoPath || flowCurrentRepoForDraft();
     if (!targetRepo || targetRepo === '__repo__') {
-      showOpToast('Pick a repo, or use + on a repo/object node.', 'error');
-      if ($convFolderFilter) {
-        try { $convFolderFilter.focus(); } catch (_) {}
+      // allowReminder (GOAL-2 object tasks): create a repo-less reminder rather
+      // than blocking — the repo gets resolved when you press play. Flow-board
+      // "+ Session" keeps requiring a repo up front.
+      if (allowReminder) {
+        targetRepo = '';
+      } else {
+        showOpToast('Pick a repo, or use + on a repo/object node.', 'error');
+        if ($convFolderFilter) {
+          try { $convFolderFilter.focus(); } catch (_) {}
+        }
+        return;
       }
-      return;
     }
     const now = Date.now();
     const id = 'draft-' + now.toString(36) + '-' + Math.random().toString(36).slice(2, 7);
-    const repoId = flowNodeKey('repo', targetRepo);
+    const repoId = targetRepo ? flowNodeKey('repo', targetRepo) : '';
     const parentId = parentNodeId || repoId;
     const draft = { id, repo_path: targetRepo, parent_node_id: parentId, title: '', created_at: now, updated_at: now };
     const nodeId = flowNodeKey('draft-session', id);
@@ -11522,9 +11550,9 @@
       showOpToast('Type a session task before pressing Play.', 'error');
       return;
     }
-    const repoPath = draft.repo_path || flowCurrentRepoForDraft();
+    const repoPath = draft.repo_path || _repoForObjectTask(draft.parent_node_id) || flowCurrentRepoForDraft();
     if (!repoPath || repoPath === '__repo__') {
-      showOpToast('Draft session needs a repo.', 'error');
+      showOpToast('Pick a repo to start this task.', 'error');
       return;
     }
 
@@ -18752,7 +18780,7 @@
       try { return localStorage.getItem(_folderGroupStorageKey(section, key)) === '1'; }
       catch (_) { return false; }
     };
-    const _folderGroupHeaderHtml = (section, folder, count, hue, orphan, collapseKey, extraAttrs = '', repoPath = '', archiveObjectId = '') => {
+    const _folderGroupHeaderHtml = (section, folder, count, hue, orphan, collapseKey, extraAttrs = '', repoPath = '', archiveObjectId = '', inlineMetaHtml = '') => {
       const collapsed = _isFolderGroupCollapsed(section, collapseKey);
       // "Push all" ship control — conversation list only, and only when we
       // know the repo's real path. Status text is hydrated client-side after
@@ -18802,6 +18830,7 @@
         + '<span class="conv-folder-group-arrow">' + (collapsed ? '▸' : '▾') + '</span>'
         + '<span class="conv-folder-group-chip' + orphan + '"' + objectTitleAttrs + '>' + escapeHtml(folder) + '</span>'
         + '<span class="conv-folder-group-count">' + count + '</span>'
+        + inlineMetaHtml
         + objectActions
         + ship
         + '</div>';
@@ -19151,16 +19180,15 @@
             ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn })).join('')
             : '<div class="conv-object-empty-hint">Empty — drag sessions here.</div>';
         }
-        // GOAL-1 status + immediate-objective line — real custom objects only
-        // (not repo-derived groups or Unclassified). Sits between header and
-        // body and is NOT a .conv-item, so it stays visible when the object is
-        // collapsed: status at a glance without expanding.
-        let objMetaHtml = '';
+        // GOAL-1 status + immediate-objective — real custom objects only (not
+        // repo-derived groups or Unclassified). Rendered INLINE in the header
+        // row (same line as the name) via the header's inlineMeta slot.
+        let inlineMetaHtml = '';
         if (archiveObjectId) {
           const _obj = (flowCustomObjects || []).find(o => o && o.id === archiveObjectId);
           const _objective = ((_obj && _obj.objective) || '').trim();
           const _su = objectStatusUi(_obj && _obj.status);
-          objMetaHtml = '<div class="conv-object-meta">'
+          inlineMetaHtml = '<span class="conv-object-meta">'
             + '<button type="button" class="conv-object-status ' + _su.cls + '"'
             +   ' data-role="object-status" data-object-id="' + escapeAttr(archiveObjectId) + '"'
             +   ' title="Click to cycle status">' + escapeHtml(_su.label) + '</button>'
@@ -19168,12 +19196,11 @@
             +   ' data-role="object-objective" data-object-id="' + escapeAttr(archiveObjectId) + '"'
             +   ' title="' + escapeAttr(_objective || 'Set the immediate objective') + '">'
             +   (_objective ? escapeHtml(_objective) : '+ objective') + '</button>'
-            + '</div>';
+            + '</span>';
         }
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '"'
           + ' data-object-drop-zone="' + escapeAttr(nodeId) + '">'
-          + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs, '', archiveObjectId)
-          + objMetaHtml
+          + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs, '', archiveObjectId, inlineMetaHtml)
           + body
           + '</div>';
       };
@@ -20401,7 +20428,7 @@
         ev.preventDefault();
         ev.stopPropagation();
         const _pn = btn.getAttribute('data-parent-node') || '';
-        createFlowDraftSession(_repoForObjectTask(_pn), _pn);
+        createFlowDraftSession(_repoForObjectTask(_pn), _pn, true);
       });
     });
     $convList.querySelectorAll('[data-flow-action="play-draft-session"]').forEach(btn => {
