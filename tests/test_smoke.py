@@ -215,6 +215,22 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("startInlineObjectRename(objectTitle);", app_js)
         self.assertIn(".conv-folder-object-title-input", app_css)
 
+    def test_by_objects_header_has_expand_collapse_all(self):
+        """By-objects mode should expose expand-all and collapse-all controls."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const _ipObjectsExpandAll = _shouldGroupByObjects", app_js)
+        self.assertIn('data-role="objects-expand-all"', app_js)
+        self.assertIn('data-objects-collapse="0"', app_js)
+        self.assertIn('data-objects-collapse="1"', app_js)
+        self.assertIn("function setInProgressObjectGroupsCollapsed(collapsed)", app_js)
+        self.assertIn("$convList.querySelectorAll('[data-role=\"inprogress-section\"] .conv-folder-group').forEach(group =>", app_js)
+        self.assertIn("localStorage.setItem(key, collapsed ? '1' : '0')", app_js)
+        self.assertIn("if (ev.target.closest('[data-role=\"objects-expand-all\"]')) return;", app_js)
+        self.assertIn("$objectsExpandAll.addEventListener('click'", app_js)
+        self.assertIn(".conv-objects-expand-all", app_css)
+
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never
         delete these markers on session end, so a stale marker must NOT keep a

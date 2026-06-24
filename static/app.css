@@ -8342,6 +8342,10 @@
   .conv-inprogress-tools .conv-grouping-toggle,
   .conv-ghissues-tools .conv-grouping-toggle,
   .conv-archived-tools .conv-grouping-toggle { margin-left: 0; }
+  .conv-objects-expand-all .grouping-opt {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
   /* Expand-all / collapse-all chip on the Archived header. Same visual
      weight as a grouping-opt so it reads as a sibling control, with a
      subtle border so the click target is obvious. */

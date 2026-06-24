@@ -19031,6 +19031,12 @@
           + '<span class="grouping-opt">+ object</span>'
           + '</span>'
         : '';
+      const _ipObjectsExpandAll = _shouldGroupByObjects
+        ? '<span class="conv-grouping-toggle conv-objects-expand-all" data-role="objects-expand-all" title="Expand or collapse all object groups">'
+            + '<span class="grouping-opt" data-objects-collapse="0">Expand all</span>'
+            + '<span class="grouping-opt" data-objects-collapse="1">Collapse all</span>'
+          + '</span>'
+        : '';
       // "Details" toggle (left of 1d/7d/All): flips inline NYA blocks under
       // every row that has a Needs-your-attention item. Single click flips the
       // persisted flag. Shown whenever the section renders (NYA is independent
@@ -19040,8 +19046,8 @@
           + ' title="Show the Needs-your-attention block under each row that has one">'
           + '<span class="grouping-opt' + (_ipNyaOn ? ' is-active' : '') + '" data-nya-details="' + (_ipNyaOn ? 'off' : 'on') + '">Details</span>'
         + '</span>';
-      const _ipTools = (_ipDetailsToggle || _ipWindowToggle || _ipGroupingToggle || _ipAddObjectBtn)
-        ? '<span class="conv-inprogress-tools">' + _ipAddObjectBtn + _ipDetailsToggle + _ipWindowToggle + _ipGroupingToggle + '</span>'
+      const _ipTools = (_ipDetailsToggle || _ipWindowToggle || _ipGroupingToggle || _ipAddObjectBtn || _ipObjectsExpandAll)
+        ? '<span class="conv-inprogress-tools">' + _ipAddObjectBtn + _ipObjectsExpandAll + _ipDetailsToggle + _ipWindowToggle + _ipGroupingToggle + '</span>'
         : '';
       // Count display: sessions in window + active group chats. Title
       // attribute spells both out so a hover explains the headline number.
@@ -19988,6 +19994,7 @@
       $inProgressToggle.addEventListener('click', (ev) => {
         // The grouping toggle (project / time) lives inside this header
         // button — its own listener stops propagation, but be defensive.
+        if (ev.target.closest('[data-role="objects-expand-all"]')) return;
         if (ev.target.closest('[data-role="grouping-toggle"], [data-role="window-toggle"], [data-role="ip-add-object"], [data-role="nya-details-toggle"]')) return;
         ev.stopPropagation();
         const section = $inProgressToggle.closest('[data-role="inprogress-section"]');
@@ -19997,6 +20004,27 @@
         const arrowEl = $inProgressToggle.querySelector('.conv-inprogress-arrow');
         if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         $inProgressToggle.setAttribute('aria-expanded', String(!wasCollapsed));
+      });
+    }
+    function setInProgressObjectGroupsCollapsed(collapsed) {
+      $convList.querySelectorAll('[data-role="inprogress-section"] .conv-folder-group').forEach(group => {
+        const header = group.querySelector('[data-role="folder-group-toggle"]');
+        const key = header && header.getAttribute('data-collapse-key');
+        if (!key) return;
+        try { localStorage.setItem(key, collapsed ? '1' : '0'); } catch (_) {}
+        group.classList.toggle('collapsed', !!collapsed);
+        if (header) header.setAttribute('aria-expanded', String(!collapsed));
+        const arrowEl = header && header.querySelector('.conv-folder-group-arrow');
+        if (arrowEl) arrowEl.textContent = collapsed ? '▸' : '▾';
+      });
+    }
+    const $objectsExpandAll = $convList.querySelector('[data-role="objects-expand-all"]');
+    if ($objectsExpandAll) {
+      $objectsExpandAll.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const opt = ev.target.closest('[data-objects-collapse]');
+        if (!opt) return;
+        setInProgressObjectGroupsCollapsed(opt.getAttribute('data-objects-collapse') === '1');
       });
     }
     // Grouping toggle (by project / by time). Triggers a re-render via the
