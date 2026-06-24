@@ -8203,8 +8203,8 @@
     max-width: 220px;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 13px;
-    line-height: 1.25;
+    font-size: 15px;
+    line-height: 1.28;
   }
   .conv-folder-object-numbered-title,
   .conv-folder-object-numbered-item {
@@ -8239,7 +8239,7 @@
     background: var(--bg);
     color: var(--text);
     font: inherit;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
     outline: none;
   }

@@ -346,8 +346,8 @@ class TestServerImports(unittest.TestCase):
                       "    max-width: 220px;\n"
                       "    overflow: hidden;\n"
                       "    text-overflow: ellipsis;\n"
-                      "    font-size: 13px;\n"
-                      "    line-height: 1.25;", app_css)
+                      "    font-size: 15px;\n"
+                      "    line-height: 1.28;", app_css)
         self.assertIn(".conv-folder-object-title-input {\n"
                       "    width: min(220px, 100%);\n"
                       "    min-width: 80px;\n"
@@ -357,7 +357,7 @@ class TestServerImports(unittest.TestCase):
                       "    background: var(--bg);\n"
                       "    color: var(--text);\n"
                       "    font: inherit;\n"
-                      "    font-size: 13px;", app_css)
+                      "    font-size: 15px;", app_css)
 
     def test_by_object_group_titles_number_slash_separated_items(self):
         """Task-like object headers should show each slash-separated item in order."""
