@@ -8068,6 +8068,20 @@
     border: 1px solid hsla(var(--chip-hue), 45%, 50%, 0.42);
     white-space: nowrap;
   }
+  .conv-folder-group-chip[data-role="object-title"] { cursor: text; }
+  .conv-folder-object-title-input {
+    width: min(220px, 100%);
+    min-width: 80px;
+    padding: 1px 7px;
+    border-radius: 3px;
+    border: 1px solid var(--accent, #58a6ff);
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    outline: none;
+  }
   .conv-folder-group-chip.is-orphan { opacity: 0.55; font-style: italic; }
   .conv-folder-group + .conv-folder-group {
     border-top: 1px solid var(--border);
@@ -13123,6 +13137,7 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 
 /* By-objects group header as a drop target (CCC-88). */
+.conv-folder-group.is-drop-target,
 .conv-folder-group-header.is-drop-target {
   outline: 2px dashed var(--accent, #58a6ff);
   outline-offset: -2px;

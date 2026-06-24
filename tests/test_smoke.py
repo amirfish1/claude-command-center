@@ -190,6 +190,31 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function startSidebarDragAutoScroll(ev)", app_js)
         self.assertIn("$convList.addEventListener('dragover', updateSidebarDragAutoScroll);", app_js)
 
+    def test_by_object_group_body_accepts_session_drops(self):
+        """Dropping below an object header should still add sessions to it."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('data-object-drop-zone="', app_js)
+        self.assertIn("function reparentConversationIdsToObject(target, convIds)", app_js)
+        self.assertIn("$convList.querySelectorAll('[data-object-drop-zone]').forEach(zone =>", app_js)
+        self.assertIn("if (ev.target.closest('[data-object-drop]')) return;", app_js)
+        self.assertIn("if (reparentConversationIdsToObject(target, convIds))", app_js)
+        self.assertIn(".conv-folder-group.is-drop-target", app_css)
+
+    def test_custom_object_name_click_starts_inline_rename(self):
+        """Custom object header names should rename inline like session titles."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('data-role="object-title"', app_js)
+        self.assertIn("function startInlineObjectRename(chip)", app_js)
+        self.assertIn("persistFlowCustomObjects();", app_js)
+        self.assertIn("obj.title = newTitle;", app_js)
+        self.assertIn("if (objectTitle) {", app_js)
+        self.assertIn("startInlineObjectRename(objectTitle);", app_js)
+        self.assertIn(".conv-folder-object-title-input", app_css)
+
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never
         delete these markers on session end, so a stale marker must NOT keep a

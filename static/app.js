@@ -9396,7 +9396,7 @@
   function isInlineRenameInProgress() {
     if (_renameInProgress) return true;
     const $list = document.getElementById('convList');
-    return !!($list && $list.querySelector('.conv-title-input'));
+    return !!($list && $list.querySelector('.conv-title-input, .conv-folder-object-title-input'));
   }
   let _sidebarDragInProgress = false;
   let _sidebarRenderPendingAfterDrag = false;
@@ -9453,7 +9453,7 @@
   document.addEventListener('drop', endSidebarDrag, true);
   function dragStartsFromTextEditor(target) {
     return !!(target && target.closest && target.closest(
-      'input, textarea, select, button, a, [contenteditable]:not([contenteditable="false"]), .conv-title-input, .kanban-rename-input'
+      'input, textarea, select, button, a, [contenteditable]:not([contenteditable="false"]), .conv-title-input, .conv-folder-object-title-input, .kanban-rename-input'
     ));
   }
   function filterGhIssues(convs) {
@@ -9945,6 +9945,69 @@
     } else {
       renderSidebar(filterConversations($convSearch ? $convSearch.value : ''));
     }
+  }
+
+  function reparentConversationIdsToObject(target, convIds) {
+    if (!target || !Array.isArray(convIds) || !convIds.length) return false;
+    let changed = false;
+    for (const convId of convIds) {
+      const row = (conversationsData || []).find(x => x.id === convId) || {};
+      const sid = row.session_id || convId;
+      if (!sid) continue;
+      const key = flowNodeKey('session', sid);
+      if (target === 'unclassified') delete flowNodeParents[key];
+      else flowNodeParents[key] = target;
+      changed = true;
+    }
+    if (!changed) return false;
+    persistFlowNodeParents();
+    clearSelectedConversationRows();
+    return true;
+  }
+
+  function startInlineObjectRename(chip) {
+    if (!chip || chip.querySelector('.conv-folder-object-title-input')) return;
+    const id = chip.getAttribute('data-object-id') || '';
+    const obj = (flowCustomObjects || []).find(o => o && o.id === id);
+    if (!obj) return;
+    const currentTitle = (obj.title || chip.textContent || 'Object').trim();
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'conv-folder-object-title-input';
+    input.value = currentTitle;
+    input.placeholder = 'Object name...';
+    chip.replaceChildren(input);
+    const hdr = chip.closest('[data-object-drop]');
+    const previousDraggable = hdr ? hdr.getAttribute('draggable') : null;
+    if (hdr) hdr.draggable = false;
+    _renameInProgress = true;
+    input.focus();
+    input.select();
+
+    let finished = false;
+    function finish(save) {
+      if (finished) return;
+      finished = true;
+      _renameInProgress = false;
+      if (hdr) {
+        if (previousDraggable === null) hdr.removeAttribute('draggable');
+        else hdr.setAttribute('draggable', previousDraggable);
+      }
+      const newTitle = input.value.trim();
+      if (save && newTitle && newTitle !== currentTitle) {
+        obj.title = newTitle;
+        obj.updated_at = Date.now();
+        persistFlowCustomObjects();
+      }
+      renderArchiveList(document.getElementById('convSearch')?.value || '');
+    }
+
+    input.addEventListener('click', ev => ev.stopPropagation());
+    input.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
   }
 
   function rankNewObjectFirst(nodeId) {
@@ -18484,12 +18547,15 @@
           + ' title="Archive this object from the active by-objects view"'
           + ' aria-label="Archive object">&#128229;</button>'
         : '';
+      const objectTitleAttrs = archiveObjectId
+        ? ' data-role="object-title" data-object-id="' + escapeHtml(archiveObjectId) + '" title="Rename object"'
+        : '';
       return '<div class="conv-folder-group-header" style="--chip-hue:' + hue + ';"'
         + ' role="button" tabindex="0" data-role="folder-group-toggle"'
         + ' data-collapse-key="' + escapeHtml(_folderGroupStorageKey(section, collapseKey)) + '"'
         + ' aria-expanded="' + (!collapsed) + '"' + extraAttrs + '>'
         + '<span class="conv-folder-group-arrow">' + (collapsed ? '▸' : '▾') + '</span>'
-        + '<span class="conv-folder-group-chip' + orphan + '">' + escapeHtml(folder) + '</span>'
+        + '<span class="conv-folder-group-chip' + orphan + '"' + objectTitleAttrs + '>' + escapeHtml(folder) + '</span>'
         + '<span class="conv-folder-group-count">' + count + '</span>'
         + objectArchive
         + ship
@@ -18810,7 +18876,8 @@
           ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn })).join('')
           : '<div class="conv-object-empty-hint">Empty — drag sessions here.</div>';
         const archiveObjectId = nodeId.indexOf('object:') === 0 ? nodeId.slice(7) : '';
-        return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
+        return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '"'
+          + ' data-object-drop-zone="' + escapeAttr(nodeId) + '">'
           + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs, '', archiveObjectId)
           + body
           + '</div>';
@@ -20067,16 +20134,35 @@
         // ── Session-row drop: reparent the session under this group ──
         const convIds = readConvIdsFromDrop(ev);
         if (!convIds.length) return;
-        for (const convId of convIds) {
-          const row = (conversationsData || []).find(x => x.id === convId) || {};
-          const sid = row.session_id || convId;
-          const key = flowNodeKey('session', sid);
-          if (target === 'unclassified') delete flowNodeParents[key];
-          else flowNodeParents[key] = target;
+        if (reparentConversationIdsToObject(target, convIds)) {
+          renderArchiveList(document.getElementById('convSearch')?.value || '');
         }
-        persistFlowNodeParents();
-        clearSelectedConversationRows();
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+    });
+    $convList.querySelectorAll('[data-object-drop-zone]').forEach(zone => {
+      zone.addEventListener('dragover', (ev) => {
+        if (ev.target.closest('[data-object-drop]')) return;
+        if (!dragHasConversationPayload(ev)) return;
+        ev.preventDefault();
+        try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+        zone.classList.add('is-drop-target');
+      });
+      zone.addEventListener('dragleave', (ev) => {
+        if (!zone.contains(ev.relatedTarget)) zone.classList.remove('is-drop-target');
+      });
+      zone.addEventListener('drop', (ev) => {
+        if (ev.target.closest('[data-object-drop]')) return;
+        zone.classList.remove('is-drop-target');
+        const target = zone.getAttribute('data-object-drop-zone') || '';
+        const raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
+        if (raw && raw.indexOf('ccc-objnode:') === 0) return;
+        const convIds = readConvIdsFromDrop(ev);
+        if (!convIds.length) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (reparentConversationIdsToObject(target, convIds)) {
+          renderArchiveList(document.getElementById('convSearch')?.value || '');
+        }
       });
     });
     const $nyaDetailsToggle = $convList.querySelector('[data-role="nya-details-toggle"]');
@@ -20163,6 +20249,13 @@
       const objNode = hdr.getAttribute('data-object-drop') || '';
       const opensInspector = objNode && objNode !== 'unclassified';
       hdr.addEventListener('click', (ev) => {
+        const objectTitle = ev.target.closest('[data-role="object-title"]');
+        if (objectTitle) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          startInlineObjectRename(objectTitle);
+          return;
+        }
         if (ev.target.closest('[data-role="archive-object"]')) return;
         if (opensInspector && !ev.target.closest('.conv-folder-group-arrow')) {
           ev.stopPropagation();
