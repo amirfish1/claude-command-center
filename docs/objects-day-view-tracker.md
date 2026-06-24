@@ -16,12 +16,22 @@ gaps below are what stop it from feeling like a real day tracker.
 | **GOAL-2** | Sessionless tasks under objects | Sessionless admin (billing, ads) had no home — only "drag sessions here". Now each object has a `+ task` adding a draft-session (editable, with play-to-spawn) | M | H | `done`³ |
 | **GOAL-3** | Persistent storage for the organization | Object defs + parent links live in browser localStorage — lost on clear, not cross-machine, invisible to the server (blocks any automation) | M/H | M | `done` |
 | **GOAL-4** | Create objects + assign sessions via the CCC API | UI drag already works; there's no programmatic `/api/*` way to create an object or parent a session under it — blocks agents/automation arranging the day. Depends on GOAL-3 (server-side state) | H | M | `done`² |
+| **GOAL-5** | Object hierarchy (object under object) | Put one object under another so the day nests (e.g. "BYM" → "Outbound emails", "SMS visibility"). Flow already supports object→object via `flowNodeParents`; the conv-list by-objects view renders FLAT and must render the tree + allow nest/unnest. `parents` already syncs (GOAL-3/4) so persistence is mostly there | H | M | `todo`⁴ |
 
 Legend — Status: `todo` · `exploring` · `building` · `done`. Value / Confidence: L/M/H.
 
 ¹ GOAL-1 shipped **manual-first** (commits `3108592` row DID/next line, `5e9b8d1`
 object status chip + objective). Open follow-up: auto-roll the object's
 status/objective from its child sessions' `session_state` instead of by hand.
+⁴ GOAL-5 (next): object hierarchy. Seams: `_renderObjGroup` / the `_byObject`
+grouping loop in the conv-list render flatten objects today — they need to build
+a parent→child object tree and render nested groups (indented). Nest/unnest via
+drag (the `[data-object-drop]` reparent handlers + `flowNodeParents`) already
+exist for session→object; extend to object→object. `flowNodeParents` keys for
+objects are `object:<id>` → parent `object:<id>`. `parents` already syncs to the
+server, so persistence + dedupe mostly carry over. Watch for cycles (don't let an
+object become its own ancestor) and the order/collapse maps keying by node id.
+
 ³ GOAL-2 done: draft-session tasks under objects with play-to-spawn (`cdb92ec`,
 `9185b47`). Follow-ups since resolved: drafts now sync to the server as a fourth
 key in the objects store (client `6873520`; server `2584c4d`, `d79cc4c` —
