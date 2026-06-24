@@ -43421,14 +43421,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if re.match(r"^backlog-todo-\d+$", conv_id):
                 self.send_json({"ok": True, "archived": True, "note": "todo hidden client-side"})
                 return
+            # Automation-safe semantics: when the caller passes an explicit
+            # `archived` bool we SET that state (idempotent — a retry converges,
+            # never flips). With no `archived` field we TOGGLE, preserving the
+            # legacy one-click UI behavior. An in-UI agent should always pass the
+            # explicit desired state so re-runs don't un-archive.
+            desired = payload.get("archived")
             try:
                 archived = _load_archived_conversations()
-                if sid in archived:
-                    archived.remove(sid)
-                    now_archived = False
-                    _archive_grace.pop(sid, None)
-                    _save_archive_grace()
-                else:
+                is_arch = sid in archived
+                want = desired if isinstance(desired, bool) else (not is_arch)
+                if want and not is_arch:
                     archived.append(sid)
                     now_archived = True
                     # Make this deliberate archive STICKY against the auto-
@@ -43438,6 +43441,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # which read as "archive refuses to work" (CCC-149 follow-up).
                     _archive_grace[sid] = time.time()
                     _save_archive_grace()
+                elif (not want) and is_arch:
+                    archived.remove(sid)
+                    now_archived = False
+                    _archive_grace.pop(sid, None)
+                    _save_archive_grace()
+                else:
+                    # Already in the desired state — no-op, report it truthfully.
+                    now_archived = is_arch
                 _save_archived_conversations(archived)
                 # Archiving retires the session — drop any stale Notification-hook
                 # marker so the dashboard doesn't keep classifying it as Waiting
@@ -43478,6 +43489,79 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except RepoContextError:
                         _bust_issue_state_cache()
                 self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result})
+            except OSError as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/conversations/archive-bulk":
+            # Bulk archive/unarchive for automation (an in-UI agent arranging the
+            # day). Idempotent SET, not toggle: pass the explicit desired state
+            # so a retry converges instead of flipping rows back. One disk write
+            # for the whole batch, with a per-id summary in the response.
+            #
+            # Process kills are deliberately SKIPPED here: forking one kill per
+            # row is the exact O(N) subprocess fan-out the perf budget forbids
+            # (see CLAUDE.md § Performance gates). Archived agent processes age
+            # out on their own; use the single endpoint when a kill is needed.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            ids = payload.get("session_ids")
+            if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
+                self.send_json({"ok": False, "error": "session_ids must be a list of strings"}, 400)
+                return
+            want = payload.get("archived", True)
+            if not isinstance(want, bool):
+                self.send_json({"ok": False, "error": "archived must be a boolean"}, 400)
+                return
+            # Dedupe + drop blanks, preserving caller order. Cap the batch so a
+            # runaway client can't rewrite the whole archive file in one shot.
+            seen = []
+            for x in ids:
+                x = x.strip()
+                if x and x not in seen:
+                    seen.append(x)
+            if len(seen) > 1000:
+                self.send_json({"ok": False, "error": "batch too large (max 1000 ids)"}, 400)
+                return
+            try:
+                archived = _load_archived_conversations()
+                arch_set = set(archived)
+                changed, unchanged, to_add, to_remove = [], [], [], set()
+                for sid in seen:
+                    is_arch = sid in arch_set
+                    if want and not is_arch:
+                        to_add.append(sid); arch_set.add(sid); changed.append(sid)
+                    elif (not want) and is_arch:
+                        to_remove.add(sid); arch_set.discard(sid); changed.append(sid)
+                    else:
+                        unchanged.append(sid)
+                if changed:
+                    # Rebuild preserving original order, then append new archives.
+                    new_list = [s for s in archived if s not in to_remove] + to_add
+                    now = time.time()
+                    for sid in to_add:
+                        _archive_grace[sid] = now
+                        # Retire any stale Notification-hook marker so the row
+                        # doesn't bounce back to "Waiting" / In progress.
+                        try:
+                            (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
+                        except (OSError, FileNotFoundError):
+                            pass
+                    for sid in to_remove:
+                        _archive_grace.pop(sid, None)
+                    _save_archived_conversations(new_list)
+                    _save_archive_grace()
+                self.send_json({
+                    "ok": True,
+                    "archived": want,
+                    "changed": changed,
+                    "unchanged": unchanged,
+                    "count": len(changed),
+                    "requested": len(seen),
+                })
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/merge-pr$", path):
