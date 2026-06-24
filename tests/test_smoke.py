@@ -247,6 +247,31 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-folder-object-title-actions", app_css)
         self.assertIn(".conv-folder-group-header[data-object-drop] .conv-folder-group-arrow", app_css)
 
+    def test_coo_tracking_checkboxes_are_coo_mode_only(self):
+        """The per-row COO tracking checkbox should stay hidden unless the
+        user has opened/enabled COO mode."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        coo_button_js = pathlib.Path(PROJECT_ROOT, "static", "coo-button.js").read_text(encoding="utf-8")
+
+        self.assertIn("const COO_MODE_KEY = 'ccc-coo-mode';", app_js)
+        self.assertIn("function isCooModeOn()", app_js)
+        self.assertIn("const cooTrackHtml = isCooModeOn()", app_js)
+        self.assertIn('localStorage.setItem("ccc-coo-mode", "1")', coo_button_js)
+        self.assertIn('window.dispatchEvent(new Event("ccc-coo-mode-changed"))', coo_button_js)
+        self.assertIn("window.addEventListener('ccc-coo-mode-changed'", app_js)
+
+    def test_by_object_headers_have_named_collapse_control(self):
+        """Object groups should expose a visible, accessible collapse/expand
+        control on each object header."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('data-role="folder-group-collapse"', app_js)
+        self.assertIn('aria-label="Collapse or expand group"', app_js)
+        self.assertIn('title="Collapse or expand group"', app_js)
+        self.assertIn("ev.target.closest('[data-role=\"folder-group-collapse\"]')", app_js)
+        self.assertIn(".conv-folder-group-arrow {", app_css)
+
     def test_by_objects_header_has_expand_collapse_all(self):
         """By-objects mode should expose expand-all and collapse-all controls."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

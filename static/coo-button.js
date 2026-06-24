@@ -24,6 +24,10 @@
       '<span class="sh-action-label">COO</span>';
 
     btn.addEventListener("click", function () {
+      try {
+        localStorage.setItem("ccc-coo-mode", "1");
+        window.dispatchEvent(new Event("ccc-coo-mode-changed"));
+      } catch (_) {}
       // Named target → repeated clicks focus the same window instead of stacking.
       var w = window.open(
         "/coo",

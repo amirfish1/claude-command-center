@@ -13557,7 +13557,12 @@
   //     it must NOT re-render or re-sort — the click handler flips one class.
   //     NOT used as a sort/group key anywhere, so a checked row stays put.
   const COO_TRACKED_KEY = 'ccc-coo-tracked';
+  const COO_MODE_KEY = 'ccc-coo-mode';
   let _cooTrackedSet = null;       // in-memory cache — O(1) per-row reads
+  function isCooModeOn() {
+    try { return localStorage.getItem(COO_MODE_KEY) === '1'; }
+    catch (_) { return false; }
+  }
   function getCooTrackedSet() {
     if (_cooTrackedSet) return _cooTrackedSet;
     try {
@@ -13635,6 +13640,13 @@
       })
       .catch(() => _cooEscalatedMap);
   }
+  function rerenderConversationListForCooMode() {
+    try { renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true }); } catch (_) {}
+  }
+  window.addEventListener('ccc-coo-mode-changed', rerenderConversationListForCooMode);
+  window.addEventListener('storage', (ev) => {
+    if (ev && ev.key === COO_MODE_KEY) rerenderConversationListForCooMode();
+  });
 
   function renderTodayTray() {
     const tray = document.getElementById('todayTray');
@@ -18586,11 +18598,13 @@
       const _cooSid = c.session_id || c.id;
       const _cooTracked = getCooTrackedSet().has(_cooSid);
       const _cooEsc = getCooEscalated(_cooSid);
-      const cooTrackHtml = '<label class="coo-track" title="'
-        + (_cooTracked ? 'COO is tracking this session — click to stop' : 'Track with COO')
-        + '" data-role="coo-track-wrap">'
-        + '<input type="checkbox" class="coo-track-cb" data-role="coo-track"'
-        + (_cooTracked ? ' checked' : '') + ' aria-label="COO tracking"></label>';
+      const cooTrackHtml = isCooModeOn()
+        ? '<label class="coo-track" title="'
+          + (_cooTracked ? 'COO is tracking this session — click to stop' : 'Track with COO')
+          + '" data-role="coo-track-wrap">'
+          + '<input type="checkbox" class="coo-track-cb" data-role="coo-track"'
+          + (_cooTracked ? ' checked' : '') + ' aria-label="COO tracking"></label>'
+        : '';
       let cooEscalatedHtml = '';
       if (_cooEsc) {
         const _escReason = (_cooEsc && _cooEsc.reason) ? String(_cooEsc.reason) : '';
@@ -18908,7 +18922,9 @@
         + ' role="button" tabindex="0" data-role="folder-group-toggle"'
         + ' data-collapse-key="' + escapeHtml(_folderGroupStorageKey(section, collapseKey)) + '"'
         + ' aria-expanded="' + (!collapsed) + '"' + extraAttrs + '>'
-        + '<span class="conv-folder-group-arrow">' + (collapsed ? '▸' : '▾') + '</span>'
+        + '<button type="button" class="conv-folder-group-arrow" data-role="folder-group-collapse"'
+        + ' title="Collapse or expand group" aria-label="Collapse or expand group">'
+        + (collapsed ? '▸' : '▾') + '</button>'
         + '<span class="conv-folder-group-chip' + orphan + '"' + objectTitleAttrs + '>' + escapeHtml(folder) + '</span>'
         + '<span class="conv-folder-group-count">' + count + '</span>'
         + inlineMetaHtml
@@ -20759,7 +20775,8 @@
       hdr.addEventListener('click', (ev) => {
         if (ev.target.closest('[data-role="object-rename"], [data-role="object-playpause"], [data-role="object-rename-editor"]')) return;
         if (ev.target.closest('[data-role="archive-object"]')) return;
-        if (opensInspector && !ev.target.closest('.conv-folder-group-arrow')) {
+        const hitCollapse = ev.target.closest('[data-role="folder-group-collapse"]');
+        if (opensInspector && !hitCollapse) {
           ev.stopPropagation();
           let payload = null;
           if (objNode.indexOf('object:') === 0) {
