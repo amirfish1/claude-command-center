@@ -3971,6 +3971,26 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .conv-item .conv-last .label { color: var(--text-muted); opacity: 0.7; margin-right: 4px; }
+  /* GOAL-1 outcome line — the session's own DID / NEXT self-report. */
+  .conv-item .conv-outcome {
+    font-size: 13px; margin-top: 4px; line-height: 1.3;
+    display: flex; align-items: baseline; gap: 8px;
+    overflow: hidden; white-space: nowrap;
+  }
+  .conv-item .conv-outcome-did {
+    color: var(--text); opacity: 0.85;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0; flex: 1 1 auto;
+  }
+  .conv-item .conv-outcome-did::before {
+    content: "\2713"; color: var(--accent, #3fb950);
+    margin-right: 5px; opacity: 0.8; font-size: 12px;
+  }
+  .conv-item .conv-outcome-next {
+    color: var(--text-muted); opacity: 0.75; flex: 0 1 auto;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  }
+  .compact-rows .conv-item .conv-outcome { display: none; }
   .conv-item .meta {
     font-size: 13px; color: var(--text-muted); margin-top: 4px;
     display: flex; align-items: center; gap: 6px;
