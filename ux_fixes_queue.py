@@ -38,9 +38,20 @@ Item shape::
       "url": "...", "title": "...", "selector": "...",
       "screenshot_path": "...", "repo_path": "...",
       "claimed_by": null, "claimed_at": null, "closed_at": null,
+      "claimed_session_id": null,        # real CCC session UUID, when known
       "created_at": "2026-06-07T20:05:00Z",
       "updated_at": "2026-06-07T20:05:00Z"
     }
+
+``claimed_by`` is a free-form *label* a worker passes to attribute its claim
+(historically also used as the session id, but workers are free to pass any
+string — a ref like ``CCC-59`` or a human label like ``codex-ccc-drain``).
+``claimed_session_id`` is the **optional, additive** companion field that holds
+the worker's *real* CCC session UUID when it is known at claim time. The
+queue-health watcher prefers it (over a UUID-shaped ``claimed_by``) to decide
+which live session to nudge when a project's queue looks stuck. Both fields are
+preserved unchanged for existing tickets; ``claimed_session_id`` is simply
+absent (``None``) when a worker did not supply one.
 
 The file holds ``{"counter": <int>, "items": [<item>, ...]}``.
 """
@@ -75,6 +86,38 @@ VALID_LANES = ("normal", "express")
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# A real CCC/Claude session id is a UUID. Used to decide whether a value handed
+# to us is a reachable session id (worth storing as ``claimed_session_id``) or
+# just a free-form attribution label.
+import re as _re  # noqa: E402  (kept local to this concern)
+
+_SESSION_ID_RE = _re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _coerce_session_uuid(value: Any) -> Optional[str]:
+    """Return a bare session UUID from ``value`` if one is present, else None.
+
+    Accepts a plain UUID or an engine-prefixed form (``codex:<uuid>`` /
+    ``codex-<uuid>``) so a worker that labels its claim with its engine still
+    yields a reachable id. Anything else (a ref like ``CCC-59``, a human label
+    like ``codex-ccc-drain``) returns None — it is not a reachable session."""
+    s = str(value or "").strip()
+    if not s:
+        return None
+    if _SESSION_ID_RE.match(s):
+        return s
+    # Engine-prefixed form, e.g. ``codex:<uuid>`` or ``codex-<uuid>``. A UUID
+    # itself contains hyphens, so match it anywhere in the string rather than
+    # naively splitting on the last separator.
+    m = _re.search(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        s,
+    )
+    return m.group(0) if m else None
 
 
 class _FileLock:
@@ -237,6 +280,7 @@ def enqueue(
             "claimed_by": None,
             "claimed_at": None,
             "closed_at": None,
+            "claimed_session_id": None,
             "created_at": now,
             "updated_at": now,
         }
@@ -274,15 +318,23 @@ def claim_next(
     session_id: str,
     lane: Optional[str] = None,
     project: Optional[str] = None,
+    session_uuid: str = "",
 ) -> Optional[Dict[str, Any]]:
     """Atomically move the oldest ``open`` item to ``in_progress`` and return it.
 
     Scoped to ``project`` when given, so a worker only drains its own repo.
     Express lane is preferred when no specific lane is requested, so urgent
     items jump the line. Returns ``None`` when nothing is open.
+
+    ``session_id`` is the attribution label stored as ``claimed_by`` (may be a
+    human label). ``session_uuid`` is the optional, additive *real* session id;
+    when it (or a UUID embedded in ``session_id``) resolves, it is stored as
+    ``claimed_session_id`` so the queue-health watcher can reach the worker even
+    if the label is not a UUID. Non-breaking: omitting it leaves the field None.
     """
     if not session_id:
         raise ValueError("session_id is required")
+    real_sid = _coerce_session_uuid(session_uuid) or _coerce_session_uuid(session_id)
     proj = _norm_project(project) if project else None
     with _FileLock(_LOCK_FILE):
         data = _load_unlocked()
@@ -298,15 +350,23 @@ def claim_next(
         item = candidates[0]
         item["status"] = "in_progress"
         item["claimed_by"] = str(session_id)
+        if real_sid:
+            item["claimed_session_id"] = real_sid
         item["claimed_at"] = _now_iso()
         item["updated_at"] = item["claimed_at"]
         _save_unlocked(data)
         return item
 
 
-def update_status(ident: Any, status: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def update_status(
+    ident: Any,
+    status: str,
+    session_id: str = "",
+    session_uuid: str = "",
+) -> Optional[Dict[str, Any]]:
     if status not in VALID_STATUSES:
         raise ValueError(f"status must be one of {VALID_STATUSES}")
+    real_sid = _coerce_session_uuid(session_uuid) or _coerce_session_uuid(session_id)
     with _FileLock(_LOCK_FILE):
         data = _load_unlocked()
         for it in data["items"]:
@@ -317,6 +377,8 @@ def update_status(ident: Any, status: str, session_id: str = "") -> Optional[Dic
                 if status == "in_progress" and session_id:
                     it["claimed_by"] = str(session_id)
                     it["claimed_at"] = now
+                    if real_sid:
+                        it["claimed_session_id"] = real_sid
                 if status == "closed":
                     it["closed_at"] = now
                     # Attribute the close so a worker that closed a ticket
@@ -332,6 +394,7 @@ def update_status(ident: Any, status: str, session_id: str = "") -> Optional[Dic
                     it["claimed_by"] = None
                     it["claimed_at"] = None
                     it["closed_at"] = None
+                    it["claimed_session_id"] = None
                 _save_unlocked(data)
                 return it
     return None
@@ -346,6 +409,7 @@ def next_item(
     close_ident: Any = None,
     lane: Optional[str] = None,
     project: Optional[str] = None,
+    session_uuid: str = "",
 ) -> Dict[str, Any]:
     """Self-feeding loop step: optionally close the item just finished, then
     claim the next open one *for the same project*. Returns
@@ -362,7 +426,7 @@ def next_item(
     # stays in its own lane without re-specifying it every call.
     if project is None and closed:
         project = closed.get("project")
-    nxt = claim_next(session_id, lane=lane, project=project)
+    nxt = claim_next(session_id, lane=lane, project=project, session_uuid=session_uuid)
     return {"closed": closed, "next": nxt}
 
 

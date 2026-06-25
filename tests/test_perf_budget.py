@@ -160,6 +160,130 @@ def test_ux_fixes_health_no_all_sessions_or_subprocess(monkeypatch):
     )
 
 
+# ── Label-claimed fixer is reachable (the nudge-reach bug) ────────────────────
+# A fixer that claims with a human LABEL (e.g. "codex-ccc-drain-20260625")
+# instead of a UUID used to resolve to fixer_session_id=None, so a detected-
+# stuck queue had no session to nudge. The fix makes the watcher reach such a
+# fixer via (a) the additive claimed_session_id field and (b) a spawn-registry
+# name → session_id fallback — both candidacy-gated and registry-read-once.
+
+def test_ux_fixes_health_resolves_label_claimed_fixer(monkeypatch):
+    """A label-claimed fixer must yield a reachable (non-null) session id.
+
+    Three projects, each with open tickets and a fixer that claimed with a
+    NON-UUID label. The id is recoverable three ways:
+      - LBLA: additive `claimed_session_id` field (preferred)
+      - LBLB: spawn-registry `name` match
+      - LBLC: a UUID embedded in an engine-prefixed label
+    All three must resolve to a real UUID in fixer_session_id (the old code
+    returned None and the queue looked unreachable / always stuck).
+    """
+    uxq = importlib.import_module("ux_fixes_queue")
+
+    sid_a = str(uuid.uuid4())
+    sid_b = str(uuid.uuid4())
+    sid_c = str(uuid.uuid4())
+
+    # Recent timestamp so the claim is inside the watcher's lookback window
+    # (a claim older than _UXQ_NUDGE_LOOKBACK_S is intentionally ignored).
+    from datetime import datetime, timezone, timedelta
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _item(number, project, status, *, claimed_by=None,
+              claimed_session_id=None, seq=None):
+        return {
+            "number": number, "project": project, "seq": seq or number,
+            "ref": f"{project}-{seq or number}", "status": status,
+            "claimed_by": claimed_by, "closed_by": claimed_by,
+            "claimed_session_id": claimed_session_id,
+            "created_at": recent,
+            "updated_at": recent,
+            "claimed_at": recent,
+            "closed_at": recent if status == "closed" else None,
+        }
+
+    items = (
+        # LBLA: label claim, but the real session id is in claimed_session_id.
+        [_item(i, "LBLA", "open") for i in range(1, 4)]
+        + [_item(50, "LBLA", "in_progress",
+                 claimed_by="codex-ccc-drain-20260625", claimed_session_id=sid_a)]
+        # LBLB: pure label claim, resolvable only via the spawn registry name.
+        + [_item(i, "LBLB", "open") for i in range(60, 63)]
+        + [_item(80, "LBLB", "in_progress", claimed_by="codex-fix-lblb")]
+        # LBLC: engine-prefixed label carrying an embedded UUID.
+        + [_item(i, "LBLC", "open") for i in range(90, 93)]
+        + [_item(120, "LBLC", "in_progress", claimed_by=f"codex:{sid_c}")]
+    )
+    monkeypatch.setattr(uxq, "list_items", lambda *a, **k: list(items))
+    # Spawn registry: only LBLB's label maps to a session id (the (b) path).
+    monkeypatch.setattr(
+        server, "_load_spawn_registry",
+        lambda: [{"name": "codex-fix-lblb", "session_id": sid_b, "engine": "codex"}],
+    )
+
+    # Perf guards: registry read is one call (not per row), liveness stays
+    # candidacy-gated (one probe per project-with-open-tickets), no all-sessions.
+    reg_calls = _count_calls(monkeypatch, "_load_spawn_registry")
+    live_calls = _count_calls(monkeypatch, "_archive_session_is_live", passthrough_return=True)
+    build_calls = _count_calls(monkeypatch, "find_all_conversations")
+    archive_calls = _count_calls(monkeypatch, "_build_archive_conversations")
+
+    health = {p["project"]: p for p in server.compute_ux_fixes_health()}
+
+    assert health["LBLA"]["fixer_session_id"] == sid_a, (
+        "claimed_session_id (additive field) was not honored — label-claimed "
+        "fixer still resolves to None"
+    )
+    assert health["LBLB"]["fixer_session_id"] == sid_b, (
+        "spawn-registry name fallback did not resolve a pure label claim"
+    )
+    assert health["LBLC"]["fixer_session_id"] == sid_c, (
+        "embedded UUID in an engine-prefixed label was not recovered"
+    )
+    # The registry is read at most once per pass (candidacy-gated), never per row.
+    assert len(reg_calls) <= 1, (
+        f"_load_spawn_registry called {len(reg_calls)}x — must be read once per "
+        "health pass, not per ticket"
+    )
+    # One liveness probe per project-with-open-tickets (3), not per ticket.
+    assert len(live_calls) <= 6, (
+        f"_archive_session_is_live called {len(live_calls)}x — liveness probing "
+        "regressed past the candidacy gate"
+    )
+    assert build_calls == [] and archive_calls == [], (
+        "label resolution must not trigger the O(all sessions) archive build"
+    )
+
+
+def test_ux_fixes_claim_stores_real_session_id(monkeypatch, tmp_path):
+    """claim_next stores a real session UUID in claimed_session_id, additively.
+
+    A worker may claim with a label; passing session_uuid (or embedding a UUID
+    in the label) records the reachable id without touching claimed_by — so old
+    label-only behavior is preserved and the new field is purely additive.
+    """
+    uxq = importlib.import_module("ux_fixes_queue")
+    qf = tmp_path / "ux-fixes-queue.json"
+    monkeypatch.setattr(uxq, "QUEUE_FILE", qf)
+    monkeypatch.setattr(uxq, "_LOCK_FILE", qf.with_suffix(".lock"))
+
+    real_sid = str(uuid.uuid4())
+    uxq.enqueue(project="ZZ", note="first")
+    uxq.enqueue(project="ZZ", note="second")
+
+    # (a) explicit session_uuid alongside a human label.
+    claimed = uxq.claim_next("codex-ccc-drain", project="ZZ", session_uuid=real_sid)
+    assert claimed["claimed_by"] == "codex-ccc-drain", "label attribution lost"
+    assert claimed["claimed_session_id"] == real_sid, "real session id not stored"
+
+    # (b) label-only claim leaves the additive field empty (non-breaking).
+    claimed2 = uxq.claim_next("just-a-label", project="ZZ")
+    assert claimed2["claimed_by"] == "just-a-label"
+    assert claimed2.get("claimed_session_id") in (None, ""), (
+        "a label-only claim must not fabricate a claimed_session_id"
+    )
+
+
 # ── Stats persistence ─────────────────────────────────────────────────────────
 # The per-transcript stats cache must survive a reload, or the first Stats open
 # after a restart re-parses every transcript (~40s, GIL-blocking).

@@ -19619,6 +19619,64 @@ _UXQ_NUDGE_LOOKBACK_S = 48 * 3600
 _UXQ_SESSION_ID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
+# A UUID embedded anywhere in a free-form label (e.g. ``codex:<uuid>`` or
+# ``codex-<uuid>``) — lets us recover a reachable id from an engine-prefixed
+# claim label even when ``claimed_session_id`` was not supplied.
+_UXQ_EMBEDDED_SESSION_ID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _uxq_resolve_fixer_sid(item, *, registry_by_name=None):
+    """Resolve a queue item's claimer to a reachable CCC session UUID, or "".
+
+    Resolution order (cheapest first, all O(1) per item):
+      1. ``claimed_session_id`` — the additive real-session field a worker can
+         supply at claim time (preferred; exact).
+      2. A UUID-shaped ``claimed_by`` (the historical happy path).
+      3. A UUID embedded in an engine-prefixed ``claimed_by`` label.
+      4. ``registry_by_name`` lookup — best-effort: if the label exactly matches
+         a CCC-spawned session's launch ``name``, take that session's id. The
+         caller passes a prebuilt name→sid map so this stays O(1) per item and
+         the spawn registry is read at most once per health/nudge pass (no
+         per-row file read, no subprocess).
+
+    Returns "" when the claimer is a genuinely unreachable label (e.g. a ref
+    like ``CCC-59`` or a free-form name with no spawn-registry match)."""
+    claimed_sid = str((item or {}).get("claimed_session_id") or "").strip()
+    if _UXQ_SESSION_ID_RE.match(claimed_sid):
+        return claimed_sid
+    label = str((item or {}).get("claimed_by") or (item or {}).get("closed_by") or "").strip()
+    if not label:
+        return ""
+    if _UXQ_SESSION_ID_RE.match(label):
+        return label
+    m = _UXQ_EMBEDDED_SESSION_ID_RE.search(label)
+    if m:
+        return m.group(0)
+    if registry_by_name:
+        hit = registry_by_name.get(label)
+        if hit and _UXQ_SESSION_ID_RE.match(hit):
+            return hit
+    return ""
+
+
+def _uxq_spawn_names_to_sids():
+    """name → session_id map from the spawn registry (read once per pass).
+
+    Cheap: one file read via _load_spawn_registry(), no subprocess, no
+    transcript parse. Used only to resolve label-claimed fixers for projects
+    that already have open tickets (the candidacy gate is applied by callers)."""
+    out = {}
+    try:
+        for entry in _load_spawn_registry():
+            name = str(entry.get("name") or "").strip()
+            sid = str(entry.get("session_id") or "").strip()
+            if name and sid and _UXQ_SESSION_ID_RE.match(sid):
+                out.setdefault(name, sid)
+    except Exception:
+        return {}
+    return out
 
 
 def _uxq_nudge_load_state():
@@ -19696,13 +19754,25 @@ def _uxq_nudge_tick():
     # new tickets landed and they sit unworked forever.
     open_max_seq = {}
     workers = {}  # sid(lower) → {project, progress, last_ts}
+    # First pass: open-ticket depth per project. We must know which projects
+    # have open work before resolving label-claimed fixers, so the (cheap)
+    # spawn-registry read is candidacy-gated to only those projects.
     for it in items:
-        proj = str(it.get("project") or "?")
         if it.get("status") == "open":
+            proj = str(it.get("project") or "?")
             open_by_project[proj] = open_by_project.get(proj, 0) + 1
             open_max_seq[proj] = max(open_max_seq.get(proj, 0), int(it.get("seq") or 0))
-        sid = str(it.get("claimed_by") or "")
-        if not _UXQ_SESSION_ID_RE.match(sid):
+    # Build the name→sid map once, only if some project actually has open work
+    # (otherwise there is nothing to nudge and no reason to read the registry).
+    registry_by_name = _uxq_spawn_names_to_sids() if open_by_project else {}
+    for it in items:
+        proj = str(it.get("project") or "?")
+        # Only resolve fixers for projects with open tickets — same candidacy
+        # gate as the registry read above; nothing else can be nudged.
+        if open_by_project.get(proj, 0) <= 0:
+            continue
+        sid = _uxq_resolve_fixer_sid(it, registry_by_name=registry_by_name)
+        if not sid:
             continue
         ts = _uxq_parse_ts(it.get("updated_at") or it.get("claimed_at"))
         if not ts or (now - ts) > _UXQ_NUDGE_LOOKBACK_S:
@@ -19807,6 +19877,14 @@ def compute_ux_fixes_health():
     except Exception:
         items = []
     now = time.time()
+    # Pre-scan: which projects have open tickets. The fixer-resolution and
+    # liveness probe are candidacy-gated to these, so the spawn registry (read
+    # below to resolve label-claimed fixers) is touched at most once per pass —
+    # and only when there is open work to reach. No per-row file/subprocess.
+    open_projects = {
+        str(it.get("project") or "?") for it in items if it.get("status") == "open"
+    }
+    registry_by_name = _uxq_spawn_names_to_sids() if open_projects else {}
     # First pass: group by project. depth + oldest open age, and the most
     # recently active fixer (claimer) plus its highest closed seq (progress).
     by_project = {}  # project → bucket
@@ -19825,8 +19903,13 @@ def compute_ux_fixes_health():
             created = _uxq_parse_ts(it.get("created_at"))
             if created and (b["oldest_open_ts"] is None or created < b["oldest_open_ts"]):
                 b["oldest_open_ts"] = created
-        sid = str(it.get("claimed_by") or it.get("closed_by") or "")
-        if not _UXQ_SESSION_ID_RE.match(sid):
+        # Only resolve a fixer for projects that have open tickets (candidacy
+        # gate). Prefer the additive real-session field, then a UUID label, then
+        # a registry name match — see _uxq_resolve_fixer_sid.
+        if proj not in open_projects:
+            continue
+        sid = _uxq_resolve_fixer_sid(it, registry_by_name=registry_by_name)
+        if not sid:
             continue
         ts = _uxq_parse_ts(it.get("updated_at") or it.get("claimed_at"))
         if not ts or (now - ts) > _UXQ_NUDGE_LOOKBACK_S:
@@ -27778,6 +27861,9 @@ matching this repo's slugified path; its basename (minus `.jsonl`) is your sessi
      -d '{{"session_id": "<your-full-session-id>", "project": "{project}"}}'
    The response is `{{"ok": true, "item": <ticket|null>}}`. If `item` is null the \
    queue is drained — schedule a wakeup and stop for now.
+   If you attribute claims with a human label instead of your raw UUID, ALSO pass \
+   your real session UUID as `session_uuid` so the queue-health watcher can reach \
+   you if your project's queue stalls (the label alone is not a reachable id).
 2. Apply the fix described by the claimed ticket. Fields you get: `number` (the global \
    ticket id), `title`, `detail`, optional `screenshot_path`, and `repo_path`. Read the \
    screenshot if present. Make the change in this repo.
@@ -42373,7 +42459,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             scope_project = _ux_fixes_scope_project(payload)
             try:
                 item = ux_fixes_queue.claim_next(
-                    sid, lane=payload.get("lane") or None, project=scope_project
+                    sid, lane=payload.get("lane") or None, project=scope_project,
+                    session_uuid=str(payload.get("session_uuid") or ""),
                 )
                 self.send_json({"ok": True, "item": item})
             except Exception as e:
@@ -42398,6 +42485,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     close_ident=int(close_n) if close_n is not None else None,
                     lane=payload.get("lane") or None,
                     project=scope_project,
+                    session_uuid=str(payload.get("session_uuid") or ""),
                 )
                 self.send_json({"ok": True, **result})
             except Exception as e:
@@ -42415,6 +42503,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     int(payload.get("number")),
                     str(payload.get("status") or ""),
                     session_id=str(payload.get("session_id") or ""),
+                    session_uuid=str(payload.get("session_uuid") or ""),
                 )
                 self.send_json({"ok": bool(item), "item": item})
             except Exception as e:

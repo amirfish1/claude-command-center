@@ -38,7 +38,11 @@ python3 -c "import os, sys; sys.path.insert(0, os.environ['CCC_REPO']); \
 
 ### API (the only functions you need)
 
-`SID` = your own CCC session id (so claims are attributed to you).
+`SID` = your own CCC session id (so claims are attributed to you). Prefer your
+raw session UUID. If you attribute claims with a human *label* instead, also
+pass your real UUID via `session_uuid=` (HTTP) so the queue-health watcher can
+still reach you if your project's queue stalls — a label alone is not a
+reachable session id.
 
 | Call | Does |
 |------|------|
