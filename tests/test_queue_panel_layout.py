@@ -61,9 +61,21 @@ class TestQueuePanelLayout(unittest.TestCase):
             app_css.index(".fq-row.is-open", app_css.index(".fq-status {"))
         ]
 
-        self.assertIn("font-size: 13px;", row_css)
-        self.assertIn("font-size: 12px;", ref_css)
-        self.assertIn("font-size: 10.5px;", status_css)
+        empty_css = app_css[
+            app_css.index(".fq-empty {"):
+            app_css.index(".fq-empty-sub {", app_css.index(".fq-empty {"))
+        ]
+        empty_sub_css = app_css[
+            app_css.index(".fq-empty-sub {"):
+            app_css.index("/* Draggable object-group", app_css.index(".fq-empty-sub {"))
+        ]
+
+        self.assertIn("font-size: 14px;", row_css)
+        self.assertIn("line-height: 1.35;", row_css)
+        self.assertIn("font-size: 12.5px;", ref_css)
+        self.assertIn("font-size: 11px;", status_css)
+        self.assertIn("font-size: 13px;", empty_css)
+        self.assertIn("font-size: 12px;", empty_sub_css)
 
 
 if __name__ == "__main__":
