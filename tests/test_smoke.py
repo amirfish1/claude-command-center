@@ -183,6 +183,11 @@ class TestServerImports(unittest.TestCase):
         Recall-backed sidebar hits without turning the field into doc search."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn("const params = new URLSearchParams({ q, limit: '50', since: '90d' });", app_js)
+        self.assertFalse(
+            "params.set('cwd', cwd);" in app_js,
+            "conversation search must not silently scope history search to the active repo",
+        )
         self.assertIn("/api/search-recall-sessions", app_js)
         self.assertIn("c._historySource === 'recall'", app_js)
         self.assertIn("_historyBadgeLabel = _historyIsRecall ? 'TR'", app_js)

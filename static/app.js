@@ -29961,7 +29961,7 @@
   // _historyState.query: the query the map was built for; stale queries
   //                       are ignored to avoid showing decorations from a
   //                       previous keystroke after the user has typed more.
-  const _historyState = { query: '', map: new Map(), broaden: false, repoRows: [], matchedRepo: null };
+  const _historyState = { query: '', map: new Map(), repoRows: [], matchedRepo: null };
   let _historyFetchSeq = 0;
   let _historyFetchTimer = null;
 
@@ -30136,13 +30136,10 @@
       _historyState.matchedRepo = null;
       return Promise.resolve();
     }
-    // Default scope = current repo, mirroring the rest of the list view.
-    // The "Broaden outside of repo" toggle (when wired) will flip this.
+    // Sidebar conversation search is global. There is no visible repo-scope
+    // control here, so silently narrowing history search to the active repo
+    // hides relevant sessions and makes the search box feel inconsistent.
     const params = new URLSearchParams({ q, limit: '50', since: '90d' });
-    if (!_historyState.broaden) {
-      const cwd = (typeof activeConvRepoPath === 'function' && activeConvRepoPath()) || '';
-      if (cwd) params.set('cwd', cwd);
-    }
     // Auto-enable semantic when the local index has embeddings — the user
     // explicitly asked: "use semantic if it's installed." Status is fetched
     // and cached at startup; we just read the flag here.
