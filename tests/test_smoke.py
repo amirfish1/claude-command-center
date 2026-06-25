@@ -820,6 +820,42 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("flex: 0 0 auto;", evergreen_css)
         self.assertIn("overflow-y: auto;", evergreen_css)
 
+    def test_evergreen_agent_rows_keep_status_context_visible(self):
+        """Evergreen agents need their queue count, goal, WIP/idle state, and
+        last-run timestamp visible at rest."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const _isEvergreenAgentGroup = _evergreenObjectNodes.has(nodeId);", app_js)
+        self.assertIn("evergreenAgent: _isEvergreenAgentGroup", app_js)
+        self.assertIn("const evergreenRowClass = opts.evergreenAgent ? ' is-evergreen-agent-row' : '';", app_js)
+        self.assertIn("let evergreenStateHtml = '';", app_js)
+        self.assertIn("const _evergreenStateLabel = _isAgentRunning ? 'WIP'", app_js)
+        self.assertIn("+ uxFixesQueueProgressHtml\n            + evergreenGoalHtml\n            + evergreenStateHtml", app_js)
+        self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-ux-fix-progress", app_css)
+        self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-goal", app_css)
+        self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-evergreen-state", app_css)
+        self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-row-end", app_css)
+
+    def test_by_objects_current_and_evergreen_sections_have_subtle_bands(self):
+        """Current sessions and evergreen agents should read as separate regions."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        current_css = app_css[
+            app_css.index(".conv-current-sessions-scroll {"):
+            app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))
+        ]
+        evergreen_css = app_css[
+            app_css.index(".conv-evergreen-agents-scroll {"):
+            app_css.index(".conv-project-tree {", app_css.index(".conv-evergreen-agents-scroll {"))
+        ]
+
+        self.assertIn("background: rgba(139, 148, 158, 0.07);", current_css)
+        self.assertIn("border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);", current_css)
+        self.assertIn("background: rgba(139, 148, 158, 0.06);", evergreen_css)
+        self.assertIn("border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);", evergreen_css)
+        self.assertIn("border-radius: 0 0 8px 8px;", evergreen_css)
+
     def test_current_sessions_respect_inprogress_window_filter(self):
         """Current sessions should use the same 1d/7d/All window as by-objects."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

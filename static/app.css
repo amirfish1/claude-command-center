@@ -3808,6 +3808,10 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     padding-right: 2px;
+    box-sizing: border-box;
+    border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+    border-radius: 8px;
+    background: rgba(139, 148, 158, 0.07);
   }
   .conv-current-sessions-scroll .conv-objects-section-label {
     height: var(--current-session-label-h);
@@ -3925,14 +3929,22 @@
     flex: 0 0 auto;
     margin: 6px 2px 0 0;
     border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-    background: color-mix(in srgb, var(--surface-2) 44%, var(--bg));
+    border-left: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+    border-right: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+    border-radius: 8px 8px 0 0;
+    background: rgba(139, 148, 158, 0.08);
   }
   .conv-evergreen-agents-scroll {
     flex: 0 0 auto;
     max-height: clamp(96px, 18vh, 240px);
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding-right: 2px;
+    box-sizing: border-box;
+    padding: 4px 4px 4px 0;
+    border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+    border-top: 0;
+    border-radius: 0 0 8px 8px;
+    background: rgba(139, 148, 158, 0.06);
   }
   .conv-project-tree { padding-left: 7px; }
   .conv-project-tree .conv-folder-group { margin: 0; }
@@ -4047,6 +4059,51 @@
     font-weight: 400;
   }
   .conv-project-tree .conv-item:hover .conv-main-row > .conv-row-end { display: inline-flex; }
+
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row {
+    gap: 6px;
+  }
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title {
+    flex: 1 1 auto;
+  }
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-ux-fix-progress,
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-goal,
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-evergreen-state,
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-row-meta,
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-row-end {
+    display: inline-flex;
+  }
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-row-meta:empty {
+    display: none;
+  }
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-goal {
+    max-width: 180px;
+    margin-left: 0;
+  }
+  .conv-evergreen-state {
+    flex: 0 0 auto;
+    align-items: center;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 9px;
+    font-size: 10px;
+    line-height: 1;
+    font-weight: 700;
+    white-space: nowrap;
+    text-transform: uppercase;
+  }
+  .conv-evergreen-state.is-wip {
+    background: rgba(251,202,4,0.15);
+    color: #FBCA04;
+  }
+  .conv-evergreen-state.is-waiting {
+    background: rgba(56,189,248,0.14);
+    color: #38bdf8;
+  }
+  .conv-evergreen-state.is-idle {
+    background: rgba(139,148,158,0.12);
+    color: var(--text-muted);
+  }
 
   /* Active child — Codex's teal rail + faint teal wash, title brightens. */
   .conv-project-tree .conv-item.active {

@@ -19508,6 +19508,17 @@
           + '<span class="conv-goal-text">' + escapeHtml(_goalText) + '</span>'
           + '</span>';
       }
+      const evergreenGoalHtml = opts.evergreenAgent ? goalChipHtml : '';
+      let evergreenStateHtml = '';
+      if (opts.evergreenAgent) {
+        const _evergreenStateLabel = _isAgentRunning ? 'WIP' : (_isWaitingForUser ? 'waiting' : 'idle');
+        const _evergreenStateCls = _isAgentRunning ? ' is-wip' : (_isWaitingForUser ? ' is-waiting' : ' is-idle');
+        const _evergreenStateTitle = (_isAgentRunning ? 'WIP' : (_isWaitingForUser ? 'Waiting for input' : 'Not WIP'))
+          + (rel ? ' · last run ' + rel : '');
+        evergreenStateHtml = '<span class="conv-evergreen-state' + _evergreenStateCls
+          + '" title="' + escapeAttr(_evergreenStateTitle) + '">'
+          + escapeHtml(_evergreenStateLabel) + '</span>';
+      }
       const hoverMetaRowHtml = (folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)
         ? '<div class="conv-hover-meta-row">'
           + folderChipHtml
@@ -19524,6 +19535,7 @@
         : '';
 
       const groupedRowClass = opts.suppressFolderChip ? ' is-grouped-row' : '';
+      const evergreenRowClass = opts.evergreenAgent ? ' is-evergreen-agent-row' : '';
       const rowRepoAttr = escapeAttr(rowRepoPath(c) || '');
 
       // COO row layer — checkbox (tracking) + escalated badge. Row-level only:
@@ -19609,7 +19621,7 @@
         + '</div>'
         : '';
 
-      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row">'
@@ -19619,6 +19631,8 @@
             + needsYouHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
             + uxFixesQueueProgressHtml
+            + evergreenGoalHtml
+            + evergreenStateHtml
             + historyBadgeHtml
             + repoBadgeHtml
             + rowMetaHtml
@@ -20190,6 +20204,7 @@
         }
       }
       const _renderObjGroup = (nodeId, title, cards, depth = 0, ordinal = 0) => {
+        const _isEvergreenAgentGroup = _evergreenObjectNodes.has(nodeId);
         // Stable per-node hue so each group keeps its color across renders.
         let hash = 0;
         for (let i = 0; i < nodeId.length; i++) hash = ((hash << 5) - hash + nodeId.charCodeAt(i)) | 0;
@@ -20234,14 +20249,14 @@
         }).join('');
         let body;
         if (archiveObjectId) {
-          const rowsHtml = cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true })).join('');
+          const rowsHtml = cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup })).join('');
           const hasChildObjects = !!((_childrenOf.get(nodeId) || []).length);
           const emptyHint = (!cards.length && !_objDrafts.length && !hasChildObjects)
             ? '<div class="conv-object-empty-hint">Empty — drag a session here, or use +.</div>' : '';
           body = rowsHtml + _draftsHtml + emptyHint;
         } else {
           body = cards.length
-            ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true })).join('')
+            ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup })).join('')
             : '<div class="conv-object-empty-hint">Empty — drag sessions here.</div>';
         }
         // GOAL-1 status + immediate-objective — real custom objects only (not
