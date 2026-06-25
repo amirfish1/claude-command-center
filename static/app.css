@@ -3782,6 +3782,33 @@
     border-color: var(--accent);
     background: var(--surface-2);
   }
+  #convList.objects-scroll-split {
+    overflow-y: hidden !important;
+    display: flex;
+    flex-direction: column;
+  }
+  #convList.objects-scroll-split .conv-inprogress-section,
+  #convList.objects-scroll-split .conv-inprogress-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  #convList.objects-scroll-split .conv-inprogress-toolbar,
+  #convList.objects-scroll-split .conv-tab-bar,
+  #convList.objects-scroll-split .conv-repo-search-section,
+  #convList.objects-scroll-split .conv-id-search-section,
+  #convList.objects-scroll-split .conv-openask-section {
+    flex: 0 0 auto;
+  }
+  .conv-current-sessions-scroll {
+    flex: 0 1 clamp(120px, 34vh, 420px);
+    min-height: 0;
+    max-height: clamp(120px, 34vh, 420px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 2px;
+  }
   /* ============================================================
      Project tree — pixel-match to Codex's .tree / .tree-item mock.
      Exact values lifted from the reference HTML: 30px rows, padding
@@ -3796,6 +3823,10 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     padding-right: 2px;
+  }
+  #convList.objects-scroll-split .conv-project-tree-scroll {
+    flex: 1 1 auto;
+    max-height: none;
   }
   .conv-project-tree { padding-left: 7px; }
   .conv-project-tree .conv-folder-group { margin: 0; }

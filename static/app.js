@@ -20087,11 +20087,15 @@
       const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));
       const _looseHtml = _looseRest.length
         ? _renderObjGroup('unclassified', 'Unclassified', _looseRest) : '';
+      const _currentSessionsExtraHtml = (_gcItems || []).map(it => it.html).join('');
+      const _currentSessionsBodyHtml = _currentSessionsHtml + _currentSessionsExtraHtml;
+      const _currentSessionsScrollHtml = (_currentSessionsBodyHtml)
+        ? '<div class="conv-current-sessions-scroll" data-role="current-sessions-scroll">' + _currentSessionsBodyHtml + '</div>'
+        : '';
       const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)
         ? '<div class="conv-project-tree-scroll" data-role="project-tree-scroll">' + _projectTreeHtml + _looseHtml + '</div>'
         : '';
-      _activeRowsHtml = _currentSessionsHtml + _projectTreeScrollHtml
-        + (_gcItems || []).map(it => it.html).join('');
+      _activeRowsHtml = _currentSessionsScrollHtml + _projectTreeScrollHtml;
     } else if (_shouldGroupByFolder) {
       // Group cards by folder; preserve folder order by the most
       // recent card in each group (freshest folder appears first).
@@ -20671,6 +20675,7 @@
       : (_openAskHtml
           + (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions')));
     const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
+    $convList.classList.toggle('objects-scroll-split', !!_shouldGroupByObjects);
     // Flicker guard. The 10s bulk-sessions poll and the 5s live-status tick both
     // re-run this render constantly. The wholesale innerHTML reset below tears
     // down and rebuilds every row, which the user sees as the whole list

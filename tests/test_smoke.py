@@ -688,12 +688,24 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)", app_js)
         self.assertIn('data-role="project-tree-scroll"', app_js)
-        self.assertIn("_activeRowsHtml = _currentSessionsHtml + _projectTreeScrollHtml", app_js)
+        self.assertIn("const _currentSessionsScrollHtml = (_currentSessionsBodyHtml)", app_js)
+        self.assertIn('data-role="current-sessions-scroll"', app_js)
+        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _projectTreeScrollHtml;", app_js)
+        self.assertIn("$convList.classList.toggle('objects-scroll-split', !!_shouldGroupByObjects);", app_js)
+        self.assertIn("#convList.objects-scroll-split {", app_css)
+        outer_css = app_css[app_css.index("#convList.objects-scroll-split {"):app_css.index("#convList.objects-scroll-split .conv-inprogress-section", app_css.index("#convList.objects-scroll-split {"))]
+        self.assertIn("overflow-y: hidden !important;", outer_css)
+        self.assertIn(".conv-current-sessions-scroll {", app_css)
+        current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
+        self.assertIn("overflow-y: auto;", current_css)
+        self.assertIn("max-height: clamp(", current_css)
+        self.assertIn("overscroll-behavior: contain;", current_css)
         self.assertIn(".conv-project-tree-scroll {", app_css)
         scroll_css = app_css[app_css.index(".conv-project-tree-scroll {"):app_css.index(".conv-project-tree {", app_css.index(".conv-project-tree-scroll {"))]
         self.assertIn("overflow-y: auto;", scroll_css)
         self.assertIn("max-height: clamp(", scroll_css)
         self.assertIn("overscroll-behavior: contain;", scroll_css)
+        self.assertIn("#convList.objects-scroll-split .conv-project-tree-scroll", app_css)
 
     def test_object_header_actions_are_hover_revealed(self):
         """Object header actions should stay quiet until hover/focus."""
