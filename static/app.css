@@ -9367,7 +9367,7 @@
   }
   .attention-panel.collapsed .att-toggle { transform: rotate(-90deg); }
 
-  /* ── Files panel (bottom-mounted, opens upward on demand) ─────────── */
+  /* ── Files panel / right-rail queue list ──────────────────────────── */
   .files-panel {
     flex: 0 0 auto;
     max-height: 35vh;
@@ -9379,13 +9379,16 @@
     box-sizing: border-box;
   }
   body.status-pos-right .status-rail-pane > .files-panel {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     height: auto !important;
     max-height: none;
     min-height: 0;
     padding: 8px 12px 10px;
     border-top: none;
     background: transparent;
+  }
+  body.status-pos-right .status-rail-pane > .files-queue-panel {
+    flex: 1 1 auto;
   }
   body.status-pos-right .status-rail-pane > .files-panel .files-resize-handle {
     display: none;
@@ -11396,7 +11399,7 @@ body.status-pos-right .conv-pane > .status-rail {
 }
 .status-rail-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
@@ -11451,12 +11454,6 @@ body.status-pos-right .conv-pane > .status-rail {
   line-height: 1.4;
   justify-content: center;
   text-align: center;
-}
-#statusRailQueuePane.is-active > .status-rail-empty {
-  display: flex;
-}
-#statusRailQueuePane:has(#sidebarQueueList) > .status-rail-empty {
-  display: none;
 }
 /* Status-rail Subagents panel — lists Task tool spawns for the active
    conv with status + (optional) subagent_type. Hidden by JS when the
@@ -14127,22 +14124,8 @@ body:has(.gc-reader) .pwa-install-banner {
 .ns-dice-btn:hover { border-color: var(--accent, #58a6ff); transform: rotate(-20deg) scale(1.1); }
 .ns-dice-btn:active { transform: rotate(340deg) scale(0.95); }
 
-/* ── Files panel ⇄ UX-fixes queue view ──────────────────────────────── */
-.files-view-toggle {
-  display: inline-flex; gap: 0; margin-left: 6px; flex-shrink: 0;
-  border: 1px solid var(--border); border-radius: 5px; overflow: hidden;
-}
-.files-view-toggle button {
-  padding: 2px 8px; border: 0; background: var(--bg);
-  color: var(--text-muted); font-size: 10.5px; cursor: pointer;
-  line-height: 1.5;
-}
-.files-view-toggle button + button { border-left: 1px solid var(--border); }
-.files-view-toggle button.is-active {
-  background: rgba(88,166,255,0.15); color: var(--accent, #58a6ff);
-  font-weight: 600;
-}
 .files-queue-list {
+  flex: 1 1 auto;
   overflow-y: auto; min-height: 0;
   display: flex; flex-direction: column;
 }
