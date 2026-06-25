@@ -688,9 +688,14 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)", app_js)
         self.assertIn('data-role="project-tree-scroll"', app_js)
+        self.assertIn("const _projectTreeHeaderHtml = _projectTreeHtml", app_js)
+        self.assertIn('data-role="project-tree-header"', app_js)
         self.assertIn("const _currentSessionsScrollHtml = (_currentSessionsBodyHtml)", app_js)
         self.assertIn('data-role="current-sessions-scroll"', app_js)
-        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeScrollHtml;", app_js)
+        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml;", app_js)
+        scroll_html_start = app_js.index("const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)")
+        scroll_html_end = app_js.index("const _objectsSplitHandleHtml", scroll_html_start)
+        self.assertNotIn("Project tree</div>", app_js[scroll_html_start:scroll_html_end])
         self.assertIn("$convList.classList.toggle('objects-scroll-split', !!_shouldGroupByObjects);", app_js)
         self.assertIn("#convList.objects-scroll-split {", app_css)
         outer_css = app_css[app_css.index("#convList.objects-scroll-split {"):app_css.index("#convList.objects-scroll-split .conv-inprogress-section", app_css.index("#convList.objects-scroll-split {"))]
@@ -706,6 +711,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("max-height: clamp(", scroll_css)
         self.assertIn("overscroll-behavior: contain;", scroll_css)
         self.assertIn("#convList.objects-scroll-split .conv-project-tree-scroll", app_css)
+        self.assertIn(".conv-project-tree-header {", app_css)
+        header_css = app_css[app_css.index(".conv-project-tree-header {"):app_css.index(".conv-project-tree-scroll {", app_css.index(".conv-project-tree-header {"))]
+        self.assertIn("flex: 0 0 auto;", header_css)
+        self.assertIn("background:", header_css)
+        self.assertIn("border-top:", header_css)
 
     def test_by_objects_current_sessions_splitter_is_resizable(self):
         """A horizontal splitter should resize Current sessions vs Project tree."""
@@ -716,7 +726,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function applyCurrentSessionsPanelHeight()", app_js)
         self.assertIn("const _objectsSplitHandleHtml = (_currentSessionsScrollHtml && _projectTreeScrollHtml)", app_js)
         self.assertIn('data-role="objects-splitter"', app_js)
-        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeScrollHtml;", app_js)
+        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml;", app_js)
         self.assertIn("function beginObjectsSplitterResize(ev)", app_js)
         self.assertIn("ev.target.closest('[data-role=\"objects-splitter\"]')", app_js)
         self.assertIn("list.style.setProperty('--current-sessions-panel-h', nextHeight + 'px');", app_js)
@@ -731,6 +741,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("cursor: row-resize;", splitter_css)
         self.assertIn(".conv-objects-splitter.is-dragging", app_css)
         self.assertIn("body.objects-splitter-resizing", app_css)
+
+    def test_current_sessions_skip_body_title_tooltip(self):
+        """Current session titles should not duplicate themselves in a body tooltip."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("if (el.closest('.conv-current-sessions-scroll')) {", app_js)
+        self.assertIn("hideTip();\n        return;", app_js)
 
     def test_by_objects_project_tree_scroll_survives_refresh_rebuilds(self):
         """Polling rebuilds should not snap the by-objects project tree to top."""
@@ -765,6 +782,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("height: var(--current-session-label-h);", current_css)
         self.assertIn(".conv-current-sessions-scroll .conv-item {", current_css)
         self.assertIn("min-height: var(--current-session-row-h);", current_css)
+        self.assertIn("border-radius: 6px;", current_css)
+        self.assertIn(".conv-current-sessions-scroll .conv-item:hover {", current_css)
+        self.assertIn("background: rgba(255, 255, 255, 0.045);", current_css)
         self.assertIn(".conv-current-sessions-scroll .conv-item .conv-title {", current_css)
         self.assertIn("color: var(--text);", current_css)
         self.assertIn("font-weight: 650;", current_css)

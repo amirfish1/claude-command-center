@@ -3807,7 +3807,10 @@
     min-height: var(--current-session-row-h);
     padding: 0 8px;
     margin-bottom: 0;
-    border-radius: 0;
+    border-radius: 6px;
+  }
+  .conv-current-sessions-scroll .conv-item:hover {
+    background: rgba(255, 255, 255, 0.045);
   }
   .conv-current-sessions-scroll .conv-item .conv-title-row,
   .conv-current-sessions-scroll .conv-item .conv-main-row {
@@ -3863,6 +3866,14 @@
   body.objects-splitter-resizing * {
     cursor: row-resize !important;
     user-select: none !important;
+  }
+  .conv-project-tree-header {
+    flex: 0 0 auto;
+    margin: 0 2px 0 0;
+    padding: 5px 8px 4px;
+    background: color-mix(in srgb, var(--surface-2) 54%, var(--bg));
+    border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
   }
   /* ============================================================
      Project tree — pixel-match to Codex's .tree / .tree-item mock.

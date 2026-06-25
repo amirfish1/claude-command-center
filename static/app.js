@@ -20233,8 +20233,10 @@
         }
       }
       const _projectTreeHtml = _objGroupsHtml
-        ? '<div class="conv-objects-section-label">Project tree</div>'
-          + '<div class="conv-project-tree">' + _objGroupsHtml + '</div>'
+        ? '<div class="conv-project-tree">' + _objGroupsHtml + '</div>'
+        : '';
+      const _projectTreeHeaderHtml = _projectTreeHtml
+        ? '<div class="conv-objects-section-label conv-project-tree-header" data-role="project-tree-header">Project tree</div>'
         : '';
       const _currentIds = new Set(_currentSessions.map(c => c.session_id || c.id));
       const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));
@@ -20251,7 +20253,7 @@
       const _objectsSplitHandleHtml = (_currentSessionsScrollHtml && _projectTreeScrollHtml)
         ? '<div class="conv-objects-splitter" data-role="objects-splitter" role="separator" aria-orientation="horizontal" title="Drag to resize Current sessions"></div>'
         : '';
-      _activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeScrollHtml;
+      _activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml;
     } else if (_shouldGroupByFolder) {
       // Group cards by folder; preserve folder order by the most
       // recent card in each group (freshest folder appears first).
@@ -23217,6 +23219,10 @@
     document.addEventListener('mouseover', (ev) => {
       const el = ev.target.closest && ev.target.closest('.conv-title');
       if (!el || el === curTarget || el.querySelector('input')) return;
+      if (el.closest('.conv-current-sessions-scroll')) {
+        hideTip();
+        return;
+      }
       hideTip();
       curTarget = el;
       timer = setTimeout(() => showTip(el), 90);
