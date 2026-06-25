@@ -3917,6 +3917,9 @@
     border-left: 1px solid rgba(154, 173, 194, 0.18);
     padding: 0 8px;
   }
+  .conv-project-tree .conv-draft-row[data-draft-id] {
+    cursor: pointer;
+  }
   .conv-project-tree .conv-draft-row[draggable="true"] {
     cursor: grab;
   }
@@ -3931,6 +3934,7 @@
   .conv-project-tree .conv-draft-input {
     border: 0; background: transparent; padding: 0;
     font-size: 13px; color: var(--text-muted);
+    cursor: text;
   }
   .conv-item .conv-ux-fix-progress {
     display: inline-flex;
@@ -9323,6 +9327,18 @@
     position: relative;
     box-sizing: border-box;
   }
+  body.status-pos-right .status-rail-pane > .files-panel {
+    flex: 1 1 auto;
+    height: auto !important;
+    max-height: none;
+    min-height: 0;
+    padding: 8px 12px 10px;
+    border-top: none;
+    background: transparent;
+  }
+  body.status-pos-right .status-rail-pane > .files-panel .files-resize-handle {
+    display: none;
+  }
   .files-panel[style*="height"] { max-height: none; }
   .files-panel.collapsed { max-height: 32px; height: 32px !important; overflow: hidden; padding-top: 0; padding-bottom: 0; }
   .files-panel.collapsed .files-list { display: none; }
@@ -11338,8 +11354,81 @@ body.status-pos-right .conv-pane > .status-rail {
   position: relative;
   border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface) 60%, var(--bg));
-  overflow-y: auto;
+  overflow: hidden;
   min-height: 0;
+}
+.status-rail-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.status-rail-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.status-rail-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.status-rail-context {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+.status-rail-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 74%, var(--bg));
+}
+.status-rail-tab {
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+}
+.status-rail-tab:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.status-rail-tab.is-active {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+}
+.status-rail-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.status-rail-pane {
+  display: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.status-rail-pane.is-active {
+  display: flex;
+  flex-direction: column;
 }
 /* Status-rail Subagents panel — lists Task tool spawns for the active
    conv with status + (optional) subagent_type. Hidden by JS when the
@@ -11821,13 +11910,12 @@ body.status-pos-right.status-rail-collapsed .conv-pane > .conv-input-context {
 }
 #convSessionId:hover .sid-copy { opacity: 0.9; }
 
-/* #10 — Rail visual structure. Add a 1px hairline between the three
-   sections (original-ask, actions, activity) so the rail reads as
-   organized blocks instead of one long stack. */
-.status-rail > .csh-ask-original {
+/* #10 — Rail visual structure. Add a 1px hairline between the compact
+   metadata blocks so the tab reads as organized session data. */
+.status-rail-pane > .csh-ask-original {
   border-bottom: 1px solid var(--border) !important;
 }
-.status-rail > .rail-actions {
+.status-rail-pane > .rail-actions {
   border-top: none;
 }
 
@@ -11928,8 +12016,8 @@ body.status-pos-right.status-rail-collapsed .conv-pane > .conv-input-context {
    rail, drop the borders/flex sizing they had inside `.csh-row` (they
    were sized to share a horizontal panel). In the rail they're stacked,
    each taking its own height, separated by a hairline divider. */
-body.status-pos-right .status-rail > .csh-ask-original,
-body.status-pos-right .status-rail > .csh-col-activity {
+body.status-pos-right .status-rail .status-rail-pane > .csh-ask-original,
+body.status-pos-right .status-rail .status-rail-pane > .csh-col-activity {
   flex: 0 0 auto;
   border: none;
   border-bottom: 1px solid var(--border);
@@ -11937,13 +12025,13 @@ body.status-pos-right .status-rail > .csh-col-activity {
   background: transparent;
   display: flex; flex-direction: column;
 }
-body.status-pos-right .status-rail > .csh-col-activity {
+body.status-pos-right .status-rail .status-rail-pane > .csh-col-activity {
   flex: 1 1 auto;        /* activity feed gets the remaining vertical space */
   min-height: 0;
   overflow-y: auto;
   border-bottom: none;
 }
-body.status-pos-right .status-rail > .csh-ask-original .user-msg {
+body.status-pos-right .status-rail .status-rail-pane > .csh-ask-original .user-msg {
   max-height: 30vh;       /* original ask scrolls inside the rail too */
   overflow-y: auto;
 }

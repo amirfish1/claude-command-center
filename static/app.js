@@ -12339,6 +12339,63 @@
     };
   }
 
+  function flowDraftParentLabel(draft) {
+    const id = draft && draft.id;
+    const nodeId = id ? flowNodeKey('draft-session', id) : '';
+    const parentId = (nodeId && flowNodeParents[nodeId]) || (draft && draft.parent_node_id) || '';
+    if (parentId.indexOf('object:') === 0) {
+      const oid = parentId.slice(7);
+      const obj = (flowCustomObjects || []).find(o => o && o.id === oid);
+      return (obj && obj.title) || 'Object';
+    }
+    if (parentId.indexOf('repo:') === 0) {
+      const repoPath = parentId.slice(5);
+      return _pathLeaf(repoPath) || repoPath;
+    }
+    const repoPath = (draft && draft.repo_path) || '';
+    return repoPath ? (_pathLeaf(repoPath) || repoPath) : '';
+  }
+
+  function flowDraftInspectorContent(draft) {
+    const title = flowDraftPrompt(draft) || 'Draft session';
+    const parentLabel = flowDraftParentLabel(draft);
+    const created = flowTimestampSec(draft && draft.created_at);
+    const updated = flowTimestampSec(draft && (draft.updated_at || draft.created_at));
+    const lines = [
+      '# ' + title,
+      '',
+      '- Type: Draft session',
+      '- Status: draft',
+      parentLabel ? '- Parent: ' + parentLabel : '',
+      draft && draft.repo_path ? '- Repo: ' + draft.repo_path : '',
+      created ? '- Created: ' + new Date(created * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '',
+      updated ? '- Updated: ' + new Date(updated * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '',
+      '',
+      '## Prompt',
+      '',
+      title,
+    ];
+    return lines.filter(line => line !== '').join('\n');
+  }
+
+  function flowDraftInspectorPayload(draftId) {
+    const draft = (flowDraftSessions || []).find(d => d && d.id === draftId);
+    if (!draft) return null;
+    const nodeId = flowNodeKey('draft-session', draft.id);
+    return {
+      ok: true,
+      kind: 'draft-session',
+      node_id: nodeId,
+      object_id: draft.id,
+      repo_path: draft.repo_path || '',
+      state_path: 'Local draft task',
+      title: flowDraftPrompt(draft) || 'Draft session',
+      content: flowDraftInspectorContent(draft),
+      fields: { status: 'draft' },
+      mtime: flowTimestampSec(draft.updated_at || draft.created_at),
+    };
+  }
+
   function flowInspectorObjectItem(obj) {
     const ui = objectStatusUi((obj && obj.status) || '');
     return {
@@ -12467,6 +12524,7 @@
     const view = getConvView();
     if (!view || !data || !data.ok) return;
     const fields = data.fields || {};
+    const isDraftSession = data.kind === 'draft-session';
     const chips = [
       fields.status ? '<span class="flow-inspector-chip status">' + escapeHtml(fields.status) + '</span>' : '',
       fields.target_date ? '<span class="flow-inspector-chip">' + escapeHtml(fields.target_date) + '</span>' : '',
@@ -12476,6 +12534,12 @@
       data.kind === 'repo' ? data.repo_path : data.object_id,
       data.state_path,
     ].filter(Boolean).join(' · ');
+    const actionButtons = isDraftSession
+      ? ''
+      : '<button type="button" class="flow-inspector-tab" data-flow-inspector-tab="edit" aria-pressed="false">Edit</button>'
+        + '<button type="button" class="flow-inspector-btn" data-flow-inspector-action="save">Save</button>'
+        + '<button type="button" class="flow-inspector-btn" data-flow-inspector-action="refresh">Refresh auto sections</button>'
+        + '<button type="button" class="flow-inspector-btn" data-flow-inspector-action="open-file">Open file</button>';
     view.innerHTML = '<div class="flow-inspector" data-kind="' + escapeAttr(data.kind || '') + '">'
       + '<div class="flow-inspector-header">'
         + '<div class="flow-inspector-kicker">Flow work item</div>'
@@ -12485,10 +12549,7 @@
       + '</div>'
       + '<div class="flow-inspector-toolbar">'
         + '<button type="button" class="flow-inspector-tab active" data-flow-inspector-tab="view" aria-pressed="true">View</button>'
-        + '<button type="button" class="flow-inspector-tab" data-flow-inspector-tab="edit" aria-pressed="false">Edit</button>'
-        + '<button type="button" class="flow-inspector-btn" data-flow-inspector-action="save">Save</button>'
-        + '<button type="button" class="flow-inspector-btn" data-flow-inspector-action="refresh">Refresh auto sections</button>'
-        + '<button type="button" class="flow-inspector-btn" data-flow-inspector-action="open-file">Open file</button>'
+        + actionButtons
         + '<span class="flow-inspector-status" data-flow-inspector-status></span>'
       + '</div>'
       + '<div class="flow-inspector-body">'
@@ -12622,11 +12683,8 @@
     return openFlowNodeInspectorForPayload(payload);
   }
 
-  // Same inspector, entered from a plain payload instead of a Flow-board DOM
-  // node — lets the sidebar's by-objects group headers open the object's MD
-  // doc exactly like clicking the node in Flow (CCC-93).
-  async function openFlowNodeInspectorForPayload(payload) {
-    if (!payload) return;
+  function prepareFlowInspectorPane(payload, loadingText) {
+    if (!payload) return null;
     if (typeof stopGroupChatReader === 'function') {
       try { stopGroupChatReader({ rerenderSidebar: false }); } catch (_) {}
     }
@@ -12644,13 +12702,29 @@
     if (typeof updateSplitToolbar === 'function') updateSplitToolbar();
     const paneId = activePaneId();
     updatePaneHeader(paneId, null, {
-      category: payload.kind === 'repo' ? 'Flow repo' : 'Flow object',
-      title: payload.title || (payload.kind === 'repo' ? _pathLeaf(payload.repo_path) : payload.object_id),
+      category: payload.kind === 'repo' ? 'Flow repo' : (payload.kind === 'draft-session' ? 'Flow draft' : 'Flow object'),
+      title: payload.title || (payload.kind === 'repo' ? _pathLeaf(payload.repo_path) : (payload.kind === 'draft-session' ? 'Draft session' : payload.object_id)),
     });
     const view = getConvView();
-    if (view) {
-      view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading Flow item...</div>';
+    if (view && loadingText) {
+      view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">' + escapeHtml(loadingText) + '</div>';
     }
+    return view;
+  }
+
+  function openFlowDraftInspector(draftId) {
+    const payload = flowDraftInspectorPayload(draftId);
+    if (!payload) return;
+    prepareFlowInspectorPane(payload, '');
+    renderFlowNodeInspector(payload);
+  }
+
+  // Same inspector, entered from a plain payload instead of a Flow-board DOM
+  // node — lets the sidebar's by-objects group headers open the object's MD
+  // doc exactly like clicking the node in Flow (CCC-93).
+  async function openFlowNodeInspectorForPayload(payload) {
+    if (!payload) return;
+    const view = prepareFlowInspectorPane(payload, 'Loading Flow item...');
     try {
       const params = new URLSearchParams();
       Object.entries(payload).forEach(([k, v]) => {
@@ -21211,6 +21285,12 @@
         endSidebarDrag();
       });
     });
+    $convList.querySelectorAll('.conv-draft-row[data-draft-id]').forEach(row => {
+      row.addEventListener('click', (ev) => {
+        if (ev.target.closest('button')) return;
+        openFlowDraftInspector(row.getAttribute('data-draft-id') || '');
+      });
+    });
     $convList.querySelectorAll('[data-flow-action="play-draft-session"]').forEach(btn => {
       btn.addEventListener('click', (ev) => {
         ev.preventDefault();
@@ -21226,7 +21306,10 @@
       });
     });
     $convList.querySelectorAll('.conv-draft-input').forEach(inp => {
-      inp.addEventListener('click', ev => ev.stopPropagation());
+      inp.addEventListener('click', ev => {
+        ev.stopPropagation();
+        openFlowDraftInspector(inp.getAttribute('data-draft-id') || '');
+      });
       inp.addEventListener('input', () => {
         const id = inp.getAttribute('data-draft-id') || '';
         saveFlowDraftInput(id, inp.value);
@@ -24219,7 +24302,10 @@
         }
         inner += '</div>';
         $issueHeader.innerHTML = inner;
-        $rail.insertBefore($issueHeader, $rail.querySelector('#railActions') || $rail.firstChild);
+        const $metadataPane = $rail.querySelector('#statusRailMetadataPane') || $rail;
+        const $railActions = $metadataPane.querySelector('#railActions');
+        if ($railActions) $metadataPane.insertBefore($issueHeader, $railActions);
+        else $metadataPane.appendChild($issueHeader);
       }
       // Strip the now-duplicated title + GH-link from the body. They live
       // in the rail; keeping them in the body too would just be noise.
@@ -26858,7 +26944,8 @@
     const inRightRail = document.body.classList.contains('status-pos-right');
     const askCol = sticky.querySelector('.csh-col-ask');
     const actCol = sticky.querySelector('.csh-col-activity')
-      || (rail && rail.querySelector(':scope > .csh-col-activity'));
+      || (rail && rail.querySelector('#statusRailActivityPane .csh-col-activity'))
+      || (rail && rail.querySelector('.csh-col-activity'));
     const earlier = sticky.querySelector('.csh-ask-earlier')
       || (actCol && actCol.querySelector('.csh-ask-earlier'));
     if (!askCol || !actCol || !earlier) return;
@@ -30620,11 +30707,30 @@
   // are stale leftovers from a prior conversation's sticky-header rebuild
   // and get removed — without that step the rail accumulates one entry
   // per conversation visited.
+  function setStatusRailTab(tab) {
+    const rail = document.getElementById('statusRail');
+    if (!rail) return;
+    const next = (tab === 'files' || tab === 'activity') ? tab : 'metadata';
+    rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
+      const active = btn.getAttribute('data-rail-tab') === next;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    rail.querySelectorAll('[data-rail-pane]').forEach(pane => {
+      const active = pane.getAttribute('data-rail-pane') === next;
+      pane.classList.toggle('is-active', active);
+      pane.hidden = !active;
+    });
+    try { localStorage.setItem('ccc-status-rail-tab', next); } catch (_) {}
+  }
+
   function _applyStatusRailLayout() {
     const sticky = document.querySelector('.conv-sticky-header');
     const rail = document.getElementById('statusRail');
     if (!rail) return;
     const inRail = document.body.classList.contains('status-pos-right');
+    const metadataPane = rail.querySelector('#statusRailMetadataPane') || rail;
+    const activityPane = rail.querySelector('#statusRailActivityPane') || rail;
 
     // Sticky-side fresh nodes (post-rebuild) always win as the source of
     // truth. Rail-side nodes are the fallback for the toggle-without-
@@ -30643,29 +30749,18 @@
     // Place the live nodes in the target slot for the current mode.
     if (inRail) {
       // Per user direction the Original ask is the FIRST item in the rail
-      // — above the rail-actions buttons. Insert before #railActions if
-      // it exists; otherwise append (rail still contains other things).
-      // Activity column goes after rail-actions (below the buttons).
+      // — above the rail-actions buttons in the Metadata tab. Activity
+      // lives in its own tab so it does not elongate the metadata view.
       const railActions = rail.querySelector('#railActions');
       if (liveOrig) {
-        if (railActions && liveOrig !== railActions) {
-          rail.insertBefore(liveOrig, railActions);
+        if (railActions && railActions.parentNode && liveOrig !== railActions) {
+          railActions.parentNode.insertBefore(liveOrig, railActions);
         } else {
-          rail.appendChild(liveOrig);
+          metadataPane.appendChild(liveOrig);
         }
       }
       if (liveAct) {
-        const filesPanel = rail.querySelector('#filesPanel');
-        if (filesPanel) {
-          rail.insertBefore(liveAct, filesPanel);
-        } else {
-          const bgPalette = rail.querySelector('.conv-bg-palette');
-          if (bgPalette) {
-            rail.insertBefore(liveAct, bgPalette);
-          } else {
-            rail.appendChild(liveAct);
-          }
-        }
+        activityPane.appendChild(liveAct);
       }
     } else if (sticky) {
       const askCol = sticky.querySelector('.csh-col-ask');
@@ -30694,6 +30789,16 @@
       });
     }
     if (!READER_ONLY_POPOUT) _hiStartPolling();
+
+    const $rail = document.getElementById('statusRail');
+    if ($rail) {
+      $rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
+        btn.addEventListener('click', () => setStatusRailTab(btn.getAttribute('data-rail-tab') || 'metadata'));
+      });
+      let savedRailTab = 'metadata';
+      try { savedRailTab = localStorage.getItem('ccc-status-rail-tab') || 'metadata'; } catch (_) {}
+      setStatusRailTab(savedRailTab);
+    }
 
     const $fileViewerClose = document.getElementById('fileViewerCloseBtn');
     if ($fileViewerClose) {
