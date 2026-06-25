@@ -19966,14 +19966,16 @@
             + '<span class="grouping-opt" data-objects-collapse="1">Collapse all</span>'
           + '</span>'
         : '';
-      // "Details" toggle (left of 1d/7d/All): flips inline NYA blocks under
-      // every row that has a Needs-your-attention item. Single click flips the
-      // persisted flag. Shown whenever the section renders (NYA is independent
-      // of folder chips, unlike the window/grouping toggles).
+      // "Details" toggle (left of 1d/7d/All): now drives row DENSITY.
+      // On = comfortable rows (full status / branch / outcome line);
+      // off = compact diet. Writes ccc-compact-rows, the same key
+      // applyCompactRowsState() applies on boot, so it persists.
+      let _rowsCompactOn = false;
+      try { _rowsCompactOn = localStorage.getItem('ccc-compact-rows') === '1'; } catch (_) {}
       const _ipDetailsToggle =
         '<span class="conv-grouping-toggle conv-nya-toggle" data-role="nya-details-toggle"'
-          + ' title="Show the Needs-your-attention block under each row that has one">'
-          + '<span class="grouping-opt' + (_ipNyaOn ? ' is-active' : '') + '" data-nya-details="' + (_ipNyaOn ? 'off' : 'on') + '">Details</span>'
+          + ' title="Details on = fuller rows (status, branch, outcome line); off = compact">'
+          + '<span class="grouping-opt' + (_rowsCompactOn ? '' : ' is-active') + '" data-rows-compact="' + (_rowsCompactOn ? '0' : '1') + '">Details</span>'
         + '</span>';
       const _ipTools = (_ipDetailsToggle || _ipWindowToggle || _ipGroupingToggle || _ipAddObjectBtn || _ipObjectsExpandAll)
         ? '<span class="conv-inprogress-tools">' + _ipAddObjectBtn + _ipObjectsExpandAll + _ipDetailsToggle + _ipWindowToggle + _ipGroupingToggle + '</span>'
@@ -21204,13 +21206,11 @@
     if ($nyaDetailsToggle) {
       $nyaDetailsToggle.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        const opt = ev.target.closest('[data-nya-details]');
+        const opt = ev.target.closest('[data-rows-compact]');
         if (!opt) return;
-        const next = opt.getAttribute('data-nya-details') === 'on';
-        try { localStorage.setItem(IP_NYA_DETAILS_KEY, next ? '1' : '0'); } catch (_) {}
-        // Pull a fresh NYA pass so blocks appear immediately on enable; the
-        // render below paints whatever is already cached without waiting.
-        if (next && typeof loadAttentionList === 'function') loadAttentionList();
+        const nextCompact = opt.getAttribute('data-rows-compact') === '1';
+        try { localStorage.setItem('ccc-compact-rows', nextCompact ? '1' : '0'); } catch (_) {}
+        $convList.classList.toggle('compact-rows', nextCompact);
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
