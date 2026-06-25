@@ -1,0 +1,1 @@
+- Keep by-objects current-session rows compact so the collapsed section shows the intended seven sessions plus More before the project tree.

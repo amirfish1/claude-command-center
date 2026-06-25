@@ -3795,6 +3795,34 @@
     overscroll-behavior: contain;
     padding-right: 2px;
   }
+  .conv-current-sessions-scroll .conv-objects-section-label {
+    min-height: var(--current-session-label-h);
+    box-sizing: border-box;
+    padding-top: 7px;
+    padding-bottom: 4px;
+  }
+  .conv-current-sessions-scroll .conv-item {
+    min-height: var(--current-session-row-h);
+    padding: 0 8px;
+    margin-bottom: 0;
+    border-radius: 0;
+  }
+  .conv-current-sessions-scroll .conv-item .conv-title-row,
+  .conv-current-sessions-scroll .conv-item .conv-main-row {
+    min-height: var(--current-session-row-h);
+    width: 100%;
+  }
+  .conv-current-sessions-scroll .conv-item > :not(.conv-title-row),
+  .conv-current-sessions-scroll .conv-item:hover > :not(.conv-title-row),
+  .conv-current-sessions-scroll .conv-item:focus-within > :not(.conv-title-row),
+  .conv-current-sessions-scroll .conv-item.active > :not(.conv-title-row) { display: none; }
+  .conv-current-sessions-scroll .conv-current-more {
+    min-height: var(--current-session-row-h);
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
   /* ============================================================
      Project tree — pixel-match to Codex's .tree / .tree-item mock.
      Exact values lifted from the reference HTML: 30px rows, padding

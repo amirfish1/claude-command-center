@@ -724,6 +724,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows)))", current_css)
         self.assertIn("flex: 0 0 clamp(", current_css)
         self.assertIn("min-height: calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows)));", current_css)
+        self.assertIn(".conv-current-sessions-scroll .conv-item {", current_css)
+        self.assertIn("min-height: var(--current-session-row-h);", current_css)
+        self.assertIn(".conv-current-sessions-scroll .conv-item > :not(.conv-title-row),", current_css)
+        self.assertIn(".conv-current-sessions-scroll .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
 
     def test_by_objects_draft_rows_align_with_sessions_and_show_play(self):
         """Draft rows should start where real sessions start, with an always
