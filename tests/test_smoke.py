@@ -1992,6 +1992,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function renderSidebar(convs, opts)", app_js)
         self.assertIn("if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
 
+    def test_composer_uses_js_autosize_not_native_field_sizing(self):
+        """The composer must avoid native field-sizing in WKWebView.
+
+        WebKit can claim support but paint the native textarea internals as a
+        gray rounded bar over the placeholder. Keep autosize in JS instead.
+        """
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertNotIn("field-sizing: content", app_css)
+        self.assertNotIn("_hasFieldSizing", app_js)
+        self.assertIn("function _autosizeConvInput()", app_js)
+        self.assertIn("$convInput.style.height = 'auto';", app_js)
+        self.assertIn("$convInput.style.height = Math.min($convInput.scrollHeight, max) + 'px';", app_js)
+
     def test_empty_composer_arrow_up_recalls_last_command(self):
         """ArrowUp in an empty composer should recall the last sent command."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
