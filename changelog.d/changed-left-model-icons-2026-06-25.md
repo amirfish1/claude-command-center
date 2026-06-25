@@ -1,0 +1,1 @@
+- Move session provider icons into the left row rail and enlarge right-rail queue ticket text.

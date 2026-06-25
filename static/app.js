@@ -19474,6 +19474,7 @@
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row">'
+            + sessionIconHtml
             + _nyaChevronHtml
             + cooTrackHtml
             + needsYouHtml
@@ -19489,13 +19490,9 @@
             // Both share the same screen real estate, so the row stays
             // narrow and there's no per-row layout shift between hover
             // states (CSS uses `position: absolute` for one of them).
-            // Engine icon (Claude/Codex/Antigravity…) rides at the FAR
-            // right, past the elapsed time — experimental placement, easy
-            // to walk back by moving sessionIconHtml before the chips.
             + '<span class="conv-row-end">'
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
             +   '<span class="conv-row-actions">' + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + archiveBtn + elevateObjectBtn + '</span>'
-            +   sessionIconHtml
             + '</span>'
           + '</div>'
         + '</div>'

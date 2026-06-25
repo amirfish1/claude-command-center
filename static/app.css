@@ -3435,12 +3435,15 @@
   .conv-item {
     --conv-dot-col: 16px;
     --conv-time-col: 43px;
+    --conv-icon-left: 10px;
+    --conv-content-left: calc(var(--conv-icon-left) + var(--conv-dot-col) + 8px);
     /* Bumped vertical padding (4 → 6) and tightened the row left/right
        (10 → 12) for the Omnara-style breathing room — rows feel less
        cramped without losing scannable density. */
-    padding: 6px 12px; border-radius: 6px; cursor: pointer;
+    padding: 6px 12px 6px var(--conv-content-left); border-radius: 6px; cursor: pointer;
     margin-bottom: 0; transition: background 0.06s ease;
     border-left: 3px solid transparent;
+    position: relative;
   }
   .conv-item:hover { background: var(--surface-2); }
   .conv-item.active { background: var(--surface-2); border-left-color: var(--purple); }
@@ -3624,10 +3627,8 @@
   }
   .conv-item .conv-row-actions {
     position: absolute;
-    /* Anchor left of the engine icon (which now rides at the far right of
-       .conv-row-end, past the elapsed time) so hover actions replace the
-       TIME but never cover the engine identity. */
-    top: 50%; right: calc(var(--conv-dot-col, 16px) + 9px);
+    /* Hover actions replace the time chip inside the right edge slot. */
+    top: 50%; right: 0;
     transform: translateY(-50%);
     display: inline-flex;
     align-items: center;
@@ -3676,6 +3677,10 @@
   }
   .conv-item .conv-branch-slot { transition: opacity 0.06s ease; }
   .conv-item .conv-session-icon {
+    position: absolute;
+    left: var(--conv-icon-left);
+    top: 50%;
+    transform: translateY(-50%);
     width: var(--conv-dot-col);
     height: 16px;
     display: inline-flex;
@@ -3683,6 +3688,13 @@
     justify-content: center;
     flex: 0 0 var(--conv-dot-col);
     vertical-align: middle;
+    opacity: 0.5;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .conv-item:hover .conv-session-icon,
+  .conv-item:focus-within .conv-session-icon {
+    opacity: 0.95;
   }
   .conv-item .conv-title {
     /* Omnara-style: slightly larger and looser line-height than the old
@@ -4090,7 +4102,7 @@
     gap: 5px;
     min-width: 0;
     max-width: calc(100% - 70px);
-    margin: 4px 48px 0 21px;
+    margin: 4px 48px 0 0;
     color: var(--text-muted);
     font-size: 10px;
     line-height: 1.4;
@@ -4721,9 +4733,9 @@
      WKWebView). The static drop-shadow on .conv-session-icon.is-live stays, so
      the glow is constant while the icon breathes. */
   @keyframes ccc-icon-pulse {
-    0% { transform: scale(1); }
-    50% { transform: scale(1.08); }
-    100% { transform: scale(1); }
+    0% { transform: translateY(-50%) scale(1); }
+    50% { transform: translateY(-50%) scale(1.08); }
+    100% { transform: translateY(-50%) scale(1); }
   }
   .conv-session-icon.claude {
     color: #e28767;
@@ -4732,7 +4744,6 @@
   .conv-session-icon.claude.is-fable5 {
     color: #f5c842;
     --icon-shadow-color: rgba(245, 200, 66, 0.55);
-    position: relative;
   }
   .conv-session-icon.claude.is-fable5::after {
     content: '$';
@@ -14305,7 +14316,7 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-row {
   display: flex; align-items: center; gap: 7px;
-  padding: 4px 10px; font-size: 11.5px;
+  padding: 5px 10px; font-size: 13px;
   border-bottom: 1px solid rgba(139,148,158,0.08);
   cursor: pointer;
 }
@@ -14320,7 +14331,7 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-ref {
   font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-  font-size: 10.5px; color: var(--text-muted); flex-shrink: 0; min-width: 52px;
+  font-size: 12px; color: var(--text-muted); flex-shrink: 0; min-width: 58px;
 }
 .fq-note {
   flex: 1 1 auto;
@@ -14331,7 +14342,7 @@ body:has(.gc-reader) .pwa-install-banner {
   white-space: nowrap;
 }
 .fq-status {
-  flex-shrink: 0; font-size: 9.5px; font-weight: 600; text-transform: uppercase;
+  flex-shrink: 0; font-size: 10.5px; font-weight: 600; text-transform: uppercase;
   padding: 1px 6px; border-radius: 999px;
 }
 .fq-row.is-open .fq-status { background: rgba(63,185,80,0.15); color: var(--green, #3fb950); }
@@ -14356,9 +14367,6 @@ body:has(.gc-reader) .pwa-install-banner {
   outline-offset: -1.5px;
   background: rgba(88,166,255,0.08);
 }
-
-/* Engine icon at the far right of each row (experimental — was leftmost). */
-.conv-item .conv-row-end > .conv-session-icon { margin-left: 5px; }
 
 /* Empty by-objects group: visible drop target with a quiet hint. */
 .conv-object-empty-hint {

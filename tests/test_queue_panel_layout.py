@@ -44,6 +44,27 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertNotIn("Queue is empty.</div>", queue_js)
         self.assertIn(".fq-empty-sub", app_css)
 
+    def test_right_rail_queue_items_use_larger_type(self):
+        """Queue ticket rows in the right rail should be readable at a glance."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        row_css = app_css[
+            app_css.index(".fq-row {"):
+            app_css.index(".fq-row:hover", app_css.index(".fq-row {"))
+        ]
+        ref_css = app_css[
+            app_css.index(".fq-ref {"):
+            app_css.index(".fq-note {", app_css.index(".fq-ref {"))
+        ]
+        status_css = app_css[
+            app_css.index(".fq-status {"):
+            app_css.index(".fq-row.is-open", app_css.index(".fq-status {"))
+        ]
+
+        self.assertIn("font-size: 13px;", row_css)
+        self.assertIn("font-size: 12px;", ref_css)
+        self.assertIn("font-size: 10.5px;", status_css)
+
 
 if __name__ == "__main__":
     unittest.main()
