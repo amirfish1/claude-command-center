@@ -8626,7 +8626,7 @@
     pointer-events: auto;
   }
   .conv-folder-object-rename-btn,
-  .conv-folder-object-add-task-btn,
+  .conv-folder-object-add-object-btn,
   .conv-folder-object-playpause-btn,
   .conv-folder-object-archive-btn {
     display: inline-flex;
@@ -8657,8 +8657,8 @@
   }
   .conv-folder-object-playpause-btn:hover,
   .conv-folder-object-playpause-btn:focus-visible,
-  .conv-folder-object-add-task-btn:hover,
-  .conv-folder-object-add-task-btn:focus-visible,
+  .conv-folder-object-add-object-btn:hover,
+  .conv-folder-object-add-object-btn:focus-visible,
   .conv-folder-object-archive-btn:hover,
   .conv-folder-object-archive-btn:focus-visible {
     color: var(--text);

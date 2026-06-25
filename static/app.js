@@ -12070,6 +12070,15 @@
     return id;
   }
 
+  function createChildFlowCustomObject(parentNodeId) {
+    const id = createDraftFlowCustomObject();
+    if (id && parentNodeId) {
+      flowNodeParents[flowNodeKey('object', id)] = parentNodeId;
+      persistFlowNodeParents();
+    }
+    return id;
+  }
+
   async function createFlowCustomObject() {
     // Fire the prompt FIRST (which mounts and shows the modal
     // synchronously inside the Promise body), then capture its rect
@@ -19368,10 +19377,10 @@
           + ' title="Rename object"'
           + ' aria-label="Rename object">' + objectRenameIcon + '</button>'
         : '';
-      const objectAddTask = (section === 'inprogress' && archiveObjectId)
-        ? '<button type="button" class="conv-folder-object-add-task-btn" data-flow-action="add-draft-session"'
+      const objectAddObject = (section === 'inprogress' && archiveObjectId)
+        ? '<button type="button" class="conv-folder-object-add-object-btn" data-flow-action="add-child-object"'
           + ' data-parent-node="' + escapeHtml(flowNodeKey('object', archiveObjectId)) + '"'
-          + ' title="Add task" aria-label="Add task">+</button>'
+          + ' title="Add child object" aria-label="Add child object">+</button>'
         : '';
       let objectPlayPause = '';
       if (section === 'inprogress' && archiveObjectId) {
@@ -19391,8 +19400,8 @@
           + ' title="Archive this object from the active by-objects view"'
           + ' aria-label="Archive object">&#128465;</button>'
         : '';
-      const objectActions = (objectRename || objectAddTask || objectPlayPause || objectArchive)
-        ? '<span class="conv-folder-object-actions">' + objectRename + objectAddTask + objectPlayPause + objectArchive + '</span>'
+      const objectActions = (objectRename || objectAddObject || objectPlayPause || objectArchive)
+        ? '<span class="conv-folder-object-actions">' + objectRename + objectAddObject + objectPlayPause + objectArchive + '</span>'
         : '';
       const objectTitleAttrs = archiveObjectId
         ? ' data-role="object-title" data-object-id="' + escapeHtml(archiveObjectId) + '" title="Open object"'
@@ -21053,13 +21062,18 @@
         setFlowObjectObjective(btn.getAttribute('data-object-id') || '');
       });
     });
-    // GOAL-2 — draft-session tasks inside the object list (Flow draft infra).
-    $convList.querySelectorAll('[data-flow-action="add-draft-session"]').forEach(btn => {
+    $convList.querySelectorAll('[data-flow-action="add-child-object"]').forEach(btn => {
       btn.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        const _pn = btn.getAttribute('data-parent-node') || '';
-        createFlowDraftSession(_repoForObjectTask(_pn), _pn, true);
+        const parentNodeId = btn.getAttribute('data-parent-node') || '';
+        const id = createChildFlowCustomObject(parentNodeId);
+        if (!id) return;
+        try { localStorage.setItem('ccc-inprogress-grouping', 'objects'); } catch (_) {}
+        try { localStorage.setItem('ccc-inprogress-collapsed', '0'); } catch (_) {}
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+        const title = $convList.querySelector('[data-role="object-title"][data-object-id="' + id + '"]');
+        startInlineObjectRename(title);
       });
     });
     $convList.querySelectorAll('[data-flow-action="play-draft-session"]').forEach(btn => {

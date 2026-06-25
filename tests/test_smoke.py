@@ -606,20 +606,27 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("#convList .conv-inprogress-list > .conv-item {\n"
                       "    padding-left: 8px;", app_css)
 
-    def test_object_task_add_button_lives_in_header_actions(self):
-        """By-object +task should be a compact object header action."""
+    def test_object_header_plus_creates_child_object(self):
+        """By-object + should create a child object, not a draft task."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("const objectAddTask = (section === 'inprogress' && archiveObjectId)", app_js)
-        self.assertIn('class="conv-folder-object-add-task-btn"', app_js)
+        self.assertIn("const objectAddObject = (section === 'inprogress' && archiveObjectId)", app_js)
+        self.assertIn('class="conv-folder-object-add-object-btn"', app_js)
         self.assertIn("data-parent-node=\"' + escapeHtml(flowNodeKey('object', archiveObjectId)) + '\"", app_js)
-        self.assertIn("objectRename + objectAddTask + objectPlayPause + objectArchive", app_js)
+        self.assertIn("objectRename + objectAddObject + objectPlayPause + objectArchive", app_js)
+        self.assertIn("function createChildFlowCustomObject(parentNodeId)", app_js)
+        self.assertIn("flowNodeParents[flowNodeKey('object', id)] = parentNodeId;", app_js)
+        self.assertIn("startInlineObjectRename(title);", app_js)
+        self.assertIn('data-flow-action="add-child-object"', app_js)
+        self.assertNotIn('data-flow-action="add-draft-session"', app_js[app_js.index("const objectAddObject ="):app_js.index("let objectPlayPause =", app_js.index("const objectAddObject ="))])
+        self.assertNotIn('class="conv-folder-object-add-task-btn"', app_js)
         self.assertNotIn('class="conv-object-add-task"', app_js)
         self.assertNotIn(">+ task</button>", app_js)
         self.assertIn("flowDraftSessions.push(draft);", app_js)
         self.assertNotIn("flowDraftSessions.unshift(draft);", app_js)
-        self.assertIn(".conv-folder-object-add-task-btn", app_css)
+        self.assertIn(".conv-folder-object-add-object-btn", app_css)
+        self.assertNotIn(".conv-folder-object-add-task-btn", app_css)
         self.assertNotIn(".conv-object-add-task", app_css)
 
     def test_object_header_actions_are_hover_revealed(self):
