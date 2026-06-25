@@ -20260,8 +20260,9 @@
         ? _renderObjGroup('unclassified', 'Unclassified', _looseRest) : '';
       const _currentSessionsExtraHtml = (_gcItems || []).map(it => it.html).join('');
       const _currentSessionsBodyHtml = _currentSessionsHtml + _currentSessionsExtraHtml;
+      const _currentSessionsScrollClass = 'conv-current-sessions-scroll' + (_ipSearchActive ? ' is-search-results' : '');
       const _currentSessionsScrollHtml = (_currentSessionsBodyHtml)
-        ? '<div class="conv-current-sessions-scroll" data-role="current-sessions-scroll">' + _currentSessionsBodyHtml + '</div>'
+        ? '<div class="' + _currentSessionsScrollClass + '" data-role="current-sessions-scroll">' + _currentSessionsBodyHtml + '</div>'
         : '';
       const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)
         ? '<div class="conv-project-tree-scroll" data-role="project-tree-scroll">' + _projectTreeHtml + _looseHtml + '</div>'

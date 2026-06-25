@@ -825,8 +825,23 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("letter-spacing: 0;", current_css)
         self.assertIn(":root:not([data-theme=\"light\"]) .conv-current-sessions-scroll .conv-item .conv-title", app_css)
         self.assertIn("color: #f0f4fb;", app_css)
-        self.assertIn(".conv-current-sessions-scroll .conv-item > :not(.conv-title-row),", current_css)
-        self.assertIn(".conv-current-sessions-scroll .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row),", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
+
+    def test_by_objects_search_results_show_row_previews(self):
+        """Search results in by-objects mode should keep snippets/previews
+        visible instead of inheriting the compact Current sessions row diet."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const _currentSessionsScrollClass = 'conv-current-sessions-scroll' + (_ipSearchActive ? ' is-search-results' : '');", app_js)
+        self.assertIn("'<div class=\"' + _currentSessionsScrollClass + '\" data-role=\"current-sessions-scroll\">'", app_js)
+        current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row),", current_css)
+        self.assertIn(".conv-current-sessions-scroll.is-search-results .conv-item {", current_css)
+        search_css = current_css[current_css.index(".conv-current-sessions-scroll.is-search-results .conv-item {"):]
+        self.assertIn("padding: 8px 10px;", search_css)
+        self.assertIn("min-height: 0;", search_css)
 
     def test_by_objects_draft_rows_align_with_sessions_and_show_play(self):
         """Draft rows should start where real sessions start, with an always

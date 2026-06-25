@@ -3825,10 +3825,14 @@
   :root:not([data-theme="light"]) .conv-current-sessions-scroll .conv-item .conv-title {
     color: #f0f4fb;
   }
-  .conv-current-sessions-scroll .conv-item > :not(.conv-title-row),
-  .conv-current-sessions-scroll .conv-item:hover > :not(.conv-title-row),
-  .conv-current-sessions-scroll .conv-item:focus-within > :not(.conv-title-row),
-  .conv-current-sessions-scroll .conv-item.active > :not(.conv-title-row) { display: none; }
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row),
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }
+  .conv-current-sessions-scroll.is-search-results .conv-item {
+    min-height: 0;
+    padding: 8px 10px;
+  }
   .conv-current-sessions-scroll .conv-current-more {
     min-height: var(--current-session-row-h);
     margin-top: 0;
