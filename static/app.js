@@ -8492,6 +8492,8 @@
       id: id,
       conversationId: null,
       lastLine: 0,
+      firstLine: 0,
+      loadBeforeLine: 0,
       eventSource: null,
       pendingSends: [],
       pendingSendsByConv: {},
@@ -24701,6 +24703,9 @@
     pane.restored = true;
     saveSplitState();
     convLastLine = 0;
+    pane.firstLine = 0;
+    pane.loadBeforeLine = 0;
+    pane.wantFull = false;
     _firstUserMsgRendered = false;
     _dynamicAskState = null;  // sticky-header scroll tracker — repopulated when the new sticky is built
     _currentToolGroup = null;
@@ -26633,13 +26638,10 @@
     return '<div class="codex-log antigravity-log" style="padding:16px 20px;">' + headerHtml + bodyHtml + '</div>';
   }
 
-  // Hover-prefetch: when the user's mouse lands on a card, fire a background
-  // fetch for that conversation's events. The server caches the parsed +
-  // serialized response in memory (~1 ms hit afterwards), so by the time
-  // the user clicks the cold parse (~300 ms for a 700 KB JSONL) is already
-  // done. Debounced so a mouse-pass over six cards doesn't fire six parses;
-  // deduped per-sid within a session because conv JSONLs append slowly and
-  // the server's mtime-keyed cache invalidates correctly when they do.
+  // Hover-prefetch: when the user's mouse lands on a card, warm only the
+  // bounded tail window. Debounced so a mouse-pass over six cards doesn't fire
+  // six parses; deduped per-sid within a session because conv JSONLs append
+  // slowly and a fresh click can still pick up the appended tail.
   const _convPrefetched = new Set();
   const _convPrefetchTimers = new Map();
   function _convPrefetchSchedule(id) {
@@ -26652,7 +26654,7 @@
       _convPrefetched.add(id);
       // Fire-and-forget. The browser may discard the response body, but
       // the server-side response cache is now warm for the eventual click.
-      fetch('/api/conversations/' + encodeURIComponent(id) + '?after=0', {
+      fetch('/api/conversations/' + encodeURIComponent(id) + '?tail=' + CONV_TAIL_LINES, {
         cache: 'no-store',
       }).catch(() => {});
     }, 120);
@@ -26668,8 +26670,8 @@
 
   // Fast open: a fresh open pulls only the last CONV_TAIL_LINES lines of the
   // transcript (the backend windows the parse), so a long file opens instantly.
-  // If earlier history exists, a "Load earlier" banner loads the whole thing on
-  // demand. Live `after=` polling is unaffected (tail returns the real
+  // If earlier history exists, a "Load earlier" banner pages in one older
+  // window at a time. Live `after=` polling is unaffected (tail returns the real
   // last_line, so streamed events keep appending from there).
   const CONV_TAIL_LINES = 400;
 
@@ -26762,7 +26764,9 @@
       if (!pane || pane.conversationId !== id) { loading = false; return; }
       // Anchor to where the reader is, so loading history above doesn't move it.
       const anchor = _topVisibleAnchor($view);
-      pane.wantFull = true; pane.lastLine = 0;
+      const beforeLine = Number(pane.firstLine || 0);
+      if (!beforeLine || beforeLine <= 1) { loading = false; return; }
+      pane.loadBeforeLine = beforeLine;
       banner.textContent = 'Loading earlier messages…';
       banner.disabled = true;
       // Overlay survives the view clear/re-render so there's a clear "working"
@@ -26823,6 +26827,42 @@
     $view.insertBefore(banner, $view.firstChild);
   }
 
+  function _prependConversationEvents(events, paneId) {
+    const $view = getConvViewForPane(paneId) || $conversationsView;
+    if (!$view) return false;
+    $view.querySelectorAll('.conv-load-earlier').forEach((el) => el.remove());
+    if (!Array.isArray(events) || events.length === 0) return true;
+    const scrollHeightBefore = $view.scrollHeight;
+    const scrollTopBefore = $view.scrollTop;
+    const savedToolGroup = _currentToolGroup;
+    const savedToolCount = _currentToolCount;
+    const savedFirstUser = _firstUserMsgRendered;
+    const savedDynamicAsk = _dynamicAskState;
+    const oldNodes = document.createDocumentFragment();
+    Array.from($view.childNodes).forEach((node) => oldNodes.appendChild(node));
+    _firstUserMsgRendered = false;
+    _dynamicAskState = null;
+    _currentToolGroup = null;
+    _currentToolCount = 0;
+    const ok = renderConversationEvents(events, paneId, { initialLoad: true, prepending: true });
+    const renderedFirstUser = _firstUserMsgRendered;
+    const renderedDynamicAsk = _dynamicAskState;
+    $view.appendChild(oldNodes);
+    const stickyHeaders = Array.from($view.querySelectorAll('.conv-sticky-header'));
+    if (stickyHeaders.length) {
+      const keep = stickyHeaders[0];
+      stickyHeaders.slice(1).forEach((el) => el.remove());
+      if (keep !== $view.firstChild) $view.insertBefore(keep, $view.firstChild);
+    }
+    _currentToolGroup = savedToolGroup;
+    _currentToolCount = savedToolCount;
+    _firstUserMsgRendered = savedFirstUser || renderedFirstUser;
+    _dynamicAskState = renderedDynamicAsk || savedDynamicAsk;
+    $view.scrollTop = scrollTopBefore + Math.max(0, $view.scrollHeight - scrollHeightBefore);
+    updateConversationEndAffordance($view);
+    return ok;
+  }
+
   async function fetchConversationEvents(paneId) {
     if (paneId) {
       const idx = paneIndexByPaneId(paneId);
@@ -26881,9 +26921,14 @@
     try {
       const _pane0 = paneByPaneId(fetchPaneId);
       const _wantFull = !!(_pane0 && _pane0.wantFull);
+      const _loadBefore = _pane0 ? Number(_pane0.loadBeforeLine || 0) : 0;
+      const _loadingEarlier = !!_loadBefore;
       if (_pane0) _pane0.wantFull = false;   // one-shot: consumed on this fetch
+      if (_pane0) _pane0.loadBeforeLine = 0; // one-shot: consumed on this fetch
       const _freshOpen = convLastLine === 0;
-      const _url = (_freshOpen && !_wantFull)
+      const _url = _loadingEarlier
+        ? '/api/conversations/' + id + '?before=' + encodeURIComponent(_loadBefore) + '&tail=' + CONV_TAIL_LINES
+        : (_freshOpen && !_wantFull)
         ? '/api/conversations/' + id + '?tail=' + CONV_TAIL_LINES
         : '/api/conversations/' + id + '?after=' + convLastLine;
       const res = await fetch(_url);
@@ -26902,10 +26947,21 @@
         if (convLastLine === 0) {
           $view.innerHTML = '';
         }
-        if (renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen }) !== false) {
+        if (_loadingEarlier) {
+          const _prepended = _prependConversationEvents(data.events, fetchPaneId);
+          const pane = paneByPaneId(fetchPaneId);
+          if (pane) pane.firstLine = data.first_line || pane.firstLine || 0;
+          if (_prepended !== false) convLastLine = Math.max(convLastLine, data.last_line || 0);
+        } else if (renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen }) !== false) {
           convLastLine = data.last_line;
         }
+        if (!_loadingEarlier) {
+          const pane = paneByPaneId(fetchPaneId);
+          if (pane) pane.firstLine = data.first_line || pane.firstLine || 0;
+        }
         if (_freshOpen && !_wantFull && data && data.truncated_before) {
+          _insertLoadEarlierBanner($view, id, fetchPaneId);
+        } else if (_loadingEarlier && data && data.truncated_before) {
           _insertLoadEarlierBanner($view, id, fetchPaneId);
         }
         restorePendingSendEchoes(id, fetchPaneId);
