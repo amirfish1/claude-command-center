@@ -1,0 +1,1 @@
+- Align By objects draft rows with the real session rows inside object groups.

@@ -937,13 +937,22 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _draftTitleCh = flowDraftTitleCh(d.title || '');", app_js)
         self.assertIn("' style=\"--draft-title-ch:' + _draftTitleCh + 'ch\"'", app_js)
         self.assertIn("inp.style.setProperty('--draft-title-ch', flowDraftTitleCh(inp.value) + 'ch');", app_js)
+        header_css = app_css[app_css.index(".conv-project-tree .conv-folder-group-header {"):app_css.index(".conv-project-tree .conv-folder-group-arrow", app_css.index(".conv-project-tree .conv-folder-group-header {"))]
+        session_css = app_css[app_css.index(".conv-project-tree .conv-item {"):app_css.index(".conv-project-tree .conv-item .conv-title-row", app_css.index(".conv-project-tree .conv-item {"))]
+        grouped_session_css = app_css[
+            app_css.index(".conv-folder-group[data-object-drop-zone] > .conv-item.is-grouped-row {"):
+            app_css.index(".conv-folder-group:not(.collapsed) .conv-item.is-grouped-row::before", app_css.index(".conv-folder-group[data-object-drop-zone] > .conv-item.is-grouped-row {"))
+        ]
         draft_css = app_css[app_css.index(".conv-project-tree .conv-draft-row {"):app_css.index(".conv-item .conv-ux-fix-progress", app_css.index(".conv-project-tree .conv-draft-row {"))]
+        self.assertIn("padding: 0 8px;", header_css)
+        self.assertIn("padding: 0 8px;", session_css)
+        self.assertIn("padding-left: 29px;", grouped_session_css)
         self.assertIn("display: flex;", draft_css)
         self.assertIn("align-items: center;", draft_css)
         self.assertIn("margin: 0 0 0 18px;", draft_css)
         self.assertIn("padding: 0 8px;", draft_css)
-        self.assertNotIn(".conv-project-tree .conv-folder-group[data-object-drop-zone] > .conv-draft-row", draft_css)
-        self.assertNotIn("padding-left: 29px;", draft_css)
+        self.assertIn(".conv-project-tree .conv-folder-group[data-object-drop-zone] > .conv-draft-row", draft_css)
+        self.assertIn("padding-left: 29px;", draft_css)
         self.assertIn(".conv-project-tree .conv-draft-row .conv-draft-play {\n    display: inline-flex;", draft_css)
         self.assertIn("width: min(calc(var(--draft-title-ch, 16) * 1ch + 18px), 100%);", draft_css)
         self.assertNotIn(".conv-project-tree .conv-draft-row .conv-draft-play,\n  .conv-project-tree .conv-draft-row .conv-draft-delete { display: none; }", draft_css)
@@ -1038,6 +1047,25 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("+ goalChipHtml", app_js[row_start:row_end])
         self.assertIn(".conv-item .conv-meta-inline,\n  .conv-item .conv-branch-slot,\n  .conv-item .conv-folder-chip,\n  .conv-item .conv-repo-pin", app_css)
         self.assertIn(".conv-item .conv-hover-meta-row {\n    display: none;", app_css)
+        hover_meta_css = app_css[
+            app_css.index(".conv-item .conv-hover-meta-row {"):
+            app_css.index(".conv-item .conv-hover-meta-row > *", app_css.index(".conv-item .conv-hover-meta-row {"))
+        ]
+        self.assertIn("font-size: 11px;", hover_meta_css)
+        self.assertIn("color: color-mix(in srgb, var(--text) 74%, var(--text-muted));", hover_meta_css)
+        self.assertIn("opacity: 1;", hover_meta_css)
+        hover_chip_css = app_css[
+            app_css.index(".conv-item .conv-hover-meta-row .conv-folder-chip {"):
+            app_css.index(".conv-item .conv-hover-meta-row .conv-meta-inline", app_css.index(".conv-item .conv-hover-meta-row .conv-folder-chip {"))
+        ]
+        self.assertIn("font-size: 11px;", hover_chip_css)
+        self.assertIn("height: 20px;", hover_chip_css)
+        self.assertIn("color: color-mix(in srgb, var(--text) 82%, var(--text-muted));", hover_chip_css)
+        hover_badge_css = app_css[
+            app_css.index(".conv-item .conv-hover-meta-row .source-badge,"):
+            app_css.index(".conv-item .conv-hover-meta-row .conv-goal .conv-goal-icon", app_css.index(".conv-item .conv-hover-meta-row .source-badge,"))
+        ]
+        self.assertIn("font-size: 11px;", hover_badge_css)
         self.assertIn(".conv-item:hover .conv-hover-meta-row,\n  .conv-item:focus-within .conv-hover-meta-row { display: flex; }", app_css)
         self.assertIn(".conv-item:hover .conv-hover-meta-row .conv-meta-inline,\n  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline,", app_css)
         self.assertIn(".conv-item:hover .conv-hover-meta-row .conv-meta-inline .source-badge,\n  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline .source-badge", app_css)
