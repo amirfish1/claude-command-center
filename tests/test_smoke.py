@@ -2569,6 +2569,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".event.user_text.send-delivered", app_js)
         self.assertIn(".event.user_text.not-acknowledged", app_js)
 
+    def test_codex_app_queued_send_marks_pending_echo_queued(self):
+        """Codex app-server queue ACKs must not leave the optimistic echo pending."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        branch = app_js[
+            app_js.index("if (data.via === 'codex-app-queued') {"):
+            app_js.index("} else if (data.queued && data.cwd_missing)", app_js.index("if (data.via === 'codex-app-queued') {"))
+        ]
+        self.assertIn("markPendingSendQueued(pendingSend,", branch)
+        self.assertIn("Queued for Codex", branch)
+
     def test_pending_spawn_timeout_stays_visible(self):
         """A Claude pending-spawn placeholder that never materializes must not
         vanish silently. It should turn into a visible failed/not-acknowledged

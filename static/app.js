@@ -5591,6 +5591,7 @@
         showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
       } else if (res.ok && data.ok) {
         if (data.via === 'codex-app-queued') {
+          markPendingSendQueued(pendingSend, 'Queued for Codex — will send when the running turn is ready.');
           showOpToast('Queued for Codex.');
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
@@ -35988,6 +35989,7 @@
           showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
         } else if (res.ok && data.ok) {
           if (data.via === 'codex-app-queued') {
+            markPendingSendQueued(pendingSend, 'Queued for Codex — will send when the running turn is ready.');
             showOpToast('Queued for Codex.');
             setTimeout(refreshConversationList, 1500);
             setTimeout(refreshConversationList, 3500);

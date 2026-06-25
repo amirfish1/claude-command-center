@@ -1,0 +1,1 @@
+- Keep Codex app-server queued follow-ups visible as queued input instead of leaving the optimistic echo stuck pending.
