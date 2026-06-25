@@ -3840,14 +3840,13 @@
     color: #f0f4fb;
   }
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row):not(.conv-hover-meta-row),
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row):not(.conv-hover-meta-row),
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: block; }
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover:not(.active) > .conv-outcome,
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within:not(.active) > .conv-outcome { display: none; }
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-outcome { display: block; }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row,
+  /* Brief (repo/source/branch meta) reveals ONLY on the selected/active row — not on hover/focus. */
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-meta-row { display: flex; }
   .conv-current-sessions-scroll.is-search-results .conv-item {
     min-height: 0;
@@ -4186,18 +4185,13 @@
   .conv-item .conv-branch-slot,
   .conv-item .conv-folder-chip,
   .conv-item .conv-repo-pin { display: none; }
-  .conv-item:hover .conv-hover-meta-row,
-  .conv-item:focus-within .conv-hover-meta-row { display: flex; }
-  .conv-item:hover .conv-hover-meta-row .conv-meta-inline,
-  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline,
-  .conv-item:hover .conv-hover-meta-row .conv-branch-slot,
-  .conv-item:focus-within .conv-hover-meta-row .conv-branch-slot,
-  .conv-item:hover .conv-hover-meta-row .conv-folder-chip,
-  .conv-item:focus-within .conv-hover-meta-row .conv-folder-chip,
-  .conv-item:hover .conv-hover-meta-row .conv-repo-pin,
-  .conv-item:focus-within .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
-  .conv-item:hover .conv-hover-meta-row .conv-meta-inline .sep,
-  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline .sep { display: inline-flex; }
+  /* Brief reveals only when the row is selected/active (was hover/focus-within). */
+  .conv-item.active .conv-hover-meta-row { display: flex; }
+  .conv-item.active .conv-hover-meta-row .conv-meta-inline,
+  .conv-item.active .conv-hover-meta-row .conv-branch-slot,
+  .conv-item.active .conv-hover-meta-row .conv-folder-chip,
+  .conv-item.active .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
+  .conv-item.active .conv-hover-meta-row .conv-meta-inline .sep { display: inline-flex; }
   .conv-item .conv-meta-inline .sep { opacity: 0.4; }
   .conv-item .conv-rel {
     /* Time chip — bumped 10 → 11.5px for legibility (Omnara's looks
@@ -4295,8 +4289,7 @@
      you can still see what a session is doing at a glance. */
   .compact-rows .conv-item .conv-row-meta .conv-meta-inline,
   .compact-rows .conv-item .conv-row-meta .conv-branch-slot { display: none; }
-  .compact-rows .conv-item:hover .conv-hover-meta-row,
-  .compact-rows .conv-item:focus-within .conv-hover-meta-row { display: flex; }
+  .compact-rows .conv-item.active .conv-hover-meta-row { display: flex; }
   /* Compact also drops the terminal git-state badges (pushed / committed /
      read-only / no edits) — they're status-at-rest, not live activity. The
      blinking WIP / waiting / live-tool signals stay. */
@@ -6092,8 +6085,7 @@
   .conv-item .conv-goal.is-paused { color: var(--orange, #d29922); }
   .conv-item .conv-goal.is-blocked { color: var(--red, #f85149); }
   .conv-item .conv-goal.is-complete { color: var(--text-muted); opacity: 0.75; }
-  .conv-item:hover .conv-hover-meta-row .conv-goal,
-  .conv-item:focus-within .conv-hover-meta-row .conv-goal { opacity: 1; }
+  .conv-item.active .conv-hover-meta-row .conv-goal { opacity: 1; }
 
   .conv-list-panel {
     display: flex; flex-direction: column;
