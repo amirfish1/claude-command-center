@@ -19451,18 +19451,15 @@
       // Outcome line (GOAL-1) — surfaces the session's own end-of-turn
       // self-report. The server already parses the <session-state> block into
       // c.session_state {did, insight, next_step_user}; until now it only
-      // showed in the transcript pane. DID = what the session achieved,
-      // NEXT_STEP_USER = the immediate next move — the tracker line that makes
-      // a pile of rows read like progress. Absent on archive/backlog rows.
+      // showed in the transcript pane. In the sidebar hover preview we keep
+      // this to DID only so the brief reads cleanly in one focused block.
       let outcomeHtml = '';
       const _ss = c.session_state || null;
-      if (!isBacklogRow && !isGithubPrRow && _ss && (_ss.did || _ss.next_step_user)) {
+      if (!isBacklogRow && !isGithubPrRow && _ss && _ss.did) {
         const _did = (_ss.did || '').trim();
-        const _next = (_ss.next_step_user || '').trim();
-        const _outTip = (_did ? 'Did: ' + _did : '') + (_did && _next ? '\n' : '') + (_next ? 'Next: ' + _next : '');
+        const _outTip = 'Did: ' + _did;
         outcomeHtml = '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'
-          + (_did ? '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>' : '')
-          + (_next ? '<span class="conv-outcome-next">&#8594; ' + escapeHtml(_next) + '</span>' : '')
+          + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'
           + '</div>';
       }
       const summaryDetailHtml = (_hasSummaryDetails && _summaryExpanded)

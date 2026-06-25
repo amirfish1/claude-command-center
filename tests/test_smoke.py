@@ -897,9 +897,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("display: flex;", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
 
-    def test_sidebar_left_model_icon_participates_in_row_layout(self):
-        """Left-side model icons should reserve flex space instead of
-        overlaying the row title."""
+    def test_sidebar_left_model_icon_uses_reserved_title_gutter(self):
+        """Left-side model icons should center across expanded rows while the
+        title and preview rows reserve the same left gutter."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -907,16 +907,22 @@ class TestServerImports(unittest.TestCase):
         row_end = app_js.index("// Right-edge slot", row_start)
         self.assertLess(app_js.index("+ sessionIconHtml", row_start, row_end), app_js.index("+ '<div class=\"conv-title '", row_start, row_end))
         self.assertNotIn("+   sessionIconHtml", app_js[app_js.index("+ '<span class=\"conv-row-end\">'", row_start):app_js.index("+ '</span>'", app_js.index("+ '<span class=\"conv-row-end\">'", row_start))])
+        main_css = app_css[app_css.index(".conv-item .conv-main-row {"):app_css.index(".conv-summary-toggle", app_css.index(".conv-item .conv-main-row {"))]
+        self.assertIn("padding-left: var(--conv-content-left);", main_css)
+        self.assertIn("box-sizing: border-box;", main_css)
+        self.assertIn(".conv-project-tree .conv-item .conv-main-row { padding-left: 0; }", app_css)
         icon_css = app_css[app_css.index(".conv-item .conv-session-icon {"):app_css.index(".conv-item:hover .conv-session-icon", app_css.index(".conv-item .conv-session-icon {"))]
-        self.assertIn("position: relative;", icon_css)
+        self.assertIn("position: absolute;", icon_css)
+        self.assertIn("left: var(--conv-icon-left);", icon_css)
+        self.assertIn("top: 50%;", icon_css)
+        self.assertIn("transform: translateY(-50%);", icon_css)
         self.assertIn("flex: 0 0 var(--conv-dot-col);", icon_css)
-        self.assertNotIn("position: absolute;", icon_css)
-        self.assertNotIn("left: var(--conv-icon-left);", icon_css)
-        self.assertNotIn("transform: translateY(-50%);", icon_css)
+        hover_meta_css = app_css[app_css.index(".conv-item .conv-hover-meta-row {"):app_css.index(".conv-item .conv-hover-meta-row > *", app_css.index(".conv-item .conv-hover-meta-row {"))]
+        self.assertIn("margin: 4px 48px 0 var(--conv-content-left);", hover_meta_css)
+        self.assertIn("max-width: calc(100% - var(--conv-content-left) - 70px);", hover_meta_css)
         icon_pulse = app_css[app_css.index("@keyframes ccc-icon-pulse {"):app_css.index(".conv-session-icon.claude", app_css.index("@keyframes ccc-icon-pulse {"))]
-        self.assertIn("transform: scale(1);", icon_pulse)
-        self.assertIn("transform: scale(1.08);", icon_pulse)
-        self.assertNotIn("translateY(-50%)", icon_pulse)
+        self.assertIn("transform: translateY(-50%) scale(1);", icon_pulse)
+        self.assertIn("transform: translateY(-50%) scale(1.08);", icon_pulse)
 
     def test_by_objects_draft_rows_align_with_sessions_and_show_play(self):
         """Draft rows should start where real sessions start, with an always
@@ -950,21 +956,25 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-folder-group-header:focus-within .conv-folder-object-actions", app_css)
         self.assertIn("pointer-events: auto;", app_css)
 
-    def test_sidebar_outcome_line_reads_as_muted_done_metadata(self):
-        """A session DID summary should show the full text below the row."""
+    def test_sidebar_outcome_line_reads_as_bright_done_brief(self):
+        """A session DID summary should read as a bright, aligned brief and
+        skip the next-step line in the sidebar."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn(".conv-item .conv-outcome {\n"
-                      "    font-size: 12px; margin: 4px 0 0 29px; line-height: 1.35;\n"
+                      "    font-size: 14px; margin: 6px 0 0 var(--conv-content-left); line-height: 1.42;\n"
                       "    display: block;", app_css)
         self.assertIn("overflow-wrap: anywhere;", app_css)
-        self.assertIn(".conv-item .conv-outcome-did {\n    color: var(--text-muted);", app_css)
+        self.assertIn(".conv-item .conv-outcome-did {\n    color: var(--text); opacity: 0.96;", app_css)
         self.assertNotIn(".conv-item .conv-outcome-did {\n"
                          "    color: var(--text-muted); opacity: 0.86;\n"
                          "    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", app_css)
         self.assertIn('content: "DONE";', app_css)
-        self.assertIn("font-size: 9px;", app_css)
+        self.assertIn("font-size: 10px;", app_css)
         self.assertIn("border: 1px solid rgba(63,185,80,0.36);", app_css)
+        self.assertIn("if (!isBacklogRow && !isGithubPrRow && _ss && _ss.did)", app_js)
+        self.assertNotIn("conv-outcome-next", app_js[app_js.index("// Outcome line (GOAL-1)"):app_js.index("const summaryDetailHtml", app_js.index("// Outcome line (GOAL-1)"))])
 
     def test_sidebar_rows_have_summary_details_toggle(self):
         """Session rows with session_state should expose an expand/collapse

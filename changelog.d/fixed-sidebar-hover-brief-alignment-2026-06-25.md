@@ -1,0 +1,1 @@
+- Align sidebar hover metadata with session titles, center left-side model icons, and make DID briefs brighter while omitting next-step text.
