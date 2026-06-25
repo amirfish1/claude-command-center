@@ -4352,6 +4352,77 @@
     return { key: 'active', label: 'Goal', className: 'is-active', iconHtml: '&#9678;' };
   }
 
+  function conversationGoalActionCommand(action) {
+    if (action === 'clear') return '/goal clear';
+    if (action === 'resume') return '/goal resume';
+    if (action === 'edit') return '/goal edit';
+    if (action === 'pause') return '/goal pause';
+    return '';
+  }
+
+  function conversationGoalActionButtonsHtml(statusKey) {
+    const key = String(statusKey || 'active').trim().toLowerCase();
+    const actions = [
+      { action: 'edit', label: 'Edit' },
+    ];
+    if (key === 'active') {
+      actions.push({ action: 'pause', label: 'Pause' });
+    } else if (key === 'paused' || key === 'blocked' || key === 'usage_limited' || key === 'budget_limited') {
+      actions.push({ action: 'resume', label: 'Resume' });
+    }
+    actions.push({ action: 'clear', label: 'Clear' });
+    return '<span class="conv-goal-strip-actions" aria-label="Goal actions">'
+      + actions.map(a => '<button type="button" class="conv-goal-action"'
+        + ' data-role="conv-goal-action" data-goal-action="' + escapeAttr(a.action) + '"'
+        + ' title="' + escapeAttr(a.label + ' goal') + '"'
+        + ' aria-label="' + escapeAttr(a.label + ' goal') + '">'
+        + escapeHtml(a.label) + '</button>').join('')
+      + '</span>';
+  }
+
+  function applyOptimisticConversationGoalAction(row, action) {
+    if (!row) return;
+    if (action === 'clear') {
+      row.goal = '';
+      row.goal_status = '';
+    } else if (action === 'resume') {
+      row.goal_status = 'active';
+    } else if (action === 'pause') {
+      row.goal_status = 'paused';
+    }
+  }
+
+  async function sendConversationGoalAction(btn) {
+    if (!btn || btn.disabled) return;
+    const action = btn.getAttribute('data-goal-action') || '';
+    const command = conversationGoalActionCommand(action);
+    const row = currentConversationRow();
+    const sid = (row && (row.session_id || row.id)) || (currentSession && currentSession.id);
+    if (!command || !sid) {
+      showOpToast('No session is selected for this goal action.', 'error');
+      return;
+    }
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '...';
+    try {
+      const data = await postInjectInput(sid, command);
+      if (!data.ok) throw new Error(data.error || 'goal action failed');
+      applyOptimisticConversationGoalAction(row, action);
+      renderConversationGoalStrip(activePaneId(), row);
+      if (typeof renderSidebar === 'function' && typeof filterConversations === 'function' && typeof $convSearch !== 'undefined') {
+        renderSidebar(filterConversations($convSearch.value));
+      }
+      showOpToast('Sent ' + command + '.', 'success');
+      setTimeout(refreshConversationList, 1200);
+      setTimeout(refreshConversationList, 3200);
+    } catch (err) {
+      showOpToast('Goal action failed: ' + ((err && err.message) || 'unknown'), 'error');
+      btn.textContent = original;
+      btn.disabled = false;
+    }
+  }
+
   function renderConversationGoalStrip(paneId, row) {
     const pane = document.querySelector('.conv-pane[data-pane-id="' + (paneId || activePaneId()) + '"]');
     const strip = pane && pane.querySelector('[data-role="conv-goal-strip"]');
@@ -4368,10 +4439,20 @@
     strip.hidden = false;
     strip.className = 'conv-goal-strip ' + ui.className;
     strip.title = ui.label + ': ' + objective;
+    const actionsHtml = (row && row.source === 'codex') ? conversationGoalActionButtonsHtml(ui.key) : '';
     strip.innerHTML = '<span class="conv-goal-strip-icon" aria-hidden="true">' + ui.iconHtml + '</span>'
       + '<span class="conv-goal-strip-state">' + escapeHtml(ui.label) + '</span>'
-      + '<span class="conv-goal-strip-objective">' + escapeHtml(objective) + '</span>';
+      + '<span class="conv-goal-strip-objective">' + escapeHtml(objective) + '</span>'
+      + actionsHtml;
   }
+
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-role="conv-goal-action"]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    sendConversationGoalAction(btn);
+  });
 
   function updateInputBar() {
     if (!$convInputBar) return;

@@ -1,0 +1,1 @@
+- Add goal-strip actions so Codex goals can be edited, cleared, paused, or resumed directly from the conversation view.
