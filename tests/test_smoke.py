@@ -270,6 +270,35 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("return known.some(root => repo === root || repo.startsWith(root + '/'));", app_js)
         self.assertIn("if (!rowBelongsToKnownRepo(r)) continue;", app_js)
 
+    def test_cross_repo_feed_paths_keep_only_owned_github_repos(self):
+        """All-repo issue/PR feeds should ignore external GitHub repos."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            mine = root / "mine"
+            theirs = root / "theirs"
+            local = root / "local-only"
+            for repo in (mine, theirs, local):
+                repo.mkdir()
+                (repo / ".git").mkdir()
+            owner_by_path = {
+                str(mine.resolve()): "me",
+                str(theirs.resolve()): "other-org",
+                str(local.resolve()): "",
+            }
+            known = [{"path": str(mine)}, {"path": str(theirs)}, {"path": str(local)}]
+            with mock.patch.object(server, "load_known_repos", return_value=known), \
+                 mock.patch.object(server, "_github_owner_login_candidates", return_value={"me"}, create=True), \
+                 mock.patch.object(
+                     server,
+                     "_github_repo_owner_for_path",
+                     side_effect=lambda p: owner_by_path.get(str(pathlib.Path(p).resolve()), ""),
+                     create=True,
+                 ):
+                self.assertEqual(server._cross_repo_feed_repo_paths(), [str(mine.resolve())])
+
     def test_by_objects_sort_prioritizes_objects_before_repos(self):
         """Manual rank must not let repos jump above objects in by-objects mode."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -1631,6 +1660,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".event.result.result-silent", app_css)
         self.assertIn(".conversations-view .event.result.result-silent", app_css)
         self.assertIn("not a live stuck process", app_js)
+        self.assertIn("Use the wake/follow-up box below", app_js)
+
+    def test_stale_optimistic_thinking_settles_when_no_process_exists(self):
+        """The optimistic Thinking pill should not tick forever after the
+        status poll proves there is no live/headless/terminal process."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function settleStaleOptimisticAgentIndicator($view)", app_js)
+        self.assertIn("No active agent process", app_js)
+        self.assertIn("Use the composer to wake it.", app_js)
+        self.assertIn("!liveStatus.live && !liveStatus.headlessPresent && !liveStatus.terminalPresent && !liveStatus.bgPresent", app_js)
+        self.assertIn("settleStaleOptimisticAgentIndicator($view);", app_js)
+        self.assertIn(".conv-live-tool-inline.is-stale-no-process", app_css)
 
     def test_compact_completion_clears_optimistic_thinking(self):
         """A completed compaction should not leave the optimistic Thinking pill."""
@@ -1684,6 +1727,55 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-goal-strip.is-blocked", app_css)
         self.assertIn(".conv-item .conv-goal.is-paused", app_css)
         self.assertIn(".conv-item .conv-goal.is-blocked", app_css)
+
+    def test_claude_goal_command_stamps_goal_fields(self):
+        """Claude slash-command goal state should be promoted to row fields,
+        including headless sessions whose only visible record is JSONL."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "goal.jsonl"
+            events = [
+                {
+                    "type": "user",
+                    "isMeta": True,
+                    "timestamp": "2026-06-24T18:10:00.000Z",
+                    "message": {
+                        "content": (
+                            "<command-message>goal</command-message>\n"
+                            "<command-name>/goal</command-name>\n"
+                            "<command-args>- get clear folder with screenshots</command-args>"
+                        )
+                    },
+                },
+                {
+                    "type": "user",
+                    "timestamp": "2026-06-24T18:11:00.000Z",
+                    "message": {"content": "normal follow-up"},
+                },
+                {
+                    "type": "user",
+                    "isMeta": True,
+                    "timestamp": "2026-06-24T18:12:00.000Z",
+                    "message": {
+                        "content": (
+                            "<command-message>goal</command-message>\n"
+                            "<command-name>/goal</command-name>\n"
+                            "<command-args>pause</command-args>"
+                        )
+                    },
+                },
+            ]
+            path.write_text("\n".join(json.dumps(ev) for ev in events) + "\n")
+
+            meta = server._extract_tail_meta(path)
+
+        self.assertEqual(meta["goal"], "get clear folder with screenshots")
+        self.assertEqual(meta["goal_status"], "paused")
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn('"goal": tail_meta.get("goal") or "",', server_py)
+        self.assertIn('"goal_status": tail_meta.get("goal_status") or "",', server_py)
 
     def test_live_question_indicator_renders_prompt_and_options(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

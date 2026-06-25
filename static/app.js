@@ -3121,6 +3121,27 @@
       _stopOptimisticAgeTicker();
     }, ms);
   }
+  function settleStaleOptimisticAgentIndicator($view) {
+    const el = ($view || document).querySelector('.conv-live-tool-inline.optimistic.is-thinking');
+    if (!el || !_optimisticAgentStart) return false;
+    if ((Date.now() - _optimisticAgentStart) < 10000) return false;
+    const noKnownProcess = liveStatusMatchesOpenConv()
+      && !liveStatus.live && !liveStatus.headlessPresent && !liveStatus.terminalPresent && !liveStatus.bgPresent
+      && !liveStatus.sidecarInFlight && liveStatus.codexState !== 'working';
+    if (!noKnownProcess) return false;
+    if (_optimisticAgentTimer) {
+      clearTimeout(_optimisticAgentTimer);
+      _optimisticAgentTimer = null;
+    }
+    _stopOptimisticAgeTicker();
+    const sid = currentSession && currentSession.id;
+    if (sid) clearSessionSending(sid);
+    el.className = 'conv-live-tool-inline optimistic is-stale-no-process';
+    el.innerHTML = '<span class="cl-pulse"></span>'
+      + '<span class="cl-tool">No active agent process</span>'
+      + '<span class="cl-hint">Use the composer to wake it.</span>';
+    return true;
+  }
   function clearOptimisticAgentIndicator($view) {
     const el = ($view || document).querySelector('.conv-live-tool-inline.optimistic');
     if (el) el.remove();
@@ -3523,6 +3544,8 @@
     // zero DOM work each tick until a session goes live again.
     const codexStateWorking = liveStatusMatchesOpenConv() && liveStatus.codexState === 'working';
     if (!liveStatus.live && !codexStateWorking) {
+      const staleOptimisticSettled = settleStaleOptimisticAgentIndicator($view);
+      if (staleOptimisticSettled) return;
       // Brief "✓ Done" flash for ~4s after session goes idle
       const _doneAge = _liveStripLastLiveTime ? (Date.now() - _liveStripLastLiveTime) : 9999999;
       if (_doneAge < 4000) {
@@ -19817,7 +19840,9 @@
       const _objGroupsHtml = _objRoots.map(n => _emitObjTree(n, 0, 0)).join('');
       // Codex-layout: stacked regions in the by-objects view.
       //  1) "Current sessions" — every session active in the last 5h (the live
-      //     triage list), flat, regardless of object attachment.
+      //     triage list), flat, regardless of object attachment. During search,
+      //     this becomes the ranked search-results band so older TR/history hits
+      //     do not get pushed below the project tree.
       //  2) "Project tree" — the object hierarchy (the day's map). A live
       //     session attached to an object intentionally appears in both.
       //  3) "Unclassified" — loose sessions older than 5h, so nothing is
@@ -19834,20 +19859,24 @@
       const _curId = (c) => c.session_id || c.id;
       let _curPrevOrder = {};
       try { _curPrevOrder = JSON.parse(localStorage.getItem(_CUR_ORDER_KEY) || '{}'); } catch (_) {}
-      const _currentSessions = (_visibleSessionConvs || [])
-        .filter(c => _sessionTs(c) >= _nowS - _LIVE_WINDOW_S)
-        .sort((a, b) => {
-          if (Math.abs(_sessionTs(a) - _sessionTs(b)) < _CUR_HYST_S) {
-            const ia = _curPrevOrder[_curId(a)], ib = _curPrevOrder[_curId(b)];
-            if (ia !== undefined && ib !== undefined && ia !== ib) return ia - ib;
-          }
-          return _sessionTs(b) - _sessionTs(a);
-        });
-      try {
-        const _o = {};
-        _currentSessions.forEach((c, i) => { _o[_curId(c)] = i; });
-        localStorage.setItem(_CUR_ORDER_KEY, JSON.stringify(_o));
-      } catch (_) {}
+      const _currentSessions = _ipSearchActive
+        ? (_visibleSessionConvs || []).slice()
+        : (_visibleSessionConvs || [])
+          .filter(c => _sessionTs(c) >= _nowS - _LIVE_WINDOW_S)
+          .sort((a, b) => {
+            if (Math.abs(_sessionTs(a) - _sessionTs(b)) < _CUR_HYST_S) {
+              const ia = _curPrevOrder[_curId(a)], ib = _curPrevOrder[_curId(b)];
+              if (ia !== undefined && ib !== undefined && ia !== ib) return ia - ib;
+            }
+            return _sessionTs(b) - _sessionTs(a);
+          });
+      if (!_ipSearchActive) {
+        try {
+          const _o = {};
+          _currentSessions.forEach((c, i) => { _o[_curId(c)] = i; });
+          localStorage.setItem(_CUR_ORDER_KEY, JSON.stringify(_o));
+        } catch (_) {}
+      }
       // Show ~7 at rest, then a "More" affordance — the live triage list
       // shouldn't push the Project tree way down. Expanded state persists so a
       // poll re-render doesn't collapse it back.
@@ -19859,8 +19888,10 @@
       const _curHidden = _currentSessions.length - _curShown.length;
       let _currentSessionsHtml = '';
       if (_currentSessions.length) {
-        _currentSessionsHtml = '<div class="conv-objects-section-label">Current sessions'
-          + '<span class="conv-objects-section-sub">last 5h</span></div>'
+        const _currentSessionsLabel = _ipSearchActive ? 'Search results' : 'Current sessions';
+        const _currentSessionsSub = _ipSearchActive ? '' : '<span class="conv-objects-section-sub">last 5h</span>';
+        _currentSessionsHtml = '<div class="conv-objects-section-label">' + _currentSessionsLabel
+          + _currentSessionsSub + '</div>'
           + _curShown.map(c => _renderRow(c, { suppressFolderChip: false })).join('');
         if (_curHidden > 0) {
           _currentSessionsHtml += '<button type="button" class="conv-current-more"'
@@ -28958,7 +28989,7 @@
       return {
         kind: 'silent',
         label: 'No visible response',
-        detail: 'Codex completed this turn without assistant text; this is not a live stuck process. Send another prompt if you expected an answer.',
+        detail: 'Codex completed this turn without assistant text; this is not a live stuck process. Use the wake/follow-up box below if you expected an answer.',
       };
     }
     const sub = String(ev.subtype || '').toLowerCase();
@@ -29883,16 +29914,38 @@
   // burying it under content / first-message / transcript matches (which the
   // field-wide filter and history augment also return). Stable partition —
   // relative order within each band is preserved.
+  function _conversationNameMatchesQuery(c, qLower) {
+    if (!qLower || !c) return false;
+    const name = String((c.display_name || c.ai_title) || '').toLowerCase();
+    return !!name && name.indexOf(qLower) !== -1;
+  }
+
   function _prioritizeNameMatches(rows, qLower) {
     if (!qLower || !Array.isArray(rows) || rows.length < 2) return rows;
     const hit = [];
     const rest = [];
     for (const c of rows) {
-      const name = String((c && (c.display_name || c.ai_title)) || '').toLowerCase();
-      if (name && name.indexOf(qLower) !== -1) hit.push(c);
+      if (_conversationNameMatchesQuery(c, qLower)) hit.push(c);
       else rest.push(c);
     }
     return hit.length ? hit.concat(rest) : rows;
+  }
+
+  function _isRecallHistoryMatch(c) {
+    return !!(c && c._historyMatch && c._historySource === 'recall');
+  }
+
+  function _prioritizeSearchResultBands(rows, qLower) {
+    if (!qLower || !Array.isArray(rows) || rows.length < 2) return rows;
+    const name = [];
+    const recall = [];
+    const rest = [];
+    for (const c of rows) {
+      if (_conversationNameMatchesQuery(c, qLower)) name.push(c);
+      else if (_isRecallHistoryMatch(c)) recall.push(c);
+      else rest.push(c);
+    }
+    return name.concat(recall).concat(rest);
   }
 
   function filterConversations(q) {
@@ -30109,21 +30162,11 @@
       seen.add(sid);
     }
     syntheticRepo.sort((a, b) => (b._repoSearchScore || 0) - (a._repoSearchScore || 0));
-    // History-only rows trail the local matches. Within themselves they
-    // keep history-search BM25 order (already sorted by score in the
-    // server response, so insertion order suffices).
-    // Favor NAME matches (CCC-78): a row whose title contains the query is
-    // a stronger hit than one that only matched transcript content. Stable
-    // partition so relative order within each band is preserved; session-id
-    // prioritization below still wins overall.
-    const _nameHit = c => {
-      const name = String(c.display_name || c.ai_title || '').toLowerCase();
-      return name.indexOf(qLower) !== -1;
-    };
+    // Order search bands by intent: title matches, then TR-backed matches,
+    // then ordinary local/history rows. Session-id prioritization below
+    // still wins overall.
     const combined = localSorted.concat(synthetic).concat(syntheticRepo);
-    const byName = combined.filter(_nameHit);
-    const rest = combined.filter(c => !_nameHit(c));
-    return _prioritizeSessionIdMatches(byName.concat(rest), qLower);
+    return _prioritizeSessionIdMatches(_prioritizeSearchResultBands(combined, qLower), qLower);
   }
 
   function _fetchHistoryAugment(query) {

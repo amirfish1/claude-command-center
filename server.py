@@ -3785,6 +3785,68 @@ def _is_transcript_control_text(text):
     return bool((text or "").lstrip().startswith(_TRANSCRIPT_CONTROL_PREFIXES))
 
 
+def _extract_command_invocation_text(text):
+    """Turn Claude Code slash-command bookkeeping into the typed command."""
+    head = (text or "").lstrip()
+    if not (head.startswith("<command-name>") or head.startswith("<command-message>")):
+        return ""
+    m = re.search(r"<command-name>([^<]+)</command-name>", head)
+    cmd_name = html.unescape(m.group(1).strip()) if m else ""
+    if not cmd_name:
+        m2 = re.search(r"<command-message>([^<]+)</command-message>", head)
+        if m2:
+            raw = html.unescape(m2.group(1).strip())
+            cmd_name = raw if raw.startswith("/") else ("/" + raw)
+    if not cmd_name:
+        return ""
+    m_args = re.search(r"<command-args>([^<]*)</command-args>", head)
+    cmd_args = html.unescape(m_args.group(1).strip()) if m_args else ""
+    return (cmd_name + (" " + cmd_args if cmd_args else "")).strip()
+
+
+def _clean_claude_goal_objective(text):
+    obj = (text or "").strip()
+    obj = re.sub(r"^(?:[-*]\s+)+", "", obj).strip()
+    return obj
+
+
+def _apply_claude_goal_command(meta, command_text):
+    """Update tail metadata from a visible Claude `/goal ...` command."""
+    cmd = (command_text or "").strip()
+    if not cmd.lower().startswith("/goal"):
+        return
+    rest = cmd[len("/goal"):].strip()
+    if not rest:
+        return
+    first, _, remainder = rest.partition(" ")
+    action = first.strip().lower()
+    if action in ("clear", "cancel", "reset", "remove"):
+        meta["goal"] = ""
+        meta["goal_status"] = ""
+        return
+    if action in ("pause", "paused"):
+        if meta.get("goal"):
+            meta["goal_status"] = "paused"
+        return
+    if action in ("resume", "active", "start"):
+        if meta.get("goal"):
+            meta["goal_status"] = "active"
+        return
+    if action in ("block", "blocked"):
+        if meta.get("goal"):
+            meta["goal_status"] = "blocked"
+        return
+    if action in ("complete", "completed", "done"):
+        if meta.get("goal"):
+            meta["goal_status"] = "complete"
+        return
+    objective = remainder if action in ("set", "edit") and remainder else rest
+    objective = _clean_claude_goal_objective(objective)
+    if objective:
+        meta["goal"] = objective
+        meta["goal_status"] = "active"
+
+
 def _extract_user_prompt_text(ev):
     """Extract user-visible prompt text from a JSONL event.
 
@@ -4437,6 +4499,8 @@ def find_all_conversations(
                 "pending_file": tail_meta.get("pending_file"),
                 "subagent_in_flight_count": tail_meta.get("subagent_in_flight_count", 0),
                 "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
+                "goal": tail_meta.get("goal") or "",
+                "goal_status": tail_meta.get("goal_status") or "",
                 # Context % badge — same fields as find_conversations so
                 # archive rows can render sidebar usage without opening the
                 # session pane.
@@ -5696,6 +5760,16 @@ def _save_screenshot_locally(image_b64):
     return str(out)
 
 
+def _github_owner_repo_from_url(url):
+    # Match git@github.com:owner/repo(.git) and https://github.com/owner/repo(.git).
+    m = re.match(r"^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if not m:
+        m = re.match(r"^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    if not m:
+        return None
+    return (m.group(1), m.group(2))
+
+
 def _origin_owner_repo():
     """Return (owner, repo) parsed from the install dir's `origin` remote, or
     None if the dir isn't a clone or the URL doesn't look like GitHub.
@@ -5704,14 +5778,62 @@ def _origin_owner_repo():
     rc, out, _ = _git(["remote", "get-url", "origin"], _install_dir())
     if rc != 0:
         return None
-    url = out.strip()
-    # Match git@github.com:owner/repo(.git) and https://github.com/owner/repo(.git).
-    m = re.match(r"^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$", url)
-    if not m:
-        m = re.match(r"^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
-    if not m:
-        return None
-    return (m.group(1), m.group(2))
+    return _github_owner_repo_from_url(out.strip())
+
+
+_GITHUB_OWNER_LOGIN_CACHE = {"ts": 0.0, "owners": set()}
+_GITHUB_OWNER_LOGIN_TTL = 300.0
+
+
+def _github_owner_login_candidates():
+    """GitHub owners considered "mine" for all-repo issue/PR feeds.
+
+    Prefer explicit configuration and the authenticated `gh` login. Fall back
+    to this install's origin owner so OSS/source installs still get a narrow
+    feed without hardcoding a username in the public repo.
+    """
+    now = time.time()
+    cached = _GITHUB_OWNER_LOGIN_CACHE.get("owners") or set()
+    if cached and (now - float(_GITHUB_OWNER_LOGIN_CACHE.get("ts") or 0)) < _GITHUB_OWNER_LOGIN_TTL:
+        return set(cached)
+    owners = set()
+    raw_env = os.environ.get("CCC_GITHUB_OWNERS") or os.environ.get("CCC_GITHUB_OWNER") or ""
+    for part in raw_env.replace(";", ",").split(","):
+        p = part.strip().lower()
+        if p:
+            owners.add(p)
+    try:
+        r = subprocess.run(
+            ["gh", "api", "user", "--jq", ".login"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            owners.add(r.stdout.strip().lower())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    origin = _origin_owner_repo()
+    if origin and origin[0]:
+        owners.add(str(origin[0]).lower())
+    _GITHUB_OWNER_LOGIN_CACHE["owners"] = set(owners)
+    _GITHUB_OWNER_LOGIN_CACHE["ts"] = now
+    return owners
+
+
+def _github_repo_owner_for_path(repo_path):
+    """Return the GitHub origin owner for a local repo path, or ''."""
+    try:
+        p = Path(repo_path).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError):
+        return ""
+    if not p.is_dir():
+        return ""
+    rc, out, _ = _git(["remote", "get-url", "origin"], p, timeout=3)
+    if rc != 0:
+        return ""
+    parsed = _github_owner_repo_from_url(out.strip())
+    return (parsed[0] if parsed else "") or ""
 
 
 def _push_screenshot_to_branch(local_path, commit_subject):
@@ -7965,6 +8087,8 @@ def _extract_tail_meta(path):
         "agent_name": None,
         "ai_title": None,
         "last_prompt": None,
+        "goal": "",
+        "goal_status": "",
         # Session signals — positions track ordering so stage can regress
         "has_edit": False,
         "has_commit": False,
@@ -8058,6 +8182,11 @@ def _extract_tail_meta(path):
                         except (ValueError, ImportError):
                             pass
                     if t == "user":
+                        msg = _safe_parse_message(ev.get("message", {}))
+                        raw_text = _extract_text_from_content(msg.get("content", ""))
+                        command_text = _extract_command_invocation_text(raw_text)
+                        if command_text:
+                            _apply_claude_goal_command(meta, command_text)
                         prompt_text = _extract_user_prompt_text(ev)
                         if prompt_text:
                             meta["last_prompt"] = prompt_text
@@ -12019,17 +12148,32 @@ def _cross_repo_feed_repo_paths():
 
     `recent-repos.txt` is ordering metadata for the picker, not membership.
     Use load_known_repos() so stale recent paths do not leak into all-repos
-    issue and ready-to-merge sections.
+    issue and ready-to-merge sections. Restrict to GitHub repos owned by the
+    authenticated account (or configured/fallback owner) so cloned external OSS
+    repos do not appear in "my repos" feeds.
     """
     try:
         entries = load_known_repos()
     except Exception:
         return []
+    owner_candidates = _github_owner_login_candidates()
     out = []
     seen = set()
     for entry in entries or []:
         repo = (entry.get("path") if isinstance(entry, dict) else "") or ""
-        if not repo or repo in seen:
+        if not repo:
+            continue
+        try:
+            repo = str(Path(repo).expanduser().resolve())
+        except (OSError, ValueError, RuntimeError):
+            continue
+        if repo in seen:
+            continue
+        owner = (_github_repo_owner_for_path(repo) or "").lower()
+        if owner_candidates:
+            if not owner or owner not in owner_candidates:
+                continue
+        elif not owner:
             continue
         seen.add(repo)
         out.append(repo)
@@ -13289,6 +13433,8 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             # pass. See find_all_conversations for the broader rationale.
             "pr_state": None,
             "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
+            "goal": tail_meta.get("goal") or "",
+            "goal_status": tail_meta.get("goal_status") or "",
             "model": tail_meta.get("model"),
             "archived": sid in archived_set,
             "pinned": sid in pinned_rank,
@@ -15587,22 +15733,13 @@ def _parse_conversation_event(ev, line_num):
             # synthetic user_text turn so the pane mirrors what the user did.
             head = (text or "").lstrip()
             if head.startswith("<command-name>") or head.startswith("<command-message>"):
-                m = re.search(r"<command-name>([^<]+)</command-name>", head)
-                cmd_name = m.group(1).strip() if m else ""
-                if not cmd_name:
-                    m2 = re.search(r"<command-message>([^<]+)</command-message>", head)
-                    if m2:
-                        raw = m2.group(1).strip()
-                        cmd_name = raw if raw.startswith("/") else ("/" + raw)
-                if cmd_name:
-                    # Append the typed arguments so the turn reads "/goal <args>"
-                    # rather than a bare "/goal". Claude Code wraps the args in a
-                    # separate <command-args> tag; without surfacing it the user
-                    # has no record of WHAT they asked the command to do (e.g.
-                    # the goal text after "/goal" vanished from the transcript).
-                    m_args = re.search(r"<command-args>([^<]*)</command-args>", head)
-                    cmd_args = m_args.group(1).strip() if m_args else ""
-                    full_cmd = (cmd_name + (" " + cmd_args if cmd_args else "")).strip()
+                # Append the typed arguments so the turn reads "/goal <args>"
+                # rather than a bare "/goal". Claude Code wraps the args in a
+                # separate <command-args> tag; without surfacing it the user
+                # has no record of WHAT they asked the command to do (e.g.
+                # the goal text after "/goal" vanished from the transcript).
+                full_cmd = _extract_command_invocation_text(head)
+                if full_cmd:
                     return {"line": line_num, "ts": ts, "type": "user_text", "text": full_cmd, "images": []}
             return None
         images = _extract_images_from_content(content, line=line_num)
