@@ -3822,6 +3822,20 @@
     letter-spacing: 0.02em;
     color: var(--text);
   }
+  /* Strip the colored hue chip box — Codex labels are bare bold text. */
+  .conv-project-tree .conv-folder-group-chip,
+  .conv-project-tree .conv-folder-object-title-text {
+    background: none;
+    border: 0;
+    padding: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  /* No "› " rename prefix and no horizontal tree connectors — the per-row
+     border-left is the only rail (matches Codex's clean vertical line). */
+  .conv-project-tree .conv-title::before { display: none; }
+  .conv-project-tree .conv-item::before,
+  .conv-project-tree .conv-folder-group .conv-item.is-grouped-row::before { display: none; }
   .conv-project-tree .conv-folder-group-count {
     margin-left: auto;
     order: 90;
@@ -7848,6 +7862,17 @@
     color: #58a6ff;
     background: linear-gradient(rgba(88,166,255,0.10), rgba(88,166,255,0.10)), var(--bg);
     border-color: rgba(88,166,255,0.35);
+  }
+  .conv-live-tool-inline.is-stale-no-process {
+    color: var(--text-muted);
+    background: linear-gradient(rgba(139,148,158,0.10), rgba(139,148,158,0.10)), var(--bg);
+    border-color: rgba(139,148,158,0.32);
+    cursor: default;
+  }
+  .conv-live-tool-inline.is-stale-no-process .cl-pulse {
+    background: var(--text-muted);
+    box-shadow: none;
+    animation: none;
   }
   .conv-live-tool-inline.is-question {
     color: #58a6ff;
