@@ -1,0 +1,1 @@
+- Gave Total Recall conversation search enough time for cold starts so TR results do not disappear as timeouts.

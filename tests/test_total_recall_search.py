@@ -114,6 +114,14 @@ class TestTotalRecallSearch(unittest.TestCase):
         self.assertEqual(out["results"], [])
         self.assertIn("error", out)
 
+    def test_total_recall_search_allows_cold_start_latency(self):
+        proc = subprocess.CompletedProcess(["brain"], 0, stdout=json.dumps({"results": []}), stderr="")
+        with mock.patch.object(server, "_total_recall_command", return_value=["brain"]), \
+             mock.patch.object(server.subprocess, "run", return_value=proc) as run:
+            server.search_total_recall_sessions("how do i get customers", limit=10)
+
+        self.assertGreaterEqual(run.call_args.kwargs["timeout"], 8.0)
+
 
 if __name__ == "__main__":
     unittest.main()

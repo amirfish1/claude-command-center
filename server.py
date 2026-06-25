@@ -37828,7 +37828,7 @@ def get_history_message(uuid):
 # while knowledge/document hits stay out of the "Search conversations" UI.
 # ---------------------------------------------------------------------------
 
-_TOTAL_RECALL_TIMEOUT_SEC = 3.0
+_TOTAL_RECALL_TIMEOUT_SEC = 8.0
 _TOTAL_RECALL_SESSION_SOURCES = {"claude-code", "codex"}
 
 
