@@ -8055,11 +8055,6 @@
   if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => mobileShowMain(false));
   const $cpMobileBackBtn = document.getElementById('cpMobileBackBtn');
   if ($cpMobileBackBtn) $cpMobileBackBtn.addEventListener('click', () => mobileShowConv(false));
-  const $mobileReloadBtn = document.getElementById('mobileReloadBtn');
-  if ($mobileReloadBtn) $mobileReloadBtn.addEventListener('click', () => {
-    // Bypass cache where supported (Firefox); Safari treats it as a normal reload.
-    try { location.reload(true); } catch (_) { location.reload(); }
-  });
 
   // ---------------------------------------------------------------------------
   // Mobile swipe-to-rotate among recently-opened conversations.

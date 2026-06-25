@@ -765,6 +765,7 @@
                 <div class="files-list" id="sidebarFilesList"></div>
                 <div class="files-queue-list" id="sidebarQueueList" style="display:none;"></div>
               </div>
+              <div class="status-rail-empty" data-rail-empty="files">No files referenced yet.</div>
             </div>
             <div class="status-rail-pane" id="statusRailActivityPane" role="tabpanel" data-rail-pane="activity">
               <!-- Subagents panel — surfaces Claude Code Task tool spawns for
@@ -779,6 +780,7 @@
                 </div>
                 <div class="subagents-list" id="subagentsList"></div>
               </div>
+              <div class="status-rail-empty" data-rail-empty="activity">No activity yet.</div>
             </div>
             <div class="conv-bg-palette" data-role="conv-bg-palette" role="radiogroup" aria-label="Conversation background color"></div>
           </div>
@@ -983,8 +985,6 @@
       </div>
     </div>
   </div>
-
-  <button class="mobile-reload-btn" id="mobileReloadBtn" title="Reload page" aria-label="Reload">&#8634;</button>
 
   <!-- ⌘K / ⌘P session search modal — fuzzy-filters all sessions by
        display_name / first_message, sorted by recency. -->

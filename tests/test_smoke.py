@@ -1305,6 +1305,17 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("mobile-show-main .conv-split[data-orientation=\"\"] .conv-pane > .conv-pane-header", app_css)
         self.assertNotIn("_captureRailEl(document.getElementById('mobileBackBtn'))", app_js)
 
+    def test_mobile_reload_fab_is_not_rendered(self):
+        """Mobile should not render the old floating page-reload button."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertNotIn('id="mobileReloadBtn"', index_html)
+        self.assertNotIn("mobileReloadBtn", app_js)
+        self.assertNotIn(".mobile-reload-btn", app_css)
+        self.assertIn('id="kanbanReloadBtn"', index_html)
+
     def test_flow_group_chat_nodes_and_drop(self):
         """Group chats render as a third node kind on the flow board
         (alongside repo and object), have a "+ Group chat" toolbar

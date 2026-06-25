@@ -8347,7 +8347,6 @@
      Both toggled via body classes (`mobile-show-main`, `mobile-conv-open`).
   */
   .mobile-back-btn { display: none; }
-  .mobile-reload-btn { display: none; }  /* legacy floating button — no longer used */
 
   /* Reload button anchored to the bottom-right of the kanban panel itself,
      so it's in reach whether the conv-panel is open, closed, or resized, and
@@ -9917,26 +9916,6 @@
     .kanban-panel-toolbar #kptReloadPageBtn,
     .kanban-panel-toolbar #kptDeployStatus { display: none !important; }
 
-    /* Floating reload visible on mobile only */
-    .mobile-reload-btn {
-      display: inline-flex !important;
-      position: fixed;
-      bottom: calc(env(safe-area-inset-bottom) + 12px);
-      right: 12px;
-      z-index: 1500;
-      width: 44px; height: 44px; border-radius: 50%;
-      background: rgba(13,17,23,0.85);
-      border: 1px solid var(--border);
-      color: var(--text);
-      align-items: center; justify-content: center;
-      font-size: 20px; line-height: 1; cursor: pointer;
-      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
-      font-family: inherit;
-      touch-action: manipulation;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-    }
-    .mobile-reload-btn:active { background: var(--accent); color: #fff; }
-
     /* Narrower board gutter + magnetic center-snap on horizontal swipe */
     .kanban-board-split {
       padding: 8px 4px !important;
@@ -9989,27 +9968,6 @@
 
     /* The unified sticky panel handles its own scroll per column —
        no per-message cap needed on mobile. */
-
-    /* Floating reload button — bottom-right to avoid overlap with conv-panel X.
-       (Safe-area padding keeps it above the home indicator.) */
-    .mobile-reload-btn {
-      display: inline-flex !important;
-      position: fixed;
-      bottom: calc(env(safe-area-inset-bottom) + 12px);
-      right: 12px;
-      z-index: 1500;
-      width: 44px; height: 44px; border-radius: 50%;
-      background: rgba(13,17,23,0.85);
-      border: 1px solid var(--border);
-      color: var(--text);
-      align-items: center; justify-content: center;
-      font-size: 20px; line-height: 1; cursor: pointer;
-      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
-      font-family: inherit;
-      touch-action: manipulation;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-    }
-    .mobile-reload-btn:active { background: var(--accent); color: #fff; }
 
     /* Mobile-specific conversation list item spacing and tap targets */
     .conv-item {
@@ -11460,6 +11418,27 @@ body.status-pos-right .conv-pane > .status-rail {
 .status-rail-pane.is-active {
   display: flex;
   flex-direction: column;
+}
+.status-rail-empty {
+  display: none;
+  margin: 12px;
+  padding: 14px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  justify-content: center;
+  text-align: center;
+}
+#statusRailFilesPane.is-active > .status-rail-empty,
+#statusRailActivityPane.is-active > .status-rail-empty {
+  display: flex;
+}
+#statusRailFilesPane:has(#filesPanel:not([style*="display: none"])) > .status-rail-empty,
+#statusRailActivityPane:has(.csh-col-activity:not([style*="display: none"])) > .status-rail-empty,
+#statusRailActivityPane:has(#subagentsPanel:not([style*="display: none"])) > .status-rail-empty {
+  display: none;
 }
 /* Status-rail Subagents panel — lists Task tool spawns for the active
    conv with status + (optional) subagent_type. Hidden by JS when the
