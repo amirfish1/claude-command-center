@@ -202,6 +202,23 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("is-recall", app_js)
         self.assertIn(".conv-history-badge.is-recall", app_css)
 
+    def test_conversation_search_remembers_last_ten_queries(self):
+        """Search should offer the last ten committed conversation queries."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('list="convSearchHistoryList"', index_html)
+        self.assertIn('<datalist id="convSearchHistoryList"></datalist>', index_html)
+        self.assertIn("const CONV_SEARCH_HISTORY_KEY = 'ccc-conv-search-history';", app_js)
+        self.assertIn("function readConversationSearchHistory()", app_js)
+        self.assertIn("function renderConversationSearchHistoryOptions()", app_js)
+        self.assertIn("function rememberConversationSearchQuery(query)", app_js)
+        self.assertIn("return deduped.slice(0, 10);", app_js)
+        self.assertIn("option.value = item;", app_js)
+        self.assertIn("renderConversationSearchHistoryOptions();", app_js)
+        self.assertIn("rememberConversationSearchQuery($convSearch.value);", app_js)
+        self.assertIn("$convSearch.addEventListener('change', () => rememberConversationSearchQuery($convSearch.value));", app_js)
+
     def test_new_session_folder_shortcuts_are_labeled(self):
         """The folder dropdown and recent chips both set the same spawn CWD.
 
@@ -629,6 +646,37 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn(".conv-folder-object-add-task-btn", app_css)
         self.assertNotIn(".conv-object-add-task", app_css)
 
+    def test_by_objects_draft_rows_are_draggable_between_objects(self):
+        """Draft task rows should move through the same object drop path."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("let _draggedFlowNode = '';", app_js)
+        self.assertIn("function flowNodeDragPayload(nodeId)", app_js)
+        self.assertIn("function readFlowNodeFromObjectDrop(ev)", app_js)
+        self.assertIn("function setDraftNodeParent(draggedNode, target)", app_js)
+        self.assertIn("' draggable=\"' + rowDraggableAttr() + '\" data-flow-draft-node=\"' + escapeAttr(flowNodeKey('draft-session', d.id)) + '\"'", app_js)
+        self.assertIn("dataTransfer.setData('text/plain', flowNodeDragPayload(nodeId));", app_js)
+        self.assertIn("$convList.querySelectorAll('[data-flow-draft-node]').forEach(row =>", app_js)
+        self.assertIn("flowNodeParents[draggedNode] = target;", app_js)
+        self.assertIn("if (draggedNode.indexOf('draft-session:') === 0)", app_js)
+        self.assertIn(".conv-draft-row.dragging", app_js)
+        self.assertIn(".conv-project-tree .conv-draft-row[draggable=\"true\"]", app_css)
+
+    def test_by_objects_project_tree_has_own_scroll_region(self):
+        """The project tree should scroll separately from current sessions."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)", app_js)
+        self.assertIn('data-role="project-tree-scroll"', app_js)
+        self.assertIn("_activeRowsHtml = _currentSessionsHtml + _projectTreeScrollHtml", app_js)
+        self.assertIn(".conv-project-tree-scroll {", app_css)
+        scroll_css = app_css[app_css.index(".conv-project-tree-scroll {"):app_css.index(".conv-project-tree {", app_css.index(".conv-project-tree-scroll {"))]
+        self.assertIn("overflow-y: auto;", scroll_css)
+        self.assertIn("max-height: clamp(", scroll_css)
+        self.assertIn("overscroll-behavior: contain;", scroll_css)
+
     def test_object_header_actions_are_hover_revealed(self):
         """Object header actions should stay quiet until hover/focus."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
@@ -668,6 +716,17 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("localStorage.setItem(sessionSummaryStorageKey(sid), nextOpen ? '1' : '0')", app_js)
         self.assertIn(".conv-summary-toggle", app_css)
         self.assertIn(".conv-session-summary-detail", app_css)
+
+    def test_sidebar_summary_toggle_lives_in_row_actions(self):
+        """Summary details should not render as a stray left-edge chevron."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const summaryActionBtn = _hasSummaryDetails", app_js)
+        self.assertIn("wakeBtn + summaryActionBtn + mergeBtn", app_js)
+        self.assertNotIn("+ summaryToggleHtml\n            + cooTrackHtml", app_js)
+        self.assertIn(".conv-row-actions .conv-summary-toggle", app_css)
+        self.assertIn("width: 20px;", app_css[app_css.index(".conv-row-actions .conv-summary-toggle"):])
 
     def test_repo_pin_marker_is_not_duplicate_pin_glyph(self):
         """Repo override rows should use a distinct repo chip, not a second pin."""

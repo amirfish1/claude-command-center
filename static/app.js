@@ -7821,9 +7821,50 @@
   const $convList = document.getElementById('convList');
   const $convSearch = document.getElementById('convSearch');
   const $convSearchClear = document.getElementById('convSearchClear');
+  const $convSearchHistoryList = document.getElementById('convSearchHistoryList');
   const $kanbanBoard = document.getElementById('kanbanBoard');
   const $flowBoard = document.getElementById('flowBoard');
   const $convKanbanToggle = document.getElementById('convKanbanToggle');
+  const CONV_SEARCH_HISTORY_KEY = 'ccc-conv-search-history';
+
+  function readConversationSearchHistory() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(CONV_SEARCH_HISTORY_KEY) || '[]');
+      return Array.isArray(raw) ? raw.map(v => String(v || '').trim()).filter(Boolean).slice(0, 10) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function writeConversationSearchHistory(items) {
+    try { localStorage.setItem(CONV_SEARCH_HISTORY_KEY, JSON.stringify((items || []).slice(0, 10))); } catch (_) {}
+  }
+
+  function renderConversationSearchHistoryOptions() {
+    if (!$convSearchHistoryList) return;
+    $convSearchHistoryList.innerHTML = '';
+    readConversationSearchHistory().forEach(item => {
+      const option = document.createElement('option');
+      option.value = item;
+      $convSearchHistoryList.appendChild(option);
+    });
+  }
+
+  function rememberConversationSearchQuery(query) {
+    const q = String(query || '').trim();
+    if (!q) return;
+    const seen = new Set();
+    const deduped = [q].concat(readConversationSearchHistory()).filter(item => {
+      const key = String(item || '').trim().toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    writeConversationSearchHistory(deduped.slice(0, 10));
+    renderConversationSearchHistoryOptions();
+    return deduped.slice(0, 10);
+  }
+  renderConversationSearchHistoryOptions();
 
   // ── One-shot localStorage migration ──
   // Project rebrand: keys moved from `clv-*` (Claude Log Viewer) to `ccc-*`
@@ -9698,7 +9739,7 @@
     // dragging but no DOM element actually carries a .dragging class,
     // clear it.
     const domHasDragging = !!document.querySelector(
-      '.flow-node.dragging,.kanban-card.dragging,.kanban-column-header.dragging-header,.conv-item.dragging,.flow-board.is-panning,.flow-board.is-zooming'
+      '.flow-node.dragging,.kanban-card.dragging,.kanban-column-header.dragging-header,.conv-item.dragging,.conv-draft-row.dragging,.conv-folder-group-header.dragging,.flow-board.is-panning,.flow-board.is-zooming'
     );
     if (_sidebarDragInProgress && !domHasDragging) {
       _sidebarDragInProgress = false;
@@ -9732,7 +9773,7 @@
     return true;
   }
   document.addEventListener('dragstart', ev => {
-    const target = ev.target && ev.target.closest && ev.target.closest('.conv-item,.kanban-card,.kanban-column-header');
+    const target = ev.target && ev.target.closest && ev.target.closest('.conv-item,.conv-draft-row,.conv-folder-group-header[draggable="true"],.kanban-card,.kanban-column-header');
     if (!target || dragStartsFromTextEditor(ev.target)) return;
     beginSidebarDrag();
   }, true);
@@ -11803,6 +11844,15 @@
     persistFlowNodePositions();
     persistFlowNodeParents();
     renderSidebar(filterConversations($convSearch ? $convSearch.value : ''));
+  }
+
+  function setDraftNodeParent(draggedNode, target) {
+    if (!draggedNode || draggedNode.indexOf('draft-session:') !== 0) return false;
+    if (!target || target.indexOf('object:') !== 0) return false;
+    if (flowNodeParents[draggedNode] === target) return false;
+    flowNodeParents[draggedNode] = target;
+    persistFlowNodeParents();
+    return true;
   }
 
   function saveFlowDraftInput(id, value) {
@@ -18389,7 +18439,7 @@
       const _hasSummaryDetails = !!(!isBacklogRow && !isGithubPrRow && _summarySid && _summaryState
         && (_summaryState.did || _summaryState.insight || _summaryState.next_step_user));
       const _summaryExpanded = _hasSummaryDetails && isSessionSummaryExpanded(_summarySid);
-      const summaryToggleHtml = _hasSummaryDetails
+      const summaryActionBtn = _hasSummaryDetails
         ? '<button type="button" class="conv-summary-toggle" data-role="session-summary-toggle"'
           + ' data-summary-sid="' + escapeAttr(_summarySid) + '"'
           + ' aria-expanded="' + (_summaryExpanded ? 'true' : 'false') + '"'
@@ -19163,9 +19213,8 @@
       return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
-          + '<div class="conv-main-row">'
+            + '<div class="conv-main-row">'
             + _nyaChevronHtml
-            + summaryToggleHtml
             + cooTrackHtml
             + leftFolderChipHtml
             + titleFolderChipHtml
@@ -19189,7 +19238,7 @@
             // to walk back by moving sessionIconHtml before the chips.
             + '<span class="conv-row-end">'
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
-            +   '<span class="conv-row-actions">' + wakeBtn + mergeBtn + startBtn + pinBtn + archiveBtn + elevateObjectBtn + '</span>'
+            +   '<span class="conv-row-actions">' + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + archiveBtn + elevateObjectBtn + '</span>'
             +   sessionIconHtml
             + '</span>'
           + '</div>'
@@ -19764,9 +19813,21 @@
           : [];
         const _draftsHtml = _objDrafts.map(d => {
           const did = escapeAttr(d.id);
-          return '<div class="conv-draft-row" data-draft-id="' + did + '">'
+          // Hover reveals when the task was added (absolute + relative). Drafts
+          // carry created_at in epoch-ms; flowTimestampSec normalizes ms<->sec.
+          const _addedSec = flowTimestampSec(d.created_at);
+          let _tipAttr = '';
+          if (_addedSec) {
+            const _rel = relativeTime(_addedSec);
+            const _abs = new Date(_addedSec * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+            const _tip = 'Added ' + _abs + (_rel === 'now' ? ' (just now)' : ' (' + _rel + ' ago)');
+            _tipAttr = ' title="' + escapeAttr(_tip) + '"';
+          }
+          return '<div class="conv-draft-row" data-draft-id="' + did + '"' + _tipAttr
+            + ' draggable="' + rowDraggableAttr() + '" data-flow-draft-node="' + escapeAttr(flowNodeKey('draft-session', d.id)) + '"'
+            + '>'
             + '<span class="conv-draft-dot" aria-hidden="true">&#9675;</span>'
-            + '<input type="text" class="conv-draft-input" data-draft-id="' + did + '"'
+            + '<input type="text" class="conv-draft-input" data-draft-id="' + did + '"' + _tipAttr
             +   ' value="' + escapeAttr(d.title || '') + '" placeholder="Task — what needs doing?" />'
             + '<button type="button" class="conv-draft-play" data-flow-action="play-draft-session"'
             +   ' data-draft-id="' + did + '" title="Start a session for this task" aria-label="Start session">&#9654;</button>'
@@ -19934,7 +19995,10 @@
       const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));
       const _looseHtml = _looseRest.length
         ? _renderObjGroup('unclassified', 'Unclassified', _looseRest) : '';
-      _activeRowsHtml = _currentSessionsHtml + _projectTreeHtml + _looseHtml
+      const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)
+        ? '<div class="conv-project-tree-scroll" data-role="project-tree-scroll">' + _projectTreeHtml + _looseHtml + '</div>'
+        : '';
+      _activeRowsHtml = _currentSessionsHtml + _projectTreeScrollHtml
         + (_gcItems || []).map(it => it.html).join('');
     } else if (_shouldGroupByFolder) {
       // Group cards by folder; preserve folder order by the most
@@ -21106,6 +21170,31 @@
         startInlineObjectRename(title);
       });
     });
+    $convList.querySelectorAll('[data-flow-draft-node]').forEach(row => {
+      row.addEventListener('dragstart', (ev) => {
+        if (dragStartsFromTextEditor(ev.target)) {
+          ev.preventDefault();
+          return;
+        }
+        const nodeId = row.getAttribute('data-flow-draft-node') || '';
+        if (!nodeId) {
+          ev.preventDefault();
+          return;
+        }
+        _draggedFlowNode = nodeId;
+        beginSidebarDrag();
+        row.classList.add('dragging');
+        startSidebarDragAutoScroll(ev);
+        try { ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+        try { ev.dataTransfer.setData('text/plain', flowNodeDragPayload(nodeId)); } catch (_) {}
+      });
+      row.addEventListener('dragend', () => {
+        _draggedFlowNode = '';
+        row.classList.remove('dragging');
+        stopSidebarDragAutoScroll();
+        endSidebarDrag();
+      });
+    });
     $convList.querySelectorAll('[data-flow-action="play-draft-session"]').forEach(btn => {
       btn.addEventListener('click', (ev) => {
         ev.preventDefault();
@@ -21205,13 +21294,17 @@
       hdr.addEventListener('dragstart', (ev) => {
         ev.stopPropagation();
         _draggedObjectNode = hdr.getAttribute('data-object-drop') || '';
+        beginSidebarDrag();
+        startSidebarDragAutoScroll(ev);
         try { ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
-        try { ev.dataTransfer.setData('text/plain', 'ccc-objnode:' + _draggedObjectNode); } catch (_) {}
+        try { ev.dataTransfer.setData('text/plain', flowNodeDragPayload(_draggedObjectNode)); } catch (_) {}
         hdr.classList.add('dragging');
       });
       hdr.addEventListener('dragend', () => {
         _draggedObjectNode = '';
         hdr.classList.remove('dragging');
+        stopSidebarDragAutoScroll();
+        endSidebarDrag();
         $convList.querySelectorAll('[data-object-drop]').forEach(n =>
           n.classList.remove('is-drop-target', 'drop-above', 'drop-below'));
       });
@@ -21221,14 +21314,15 @@
         return y < 0.33 ? 'above' : (y > 0.67 ? 'below' : 'nest');
       };
       hdr.addEventListener('dragover', (ev) => {
-        if (!_draggedObjectNode && !dragHasConversationPayload(ev)) return;
+        if (!_draggedObjectNode && !_draggedFlowNode && !dragHasConversationPayload(ev)) return;
         ev.preventDefault();
         ev.dataTransfer.dropEffect = 'move';
         hdr.classList.remove('is-drop-target', 'drop-above', 'drop-below');
-        if (_draggedObjectNode) {
-          if (_draggedObjectNode === hdr.getAttribute('data-object-drop')) return;
+        if (_draggedObjectNode || _draggedFlowNode) {
+          const draggedNode = _draggedObjectNode || _draggedFlowNode;
+          if (draggedNode === hdr.getAttribute('data-object-drop')) return;
           const zone = dropZoneOf(ev);
-          hdr.classList.add(zone === 'above' ? 'drop-above' : (zone === 'below' ? 'drop-below' : 'is-drop-target'));
+          hdr.classList.add(draggedNode.indexOf('object:') === 0 && zone !== 'nest' ? (zone === 'above' ? 'drop-above' : 'drop-below') : 'is-drop-target');
         } else {
           hdr.classList.add('is-drop-target');
         }
@@ -21239,14 +21333,20 @@
         ev.stopPropagation();
         hdr.classList.remove('is-drop-target', 'drop-above', 'drop-below');
         const target = hdr.getAttribute('data-object-drop');
-        const raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
-        // ── Group-header drop: reorder or nest ──
-        const isObjDrag = (raw && raw.indexOf('ccc-objnode:') === 0) || !!_draggedObjectNode;
-        if (isObjDrag) {
+        const draggedNode = readFlowNodeFromObjectDrop(ev);
+        // ── Group-header drop: reorder/nest objects, or move draft tasks. ──
+        if (draggedNode) {
           // getData can come back empty mid-drop in some browsers; fall back to
           // the node captured on dragstart so nesting never silently no-ops.
-          const dragged = (raw && raw.indexOf('ccc-objnode:') === 0) ? raw.slice(12) : _draggedObjectNode;
+          const dragged = draggedNode;
           if (!dragged || dragged === target) return;
+          if (draggedNode.indexOf('draft-session:') === 0) {
+            if (setDraftNodeParent(draggedNode, target)) {
+              showOpToast('Moved task', 'success');
+              renderArchiveList(document.getElementById('convSearch')?.value || '');
+            }
+            return;
+          }
           const zone = dropZoneOf(ev);
           if (zone === 'nest') {
             // Dropping into Unclassified's body un-nests (lifts to top level).
@@ -21293,7 +21393,7 @@
     $convList.querySelectorAll('[data-object-drop-zone]').forEach(zone => {
       zone.addEventListener('dragover', (ev) => {
         if (ev.target.closest('[data-object-drop]')) return;
-        if (!dragHasConversationPayload(ev)) return;
+        if (!_draggedObjectNode && !_draggedFlowNode && !dragHasConversationPayload(ev)) return;
         ev.preventDefault();
         try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
         zone.classList.add('is-drop-target');
@@ -21305,15 +21405,21 @@
         if (ev.target.closest('[data-object-drop]')) return;
         zone.classList.remove('is-drop-target');
         const target = zone.getAttribute('data-object-drop-zone') || '';
-        const raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
+        const draggedNode = readFlowNodeFromObjectDrop(ev);
         // GOAL-5 — an object dropped anywhere on another object's cluster (not
         // just the thin header) nests under it. This is the gesture users
         // actually reach for; the body used to reject it outright.
-        const isObjDrag = (raw && raw.indexOf('ccc-objnode:') === 0) || !!_draggedObjectNode;
-        if (isObjDrag) {
+        if (draggedNode) {
           ev.preventDefault();
           ev.stopPropagation();
-          const dragged = (raw && raw.indexOf('ccc-objnode:') === 0) ? raw.slice(12) : _draggedObjectNode;
+          if (draggedNode.indexOf('draft-session:') === 0) {
+            if (setDraftNodeParent(draggedNode, target)) {
+              showOpToast('Moved task', 'success');
+              renderArchiveList(document.getElementById('convSearch')?.value || '');
+            }
+            return;
+          }
+          const dragged = draggedNode;
           // Dropping onto Unclassified lifts the object back to top level.
           if (target === 'unclassified') {
             if (_setObjectParent(dragged, '')) {
@@ -22373,6 +22479,7 @@
   let dragSourceIds = [];
   // Object/group header currently being dragged in the by-objects sidebar.
   let _draggedObjectNode = '';
+  let _draggedFlowNode = '';
   let _sidebarDragAutoScrollRaf = 0;
   let _sidebarDragAutoScrollVelocity = 0;
 
@@ -23613,6 +23720,17 @@
   function dragHasConversationPayload(ev) {
     const types = (ev.dataTransfer && ev.dataTransfer.types) || [];
     return Array.from(types).some(t => t === 'text/plain');
+  }
+
+  function flowNodeDragPayload(nodeId) {
+    return 'ccc-flownode:' + String(nodeId || '');
+  }
+
+  function readFlowNodeFromObjectDrop(ev) {
+    const raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
+    if (raw && raw.indexOf('ccc-flownode:') === 0) return raw.slice(13);
+    if (raw && raw.indexOf('ccc-objnode:') === 0) return raw.slice(12);
+    return _draggedFlowNode || _draggedObjectNode || '';
   }
 
   // Read the conversation id out of the drop event. Both .conv-item drag
@@ -31068,6 +31186,10 @@
       });
     }, 180);
   });
+  $convSearch.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') rememberConversationSearchQuery($convSearch.value);
+  });
+  $convSearch.addEventListener('change', () => rememberConversationSearchQuery($convSearch.value));
   if ($convSearch) {
     $convSearch.addEventListener('blur', () => {
       try { _flushDeferredSidebarRenderIfAny(); } catch (_) {}

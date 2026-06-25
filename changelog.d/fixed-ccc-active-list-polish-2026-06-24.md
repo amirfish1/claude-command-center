@@ -1,0 +1,1 @@
+- Fixed several Active sidebar polish issues: draggable draft tasks, quieter summary details controls, remembered conversation searches, and separate project-tree scrolling.

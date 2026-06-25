@@ -3600,6 +3600,10 @@
     background: rgba(88,166,255,0.10);
     outline: none;
   }
+  .conv-row-actions .conv-summary-toggle {
+    width: 20px;
+    height: 18px;
+  }
   /* Row-end slot — Omnara-style. Holds the time at rest, swaps to action
      buttons (merge / start / archive) on hover. The two share the same
      screen real estate via `position: absolute` on the actions, so the
@@ -3783,6 +3787,13 @@
      The one intended diff from the static mock: a per-level collapse
      chevron stays (we want expand/collapse at every level).
      ============================================================ */
+  .conv-project-tree-scroll {
+    min-height: 0;
+    max-height: clamp(180px, 48vh, 680px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 2px;
+  }
   .conv-project-tree { padding-left: 7px; }
   .conv-project-tree .conv-folder-group { margin: 0; }
   /* Kill the default group vertical rail — we use a per-row border-left
@@ -3902,6 +3913,12 @@
     margin-left: 18px;
     border-left: 1px solid rgba(154, 173, 194, 0.18);
     padding: 0 8px;
+  }
+  .conv-project-tree .conv-draft-row[draggable="true"] {
+    cursor: grab;
+  }
+  .conv-project-tree .conv-draft-row.dragging {
+    opacity: 0.55;
   }
   .conv-project-tree .conv-draft-row .conv-draft-dot,
   .conv-project-tree .conv-draft-row .conv-draft-play,
