@@ -5079,7 +5079,11 @@
   .conv-input-bar textarea {
     flex: 1; padding: 6px 4px;
     border: none; outline: none;
-    background: transparent;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent !important;
+    background-image: none !important;
+    box-shadow: none;
     /* Brighter than --text (#c9d1d9) so the prompt has the same legibility
        as Claude Desktop's input. Light-mode override below keeps it dark. */
     color: #f0f6fc;

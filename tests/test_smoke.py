@@ -2009,6 +2009,15 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function _autosizeConvInput()", app_js)
         self.assertIn("$convInput.style.height = 'auto';", app_js)
         self.assertIn("$convInput.style.height = Math.min($convInput.scrollHeight, max) + 'px';", app_js)
+        input_css = app_css[
+            app_css.index(".conv-input-bar input,"):
+            app_css.index("/* Keep composer sizing in JS.", app_css.index(".conv-input-bar input,"))
+        ]
+        self.assertIn("-webkit-appearance: none;", input_css)
+        self.assertIn("appearance: none;", input_css)
+        self.assertIn("background: transparent !important;", input_css)
+        self.assertIn("background-image: none !important;", input_css)
+        self.assertIn("box-shadow: none;", input_css)
 
     def test_empty_composer_arrow_up_recalls_last_command(self):
         """ArrowUp in an empty composer should recall the last sent command."""
