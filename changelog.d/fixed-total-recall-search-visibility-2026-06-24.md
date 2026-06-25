@@ -1,0 +1,1 @@
+- Kept Total Recall session matches visible at the top of by-objects conversation search results instead of hiding older hits below current sessions.
