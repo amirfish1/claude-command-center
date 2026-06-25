@@ -25168,6 +25168,16 @@
       return _projectForRepoPath(rp);
     } catch (_) { return ''; }
   }
+  function _uxqEmptyHtml(project, totalCount) {
+    const total = Number(totalCount) || 0;
+    if (project) {
+      const other = total > 0
+        ? '<div class="fq-empty-sub">' + total + (total === 1 ? ' ticket in other projects.' : ' tickets in other projects.') + '</div>'
+        : '<div class="fq-empty-sub">Use + to add one.</div>';
+      return '<div class="fq-empty"><div>No tickets for ' + escapeHtml(project) + '.</div>' + other + '</div>';
+    }
+    return '<div class="fq-empty"><div>No queue tickets.</div><div class="fq-empty-sub">Use + to add one.</div></div>';
+  }
   function _renderQueuePanel() {
     const $queue = document.getElementById('sidebarQueueList');
     if (!$queue) return;
@@ -25185,7 +25195,7 @@
           + '<span class="fq-note">' + escapeHtml(noteFull) + '</span>'
           + '<span class="fq-status">' + escapeHtml(status) + '</span>'
           + '</div>';
-      }).join('') || '<div class="fq-empty">Queue is empty.</div>';
+      }).join('') || _uxqEmptyHtml(proj, items.length);
       const $count = document.getElementById('queueCount');
       if ($count) $count.textContent = rows.length;
     });

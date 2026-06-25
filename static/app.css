@@ -14324,6 +14324,11 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-row.is-closed .fq-status { background: rgba(139,148,158,0.12); color: var(--text-muted); }
 .fq-row.is-closed .fq-note { color: var(--text-muted); }
 .fq-empty { padding: 10px; font-size: 11.5px; color: var(--text-muted); }
+.fq-empty-sub {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--faint, var(--text-muted));
+}
 
 /* Draggable object-group headers in by-objects mode: above/below insert
    lines while reordering, accent ring while nesting. */
