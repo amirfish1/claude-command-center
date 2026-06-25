@@ -19762,10 +19762,15 @@
         // depth as a left indent + a guide rail so the day reads as a tree.
         const _nestCls = depth > 0 ? ' is-nested' : '';
         const _nestStyle = ' style="--obj-depth:' + depth + ';--level-chip-hue:' + levelHue + '"';
+        // When a parent is collapsed its sub-objects are hidden, so show the
+        // whole subtree's session count (direct + descendants) instead of just
+        // the direct rows — otherwise a parent of nested objects reads as "0".
+        const _hasKids = !!(_childrenOf.get(nodeId) || []).length;
+        const _count = (collapsed && _hasKids) ? _aggCount(nodeId) : cards.length;
         return '<div class="conv-folder-group' + _nestCls + (collapsed ? ' collapsed' : '') + (sessionsCollapsed ? ' sessions-collapsed' : '') + '"'
           + _nestStyle
           + ' data-object-drop-zone="' + escapeAttr(nodeId) + '" data-object-depth="' + depth + '">'
-          + _folderGroupHeaderHtml('inprogress', title, cards.length, hue, '', nodeId, attrs, '', archiveObjectId, inlineMetaHtml, ordinal)
+          + _folderGroupHeaderHtml('inprogress', title, _count, hue, '', nodeId, attrs, '', archiveObjectId, inlineMetaHtml, ordinal)
           + body
           + '</div>';
       };
@@ -19785,6 +19790,18 @@
         if (p) { (_childrenOf.get(p) || _childrenOf.set(p, []).get(p)).push(nodeId); }
         else { _objRoots.push(nodeId); }
       }
+      // Aggregate session count = a node's own cards + all descendants'. A
+      // collapsed parent shows the real weight it hides instead of "0".
+      // Memoised + cycle-guarded. (Referenced by _renderObjGroup at call time.)
+      const _aggCountMemo = new Map();
+      const _aggCount = (nodeId) => {
+        if (_aggCountMemo.has(nodeId)) return _aggCountMemo.get(nodeId);
+        _aggCountMemo.set(nodeId, 0); // cycle guard
+        let total = ((_byObject.get(nodeId) || {}).cards || []).length;
+        for (const k of (_childrenOf.get(nodeId) || [])) total += _aggCount(k);
+        _aggCountMemo.set(nodeId, total);
+        return total;
+      };
       const _emittedObj = new Set();
       const _emitObjTree = (nodeId, depth, ordinal = 0) => {
         if (_emittedObj.has(nodeId)) return '';   // cycle / dup guard
@@ -21013,18 +21030,33 @@
     // Shared by the header drop AND the whole-group-body drop, so "drag an
     // object onto another object" nests whether you land on the thin header or
     // anywhere in the target's cluster. Returns true if it nested.
-    const _nestObjectUnder = (dragged, target) => {
-      if (!dragged || !target || dragged === target) return false;
-      if (dragged.indexOf('object:') !== 0 || target.indexOf('object:') !== 0) return false;
-      // Cycle guard: refuse if target is a descendant of dragged.
-      let n = target;
-      for (let hop = 0; hop < 16 && n; hop++) {
-        if (n === dragged) { showOpToast('That would make a loop — not nesting.', 'error'); return false; }
-        n = flowNodeParents[n];
+    // Set (or clear) an object's parent object. parent='' / falsy → top level
+    // (the un-nest path). Cycle-guarded when nesting. Returns true if it
+    // changed anything.
+    const _setObjectParent = (dragged, parent) => {
+      if (!dragged || dragged.indexOf('object:') !== 0) return false;
+      if (parent && parent.indexOf('object:') === 0) {
+        if (dragged === parent) return false;
+        // Refuse if target is a descendant of dragged (would loop).
+        let n = parent;
+        for (let hop = 0; hop < 16 && n; hop++) {
+          if (n === dragged) { showOpToast('That would make a loop — not nesting.', 'error'); return false; }
+          n = flowNodeParents[n];
+        }
+        if (flowNodeParents[dragged] === parent) return false; // already there
+        flowNodeParents[dragged] = parent;
+      } else {
+        if (!flowNodeParents[dragged]) return false; // already top level
+        delete flowNodeParents[dragged];
       }
-      flowNodeParents[dragged] = target;
       persistFlowNodeParents();
       return true;
+    };
+    // Nest dragged under target (object → object). Thin wrapper kept for the
+    // nest-zone / body-drop callers.
+    const _nestObjectUnder = (dragged, target) => {
+      if (!target || target.indexOf('object:') !== 0) return false;
+      return _setObjectParent(dragged, target);
     };
     $convList.querySelectorAll('[data-object-drop]').forEach(hdr => {
       // Group headers are themselves draggable: drop on another header's
@@ -21079,19 +21111,31 @@
           if (!dragged || dragged === target) return;
           const zone = dropZoneOf(ev);
           if (zone === 'nest') {
+            // Dropping into Unclassified's body un-nests (lifts to top level).
+            if (target === 'unclassified') {
+              if (_setObjectParent(dragged, '')) {
+                showOpToast('Moved to top level', 'success');
+                renderArchiveList(document.getElementById('convSearch')?.value || '');
+              }
+              return;
+            }
             if (_nestObjectUnder(dragged, target)) {
               showOpToast('Nested under ' + (hdr.textContent || '').trim().slice(0, 40), 'success');
               renderArchiveList(document.getElementById('convSearch')?.value || '');
             }
             return;
           }
-          // Reorder: rebuild ranks from current DOM order, splice dragged
-          // around the target. Cosmetic only.
+          // Reorder = "become the target's sibling at its level". This is also
+          // the un-nest gesture: dropping a nested object above/below a
+          // top-level object clears its parent; dropping next to a sibling
+          // keeps the shared parent. Ranks rebuild from DOM order below.
+          const tParent = flowNodeParents[target];
+          _setObjectParent(dragged, (tParent && tParent.indexOf('object:') === 0) ? tParent : '');
           const ids = Array.from($convList.querySelectorAll('[data-object-drop]'))
             .map(n => n.getAttribute('data-object-drop'))
             .filter(id => id && id !== dragged);
           const at = ids.indexOf(target);
-          if (at === -1) return;
+          if (at === -1) { renderArchiveList(document.getElementById('convSearch')?.value || ''); return; }
           ids.splice(zone === 'above' ? at : at + 1, 0, dragged);
           const order = {};
           ids.forEach((id, i) => { order[id] = i; });
@@ -21132,6 +21176,14 @@
           ev.preventDefault();
           ev.stopPropagation();
           const dragged = (raw && raw.indexOf('ccc-objnode:') === 0) ? raw.slice(12) : _draggedObjectNode;
+          // Dropping onto Unclassified lifts the object back to top level.
+          if (target === 'unclassified') {
+            if (_setObjectParent(dragged, '')) {
+              showOpToast('Moved to top level', 'success');
+              renderArchiveList(document.getElementById('convSearch')?.value || '');
+            }
+            return;
+          }
           if (_nestObjectUnder(dragged, target)) {
             const label = (zone.querySelector('.conv-folder-group-chip')?.textContent || '').trim().slice(0, 40);
             showOpToast('Nested under ' + label, 'success');
