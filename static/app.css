@@ -3819,11 +3819,25 @@
     display: inline-flex;
     order: 91;
   }
-  /* Child rows: names only at rest (the map). Time / chips / hover actions
-     reveal on hover so editing affordances stay reachable. */
-  .conv-project-tree .conv-item .conv-row-meta,
-  .conv-project-tree .conv-item .conv-row-end { display: none; }
-  .conv-project-tree .conv-item:hover .conv-row-end { display: flex; }
+  /* Child rows = the session NAME only at rest (Codex's map). Structurally
+     hide everything but the title: the drag handle + trailing ask/outcome/
+     summary blocks, and every inline chip/badge/meta beside the title. The
+     right-edge actions reveal on hover so editing stays reachable. */
+  .conv-project-tree .conv-item > :not(.conv-title-row) { display: none; }
+  .conv-project-tree .conv-item .conv-main-row > :not(.conv-title) { display: none; }
+  .conv-project-tree .conv-item:hover .conv-main-row > .conv-row-end { display: inline-flex; }
+  /* Drop the "1." / "2." ordinal prefix on object headers — Codex labels are
+     plain ("STRATEGY", not "1. STRATEGY"). */
+  .conv-project-tree .conv-folder-object-number { display: none; }
+  /* Draft/task rows: plain text at rest, play/delete on hover. */
+  .conv-project-tree .conv-draft-row .conv-draft-dot,
+  .conv-project-tree .conv-draft-row .conv-draft-play,
+  .conv-project-tree .conv-draft-row .conv-draft-delete { display: none; }
+  .conv-project-tree .conv-draft-row:hover .conv-draft-play,
+  .conv-project-tree .conv-draft-row:hover .conv-draft-delete { display: inline-flex; }
+  .conv-project-tree .conv-draft-input {
+    border: 0; background: transparent; padding: 0;
+  }
   /* Active child: Codex's green/teal left rail + faint highlight. */
   .conv-project-tree .conv-item.active {
     border-left-color: var(--green, #3fb950);
