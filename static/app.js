@@ -30152,7 +30152,8 @@
     const historyReq = fetch('/api/search-history?' + params.toString())
       .then(r => r.ok ? r.json() : { results: [] })
       .catch(() => ({ results: [] }))
-    const recallReq = fetch('/api/search-recall-sessions?' + params.toString())
+    const recallParams = new URLSearchParams({ q, limit: '50' });
+    const recallReq = fetch('/api/search-recall-sessions?' + recallParams.toString())
       .then(r => r.ok ? r.json() : { results: [] })
       .catch(() => ({ results: [] }))
     const matchedRepo = _bestRepoMatchForQuery(qLower);
