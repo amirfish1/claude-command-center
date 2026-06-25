@@ -54,6 +54,20 @@ def _run_parse_channel(env_extra=None, args=()):
     return result.stdout.strip()
 
 
+def _run_install_script_function(function_call, prelude=""):
+    """Source install.sh and invoke one function without running main."""
+    bash_program = (
+        f'{prelude}\n'
+        f'source "{INSTALL_SCRIPT}"; '
+        f'{function_call}'
+    )
+    return subprocess.run(
+        ["bash", "-c", bash_program],
+        capture_output=True,
+        text=True,
+    )
+
+
 class TestInstallScript(unittest.TestCase):
     def test_install_script_exists(self):
         self.assertTrue(
@@ -90,6 +104,28 @@ class TestInstallScript(unittest.TestCase):
             0,
             f"shellcheck failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}",
         )
+
+    def test_platform_gate_allows_macos_and_linux(self):
+        for platform in ("Darwin", "Linux"):
+            with self.subTest(platform=platform):
+                result = _run_install_script_function(
+                    "require_supported_platform",
+                    prelude=f'uname() {{ printf "{platform}"; }}',
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"{platform} should be accepted\n"
+                    f"STDOUT: {result.stdout!r}\nSTDERR: {result.stderr!r}",
+                )
+
+    def test_platform_gate_rejects_unknown_os(self):
+        result = _run_install_script_function(
+            "require_supported_platform",
+            prelude='uname() { printf "FreeBSD"; }',
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("macOS or Linux", result.stderr)
 
 
 class TestParseChannel(unittest.TestCase):
