@@ -6074,7 +6074,8 @@
     display: flex; gap: 6px; align-items: center;
     padding: 8px 12px 0;
   }
-  .conv-list-header .search-wrap { flex: 1; position: relative; }
+  .search-wrap { position: relative; }
+  .conv-list-header .search-wrap { flex: 1; }
   .conv-search-input {
     width: 100%;
     padding: 6px 30px 6px 10px;
@@ -10184,9 +10185,24 @@
      for the primary CTAs. The two buttons share the row 50/50. */
   .new-session-panel {
     border-bottom: 1px solid var(--border);
-    padding: 10px 12px;
+    padding: 8px 12px;
     display: flex;
+    flex-direction: column;
     gap: 6px;
+  }
+  .new-session-primary-row,
+  .new-session-secondary-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .new-session-primary-row #sidebarNewBtn {
+    flex: 0 0 auto;
+  }
+  .new-session-primary-row .search-wrap {
+    flex: 1 1 120px;
+    min-width: 72px;
   }
   .new-session-btn {
     flex: 1 1 0;

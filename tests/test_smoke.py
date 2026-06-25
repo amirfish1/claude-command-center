@@ -237,6 +237,24 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("font-weight: 800;", app_css)
         self.assertIn("@keyframes convSearchPulse", app_css)
 
+    def test_sidebar_search_shares_new_session_row(self):
+        """The conversation search box should live beside New session, not in
+        a separate list-header row."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        panel_start = index_html.index('<div class="new-session-panel">')
+        panel_end = index_html.index('<div id="gcManageModal"', panel_start)
+        panel_html = index_html[panel_start:panel_end]
+        self.assertIn('<div class="new-session-primary-row">', panel_html)
+        self.assertLess(panel_html.index('id="sidebarNewBtn"'), panel_html.index('id="convSearch"'))
+        self.assertIn('placeholder="Search..."', panel_html)
+        list_start = index_html.index('<div class="conv-list-panel" id="convListPanel">')
+        list_end = index_html.index('<div class="today-tray"', list_start)
+        self.assertNotIn('id="convSearch"', index_html[list_start:list_end])
+        self.assertIn('.new-session-primary-row,', app_css)
+        self.assertIn('.new-session-primary-row .search-wrap {', app_css)
+
     def test_new_session_folder_shortcuts_are_labeled(self):
         """The folder dropdown and recent chips both set the same spawn CWD.
 

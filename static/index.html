@@ -430,11 +430,22 @@
     </div>
 
     <div class="new-session-panel">
-      <button class="new-session-btn" id="sidebarNewBtn" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New session</button>
-      <button class="new-session-btn new-session-btn-secondary" id="sidebarNewGroupChatBtn" title="Create a new empty group chat — drag sessions in afterwards to add them" aria-label="New group chat"><span class="plus" aria-hidden="true">+</span> New Group chat</button>
-      <button class="new-session-btn new-session-btn-secondary" id="sidebarGroupChatLiveBtn" title="Open the standalone group chat live view" aria-label="Group chat live view" style="flex:0 0 auto;padding:0 10px;">Live</button>
-      <button class="new-session-btn new-session-btn-secondary" id="sidebarManageGroupChatsBtn" title="Manage existing group chats — pause / unpause orchestration" aria-label="Manage group chats" style="flex:0 0 auto;padding:0 10px;">&#8801;</button>
+      <div class="new-session-primary-row">
+        <button class="new-session-btn" id="sidebarNewBtn" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New session</button>
+        <div class="search-wrap">
+          <input type="text" id="convSearch" class="conv-search-input" placeholder="Search..." autocomplete="off" list="convSearchHistoryList">
+          <datalist id="convSearchHistoryList"></datalist>
+          <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
+        </div>
+        <button type="button" id="convListCollapseBtn" class="conv-list-collapse-btn" title="Collapse conversation list" aria-label="Collapse conversation list" aria-expanded="true">&laquo;</button>
+      </div>
+      <div class="new-session-secondary-row">
+        <button class="new-session-btn new-session-btn-secondary" id="sidebarNewGroupChatBtn" title="Create a new empty group chat — drag sessions in afterwards to add them" aria-label="New group chat"><span class="plus" aria-hidden="true">+</span> New Group chat</button>
+        <button class="new-session-btn new-session-btn-secondary" id="sidebarGroupChatLiveBtn" title="Open the standalone group chat live view" aria-label="Group chat live view" style="flex:0 0 auto;padding:0 10px;">Live</button>
+        <button class="new-session-btn new-session-btn-secondary" id="sidebarManageGroupChatsBtn" title="Manage existing group chats — pause / unpause orchestration" aria-label="Manage group chats" style="flex:0 0 auto;padding:0 10px;">&#8801;</button>
+      </div>
     </div>
+    <div id="convSearchStatus" class="conv-search-status" data-role="conv-search-status" hidden aria-live="polite">SEARCHING...</div>
     <div id="gcManageModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="gcManageTitle" hidden>
       <div class="upd-backdrop" data-gc-manage-close></div>
       <div class="upd-dialog" style="width:min(560px,94vw);max-height:80vh;display:flex;flex-direction:column;">
@@ -446,15 +457,6 @@
       </div>
     </div>
     <div class="conv-list-panel" id="convListPanel">
-      <div class="conv-list-header">
-        <button type="button" id="convListCollapseBtn" class="conv-list-collapse-btn" title="Collapse conversation list" aria-label="Collapse conversation list" aria-expanded="true">&laquo;</button>
-        <div class="search-wrap">
-          <input type="text" id="convSearch" class="conv-search-input" placeholder="Search conversations..." autocomplete="off" list="convSearchHistoryList">
-          <datalist id="convSearchHistoryList"></datalist>
-          <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
-        </div>
-      </div>
-      <div id="convSearchStatus" class="conv-search-status" data-role="conv-search-status" hidden aria-live="polite">SEARCHING...</div>
       <!-- Today's projects tray (CCC-141). Hidden unless #todayToggleBtn is on.
            A lightweight session tray — NOT the Flow board's data. Drop conv rows
            here to plan today's sessions; ids persist in localStorage. -->

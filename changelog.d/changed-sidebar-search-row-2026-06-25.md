@@ -1,0 +1,1 @@
+- Move sidebar conversation search into the New session row.
