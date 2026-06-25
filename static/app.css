@@ -3830,6 +3830,11 @@
   .conv-current-sessions-scroll .conv-item:hover {
     background: rgba(255, 255, 255, 0.045);
   }
+  .conv-current-sessions-scroll .conv-item.is-current-child-row {
+    --current-child-indent: calc(var(--current-child-depth, 1) * 14px);
+    --conv-icon-left: calc(10px + var(--current-child-indent));
+    border-left-color: rgba(154, 173, 194, 0.24);
+  }
   .conv-current-sessions-scroll .conv-item .conv-title-row,
   .conv-current-sessions-scroll .conv-item .conv-main-row {
     min-height: var(--current-session-row-h);

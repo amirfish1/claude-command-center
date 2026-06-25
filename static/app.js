@@ -19537,6 +19537,11 @@
 
       const groupedRowClass = opts.suppressFolderChip ? ' is-grouped-row' : '';
       const evergreenRowClass = opts.evergreenAgent ? ' is-evergreen-agent-row' : '';
+      const currentChildDepth = Math.max(0, Math.min(4, Number(opts.currentChildDepth || 0) || 0));
+      const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';
+      const currentChildStyle = currentChildDepth > 0
+        ? ' style="--current-child-depth:' + currentChildDepth + '"'
+        : '';
       const rowRepoAttr = escapeAttr(rowRepoPath(c) || '');
 
       // COO row layer — checkbox (tracking) + escalated badge. Row-level only:
@@ -19622,7 +19627,7 @@
         + '</div>'
         : '';
 
-      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + currentChildRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row">'
@@ -20424,6 +20429,44 @@
           localStorage.setItem(_CUR_ORDER_KEY, JSON.stringify(_o));
         } catch (_) {}
       }
+      const _currentSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
+      const _currentSessionParentId = (c) =>
+        String((c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)) || '').trim();
+      const _currentSessionsTreeRows = (rows) => {
+        const byId = new Map();
+        (rows || []).forEach(c => {
+          const id = _currentSessionId(c);
+          if (id) byId.set(id, c);
+        });
+        const childrenByParent = new Map();
+        const childIds = new Set();
+        (rows || []).forEach(c => {
+          const id = _currentSessionId(c);
+          const pid = _currentSessionParentId(c);
+          if (!id || !pid || id === pid || !byId.has(pid)) return;
+          childIds.add(id);
+          (childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)).push(c);
+        });
+        const out = [];
+        const emitted = new Set();
+        const emit = (c, depth) => {
+          const id = _currentSessionId(c);
+          if (!id || emitted.has(id)) return;
+          emitted.add(id);
+          out.push({ card: c, depth });
+          (childrenByParent.get(id) || []).forEach(child => emit(child, depth + 1));
+        };
+        (rows || []).forEach(c => {
+          const id = _currentSessionId(c);
+          if (!id || childIds.has(id)) return;
+          emit(c, 0);
+        });
+        (rows || []).forEach(c => emit(c, 0)); // cycle/orphan guard
+        return out;
+      };
+      const _currentSessionRows = _ipSearchActive
+        ? _currentSessions.map(c => ({ card: c, depth: 0 }))
+        : _currentSessionsTreeRows(_currentSessions);
       // Show ~7 at rest, then a "More" affordance — the live triage list
       // shouldn't push the Project tree way down. Expanded state persists so a
       // poll re-render doesn't collapse it back.
@@ -20431,20 +20474,20 @@
       const _CURRENT_SESSIONS_VISIBLE_ROWS = _CURRENT_SESSIONS_COLLAPSED_LIMIT + 1;
       let _curExpanded = false;
       try { _curExpanded = localStorage.getItem('ccc-current-sessions-expanded') === '1'; } catch (_) {}
-      const _curShown = (_curExpanded || _currentSessions.length <= _CURRENT_SESSIONS_COLLAPSED_LIMIT)
-        ? _currentSessions : _currentSessions.slice(0, _CURRENT_SESSIONS_COLLAPSED_LIMIT);
-      const _curHidden = _currentSessions.length - _curShown.length;
+      const _curShown = (_curExpanded || _currentSessionRows.length <= _CURRENT_SESSIONS_COLLAPSED_LIMIT)
+        ? _currentSessionRows : _currentSessionRows.slice(0, _CURRENT_SESSIONS_COLLAPSED_LIMIT);
+      const _curHidden = _currentSessionRows.length - _curShown.length;
       let _currentSessionsHtml = '';
       if (_currentSessions.length) {
         const _currentSessionsLabel = _ipSearchActive ? 'Search results' : 'Current sessions';
         const _currentSessionsSub = _ipSearchActive ? '' : '<span class="conv-objects-section-sub">' + _currentSessionsWindowLabel + '</span>';
         _currentSessionsHtml = '<div class="conv-objects-section-label">' + _currentSessionsLabel
           + _currentSessionsSub + '</div>'
-          + _curShown.map(c => _renderRow(c, { suppressFolderChip: false, quietTitleChrome: true })).join('');
+          + _curShown.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join('');
         if (_curHidden > 0) {
           _currentSessionsHtml += '<button type="button" class="conv-current-more"'
             + ' data-role="current-sessions-more" data-expand="1">More (' + _curHidden + ')</button>';
-        } else if (_curExpanded && _currentSessions.length > _CURRENT_SESSIONS_COLLAPSED_LIMIT) {
+        } else if (_curExpanded && _currentSessionRows.length > _CURRENT_SESSIONS_COLLAPSED_LIMIT) {
           _currentSessionsHtml += '<button type="button" class="conv-current-more"'
             + ' data-role="current-sessions-more" data-expand="0">Show less</button>';
         }
@@ -34834,6 +34877,13 @@
         // goal chip never renders.
         goal: c.goal || '',
         goal_status: c.goal_status || '',
+        parent_session_id: c.parent_session_id || '',
+        hermes_parent_session_id: c.hermes_parent_session_id || c.parent_session_id || '',
+        hermes_continued_from: c.hermes_continued_from || c.parent_session_id || '',
+        hermes_child_session_ids: Array.isArray(c.hermes_child_session_ids) ? c.hermes_child_session_ids : [],
+        hermes_lineage_session_ids: Array.isArray(c.hermes_lineage_session_ids) ? c.hermes_lineage_session_ids : [],
+        hermes_lineage_count: c.hermes_lineage_count || 0,
+        hermes_is_parent: !!c.hermes_is_parent,
       });
     }).map(_applyLiveOverlayToRow);
 

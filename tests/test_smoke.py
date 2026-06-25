@@ -1003,8 +1003,8 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("const _CURRENT_SESSIONS_COLLAPSED_LIMIT = 7;", app_js)
         self.assertIn("const _CURRENT_SESSIONS_VISIBLE_ROWS = _CURRENT_SESSIONS_COLLAPSED_LIMIT + 1;", app_js)
-        self.assertIn("? _currentSessions : _currentSessions.slice(0, _CURRENT_SESSIONS_COLLAPSED_LIMIT);", app_js)
-        self.assertIn("_currentSessions.length > _CURRENT_SESSIONS_COLLAPSED_LIMIT", app_js)
+        self.assertIn("? _currentSessionRows : _currentSessionRows.slice(0, _CURRENT_SESSIONS_COLLAPSED_LIMIT);", app_js)
+        self.assertIn("_currentSessionRows.length > _CURRENT_SESSIONS_COLLAPSED_LIMIT", app_js)
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
         self.assertIn("--current-session-row-h: 20px;", current_css)
         self.assertIn("--current-session-label-h: 18px;", current_css)
@@ -1049,16 +1049,36 @@ class TestServerImports(unittest.TestCase):
 
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row):not(.conv-hover-meta-row),", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row):not(.conv-hover-meta-row),", current_css)
         self.assertIn("display: block;", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row,", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-meta-row", current_css)
         self.assertIn("display: flex;", current_css)
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover:not(.active) > .conv-outcome,", current_css)
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within:not(.active) > .conv-outcome { display: none; }", current_css)
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-outcome { display: block; }", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
+
+    def test_by_objects_current_sessions_nest_parented_sessions(self):
+        """Current sessions should show parented child sessions directly under
+        their visible parent, indented."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("parent_session_id: c.parent_session_id || ''", app_js)
+        self.assertIn("hermes_child_session_ids: Array.isArray(c.hermes_child_session_ids) ? c.hermes_child_session_ids : []", app_js)
+        self.assertIn("const _currentSessionParentId = (c) =>", app_js)
+        self.assertIn("const _currentSessionsTreeRows = (rows) => {", app_js)
+        self.assertIn("childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)", app_js)
+        self.assertIn("const _currentSessionRows = _ipSearchActive", app_js)
+        self.assertIn("const _curShown = (_curExpanded || _currentSessionRows.length <= _CURRENT_SESSIONS_COLLAPSED_LIMIT)", app_js)
+        self.assertIn("_curShown.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join('')", app_js)
+        self.assertIn("const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';", app_js)
+        self.assertIn("const currentChildStyle = currentChildDepth > 0", app_js)
+        self.assertIn(".conv-current-sessions-scroll .conv-item.is-current-child-row {", app_css)
+        current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
+        self.assertIn("--current-child-indent: calc(var(--current-child-depth, 1) * 14px);", current_css)
+        self.assertIn("--conv-icon-left: calc(10px + var(--current-child-indent));", current_css)
 
     def test_sidebar_left_model_icon_uses_reserved_title_gutter(self):
         """Left-side model icons should center across expanded rows while the
