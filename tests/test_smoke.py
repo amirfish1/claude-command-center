@@ -193,6 +193,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_historyBadgeLabel = _historyIsRecall ? 'TR'", app_js)
         self.assertIn("const recallParams = new URLSearchParams({ q, limit: '50' });", app_js)
         self.assertIn("fetch('/api/search-recall-sessions?' + recallParams.toString())", app_js)
+        self.assertIn(
+            "const results = ((recallData && recallData.results) || [])\n"
+            "        .concat((data && data.results) || []);",
+            app_js,
+        )
         self.assertIn("Total Recall", app_js)
         self.assertIn("is-recall", app_js)
         self.assertIn(".conv-history-badge.is-recall", app_css)

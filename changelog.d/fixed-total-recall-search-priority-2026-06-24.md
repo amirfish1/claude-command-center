@@ -1,0 +1,1 @@
+- Prioritized Total Recall session matches in conversation search so TR results are visible instead of buried after history hits.

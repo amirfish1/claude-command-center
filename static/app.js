@@ -30163,15 +30163,14 @@
     return Promise.all([historyReq, recallReq, repoReq]).then(([data, recallData, repoRows]) => {
       // Drop stale responses — newer keystroke already in flight.
       if (seq !== _historyFetchSeq) return;
-      const results = ((data && data.results) || [])
-        .concat((recallData && recallData.results) || []);
+      const results = ((recallData && recallData.results) || [])
+        .concat((data && data.results) || []);
       const bySession = new Map();
       for (const r of results) {
         const sid = r.session_id;
         if (!sid) continue;
-        // First hit per session wins. Server returns RRF-sorted when
-        // semantic is on, BM25-sorted when off. Either way, first hit
-        // is the best per session.
+        // First hit per session wins. Recall goes first so TR-backed matches
+        // are visible instead of being buried after a full history page.
         if (!bySession.has(sid)) {
           bySession.set(sid, {
             snippet: r.snippet || '',
