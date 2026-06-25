@@ -3910,7 +3910,11 @@
      full row is one hover/expand away in Comfortable. Reversible: it's a
      pure display toggle on #convList, no render change. */
   .compact-rows .conv-item .conv-outcome { display: none; }
-  .compact-rows .conv-item .conv-row-meta { display: none; }
+  /* Compact hides the secondary chips (size, branch, tokens) but KEEPS the
+     live status slot — the blinking bash/WIP/edit indicator stays visible so
+     you can still see what a session is doing at a glance. */
+  .compact-rows .conv-item .conv-row-meta .conv-meta-inline,
+  .compact-rows .conv-item .conv-row-meta .conv-branch-slot { display: none; }
   .conv-folder-group .conv-item.is-grouped-row {
     /* Parity with "by time" rows — same vertical padding (6px) and same
        border-radius (6px). The original tightening (4px / 4px) made the
@@ -4207,7 +4211,14 @@
     justify-content: flex-end;
     gap: 6px;
     flex-wrap: wrap;
-    padding: 0 8px 6px 8px;
+    padding: 6px 8px;
+    /* Keep the controls (expand/collapse all, by project/time, Details,
+       window) reachable while scrolling a long list — pin to the top of the
+       scroll container; rows slide underneath. */
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    background: var(--surface);
   }
   #convList .conv-inprogress-toolbar .conv-inprogress-tools {
     margin-left: 0;
