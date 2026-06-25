@@ -10029,6 +10029,7 @@
   let flowOrganizeRecordSession = null;
   let flowNodeParents = {};
   try { flowNodeParents = JSON.parse(localStorage.getItem('ccc-flow-node-parents') || '{}'); } catch (_) {}
+  const OBJECT_SESSION_ORDER_KEY = 'ccc-object-session-order';
   let flowCollapsedNodes = {};
   try { flowCollapsedNodes = JSON.parse(localStorage.getItem('ccc-flow-collapsed-nodes') || '{}'); } catch (_) {}
   let flowCustomObjects = [];
@@ -10646,6 +10647,104 @@
     }
     if (!changed) return false;
     persistFlowNodeParents();
+    clearSelectedConversationRows();
+    return true;
+  }
+
+  function loadObjectSessionOrder() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(OBJECT_SESSION_ORDER_KEY) || '{}');
+      return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function saveObjectSessionOrder(order) {
+    try { localStorage.setItem(OBJECT_SESSION_ORDER_KEY, JSON.stringify(order || {})); } catch (_) {}
+  }
+
+  function conversationNodeIdForRecord(c) {
+    const sid = c && (c.session_id || c.id);
+    return sid ? flowNodeKey('session', sid) : '';
+  }
+
+  function conversationNodeIdForConvId(convId) {
+    if (!convId) return '';
+    const row = (conversationsData || []).find(c =>
+      c && (c.id === convId || c.session_id === convId));
+    const sid = (row && (row.session_id || row.id)) || convId;
+    return sid ? flowNodeKey('session', sid) : '';
+  }
+
+  function conversationNodeIdForElement(row) {
+    if (!row) return '';
+    const sid = row.getAttribute('data-session-id') || row.dataset.id || '';
+    return sid ? flowNodeKey('session', sid) : '';
+  }
+
+  function sortedObjectCardsForRender(parentNode, cards) {
+    const list = Array.isArray(cards) ? cards.slice() : [];
+    const allOrder = loadObjectSessionOrder();
+    const ranks = (allOrder && allOrder[parentNode]) || {};
+    if (!ranks || typeof ranks !== 'object') return list;
+    return list.map((c, index) => ({
+      c,
+      index,
+      rank: ranks[conversationNodeIdForRecord(c)],
+    })).sort((a, b) => {
+      const ar = Number.isFinite(a.rank) ? a.rank : Infinity;
+      const br = Number.isFinite(b.rank) ? b.rank : Infinity;
+      if (ar !== br) return ar - br;
+      return a.index - b.index;
+    }).map(item => item.c);
+  }
+
+  function reorderObjectSessionRows(targetRow, convIds, placement) {
+    if (!targetRow || !Array.isArray(convIds) || !convIds.length) return false;
+    const group = targetRow.closest('[data-object-drop-zone]');
+    if (!group) return false;
+    const targetParent = group.getAttribute('data-object-drop-zone') || '';
+    const targetKey = conversationNodeIdForElement(targetRow);
+    if (!targetParent || !targetKey) return false;
+    const movedKeys = [];
+    for (const convId of convIds) {
+      const key = conversationNodeIdForConvId(convId);
+      if (key && movedKeys.indexOf(key) === -1) movedKeys.push(key);
+    }
+    if (!movedKeys.length || movedKeys.indexOf(targetKey) !== -1) return false;
+
+    let parentChanged = false;
+    for (const key of movedKeys) {
+      if (targetParent === 'unclassified') {
+        if (flowNodeParents[key]) {
+          delete flowNodeParents[key];
+          parentChanged = true;
+        }
+      } else if (flowNodeParents[key] !== targetParent) {
+        flowNodeParents[key] = targetParent;
+        parentChanged = true;
+      }
+    }
+
+    const rowKeys = Array.from(group.children)
+      .filter(child => child.classList && child.classList.contains('conv-item'))
+      .map(conversationNodeIdForElement)
+      .filter(Boolean);
+    const nextKeys = rowKeys.filter(key => movedKeys.indexOf(key) === -1);
+    const targetIndex = nextKeys.indexOf(targetKey);
+    if (targetIndex === -1) return false;
+    nextKeys.splice(placement === 'after' ? targetIndex + 1 : targetIndex, 0, ...movedKeys);
+
+    const allOrder = loadObjectSessionOrder();
+    for (const [parent, ranks] of Object.entries(allOrder)) {
+      if (!ranks || typeof ranks !== 'object' || parent === targetParent) continue;
+      for (const key of movedKeys) delete ranks[key];
+    }
+    allOrder[targetParent] = {};
+    nextKeys.forEach((key, index) => { allOrder[targetParent][key] = index; });
+    saveObjectSessionOrder(allOrder);
+    if (parentChanged) persistFlowNodeParents();
     clearSelectedConversationRows();
     return true;
   }
@@ -20218,7 +20317,9 @@
         _emittedObj.add(nodeId);
         const group = _byObject.get(nodeId);
         if (!group) return '';
-        let html = _renderObjGroup(nodeId, group.title, group.cards, depth, ordinal);
+        const cards = group.cards;
+        const orderedCards = sortedObjectCardsForRender(nodeId, cards);
+        let html = _renderObjGroup(nodeId, group.title, orderedCards, depth, ordinal);
         // A collapsed parent hides its whole subtree — skip recursing.
         if (_isFolderGroupCollapsed('inprogress', nodeId)) return html;
         const includeEvergreen = !!(opts && opts.includeEvergreen);
@@ -20318,7 +20419,7 @@
       const _currentIds = new Set(_currentSessions.map(c => c.session_id || c.id));
       const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));
       const _looseHtml = _looseRest.length
-        ? _renderObjGroup('unclassified', 'Unclassified', _looseRest) : '';
+        ? _renderObjGroup('unclassified', 'Unclassified', sortedObjectCardsForRender('unclassified', _looseRest)) : '';
       const _currentSessionsExtraHtml = (_gcItems || []).map(it => it.html).join('');
       const _currentSessionsBodyHtml = _currentSessionsHtml + _currentSessionsExtraHtml;
       const _currentSessionsScrollClass = 'conv-current-sessions-scroll' + (_ipSearchActive ? ' is-search-results' : '');
@@ -22937,6 +23038,13 @@
       if (!src || dragSourceIds.indexOf(dstId) !== -1) return;
       const before = el.classList.contains('drop-above');
       el.classList.remove('drop-above', 'drop-below');
+      const objectDropGroup = el.closest('[data-object-drop-zone]');
+      if (objectDropGroup) {
+        if (reorderObjectSessionRows(el, readConvIdsFromDrop(ev), before ? 'before' : 'after')) {
+          renderArchiveList(document.getElementById('convSearch')?.value || '');
+        }
+        return;
+      }
       // When src and dst belong to different folder buckets, treat the
       // drop as a repo pin instead of a reorder.
       {

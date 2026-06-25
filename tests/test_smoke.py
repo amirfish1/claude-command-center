@@ -432,6 +432,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (reparentConversationIdsToObject(target, convIds))", app_js)
         self.assertIn(".conv-folder-group.is-drop-target", app_css)
 
+    def test_by_object_session_rows_can_be_reordered_within_group(self):
+        """Dropping a session row on another row inside an object should rank
+        that object's sessions on screen without using global archive order."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const OBJECT_SESSION_ORDER_KEY = 'ccc-object-session-order';", app_js)
+        self.assertIn("function sortedObjectCardsForRender(parentNode, cards)", app_js)
+        self.assertIn("function reorderObjectSessionRows(targetRow, convIds, placement)", app_js)
+        self.assertIn("const orderedCards = sortedObjectCardsForRender(nodeId, cards);", app_js)
+        self.assertIn("_renderObjGroup(nodeId, group.title, orderedCards, depth, ordinal)", app_js)
+        self.assertIn("const objectDropGroup = el.closest('[data-object-drop-zone]');", app_js)
+        self.assertIn("if (reorderObjectSessionRows(el, readConvIdsFromDrop(ev), before ? 'before' : 'after'))", app_js)
+
     def test_nested_object_group_suppresses_empty_hint(self):
         """A parent object with child objects is not empty even without sessions."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -580,8 +593,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function numberedObjectTitleHtml(title, ordinal = 0)", app_js)
         self.assertIn("const prefix = ordinal > 0", app_js)
         self.assertIn("numberedObjectTitleHtml(folder, objectOrdinal)", app_js)
-        self.assertIn("_renderObjGroup(nodeId, group.title, group.cards, depth, ordinal)", app_js)
-        self.assertIn("_emitObjTree(k, depth + 1, i + 1)", app_js)
+        self.assertIn("_renderObjGroup(nodeId, group.title, orderedCards, depth, ordinal)", app_js)
+        self.assertIn("_emitObjTree(k, depth + 1, i + 1, opts)", app_js)
         self.assertNotIn("raw.split('/').map", app_js)
         self.assertIn(".conv-folder-object-title-text", app_css)
         self.assertIn(".conv-folder-object-number", app_css)
