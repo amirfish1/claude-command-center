@@ -19815,13 +19815,33 @@
         return html;
       };
       const _objGroupsHtml = _objRoots.map(n => _emitObjTree(n, 0, 0)).join('');
-      // Codex-layout step 1: the loose (object-unattached) sessions are the
-      // live triage list — render them ON TOP as "Current sessions", with the
-      // object tree below as the day's map. (Next: hoist the tree so it shows
-      // in by-time / by-project too, and retire the by-objects toggle.)
-      const _currentSessionsHtml = _unclassified.length
-        ? _renderObjGroup('unclassified', 'Current sessions', _unclassified) : '';
-      _activeRowsHtml = _currentSessionsHtml + _objGroupsHtml + (_gcItems || []).map(it => it.html).join('');
+      // Codex-layout: stacked regions in the by-objects view.
+      //  1) "Current sessions" — every session active in the last 5h (the live
+      //     triage list), flat, regardless of object attachment.
+      //  2) "Project tree" — the object hierarchy (the day's map). A live
+      //     session attached to an object intentionally appears in both.
+      //  3) "Unclassified" — loose sessions older than 5h, so nothing is
+      //     dropped from view.
+      const _LIVE_WINDOW_S = 5 * 3600;
+      const _nowS = Date.now() / 1000;
+      const _sessionTs = (c) => (c.modified || c.mtime || 0);
+      const _currentSessions = (_visibleSessionConvs || [])
+        .filter(c => _sessionTs(c) >= _nowS - _LIVE_WINDOW_S)
+        .sort((a, b) => _sessionTs(b) - _sessionTs(a));
+      const _currentSessionsHtml = _currentSessions.length
+        ? '<div class="conv-objects-section-label">Current sessions'
+          + '<span class="conv-objects-section-sub">last 5h</span></div>'
+          + _currentSessions.map(c => _renderRow(c, { suppressFolderChip: false })).join('')
+        : '';
+      const _projectTreeHtml = _objGroupsHtml
+        ? '<div class="conv-objects-section-label">Project tree</div>' + _objGroupsHtml
+        : '';
+      const _currentIds = new Set(_currentSessions.map(c => c.session_id || c.id));
+      const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));
+      const _looseHtml = _looseRest.length
+        ? _renderObjGroup('unclassified', 'Unclassified', _looseRest) : '';
+      _activeRowsHtml = _currentSessionsHtml + _projectTreeHtml + _looseHtml
+        + (_gcItems || []).map(it => it.html).join('');
     } else if (_shouldGroupByFolder) {
       // Group cards by folder; preserve folder order by the most
       // recent card in each group (freshest folder appears first).
