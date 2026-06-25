@@ -10287,8 +10287,11 @@
     border-bottom: 1px solid var(--border);
     padding: 8px 12px;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: nowrap;
     gap: 6px;
+    min-width: 0;
   }
   .new-session-primary-row,
   .new-session-secondary-row {
@@ -10297,12 +10300,28 @@
     gap: 6px;
     min-width: 0;
   }
+  .new-session-primary-row {
+    flex: 1 1 auto;
+  }
+  .new-session-secondary-row {
+    flex: 0 1 auto;
+  }
   .new-session-primary-row #sidebarNewBtn {
-    flex: 0 0 auto;
+    flex: 0 1 136px;
   }
   .new-session-primary-row .search-wrap {
-    flex: 1 1 120px;
-    min-width: 72px;
+    flex: 1 1 96px;
+    min-width: 48px;
+  }
+  .new-session-secondary-row #sidebarNewGroupChatBtn {
+    flex: 0 1 172px;
+  }
+  .new-session-secondary-row .new-session-icon-btn {
+    flex: 0 0 34px;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    font-size: 14px;
   }
   .new-session-btn {
     flex: 1 1 0;

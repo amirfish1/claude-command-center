@@ -255,6 +255,29 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('.new-session-primary-row,', app_css)
         self.assertIn('.new-session-primary-row .search-wrap {', app_css)
 
+    def test_new_session_panel_controls_fit_single_toolbar_row(self):
+        """New-session, search, group-chat, live, and manage controls stay in one row."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        panel_start = index_html.index('<div class="new-session-panel">')
+        panel_end = index_html.index('<div id="gcManageModal"', panel_start)
+        panel_html = index_html[panel_start:panel_end]
+        panel_css = app_css[
+            app_css.index(".new-session-panel {"):
+            app_css.index("/* Sidebar footer", app_css.index(".new-session-panel {"))
+        ]
+
+        self.assertIn("flex-direction: row;", panel_css)
+        self.assertIn("flex-wrap: nowrap;", panel_css)
+        self.assertIn(".new-session-secondary-row .new-session-icon-btn {", panel_css)
+        self.assertIn("width: 34px;", panel_css)
+        self.assertIn("min-width: 48px;", panel_css)
+        self.assertIn('id="sidebarGroupChatLiveBtn"', panel_html)
+        self.assertIn('aria-label="Group chat live view"', panel_html)
+        self.assertIn('<span aria-hidden="true">&#9654;</span>', panel_html)
+        self.assertNotIn('>Live</button>', panel_html)
+
     def test_new_session_folder_shortcuts_are_labeled(self):
         """The folder dropdown and recent chips both set the same spawn CWD.
 
