@@ -1,0 +1,1 @@
+- Keep the By objects current-sessions band tall enough for seven rows plus More, and consolidate the right status rail into Metadata and Queue tabs.

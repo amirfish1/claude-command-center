@@ -722,6 +722,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("--current-session-label-h: 28px;", current_css)
         self.assertIn("--current-sessions-visible-rows: 8;", current_css)
         self.assertIn("calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows)))", current_css)
+        self.assertIn("flex: 0 0 clamp(", current_css)
+        self.assertIn("min-height: calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows)));", current_css)
 
     def test_by_objects_draft_rows_align_with_sessions_and_show_play(self):
         """Draft rows should start where real sessions start, with an always
@@ -1810,23 +1812,29 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const source = (conv && conv.first_message) || ev.text || '';", app_js)
         self.assertIn("const cleaned = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));", app_js)
 
-    def test_right_rail_uses_session_utility_tabs(self):
-        """The right rail should match the Stitch 2 shape: compact Session
-        Utilities with Metadata, Files, and Activity panes instead of one long
-        vertical stack of unrelated session data."""
+    def test_right_rail_uses_metadata_and_queue_tabs(self):
+        """The right rail keeps session context stacked under Metadata, with
+        Queue as the only separate utility pane."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('<div class="status-rail-title">Session Utilities</div>', index_html)
         self.assertIn('data-rail-tab="metadata"', index_html)
-        self.assertIn('data-rail-tab="files"', index_html)
-        self.assertIn('data-rail-tab="activity"', index_html)
+        self.assertIn('data-rail-tab="queue"', index_html)
+        self.assertNotIn('data-rail-tab="files"', index_html)
+        self.assertNotIn('data-rail-tab="activity"', index_html)
         self.assertIn('id="statusRailMetadataPane"', index_html)
-        self.assertIn('id="statusRailFilesPane"', index_html)
-        self.assertIn('id="statusRailActivityPane"', index_html)
+        self.assertIn('id="statusRailQueuePane"', index_html)
+        self.assertNotIn('id="statusRailFilesPane"', index_html)
+        self.assertNotIn('id="statusRailActivityPane"', index_html)
+        self.assertIn('id="filesPanel"', index_html[index_html.index('id="statusRailMetadataPane"'):index_html.index('id="statusRailQueuePane"')])
+        self.assertIn('id="subagentsPanel"', index_html[index_html.index('id="statusRailMetadataPane"'):index_html.index('id="statusRailQueuePane"')])
+        self.assertNotIn('id="filesViewToggle"', index_html)
         self.assertIn("function setStatusRailTab(tab)", app_js)
         self.assertIn("rail.querySelector('#statusRailMetadataPane')", app_js)
-        self.assertIn("rail.querySelector('#statusRailActivityPane')", app_js)
+        self.assertIn("rail.querySelector('#statusRailQueuePane')", app_js)
+        self.assertNotIn("rail.querySelector('#statusRailActivityPane')", app_js)
+        self.assertNotIn("getElementById('filesViewToggle')", app_js)
         self.assertIn(".status-rail-tabs", app_css)
         self.assertIn(".status-rail-pane.is-active", app_css)
 

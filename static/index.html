@@ -736,38 +736,20 @@
             </div>
             <div class="status-rail-tabs" role="tablist" aria-label="Session utility panes">
               <button class="status-rail-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="statusRailMetadataPane" data-rail-tab="metadata">Metadata</button>
-              <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailFilesPane" data-rail-tab="files">Files</button>
-              <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailActivityPane" data-rail-tab="activity">Activity</button>
+              <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailQueuePane" data-rail-tab="queue">Queue</button>
             </div>
             <div class="status-rail-pane is-active" id="statusRailMetadataPane" role="tabpanel" data-rail-pane="metadata">
               <div class="rail-actions" id="railActions" data-role="rail-actions"></div>
-            </div>
-            <div class="status-rail-pane" id="statusRailFilesPane" role="tabpanel" data-rail-pane="files">
               <div class="files-panel" id="filesPanel" style="display: none;">
                 <div class="files-resize-handle" id="filesResizeHandle" title="Drag up to resize · double-click to reset"></div>
                 <div class="files-header">
                   <span class="files-title-label">Files</span>
                   <span class="files-count" id="filesCount"></span>
-                  <!-- Files ⇄ Queue switch — only visible when the selected
-                       session is a UX-fixes-queue worker (same detection as the
-                       x/y progress chip). Queue lists every ticket: ref, first
-                       chars of the note, status. Wired in app.js. -->
-                  <span class="files-view-toggle" id="filesViewToggle" style="display:none;" role="group" aria-label="Files panel view">
-                    <button type="button" data-fv="files" title="Show files referenced by this session">Files</button>
-                    <button type="button" data-fv="queue" title="Show the UX-fixes queue tickets">Queue</button>
-                  </span>
                   <input type="text" id="filesSearchInput" class="files-search-input" placeholder="Search..." aria-label="Search files">
-                  <!-- Add a ticket to the queue from here (CCC-145). Only visible
-                       in queue mode; wired in app.js. -->
-                  <button class="files-queue-add" id="filesQueueAdd" type="button" style="display:none;" title="Add a ticket to this queue" aria-label="Add a queue item">&#43;</button>
                   <button class="files-toggle" id="filesToggle" title="Collapse / expand" aria-label="Toggle Files panel">&#9662;</button>
                 </div>
                 <div class="files-list" id="sidebarFilesList"></div>
-                <div class="files-queue-list" id="sidebarQueueList" style="display:none;"></div>
               </div>
-              <div class="status-rail-empty" data-rail-empty="files">No files referenced yet.</div>
-            </div>
-            <div class="status-rail-pane" id="statusRailActivityPane" role="tabpanel" data-rail-pane="activity">
               <!-- Subagents panel — surfaces Claude Code Task tool spawns for
                    the currently selected session. Populated by
                    updateSubagentsPanel() in app.js whenever the active
@@ -780,7 +762,16 @@
                 </div>
                 <div class="subagents-list" id="subagentsList"></div>
               </div>
-              <div class="status-rail-empty" data-rail-empty="activity">No activity yet.</div>
+            </div>
+            <div class="status-rail-pane" id="statusRailQueuePane" role="tabpanel" data-rail-pane="queue">
+              <div class="files-panel files-queue-panel" id="queuePanel">
+                <div class="files-header">
+                  <span class="files-title-label">Queue</span>
+                  <span class="files-count" id="queueCount"></span>
+                  <button class="files-queue-add" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">&#43;</button>
+                </div>
+                <div class="files-queue-list" id="sidebarQueueList"></div>
+              </div>
             </div>
             <div class="conv-bg-palette" data-role="conv-bg-palette" role="radiogroup" aria-label="Conversation background color"></div>
           </div>

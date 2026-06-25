@@ -3805,12 +3805,12 @@
     --current-session-row-h: 30px;
     --current-session-label-h: 28px;
     --current-sessions-visible-rows: 8;
-    flex: 0 1 clamp(
+    flex: 0 0 clamp(
       calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows))),
       34vh,
       420px
     );
-    min-height: 0;
+    min-height: calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows)));
     max-height: clamp(
       calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows))),
       34vh,
@@ -11452,13 +11452,10 @@ body.status-pos-right .conv-pane > .status-rail {
   justify-content: center;
   text-align: center;
 }
-#statusRailFilesPane.is-active > .status-rail-empty,
-#statusRailActivityPane.is-active > .status-rail-empty {
+#statusRailQueuePane.is-active > .status-rail-empty {
   display: flex;
 }
-#statusRailFilesPane:has(#filesPanel:not([style*="display: none"])) > .status-rail-empty,
-#statusRailActivityPane:has(.csh-col-activity:not([style*="display: none"])) > .status-rail-empty,
-#statusRailActivityPane:has(#subagentsPanel:not([style*="display: none"])) > .status-rail-empty {
+#statusRailQueuePane:has(#sidebarQueueList) > .status-rail-empty {
   display: none;
 }
 /* Status-rail Subagents panel — lists Task tool spawns for the active

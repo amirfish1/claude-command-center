@@ -24957,27 +24957,11 @@
     ffcUpdateSidebar(data);
   }
 
-  // ── Files panel ⇄ UX-fixes queue view ────────────────────────────────
-  // When the selected session is a UX-fixes-queue worker (same detection
-  // as the x/y progress chip), the Files container can flip to a Queue
-  // view listing every ticket: ref, first 30 chars of the note, status.
-  // Queue is the DEFAULT for those sessions; the header toggle flips back.
-  let _filesViewChoice = '';       // '' auto | 'files' | 'queue'
-  let _filesViewChoiceConv = null; // conv the explicit choice belongs to
+  // ── Files panel + UX-fixes Queue tab ─────────────────────────────────
+  // Files live under Metadata. Queue is a separate status-rail tab listing
+  // tickets for the selected session's project scope.
   let _uxqItemsCache = { ts: 0, items: [] };
   let _ffcLastSidebarData = null;
-  function _isUxqWorkerSession() {
-    try {
-      const row = openConvRow();
-      return !!(row && typeof _uxFixesQueueProgressForRow === 'function'
-        && _uxFixesQueueProgressForRow(row));
-    } catch (_) { return false; }
-  }
-  function _filesViewEffective() {
-    // An explicit pick only sticks for the conversation it was made in.
-    if (_filesViewChoice && _filesViewChoiceConv === currentConversation) return _filesViewChoice;
-    return _isUxqWorkerSession() ? 'queue' : 'files';
-  }
   async function _fetchUxqItems() {
     if (Date.now() - _uxqItemsCache.ts < 15000) return _uxqItemsCache.items;
     try {
@@ -25017,11 +25001,10 @@
       return _projectForRepoPath(rp);
     } catch (_) { return ''; }
   }
-  function _renderQueueListInFilesPanel() {
+  function _renderQueuePanel() {
     const $queue = document.getElementById('sidebarQueueList');
     if (!$queue) return;
     _fetchUxqItems().then(items => {
-      if (_filesViewEffective() !== 'queue') return;  // flipped while fetching
       const proj = _uxqWorkerProject();
       const scoped = proj ? items.filter(it => (it.project || '') === proj) : items;
       const rows = scoped.slice().reverse();  // newest first
@@ -25037,8 +25020,8 @@
           + '<span class="fq-status">' + escapeHtml(status) + '</span>'
           + '</div>';
       }).join('') || '<div class="fq-empty">Queue is empty.</div>';
-      const $count = document.getElementById('filesCount');
-      if ($count && _filesViewEffective() === 'queue') $count.textContent = rows.length;
+      const $count = document.getElementById('queueCount');
+      if ($count) $count.textContent = rows.length;
     });
   }
   // Jump the conversation pane to the first mention of a ticket ref
@@ -25078,52 +25061,18 @@
       });
     }
   }
-  // Sync panel chrome to the effective mode. Returns true when the panel is
-  // in queue mode (caller then keeps the panel visible even with 0 files).
-  function _applyFilesViewMode() {
+  // Sync Files panel chrome. Queue is now a status-rail tab, not an inline
+  // mode inside the Files panel.
+  function _syncFilesPanelChrome() {
     const $panel = document.getElementById('filesPanel');
     const $files = document.getElementById('sidebarFilesList');
-    const $queue = document.getElementById('sidebarQueueList');
-    const $toggle = document.getElementById('filesViewToggle');
     const $search = document.getElementById('filesSearchInput');
     const $label = $panel && $panel.querySelector('.files-title-label');
-    if (!$panel || !$files || !$queue) return false;
-    // The Queue is always reachable (CCC-167): show the Files⇄Queue toggle for
-    // every session, not just UX-fixes-queue workers. Worker sessions still
-    // default to the Queue view (via _filesViewEffective); everyone else
-    // defaults to Files but can flip to the Queue at any time. The queue list
-    // already renders its own empty state ("Queue is empty.").
-    const mode = _filesViewEffective();
-    if ($toggle) {
-      $toggle.style.display = '';
-      $toggle.querySelectorAll('[data-fv]').forEach(b =>
-        b.classList.toggle('is-active', b.getAttribute('data-fv') === mode));
-    }
-    const queueMode = mode === 'queue';
-    $files.style.display = queueMode ? 'none' : '';
-    $queue.style.display = queueMode ? '' : 'none';
-    const $qadd = document.getElementById('filesQueueAdd');
-    if ($qadd) $qadd.style.display = queueMode ? '' : 'none';
-    if ($search) $search.style.display = queueMode ? 'none' : '';
-    if ($label) $label.textContent = queueMode ? 'Queue' : 'Files';
-    if (queueMode) {
-      $panel.style.display = '';
-      _renderQueueListInFilesPanel();
-    }
-    return queueMode;
-  }
-  {
-    const $fvToggle = document.getElementById('filesViewToggle');
-    if ($fvToggle) {
-      $fvToggle.addEventListener('click', (ev) => {
-        const b = ev.target.closest('[data-fv]');
-        if (!b) return;
-        _filesViewChoice = b.getAttribute('data-fv');
-        _filesViewChoiceConv = currentConversation;
-        _uxqItemsCache.ts = 0;  // fresh fetch on flip
-        ffcUpdateSidebar(_ffcLastSidebarData);
-      });
-    }
+    if (!$panel || !$files) return false;
+    $files.style.display = '';
+    if ($search) $search.style.display = '';
+    if ($label) $label.textContent = 'Files';
+    _renderQueuePanel();
   }
   // Add a ticket to the queue straight from the panel header (CCC-145). Routes
   // into the same project scope the panel is showing (_uxqWorkerProject), so a
@@ -25147,7 +25096,7 @@
             const ref = (data.item && data.item.ref) || 'ticket';
             showOpToast('Added ' + ref + ' to queue');
             _uxqItemsCache.ts = 0;  // bust cache so the new row shows
-            _renderQueueListInFilesPanel();
+            _renderQueuePanel();
           } else {
             showOpToast('Add failed: ' + ((data && data.error) || 'unknown'));
           }
@@ -25164,25 +25113,17 @@
     const $count = document.getElementById('filesCount');
     const $list = document.getElementById('sidebarFilesList');
     if (!$panel || !$count || !$list) return;
-    const _queueMode = _applyFilesViewMode();
+    _syncFilesPanelChrome();
 
     if (!data || !data.count) {
-      if (!_queueMode) {
-        // A selected session that referenced no files (data present, count 0)
-        // keeps the panel visible so the always-present Files⇄Queue toggle
-        // (CCC-167) stays reachable — the Files list just renders empty and
-        // the user can flip to the Queue, which carries its own empty state.
-        // No session context at all (data === null, e.g. a Flow repo/object)
-        // still hides the panel.
-        $panel.style.display = data ? '' : 'none';
-        $count.textContent = '';
-      }
+      $panel.style.display = 'none';
+      $count.textContent = '';
       $list.innerHTML = '';
       return;
     }
 
     $panel.style.display = '';
-    if (!_queueMode) $count.textContent = data.count;
+    $count.textContent = data.count;
     $list.innerHTML = '';
 
     // Flatten all categories
@@ -26961,7 +26902,7 @@
     const inRightRail = document.body.classList.contains('status-pos-right');
     const askCol = sticky.querySelector('.csh-col-ask');
     const actCol = sticky.querySelector('.csh-col-activity')
-      || (rail && rail.querySelector('#statusRailActivityPane .csh-col-activity'))
+      || (rail && rail.querySelector('#statusRailMetadataPane .csh-col-activity'))
       || (rail && rail.querySelector('.csh-col-activity'));
     const earlier = sticky.querySelector('.csh-ask-earlier')
       || (actCol && actCol.querySelector('.csh-ask-earlier'));
@@ -30727,7 +30668,8 @@
   function setStatusRailTab(tab) {
     const rail = document.getElementById('statusRail');
     if (!rail) return;
-    const next = (tab === 'files' || tab === 'activity') ? tab : 'metadata';
+    const queuePane = rail.querySelector('#statusRailQueuePane');
+    const next = (tab === 'queue') ? 'queue' : 'metadata';
     rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
       const active = btn.getAttribute('data-rail-tab') === next;
       btn.classList.toggle('is-active', active);
@@ -30738,6 +30680,7 @@
       pane.classList.toggle('is-active', active);
       pane.hidden = !active;
     });
+    if (next === 'queue' && queuePane) _renderQueuePanel();
     try { localStorage.setItem('ccc-status-rail-tab', next); } catch (_) {}
   }
 
@@ -30747,7 +30690,6 @@
     if (!rail) return;
     const inRail = document.body.classList.contains('status-pos-right');
     const metadataPane = rail.querySelector('#statusRailMetadataPane') || rail;
-    const activityPane = rail.querySelector('#statusRailActivityPane') || rail;
 
     // Sticky-side fresh nodes (post-rebuild) always win as the source of
     // truth. Rail-side nodes are the fallback for the toggle-without-
@@ -30767,7 +30709,7 @@
     if (inRail) {
       // Per user direction the Original ask is the FIRST item in the rail
       // — above the rail-actions buttons in the Metadata tab. Activity
-      // lives in its own tab so it does not elongate the metadata view.
+      // now lives in Metadata too; Queue is the only separate utility tab.
       const railActions = rail.querySelector('#railActions');
       if (liveOrig) {
         if (railActions && railActions.parentNode && liveOrig !== railActions) {
@@ -30777,7 +30719,7 @@
         }
       }
       if (liveAct) {
-        activityPane.appendChild(liveAct);
+        metadataPane.appendChild(liveAct);
       }
     } else if (sticky) {
       const askCol = sticky.querySelector('.csh-col-ask');
