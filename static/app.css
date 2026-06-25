@@ -3677,10 +3677,7 @@
   }
   .conv-item .conv-branch-slot { transition: opacity 0.06s ease; }
   .conv-item .conv-session-icon {
-    position: absolute;
-    left: var(--conv-icon-left);
-    top: 50%;
-    transform: translateY(-50%);
+    position: relative;
     width: var(--conv-dot-col);
     height: 16px;
     display: inline-flex;
@@ -3837,10 +3834,13 @@
   :root:not([data-theme="light"]) .conv-current-sessions-scroll .conv-item .conv-title {
     color: #f0f4fb;
   }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row),
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: block; }
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-meta-row { display: flex; }
   .conv-current-sessions-scroll.is-search-results .conv-item {
     min-height: 0;
     padding: 8px 10px;
@@ -4730,9 +4730,9 @@
      WKWebView). The static drop-shadow on .conv-session-icon.is-live stays, so
      the glow is constant while the icon breathes. */
   @keyframes ccc-icon-pulse {
-    0% { transform: translateY(-50%) scale(1); }
-    50% { transform: translateY(-50%) scale(1.08); }
-    100% { transform: translateY(-50%) scale(1); }
+    0% { transform: scale(1); }
+    50% { transform: scale(1.08); }
+    100% { transform: scale(1); }
   }
   .conv-session-icon.claude {
     color: #e28767;

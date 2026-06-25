@@ -839,8 +839,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("letter-spacing: 0;", current_css)
         self.assertIn(":root:not([data-theme=\"light\"]) .conv-current-sessions-scroll .conv-item .conv-title", app_css)
         self.assertIn("color: #f0f4fb;", app_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row),", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: block; }", current_css)
 
     def test_by_objects_search_results_show_row_previews(self):
         """Search results in by-objects mode should keep snippets/previews
@@ -851,11 +851,47 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _currentSessionsScrollClass = 'conv-current-sessions-scroll' + (_ipSearchActive ? ' is-search-results' : '');", app_js)
         self.assertIn("'<div class=\"' + _currentSessionsScrollClass + '\" data-role=\"current-sessions-scroll\">'", app_js)
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row),", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }", current_css)
         self.assertIn(".conv-current-sessions-scroll.is-search-results .conv-item {", current_css)
         search_css = current_css[current_css.index(".conv-current-sessions-scroll.is-search-results .conv-item {"):]
         self.assertIn("padding: 8px 10px;", search_css)
         self.assertIn("min-height: 0;", search_css)
+
+    def test_by_objects_current_sessions_hover_reveals_preview_row(self):
+        """Current sessions should stay compact at rest but reveal row
+        previews/metadata on hover or keyboard focus."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),", current_css)
+        self.assertIn("display: block;", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row,", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row", current_css)
+        self.assertIn("display: flex;", current_css)
+        self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
+
+    def test_sidebar_left_model_icon_participates_in_row_layout(self):
+        """Left-side model icons should reserve flex space instead of
+        overlaying the row title."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        row_start = app_js.index("+ '<div class=\"conv-main-row\">'")
+        row_end = app_js.index("// Right-edge slot", row_start)
+        self.assertLess(app_js.index("+ sessionIconHtml", row_start, row_end), app_js.index("+ '<div class=\"conv-title '", row_start, row_end))
+        self.assertNotIn("+   sessionIconHtml", app_js[app_js.index("+ '<span class=\"conv-row-end\">'", row_start):app_js.index("+ '</span>'", app_js.index("+ '<span class=\"conv-row-end\">'", row_start))])
+        icon_css = app_css[app_css.index(".conv-item .conv-session-icon {"):app_css.index(".conv-item:hover .conv-session-icon", app_css.index(".conv-item .conv-session-icon {"))]
+        self.assertIn("position: relative;", icon_css)
+        self.assertIn("flex: 0 0 var(--conv-dot-col);", icon_css)
+        self.assertNotIn("position: absolute;", icon_css)
+        self.assertNotIn("left: var(--conv-icon-left);", icon_css)
+        self.assertNotIn("transform: translateY(-50%);", icon_css)
+        icon_pulse = app_css[app_css.index("@keyframes ccc-icon-pulse {"):app_css.index(".conv-session-icon.claude", app_css.index("@keyframes ccc-icon-pulse {"))]
+        self.assertIn("transform: scale(1);", icon_pulse)
+        self.assertIn("transform: scale(1.08);", icon_pulse)
+        self.assertNotIn("translateY(-50%)", icon_pulse)
 
     def test_by_objects_draft_rows_align_with_sessions_and_show_play(self):
         """Draft rows should start where real sessions start, with an always
