@@ -19469,6 +19469,11 @@ def _start_resume_queue_watcher() -> None:
 #   3. A minimum 10-minute gap between pings to the same session, even
 #      across progress levels.
 _UXQ_NUDGE_STATE_FILE = Path.home() / ".claude" / "command-center" / "uxq-nudge-state.json"
+# Sessions the user has explicitly retired: the nudge watcher must never inject
+# "continue" into them, even while their project has open tickets. A finished
+# worker (all its claims closed) otherwise keeps getting pinged forever as new
+# tickets arrive — see _uxq_nudge_tick. JSON list of session-id strings.
+_UXQ_NUDGE_OPTOUT_FILE = Path.home() / ".claude" / "command-center" / "uxq-nudge-optout.json"
 _UXQ_NUDGE_INTERVAL_S = 120
 _UXQ_NUDGE_MIN_GAP_S = 600
 _UXQ_NUDGE_TEXT = "continue"
@@ -19496,6 +19501,43 @@ def _uxq_nudge_save_state(state):
         os.replace(tmp, _UXQ_NUDGE_STATE_FILE)
     except OSError:
         pass
+
+
+def _uxq_nudge_load_optout():
+    """Set of lowercased session-ids the user retired from queue nudging."""
+    try:
+        with open(_UXQ_NUDGE_OPTOUT_FILE) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return set()
+    if isinstance(data, dict):
+        data = data.get("sessions") or []
+    if not isinstance(data, list):
+        return set()
+    return {str(s).strip().lower() for s in data if str(s).strip()}
+
+
+def _uxq_nudge_set_optout(session_id, retired=True):
+    """Add or remove a session-id from the nudge opt-out list. Returns the new
+    sorted list (lowercased). Atomic write."""
+    sid = str(session_id or "").strip().lower()
+    if not sid:
+        return sorted(_uxq_nudge_load_optout())
+    current = _uxq_nudge_load_optout()
+    if retired:
+        current.add(sid)
+    else:
+        current.discard(sid)
+    out = sorted(current)
+    try:
+        _UXQ_NUDGE_OPTOUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = str(_UXQ_NUDGE_OPTOUT_FILE) + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"sessions": out}, f, indent=2)
+        os.replace(tmp, _UXQ_NUDGE_OPTOUT_FILE)
+    except OSError:
+        pass
+    return out
 
 
 def _uxq_parse_ts(value):
@@ -19536,9 +19578,12 @@ def _uxq_nudge_tick():
             w["project"] = proj
     if not workers:
         return
+    optout = _uxq_nudge_load_optout()
     state = _uxq_nudge_load_state()
     changed = False
     for sid, w in workers.items():
+        if sid in optout:
+            continue  # user retired this session — never nudge it
         if open_by_project.get(w["project"], 0) <= 0:
             continue  # queue drained for this worker's project
         st = state.get(sid) or {}
@@ -41628,6 +41673,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 tmp.write_text(json.dumps(existing, indent=1) + "\n")
                 tmp.replace(notes_file)
                 self.send_json({"ok": True, "count": len(clean)})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 400)
+            return
+
+        if path == "/api/uxq/retire":
+            # Retire (or un-retire) a session from the UX-fixes-queue nudge
+            # watcher, which otherwise keeps injecting "continue" into a worker
+            # whose project still has open tickets — forever, for a finished
+            # session. Body: {session_id, retired?: bool (default true)}.
+            # Same-origin already enforced by do_POST's _check_same_origin.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                sid = str(data.get("session_id") or "").strip()
+                if not sid:
+                    self.send_json({"error": "session_id required"}, 400)
+                    return
+                retired = data.get("retired", True)
+                out = _uxq_nudge_set_optout(sid, retired=bool(retired))
+                self.send_json({"ok": True, "retired": bool(retired),
+                                "session_id": sid, "count": len(out)})
             except Exception as e:
                 self.send_json({"error": str(e)}, 400)
             return
