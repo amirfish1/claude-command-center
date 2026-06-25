@@ -4033,9 +4033,6 @@
     border-left: 1px solid rgba(154, 173, 194, 0.18);
     padding: 0 8px;
   }
-  .conv-project-tree .conv-folder-group[data-object-drop-zone] > .conv-draft-row {
-    padding-left: 29px;
-  }
   .conv-project-tree .conv-draft-row[data-draft-id] {
     cursor: pointer;
   }
