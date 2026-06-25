@@ -14148,7 +14148,14 @@ body:has(.gc-reader) .pwa-install-banner {
   font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
   font-size: 10.5px; color: var(--text-muted); flex-shrink: 0; min-width: 52px;
 }
-.fq-note { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fq-note {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .fq-status {
   flex-shrink: 0; font-size: 9.5px; font-weight: 600; text-transform: uppercase;
   padding: 1px 6px; border-radius: 999px;

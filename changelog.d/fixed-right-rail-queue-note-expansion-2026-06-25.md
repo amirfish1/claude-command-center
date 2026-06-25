@@ -1,0 +1,1 @@
+- Let right-rail queue rows reveal more note text as the rail is widened instead of pre-truncating every note.

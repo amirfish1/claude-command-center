@@ -25010,13 +25010,12 @@
       const rows = scoped.slice().reverse();  // newest first
       $queue.innerHTML = rows.map(it => {
         const noteFull = String(it.note || '');
-        const note = noteFull.length > 30 ? noteFull.slice(0, 30) + '…' : noteFull;
         const status = it.status || 'open';
         const ref = it.ref || ('#' + (it.number || '?'));
         return '<div class="fq-row is-' + escapeAttr(status) + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(noteFull) + '\n\nClick to jump to the first mention of ' + escapeAttr(ref) + ' in the conversation.">'
           + '<span class="fq-ref">' + escapeHtml(ref) + '</span>'
-          + '<span class="fq-note">' + escapeHtml(note) + '</span>'
+          + '<span class="fq-note">' + escapeHtml(noteFull) + '</span>'
           + '<span class="fq-status">' + escapeHtml(status) + '</span>'
           + '</div>';
       }).join('') || '<div class="fq-empty">Queue is empty.</div>';
