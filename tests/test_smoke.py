@@ -185,6 +185,7 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("/api/search-recall-sessions", app_js)
         self.assertIn("c._historySource === 'recall'", app_js)
+        self.assertIn("_historyBadgeLabel = _historyIsRecall ? 'TR'", app_js)
         self.assertIn("Total Recall", app_js)
         self.assertIn("is-recall", app_js)
         self.assertIn(".conv-history-badge.is-recall", app_css)

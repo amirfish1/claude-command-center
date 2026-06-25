@@ -18968,7 +18968,7 @@
       const _historyIsSemantic = c._historySource === 'vec' || c._historySource === 'fused';
       const _historyIsRecall = c._historySource === 'recall';
       const _historyBadgeClass = _historyIsSemantic ? ' is-semantic' : (_historyIsRecall ? ' is-recall' : '');
-      const _historyBadgeLabel = _historyIsRecall ? 'recall' : (_historyIsSemantic ? 'semantic history' : 'history');
+      const _historyBadgeLabel = _historyIsRecall ? 'TR' : (_historyIsSemantic ? 'semantic history' : 'history');
       const _historyBadgeTitle = _historyIsRecall
         ? 'Matched by Total Recall'
         : 'Matched in conversation history' + (_historyIsSemantic ? ' (semantic)' : '');
