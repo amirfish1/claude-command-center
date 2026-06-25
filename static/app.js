@@ -30860,8 +30860,9 @@
   function setStatusRailTab(tab) {
     const rail = document.getElementById('statusRail');
     if (!rail) return;
+    const filesPane = rail.querySelector('#statusRailFilesPane');
     const queuePane = rail.querySelector('#statusRailQueuePane');
-    const next = (tab === 'queue') ? 'queue' : 'metadata';
+    const next = (tab === 'files' || tab === 'queue') ? tab : 'metadata';
     rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
       const active = btn.getAttribute('data-rail-tab') === next;
       btn.classList.toggle('is-active', active);

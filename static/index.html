@@ -736,20 +736,11 @@
             </div>
             <div class="status-rail-tabs" role="tablist" aria-label="Session utility panes">
               <button class="status-rail-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="statusRailMetadataPane" data-rail-tab="metadata">Metadata</button>
+              <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailFilesPane" data-rail-tab="files">Files</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailQueuePane" data-rail-tab="queue">Queue</button>
             </div>
             <div class="status-rail-pane is-active" id="statusRailMetadataPane" role="tabpanel" data-rail-pane="metadata">
               <div class="rail-actions" id="railActions" data-role="rail-actions"></div>
-              <div class="files-panel" id="filesPanel" style="display: none;">
-                <div class="files-resize-handle" id="filesResizeHandle" title="Drag up to resize · double-click to reset"></div>
-                <div class="files-header">
-                  <span class="files-title-label">Files</span>
-                  <span class="files-count" id="filesCount"></span>
-                  <input type="text" id="filesSearchInput" class="files-search-input" placeholder="Search..." aria-label="Search files">
-                  <button class="files-toggle" id="filesToggle" title="Collapse / expand" aria-label="Toggle Files panel">&#9662;</button>
-                </div>
-                <div class="files-list" id="sidebarFilesList"></div>
-              </div>
               <!-- Subagents panel — surfaces Claude Code Task tool spawns for
                    the currently selected session. Populated by
                    updateSubagentsPanel() in app.js whenever the active
@@ -761,6 +752,18 @@
                   <span class="subagents-count" id="subagentsCount"></span>
                 </div>
                 <div class="subagents-list" id="subagentsList"></div>
+              </div>
+            </div>
+            <div class="status-rail-pane" id="statusRailFilesPane" role="tabpanel" data-rail-pane="files">
+              <div class="files-panel" id="filesPanel" style="display: none;">
+                <div class="files-resize-handle" id="filesResizeHandle" title="Drag up to resize · double-click to reset"></div>
+                <div class="files-header">
+                  <span class="files-title-label">Files</span>
+                  <span class="files-count" id="filesCount"></span>
+                  <input type="text" id="filesSearchInput" class="files-search-input" placeholder="Search..." aria-label="Search files">
+                  <button class="files-toggle" id="filesToggle" title="Collapse / expand" aria-label="Toggle Files panel">&#9662;</button>
+                </div>
+                <div class="files-list" id="sidebarFilesList"></div>
               </div>
             </div>
             <div class="status-rail-pane" id="statusRailQueuePane" role="tabpanel" data-rail-pane="queue">

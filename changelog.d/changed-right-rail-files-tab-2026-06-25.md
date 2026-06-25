@@ -1,0 +1,1 @@
+- Move Files into its own right-rail tab between Metadata and Queue, while keeping Activity inside Metadata.

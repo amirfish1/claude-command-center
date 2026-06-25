@@ -11541,7 +11541,7 @@ body.status-pos-right .conv-pane > .status-rail {
 }
 .status-rail-tabs {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
@@ -12201,8 +12201,16 @@ body.status-pos-right .status-rail .status-rail-pane > .csh-col-activity {
 body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] {
   overflow-y: hidden;
 }
-body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] .files-list {
-  max-height: clamp(96px, 28vh, 320px);
+body.status-pos-right .status-rail-pane[data-rail-pane="files"] {
+  overflow-y: hidden;
+}
+body.status-pos-right .status-rail-pane[data-rail-pane="files"] > .files-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+body.status-pos-right .status-rail-pane[data-rail-pane="files"] .files-list {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .csh-col-activity {

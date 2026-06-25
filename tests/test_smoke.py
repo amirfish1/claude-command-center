@@ -1950,39 +1950,50 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const source = (conv && conv.first_message) || ev.text || '';", app_js)
         self.assertIn("const cleaned = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));", app_js)
 
-    def test_right_rail_uses_metadata_and_queue_tabs(self):
-        """The right rail keeps session context stacked under Metadata, with
-        Queue as the only separate utility pane."""
+    def test_right_rail_uses_metadata_files_and_queue_tabs(self):
+        """The right rail keeps activity in Metadata, with Files and Queue as
+        their own utility panes."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('<div class="status-rail-title">Session Utilities</div>', index_html)
         self.assertIn('data-rail-tab="metadata"', index_html)
+        self.assertIn('data-rail-tab="files"', index_html)
         self.assertIn('data-rail-tab="queue"', index_html)
-        self.assertNotIn('data-rail-tab="files"', index_html)
         self.assertNotIn('data-rail-tab="activity"', index_html)
+        self.assertLess(index_html.index('data-rail-tab="metadata"'), index_html.index('data-rail-tab="files"'))
+        self.assertLess(index_html.index('data-rail-tab="files"'), index_html.index('data-rail-tab="queue"'))
         self.assertIn('id="statusRailMetadataPane"', index_html)
+        self.assertIn('id="statusRailFilesPane"', index_html)
         self.assertIn('id="statusRailQueuePane"', index_html)
-        self.assertNotIn('id="statusRailFilesPane"', index_html)
         self.assertNotIn('id="statusRailActivityPane"', index_html)
-        self.assertIn('id="filesPanel"', index_html[index_html.index('id="statusRailMetadataPane"'):index_html.index('id="statusRailQueuePane"')])
-        self.assertIn('id="subagentsPanel"', index_html[index_html.index('id="statusRailMetadataPane"'):index_html.index('id="statusRailQueuePane"')])
+        metadata_block = index_html[index_html.index('id="statusRailMetadataPane"'):index_html.index('id="statusRailFilesPane"')]
+        files_block = index_html[index_html.index('id="statusRailFilesPane"'):index_html.index('id="statusRailQueuePane"')]
+        self.assertNotIn('id="filesPanel"', metadata_block)
+        self.assertIn('id="subagentsPanel"', metadata_block)
+        self.assertIn('id="filesPanel"', files_block)
         self.assertNotIn('id="filesViewToggle"', index_html)
         self.assertIn("function setStatusRailTab(tab)", app_js)
         self.assertIn("rail.querySelector('#statusRailMetadataPane')", app_js)
+        self.assertIn("rail.querySelector('#statusRailFilesPane')", app_js)
         self.assertIn("rail.querySelector('#statusRailQueuePane')", app_js)
         self.assertNotIn("rail.querySelector('#statusRailActivityPane')", app_js)
+        self.assertIn("const next = (tab === 'files' || tab === 'queue') ? tab : 'metadata';", app_js)
         self.assertNotIn("getElementById('filesViewToggle')", app_js)
         self.assertIn(".status-rail-tabs", app_css)
+        tabs_css = app_css[app_css.index(".status-rail-tabs {"):app_css.index(".status-rail-tab {", app_css.index(".status-rail-tabs {"))]
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", tabs_css)
         self.assertIn(".status-rail-pane.is-active", app_css)
         self.assertIn("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] {", app_css)
-        self.assertIn("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] .files-list {", app_css)
+        self.assertIn("body.status-pos-right .status-rail-pane[data-rail-pane=\"files\"] {", app_css)
+        self.assertIn("body.status-pos-right .status-rail-pane[data-rail-pane=\"files\"] .files-list {", app_css)
         self.assertIn("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] > .csh-col-activity {", app_css)
-        metadata_css = app_css[app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] {"):app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] .files-list", app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] {"))]
+        metadata_css = app_css[app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] {"):app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"files\"]", app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] {"))]
         self.assertIn("overflow-y: hidden;", metadata_css)
-        files_scroll_css = app_css[app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] .files-list {"):app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] > .csh-col-activity", app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] .files-list {"))]
+        files_scroll_css = app_css[app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"files\"] .files-list {"):app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] > .csh-col-activity", app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"files\"] .files-list {"))]
         self.assertIn("overflow-y: auto;", files_scroll_css)
-        self.assertIn("max-height: clamp(", files_scroll_css)
+        self.assertIn("flex: 1 1 auto;", files_scroll_css)
+        self.assertNotIn("max-height: clamp(", files_scroll_css)
         activity_css = app_css[app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] > .csh-col-activity {"):app_css.index("body.status-pos-right .status-rail .status-rail-pane > .csh-ask-original .user-msg", app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] > .csh-col-activity {"))]
         self.assertIn("overflow-y: visible;", activity_css)
         self.assertNotIn("flex: 1 1 auto;", activity_css)
