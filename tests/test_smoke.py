@@ -522,6 +522,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-folder-object-title-actions", app_css)
         self.assertIn(".conv-folder-group-header[data-object-drop] .conv-folder-group-arrow", app_css)
 
+    def test_object_rename_input_keeps_space_key(self):
+        """Space in object rename input should not bubble to the header toggle."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        start = app_js.index("input.addEventListener('keydown', ev => {", app_js.index("function startInlineObjectRename"))
+        block = app_js[start:app_js.index("});", start) + 3]
+        self.assertIn("ev.stopPropagation();", block)
+        self.assertIn("if (ev.key === 'Enter')", block)
+        self.assertIn("else if (ev.key === 'Escape')", block)
+
     def test_coo_tracking_checkboxes_are_coo_mode_only(self):
         """The per-row COO tracking checkbox should stay hidden unless the
         user has opened/enabled COO mode."""

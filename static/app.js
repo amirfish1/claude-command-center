@@ -10814,6 +10814,7 @@
       finish(false);
     });
     input.addEventListener('keydown', ev => {
+      ev.stopPropagation();
       if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
       else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
     });
