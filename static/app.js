@@ -9828,6 +9828,28 @@
   let _sidebarDragInProgress = false;
   let _sidebarRenderPendingAfterDrag = false;
   let _sidebarRenderAfterDragRaf = 0;
+  const _CURRENT_SESSIONS_PANEL_H_KEY = 'ccc-current-sessions-panel-h';
+  function _storedCurrentSessionsPanelHeight() {
+    try {
+      const n = parseInt(localStorage.getItem(_CURRENT_SESSIONS_PANEL_H_KEY) || '', 10);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+  function applyCurrentSessionsPanelHeight() {
+    const list = document.getElementById('convList');
+    if (!list) return;
+    const height = _storedCurrentSessionsPanelHeight();
+    if (height) list.style.setProperty('--current-sessions-panel-h', height + 'px');
+    else list.style.removeProperty('--current-sessions-panel-h');
+  }
+  function _clampObjectsSplitterHeight(list, height) {
+    const minHeight = 78;
+    const containerH = list ? list.getBoundingClientRect().height : 0;
+    const maxHeight = containerH ? Math.max(minHeight, containerH - 160) : 520;
+    return Math.round(Math.max(minHeight, Math.min(maxHeight, height)));
+  }
   function isSidebarDragInProgress() {
     // Self-heal: the boolean can get stuck true when a dragstart fires but
     // dragend / drop never does (mid-drag Escape, browser-cancelled drag,
@@ -9838,7 +9860,7 @@
     // dragging but no DOM element actually carries a .dragging class,
     // clear it.
     const domHasDragging = !!document.querySelector(
-      '.flow-node.dragging,.kanban-card.dragging,.kanban-column-header.dragging-header,.conv-item.dragging,.conv-draft-row.dragging,.conv-folder-group-header.dragging,.flow-board.is-panning,.flow-board.is-zooming'
+      '.flow-node.dragging,.kanban-card.dragging,.kanban-column-header.dragging-header,.conv-item.dragging,.conv-draft-row.dragging,.conv-folder-group-header.dragging,.conv-objects-splitter.is-dragging,.flow-board.is-panning,.flow-board.is-zooming'
     );
     if (_sidebarDragInProgress && !domHasDragging) {
       _sidebarDragInProgress = false;
@@ -9865,6 +9887,46 @@
     _sidebarDragInProgress = false;
     if (!_sidebarRenderPendingAfterDrag || _sidebarRenderAfterDragRaf) return;
     _sidebarRenderAfterDragRaf = requestAnimationFrame(flushSidebarRenderAfterDrag);
+  }
+  function beginObjectsSplitterResize(ev) {
+    const handle = ev.target && ev.target.closest && ev.target.closest('[data-role="objects-splitter"]');
+    if (!handle) return;
+    const list = handle.closest('#convList');
+    const current = list && list.querySelector('[data-role="current-sessions-scroll"]');
+    const tree = list && list.querySelector('[data-role="project-tree-scroll"]');
+    if (!list || !current || !tree) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const startY = ev.clientY;
+    const startHeight = current.getBoundingClientRect().height || current.offsetHeight || _storedCurrentSessionsPanelHeight() || 180;
+    let nextHeight = _clampObjectsSplitterHeight(list, startHeight);
+    beginSidebarDrag();
+    handle.classList.add('is-dragging');
+    document.body.classList.add('objects-splitter-resizing');
+    try { handle.setPointerCapture(ev.pointerId); } catch (_) {}
+    const applyHeight = (clientY) => {
+      nextHeight = _clampObjectsSplitterHeight(list, startHeight + (clientY - startY));
+      list.style.setProperty('--current-sessions-panel-h', nextHeight + 'px');
+    };
+    const onMove = (moveEv) => {
+      moveEv.preventDefault();
+      applyHeight(moveEv.clientY);
+    };
+    const onUp = (upEv) => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+      handle.classList.remove('is-dragging');
+      document.body.classList.remove('objects-splitter-resizing');
+      try { handle.releasePointerCapture(upEv.pointerId); } catch (_) {}
+      try { localStorage.setItem(_CURRENT_SESSIONS_PANEL_H_KEY, String(nextHeight)); } catch (_) {}
+      _sidebarDragInProgress = false;
+      flushSidebarRenderAfterDrag();
+    };
+    applyHeight(startY);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
   }
   function deferSidebarRenderIfDragging() {
     if (!isSidebarDragInProgress()) return false;
@@ -19217,10 +19279,6 @@
             + ' title="' + escapeHtml(c.folder_path || c.session_cwd || '') + '">'
             + escapeHtml(c.folder_label_chip) + '</span>'
         : '';
-      const folderChipBeforeTitle = opts.folderChipBeforeTitle !== false;
-      const leftFolderChipHtml = folderChipBeforeTitle ? '' : folderChipHtml;
-      const titleFolderChipHtml = folderChipBeforeTitle ? folderChipHtml : '';
-
       // Worktree badge — shown when the session came from a sibling worktree
       // dir (e.g. "claude-command-center-wt-gemini" → badge shows "wt-gemini").
       const worktreeBadgeHtml = c.worktree_label
@@ -19274,11 +19332,36 @@
           + ' title="' + escapeAttr(tip) + '">' + ctxPct.pct + '%</span>';
       }
       const branchSlotHtml = pctBadgeHtml + worktreeBadgeHtml + branch;
-      const rowMetaHtml = (rowSizeHtml || liveToolHtml || signals || branchSlotHtml)
+      // Current-goal chip — codex sessions only (the native `/goal` feature,
+      // read server-side from ~/.codex/goals_1.sqlite into c.goal). Status
+      // colors mirror codex's enum: active=green, complete=muted, anything
+      // else (paused/blocked/usage_limited/budget_limited) = amber. Truncated
+      // by CSS; full objective + status in the tooltip.
+      let goalChipHtml = '';
+      const _goalText = (c.goal || '').trim();
+      if (_goalText) {
+        const _gs = (c.goal_status || '').trim();
+        const _gui = goalStatusUi(_gs);
+        const _gcls = ' ' + _gui.className;
+        const _gTip = 'Goal' + (_gs ? ' (' + _gs + ')' : '') + ': ' + _goalText;
+        goalChipHtml = '<span class="conv-goal' + _gcls + '" data-role="goal" title="'
+          + escapeAttr(_gTip) + '">'
+          + '<span class="conv-goal-icon" aria-hidden="true">' + _gui.iconHtml + '</span>'
+          + '<span class="conv-goal-text">' + escapeHtml(_goalText) + '</span>'
+          + '</span>';
+      }
+      const hoverMetaRowHtml = (goalChipHtml || folderChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)
+        ? '<div class="conv-hover-meta-row">'
+          + goalChipHtml
+          + folderChipHtml
+          + pinnedHtml
+          + (rowSizeHtml || '')
+          + (branchSlotHtml ? '<span class="conv-branch-slot">' + branchSlotHtml + '</span>' : '')
+          + '</div>'
+        : '';
+      const rowMetaHtml = (liveToolHtml || signals)
         ? '<span class="conv-row-meta">'
-          + (rowSizeHtml || '<span class="conv-meta-inline"></span>')
           + '<span class="conv-status-slot">' + liveToolHtml + signals + '</span>'
-          + '<span class="conv-branch-slot">' + branchSlotHtml + '</span>'
           + '</span>'
         : '';
 
@@ -19346,25 +19429,6 @@
         : '';
       const needsYouRowClass = _needsYouRow ? ' is-needs-you' : '';
 
-      // Current-goal chip — codex sessions only (the native `/goal` feature,
-      // read server-side from ~/.codex/goals_1.sqlite into c.goal). Status
-      // colors mirror codex's enum: active=green, complete=muted, anything
-      // else (paused/blocked/usage_limited/budget_limited) = amber. Truncated
-      // by CSS; full objective + status in the tooltip.
-      let goalChipHtml = '';
-      const _goalText = (c.goal || '').trim();
-      if (_goalText) {
-        const _gs = (c.goal_status || '').trim();
-        const _gui = goalStatusUi(_gs);
-        const _gcls = ' ' + _gui.className;
-        const _gTip = 'Goal' + (_gs ? ' (' + _gs + ')' : '') + ': ' + _goalText;
-        goalChipHtml = '<span class="conv-goal' + _gcls + '" data-role="goal" title="'
-          + escapeAttr(_gTip) + '">'
-          + '<span class="conv-goal-icon" aria-hidden="true">' + _gui.iconHtml + '</span>'
-          + '<span class="conv-goal-text">' + escapeHtml(_goalText) + '</span>'
-          + '</span>';
-      }
-
       // Outcome line (GOAL-1) — surfaces the session's own end-of-turn
       // self-report. The server already parses the <session-state> block into
       // c.session_state {did, insight, next_step_user}; until now it only
@@ -19396,15 +19460,11 @@
             + '<div class="conv-main-row">'
             + _nyaChevronHtml
             + cooTrackHtml
-            + leftFolderChipHtml
-            + titleFolderChipHtml
             + needsYouHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
-            + goalChipHtml
             + uxFixesQueueProgressHtml
             + historyBadgeHtml
             + repoBadgeHtml
-            + pinnedHtml
             + rowMetaHtml
             + cooStatusHtml
             + cooEscalatedHtml
@@ -19423,6 +19483,7 @@
             + '</span>'
           + '</div>'
         + '</div>'
+        + hoverMetaRowHtml
         + ask
         + outcomeHtml
         + summaryDetailHtml
@@ -20187,7 +20248,10 @@
       const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)
         ? '<div class="conv-project-tree-scroll" data-role="project-tree-scroll">' + _projectTreeHtml + _looseHtml + '</div>'
         : '';
-      _activeRowsHtml = _currentSessionsScrollHtml + _projectTreeScrollHtml;
+      const _objectsSplitHandleHtml = (_currentSessionsScrollHtml && _projectTreeScrollHtml)
+        ? '<div class="conv-objects-splitter" data-role="objects-splitter" role="separator" aria-orientation="horizontal" title="Drag to resize Current sessions"></div>'
+        : '';
+      _activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeScrollHtml;
     } else if (_shouldGroupByFolder) {
       // Group cards by folder; preserve folder order by the most
       // recent card in each group (freshest folder appears first).
@@ -20768,6 +20832,8 @@
           + (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions')));
     const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
     $convList.classList.toggle('objects-scroll-split', !!_shouldGroupByObjects);
+    if (_shouldGroupByObjects) applyCurrentSessionsPanelHeight();
+    else $convList.style.removeProperty('--current-sessions-panel-h');
     // Flicker guard. The 10s bulk-sessions poll and the 5s live-status tick both
     // re-run this render constantly. The wholesale innerHTML reset below tears
     // down and rebuilds every row, which the user sees as the whole list
@@ -20835,7 +20901,17 @@
       : null;
     const _focusInputCaretStart = _focusInputBefore ? _focusInputBefore.selectionStart : null;
     const _focusInputCaretEnd = _focusInputBefore ? _focusInputBefore.selectionEnd : null;
+    const _projectTreeScrollBefore = _shouldGroupByObjects
+      ? $convList.querySelector('[data-role="project-tree-scroll"]')
+      : null;
+    const _projectTreeScrollTop = _projectTreeScrollBefore ? _projectTreeScrollBefore.scrollTop : 0;
     $convList.innerHTML = _convListHtml;
+    const _projectTreeScrollAfter = _projectTreeScrollBefore
+      ? $convList.querySelector('[data-role="project-tree-scroll"]')
+      : null;
+    if (_projectTreeScrollAfter) {
+      _projectTreeScrollAfter.scrollTop = Math.min(_projectTreeScrollTop, Math.max(0, _projectTreeScrollAfter.scrollHeight - _projectTreeScrollAfter.clientHeight));
+    }
     if (_focusInputBefore && document.activeElement !== _focusInputBefore && document.contains(_focusInputBefore)) {
       try {
         _focusInputBefore.focus({ preventScroll: true });
@@ -21690,6 +21766,10 @@
         try { localStorage.setItem('ccc-current-sessions-expanded', expand ? '1' : '0'); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
+    }
+    if (!$convList._objectsSplitterWired) {
+      $convList._objectsSplitterWired = true;
+      $convList.addEventListener('pointerdown', beginObjectsSplitterResize);
     }
     const $windowToggle = $convList.querySelector('[data-role="window-toggle"]');
     if ($windowToggle) {

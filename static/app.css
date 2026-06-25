@@ -3777,29 +3777,31 @@
     flex: 0 0 auto;
   }
   .conv-current-sessions-scroll {
-    --current-session-row-h: 30px;
-    --current-session-label-h: 28px;
+    --current-session-row-h: 20px;
+    --current-session-label-h: 18px;
     --current-sessions-visible-rows: 8;
-    flex: 0 0 clamp(
+    flex: 0 0 var(--current-sessions-panel-h, clamp(
       calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows))),
       34vh,
       420px
-    );
+    ));
     min-height: calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows)));
-    max-height: clamp(
+    max-height: var(--current-sessions-panel-h, clamp(
       calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows))),
       34vh,
       420px
-    );
+    ));
     overflow-y: auto;
     overscroll-behavior: contain;
     padding-right: 2px;
   }
   .conv-current-sessions-scroll .conv-objects-section-label {
+    height: var(--current-session-label-h);
     min-height: var(--current-session-label-h);
     box-sizing: border-box;
-    padding-top: 7px;
-    padding-bottom: 4px;
+    padding-top: 2px;
+    padding-bottom: 0;
+    line-height: 14px;
   }
   .conv-current-sessions-scroll .conv-item {
     min-height: var(--current-session-row-h);
@@ -3812,6 +3814,14 @@
     min-height: var(--current-session-row-h);
     width: 100%;
   }
+  .conv-current-sessions-scroll .conv-item .conv-title {
+    color: var(--text);
+    font-weight: 650;
+    letter-spacing: 0;
+  }
+  :root:not([data-theme="light"]) .conv-current-sessions-scroll .conv-item .conv-title {
+    color: #f0f4fb;
+  }
   .conv-current-sessions-scroll .conv-item > :not(.conv-title-row),
   .conv-current-sessions-scroll .conv-item:hover > :not(.conv-title-row),
   .conv-current-sessions-scroll .conv-item:focus-within > :not(.conv-title-row),
@@ -3822,6 +3832,37 @@
     margin-bottom: 0;
     padding-top: 0;
     padding-bottom: 0;
+  }
+  .conv-objects-splitter {
+    flex: 0 0 10px;
+    min-height: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: row-resize;
+    touch-action: none;
+    user-select: none;
+    color: var(--text-muted);
+  }
+  .conv-objects-splitter::before {
+    content: '';
+    width: min(72px, 42%);
+    height: 2px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-muted) 42%, transparent);
+  }
+  .conv-objects-splitter:hover::before,
+  .conv-objects-splitter.is-dragging::before {
+    height: 3px;
+    background: var(--accent);
+  }
+  body.objects-splitter-resizing {
+    cursor: row-resize;
+    user-select: none;
+  }
+  body.objects-splitter-resizing * {
+    cursor: row-resize !important;
+    user-select: none !important;
   }
   /* ============================================================
      Project tree — pixel-match to Codex's .tree / .tree-item mock.
@@ -4024,6 +4065,45 @@
     white-space: nowrap;
     text-align: right;
   }
+  .conv-item .conv-hover-meta-row {
+    display: none;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 5px;
+    min-width: 0;
+    max-width: calc(100% - 70px);
+    margin: 4px 48px 0 21px;
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.4;
+    overflow: hidden;
+    opacity: 0.9;
+  }
+  .conv-item .conv-hover-meta-row > * {
+    min-width: 0;
+    flex: 0 1 auto;
+  }
+  .conv-item .conv-hover-meta-row .conv-folder-chip {
+    width: auto;
+    max-width: 126px;
+    height: 18px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(154, 173, 194, 0.10);
+    border-color: rgba(154, 173, 194, 0.18);
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    text-align: left;
+  }
+  .conv-item .conv-hover-meta-row .conv-meta-inline,
+  .conv-item .conv-hover-meta-row .conv-branch-slot {
+    justify-content: flex-start;
+    text-align: left;
+  }
+  .conv-item .conv-hover-meta-row .conv-goal {
+    margin-left: 0;
+    max-width: 180px;
+  }
   .conv-item .conv-status-slot,
   .conv-item .conv-branch-slot,
   .conv-item .conv-engine-slot {
@@ -4053,24 +4133,20 @@
   .conv-item .conv-branch-slot,
   .conv-item .conv-folder-chip,
   .conv-item .conv-repo-pin { display: none; }
-  .conv-item:hover .conv-meta-inline,
-  .conv-item:focus-within .conv-meta-inline,
-  .conv-item.active .conv-meta-inline,
-  .conv-item:hover .conv-branch-slot,
-  .conv-item:focus-within .conv-branch-slot,
-  .conv-item.active .conv-branch-slot,
-  .conv-item:hover .conv-folder-chip,
-  .conv-item:focus-within .conv-folder-chip,
-  .conv-item.active .conv-folder-chip,
-  .conv-item:hover .conv-repo-pin,
-  .conv-item:focus-within .conv-repo-pin,
-  .conv-item.active .conv-repo-pin { display: inline-flex; }
-  .conv-item:hover .conv-meta-inline .sep,
-  .conv-item:focus-within .conv-meta-inline .sep,
-  .conv-item.active .conv-meta-inline .sep,
-  .conv-item:hover .conv-meta-inline .source-badge,
-  .conv-item:focus-within .conv-meta-inline .source-badge,
-  .conv-item.active .conv-meta-inline .source-badge { display: inline-flex; }
+  .conv-item:hover .conv-hover-meta-row,
+  .conv-item:focus-within .conv-hover-meta-row { display: flex; }
+  .conv-item:hover .conv-hover-meta-row .conv-meta-inline,
+  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline,
+  .conv-item:hover .conv-hover-meta-row .conv-branch-slot,
+  .conv-item:focus-within .conv-hover-meta-row .conv-branch-slot,
+  .conv-item:hover .conv-hover-meta-row .conv-folder-chip,
+  .conv-item:focus-within .conv-hover-meta-row .conv-folder-chip,
+  .conv-item:hover .conv-hover-meta-row .conv-repo-pin,
+  .conv-item:focus-within .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
+  .conv-item:hover .conv-hover-meta-row .conv-meta-inline .sep,
+  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline .sep,
+  .conv-item:hover .conv-hover-meta-row .conv-meta-inline .source-badge,
+  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline .source-badge { display: inline-flex; }
   .conv-item .conv-meta-inline .sep { opacity: 0.4; }
   .conv-item .conv-rel {
     /* Time chip — bumped 10 → 11.5px for legibility (Omnara's looks
@@ -4168,12 +4244,8 @@
      you can still see what a session is doing at a glance. */
   .compact-rows .conv-item .conv-row-meta .conv-meta-inline,
   .compact-rows .conv-item .conv-row-meta .conv-branch-slot { display: none; }
-  .compact-rows .conv-item:hover .conv-row-meta .conv-meta-inline,
-  .compact-rows .conv-item:focus-within .conv-row-meta .conv-meta-inline,
-  .compact-rows .conv-item.active .conv-row-meta .conv-meta-inline,
-  .compact-rows .conv-item:hover .conv-row-meta .conv-branch-slot,
-  .compact-rows .conv-item:focus-within .conv-row-meta .conv-branch-slot,
-  .compact-rows .conv-item.active .conv-row-meta .conv-branch-slot { display: inline-flex; }
+  .compact-rows .conv-item:hover .conv-hover-meta-row,
+  .compact-rows .conv-item:focus-within .conv-hover-meta-row { display: flex; }
   /* Compact also drops the terminal git-state badges (pushed / committed /
      read-only / no edits) — they're status-at-rest, not live activity. The
      blinking WIP / waiting / live-tool signals stay. */
@@ -5963,9 +6035,8 @@
   .conv-item .conv-goal.is-paused { color: var(--orange, #d29922); }
   .conv-item .conv-goal.is-blocked { color: var(--red, #f85149); }
   .conv-item .conv-goal.is-complete { color: var(--text-muted); opacity: 0.75; }
-  /* Hover fades the goal like other row meta so action icons stay readable. */
-  .conv-item:hover .conv-goal,
-  .conv-item:focus-within .conv-goal { opacity: 0.45; }
+  .conv-item:hover .conv-hover-meta-row .conv-goal,
+  .conv-item:focus-within .conv-hover-meta-row .conv-goal { opacity: 1; }
 
   .conv-list-panel {
     display: flex; flex-direction: column;
@@ -12115,6 +12186,23 @@ body.status-pos-right .status-rail .status-rail-pane > .csh-col-activity {
   min-height: 0;
   overflow-y: auto;
   border-bottom: none;
+}
+body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] {
+  overflow-y: hidden;
+}
+body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] .files-list {
+  max-height: clamp(96px, 28vh, 320px);
+  overflow-y: auto;
+}
+body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .csh-col-activity {
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow-y: visible;
+}
+body.status-pos-right .status-rail .status-rail-pane[data-rail-pane="metadata"] > .csh-col-activity {
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow-y: visible;
 }
 body.status-pos-right .status-rail .status-rail-pane > .csh-ask-original .user-msg {
   max-height: 30vh;       /* original ask scrolls inside the rail too */

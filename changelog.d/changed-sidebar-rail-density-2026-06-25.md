@@ -1,0 +1,1 @@
+- Keep the by-objects project tree scroll position stable across refreshes, make Current sessions resizable with brighter compact titles, move row metadata and goals into hover-only detail, and limit right-rail Metadata scrolling to the Files list.

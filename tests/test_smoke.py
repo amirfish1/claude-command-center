@@ -690,7 +690,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-role="project-tree-scroll"', app_js)
         self.assertIn("const _currentSessionsScrollHtml = (_currentSessionsBodyHtml)", app_js)
         self.assertIn('data-role="current-sessions-scroll"', app_js)
-        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _projectTreeScrollHtml;", app_js)
+        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeScrollHtml;", app_js)
         self.assertIn("$convList.classList.toggle('objects-scroll-split', !!_shouldGroupByObjects);", app_js)
         self.assertIn("#convList.objects-scroll-split {", app_css)
         outer_css = app_css[app_css.index("#convList.objects-scroll-split {"):app_css.index("#convList.objects-scroll-split .conv-inprogress-section", app_css.index("#convList.objects-scroll-split {"))]
@@ -698,7 +698,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-current-sessions-scroll {", app_css)
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
         self.assertIn("overflow-y: auto;", current_css)
-        self.assertIn("max-height: clamp(", current_css)
+        self.assertIn("max-height: var(--current-sessions-panel-h, clamp(", current_css)
         self.assertIn("overscroll-behavior: contain;", current_css)
         self.assertIn(".conv-project-tree-scroll {", app_css)
         scroll_css = app_css[app_css.index(".conv-project-tree-scroll {"):app_css.index(".conv-project-tree {", app_css.index(".conv-project-tree-scroll {"))]
@@ -706,6 +706,44 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("max-height: clamp(", scroll_css)
         self.assertIn("overscroll-behavior: contain;", scroll_css)
         self.assertIn("#convList.objects-scroll-split .conv-project-tree-scroll", app_css)
+
+    def test_by_objects_current_sessions_splitter_is_resizable(self):
+        """A horizontal splitter should resize Current sessions vs Project tree."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const _CURRENT_SESSIONS_PANEL_H_KEY = 'ccc-current-sessions-panel-h';", app_js)
+        self.assertIn("function applyCurrentSessionsPanelHeight()", app_js)
+        self.assertIn("const _objectsSplitHandleHtml = (_currentSessionsScrollHtml && _projectTreeScrollHtml)", app_js)
+        self.assertIn('data-role="objects-splitter"', app_js)
+        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeScrollHtml;", app_js)
+        self.assertIn("function beginObjectsSplitterResize(ev)", app_js)
+        self.assertIn("ev.target.closest('[data-role=\"objects-splitter\"]')", app_js)
+        self.assertIn("list.style.setProperty('--current-sessions-panel-h', nextHeight + 'px');", app_js)
+        self.assertIn("localStorage.setItem(_CURRENT_SESSIONS_PANEL_H_KEY, String(nextHeight));", app_js)
+        self.assertIn("$convList.addEventListener('pointerdown', beginObjectsSplitterResize);", app_js)
+
+        current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
+        self.assertIn("flex: 0 0 var(--current-sessions-panel-h, clamp(", current_css)
+        self.assertIn("max-height: var(--current-sessions-panel-h, clamp(", current_css)
+        self.assertIn(".conv-objects-splitter {", app_css)
+        splitter_css = app_css[app_css.index(".conv-objects-splitter {"):app_css.index(".conv-objects-splitter::before", app_css.index(".conv-objects-splitter {"))]
+        self.assertIn("cursor: row-resize;", splitter_css)
+        self.assertIn(".conv-objects-splitter.is-dragging", app_css)
+        self.assertIn("body.objects-splitter-resizing", app_css)
+
+    def test_by_objects_project_tree_scroll_survives_refresh_rebuilds(self):
+        """Polling rebuilds should not snap the by-objects project tree to top."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        snapshot_pos = app_js.index("const _projectTreeScrollBefore = _shouldGroupByObjects")
+        inner_html_pos = app_js.index("$convList.innerHTML = _convListHtml;", snapshot_pos)
+        restore_pos = app_js.index("const _projectTreeScrollAfter = _projectTreeScrollBefore", inner_html_pos)
+        self.assertLess(snapshot_pos, inner_html_pos)
+        self.assertLess(inner_html_pos, restore_pos)
+        self.assertIn("$convList.querySelector('[data-role=\"project-tree-scroll\"]')", app_js[snapshot_pos:inner_html_pos])
+        self.assertIn("const _projectTreeScrollTop = _projectTreeScrollBefore ? _projectTreeScrollBefore.scrollTop : 0;", app_js)
+        self.assertIn("_projectTreeScrollAfter.scrollTop = Math.min(_projectTreeScrollTop, Math.max(0, _projectTreeScrollAfter.scrollHeight - _projectTreeScrollAfter.clientHeight));", app_js)
 
     def test_by_objects_current_sessions_leaves_room_for_more_row(self):
         """Collapsed current sessions should fit seven rows plus More before
@@ -718,14 +756,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("? _currentSessions : _currentSessions.slice(0, _CURRENT_SESSIONS_COLLAPSED_LIMIT);", app_js)
         self.assertIn("_currentSessions.length > _CURRENT_SESSIONS_COLLAPSED_LIMIT", app_js)
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
-        self.assertIn("--current-session-row-h: 30px;", current_css)
-        self.assertIn("--current-session-label-h: 28px;", current_css)
+        self.assertIn("--current-session-row-h: 20px;", current_css)
+        self.assertIn("--current-session-label-h: 18px;", current_css)
         self.assertIn("--current-sessions-visible-rows: 8;", current_css)
         self.assertIn("calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows)))", current_css)
-        self.assertIn("flex: 0 0 clamp(", current_css)
+        self.assertIn("flex: 0 0 var(--current-sessions-panel-h, clamp(", current_css)
         self.assertIn("min-height: calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows)));", current_css)
+        self.assertIn("height: var(--current-session-label-h);", current_css)
         self.assertIn(".conv-current-sessions-scroll .conv-item {", current_css)
         self.assertIn("min-height: var(--current-session-row-h);", current_css)
+        self.assertIn(".conv-current-sessions-scroll .conv-item .conv-title {", current_css)
+        self.assertIn("color: var(--text);", current_css)
+        self.assertIn("font-weight: 650;", current_css)
+        self.assertIn("letter-spacing: 0;", current_css)
+        self.assertIn(":root:not([data-theme=\"light\"]) .conv-current-sessions-scroll .conv-item .conv-title", app_css)
+        self.assertIn("color: #f0f4fb;", app_css)
         self.assertIn(".conv-current-sessions-scroll .conv-item > :not(.conv-title-row),", current_css)
         self.assertIn(".conv-current-sessions-scroll .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
 
@@ -824,12 +869,21 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("const folderChipHtml = (c.folder_label_chip && !opts.suppressFolderChip)", app_js)
         self.assertIn("+ (sourceBadge ? '<span class=\"sep\">&middot;</span>' + sourceBadge : '')", app_js)
+        self.assertIn("const hoverMetaRowHtml = (goalChipHtml || folderChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)", app_js)
+        self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
+        self.assertIn("+ goalChipHtml\n          + folderChipHtml", app_js)
+        self.assertIn("+ hoverMetaRowHtml", app_js)
+        row_start = app_js.index("+ '<div class=\"conv-main-row\">'")
+        row_end = app_js.index("// Right-edge slot", row_start)
+        self.assertNotIn("+ goalChipHtml", app_js[row_start:row_end])
         self.assertIn(".conv-item .conv-meta-inline,\n  .conv-item .conv-branch-slot,\n  .conv-item .conv-folder-chip,\n  .conv-item .conv-repo-pin", app_css)
-        self.assertIn(".conv-item:hover .conv-meta-inline,\n  .conv-item:focus-within .conv-meta-inline,\n  .conv-item.active .conv-meta-inline", app_css)
-        self.assertIn(".conv-item:hover .conv-branch-slot,\n  .conv-item:focus-within .conv-branch-slot,\n  .conv-item.active .conv-branch-slot", app_css)
-        self.assertIn(".conv-item:hover .conv-folder-chip,\n  .conv-item:focus-within .conv-folder-chip,\n  .conv-item.active .conv-folder-chip", app_css)
-        self.assertIn(".conv-item:hover .conv-meta-inline .source-badge,\n  .conv-item:focus-within .conv-meta-inline .source-badge,\n  .conv-item.active .conv-meta-inline .source-badge", app_css)
-        self.assertIn(".compact-rows .conv-item:hover .conv-row-meta .conv-meta-inline,\n  .compact-rows .conv-item:focus-within .conv-row-meta .conv-meta-inline,\n  .compact-rows .conv-item.active .conv-row-meta .conv-meta-inline", app_css)
+        self.assertIn(".conv-item .conv-hover-meta-row {\n    display: none;", app_css)
+        self.assertIn(".conv-item:hover .conv-hover-meta-row,\n  .conv-item:focus-within .conv-hover-meta-row { display: flex; }", app_css)
+        self.assertIn(".conv-item:hover .conv-hover-meta-row .conv-meta-inline,\n  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline,", app_css)
+        self.assertIn(".conv-item:hover .conv-hover-meta-row .conv-meta-inline .source-badge,\n  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline .source-badge", app_css)
+        self.assertIn(".compact-rows .conv-item:hover .conv-hover-meta-row,\n  .compact-rows .conv-item:focus-within .conv-hover-meta-row { display: flex; }", app_css)
+        self.assertNotIn(".conv-item.active .conv-hover-meta-row", app_css)
+        self.assertIn(".conv-item:hover .conv-hover-meta-row .conv-goal,\n  .conv-item:focus-within .conv-hover-meta-row .conv-goal { opacity: 1; }", app_css)
 
     def test_sidebar_titles_strip_leading_pasted_image_paths(self):
         """Current-session rows should show the human task, not the leading
@@ -1855,6 +1909,17 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("getElementById('filesViewToggle')", app_js)
         self.assertIn(".status-rail-tabs", app_css)
         self.assertIn(".status-rail-pane.is-active", app_css)
+        self.assertIn("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] {", app_css)
+        self.assertIn("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] .files-list {", app_css)
+        self.assertIn("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] > .csh-col-activity {", app_css)
+        metadata_css = app_css[app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] {"):app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] .files-list", app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] {"))]
+        self.assertIn("overflow-y: hidden;", metadata_css)
+        files_scroll_css = app_css[app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] .files-list {"):app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] > .csh-col-activity", app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] .files-list {"))]
+        self.assertIn("overflow-y: auto;", files_scroll_css)
+        self.assertIn("max-height: clamp(", files_scroll_css)
+        activity_css = app_css[app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] > .csh-col-activity {"):app_css.index("body.status-pos-right .status-rail .status-rail-pane > .csh-ask-original .user-msg", app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] > .csh-col-activity {"))]
+        self.assertIn("overflow-y: visible;", activity_css)
+        self.assertNotIn("flex: 1 1 auto;", activity_css)
 
     def test_done_result_can_copy_agent_answer(self):
         """Successful Done rows expose a small copy affordance for the last
