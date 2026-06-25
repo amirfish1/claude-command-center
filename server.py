@@ -19776,6 +19776,96 @@ def start_uxq_nudge_watcher():
     threading.Thread(target=_watcher, daemon=True, name="uxq-nudge-watcher").start()
 
 
+# Minutes a fixer can make no closing progress before its project's queue is
+# judged STUCK (used by compute_ux_fixes_health). Mirrors the nudge watcher's
+# "no progress" intuition; kept generous so a slow-but-working fix isn't flagged.
+_UXQ_STUCK_NO_PROGRESS_S = 10 * 60
+
+
+def compute_ux_fixes_health():
+    """Per-project queue-health snapshot used by /api/ux-fixes/health.
+
+    Returns a list of dicts, one per project that has open tickets:
+
+        {project, depth, oldest_open_age_seconds, fixer_session_id,
+         fixer_live, fixer_idle_or_stale, stuck}
+
+    `stuck` = depth > 0 AND (no resolvable live fixer OR the fixer has closed
+    nothing for _UXQ_STUCK_NO_PROGRESS_S). A stuck project with no resolvable
+    fixer is reported (a human / the UI handles spawning) but never auto-spawned.
+
+    PERFORMANCE (CLAUDE.md "Performance gates"): this does ZERO O(all
+    sessions/transcripts) work. The queue is one JSON file read once via the
+    backend-agnostic list_items() API. Liveness is resolved ONLY for the single
+    candidate fixer of a project that already has open tickets, through the
+    cheap sidecar/live-id primitive `_archive_session_is_live` (a stat() plus
+    the in-memory live-id set) — no per-row transcript parse and no subprocess
+    fork per project/row.
+    """
+    try:
+        items = ux_fixes_queue.list_items()
+    except Exception:
+        items = []
+    now = time.time()
+    # First pass: group by project. depth + oldest open age, and the most
+    # recently active fixer (claimer) plus its highest closed seq (progress).
+    by_project = {}  # project → bucket
+    for it in items:
+        proj = str(it.get("project") or "?")
+        b = by_project.setdefault(proj, {
+            "depth": 0,
+            "oldest_open_ts": None,
+            "fixer_session_id": None,
+            "fixer_last_ts": 0.0,
+            "fixer_progress_ts": 0.0,
+        })
+        status = it.get("status")
+        if status == "open":
+            b["depth"] += 1
+            created = _uxq_parse_ts(it.get("created_at"))
+            if created and (b["oldest_open_ts"] is None or created < b["oldest_open_ts"]):
+                b["oldest_open_ts"] = created
+        sid = str(it.get("claimed_by") or it.get("closed_by") or "")
+        if not _UXQ_SESSION_ID_RE.match(sid):
+            continue
+        ts = _uxq_parse_ts(it.get("updated_at") or it.get("claimed_at"))
+        if not ts or (now - ts) > _UXQ_NUDGE_LOOKBACK_S:
+            continue
+        # The fixer is the claimer whose activity is most recent.
+        if ts > b["fixer_last_ts"]:
+            b["fixer_last_ts"] = ts
+            b["fixer_session_id"] = sid
+        if status == "closed":
+            closed_ts = _uxq_parse_ts(it.get("closed_at") or it.get("updated_at"))
+            if closed_ts > b["fixer_progress_ts"]:
+                b["fixer_progress_ts"] = closed_ts
+    # Second pass: only projects WITH open tickets are candidates for the (cheap)
+    # liveness probe — that is the candidacy gate. One probe per such project.
+    out = []
+    for proj, b in by_project.items():
+        if b["depth"] <= 0:
+            continue
+        fixer = b["fixer_session_id"]
+        fixer_live = bool(fixer) and _archive_session_is_live(fixer)
+        # "Made no closing progress for N minutes" — also treat a fixer we never
+        # saw close anything (progress_ts == 0) as stale once it has a claim.
+        last_progress = b["fixer_progress_ts"] or b["fixer_last_ts"]
+        idle_or_stale = (not last_progress) or ((now - last_progress) > _UXQ_STUCK_NO_PROGRESS_S)
+        stuck = (not fixer_live) or idle_or_stale
+        oldest_ts = b["oldest_open_ts"]
+        out.append({
+            "project": proj,
+            "depth": b["depth"],
+            "oldest_open_age_seconds": int(now - oldest_ts) if oldest_ts else None,
+            "fixer_session_id": fixer,
+            "fixer_live": fixer_live,
+            "fixer_idle_or_stale": idle_or_stale,
+            "stuck": stuck,
+        })
+    out.sort(key=lambda r: (-r["depth"], r["project"]))
+    return out
+
+
 def _queue_codex_resume(session_id, text, pid=None):
     with _pending_resume_lock:
         _pending_resume_queue.setdefault(session_id, []).append(text)
@@ -40144,6 +40234,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 items = ux_fixes_queue.list_items(status=status_filter, lane=lane_filter)
                 self.send_json({"ok": True, "items": items, "count": len(items)})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/ux-fixes/health":
+            # Candidacy-gated per-project queue-health: depth, oldest-open age,
+            # the fixer's liveness, and whether the project is STUCK. When any
+            # project is stuck we run the existing nudge tick (autonomous detect
+            # → inject the same wake the manual nudge sends), honouring its own
+            # per-session throttle/opt-out state — no second throttle map. A
+            # stuck project with no resolvable fixer is reported, never spawned.
+            try:
+                health = compute_ux_fixes_health()
+                if any(p.get("stuck") for p in health):
+                    try:
+                        _uxq_nudge_tick()
+                    except Exception:
+                        pass
+                self.send_json({"ok": True, "projects": health, "count": len(health)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/telemetry/status":

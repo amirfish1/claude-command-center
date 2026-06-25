@@ -104,6 +104,62 @@ def test_archive_build_skips_liveness_for_old_sessions(big_projects, monkeypatch
     )
 
 
+# ── UX-fixes queue health (candidacy gate) ───────────────────────────────────
+# compute_ux_fixes_health must read the queue ONCE and probe liveness only for
+# the single candidate fixer of a project that has open tickets — never an
+# O(all sessions/transcripts) scan and never a per-project/row subprocess fork.
+
+def test_ux_fixes_health_no_all_sessions_or_subprocess(monkeypatch):
+    """Health must not scan all sessions or fork per project/row.
+
+    Two projects, each with open tickets and a distinct fixer claimer, plus a
+    pile of unrelated closed tickets. The candidacy gate means liveness is
+    resolved at most once per project-with-open-tickets, and the full archive
+    build is never touched.
+    """
+    uxq = importlib.import_module("ux_fixes_queue")
+
+    def _item(number, project, status, claimed_by=None, seq=None):
+        return {
+            "number": number, "project": project, "seq": seq or number,
+            "ref": f"{project}-{seq or number}", "status": status,
+            "claimed_by": claimed_by, "closed_by": claimed_by,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-06-01T00:00:00Z",
+            "claimed_at": "2026-06-01T00:00:00Z",
+            "closed_at": "2026-06-01T00:00:00Z" if status == "closed" else None,
+        }
+
+    sid_a = str(uuid.uuid4())
+    sid_b = str(uuid.uuid4())
+    items = (
+        [_item(i, "CCC", "open") for i in range(1, 15)]
+        + [_item(100, "CCC", "in_progress", claimed_by=sid_a)]
+        + [_item(i, "BYM", "closed", claimed_by=sid_b) for i in range(200, 260)]
+        + [_item(300, "BYM", "open")]
+    )
+    monkeypatch.setattr(uxq, "list_items", lambda *a, **k: list(items))
+
+    live_calls = _count_calls(monkeypatch, "_archive_session_is_live", passthrough_return=False)
+    # The full archive build is the O(all sessions) path; it must never run.
+    build_calls = _count_calls(monkeypatch, "find_all_conversations")
+    archive_calls = _count_calls(monkeypatch, "_build_archive_conversations")
+
+    health = server.compute_ux_fixes_health()
+
+    projects = {p["project"] for p in health}
+    assert {"CCC", "BYM"} <= projects, f"expected CCC+BYM in health, got {projects}"
+    # One liveness probe per project-with-open-tickets (2), not per ticket (~75).
+    assert len(live_calls) <= 4, (
+        f"_archive_session_is_live called {len(live_calls)}x — health is probing "
+        "liveness per ticket instead of per candidate fixer (candidacy gate lost)"
+    )
+    assert build_calls == [] and archive_calls == [], (
+        "compute_ux_fixes_health triggered the O(all sessions) archive build — "
+        "it must work off the queue file + cheap liveness primitive only"
+    )
+
+
 # ── Stats persistence ─────────────────────────────────────────────────────────
 # The per-transcript stats cache must survive a reload, or the first Stats open
 # after a restart re-parses every transcript (~40s, GIL-blocking).
