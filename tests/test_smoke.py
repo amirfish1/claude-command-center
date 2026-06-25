@@ -710,7 +710,8 @@ class TestServerImports(unittest.TestCase):
         scroll_html_start = app_js.index("const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)")
         scroll_html_end = app_js.index("const _objectsSplitHandleHtml", scroll_html_start)
         self.assertNotIn("Project tree</div>", app_js[scroll_html_start:scroll_html_end])
-        self.assertIn("$convList.classList.toggle('objects-scroll-split', !!_shouldGroupByObjects);", app_js)
+        self.assertIn("const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;", app_js)
+        self.assertIn("$convList.classList.toggle('objects-scroll-split', _objectsSplitActive);", app_js)
         self.assertIn("#convList.objects-scroll-split {", app_css)
         outer_css = app_css[app_css.index("#convList.objects-scroll-split {"):app_css.index("#convList.objects-scroll-split .conv-inprogress-section", app_css.index("#convList.objects-scroll-split {"))]
         self.assertIn("overflow-y: hidden !important;", outer_css)
@@ -756,6 +757,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-objects-splitter.is-dragging", app_css)
         self.assertIn("body.objects-splitter-resizing", app_css)
 
+    def test_by_objects_split_mode_only_applies_to_active_tab(self):
+        """All/Issues/Merge must keep normal sidebar scrolling even when the
+        saved Active grouping is by objects."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;", app_js)
+        self.assertIn("$convList.classList.toggle('objects-scroll-split', _objectsSplitActive);", app_js)
+        self.assertIn("if (_objectsSplitActive) applyCurrentSessionsPanelHeight();", app_js)
+        self.assertIn("const _projectTreeScrollBefore = _objectsSplitActive", app_js)
+        self.assertIn("const _projectTreeScrollAfter = _projectTreeScrollBefore", app_js)
+        self.assertNotIn("$convList.classList.toggle('objects-scroll-split', !!_shouldGroupByObjects);", app_js)
+        self.assertNotIn("if (_shouldGroupByObjects) applyCurrentSessionsPanelHeight();", app_js)
+
     def test_by_objects_splitter_clamps_to_visible_current_session_rows(self):
         """Saved splitter heights should not shrink Current sessions below the
         seven-row preview plus the More row."""
@@ -787,7 +801,7 @@ class TestServerImports(unittest.TestCase):
         """Polling rebuilds should not snap the by-objects project tree to top."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        snapshot_pos = app_js.index("const _projectTreeScrollBefore = _shouldGroupByObjects")
+        snapshot_pos = app_js.index("const _projectTreeScrollBefore = _objectsSplitActive")
         inner_html_pos = app_js.index("$convList.innerHTML = _convListHtml;", snapshot_pos)
         restore_pos = app_js.index("const _projectTreeScrollAfter = _projectTreeScrollBefore", inner_html_pos)
         self.assertLess(snapshot_pos, inner_html_pos)
@@ -857,6 +871,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("display: flex;", draft_css)
         self.assertIn("align-items: center;", draft_css)
         self.assertIn("margin: 0 0 0 18px;", draft_css)
+        self.assertIn(".conv-project-tree .conv-folder-group[data-object-drop-zone] > .conv-draft-row", draft_css)
+        self.assertIn("padding-left: 29px;", draft_css)
         self.assertIn(".conv-project-tree .conv-draft-row .conv-draft-play {\n    display: inline-flex;", draft_css)
         self.assertIn("width: min(calc(var(--draft-title-ch, 16) * 1ch + 18px), 100%);", draft_css)
         self.assertNotIn(".conv-project-tree .conv-draft-row .conv-draft-play,\n  .conv-project-tree .conv-draft-row .conv-draft-delete { display: none; }", draft_css)

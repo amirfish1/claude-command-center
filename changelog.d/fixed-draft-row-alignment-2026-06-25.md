@@ -1,0 +1,1 @@
+- Align by-objects draft task rows with real session rows under the same object.

@@ -1,0 +1,1 @@
+- Restore normal sidebar scrolling on the All tab when Active is saved in By objects mode.

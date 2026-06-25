@@ -20850,8 +20850,9 @@
       : (_openAskHtml
           + (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions')));
     const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
-    $convList.classList.toggle('objects-scroll-split', !!_shouldGroupByObjects);
-    if (_shouldGroupByObjects) applyCurrentSessionsPanelHeight();
+    const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;
+    $convList.classList.toggle('objects-scroll-split', _objectsSplitActive);
+    if (_objectsSplitActive) applyCurrentSessionsPanelHeight();
     else $convList.style.removeProperty('--current-sessions-panel-h');
     // Flicker guard. The 10s bulk-sessions poll and the 5s live-status tick both
     // re-run this render constantly. The wholesale innerHTML reset below tears
@@ -20920,7 +20921,7 @@
       : null;
     const _focusInputCaretStart = _focusInputBefore ? _focusInputBefore.selectionStart : null;
     const _focusInputCaretEnd = _focusInputBefore ? _focusInputBefore.selectionEnd : null;
-    const _projectTreeScrollBefore = _shouldGroupByObjects
+    const _projectTreeScrollBefore = _objectsSplitActive
       ? $convList.querySelector('[data-role="project-tree-scroll"]')
       : null;
     const _projectTreeScrollTop = _projectTreeScrollBefore ? _projectTreeScrollBefore.scrollTop : 0;
