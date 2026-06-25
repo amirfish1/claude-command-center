@@ -2,7 +2,7 @@
 
 **Start the next while Claude builds the first.**
 
-One local dashboard for every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, and **Kilo Code** session on your Mac. Spawn in parallel, ship in parallel.
+One local dashboard for every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, and **Kilo Code** session on your machine. Spawn in parallel, ship in parallel.
 
 > 📢 Shipping fast. **Watch → Releases** (top-right) to get pinged on new versions without the noise.
 
@@ -31,7 +31,7 @@ Try the read-only demo first: [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/dem
   Your browser doesn't support inline video. <a href="https://github.com/amirfish1/claude-command-center/releases/download/v4.3.2.2/May-23-v4-CCC-v5.mp4">Download the demo</a> or watch the GIF above.
 </video>
 
-CCC latches onto every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session on your Mac — terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each agent's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
+CCC latches onto every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session on your machine — terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each agent's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
 
 See the [engine support matrix](#engine-support) below for what's first-class vs. partial per engine — spawn works across all supported engines, transcript ingestion and UX parity vary.
 
@@ -173,7 +173,7 @@ the UI uses for the kanban.
 │ any claude  │ ─────────> │ ~/.claude/projects/*.jsonl     │
 │ process     │            │ ~/.claude/sessions/<pid>.json  │
 │ anywhere on │            │ ~/.claude/command-center/          │
-│ your mac    │            │   live-state/<sid>.json        │
+│ your machine│            │   live-state/<sid>.json        │
 └─────────────┘            └──────────────┬─────────────────┘
                                           │  reads
                                           v
@@ -237,6 +237,10 @@ If you'd like to see an engine bumped from "partial" to first-class, open an iss
   Jump/Launch in the conversation toolbar; resumes the current CLI
   session inside the Claude Desktop app via the `claude://resume` deep
   link.
+- **Fresh worktree spawns**: toggle worktree mode to launch a session in
+  `<repo>-wt/<slug>/` on `feat/<slug>`. Optional
+  [`.ccc/worktree-init`](docs/worktree-init.md) scripts can copy local env
+  files or install dependencies before the agent starts.
 - **Headless spawn with follow-up**: launch `claude -p` sessions from the
   dashboard and keep talking to them via an in-browser input bar (no
   terminal needed, stdin pipe stays open).

@@ -3,17 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CCC: One inbox for every Claude, Codex, and Antigravity session on your Mac</title>
-<meta name="description" content="One inbox for every Claude, Codex, and Antigravity session on your machine. Pin strategy sessions on top, fan out sub-sessions below. Local, open source, MIT.">
+<title>CCC: Start the next while Claude builds the first</title>
+<meta name="description" content="One local dashboard for every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session. Spawn in parallel, ship in parallel. Local, open source, MIT.">
 <link rel="canonical" href="https://ccc.amirfish.ai">
 
-<meta property="og:title" content="Claude Command Center, v4 with Antigravity">
-<meta property="og:description" content="One inbox for every Claude, Codex, and Antigravity session on your machine. Pin strategy, fan out execution.">
+<meta property="og:title" content="CCC: Start the next while Claude builds the first">
+<meta property="og:description" content="One local dashboard for Claude Code, Codex, Cursor, Antigravity, and Kilo Code sessions. Spawn in parallel, ship in parallel.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://ccc.amirfish.ai">
-<meta property="og:image" content="https://ccc.amirfish.ai/images/social-preview.png?v=4">
+<meta property="og:image" content="https://ccc.amirfish.ai/images/social-preview.png?v=5">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://ccc.amirfish.ai/images/social-preview.png?v=4">
+<meta name="twitter:image" content="https://ccc.amirfish.ai/images/social-preview.png?v=5">
 
 <style>
   :root {
@@ -127,7 +127,7 @@
     border-radius: 8px; display: flex; align-items: center; gap: 12px;
     max-width: 700px;
   }
-  .quick-install code { color: var(--fg); flex: 1; overflow-x: auto; white-space: nowrap; font-size: 13px; }
+  .quick-install code { color: var(--fg); flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font-size: 13px; }
   .quick-install .copy {
     background: transparent; color: var(--fg-dim);
     border: 1px solid var(--line-strong); border-radius: 6px;
@@ -200,7 +200,7 @@
     letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 18px;
   }
 
-  /* What's new in v4 */
+  /* What's new cards */
   .news-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
   @media (max-width: 860px) { .news-grid { grid-template-columns: 1fr; } }
   .news-card {
@@ -284,9 +284,9 @@
   table.compare .partial { color: var(--orange); font-weight: 500; }
 
   /* Install section */
-  .install-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .install-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
   @media (max-width: 860px) { .install-grid { grid-template-columns: 1fr; } }
-  .install-block { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 26px; }
+  .install-block { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 26px; min-width: 0; }
   .install-block h3 { margin: 0 0 14px; font-size: 16px; font-family: var(--mono); color: var(--fg-dim); font-weight: 500; }
   .install-block pre {
     margin: 0; padding: 16px; background: var(--code-bg);
@@ -409,7 +409,7 @@
     <div class="brand">
       <span class="dot"></span>
       <span>claude command center</span>
-      <span class="version">v4 with Antigravity</span>
+      <span class="version">v5.3</span>
     </div>
     <nav class="nav-links">
       <a href="#whats-new">What's new</a>
@@ -426,34 +426,34 @@
   <section class="hero" style="border-top: 0;">
     <div class="wrap hero-inner">
       <div class="eyebrow fade-target">
-        <span class="badge">v4</span>
-        <span>Antigravity now a first-class engine</span>
+        <span class="badge">v5.3</span>
+        <span>Claude Code, Codex, Cursor, Antigravity, and Kilo Code</span>
       </div>
       <h1 class="hero-title fade-target">
-        One inbox for every <span class="orange">Claude</span>, <span class="orange">Codex</span>, and <span class="orange">Antigravity</span> session on your Mac.
+        Start the next while <span class="orange">Claude</span> builds the first.
       </h1>
       <p class="lede fade-target">
-        Pin strategy sessions on top. Fan out sub-sessions for execution. Stay above the noise across 30+ agent sessions. Local, open source, MIT.
+        One local dashboard for every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session. Spawn in parallel, ship in parallel, and keep the board attached to sessions you started anywhere.
       </p>
 
       <div class="cta-row fade-target">
-        <a class="btn btn-primary" href="https://github.com/amirfish1/claude-command-center/releases/latest/download/ccc.dmg" rel="noopener">
-          Download for Mac <span class="arrow">&darr;</span>
+        <a class="btn btn-primary" href="#install">
+          Install <span class="arrow">&darr;</span>
         </a>
         <a class="btn btn-soft" href="/demo">Try the live demo</a>
         <a class="btn btn-soft" href="https://github.com/amirfish1/claude-command-center" rel="noopener">★ GitHub</a>
       </div>
 
       <div class="quick-install fade-target" id="quickInstall">
-        <code id="quickCmd">brew tap amirfish1/ccc &amp;&amp; brew install ccc</code>
+        <code id="quickCmd">curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=landing bash</code>
         <button class="copy" type="button" data-target="quickCmd">copy</button>
       </div>
 
       <div class="install-meta fade-target">
-        Or <a href="#install" style="color: var(--fg-dim); text-decoration: underline; text-underline-offset: 3px;">install via curl</a> <span class="sep">·</span> <a href="https://amirfish.ai/ccc-resources" style="color: var(--fg-dim); text-decoration: underline; text-underline-offset: 3px;">carousel resources</a> <span class="sep">·</span> macOS <span class="sep">·</span> No telemetry by default <span class="sep">·</span> MIT
+        Or use <a href="#install" style="color: var(--fg-dim); text-decoration: underline; text-underline-offset: 3px;">Homebrew / DMG</a> <span class="sep">·</span> macOS + Linux <span class="sep">·</span> No telemetry by default <span class="sep">·</span> MIT
       </div>
 
-      <div class="demo boot-target" aria-label="CCC v4 dashboard demo">
+      <div class="demo boot-target" aria-label="CCC dashboard demo">
         <div class="demo-bar">
           <div class="lights">
             <span class="light red"></span>
@@ -478,30 +478,30 @@
 
   <section id="whats-new">
     <div class="wrap">
-      <div class="section-eyebrow fade-target">New in v4 · Shipped May 21, 2026</div>
-      <h2 class="fade-target">Three things that ship with <span class="orange">v4</span>.</h2>
+      <div class="section-eyebrow fade-target">Recent releases · June 2026</div>
+      <h2 class="fade-target">Three things that ship <span class="orange">now</span>.</h2>
       <p class="section-lede fade-target">
-        The biggest is Antigravity. Google's new coding agent is now a first-class engine alongside Claude Code and Codex, including the app-only sessions other tools cannot drive.
+        The dashboard grew past its original Claude-only loop: more engines, reusable launch templates, Linux headless support, and worktree-aware spawning.
       </p>
 
       <div class="news-grid stagger-grid">
         <div class="news-card headline">
           <span class="pill">★ Headline</span>
-          <h3>Antigravity engine</h3>
-          <p>Both AGY CLI and app-only sessions are drivable. CCC reads the Antigravity app's local HTTPS language server and posts follow-up messages through the cascade RPC.</p>
-          <div class="sub">// app-session input via local RPC</div>
+          <h3>Five engine board</h3>
+          <p>Claude Code, Codex, Cursor, Antigravity, and Kilo Code sessions appear in one board, including sessions started outside CCC.</p>
+          <div class="sub">// attach first, spawn when useful</div>
         </div>
         <div class="news-card">
-          <span class="pill">Telemetry</span>
-          <h3>WIP + tokens</h3>
-          <p>WIP indication, TTY display, and token usage tracking for Antigravity rows. Same telemetry surface as the Claude rows.</p>
-          <div class="sub">// per-session, per-engine</div>
+          <span class="pill">Templates</span>
+          <h3>Launch recipes</h3>
+          <p>The template gallery pre-fills repeatable new-session prompts with engine and worktree defaults, so common workflows start in one click.</p>
+          <div class="sub">// static/templates.json</div>
         </div>
         <div class="news-card">
-          <span class="pill">UX</span>
-          <h3>Row pinning</h3>
-          <p>Pin any session to the top of the list. Strategy stays visible while execution scrolls below. The foundation for the pin-and-fan workflow.</p>
-          <div class="sub">// the power loop</div>
+          <span class="pill">Runtime</span>
+          <h3>Linux + worktrees</h3>
+          <p>The curl installer supports macOS and Linux, and spawned sessions can run in fresh git worktrees with optional per-worktree setup hooks.</p>
+          <div class="sub">// macOS desktop, Linux headless</div>
         </div>
       </div>
     </div>
@@ -520,7 +520,7 @@
           <div class="num">01</div>
           <h3>Sees every session, not just the ones it spawned.</h3>
           <p>
-            CCC reads each engine's on-disk state as the source of truth. Open a terminal, run <code>claude --resume</code> or <code>agy --conversation</code>, and the row appears. Close the dashboard, sessions keep running.
+            CCC reads each engine's on-disk state as the source of truth. Open a terminal, resume a Claude or Codex session, or spawn from Cursor, Antigravity, or Kilo Code, and the row appears. Close the dashboard, sessions keep running.
           </p>
           <pre>~/.claude/projects/*.jsonl
 ~/.claude/sessions/&lt;pid&gt;.json
@@ -544,7 +544,7 @@
           <div class="num">03</div>
           <h3>GitHub and headless built in.</h3>
           <p>
-            One click turns a GitHub issue into a session. Verify closes the issue with a commit-SHA comment. Spawn headless <code>claude -p</code> or <code>agy --conversation</code> sessions from the dashboard and keep typing at them from the browser.
+            One click turns a GitHub issue into a session. Verify closes the issue with a commit-SHA comment. Spawn headless agent sessions from the dashboard and keep typing at them from the browser.
           </p>
           <pre>gh issue → session → PR → verify
 claude -p --input-format stream-json
@@ -566,7 +566,7 @@ agy --conversation &lt;sid&gt;</pre>
         <div class="use-case">
           <div class="who">Solo product builder</div>
           <h3>Shipping two products in parallel</h3>
-          <p>Two repos in flight. Claude builds feature A while Codex refactors feature B while Antigravity drafts the migration. You pin the two strategy sessions and the sub-sessions are visible across both.</p>
+          <p>Two repos in flight. Claude builds feature A while Codex refactors feature B while Cursor or Antigravity drafts the migration. You pin the two strategy sessions and the sub-sessions are visible across both.</p>
         </div>
         <div class="use-case">
           <div class="who">Agency lead</div>
@@ -600,7 +600,7 @@ agy --conversation &lt;sid&gt;</pre>
           <thead>
             <tr>
               <th></th>
-              <th class="us">CCC v4</th>
+              <th class="us">CCC v5</th>
               <th>claude-squad</th>
               <th>Conductor</th>
               <th>Sculptor</th>
@@ -615,8 +615,8 @@ agy --conversation &lt;sid&gt;</pre>
               <td class="no">no</td>
             </tr>
             <tr>
-              <td>Multi-engine (Claude + Codex + Antigravity)</td>
-              <td class="yes">✓ all 3</td>
+              <td>Multi-engine dashboard</td>
+              <td class="yes">✓ Claude, Codex, Cursor, Antigravity, Kilo</td>
               <td class="partial">Claude + Codex</td>
               <td class="partial">Claude + Codex</td>
               <td class="partial">Claude + Codex</td>
@@ -657,15 +657,15 @@ agy --conversation &lt;sid&gt;</pre>
               <td class="no">docs only</td>
             </tr>
             <tr>
-              <td>Polished native app (DMG)</td>
-              <td class="yes">✓ signed + Sparkle</td>
+              <td>Native-ish install path</td>
+              <td class="yes">✓ DMG + Homebrew</td>
               <td class="no">CLI</td>
               <td class="yes">✓</td>
               <td class="yes">✓</td>
             </tr>
             <tr>
               <td>Windows / Linux</td>
-              <td class="partial">macOS first</td>
+              <td class="partial">macOS + headless Linux</td>
               <td class="yes">✓</td>
               <td class="no">macOS</td>
               <td class="partial">macOS + Linux</td>
@@ -681,14 +681,14 @@ agy --conversation &lt;sid&gt;</pre>
       <div class="section-eyebrow fade-target">Get it</div>
       <h2 class="fade-target">Install in 60 seconds.</h2>
       <p class="section-lede fade-target">
-        macOS, Python 3, Claude Code (and optionally Codex CLI, Antigravity CLI for those engines).
+        macOS or Linux, Python 3, and Claude Code. Add Codex, Cursor, Antigravity, Kilo Code, or GitHub CLI and the matching surfaces light up.
       </p>
 
       <div class="install-grid stagger-grid">
         <div class="install-block">
           <h3># one-line install</h3>
 <pre><span class="comment"># downloads, installs, opens the dashboard</span>
-curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=landing bash
 
 <span class="comment"># launch later</span>
 ccc start
@@ -697,14 +697,14 @@ open http://localhost:8090</pre>
         </div>
 
         <div class="install-block">
-          <h3># native Mac app</h3>
+          <h3># Homebrew or Mac app</h3>
 <pre><span class="comment"># drag-and-drop install (recommended if you avoid the terminal)</span>
 <a href="https://github.com/amirfish1/claude-command-center/releases/latest/download/ccc.dmg" style="color: var(--orange); text-decoration: underline; text-underline-offset: 3px;">Download CCC.dmg &darr;</a>
 
 <span class="comment"># or via Homebrew</span>
 brew tap amirfish1/ccc
 brew install ccc</pre>
-          <p class="req">DMG bundles a launcher that triggers the installer on first run. Unsigned (open source, no Apple developer account) — first launch needs a right-click → Open. Homebrew install is signed-by-formula and handles the launchd agent.</p>
+          <p class="req">DMG bundles a launcher that triggers the installer on first run. Unsigned (open source, no Apple developer account) — first launch needs a right-click → Open. Homebrew installs the <code>ccc</code> command and can run CCC as a background service.</p>
         </div>
       </div>
     </div>
@@ -720,10 +720,10 @@ brew install ccc</pre>
             Other tools want to own execution. You launch agents through their dashboard, and in return you get a card on a kanban. <strong>That's fine until you open a terminal.</strong>
           </p>
           <p>
-            The moment you <code>claude --resume</code> or <code>agy --conversation</code> something by hand, you're outside the tool's universe. The dashboard can't see it. The work you just did doesn't show up against the issue, in the review queue, or anywhere.
+            The moment you resume a session by hand, you're outside the tool's universe. The dashboard can't see it. The work you just did doesn't show up against the issue, in the review queue, or anywhere.
           </p>
           <p>
-            <strong>CCC goes the other way.</strong> Each engine's on-disk state is the source of truth. If Claude Code, Codex, or Antigravity is running anywhere on your machine, it shows up here. Close the dashboard. Sessions keep running. Reopen tomorrow. Everything still there.
+            <strong>CCC goes the other way.</strong> Each engine's on-disk state is the source of truth. If Claude Code, Codex, Cursor, Antigravity, or Kilo Code is running anywhere on your machine, it shows up here. Close the dashboard. Sessions keep running. Reopen tomorrow. Everything still there.
           </p>
         </div>
         <ul class="why-list fade-target">
@@ -731,7 +731,7 @@ brew install ccc</pre>
           <li><strong>State</strong>Human-readable JSON sidecars under <code>~/.claude/command-center/</code>. Rewriteable by hand.</li>
           <li><strong>Workers</strong>Zero. Every API request rescans Claude's session directories and returns a flat list. No background jobs to babysit.</li>
           <li><strong>Telemetry</strong>Anonymous, opt-in, off by default. Five fields, all bounded. Inspectable locally. Source of the worker is in the repo.</li>
-          <li><strong>Scope</strong>Local dev tool. macOS-first. No multi-user. No network mode. If you're looking at it on a remote host, something has gone wrong.</li>
+          <li><strong>Scope</strong>Local dev tool. macOS desktop and headless Linux. No hosted multi-user control plane. Expose it only on trusted loopback or a private network.</li>
         </ul>
       </div>
     </div>
@@ -754,7 +754,7 @@ brew install ccc</pre>
     <div class="foot-row">
       <div>
         Claude Command Center. MIT &copy; 2026 Amir Fish.<br>
-        Built on top of <a href="https://docs.claude.com/en/docs/claude-code">Claude Code</a>, <a href="https://github.com/openai/codex">Codex</a>, and <a href="https://antigravity.google">Antigravity</a>.
+        Built on top of <a href="https://docs.claude.com/en/docs/claude-code">Claude Code</a>, <a href="https://github.com/openai/codex">Codex</a>, Cursor, <a href="https://antigravity.google">Antigravity</a>, and Kilo Code.
       </div>
       <div class="links">
         <a href="https://github.com/amirfish1/claude-command-center">GitHub</a>

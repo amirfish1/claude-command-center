@@ -7,9 +7,10 @@
 #   ./install.sh --from=readme                     # direct invocation after git clone
 #
 # Behaviour:
-#   - macOS only. Linux exits fast with a one-line pointer to the Docker issue.
+#   - Supports macOS and Linux. On Linux, desktop-only conveniences degrade
+#     the same way they do when running ./run.sh directly.
 #   - Clones to ~/.ccc/claude-command-center if absent, git pulls if present.
-#   - Verifies python3 and the `claude` CLI are on PATH.
+#   - Verifies git and python3 are on PATH.
 #   - Persists an attribution channel to ~/.claude/command-center/install-source.
 #   - Launches ./run.sh in the foreground and opens http://localhost:8090
 #     once the port answers.
@@ -72,13 +73,16 @@ persist_channel() {
 # ---------------------------------------------------------------------------
 # Platform gate
 # ---------------------------------------------------------------------------
-require_macos() {
+require_supported_platform() {
   local uname_s
   uname_s="$(uname -s 2>/dev/null || printf 'unknown')"
-  if [ "$uname_s" != "Darwin" ]; then
-    err "CCC is macOS-only; see the Docker issue ${REPO_URL}/issues/54 once it ships"
-    exit 2
-  fi
+  case "$uname_s" in
+    Darwin|Linux) return 0 ;;
+    *)
+      err "CCC install supports macOS or Linux; unsupported OS: ${uname_s}"
+      exit 2
+      ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -86,7 +90,7 @@ require_macos() {
 # ---------------------------------------------------------------------------
 require_python3() {
   if ! command -v python3 >/dev/null 2>&1; then
-    err "python3 not found on PATH. Install Xcode CLT: xcode-select --install"
+    err "python3 not found on PATH. Install Python 3, then re-run this installer."
     exit 1
   fi
 }
@@ -106,7 +110,7 @@ warn_if_no_claude_cli() {
 
 require_git() {
   if ! command -v git >/dev/null 2>&1; then
-    err "git not found on PATH. Install Xcode CLT: xcode-select --install"
+    err "git not found on PATH. Install git, then re-run this installer."
     exit 1
   fi
 }
@@ -134,7 +138,11 @@ open_when_ready() {
   (
     for _ in $(seq 1 60); do
       if (echo > "/dev/tcp/127.0.0.1/${PORT}") >/dev/null 2>&1; then
-        open "$DASHBOARD_URL" >/dev/null 2>&1 || true
+        if command -v open >/dev/null 2>&1; then
+          open "$DASHBOARD_URL" >/dev/null 2>&1 || true
+        elif command -v xdg-open >/dev/null 2>&1; then
+          xdg-open "$DASHBOARD_URL" >/dev/null 2>&1 || true
+        fi
         exit 0
       fi
       sleep 1
@@ -186,7 +194,7 @@ launch_server() {
 # main
 # ---------------------------------------------------------------------------
 main() {
-  require_macos
+  require_supported_platform
   require_git
   require_python3
   warn_if_no_claude_cli
