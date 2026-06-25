@@ -284,18 +284,32 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("promptModal('Object name'", handler)
         self.assertNotIn("await promptModal", handler)
 
-    def test_sidebar_tabs_start_with_active_and_archived(self):
-        """The high-traffic Active and Archived tabs should be first."""
+    def test_sidebar_tabs_start_with_active_and_all(self):
+        """The high-traffic Active and All tabs should be first."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         tab_block = app_js[app_js.index("const _tabDefs = ["):app_js.index("const _tabBarHtml", app_js.index("const _tabDefs = ["))]
 
         active_pos = tab_block.index("['inprogress', 'Active'")
-        archived_pos = tab_block.index("['archived', 'Archived'")
+        self.assertIn("['archived', 'All'", tab_block)
+        all_pos = tab_block.index("['archived', 'All'")
         issues_pos = tab_block.index("['issues', 'Issues'")
         merge_pos = tab_block.index("['merge', 'Merge'")
-        self.assertLess(active_pos, archived_pos)
-        self.assertLess(archived_pos, issues_pos)
+        self.assertLess(active_pos, all_pos)
+        self.assertLess(all_pos, issues_pos)
         self.assertLess(issues_pos, merge_pos)
+
+    def test_sidebar_all_tab_contains_active_and_archived_sessions(self):
+        """The All tab should replay every session, not only archived rows."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const _allTabConvs = ", app_js)
+        all_start = app_js.index("const _allTabConvs = ")
+        all_block = app_js[all_start:app_js.index("const _arcHasFolderChips", all_start)]
+        self.assertIn("_sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _archivedConvs)", all_block)
+        self.assertIn("const _arcHasFolderChips = _allTabConvs.some(c => c.folder_label_chip);", app_js)
+        self.assertIn("for (const c of _allTabConvs)", app_js)
+        self.assertIn('<span class="conv-archived-label">All</span>', app_js)
+        self.assertIn("_sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))", app_js)
 
     def test_ready_to_merge_only_uses_known_repo_rows(self):
         """Cross-repo Ready to merge should not surface PRs from unknown repos."""
@@ -930,11 +944,23 @@ class TestServerImports(unittest.TestCase):
         pasted-image file path that can be captured in display_name."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
+        self.assertIn("function capitalizeSessionTitleStart(title)", app_js)
         self.assertIn("function sidebarRowDisplayTitle(rawTitle)", app_js)
         self.assertIn("replace(LEADING_CCC_PASTED_IMAGE_PATH_RE, '')", app_js)
         self.assertIn("pasted[ -]images", app_js)
+        self.assertIn("return capitalizeSessionTitleStart(cleanedTitle);", app_js)
         self.assertIn("let title = sidebarRowDisplayTitle(rawTitle);", app_js)
         self.assertNotIn("let title = rawTitle.replace(/-/g, ' ');", app_js)
+
+    def test_current_session_rows_use_plain_title_chrome(self):
+        """The by-objects current-session strip should not add extra title
+        marker glyphs in front of compact row names."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const quietTitleChrome = !!opts.quietTitleChrome;", app_js)
+        self.assertIn("if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;", app_js)
+        self.assertIn("if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';", app_js)
+        self.assertIn("_curShown.map(c => _renderRow(c, { suppressFolderChip: false, quietTitleChrome: true })).join('')", app_js)
 
     def test_repo_pin_marker_is_not_duplicate_pin_glyph(self):
         """Repo override rows should use a distinct repo chip, not a second pin."""

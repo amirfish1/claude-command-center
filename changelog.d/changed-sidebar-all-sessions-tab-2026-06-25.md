@@ -1,0 +1,1 @@
+- Rename the Archived sidebar tab to All and show active plus archived sessions there.

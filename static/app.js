@@ -20646,10 +20646,9 @@
         + '<div class="conv-ghissues-list">' + _ghRows + '</div>'
         + '</div>';
     }
-    // Archived section: always present so the destination is obvious,
-    // collapsed by default so it doesn't crowd the active list. State
-    // persists in localStorage. No gap separators inside — archived
-    // rows are a single block, the user's done with timing.
+    // All section: the history replay. It uses the old "archived" tab key and
+    // CSS classes for preference/back-compat, but the visible model is now
+    // "All": active sessions plus terminal/archive rows in one place.
     //
     // Archived group chats are interleaved into this section, sorted by
     // mtime alongside session rows. They render as a slim custom row with
@@ -20663,7 +20662,8 @@
     // below. A small "expand/collapse all" control lets the user blast
     // through everything at once — useful because archived can get long.
     let _archivedHtml = '';
-    const _arcHasFolderChips = _archivedConvs.some(c => c.folder_label_chip);
+    const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _archivedConvs);
+    const _arcHasFolderChips = _allTabConvs.some(c => c.folder_label_chip);
     const _archivedGroupChatsForRender = _hideGroupChatsForSearch
       ? []
       : (Array.isArray(_archivedGroupChats) ? _archivedGroupChats : []);
@@ -20703,7 +20703,7 @@
       // groups (they're not project-scoped). Sort folders by their
       // most-recent archived-row mtime, descending.
       const _byFolder = new Map();
-      for (const c of _archivedConvs) {
+      for (const c of _allTabConvs) {
         const key = c.folder_label_chip || c.folder_path || '(unknown)';
         if (!_byFolder.has(key)) _byFolder.set(key, []);
         _byFolder.get(key).push(c);
@@ -20732,11 +20732,11 @@
             .join('')
         : '';
       _arcRows = _folderRowsHtml + _gcRowsFlat;
-      _arcCount = _archivedConvs.length + _archivedGroupChatsForRender.length;
+      _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length;
     } else {
       // Flat chronological list — original behavior.
       const _archivedItems = [];
-      for (const c of _archivedConvs) {
+      for (const c of _allTabConvs) {
         _archivedItems.push({
           pinRank: c.pinned ? _pinRankValue(c) : Infinity,
           mtime: c.modified || c.last_interacted || 0,
@@ -20784,12 +20784,12 @@
           })()
         : '';
       // 1d / 7d / All time-window toggle. Only meaningful in the dedicated
-      // Archived view (renderArchiveList does the actual recency filtering);
+      // All view (renderArchiveList does the actual recency filtering);
       // the active list's inline "Archived" sub-section is not windowed, so
       // showing it there would be a dead control. Mirrors the In Progress
       // window toggle's markup/classes (grouping-opt + data-window).
       const _arcWindowCur = _archiveWindow();
-      const _arcWindowToggle = '<span class="conv-grouping-toggle conv-window-toggle" data-role="archived-window-toggle" title="Limit archived rows by recent activity">'
+      const _arcWindowToggle = '<span class="conv-grouping-toggle conv-window-toggle" data-role="archived-window-toggle" title="Limit all rows by recent activity">'
           + '<span class="grouping-opt' + (_arcWindowCur === '1d' ? ' is-active' : '') + '" data-window="1d">1d</span>'
           + '<span class="grouping-opt' + (_arcWindowCur === '7d' ? ' is-active' : '') + '" data-window="7d">7d</span>'
           + '<span class="grouping-opt' + (_arcWindowCur === 'all' ? ' is-active' : '') + '" data-window="all">All</span>'
@@ -20801,14 +20801,14 @@
         '<div class="conv-archived-section' + (_arcCollapsed ? ' collapsed' : '') + '" data-role="archived-section">'
         + '<button type="button" class="conv-archived-header" data-role="archived-toggle" aria-expanded="' + (!_arcCollapsed) + '">'
         +   '<span class="conv-archived-arrow">' + _arcArrow + '</span>'
-        +   '<span class="conv-archived-label">Archived</span>'
+        +   '<span class="conv-archived-label">All</span>'
         +   '<span class="conv-archived-count">' + _arcCount + '</span>'
         +   _arcTools
         + '</button>'
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + '</div>';
     }
-    // Tabs (CCC-85): GH Issues / Ready to merge / In progress / Archived
+    // Tabs (CCC-85): Active / All / GH Issues / Ready to merge
     // are tabs now, one section visible at a time. Search result rows
     // (id/repo search) always render above the active tab's content.
     const _sidebarTab = (() => {
@@ -20819,7 +20819,7 @@
     })();
     const _tabDefs = [
       ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
-      ['archived', 'Archived', _arcCount || 0],
+      ['archived', 'All', _arcCount || 0],
       ['issues', 'Issues', (_ghIssueConvs && _ghIssueConvs.length) || 0],
       ['merge', 'Merge', (_readyToMergeConvs && _readyToMergeConvs.length) || 0],
     ];
@@ -20840,7 +20840,7 @@
       .replace('aria-expanded="false"', 'aria-expanded="true"');
     const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
       : _sidebarTab === 'merge' ? (_forceOpen(_readyToMergeHtml, 'conv-readytomerge-section') || _tabEmpty('PRs waiting to merge'))
-      : _sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('archived sessions'))
+      : _sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
       : (_openAskHtml
           + (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions')));
     const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
@@ -34321,7 +34321,7 @@
     if (_arcWindowEmptied && !hasGc) {
       const _winLabel = _arcWindow === '7d' ? '7 days' : 'day';
       _renderArchiveEmpty(
-        '<div class="archive-empty-state">No archived conversations in the last ' + _winLabel + '.<br>'
+        '<div class="archive-empty-state">No conversations in the last ' + _winLabel + '.<br>'
         + '<span class="conv-inprogress-window-footer-cta" data-role="archive-window-showall" role="button" tabindex="0" style="cursor:pointer;">Show all</span>'
         + '</div>'
       );
