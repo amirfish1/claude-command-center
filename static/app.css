@@ -4020,7 +4020,7 @@
   .conv-project-tree .conv-item .conv-title {
     font-size: 13px;
     font-weight: 400;
-    color: var(--text-muted);
+    color: #9aa8b7; /* Codex --muted: child names sit quieter than headers */
   }
   /* Names only at rest: hide the drag handle + trailing ask/outcome/summary
      blocks and every inline chip/badge beside the title; right-edge actions
