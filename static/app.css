@@ -3669,37 +3669,12 @@
   .conv-item:focus-within .conv-row-end > .conv-rel {
     opacity: 0;
   }
-  /* CCC-186: the hover action icons (merge / pin / archive) are an absolutely-
-     positioned overlay whose solid background is meant to mask whatever sits
-     behind them — but the meta slot (PR badge, status chips, WIP) is wider
-     than that mask, so it peeked out next to the icons and read as "icons in
-     the text". Fade the meta on hover too, mirroring the time-fade above, so
-     the icons sit on clean background. opacity keeps layout → no row shift.
-     Pinned rows that show actions at rest aren't hovered, so their meta stays
-     visible. */
   .conv-item .conv-row-meta { transition: opacity 0.06s ease; }
-  .conv-item:hover .conv-row-meta,
-  .conv-item:focus-within .conv-row-meta {
-    opacity: 0;
-  }
   .conv-item .conv-row-end > .conv-rel {
     flex: 0 0 auto;            /* override the column-width flex from the base rule */
     transition: opacity 0.06s ease;
   }
-  /* CCC-170: the hover action buttons (pin / archive) sat ON TOP of the branch
-     + context-% chips, which keep their own solid backgrounds and bled out
-     beside the buttons — reading as a messy overlay (e.g. "📌main📥" jammed over
-     "27% main"). Fade the whole meta slot out on hover/focus, the same clean
-     swap the elapsed time already does, so the actions land on an empty area
-     instead of overlapping the chips. Pinned-not-hovered rows are untouched
-     (they show only the pin over visible chips by the is-pinned rules above). */
-  .conv-item:hover .conv-branch-slot,
-  .conv-item:focus-within .conv-branch-slot {
-    opacity: 0;
-  }
-  .conv-item .conv-branch-slot {
-    transition: opacity 0.06s ease;
-  }
+  .conv-item .conv-branch-slot { transition: opacity 0.06s ease; }
   .conv-item .conv-session-icon {
     width: var(--conv-dot-col);
     height: 16px;
@@ -4005,10 +3980,9 @@
     white-space: nowrap;
   }
   .conv-item .conv-row-meta {
-    display: grid;
-    grid-template-columns: 64px max-content max-content 12px;
+    display: inline-flex;
     align-items: center;
-    column-gap: 0;
+    gap: 4px;
     justify-content: end;
     flex: 0 0 auto;
     min-width: 0;
@@ -4047,8 +4021,28 @@
   .conv-item .conv-branch-slot:empty,
   .conv-item .conv-engine-slot:empty { display: none; }
   .conv-item .conv-status-slot .conv-live-tool { max-width: none; }
-  .conv-item .conv-meta-inline .sep,
-  .conv-item .conv-meta-inline .source-badge { display: none; }
+  .conv-item .conv-meta-inline,
+  .conv-item .conv-branch-slot,
+  .conv-item .conv-folder-chip,
+  .conv-item .conv-repo-pin { display: none; }
+  .conv-item:hover .conv-meta-inline,
+  .conv-item:focus-within .conv-meta-inline,
+  .conv-item.active .conv-meta-inline,
+  .conv-item:hover .conv-branch-slot,
+  .conv-item:focus-within .conv-branch-slot,
+  .conv-item.active .conv-branch-slot,
+  .conv-item:hover .conv-folder-chip,
+  .conv-item:focus-within .conv-folder-chip,
+  .conv-item.active .conv-folder-chip,
+  .conv-item:hover .conv-repo-pin,
+  .conv-item:focus-within .conv-repo-pin,
+  .conv-item.active .conv-repo-pin { display: inline-flex; }
+  .conv-item:hover .conv-meta-inline .sep,
+  .conv-item:focus-within .conv-meta-inline .sep,
+  .conv-item.active .conv-meta-inline .sep,
+  .conv-item:hover .conv-meta-inline .source-badge,
+  .conv-item:focus-within .conv-meta-inline .source-badge,
+  .conv-item.active .conv-meta-inline .source-badge { display: inline-flex; }
   .conv-item .conv-meta-inline .sep { opacity: 0.4; }
   .conv-item .conv-rel {
     /* Time chip — bumped 10 → 11.5px for legibility (Omnara's looks
@@ -4146,6 +4140,12 @@
      you can still see what a session is doing at a glance. */
   .compact-rows .conv-item .conv-row-meta .conv-meta-inline,
   .compact-rows .conv-item .conv-row-meta .conv-branch-slot { display: none; }
+  .compact-rows .conv-item:hover .conv-row-meta .conv-meta-inline,
+  .compact-rows .conv-item:focus-within .conv-row-meta .conv-meta-inline,
+  .compact-rows .conv-item.active .conv-row-meta .conv-meta-inline,
+  .compact-rows .conv-item:hover .conv-row-meta .conv-branch-slot,
+  .compact-rows .conv-item:focus-within .conv-row-meta .conv-branch-slot,
+  .compact-rows .conv-item.active .conv-row-meta .conv-branch-slot { display: inline-flex; }
   /* Compact also drops the terminal git-state badges (pushed / committed /
      read-only / no edits) — they're status-at-rest, not live activity. The
      blinking WIP / waiting / live-tool signals stay. */

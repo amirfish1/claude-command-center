@@ -813,6 +813,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-history-snippet.is-search-result", app_css)
         self.assertIn("max-height: 9.8em;", app_css)
 
+    def test_sidebar_row_metadata_reveals_on_hover(self):
+        """Repo/source/branch metadata should not crowd resting rows."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const folderChipHtml = (c.folder_label_chip && !opts.suppressFolderChip)", app_js)
+        self.assertIn("+ (sourceBadge ? '<span class=\"sep\">&middot;</span>' + sourceBadge : '')", app_js)
+        self.assertIn(".conv-item .conv-meta-inline,\n  .conv-item .conv-branch-slot,\n  .conv-item .conv-folder-chip,\n  .conv-item .conv-repo-pin", app_css)
+        self.assertIn(".conv-item:hover .conv-meta-inline,\n  .conv-item:focus-within .conv-meta-inline,\n  .conv-item.active .conv-meta-inline", app_css)
+        self.assertIn(".conv-item:hover .conv-branch-slot,\n  .conv-item:focus-within .conv-branch-slot,\n  .conv-item.active .conv-branch-slot", app_css)
+        self.assertIn(".conv-item:hover .conv-folder-chip,\n  .conv-item:focus-within .conv-folder-chip,\n  .conv-item.active .conv-folder-chip", app_css)
+        self.assertIn(".conv-item:hover .conv-meta-inline .source-badge,\n  .conv-item:focus-within .conv-meta-inline .source-badge,\n  .conv-item.active .conv-meta-inline .source-badge", app_css)
+        self.assertIn(".compact-rows .conv-item:hover .conv-row-meta .conv-meta-inline,\n  .compact-rows .conv-item:focus-within .conv-row-meta .conv-meta-inline,\n  .compact-rows .conv-item.active .conv-row-meta .conv-meta-inline", app_css)
+
     def test_sidebar_titles_strip_leading_pasted_image_paths(self):
         """Current-session rows should show the human task, not the leading
         pasted-image file path that can be captured in display_name."""
