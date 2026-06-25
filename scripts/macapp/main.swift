@@ -20,6 +20,8 @@ let CCC_PORT = 8090
 let CCC_INSTALL_DIR = NSString(string: "~/.ccc/claude-command-center").expandingTildeInPath
 let CCC_URL = URL(string: "http://localhost:\(CCC_PORT)")!
 let CCC_BUNDLE_VERSION = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev"
+let CCC_MAIN_MIN_WIDTH: CGFloat = 420
+let CCC_MAIN_MIN_HEIGHT: CGFloat = 600
 
 // MARK: - Helpers
 
@@ -210,7 +212,7 @@ final class CCCWebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindow
         win.isReleasedWhenClosed = false
         if isMain {
             win.title = "Command Center for Claude, Codex, Antigravity — v\(CCC_BUNDLE_VERSION)"
-            win.minSize = NSSize(width: 900, height: 600)
+            win.minSize = NSSize(width: CCC_MAIN_MIN_WIDTH, height: CCC_MAIN_MIN_HEIGHT)
             win.setFrameAutosaveName("CCCMainWindow")
             win.titlebarAppearsTransparent = false
             win.center()

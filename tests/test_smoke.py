@@ -1836,6 +1836,21 @@ class TestServerImports(unittest.TestCase):
             macapp,
         )
 
+    def test_macapp_main_window_can_shrink_into_mobile_layout(self):
+        """CCC.app must allow the main dashboard to resize below the web
+        UI's 950px narrow breakpoint. Otherwise the native shell blocks
+        the existing single-column layout before CSS/JS can activate it."""
+        macapp = pathlib.Path(PROJECT_ROOT, "scripts", "macapp", "main.swift").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("matchMedia('(max-width: 950px)')", app_js)
+        self.assertIn("let CCC_MAIN_MIN_WIDTH: CGFloat = 420", macapp)
+        self.assertIn("let CCC_MAIN_MIN_HEIGHT: CGFloat = 600", macapp)
+        self.assertIn(
+            "win.minSize = NSSize(width: CCC_MAIN_MIN_WIDTH, height: CCC_MAIN_MIN_HEIGHT)",
+            macapp,
+        )
+        self.assertNotIn("win.minSize = NSSize(width: 900, height: 600)", macapp)
+
     def test_sending_sidebar_render_bypasses_textarea_pause_guard(self):
         """Hitting Send leaves focus in the conv input textarea, which
         normally pauses sidebar renders (so background pollers can't
