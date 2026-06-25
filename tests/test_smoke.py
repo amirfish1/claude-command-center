@@ -895,6 +895,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row,", current_css)
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row", current_css)
         self.assertIn("display: flex;", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover:not(.active) > .conv-outcome,", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within:not(.active) > .conv-outcome { display: none; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-outcome { display: block; }", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
 
     def test_sidebar_left_model_icon_uses_reserved_title_gutter(self):

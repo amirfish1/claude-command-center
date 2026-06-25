@@ -1,0 +1,1 @@
+- Show sidebar DONE briefs only on the selected current session instead of on hover.
