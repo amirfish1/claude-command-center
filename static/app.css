@@ -3800,6 +3800,35 @@
     padding-top: 4px;
     padding-bottom: 4px;
   }
+  /* Header = name (left) + count pill (far right), Codex-style. The object
+     status/objective buttons and the action cluster are chrome — hide them at
+     rest so the tree reads as a clean map; reveal actions on hover. */
+  .conv-project-tree .conv-folder-group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .conv-project-tree .conv-folder-group-chip {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .conv-project-tree .conv-folder-group-count { margin-left: auto; order: 90; }
+  .conv-project-tree .conv-object-meta,
+  .conv-project-tree .conv-folder-object-actions { display: none; }
+  .conv-project-tree .conv-folder-group-header:hover .conv-folder-object-actions {
+    display: inline-flex;
+    order: 91;
+  }
+  /* Child rows: names only at rest (the map). Time / chips / hover actions
+     reveal on hover so editing affordances stay reachable. */
+  .conv-project-tree .conv-item .conv-row-meta,
+  .conv-project-tree .conv-item .conv-row-end { display: none; }
+  .conv-project-tree .conv-item:hover .conv-row-end { display: flex; }
+  /* Active child: Codex's green/teal left rail + faint highlight. */
+  .conv-project-tree .conv-item.active {
+    border-left-color: var(--green, #3fb950);
+    background: rgba(63, 185, 80, 0.08);
+  }
   .conv-item .conv-ux-fix-progress {
     display: inline-flex;
     align-items: center;
