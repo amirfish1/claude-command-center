@@ -19871,7 +19871,8 @@
         }
       }
       const _projectTreeHtml = _objGroupsHtml
-        ? '<div class="conv-objects-section-label">Project tree</div>' + _objGroupsHtml
+        ? '<div class="conv-objects-section-label">Project tree</div>'
+          + '<div class="conv-project-tree">' + _objGroupsHtml + '</div>'
         : '';
       const _currentIds = new Set(_currentSessions.map(c => c.session_id || c.id));
       const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));

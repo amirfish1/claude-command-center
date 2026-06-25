@@ -3775,6 +3775,31 @@
     border-color: var(--accent);
     background: var(--surface-2);
   }
+  /* Project tree — match Codex's lighter tree formatting: uppercase object
+     labels, a rounded pill count, and tighter rows so the hierarchy reads as
+     a map rather than another row list. Scoped to the tree so by-folder
+     groups are untouched. */
+  .conv-project-tree .conv-folder-group-chip {
+    text-transform: uppercase;
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+  .conv-project-tree .conv-folder-group-count {
+    min-width: 20px;
+    text-align: center;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(139, 148, 158, 0.16);
+    color: var(--text-muted);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .conv-project-tree .conv-item {
+    min-height: 30px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
   .conv-item .conv-ux-fix-progress {
     display: inline-flex;
     align-items: center;
