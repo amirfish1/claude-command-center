@@ -19825,14 +19825,51 @@
       const _LIVE_WINDOW_S = 5 * 3600;
       const _nowS = Date.now() / 1000;
       const _sessionTs = (c) => (c.modified || c.mtime || 0);
+      // Stable order: without this the 5s poll reshuffles the list every time a
+      // live session's mtime ticks (it jumps). Mirror the flat/folder views —
+      // 5-min hysteresis + remembered order so near-simultaneous rows hold their
+      // place until a real (>5min) gap opens up.
+      const _CUR_HYST_S = 5 * 60;
+      const _CUR_ORDER_KEY = 'ccc-current-sessions-order';
+      const _curId = (c) => c.session_id || c.id;
+      let _curPrevOrder = {};
+      try { _curPrevOrder = JSON.parse(localStorage.getItem(_CUR_ORDER_KEY) || '{}'); } catch (_) {}
       const _currentSessions = (_visibleSessionConvs || [])
         .filter(c => _sessionTs(c) >= _nowS - _LIVE_WINDOW_S)
-        .sort((a, b) => _sessionTs(b) - _sessionTs(a));
-      const _currentSessionsHtml = _currentSessions.length
-        ? '<div class="conv-objects-section-label">Current sessions'
+        .sort((a, b) => {
+          if (Math.abs(_sessionTs(a) - _sessionTs(b)) < _CUR_HYST_S) {
+            const ia = _curPrevOrder[_curId(a)], ib = _curPrevOrder[_curId(b)];
+            if (ia !== undefined && ib !== undefined && ia !== ib) return ia - ib;
+          }
+          return _sessionTs(b) - _sessionTs(a);
+        });
+      try {
+        const _o = {};
+        _currentSessions.forEach((c, i) => { _o[_curId(c)] = i; });
+        localStorage.setItem(_CUR_ORDER_KEY, JSON.stringify(_o));
+      } catch (_) {}
+      // Show ~7 at rest, then a "More" affordance — the live triage list
+      // shouldn't push the Project tree way down. Expanded state persists so a
+      // poll re-render doesn't collapse it back.
+      const _CUR_LIMIT = 7;
+      let _curExpanded = false;
+      try { _curExpanded = localStorage.getItem('ccc-current-sessions-expanded') === '1'; } catch (_) {}
+      const _curShown = (_curExpanded || _currentSessions.length <= _CUR_LIMIT)
+        ? _currentSessions : _currentSessions.slice(0, _CUR_LIMIT);
+      const _curHidden = _currentSessions.length - _curShown.length;
+      let _currentSessionsHtml = '';
+      if (_currentSessions.length) {
+        _currentSessionsHtml = '<div class="conv-objects-section-label">Current sessions'
           + '<span class="conv-objects-section-sub">last 5h</span></div>'
-          + _currentSessions.map(c => _renderRow(c, { suppressFolderChip: false })).join('')
-        : '';
+          + _curShown.map(c => _renderRow(c, { suppressFolderChip: false })).join('');
+        if (_curHidden > 0) {
+          _currentSessionsHtml += '<button type="button" class="conv-current-more"'
+            + ' data-role="current-sessions-more" data-expand="1">More (' + _curHidden + ')</button>';
+        } else if (_curExpanded && _currentSessions.length > _CUR_LIMIT) {
+          _currentSessionsHtml += '<button type="button" class="conv-current-more"'
+            + ' data-role="current-sessions-more" data-expand="0">Show less</button>';
+        }
+      }
       const _projectTreeHtml = _objGroupsHtml
         ? '<div class="conv-objects-section-label">Project tree</div>' + _objGroupsHtml
         : '';
@@ -21259,6 +21296,20 @@
         if (block && block.classList.contains('conv-nya-detail')) {
           block.classList.toggle('is-collapsed', nowCollapsed);
         }
+      });
+    }
+    // "More / Show less" for the Current sessions region. Delegated + wired
+    // once so it survives re-renders; toggles a persisted flag and repaints.
+    if (!$convList._currentMoreWired) {
+      $convList._currentMoreWired = true;
+      $convList.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('[data-role="current-sessions-more"]');
+        if (!btn) return;
+        ev.stopPropagation();
+        ev.preventDefault();
+        const expand = btn.getAttribute('data-expand') === '1';
+        try { localStorage.setItem('ccc-current-sessions-expanded', expand ? '1' : '0'); } catch (_) {}
+        renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
     const $windowToggle = $convList.querySelector('[data-role="window-toggle"]');
