@@ -1009,6 +1009,17 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("width: min(calc(var(--draft-title-ch, 16) * 1ch + 18px), 100%);", draft_css)
         self.assertNotIn(".conv-project-tree .conv-draft-row .conv-draft-play,\n  .conv-project-tree .conv-draft-row .conv-draft-delete { display: none; }", draft_css)
 
+    def test_project_tree_session_rename_input_stays_visible(self):
+        """Project-tree session rows reuse inline rename; their input must not
+        be hidden by the tree's names-only row rule."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn(
+            ".conv-project-tree .conv-item .conv-main-row > :not(.conv-title):not(.conv-title-input) { display: none; }",
+            app_css,
+        )
+        self.assertIn(".conv-project-tree .conv-item .conv-title-input {", app_css)
+        self.assertNotIn(".conv-project-tree .conv-item .conv-main-row > :not(.conv-title) { display: none; }", app_css)
+
     def test_object_header_actions_are_hover_revealed(self):
         """Object header actions should stay quiet until hover/focus."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")

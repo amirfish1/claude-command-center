@@ -4038,7 +4038,14 @@
      blocks and every inline chip/badge beside the title; right-edge actions
      reveal on hover. */
   .conv-project-tree .conv-item > :not(.conv-title-row) { display: none; }
-  .conv-project-tree .conv-item .conv-main-row > :not(.conv-title) { display: none; }
+  .conv-project-tree .conv-item .conv-main-row > :not(.conv-title):not(.conv-title-input) { display: none; }
+  .conv-project-tree .conv-item .conv-title-input {
+    min-width: 0;
+    height: 24px;
+    padding: 2px 6px;
+    font-size: 13px;
+    font-weight: 400;
+  }
   .conv-project-tree .conv-item:hover .conv-main-row > .conv-row-end { display: inline-flex; }
 
   /* Active child — Codex's teal rail + faint teal wash, title brightens. */
