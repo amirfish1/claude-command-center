@@ -25388,6 +25388,7 @@
     if (rail) {
       rail.classList.remove('file-viewer-active');
     }
+    if (typeof window._cccRestoreStatusRailAfterFileViewer === 'function') window._cccRestoreStatusRailAfterFileViewer();
     const bodyEl = document.getElementById('fileViewerBody');
     if (bodyEl) {
       bodyEl.innerHTML = '';
@@ -25439,6 +25440,7 @@
     }
     if (filenameEl && label != null) filenameEl.textContent = label;
     if (viewer) viewer.setAttribute('data-current-path', target);
+    if (typeof window._cccExpandStatusRailForFileViewer === 'function') window._cccExpandStatusRailForFileViewer();
     if (rail) rail.classList.add('file-viewer-active');
   }
 
@@ -31105,6 +31107,7 @@
     const $statusRailRestore = document.getElementById('statusRailRestoreBtn');
     const STATUS_RAIL_DEFAULT_WIDTH = 260;
     const STATUS_RAIL_MIN_WIDTH = 220;
+    const FILE_VIEWER_RAIL_EXPAND_FACTOR = 2.5;
     // Generous cap so the rail can host the MD file viewer at a
     // readable width on big screens. The natural ceiling is
     // (paneWidth - 260) so the conversation never shrinks below
@@ -31144,6 +31147,8 @@
       const saved = parseInt(localStorage.getItem('ccc-status-rail-width') || '0', 10);
       return saved >= STATUS_RAIL_MIN_WIDTH ? saved : STATUS_RAIL_DEFAULT_WIDTH;
     };
+    let fileViewerPreviousRailWidth = null;
+    let fileViewerPreviousRailStoredWidth = null;
     // Resizing/collapsing the rail re-flows the conversation reader (its pane
     // gets wider/narrower → text re-wraps → content height changes), which
     // drifts the reading position under a fixed scrollTop. Capture each open
@@ -31178,6 +31183,29 @@
       }
       return next;
     };
+    const _expandStatusRailForFileViewer = () => {
+      if (!$statusRail || !document.body.classList.contains('status-pos-right')) return;
+      if (fileViewerPreviousRailWidth == null) {
+        fileViewerPreviousRailWidth = $statusRail.getBoundingClientRect().width || _savedStatusRailWidth();
+        try { fileViewerPreviousRailStoredWidth = localStorage.getItem('ccc-status-rail-width'); } catch (_) { fileViewerPreviousRailStoredWidth = null; }
+      }
+      _setStatusRailCollapsed(false, false);
+      _setStatusRailWidth(fileViewerPreviousRailWidth * FILE_VIEWER_RAIL_EXPAND_FACTOR, false);
+    };
+    const _restoreStatusRailAfterFileViewer = () => {
+      if (fileViewerPreviousRailWidth == null) return;
+      const previousWidth = fileViewerPreviousRailWidth;
+      const previousStoredWidth = fileViewerPreviousRailStoredWidth;
+      fileViewerPreviousRailWidth = null;
+      fileViewerPreviousRailStoredWidth = null;
+      _setStatusRailWidth(previousWidth, false);
+      try {
+        if (previousStoredWidth == null) localStorage.removeItem('ccc-status-rail-width');
+        else localStorage.setItem('ccc-status-rail-width', previousStoredWidth);
+      } catch (_) {}
+    };
+    window._cccExpandStatusRailForFileViewer = _expandStatusRailForFileViewer;
+    window._cccRestoreStatusRailAfterFileViewer = _restoreStatusRailAfterFileViewer;
     const _setStatusRailCollapsed = (collapsed, persist) => {
       _preserveReadersAcross(() => {
         document.body.classList.toggle('status-rail-collapsed', !!collapsed);

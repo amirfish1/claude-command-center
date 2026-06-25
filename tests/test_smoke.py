@@ -2234,6 +2234,22 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("overflow-y: visible;", activity_css)
         self.assertNotIn("flex: 1 1 auto;", activity_css)
 
+    def test_markdown_file_viewer_temporarily_widens_right_rail(self):
+        """Opening a Markdown preview should widen the right rail and closing
+        it should restore the previous rail width."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const FILE_VIEWER_RAIL_EXPAND_FACTOR = 2.5;", app_js)
+        self.assertIn("let fileViewerPreviousRailWidth = null;", app_js)
+        self.assertIn("let fileViewerPreviousRailStoredWidth = null;", app_js)
+        self.assertIn("window._cccExpandStatusRailForFileViewer = _expandStatusRailForFileViewer;", app_js)
+        self.assertIn("window._cccRestoreStatusRailAfterFileViewer = _restoreStatusRailAfterFileViewer;", app_js)
+        self.assertIn("if (typeof window._cccExpandStatusRailForFileViewer === 'function') window._cccExpandStatusRailForFileViewer();", app_js)
+        self.assertIn("if (typeof window._cccRestoreStatusRailAfterFileViewer === 'function') window._cccRestoreStatusRailAfterFileViewer();", app_js)
+        self.assertIn("_setStatusRailWidth(fileViewerPreviousRailWidth * FILE_VIEWER_RAIL_EXPAND_FACTOR, false);", app_js)
+        self.assertIn("_setStatusRailWidth(previousWidth, false);", app_js)
+        self.assertIn("if (previousStoredWidth == null) localStorage.removeItem('ccc-status-rail-width');", app_js)
+
     def test_done_result_can_copy_agent_answer(self):
         """Successful Done rows expose a small copy affordance for the last
         assistant answer, rather than forcing users to select rendered text
