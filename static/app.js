@@ -19814,11 +19814,14 @@
         (_childrenOf.get(nodeId) || []).forEach((k, i) => { html += _emitObjTree(k, depth + 1, i + 1); });
         return html;
       };
-      let _objGroupsHtml = _objRoots.map(n => _emitObjTree(n, 0, 0)).join('');
-      if (_unclassified.length) {
-        _objGroupsHtml += _renderObjGroup('unclassified', 'Unclassified', _unclassified);
-      }
-      _activeRowsHtml = _objGroupsHtml + (_gcItems || []).map(it => it.html).join('');
+      const _objGroupsHtml = _objRoots.map(n => _emitObjTree(n, 0, 0)).join('');
+      // Codex-layout step 1: the loose (object-unattached) sessions are the
+      // live triage list — render them ON TOP as "Current sessions", with the
+      // object tree below as the day's map. (Next: hoist the tree so it shows
+      // in by-time / by-project too, and retire the by-objects toggle.)
+      const _currentSessionsHtml = _unclassified.length
+        ? _renderObjGroup('unclassified', 'Current sessions', _unclassified) : '';
+      _activeRowsHtml = _currentSessionsHtml + _objGroupsHtml + (_gcItems || []).map(it => it.html).join('');
     } else if (_shouldGroupByFolder) {
       // Group cards by folder; preserve folder order by the most
       // recent card in each group (freshest folder appears first).
