@@ -3894,7 +3894,11 @@
   .conv-project-tree-header {
     flex: 0 0 auto;
     margin: 0 2px 0 0;
-    padding: 5px 8px 4px;
+    padding: 14px 10px 8px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    color: color-mix(in srgb, var(--text) 70%, var(--text-muted));
     background: color-mix(in srgb, var(--surface-2) 54%, var(--bg));
     border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
     border-bottom: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
@@ -4108,15 +4112,15 @@
     display: none;
     align-items: center;
     flex-wrap: nowrap;
-    gap: 5px;
+    gap: 6px;
     min-width: 0;
     max-width: calc(100% - var(--conv-content-left) - 70px);
     margin: 4px 48px 0 var(--conv-content-left);
-    color: var(--text-muted);
-    font-size: 10px;
-    line-height: 1.4;
+    color: color-mix(in srgb, var(--text) 74%, var(--text-muted));
+    font-size: 11px;
+    line-height: 1.45;
     overflow: hidden;
-    opacity: 0.9;
+    opacity: 1;
   }
   .conv-item .conv-hover-meta-row > * {
     min-width: 0;
@@ -4125,15 +4129,26 @@
   .conv-item .conv-hover-meta-row .conv-folder-chip {
     width: auto;
     max-width: 126px;
-    height: 18px;
-    padding: 1px 6px;
+    height: 20px;
+    padding: 2px 7px;
     border-radius: 4px;
-    background: rgba(154, 173, 194, 0.10);
-    border-color: rgba(154, 173, 194, 0.18);
-    color: var(--text-muted);
+    background: rgba(154, 173, 194, 0.14);
+    border-color: rgba(154, 173, 194, 0.26);
+    color: color-mix(in srgb, var(--text) 82%, var(--text-muted));
+    font-size: 11px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     text-align: left;
   }
+  .conv-item .conv-hover-meta-row .source-badge,
+  .conv-item .conv-hover-meta-row .branch-badge,
+  .conv-item .conv-hover-meta-row .conv-wt-badge,
+  .conv-item .conv-hover-meta-row .conv-pct-badge,
+  .conv-item .conv-hover-meta-row .conv-repo-pin,
+  .conv-item .conv-hover-meta-row .conv-goal {
+    font-size: 11px;
+    line-height: 1.35;
+  }
+  .conv-item .conv-hover-meta-row .conv-goal .conv-goal-icon { font-size: 10px; }
   .conv-item .conv-hover-meta-row .conv-meta-inline,
   .conv-item .conv-hover-meta-row .conv-branch-slot {
     justify-content: flex-start;

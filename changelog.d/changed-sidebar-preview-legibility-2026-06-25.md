@@ -1,0 +1,1 @@
+- Improve sidebar hover-preview legibility, space the Project Tree header, and remove the Active view grouping toggle.

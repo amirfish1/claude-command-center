@@ -19547,16 +19547,9 @@
     const _visibleSessionConvs = _hasFolderChips
       ? (_ipWindowCutoff ? _sessionConvs.filter(c => c.pinned || c.source === 'hermes' || c.engine === 'hermes' || (c.modified || 0) >= _ipWindowCutoff) : _sessionConvs)
       : _sessionConvs;
-    // User-controlled grouping preference for the In Progress section.
-    // 'project' (default): group by folder. 'time': flat chrono
-    // list with gap separators. Only meaningful when there are folder
-    // chips (i.e. multi-repo / archive mode); the In Progress header's
-    // by-project / by-time toggle (only shown when _hasFolderChips) writes
-    // this key.
-    const _ipGrouping = (() => {
-      try { return localStorage.getItem('ccc-inprogress-grouping') || 'project'; }
-      catch (_) { return 'project'; }
-    })();
+    // Active is the live triage surface, so keep it on the object map without
+    // a grouping segmented control. The All tab owns project/time grouping.
+    const _ipGrouping = _hasFolderChips ? 'objects' : 'time';
     const _shouldGroupByFolder = _hasFolderChips && _ipGrouping === 'project';
     // "By objects" (CCC-83): group In Progress rows under the Flow object
     // each session is parented to on the Flow board (nearest object
@@ -20388,17 +20381,7 @@
             + '<span class="grouping-opt' + (_ipWindow === 'all' ? ' is-active' : '') + '" data-window="all">All</span>'
           + '</span>'
         : '';
-      // by-project / by-time toggle, only when there are folder chips
-      // (otherwise grouping is meaningless). Inline spans so the click
-      // doesn't bubble to the section's collapse button (handler does
-      // ev.stopPropagation when wired below).
-      const _ipGroupingToggle = _hasFolderChips
-        ? '<span class="conv-grouping-toggle" data-role="grouping-toggle">'
-            + '<span class="grouping-opt' + (_ipGrouping === 'project' ? ' is-active' : '') + '" data-grouping="project">by project</span>'
-            + '<span class="grouping-opt' + (_ipGrouping === 'time' ? ' is-active' : '') + '" data-grouping="time">by time</span>'
-            + '<span class="grouping-opt' + (_ipGrouping === 'objects' ? ' is-active' : '') + '" data-grouping="objects" title="Group by the Flow object each session is attached to on the Flow board">by objects</span>'
-          + '</span>'
-        : '';
+      const _ipGroupingToggle = '';
       // "+ object" (CCC-92): create a new (possibly empty) Flow object that
       // immediately appears as a group row in by-objects mode. It is visible
       // before by-objects mode too; clicking it flips the grouping after the

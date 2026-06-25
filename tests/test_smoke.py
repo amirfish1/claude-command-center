@@ -747,6 +747,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-project-tree-header {", app_css)
         header_css = app_css[app_css.index(".conv-project-tree-header {"):app_css.index(".conv-project-tree-scroll {", app_css.index(".conv-project-tree-header {"))]
         self.assertIn("flex: 0 0 auto;", header_css)
+        self.assertIn("padding: 14px 10px 8px;", header_css)
+        self.assertIn("font-size: 12px;", header_css)
+        self.assertIn("font-weight: 700;", header_css)
+        self.assertIn("letter-spacing: 0.07em;", header_css)
+        self.assertIn("color: color-mix(in srgb, var(--text) 70%, var(--text-muted));", header_css)
         self.assertIn("background:", header_css)
         self.assertIn("border-top:", header_css)
 
@@ -780,6 +785,14 @@ class TestServerImports(unittest.TestCase):
         saved Active grouping is by objects."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
+        self.assertIn("const _ipGrouping = _hasFolderChips ? 'objects' : 'time';", app_js)
+        inprogress_toolbar_js = app_js[
+            app_js.index("const _ipWindowToggle = _hasFolderChips"):
+            app_js.index("const _ipAddObjectBtn = _hasFolderChips", app_js.index("const _ipWindowToggle = _hasFolderChips"))
+        ]
+        self.assertIn("const _ipGroupingToggle = '';", inprogress_toolbar_js)
+        self.assertNotIn('data-role="grouping-toggle"', inprogress_toolbar_js)
+        self.assertIn('data-role="archived-grouping-toggle"', app_js)
         self.assertIn("const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;", app_js)
         self.assertIn("$convList.classList.toggle('objects-scroll-split', _objectsSplitActive);", app_js)
         self.assertIn("if (_objectsSplitActive) applyCurrentSessionsPanelHeight();", app_js)
@@ -1061,6 +1074,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("font-size: 11px;", hover_chip_css)
         self.assertIn("height: 20px;", hover_chip_css)
         self.assertIn("color: color-mix(in srgb, var(--text) 82%, var(--text-muted));", hover_chip_css)
+        self.assertIn(".conv-item .conv-hover-meta-row .source-badge,", app_css)
         hover_badge_css = app_css[
             app_css.index(".conv-item .conv-hover-meta-row .source-badge,"):
             app_css.index(".conv-item .conv-hover-meta-row .conv-goal .conv-goal-icon", app_css.index(".conv-item .conv-hover-meta-row .source-badge,"))
