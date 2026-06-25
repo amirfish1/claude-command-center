@@ -4065,6 +4065,13 @@
   }
   .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title {
     flex: 1 1 auto;
+    font-size: 13.5px;
+    font-weight: 650;
+    color: var(--text);
+    letter-spacing: 0;
+  }
+  :root:not([data-theme="light"]) .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title {
+    color: #f0f4fb;
   }
   .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-ux-fix-progress,
   .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-goal,

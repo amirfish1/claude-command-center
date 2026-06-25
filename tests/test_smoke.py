@@ -873,6 +873,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-goal", app_css)
         self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-evergreen-state", app_css)
         self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-row-end", app_css)
+        title_css = app_css[
+            app_css.index(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title {"):
+            app_css.index(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-ux-fix-progress", app_css.index(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title {"))
+        ]
+        self.assertIn("font-size: 13.5px;", title_css)
+        self.assertIn("font-weight: 650;", title_css)
+        self.assertIn("color: var(--text);", title_css)
+        self.assertIn("letter-spacing: 0;", title_css)
+        self.assertIn(':root:not([data-theme="light"]) .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title', app_css)
+        self.assertIn("color: #f0f4fb;", app_css)
 
     def test_by_objects_current_and_evergreen_sections_have_subtle_bands(self):
         """Current sessions and evergreen agents should read as separate regions."""
