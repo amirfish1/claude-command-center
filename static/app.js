@@ -30203,6 +30203,44 @@
     return (s || '').replace(/<mark>/g, '').replace(/<\/mark>/g, '').replace(/…/g, '');
   }
 
+  function _historySourceRank(source) {
+    source = String(source || '').toLowerCase();
+    if (source === 'recall') return 3;
+    if (source === 'semantic') return 2;
+    if (source === 'bm25') return 1;
+    return 0;
+  }
+
+  function _historyTsSeconds(ts) {
+    const n = Number(ts || 0);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return n > 20000000000 ? Math.floor(n / 1000) : n;
+  }
+
+  function _mergeHistoryResults(qLower, results) {
+    if (!qLower) return;
+    if (_historyState.query !== qLower) {
+      _historyState.query = qLower;
+      _historyState.map = new Map();
+    }
+    const map = _historyState.map;
+    for (const r of (Array.isArray(results) ? results : [])) {
+      const sid = r && r.session_id;
+      if (!sid) continue;
+      const hit = {
+        snippet: r.snippet || '',
+        ts: _historyTsSeconds(r.ts_unix || 0),
+        cwd: r.cwd || '',
+        type: r.type || '',
+        source: r._source || 'bm25',
+      };
+      const existing = map.get(sid);
+      if (!existing || _historySourceRank(hit.source) > _historySourceRank(existing.source)) {
+        map.set(sid, hit);
+      }
+    }
+  }
+
   function _repoMatchScore(repo, qLower) {
     if (!repo || !qLower) return Number.POSITIVE_INFINITY;
     const path = (repo.path || '').toLowerCase();
@@ -30323,7 +30361,7 @@
         source: 'history',
         cwd: hit.cwd || '',
         session_cwd: hit.cwd || '',
-        modified: (hit.ts || 0) * 1000,
+        modified: _historyTsSeconds(hit.ts),
         size: 0,
         archived: false,
         _historyMatch: true,
@@ -30360,6 +30398,10 @@
       return Promise.resolve();
     }
     setConversationSearchLoading(true, q);
+    _historyState.query = qLower;
+    _historyState.map = new Map();
+    _historyState.repoRows = [];
+    _historyState.matchedRepo = null;
     // Sidebar conversation search is global. There is no visible repo-scope
     // control here, so silently narrowing history search to the active repo
     // hides relevant sessions and makes the search box feel inconsistent.
@@ -30383,37 +30425,34 @@
         .then(r => r.ok ? r.json() : [])
         .catch(() => [])
       : Promise.resolve([]);
-    return Promise.all([historyReq, recallReq, repoReq]).then(([data, recallData, repoRows]) => {
+    const repaintIfCurrent = () => {
+      _convListRenderSig = null;
+      if ($convSearch && $convSearch.value === q) {
+        _renderConversationSearchResults(q);
+      }
+    };
+    const recallDone = recallReq.then((recallData) => {
+      if (seq !== _historyFetchSeq) return;
+      _mergeHistoryResults(qLower, (recallData && recallData.results) || []);
+      repaintIfCurrent();
+    });
+    const historyDone = historyReq.then((data) => {
+      if (seq !== _historyFetchSeq) return;
+      _mergeHistoryResults(qLower, (data && data.results) || []);
+      repaintIfCurrent();
+    });
+    const repoDone = repoReq.then((repoRows) => {
       // Drop stale responses — newer keystroke already in flight.
       if (seq !== _historyFetchSeq) return;
-      const results = ((recallData && recallData.results) || [])
-        .concat((data && data.results) || []);
-      const bySession = new Map();
-      for (const r of results) {
-        const sid = r.session_id;
-        if (!sid) continue;
-        // First hit per session wins. Recall goes first so TR-backed matches
-        // are visible instead of being buried after a full history page.
-        if (!bySession.has(sid)) {
-          bySession.set(sid, {
-            snippet: r.snippet || '',
-            ts: r.ts_unix || 0,
-            cwd: r.cwd || '',
-            type: r.type || '',
-            source: r._source || 'bm25',
-          });
-        }
-      }
-      _historyState.query = qLower;
-      _historyState.map = bySession;
       _historyState.repoRows = _buildRepoSearchRows(repoRows, matchedRepo);
       _historyState.matchedRepo = matchedRepo
         ? { path: matchedRepo.path, label: matchedRepo.label || _pathLeaf(matchedRepo.path) || matchedRepo.path }
         : null;
+      repaintIfCurrent();
+    });
+    return Promise.all([historyDone, recallDone, repoDone]).then(() => {
+      if (seq !== _historyFetchSeq) return;
       setConversationSearchLoading(false, q);
-      // Force a full sidebar rebuild — the flicker guard can otherwise
-      // skip the second pass that adds repo badges/section HTML.
-      _convListRenderSig = null;
     });
   }
 
@@ -31143,30 +31182,33 @@
   // keeps the input thread free while typing fast. setTimeout (not setInterval)
   // is not muted-while-typing, so this still fires.
   let _convSearchRenderTimer = null;
+  function _renderConversationSearchResults(query) {
+    // Capture the search box's focus + caret state before the render.
+    // In the WKWebView native app something during renderSidebar steals
+    // focus (likely an auto-focus side effect of a re-rendered child
+    // or a WKWebView quirk on innerHTML thrash). User-visible symptom:
+    // typing in the sidebar search needs a manual re-click after every
+    // character. Restore focus right after the render if the search
+    // box held it going in — avoids yanking focus when the user has
+    // intentionally moved elsewhere between keystrokes.
+    const wasFocused = (document.activeElement === $convSearch);
+    const caretStart = wasFocused ? $convSearch.selectionStart : null;
+    const caretEnd = wasFocused ? $convSearch.selectionEnd : null;
+    renderSidebar(filterConversations(query), { force: true });
+    if (wasFocused && document.activeElement !== $convSearch) {
+      try {
+        $convSearch.focus({ preventScroll: true });
+        if (caretStart != null && caretEnd != null) {
+          $convSearch.setSelectionRange(caretStart, caretEnd);
+        }
+      } catch (_) { /* defensive — focus rarely throws but unsafe to swallow */ }
+    }
+  }
   function _scheduleConvSearchRender() {
     if (_convSearchRenderTimer) clearTimeout(_convSearchRenderTimer);
     _convSearchRenderTimer = setTimeout(() => {
       _convSearchRenderTimer = null;
-      // Capture the search box's focus + caret state before the render.
-      // In the WKWebView native app something during renderSidebar steals
-      // focus (likely an auto-focus side effect of a re-rendered child
-      // or a WKWebView quirk on innerHTML thrash). User-visible symptom:
-      // typing in the sidebar search needs a manual re-click after every
-      // character. Restore focus right after the render if the search
-      // box held it going in — avoids yanking focus when the user has
-      // intentionally moved elsewhere between keystrokes.
-      const wasFocused = (document.activeElement === $convSearch);
-      const caretStart = wasFocused ? $convSearch.selectionStart : null;
-      const caretEnd = wasFocused ? $convSearch.selectionEnd : null;
-      renderSidebar(filterConversations($convSearch.value));
-      if (wasFocused && document.activeElement !== $convSearch) {
-        try {
-          $convSearch.focus({ preventScroll: true });
-          if (caretStart != null && caretEnd != null) {
-            $convSearch.setSelectionRange(caretStart, caretEnd);
-          }
-        } catch (_) { /* defensive — focus rarely throws but unsafe to swallow */ }
-      }
+      _renderConversationSearchResults($convSearch.value);
     }, 70);
   }
   $convSearch.addEventListener('input', () => {
@@ -31189,20 +31231,7 @@
         // Only re-render if the input still holds this query — user may
         // have already typed more, in which case a newer fetch is queued.
         if ($convSearch.value === q) {
-          // Same focus-restore dance as the debounced render above — the
-          // history-augmented render also blurs the search box in WKWebView.
-          const wasFocused = (document.activeElement === $convSearch);
-          const caretStart = wasFocused ? $convSearch.selectionStart : null;
-          const caretEnd = wasFocused ? $convSearch.selectionEnd : null;
-          renderSidebar(filterConversations($convSearch.value));
-          if (wasFocused && document.activeElement !== $convSearch) {
-            try {
-              $convSearch.focus({ preventScroll: true });
-              if (caretStart != null && caretEnd != null) {
-                $convSearch.setSelectionRange(caretStart, caretEnd);
-              }
-            } catch (_) {}
-          }
+          _renderConversationSearchResults($convSearch.value);
         }
       });
     }, 180);
