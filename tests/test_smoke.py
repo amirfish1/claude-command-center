@@ -777,6 +777,17 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-history-snippet.is-search-result", app_css)
         self.assertIn("max-height: 9.8em;", app_css)
 
+    def test_sidebar_titles_strip_leading_pasted_image_paths(self):
+        """Current-session rows should show the human task, not the leading
+        pasted-image file path that can be captured in display_name."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function sidebarRowDisplayTitle(rawTitle)", app_js)
+        self.assertIn("replace(LEADING_CCC_PASTED_IMAGE_PATH_RE, '')", app_js)
+        self.assertIn("pasted[ -]images", app_js)
+        self.assertIn("let title = sidebarRowDisplayTitle(rawTitle);", app_js)
+        self.assertNotIn("let title = rawTitle.replace(/-/g, ' ');", app_js)
+
     def test_repo_pin_marker_is_not_duplicate_pin_glyph(self):
         """Repo override rows should use a distinct repo chip, not a second pin."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

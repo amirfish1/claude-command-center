@@ -1335,9 +1335,16 @@
   // first_message and would otherwise dominate the auto-generated title.
   // Only strips when there's actual prose after the path.
   const LEADING_PATH_OR_URL_RE = /^(?:https?:\/\/\S+|file:\/\/\S+|\S*\/\S*\.[A-Za-z0-9]{1,8})\s+(?=\S)/;
+  const LEADING_CCC_PASTED_IMAGE_PATH_RE = /^(?:file:\/\/)?(?:\/[^\n]*?\/)?\.claude\/(?:command[- ]center\/)?pasted[ -]images\/paste[- ][\w.-]+?\.(?:png|jpe?g|gif|webp)\s+(?=\S)/i;
   function stripLeadingPathOrUrl(s) {
     if (!s) return s;
     return String(s).replace(LEADING_PATH_OR_URL_RE, '');
+  }
+  function sidebarRowDisplayTitle(rawTitle) {
+    if (!rawTitle) return rawTitle;
+    return stripLeadingPathOrUrl(String(rawTitle))
+      .replace(LEADING_CCC_PASTED_IMAGE_PATH_RE, '')
+      .replace(/-/g, ' ');
   }
   // Extract the first sentence / line from a blob of text. Used to derive a
   // usable title when the original prompt is a multi-paragraph body.
@@ -18569,7 +18576,7 @@
       if (c.backlog_type === 'github' || c.issue_number || c.linked_issue) {
         rawTitle = stripGhIssueProjectTag(rawTitle);
       }
-      let title = rawTitle.replace(/-/g, ' ');
+      let title = sidebarRowDisplayTitle(rawTitle);
       // ✨ = AI-generated (Claude/Codex/Antigravity). User renames get NO
       // glyph; the .user-renamed CSS class gives them a quiet dotted underline
       // instead so the row doesn't shout.
