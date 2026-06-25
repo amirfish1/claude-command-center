@@ -3933,6 +3933,13 @@
      you can still see what a session is doing at a glance. */
   .compact-rows .conv-item .conv-row-meta .conv-meta-inline,
   .compact-rows .conv-item .conv-row-meta .conv-branch-slot { display: none; }
+  /* Compact also drops the terminal git-state badges (pushed / committed /
+     read-only / no edits) — they're status-at-rest, not live activity. The
+     blinking WIP / waiting / live-tool signals stay. */
+  .compact-rows .conv-item .conv-signal.pushed,
+  .compact-rows .conv-item .conv-signal.committed,
+  .compact-rows .conv-item .conv-signal.read-only,
+  .compact-rows .conv-item .conv-signal.no-edits { display: none; }
   .conv-folder-group .conv-item.is-grouped-row {
     /* Parity with "by time" rows — same vertical padding (6px) and same
        border-radius (6px). The original tightening (4px / 4px) made the
