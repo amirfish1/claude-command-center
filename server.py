@@ -47242,12 +47242,12 @@ def ensure_hooks_installed():
         # timeout so AskUserQuestion relay can block until answered.
         for entry in pre_tool_hooks:
             for h in entry.get("hooks", []) or []:
-                    cmd = h.get("command", "")
-                    if ("pre-tool-use.py" in cmd and HOOK_MARKER in cmd
-                            and h.get("timeout") != PRETOOLUSE_HOOK_TIMEOUT):
-                        h["timeout"] = PRETOOLUSE_HOOK_TIMEOUT
-                        rewrote_hooks = True
-                        print("  [hooks] Set PreToolUse hook timeout for question relay")
+                cmd = h.get("command", "")
+                if ("pre-tool-use.py" in cmd and HOOK_MARKER in cmd
+                        and h.get("timeout") != PRETOOLUSE_HOOK_TIMEOUT):
+                    h["timeout"] = PRETOOLUSE_HOOK_TIMEOUT
+                    rewrote_hooks = True
+                    print("  [hooks] Set PreToolUse hook timeout for question relay")
 
     # PostToolUse hook
     post_tool_hooks = hooks.setdefault("PostToolUse", [])
