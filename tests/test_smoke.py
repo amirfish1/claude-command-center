@@ -780,6 +780,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-objects-splitter.is-dragging", app_css)
         self.assertIn("body.objects-splitter-resizing", app_css)
 
+    def test_current_sessions_respect_inprogress_window_filter(self):
+        """Current sessions should use the same 1d/7d/All window as by-objects."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const _currentSessionsWindowS = _ipWindowDays ? (_ipWindowDays * 24 * 3600) : null;", app_js)
+        self.assertIn("const _currentSessionsWindowLabel = _ipWindow === 'all' ? 'all' : (_ipWindow === '7d' ? 'last 7d' : 'last 1d');", app_js)
+        self.assertIn("if (!_currentSessionsWindowS) return true;", app_js)
+        self.assertIn("return _sessionTs(c) >= _nowS - _currentSessionsWindowS;", app_js)
+        self.assertIn("'<span class=\"conv-objects-section-sub\">' + _currentSessionsWindowLabel + '</span>'", app_js)
+        self.assertNotIn("const _LIVE_WINDOW_S = 5 * 3600;", app_js)
+        self.assertNotIn("last 5h", app_js)
+
     def test_by_objects_split_mode_only_applies_to_active_tab(self):
         """All/Issues/Merge must keep normal sidebar scrolling even when the
         saved Active grouping is by objects."""

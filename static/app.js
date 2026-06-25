@@ -20215,15 +20215,16 @@
       };
       const _objGroupsHtml = _objRoots.map(n => _emitObjTree(n, 0, 0)).join('');
       // Codex-layout: stacked regions in the by-objects view.
-      //  1) "Current sessions" — every session active in the last 5h (the live
-      //     triage list), flat, regardless of object attachment. During search,
+      //  1) "Current sessions" — every session active in the selected window
+      //     (the live triage list), flat, regardless of object attachment. During search,
       //     this becomes the ranked search-results band so older TR/history hits
       //     do not get pushed below the project tree.
       //  2) "Project tree" — the object hierarchy (the day's map). A live
       //     session attached to an object intentionally appears in both.
-      //  3) "Unclassified" — loose sessions older than 5h, so nothing is
+      //  3) "Unclassified" — loose sessions outside Current sessions, so nothing is
       //     dropped from view.
-      const _LIVE_WINDOW_S = 5 * 3600;
+      const _currentSessionsWindowS = _ipWindowDays ? (_ipWindowDays * 24 * 3600) : null;
+      const _currentSessionsWindowLabel = _ipWindow === 'all' ? 'all' : (_ipWindow === '7d' ? 'last 7d' : 'last 1d');
       const _nowS = Date.now() / 1000;
       const _sessionTs = (c) => (c.modified || c.mtime || 0);
       // Stable order: without this the 5s poll reshuffles the list every time a
@@ -20238,7 +20239,10 @@
       const _currentSessions = _ipSearchActive
         ? (_visibleSessionConvs || []).slice()
         : (_visibleSessionConvs || [])
-          .filter(c => _sessionTs(c) >= _nowS - _LIVE_WINDOW_S)
+          .filter(c => {
+            if (!_currentSessionsWindowS) return true;
+            return _sessionTs(c) >= _nowS - _currentSessionsWindowS;
+          })
           .sort((a, b) => {
             if (Math.abs(_sessionTs(a) - _sessionTs(b)) < _CUR_HYST_S) {
               const ia = _curPrevOrder[_curId(a)], ib = _curPrevOrder[_curId(b)];
@@ -20266,7 +20270,7 @@
       let _currentSessionsHtml = '';
       if (_currentSessions.length) {
         const _currentSessionsLabel = _ipSearchActive ? 'Search results' : 'Current sessions';
-        const _currentSessionsSub = _ipSearchActive ? '' : '<span class="conv-objects-section-sub">last 5h</span>';
+        const _currentSessionsSub = _ipSearchActive ? '' : '<span class="conv-objects-section-sub">' + _currentSessionsWindowLabel + '</span>';
         _currentSessionsHtml = '<div class="conv-objects-section-label">' + _currentSessionsLabel
           + _currentSessionsSub + '</div>'
           + _curShown.map(c => _renderRow(c, { suppressFolderChip: false, quietTitleChrome: true })).join('');
