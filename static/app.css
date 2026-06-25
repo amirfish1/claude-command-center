@@ -4139,7 +4139,6 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     text-align: left;
   }
-  .conv-item .conv-hover-meta-row .source-badge,
   .conv-item .conv-hover-meta-row .branch-badge,
   .conv-item .conv-hover-meta-row .conv-wt-badge,
   .conv-item .conv-hover-meta-row .conv-pct-badge,
@@ -4198,9 +4197,7 @@
   .conv-item:hover .conv-hover-meta-row .conv-repo-pin,
   .conv-item:focus-within .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
   .conv-item:hover .conv-hover-meta-row .conv-meta-inline .sep,
-  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline .sep,
-  .conv-item:hover .conv-hover-meta-row .conv-meta-inline .source-badge,
-  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline .source-badge { display: inline-flex; }
+  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline .sep { display: inline-flex; }
   .conv-item .conv-meta-inline .sep { opacity: 0.4; }
   .conv-item .conv-rel {
     /* Time chip — bumped 10 → 11.5px for legibility (Omnara's looks

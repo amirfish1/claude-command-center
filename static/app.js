@@ -18921,13 +18921,6 @@
       const isHermesRow = c.source === 'hermes' || c.engine === 'hermes';
       const isFable5Row = !isCodexRow && !isGeminiRow && !isCursorRow && !isAntigravityRow && !isHermesRow
         && !!c.model && /fable-5/i.test(c.model);
-      let sourceBadge = '';
-      if (c.source === 'pkood') sourceBadge = '<span class="source-badge pkood">pkood</span>';
-      else if (isCodexRow) sourceBadge = '<span class="source-badge codex">codex</span>';
-      else if (isGeminiRow) sourceBadge = '<span class="source-badge gemini">gemini</span>';
-      else if (isCursorRow) sourceBadge = '<span class="source-badge cursor">cursor</span>';
-      else if (isAntigravityRow) sourceBadge = '<span class="source-badge antigravity">antigravity</span>';
-      else if (isHermesRow) sourceBadge = '<span class="source-badge hermes">hermes</span>';
       let iconType = 'claude';
       let iconTitleType = 'Claude';
       let svgMarkup = '';
@@ -19340,7 +19333,6 @@
         ? ''
         : '<span class="conv-meta-inline">'
           + '<span>' + formatSize(c.size) + '</span>'
-          + (sourceBadge ? '<span class="sep">&middot;</span>' + sourceBadge : '')
           + '</span>';
       // Suppressed when the row sits under a folder
       // group header that already labels the folder — chip would be noise.
@@ -19421,10 +19413,10 @@
           + '<span class="conv-goal-text">' + escapeHtml(_goalText) + '</span>'
           + '</span>';
       }
-      const hoverMetaRowHtml = (goalChipHtml || folderChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)
+      const hoverMetaRowHtml = (folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)
         ? '<div class="conv-hover-meta-row">'
-          + goalChipHtml
           + folderChipHtml
+          + goalChipHtml
           + pinnedHtml
           + (rowSizeHtml || '')
           + (branchSlotHtml ? '<span class="conv-branch-slot">' + branchSlotHtml + '</span>' : '')

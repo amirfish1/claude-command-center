@@ -1,0 +1,1 @@
+- Put repository chips first in sidebar row previews, followed by goals, and remove engine/source labels from the preview line.

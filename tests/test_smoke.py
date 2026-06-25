@@ -1050,10 +1050,15 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const folderChipHtml = (c.folder_label_chip && !opts.suppressFolderChip)", app_js)
-        self.assertIn("+ (sourceBadge ? '<span class=\"sep\">&middot;</span>' + sourceBadge : '')", app_js)
-        self.assertIn("const hoverMetaRowHtml = (goalChipHtml || folderChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)", app_js)
+        row_size_js = app_js[
+            app_js.index("const rowSizeHtml = (isBacklogRow || isGithubPrRow)"):
+            app_js.index("// Suppressed when the row sits under a folder", app_js.index("const rowSizeHtml = (isBacklogRow || isGithubPrRow)"))
+        ]
+        self.assertIn("+ '<span>' + formatSize(c.size) + '</span>'", row_size_js)
+        self.assertNotIn("sourceBadge", row_size_js)
+        self.assertIn("const hoverMetaRowHtml = (folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
-        self.assertIn("+ goalChipHtml\n          + folderChipHtml", app_js)
+        self.assertIn("+ folderChipHtml\n          + goalChipHtml", app_js)
         self.assertIn("+ hoverMetaRowHtml", app_js)
         row_start = app_js.index("+ '<div class=\"conv-main-row\">'")
         row_end = app_js.index("// Right-edge slot", row_start)
@@ -1074,15 +1079,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("font-size: 11px;", hover_chip_css)
         self.assertIn("height: 20px;", hover_chip_css)
         self.assertIn("color: color-mix(in srgb, var(--text) 82%, var(--text-muted));", hover_chip_css)
-        self.assertIn(".conv-item .conv-hover-meta-row .source-badge,", app_css)
         hover_badge_css = app_css[
-            app_css.index(".conv-item .conv-hover-meta-row .source-badge,"):
-            app_css.index(".conv-item .conv-hover-meta-row .conv-goal .conv-goal-icon", app_css.index(".conv-item .conv-hover-meta-row .source-badge,"))
+            app_css.index(".conv-item .conv-hover-meta-row .branch-badge,"):
+            app_css.index(".conv-item .conv-hover-meta-row .conv-goal .conv-goal-icon", app_css.index(".conv-item .conv-hover-meta-row .branch-badge,"))
         ]
         self.assertIn("font-size: 11px;", hover_badge_css)
         self.assertIn(".conv-item:hover .conv-hover-meta-row,\n  .conv-item:focus-within .conv-hover-meta-row { display: flex; }", app_css)
         self.assertIn(".conv-item:hover .conv-hover-meta-row .conv-meta-inline,\n  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline,", app_css)
-        self.assertIn(".conv-item:hover .conv-hover-meta-row .conv-meta-inline .source-badge,\n  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline .source-badge", app_css)
+        self.assertNotIn(".conv-item:hover .conv-hover-meta-row .conv-meta-inline .source-badge", app_css)
         self.assertIn(".compact-rows .conv-item:hover .conv-hover-meta-row,\n  .compact-rows .conv-item:focus-within .conv-hover-meta-row { display: flex; }", app_css)
         self.assertNotIn(".conv-item.active .conv-hover-meta-row", app_css)
         self.assertIn(".conv-item:hover .conv-hover-meta-row .conv-goal,\n  .conv-item:focus-within .conv-hover-meta-row .conv-goal { opacity: 1; }", app_css)
@@ -2412,7 +2416,7 @@ class TestServerImports(unittest.TestCase):
     def test_hermes_history_is_wired_in_static_ui(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
-        self.assertIn("source-badge hermes", app_js)
+        self.assertIn("const isHermesRow = c.source === 'hermes' || c.engine === 'hermes';", app_js)
         self.assertIn("is-hermes-session", app_js)
         self.assertIn("Resume Hermes and send...", app_js)
         self.assertIn("hermes-resume", app_js)
