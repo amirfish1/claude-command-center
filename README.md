@@ -37,6 +37,7 @@ See the [engine support matrix](#engine-support) below for what's first-class vs
 
 ## Recent
 
+- **2026-06-25** — **v5.4.0** — **Project tree**: the "By objects" sidebar now splits a live "Current sessions" triage band over a hierarchical map of your day — sessions grouped under nestable, draggable Flow objects. Plus a new `/api/sessions/events` SSE stream (subscribe to session-state changes instead of polling) and a broad Codex, sidebar, and Total Recall search polish wave.
 - **2026-06-03** — **v4.6.0** — Major performance pass: the dashboard idles instead of pinning a CPU core, group-chat opens ~40× faster, long conversations open near-instantly (windowed load + scroll-up to load earlier), and Codex sessions with screenshots no longer stall on multi-MB images. New CCC self-health readout in the footer.
 - **2026-05-21** — **v4.0.0** — Antigravity (Google DeepMind) joins the dashboard as a first-class engine alongside Claude Code and Codex.
 - **2026-05-21** — Drag any conversation row outside the window to pop it into a focused side pane, with 24 per-conversation accent colors.
@@ -198,6 +199,11 @@ the UI uses for the kanban.
   (live? commits? pushed? sidecar activity?), overridable by drag.
 - **Backlog**: open GitHub issues + `TODO.md` entries, surfaced as cards
   next to your active sessions so everything lives on one board.
+- **Objects & the Project tree**: group sessions under named, nestable
+  **Flow objects** to build a hierarchical map of the day's work. The
+  sidebar's "By objects" view splits this tree from a live "Current
+  sessions" triage band (last 5h), so structure and live activity stay
+  side by side.
 
 ## Engine support
 
@@ -221,6 +227,13 @@ If you'd like to see an engine bumped from "partial" to first-class, open an iss
 - **ACP adapter** (optional): expose CCC over the [Agent Client Protocol](https://agentclientprotocol.com) so editors and ACP clients (VS Code, JetBrains, Zed, and agents like Hermes) can drive Claude Code sessions over JSON-RPC stdio. Runs as a separate process (`python3 ccc_acp.py`); install with the `acp` extra. The core server stays stdlib-only.
 - **Kanban** across every session, with drag-drop between columns,
   rubber-band multi-select, and per-column tinting.
+- **Project tree**: the sidebar's **By objects** view stacks a live
+  **Current sessions** band (everything active in the last 5h) over a
+  **Project tree** — your day's work as a hierarchy, with sessions grouped
+  under nestable **Flow objects** you name, drag, and reparent. Drag the
+  divider to resize the two bands; collapse branches you're not using. The
+  structured map sits beside the live triage list, so "what's running now"
+  and "how it all fits" share one pane instead of one scrolling list.
 - **Split conversations**: drag any sidebar session onto the right or
   bottom edge of the open conversation to view two transcripts
   side-by-side, each with its own input bar. Closes back to single-pane
