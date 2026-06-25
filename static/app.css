@@ -3802,9 +3802,20 @@
     flex: 0 0 auto;
   }
   .conv-current-sessions-scroll {
-    flex: 0 1 clamp(120px, 34vh, 420px);
+    --current-session-row-h: 30px;
+    --current-session-label-h: 28px;
+    --current-sessions-visible-rows: 8;
+    flex: 0 1 clamp(
+      calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows))),
+      34vh,
+      420px
+    );
     min-height: 0;
-    max-height: clamp(120px, 34vh, 420px);
+    max-height: clamp(
+      calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows))),
+      34vh,
+      420px
+    );
     overflow-y: auto;
     overscroll-behavior: contain;
     padding-right: 2px;
@@ -3943,8 +3954,11 @@
 
   /* ----- Draft/task rows: plain text at rest, play/delete on hover. ----- */
   .conv-project-tree .conv-draft-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     min-height: 30px;
-    margin-left: 18px;
+    margin: 0 0 0 18px;
     border-left: 1px solid rgba(154, 173, 194, 0.18);
     padding: 0 8px;
   }
@@ -3958,12 +3972,19 @@
     opacity: 0.55;
   }
   .conv-project-tree .conv-draft-row .conv-draft-dot,
-  .conv-project-tree .conv-draft-row .conv-draft-play,
   .conv-project-tree .conv-draft-row .conv-draft-delete { display: none; }
-  .conv-project-tree .conv-draft-row:hover .conv-draft-play,
+  .conv-project-tree .conv-draft-row .conv-draft-play {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.78;
+  }
   .conv-project-tree .conv-draft-row:hover .conv-draft-delete { display: inline-flex; }
   .conv-project-tree .conv-draft-input {
     border: 0; background: transparent; padding: 0;
+    flex: 0 1 auto;
+    width: min(calc(var(--draft-title-ch, 16) * 1ch + 18px), 100%);
+    max-width: calc(100% - 28px);
     font-size: 13px; color: var(--text-muted);
     cursor: text;
   }

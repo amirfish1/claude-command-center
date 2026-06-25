@@ -11202,6 +11202,12 @@
     return String((draft && (draft.prompt || draft.title)) || '').trim();
   }
 
+  function flowDraftTitleCh(value) {
+    const len = String(value || '').trim().length;
+    if (!len) return 22;
+    return Math.max(4, Math.min(64, len + 1));
+  }
+
   function flowCurrentRepoForDraft() {
     const selectedRow = openConvRow();
     return rowRepoPath(selectedRow) || selectedRepoPath();
@@ -19907,6 +19913,7 @@
           : [];
         const _draftsHtml = _objDrafts.map(d => {
           const did = escapeAttr(d.id);
+          const _draftTitleCh = flowDraftTitleCh(d.title || '');
           // Hover reveals when the task was added (absolute + relative). Drafts
           // carry created_at in epoch-ms; flowTimestampSec normalizes ms<->sec.
           const _addedSec = flowTimestampSec(d.created_at);
@@ -19922,6 +19929,7 @@
             + '>'
             + '<span class="conv-draft-dot" aria-hidden="true">&#9675;</span>'
             + '<input type="text" class="conv-draft-input" data-draft-id="' + did + '"' + _tipAttr
+            + ' style="--draft-title-ch:' + _draftTitleCh + 'ch"'
             +   ' value="' + escapeAttr(d.title || '') + '" placeholder="Task — what needs doing?" />'
             + '<button type="button" class="conv-draft-play" data-flow-action="play-draft-session"'
             +   ' data-draft-id="' + did + '" title="Start a session for this task" aria-label="Start session">&#9654;</button>'
@@ -20060,11 +20068,12 @@
       // Show ~7 at rest, then a "More" affordance — the live triage list
       // shouldn't push the Project tree way down. Expanded state persists so a
       // poll re-render doesn't collapse it back.
-      const _CUR_LIMIT = 7;
+      const _CURRENT_SESSIONS_COLLAPSED_LIMIT = 7;
+      const _CURRENT_SESSIONS_VISIBLE_ROWS = _CURRENT_SESSIONS_COLLAPSED_LIMIT + 1;
       let _curExpanded = false;
       try { _curExpanded = localStorage.getItem('ccc-current-sessions-expanded') === '1'; } catch (_) {}
-      const _curShown = (_curExpanded || _currentSessions.length <= _CUR_LIMIT)
-        ? _currentSessions : _currentSessions.slice(0, _CUR_LIMIT);
+      const _curShown = (_curExpanded || _currentSessions.length <= _CURRENT_SESSIONS_COLLAPSED_LIMIT)
+        ? _currentSessions : _currentSessions.slice(0, _CURRENT_SESSIONS_COLLAPSED_LIMIT);
       const _curHidden = _currentSessions.length - _curShown.length;
       let _currentSessionsHtml = '';
       if (_currentSessions.length) {
@@ -20076,7 +20085,7 @@
         if (_curHidden > 0) {
           _currentSessionsHtml += '<button type="button" class="conv-current-more"'
             + ' data-role="current-sessions-more" data-expand="1">More (' + _curHidden + ')</button>';
-        } else if (_curExpanded && _currentSessions.length > _CUR_LIMIT) {
+        } else if (_curExpanded && _currentSessions.length > _CURRENT_SESSIONS_COLLAPSED_LIMIT) {
           _currentSessionsHtml += '<button type="button" class="conv-current-more"'
             + ' data-role="current-sessions-more" data-expand="0">Show less</button>';
         }
@@ -21320,6 +21329,7 @@
       inp.addEventListener('input', () => {
         const id = inp.getAttribute('data-draft-id') || '';
         saveFlowDraftInput(id, inp.value);
+        inp.style.setProperty('--draft-title-ch', flowDraftTitleCh(inp.value) + 'ch');
         flowDraftFocusId = id;
         flowDraftFocusSelection = { start: inp.selectionStart, end: inp.selectionEnd };
       });

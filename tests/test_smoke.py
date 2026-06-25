@@ -707,6 +707,40 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("overscroll-behavior: contain;", scroll_css)
         self.assertIn("#convList.objects-scroll-split .conv-project-tree-scroll", app_css)
 
+    def test_by_objects_current_sessions_leaves_room_for_more_row(self):
+        """Collapsed current sessions should fit seven rows plus More before
+        the project tree starts."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const _CURRENT_SESSIONS_COLLAPSED_LIMIT = 7;", app_js)
+        self.assertIn("const _CURRENT_SESSIONS_VISIBLE_ROWS = _CURRENT_SESSIONS_COLLAPSED_LIMIT + 1;", app_js)
+        self.assertIn("? _currentSessions : _currentSessions.slice(0, _CURRENT_SESSIONS_COLLAPSED_LIMIT);", app_js)
+        self.assertIn("_currentSessions.length > _CURRENT_SESSIONS_COLLAPSED_LIMIT", app_js)
+        current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
+        self.assertIn("--current-session-row-h: 30px;", current_css)
+        self.assertIn("--current-session-label-h: 28px;", current_css)
+        self.assertIn("--current-sessions-visible-rows: 8;", current_css)
+        self.assertIn("calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows)))", current_css)
+
+    def test_by_objects_draft_rows_align_with_sessions_and_show_play(self):
+        """Draft rows should start where real sessions start, with an always
+        visible play action immediately after the draft text."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function flowDraftTitleCh(value)", app_js)
+        self.assertIn("const _draftTitleCh = flowDraftTitleCh(d.title || '');", app_js)
+        self.assertIn("' style=\"--draft-title-ch:' + _draftTitleCh + 'ch\"'", app_js)
+        self.assertIn("inp.style.setProperty('--draft-title-ch', flowDraftTitleCh(inp.value) + 'ch');", app_js)
+        draft_css = app_css[app_css.index(".conv-project-tree .conv-draft-row {"):app_css.index(".conv-item .conv-ux-fix-progress", app_css.index(".conv-project-tree .conv-draft-row {"))]
+        self.assertIn("display: flex;", draft_css)
+        self.assertIn("align-items: center;", draft_css)
+        self.assertIn("margin: 0 0 0 18px;", draft_css)
+        self.assertIn(".conv-project-tree .conv-draft-row .conv-draft-play {\n    display: inline-flex;", draft_css)
+        self.assertIn("width: min(calc(var(--draft-title-ch, 16) * 1ch + 18px), 100%);", draft_css)
+        self.assertNotIn(".conv-project-tree .conv-draft-row .conv-draft-play,\n  .conv-project-tree .conv-draft-row .conv-draft-delete { display: none; }", draft_css)
+
     def test_object_header_actions_are_hover_revealed(self):
         """Object header actions should stay quiet until hover/focus."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
