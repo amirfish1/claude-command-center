@@ -14753,6 +14753,46 @@ def _ffc_iter_targets(text):
             yield (cleaned, "path")
 
 
+def _ffc_file_label(target, kind):
+    if kind == "url":
+        try:
+            parsed = urllib.parse.urlsplit(target)
+            tail = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+            return tail or parsed.netloc or target
+        except ValueError:
+            return target
+    return os.path.basename(target) or target
+
+
+def _ffc_consider_file_target(seen, target, kind, line, truncated):
+    """Add/update one Files-panel row and preserve first + latest mentions."""
+    if not target:
+        return truncated
+    try:
+        line_num = int(line)
+    except (TypeError, ValueError):
+        line_num = 0
+    existing = seen.get(target)
+    if existing:
+        prev = existing.get("last_line") or existing.get("first_line") or 0
+        existing["last_line"] = max(int(prev or 0), line_num)
+        return truncated
+    category = _categorize_file_target(target)
+    if not category:
+        return truncated
+    if len(seen) >= _FFC_MAX_ENTRIES:
+        return True
+    seen[target] = {
+        "label": _ffc_file_label(target, kind),
+        "target": target,
+        "kind": kind,
+        "category": category,
+        "first_line": line_num,
+        "last_line": line_num,
+    }
+    return truncated
+
+
 def _ffc_flatten_strings(value):
     """Walk a tool_use input dict yielding every nested string. Used
     to scan entire `Bash{command: …}` / `Edit{old_string: …}` payloads,
@@ -15442,31 +15482,7 @@ def _extract_files_from_conversation(conversation_id):
 
     def consider(target, kind, line):
         nonlocal truncated
-        if not target or target in seen:
-            return
-        category = _categorize_file_target(target)
-        if not category:
-            return
-        if len(seen) >= _FFC_MAX_ENTRIES:
-            truncated = True
-            return
-        # Label: basename for paths, URL last-path-segment (or host) for URLs.
-        if kind == "url":
-            try:
-                parsed = urllib.parse.urlsplit(target)
-                tail = parsed.path.rstrip("/").rsplit("/", 1)[-1]
-                label = tail or parsed.netloc or target
-            except ValueError:
-                label = target
-        else:
-            label = os.path.basename(target) or target
-        seen[target] = {
-            "label": label,
-            "target": target,
-            "kind": kind,
-            "category": category,
-            "first_line": line,
-        }
+        truncated = _ffc_consider_file_target(seen, target, kind, line, truncated)
 
     try:
         with open(filepath, "r") as f:
@@ -15546,30 +15562,7 @@ def _extract_files_from_codex_conversation(thread_id):
 
     def consider(target, kind, line):
         nonlocal truncated
-        if not target or target in seen:
-            return
-        category = _categorize_file_target(target)
-        if not category:
-            return
-        if len(seen) >= _FFC_MAX_ENTRIES:
-            truncated = True
-            return
-        if kind == "url":
-            try:
-                parsed = urllib.parse.urlsplit(target)
-                tail = parsed.path.rstrip("/").rsplit("/", 1)[-1]
-                label = tail or parsed.netloc or target
-            except ValueError:
-                label = target
-        else:
-            label = os.path.basename(target) or target
-        seen[target] = {
-            "label": label,
-            "target": target,
-            "kind": kind,
-            "category": category,
-            "first_line": line,
-        }
+        truncated = _ffc_consider_file_target(seen, target, kind, line, truncated)
 
     def consider_text(text, line):
         if not isinstance(text, str) or not text:
@@ -15629,30 +15622,7 @@ def _extract_files_from_gemini_conversation(session_id):
 
     def consider(target, kind, idx):
         nonlocal truncated
-        if not target or target in seen:
-            return
-        category = _categorize_file_target(target)
-        if not category:
-            return
-        if len(seen) >= _FFC_MAX_ENTRIES:
-            truncated = True
-            return
-        if kind == "url":
-            try:
-                parsed = urllib.parse.urlsplit(target)
-                tail = parsed.path.rstrip("/").rsplit("/", 1)[-1]
-                label = tail or parsed.netloc or target
-            except ValueError:
-                label = target
-        else:
-            label = os.path.basename(target) or target
-        seen[target] = {
-            "label": label,
-            "target": target,
-            "kind": kind,
-            "category": category,
-            "first_line": idx + 1,
-        }
+        truncated = _ffc_consider_file_target(seen, target, kind, idx + 1, truncated)
 
     messages = data.get("messages") or []
     for idx, msg in enumerate(messages):
@@ -22944,30 +22914,7 @@ def _extract_files_from_cursor_conversation(session_id):
 
     def consider(target, kind, line):
         nonlocal truncated
-        if not target or target in seen:
-            return
-        category = _categorize_file_target(target)
-        if not category:
-            return
-        if len(seen) >= _FFC_MAX_ENTRIES:
-            truncated = True
-            return
-        if kind == "url":
-            try:
-                parsed = urllib.parse.urlsplit(target)
-                tail = parsed.path.rstrip("/").rsplit("/", 1)[-1]
-                label = tail or parsed.netloc or target
-            except ValueError:
-                label = target
-        else:
-            label = os.path.basename(target) or target
-        seen[target] = {
-            "label": label,
-            "target": target,
-            "kind": kind,
-            "category": category,
-            "first_line": line,
-        }
+        truncated = _ffc_consider_file_target(seen, target, kind, line, truncated)
 
     def consider_text(text, line):
         if not isinstance(text, str) or not text:
@@ -24216,30 +24163,7 @@ def _extract_files_from_hermes_conversation(session_id):
 
     def consider(target, kind, line):
         nonlocal truncated
-        if not target or target in seen:
-            return
-        category = _categorize_file_target(target)
-        if not category:
-            return
-        if len(seen) >= _FFC_MAX_ENTRIES:
-            truncated = True
-            return
-        label = target
-        if kind == "url":
-            try:
-                parsed = urllib.parse.urlsplit(target)
-                label = parsed.path.rstrip("/").rsplit("/", 1)[-1] or parsed.netloc or target
-            except ValueError:
-                pass
-        else:
-            label = os.path.basename(target) or target
-        seen[target] = {
-            "label": label,
-            "target": target,
-            "kind": kind,
-            "category": category,
-            "first_line": line,
-        }
+        truncated = _ffc_consider_file_target(seen, target, kind, line, truncated)
 
     for ev in result.get("events") or []:
         line = ev.get("line") or 0
@@ -26626,30 +26550,7 @@ def _extract_files_from_antigravity_conversation(session_id):
 
     def consider(target, kind, line):
         nonlocal truncated
-        if not target or target in seen:
-            return
-        category = _categorize_file_target(target)
-        if not category:
-            return
-        if len(seen) >= _FFC_MAX_ENTRIES:
-            truncated = True
-            return
-        if kind == "url":
-            try:
-                parsed = urllib.parse.urlsplit(target)
-                tail = parsed.path.rstrip("/").rsplit("/", 1)[-1]
-                label = tail or parsed.netloc or target
-            except ValueError:
-                label = target
-        else:
-            label = os.path.basename(target) or target
-        seen[target] = {
-            "label": label,
-            "target": target,
-            "kind": kind,
-            "category": category,
-            "first_line": line,
-        }
+        truncated = _ffc_consider_file_target(seen, target, kind, line, truncated)
 
     line_num = 0
     try:

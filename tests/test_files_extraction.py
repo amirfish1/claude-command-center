@@ -129,7 +129,16 @@ class TestExtractor(unittest.TestCase):
         md_targets = [r["target"] for r in result["groups"].get("markdown", [])]
         self.assertEqual(md_targets.count("/Users/testuser/Apps/foo/intro.md"), 1)
 
-    def test_each_row_has_label_target_kind_first_line(self):
+    def test_de_duplicated_repeats_track_last_line(self):
+        result = self.server._extract_files_from_conversation("ignored")
+        intro = next(
+            r for r in result["groups"].get("markdown", [])
+            if r["target"] == "/Users/testuser/Apps/foo/intro.md"
+        )
+        self.assertEqual(intro["first_line"], 3)
+        self.assertEqual(intro["last_line"], 4)
+
+    def test_each_row_has_label_target_kind_first_and_last_line(self):
         result = self.server._extract_files_from_conversation("ignored")
         for cat, rows in result["groups"].items():
             for r in rows:
@@ -138,6 +147,7 @@ class TestExtractor(unittest.TestCase):
                     self.assertIn("target", r)
                     self.assertIn("kind", r)
                     self.assertIn("first_line", r)
+                    self.assertIn("last_line", r)
                     self.assertIn(r["kind"], ("path", "url"))
 
     def test_missing_jsonl_returns_empty(self):

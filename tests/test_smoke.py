@@ -2278,6 +2278,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("overflow-y: visible;", activity_css)
         self.assertNotIn("flex: 1 1 auto;", activity_css)
 
+    def test_files_sidebar_sorts_by_recent_mentions(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("function _ffcRecencyLine(row)", app_js)
+        self.assertIn("allFiles.sort((a, b) => _ffcRecencyLine(b) - _ffcRecencyLine(a));", app_js)
+
     def test_markdown_file_viewer_temporarily_widens_right_rail(self):
         """Opening a Markdown preview should widen the right rail and closing
         it should restore the previous rail width."""

@@ -25395,8 +25395,8 @@
       }
     }
 
-    // Sort reverse chronologically (by first_line descending)
-    allFiles.sort((a, b) => (b.first_line || 0) - (a.first_line || 0));
+    // Sort reverse chronologically by the latest mention of each file.
+    allFiles.sort((a, b) => _ffcRecencyLine(b) - _ffcRecencyLine(a));
 
     // Render each file
     for (const row of allFiles) {
@@ -25408,6 +25408,13 @@
     if ($searchInput && $searchInput.value) {
       $searchInput.dispatchEvent(new Event('input'));
     }
+  }
+
+  function _ffcRecencyLine(row) {
+    const last = Number(row && row.last_line);
+    if (Number.isFinite(last) && last > 0) return last;
+    const first = Number(row && row.first_line);
+    return Number.isFinite(first) && first > 0 ? first : 0;
   }
 
   function closeStatusRailFileViewer() {
