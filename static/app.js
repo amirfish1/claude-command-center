@@ -14850,8 +14850,8 @@
   function wireConversationListScrollPause() {
     if (!$convList || $convList._mobileScrollPauseWired) return;
     $convList._mobileScrollPauseWired = true;
-    $convList.addEventListener('scroll', noteConversationListScrollActivity, { passive: true });
-    $convList.addEventListener('touchmove', noteConversationListScrollActivity, { passive: true });
+    $convList.addEventListener('scroll', noteConversationListScrollActivity, { passive: true, capture: true });
+    $convList.addEventListener('touchmove', noteConversationListScrollActivity, { passive: true, capture: true });
   }
   wireConversationListScrollPause();
 
@@ -20919,17 +20919,27 @@
       : null;
     const _focusInputCaretStart = _focusInputBefore ? _focusInputBefore.selectionStart : null;
     const _focusInputCaretEnd = _focusInputBefore ? _focusInputBefore.selectionEnd : null;
+    const _currentSessionsScrollBefore = _objectsSplitActive
+      ? $convList.querySelector('[data-role="current-sessions-scroll"]')
+      : null;
     const _projectTreeScrollBefore = _objectsSplitActive
       ? $convList.querySelector('[data-role="project-tree-scroll"]')
       : null;
+    const _currentSessionsScrollTop = _currentSessionsScrollBefore ? _currentSessionsScrollBefore.scrollTop : 0;
     const _projectTreeScrollTop = _projectTreeScrollBefore ? _projectTreeScrollBefore.scrollTop : 0;
     $convList.innerHTML = _convListHtml;
+    const _currentSessionsScrollAfter = _currentSessionsScrollBefore
+      ? $convList.querySelector('[data-role="current-sessions-scroll"]')
+      : null;
     const _projectTreeScrollAfter = _projectTreeScrollBefore
       ? $convList.querySelector('[data-role="project-tree-scroll"]')
       : null;
-    if (_projectTreeScrollAfter) {
-      _projectTreeScrollAfter.scrollTop = Math.min(_projectTreeScrollTop, Math.max(0, _projectTreeScrollAfter.scrollHeight - _projectTreeScrollAfter.clientHeight));
-    }
+    const _restoreSplitScrollTop = (el, top) => {
+      if (!el) return;
+      el.scrollTop = Math.min(top, Math.max(0, el.scrollHeight - el.clientHeight));
+    };
+    _restoreSplitScrollTop(_currentSessionsScrollAfter, _currentSessionsScrollTop);
+    _restoreSplitScrollTop(_projectTreeScrollAfter, _projectTreeScrollTop);
     if (_focusInputBefore && document.activeElement !== _focusInputBefore && document.contains(_focusInputBefore)) {
       try {
         _focusInputBefore.focus({ preventScroll: true });

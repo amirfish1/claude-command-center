@@ -797,18 +797,25 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (el.closest('.conv-current-sessions-scroll')) {", app_js)
         self.assertIn("hideTip();\n        return;", app_js)
 
-    def test_by_objects_project_tree_scroll_survives_refresh_rebuilds(self):
-        """Polling rebuilds should not snap the by-objects project tree to top."""
+    def test_by_objects_split_scrolls_survive_refresh_rebuilds(self):
+        """Polling rebuilds should not snap either by-objects split pane to top."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
+        current_snapshot_pos = app_js.index("const _currentSessionsScrollBefore = _objectsSplitActive")
         snapshot_pos = app_js.index("const _projectTreeScrollBefore = _objectsSplitActive")
         inner_html_pos = app_js.index("$convList.innerHTML = _convListHtml;", snapshot_pos)
+        current_restore_pos = app_js.index("const _currentSessionsScrollAfter = _currentSessionsScrollBefore", inner_html_pos)
         restore_pos = app_js.index("const _projectTreeScrollAfter = _projectTreeScrollBefore", inner_html_pos)
+        self.assertLess(current_snapshot_pos, inner_html_pos)
         self.assertLess(snapshot_pos, inner_html_pos)
+        self.assertLess(inner_html_pos, current_restore_pos)
         self.assertLess(inner_html_pos, restore_pos)
+        self.assertIn("$convList.querySelector('[data-role=\"current-sessions-scroll\"]')", app_js[current_snapshot_pos:inner_html_pos])
         self.assertIn("$convList.querySelector('[data-role=\"project-tree-scroll\"]')", app_js[snapshot_pos:inner_html_pos])
+        self.assertIn("const _currentSessionsScrollTop = _currentSessionsScrollBefore ? _currentSessionsScrollBefore.scrollTop : 0;", app_js)
         self.assertIn("const _projectTreeScrollTop = _projectTreeScrollBefore ? _projectTreeScrollBefore.scrollTop : 0;", app_js)
-        self.assertIn("_projectTreeScrollAfter.scrollTop = Math.min(_projectTreeScrollTop, Math.max(0, _projectTreeScrollAfter.scrollHeight - _projectTreeScrollAfter.clientHeight));", app_js)
+        self.assertIn("_restoreSplitScrollTop(_currentSessionsScrollAfter, _currentSessionsScrollTop);", app_js)
+        self.assertIn("_restoreSplitScrollTop(_projectTreeScrollAfter, _projectTreeScrollTop);", app_js)
 
     def test_by_objects_current_sessions_leaves_room_for_more_row(self):
         """Collapsed current sessions should fit seven rows plus More before
@@ -1982,8 +1989,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function shouldSuppressSyntheticRowClick(id)", app_js)
         self.assertIn("if (shouldSuppressSyntheticRowClick(item.dataset.id)) { ev.preventDefault(); return; }", app_js)
         self.assertIn("function noteConversationListScrollActivity()", app_js)
-        self.assertIn("$convList.addEventListener('scroll', noteConversationListScrollActivity, { passive: true });", app_js)
-        self.assertIn("$convList.addEventListener('touchmove', noteConversationListScrollActivity, { passive: true });", app_js)
+        self.assertIn("$convList.addEventListener('scroll', noteConversationListScrollActivity, { passive: true, capture: true });", app_js)
+        self.assertIn("$convList.addEventListener('touchmove', noteConversationListScrollActivity, { passive: true, capture: true });", app_js)
         self.assertIn("if (isConversationListScrollActive()) return true;", app_js)
         self.assertIn("if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
         self.assertIn("const _skipFlipForTouchScroll = shouldUseTouchRowMode();", app_js)

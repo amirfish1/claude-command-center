@@ -1,0 +1,1 @@
+- Preserve By objects split-pane scroll positions across periodic sidebar refreshes.
