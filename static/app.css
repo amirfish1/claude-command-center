@@ -5117,9 +5117,16 @@
        the OS resize-handle (the grip in the bottom-right corner). */
     line-height: 1.5;
     resize: none;
+    overflow-x: hidden;
     overflow-y: auto;
+    scrollbar-width: none;
     min-height: 24px;
     max-height: 240px;
+  }
+  .conv-input-bar textarea::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
   }
   /* Native-app typing on touch devices. iOS Safari/WKWebView auto-zoom the
      page whenever a focused input renders below 16px — the single biggest

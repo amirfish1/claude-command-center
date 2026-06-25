@@ -2021,6 +2021,27 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("background-image: none !important;", input_css)
         self.assertIn("box-shadow: none;", input_css)
 
+    def test_composer_textarea_hides_native_scrollbar_chrome(self):
+        """The composer textarea should not show WebKit scrollbar thumbs.
+
+        In the Mac app, a horizontal textarea scrollbar inherits
+        --border from the conversation palette and appears as a large gray
+        bar across the input box.
+        """
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        textarea_css = app_css[
+            app_css.index(".conv-input-bar textarea {\n    /* Single-row by default;"):
+            app_css.index("/* Native-app typing on touch devices.", app_css.index(".conv-input-bar textarea {\n    /* Single-row by default;"))
+        ]
+        self.assertIn("overflow-x: hidden;", textarea_css)
+        self.assertIn("scrollbar-width: none;", textarea_css)
+        self.assertIn(".conv-input-bar textarea::-webkit-scrollbar", app_css)
+        self.assertIn("display: none;", app_css[
+            app_css.index(".conv-input-bar textarea::-webkit-scrollbar"):
+            app_css.index("/* Native-app typing on touch devices.", app_css.index(".conv-input-bar textarea::-webkit-scrollbar"))
+        ])
+
     def test_empty_composer_arrow_up_recalls_last_command(self):
         """ArrowUp in an empty composer should recall the last sent command."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
