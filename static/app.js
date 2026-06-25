@@ -33642,7 +33642,7 @@
     const s = String(value || '').trim();
     if (!s) return false;
     if (s.startsWith('-')) return false;             // mistyped CLI flag
-    if (/^[A-Za-z][A-Za-z0-9]*(-[A-Za-z0-9]+)*-\d+$/.test(s) && s.length <= 32) {
+    if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*-\d+$/.test(s) && s.length <= 32) {
       return false;                                   // looks like a ticket ref (PROJ-7)
     }
     return true;
@@ -33798,16 +33798,10 @@
         }
       }
     }
-    // 2) Otherwise, credit the session that closed this project's LATEST ticket
-    //    — so an idle worker row still shows the last fix it shipped.
-    const lastFix = uxFixesQueueMeta.lastFixBySession || new Map();
-    for (const key of keys) {
-      const done = lastFix.get(key);
-      if (!done) continue;
-      const total = Number(projectMaxSeq.get(done.project) || 0);
-      if (!Number.isFinite(total) || total <= 0) break;
-      return { kind: 'done', current: done.seq, total, lane: 'normal', project: done.project, ref: done.ref };
-    }
+    // 2) Project-named worker rows should show the latest project close, even
+    // when this visual row's own session id last closed an older ticket. Queue
+    // draining can move across worker identities, but the project worker row is
+    // the thing the user scans for up-to-date CCC/BYM progress.
     const projectLastFix = uxFixesQueueMeta.lastFixByProject || new Map();
     if (projectHint) {
       const done = projectLastFix.get(projectHint);
@@ -33817,6 +33811,17 @@
           return { kind: 'done', current: done.seq, total, lane: 'normal', project: done.project, ref: done.ref };
         }
       }
+    }
+    // 3) Otherwise, credit the session that closed this project's latest ticket
+    // attributable to this row — so an idle non-project worker row still shows
+    // what it personally finished.
+    const lastFix = uxFixesQueueMeta.lastFixBySession || new Map();
+    for (const key of keys) {
+      const done = lastFix.get(key);
+      if (!done) continue;
+      const total = Number(projectMaxSeq.get(done.project) || 0);
+      if (!Number.isFinite(total) || total <= 0) break;
+      return { kind: 'done', current: done.seq, total, lane: 'normal', project: done.project, ref: done.ref };
     }
     return null;
   }

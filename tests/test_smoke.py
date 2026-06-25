@@ -1503,6 +1503,23 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("uxFixesQueueMeta.lastFixByProject || new Map()", app_js)
         self.assertIn(".conv-item .conv-ux-fix-progress", app_css)
 
+    def test_project_worker_progress_prefers_latest_project_fix(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        fn_start = app_js.index("function _uxFixesQueueProgressForRow(c)")
+        fn_end = app_js.index("function _uxFixesQueueProgressHtml(c)", fn_start)
+        fn_body = app_js[fn_start:fn_end]
+        project_done_pos = fn_body.index("const projectLastFix = uxFixesQueueMeta.lastFixByProject || new Map();")
+        session_done_pos = fn_body.index("const lastFix = uxFixesQueueMeta.lastFixBySession || new Map();")
+        self.assertLess(project_done_pos, session_done_pos)
+
+    def test_ux_fixes_worker_ids_with_numeric_suffix_are_plausible(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        fn_start = app_js.index("function _uxFixesPlausibleSessionId(value)")
+        fn_end = app_js.index("function _uxFixesRowIdentityKeys(c)", fn_start)
+        fn_body = app_js[fn_start:fn_end]
+        self.assertIn("^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*-\\d+$", fn_body)
+        self.assertNotIn("^[A-Za-z][A-Za-z0-9]*(-[A-Za-z0-9]+)*-\\d+$", fn_body)
+
     def test_sidebar_refresh_defers_while_dragging(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("function deferSidebarRenderIfDragging", app_js)
