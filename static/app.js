@@ -1340,11 +1340,15 @@
     if (!s) return s;
     return String(s).replace(LEADING_PATH_OR_URL_RE, '');
   }
+  function capitalizeSessionTitleStart(title) {
+    return String(title || '').replace(/^(\s*)([a-z])/, (_, lead, ch) => lead + ch.toUpperCase());
+  }
   function sidebarRowDisplayTitle(rawTitle) {
     if (!rawTitle) return rawTitle;
-    return stripLeadingPathOrUrl(String(rawTitle))
+    const cleanedTitle = stripLeadingPathOrUrl(String(rawTitle))
       .replace(LEADING_CCC_PASTED_IMAGE_PATH_RE, '')
       .replace(/-/g, ' ');
+    return capitalizeSessionTitleStart(cleanedTitle);
   }
   // Extract the first sentence / line from a blob of text. Used to derive a
   // usable title when the original prompt is a multi-paragraph body.
@@ -18667,6 +18671,7 @@
       + '</div>';
     };
     const _renderRow = (c, opts = {}) => {
+      const quietTitleChrome = !!opts.quietTitleChrome;
       // Inline NYA lookup (In-progress rows only, when Details is on). Resolved
       // once here so both the row chevron and the appended block agree.
       const _nyaInlineItem = _nyaDetailsForRows
@@ -18740,9 +18745,9 @@
       // ✨ = AI-generated (Claude/Codex/Antigravity). User renames get NO
       // glyph; the .user-renamed CSS class gives them a quiet dotted underline
       // instead so the row doesn't shout.
-      if (titleSource === 'ai') title = '✨ ' + title;
+      if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;
       let titleClass = '';
-      if (c.name_overridden) titleClass = 'user-renamed';
+      if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';
       else if (!c.display_name && !c.ai_title && !c.first_message) titleClass = 'untitled';
       const uxFixesQueueProgressHtml = _uxFixesQueueProgressHtml(c);
       // Prefer the last assistant "outcome" (summary) over the original ask —
@@ -20234,7 +20239,7 @@
         const _currentSessionsSub = _ipSearchActive ? '' : '<span class="conv-objects-section-sub">last 5h</span>';
         _currentSessionsHtml = '<div class="conv-objects-section-label">' + _currentSessionsLabel
           + _currentSessionsSub + '</div>'
-          + _curShown.map(c => _renderRow(c, { suppressFolderChip: false })).join('');
+          + _curShown.map(c => _renderRow(c, { suppressFolderChip: false, quietTitleChrome: true })).join('');
         if (_curHidden > 0) {
           _currentSessionsHtml += '<button type="button" class="conv-current-more"'
             + ' data-role="current-sessions-more" data-expand="1">More (' + _curHidden + ')</button>';
