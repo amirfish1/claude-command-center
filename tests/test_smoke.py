@@ -836,7 +836,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("replace(/[^a-z0-9]+/g, '') === 'evergreenagents'", app_js)
         self.assertIn("const _evergreenObjectNodes = new Set();", app_js)
         self.assertIn("if (_evergreenObjectNodes.has(nodeId)) continue;", app_js)
-        self.assertIn("const _evergreenAgentsHtml = _evergreenRoots.length", app_js)
+        self.assertIn("const _renderEvergreenAgentRows = (nodeId) => {", app_js)
+        self.assertIn("const _evergreenAgentsRowsHtml = _evergreenRoots.map(_renderEvergreenAgentRows).join('');", app_js)
+        self.assertIn("const _evergreenAgentsHtml = _evergreenAgentsRowsHtml", app_js)
+        self.assertIn("+ _evergreenAgentsRowsHtml", app_js)
+        self.assertNotIn("_emitObjTree(n, 0, i + 1, { includeEvergreen: true })", app_js)
         self.assertIn('data-role="evergreen-agents-header"', app_js)
         self.assertIn('data-role="evergreen-agents-scroll"', app_js)
         self.assertIn(

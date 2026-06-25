@@ -20347,9 +20347,25 @@
       const _objGroupsHtml = _objRoots.map(n => _emitObjTree(n, 0, 0)).join('');
       const _evergreenRoots = Array.from(_evergreenObjectNodes)
         .filter(n => !_evergreenObjectNodes.has(_objParentOf(n) || ''));
-      const _evergreenAgentsHtml = _evergreenRoots.length
+      const _renderEvergreenAgentRows = (nodeId) => {
+        const seen = new Set();
+        const walk = (id) => {
+          if (seen.has(id)) return '';
+          seen.add(id);
+          const group = _byObject.get(id);
+          if (!group) return '';
+          let html = sortedObjectCardsForRender(id, group.cards || [])
+            .map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true }))
+            .join('');
+          (_childrenOf.get(id) || []).forEach((k) => { html += walk(k); });
+          return html;
+        };
+        return walk(nodeId);
+      };
+      const _evergreenAgentsRowsHtml = _evergreenRoots.map(_renderEvergreenAgentRows).join('');
+      const _evergreenAgentsHtml = _evergreenAgentsRowsHtml
         ? '<div class="conv-project-tree conv-evergreen-agents-tree">'
-          + _evergreenRoots.map((n, i) => _emitObjTree(n, 0, i + 1, { includeEvergreen: true })).join('')
+          + _evergreenAgentsRowsHtml
           + '</div>'
         : '';
       const _evergreenSessionIds = new Set();
