@@ -1,0 +1,1 @@
+- Keep the by-objects Current sessions panel from reopening below the seven-row preview height.

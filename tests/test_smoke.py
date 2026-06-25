@@ -742,6 +742,26 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-objects-splitter.is-dragging", app_css)
         self.assertIn("body.objects-splitter-resizing", app_css)
 
+    def test_by_objects_splitter_clamps_to_visible_current_session_rows(self):
+        """Saved splitter heights should not shrink Current sessions below the
+        seven-row preview plus the More row."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const _CURRENT_SESSIONS_ROW_H = 20;", app_js)
+        self.assertIn("const _CURRENT_SESSIONS_LABEL_H = 18;", app_js)
+        self.assertIn("const _CURRENT_SESSIONS_MIN_VISIBLE_ROWS = 8;", app_js)
+        self.assertIn(
+            "const _CURRENT_SESSIONS_MIN_PANEL_H = _CURRENT_SESSIONS_LABEL_H + (_CURRENT_SESSIONS_ROW_H * _CURRENT_SESSIONS_MIN_VISIBLE_ROWS);",
+            app_js,
+        )
+        clamp_start = app_js.index("function _clampObjectsSplitterHeight")
+        clamp_body = app_js[clamp_start:app_js.index("function isSidebarDragInProgress", clamp_start)]
+        self.assertIn("const minHeight = _CURRENT_SESSIONS_MIN_PANEL_H;", clamp_body)
+        self.assertNotIn("const minHeight = 78;", clamp_body)
+        apply_start = app_js.index("function applyCurrentSessionsPanelHeight()")
+        apply_body = app_js[apply_start:app_js.index("function _clampObjectsSplitterHeight", apply_start)]
+        self.assertIn("const height = _clampObjectsSplitterHeight(list, storedHeight);", apply_body)
+
     def test_current_sessions_skip_body_title_tooltip(self):
         """Current session titles should not duplicate themselves in a body tooltip."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

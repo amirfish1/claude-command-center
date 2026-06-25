@@ -9829,6 +9829,10 @@
   let _sidebarRenderPendingAfterDrag = false;
   let _sidebarRenderAfterDragRaf = 0;
   const _CURRENT_SESSIONS_PANEL_H_KEY = 'ccc-current-sessions-panel-h';
+  const _CURRENT_SESSIONS_ROW_H = 20;
+  const _CURRENT_SESSIONS_LABEL_H = 18;
+  const _CURRENT_SESSIONS_MIN_VISIBLE_ROWS = 8;
+  const _CURRENT_SESSIONS_MIN_PANEL_H = _CURRENT_SESSIONS_LABEL_H + (_CURRENT_SESSIONS_ROW_H * _CURRENT_SESSIONS_MIN_VISIBLE_ROWS);
   function _storedCurrentSessionsPanelHeight() {
     try {
       const n = parseInt(localStorage.getItem(_CURRENT_SESSIONS_PANEL_H_KEY) || '', 10);
@@ -9840,12 +9844,19 @@
   function applyCurrentSessionsPanelHeight() {
     const list = document.getElementById('convList');
     if (!list) return;
-    const height = _storedCurrentSessionsPanelHeight();
-    if (height) list.style.setProperty('--current-sessions-panel-h', height + 'px');
-    else list.style.removeProperty('--current-sessions-panel-h');
+    const storedHeight = _storedCurrentSessionsPanelHeight();
+    if (!storedHeight) {
+      list.style.removeProperty('--current-sessions-panel-h');
+      return;
+    }
+    const height = _clampObjectsSplitterHeight(list, storedHeight);
+    list.style.setProperty('--current-sessions-panel-h', height + 'px');
+    if (height !== storedHeight) {
+      try { localStorage.setItem(_CURRENT_SESSIONS_PANEL_H_KEY, String(height)); } catch (_) {}
+    }
   }
   function _clampObjectsSplitterHeight(list, height) {
-    const minHeight = 78;
+    const minHeight = _CURRENT_SESSIONS_MIN_PANEL_H;
     const containerH = list ? list.getBoundingClientRect().height : 0;
     const maxHeight = containerH ? Math.max(minHeight, containerH - 160) : 520;
     return Math.round(Math.max(minHeight, Math.min(maxHeight, height)));
