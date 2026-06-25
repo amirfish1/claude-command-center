@@ -1546,6 +1546,10 @@
     try { return localStorage.getItem(IP_NYA_DETAILS_KEY) === '1'; }
     catch (_) { return false; }
   }
+  function compactRowsOn() {
+    try { return localStorage.getItem('ccc-compact-rows') === '1'; }
+    catch (_) { return false; }
+  }
   // session_id -> attention item, rebuilt every loadAttentionList() pass. Lets
   // the conversation list look up a row's NYA block without a second fetch.
   const _nyaItemsBySid = new Map();
@@ -7822,6 +7826,7 @@
   const $convSearch = document.getElementById('convSearch');
   const $convSearchClear = document.getElementById('convSearchClear');
   const $convSearchHistoryList = document.getElementById('convSearchHistoryList');
+  const $convSearchStatus = document.getElementById('convSearchStatus');
   const $kanbanBoard = document.getElementById('kanbanBoard');
   const $flowBoard = document.getElementById('flowBoard');
   const $convKanbanToggle = document.getElementById('convKanbanToggle');
@@ -7865,6 +7870,17 @@
     return deduped.slice(0, 10);
   }
   renderConversationSearchHistoryOptions();
+
+  function setConversationSearchLoading(isLoading, query) {
+    if (!$convSearchStatus) return;
+    const q = String(query || '').trim();
+    isLoading = !!(isLoading && q);
+    $convSearchStatus.hidden = !isLoading;
+    $convSearchStatus.textContent = isLoading ? 'SEARCHING...' : '';
+    $convSearchStatus.setAttribute('aria-busy', isLoading ? 'true' : 'false');
+    const wrap = $convSearch && $convSearch.closest('.search-wrap');
+    if (wrap) wrap.classList.toggle('is-searching', isLoading);
+  }
 
   // ── One-shot localStorage migration ──
   // Project rebrand: keys moved from `clv-*` (Claude Log Viewer) to `ccc-*`
@@ -18931,6 +18947,7 @@
         // class (.gh-in-progress) instead of .activity-working.
         signals += '<span class="conv-signal gh-in-progress" title="Linked GitHub issue carries the claude-in-progress label">issue: in progress</span>';
       }
+      const _showGitStateSignals = !_rowsCompactOn;
       if (c.source === 'pkood') {
         const ps = (c.pkood_status || '').toUpperCase();
         if (ps === 'RUNNING') signals += '<span class="conv-signal pkood-running">running</span>';
@@ -18939,9 +18956,9 @@
         if (c.pkood_is_stuck) signals += '<span class="conv-signal pkood-stuck">stuck</span>';
       } else if (c.spawn_failed) {
         signals += '<span class="conv-signal spawn-failed" title="' + escapeHtml(c.spawn_error || 'Spawn process exited before a session was created') + '">failed</span>';
-      } else if (isWorktree && c.worktree_dirty) {
+      } else if (_showGitStateSignals && isWorktree && c.worktree_dirty) {
         signals += '<span class="conv-signal uncommitted" title="git status: this worktree has uncommitted changes">uncommitted</span>';
-      } else if (c.tail_pr_number) {
+      } else if (_showGitStateSignals && c.tail_pr_number) {
         // Any session with a PR: surface it instead of the generic
         // committed/pushed chip — the PR is the actionable signal.
         // State-aware styling: merged → purple ✓, open → cyan ↗, closed
@@ -18972,13 +18989,13 @@
             signals += '<span class="conv-signal ' + noteCls + '" title="' + escapeHtml(note.title || note.label) + '">' + escapeHtml(note.label) + '</span>';
           }
         }
-      } else if (c.has_push) {
+      } else if (_showGitStateSignals && c.has_push) {
         signals += '<span class="conv-signal pushed">pushed</span>';
-      } else if (c.has_commit) {
+      } else if (_showGitStateSignals && c.has_commit) {
         signals += '<span class="conv-signal committed">committed</span>';
-      } else if (hasReadOnlyWork(c)) {
+      } else if (_showGitStateSignals && hasReadOnlyWork(c)) {
         signals += '<span class="conv-signal read-only" title="Agent completed read-only work without file edits">read-only</span>';
-      } else if (hasNoEdits(c)) {
+      } else if (_showGitStateSignals && hasNoEdits(c)) {
         signals += '<span class="conv-signal no-edits" title="Agent has not edited any files in this session">no edits</span>';
       }
 
@@ -19077,7 +19094,7 @@
         ? '<span class="conv-history-badge" title="Matched repo search; showing latest sessions from ' + escapeHtml(c._repoSearchLabel || 'repo') + '">repo</span>'
         : '';
       const historySnippetHtml = c._historySnippet
-        ? '<div class="conv-history-snippet">' + c._historySnippet + '</div>'
+        ? '<div class="conv-history-snippet is-search-result">' + c._historySnippet + '</div>'
         : '';
 
       const ctxPct = _convRowContextPct(c);
@@ -19280,6 +19297,7 @@
     // the data feed uses makes the toggle truthful AND the single control: one
     // click on All widens the real window and persists. Defaults to 'all' (no
     // projects hidden). NYA / attention feed (scope=live) stays separate.
+    const _rowsCompactOn = compactRowsOn();
     const _ipNyaOn = _ipNyaDetailsOn();
     const _ipWindow = _hasFolderChips ? _archiveWindow() : 'all';
     const _ipWindowDays = _ipWindow === '7d' ? 7 : (_ipWindow === '1d' ? 1 : null);
@@ -20151,8 +20169,6 @@
       // On = comfortable rows (full status / branch / outcome line);
       // off = compact diet. Writes ccc-compact-rows, the same key
       // applyCompactRowsState() applies on boot, so it persists.
-      let _rowsCompactOn = false;
-      try { _rowsCompactOn = localStorage.getItem('ccc-compact-rows') === '1'; } catch (_) {}
       const _ipDetailsToggle =
         '<span class="conv-grouping-toggle conv-nya-toggle" data-role="nya-details-toggle"'
           + ' title="Details on = fuller rows (status, branch, outcome line); off = compact">'
@@ -22885,7 +22901,7 @@
   // ask preview disappears. Persists in localStorage so it sticks.
   const $convCompactToggle = document.getElementById('convCompactToggle');
   function applyCompactRowsState() {
-    const compact = localStorage.getItem('ccc-compact-rows') === '1';
+    const compact = compactRowsOn();
     if ($convList) $convList.classList.toggle('compact-rows', compact);
     if ($convCompactToggle) {
       $convCompactToggle.classList.toggle('active', compact);
@@ -30340,8 +30356,10 @@
       _historyState.map = new Map();
       _historyState.repoRows = [];
       _historyState.matchedRepo = null;
+      setConversationSearchLoading(false, q);
       return Promise.resolve();
     }
+    setConversationSearchLoading(true, q);
     // Sidebar conversation search is global. There is no visible repo-scope
     // control here, so silently narrowing history search to the active repo
     // hides relevant sessions and makes the search box feel inconsistent.
@@ -30392,6 +30410,7 @@
       _historyState.matchedRepo = matchedRepo
         ? { path: matchedRepo.path, label: matchedRepo.label || _pathLeaf(matchedRepo.path) || matchedRepo.path }
         : null;
+      setConversationSearchLoading(false, q);
       // Force a full sidebar rebuild — the flicker guard can otherwise
       // skip the second pass that adds repo badges/section HTML.
       _convListRenderSig = null;
@@ -31163,6 +31182,8 @@
     // Debounced history fetch; on completion, re-render with augmentation.
     if (_historyFetchTimer) clearTimeout(_historyFetchTimer);
     const q = $convSearch.value;
+    if (q.trim()) setConversationSearchLoading(true, q);
+    else setConversationSearchLoading(false, q);
     _historyFetchTimer = setTimeout(() => {
       _fetchHistoryAugment(q).then(() => {
         // Only re-render if the input still holds this query — user may

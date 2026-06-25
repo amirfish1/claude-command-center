@@ -3467,6 +3467,9 @@
     background: rgba(255, 213, 100, 0.3); color: var(--text);
     padding: 0 2px; border-radius: 2px;
   }
+  .conv-history-snippet.is-search-result {
+    max-height: 9.8em;
+  }
   /* Worktree-origin badge: shown when a session came from a sibling
      worktree dir (e.g. claude-command-center-wt-gemini). */
   .conv-wt-badge {
@@ -4091,6 +4094,10 @@
      read-only / no edits) — they're status-at-rest, not live activity. The
      blinking WIP / waiting / live-tool signals stay. */
   .compact-rows .conv-item .conv-signal.pushed,
+  .compact-rows .conv-item .conv-signal.uncommitted,
+  .compact-rows .conv-item .conv-signal.pr-open,
+  .compact-rows .conv-item .conv-signal.pr-merged,
+  .compact-rows .conv-item .conv-signal.pr-closed,
   .compact-rows .conv-item .conv-signal.committed,
   .compact-rows .conv-item .conv-signal.read-only,
   .compact-rows .conv-item .conv-signal.no-edits { display: none; }
@@ -5885,6 +5892,23 @@
     padding: 0;
   }
   .search-wrap.has-value .conv-search-clear { display: flex; }
+  .conv-search-status {
+    margin: 6px 12px 0;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 213, 100, 0.58);
+    border-radius: 6px;
+    background: rgba(255, 213, 100, 0.16);
+    color: #ffd564;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-align: center;
+    animation: convSearchPulse 0.85s ease-in-out infinite alternate;
+  }
+  @keyframes convSearchPulse {
+    from { opacity: 0.72; }
+    to { opacity: 1; }
+  }
 
   /* Today's projects tray (CCC-141). Sits below the search input and above the
      conversation list. Lightweight session tray, NOT Flow board state. */

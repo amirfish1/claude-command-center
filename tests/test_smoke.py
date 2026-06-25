@@ -219,6 +219,24 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("rememberConversationSearchQuery($convSearch.value);", app_js)
         self.assertIn("$convSearch.addEventListener('change', () => rememberConversationSearchQuery($convSearch.value));", app_js)
 
+    def test_conversation_search_shows_clear_searching_state(self):
+        """Async conversation search should loudly say when it is searching."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="convSearchStatus"', index_html)
+        self.assertIn("SEARCHING...", index_html)
+        self.assertIn("const $convSearchStatus = document.getElementById('convSearchStatus');", app_js)
+        self.assertIn("function setConversationSearchLoading(isLoading, query)", app_js)
+        self.assertIn("$convSearchStatus.hidden = !isLoading;", app_js)
+        self.assertIn("$convSearchStatus.textContent = isLoading ? 'SEARCHING...' : '';", app_js)
+        self.assertIn("setConversationSearchLoading(true, q);", app_js)
+        self.assertIn("setConversationSearchLoading(false, q);", app_js)
+        self.assertIn(".conv-search-status", app_css)
+        self.assertIn("font-weight: 800;", app_css)
+        self.assertIn("@keyframes convSearchPulse", app_css)
+
     def test_new_session_folder_shortcuts_are_labeled(self):
         """The folder dropdown and recent chips both set the same spawn CWD.
 
@@ -727,6 +745,25 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("+ summaryToggleHtml\n            + cooTrackHtml", app_js)
         self.assertIn(".conv-row-actions .conv-summary-toggle", app_css)
         self.assertIn("width: 20px;", app_css[app_css.index(".conv-row-actions .conv-summary-toggle"):])
+
+    def test_details_off_hides_git_state_chips_and_expands_search_snippets(self):
+        """Compact Details-off rows should hide non-live git/PR chips and
+        search rows should show a larger snippet preview."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function compactRowsOn()", app_js)
+        self.assertIn("const _rowsCompactOn = compactRowsOn();", app_js)
+        self.assertIn("const _showGitStateSignals = !_rowsCompactOn;", app_js)
+        self.assertIn("} else if (_showGitStateSignals && isWorktree && c.worktree_dirty)", app_js)
+        self.assertIn("} else if (_showGitStateSignals && c.tail_pr_number)", app_js)
+        self.assertIn("conv-history-snippet is-search-result", app_js)
+        self.assertIn(".compact-rows .conv-item .conv-signal.uncommitted", app_css)
+        self.assertIn(".compact-rows .conv-item .conv-signal.pr-open", app_css)
+        self.assertIn(".compact-rows .conv-item .conv-signal.pr-merged", app_css)
+        self.assertIn(".compact-rows .conv-item .conv-signal.pr-closed", app_css)
+        self.assertIn(".conv-history-snippet.is-search-result", app_css)
+        self.assertIn("max-height: 9.8em;", app_css)
 
     def test_repo_pin_marker_is_not_duplicate_pin_glyph(self):
         """Repo override rows should use a distinct repo chip, not a second pin."""
