@@ -856,6 +856,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);", evergreen_css)
         self.assertIn("border-radius: 0 0 8px 8px;", evergreen_css)
 
+    def test_by_objects_current_sessions_exclude_evergreen_agents(self):
+        """Evergreen agents belong only in their own bottom region at rest."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const _evergreenSessionIds = new Set();", app_js)
+        self.assertIn("const _collectEvergreenSessionIds = (nodeId) =>", app_js)
+        self.assertIn("_evergreenRoots.forEach(_collectEvergreenSessionIds);", app_js)
+        self.assertIn("const _currentSessionSource = _ipSearchActive", app_js)
+        self.assertIn("? (_visibleSessionConvs || []).slice()", app_js)
+        self.assertIn(": (_visibleSessionConvs || []).filter(c => !_evergreenSessionIds.has(c.session_id || c.id || ''));", app_js)
+        self.assertIn("const _currentSessions = _ipSearchActive\n        ? _currentSessionSource\n        : _currentSessionSource", app_js)
+
     def test_current_sessions_respect_inprogress_window_filter(self):
         """Current sessions should use the same 1d/7d/All window as by-objects."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

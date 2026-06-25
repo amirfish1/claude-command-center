@@ -20351,6 +20351,16 @@
           + _evergreenRoots.map((n, i) => _emitObjTree(n, 0, i + 1, { includeEvergreen: true })).join('')
           + '</div>'
         : '';
+      const _evergreenSessionIds = new Set();
+      const _collectEvergreenSessionIds = (nodeId) => {
+        const group = _byObject.get(nodeId);
+        ((group && group.cards) || []).forEach(c => {
+          const sid = c.session_id || c.id || '';
+          if (sid) _evergreenSessionIds.add(sid);
+        });
+        (_childrenOf.get(nodeId) || []).forEach(_collectEvergreenSessionIds);
+      };
+      _evergreenRoots.forEach(_collectEvergreenSessionIds);
       // Codex-layout: stacked regions in the by-objects view.
       //  1) "Current sessions" — every session active in the selected window
       //     (the live triage list), flat, regardless of object attachment. During search,
@@ -20373,9 +20383,12 @@
       const _curId = (c) => c.session_id || c.id;
       let _curPrevOrder = {};
       try { _curPrevOrder = JSON.parse(localStorage.getItem(_CUR_ORDER_KEY) || '{}'); } catch (_) {}
-      const _currentSessions = _ipSearchActive
+      const _currentSessionSource = _ipSearchActive
         ? (_visibleSessionConvs || []).slice()
-        : (_visibleSessionConvs || [])
+        : (_visibleSessionConvs || []).filter(c => !_evergreenSessionIds.has(c.session_id || c.id || ''));
+      const _currentSessions = _ipSearchActive
+        ? _currentSessionSource
+        : _currentSessionSource
           .filter(c => {
             if (!_currentSessionsWindowS) return true;
             return _sessionTs(c) >= _nowS - _currentSessionsWindowS;
