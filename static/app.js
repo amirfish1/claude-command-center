@@ -18002,25 +18002,41 @@
   // patching. Leaf spans (no nested tags), so [^<]* for the inner text is safe.
   const _VOLATILE_TIME_RE = /(<span class="[^"]*\b(?:conv-rel|conv-ingroupchat-row-when|conv-ingroupchat-participant-when)\b[^"]*"[^>]*>)([^<]*)(<\/span>)/g;
 
-  // Update only the volatile time labels in place from freshly-built markup,
-  // leaving the rest of the live DOM (and its attached handlers) untouched.
-  // Called when the structural signature is unchanged, i.e. only clocks moved.
+  // The live activity slot (.conv-status-slot) holds the live-tool indicator
+  // ("Reading file…" / "Bash command…", with an in-flight class) and the
+  // status signals. For an actively-running session this changes on nearly
+  // every poll, and baked into row markup it was the dominant driver of the
+  // periodic full-list rebuild flicker (most visible in "Current sessions",
+  // which surfaces exactly the live rows). Blank it from the structural
+  // signature and patch it in place like the time labels. The inner content
+  // is a flat run of leaf <span>s, so the middle group matches text OR a
+  // single-level span, ending at the slot's own closing tag.
+  const _VOLATILE_STATUS_RE = /(<span class="conv-status-slot">)((?:[^<]|<span\b[^>]*>[^<]*<\/span>)*)(<\/span>)/g;
+
+  // Update only the volatile bits (time labels + live status slot) in place
+  // from freshly-built markup, leaving the rest of the live DOM (and its
+  // attached handlers) untouched. Called when the structural signature is
+  // unchanged, i.e. only clocks / live activity moved.
   function _patchVolatileTimes(newHtml) {
     const $convList = document.getElementById('convList');
     if (!$convList) return;
-    const texts = [];
-    let m;
-    _VOLATILE_TIME_RE.lastIndex = 0;
-    while ((m = _VOLATILE_TIME_RE.exec(newHtml)) !== null) texts.push(m[2]);
-    const spans = $convList.querySelectorAll(
+    const _patchByOrder = (re, group, selector) => {
+      const vals = [];
+      let m;
+      re.lastIndex = 0;
+      while ((m = re.exec(newHtml)) !== null) vals.push(m[group]);
+      const els = $convList.querySelectorAll(selector);
+      // querySelectorAll yields document order, matching source/regex order.
+      // If counts ever drift, bail rather than mis-assign — the next
+      // structural render corrects it.
+      if (els.length !== vals.length) return;
+      for (let i = 0; i < els.length; i++) {
+        if (els[i].innerHTML !== vals[i]) els[i].innerHTML = vals[i];
+      }
+    };
+    _patchByOrder(_VOLATILE_TIME_RE, 2,
       'span.conv-rel, span.conv-ingroupchat-row-when, span.conv-ingroupchat-participant-when');
-    // querySelectorAll yields document order, which matches source/regex order.
-    // If counts ever drift, bail rather than mis-assign — the next structural
-    // render corrects it.
-    if (spans.length !== texts.length) return;
-    for (let i = 0; i < spans.length; i++) {
-      if (spans[i].innerHTML !== texts[i]) spans[i].innerHTML = texts[i];
-    }
+    _patchByOrder(_VOLATILE_STATUS_RE, 2, 'span.conv-status-slot');
   }
 
   function renderConversationList(convs) {
@@ -20513,7 +20529,9 @@
     // unchanged, only the clocks moved, so patch just those spans in place (no
     // teardown, no flicker) and bail. Any real change alters the structural sig
     // and falls through to a normal rebuild.
-    const _structSig = _convListHtml.replace(_VOLATILE_TIME_RE, '$1$3');
+    const _structSig = _convListHtml
+      .replace(_VOLATILE_TIME_RE, '$1$3')
+      .replace(_VOLATILE_STATUS_RE, '$1$3');
     // Refresh the Subagents rail panel each tick so spawn count + running
     // status reflect the latest /api/sessions data even when the conv-list
     // structure is otherwise unchanged (we short-circuit below in that case).
