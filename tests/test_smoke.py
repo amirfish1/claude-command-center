@@ -724,7 +724,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-role="project-tree-header"', app_js)
         self.assertIn("const _currentSessionsScrollHtml = (_currentSessionsBodyHtml)", app_js)
         self.assertIn('data-role="current-sessions-scroll"', app_js)
-        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml;", app_js)
+        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;", app_js)
         scroll_html_start = app_js.index("const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)")
         scroll_html_end = app_js.index("const _objectsSplitHandleHtml", scroll_html_start)
         self.assertNotIn("Project tree</div>", app_js[scroll_html_start:scroll_html_end])
@@ -764,7 +764,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function applyCurrentSessionsPanelHeight()", app_js)
         self.assertIn("const _objectsSplitHandleHtml = (_currentSessionsScrollHtml && _projectTreeScrollHtml)", app_js)
         self.assertIn('data-role="objects-splitter"', app_js)
-        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml;", app_js)
+        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;", app_js)
         self.assertIn("function beginObjectsSplitterResize(ev)", app_js)
         self.assertIn("ev.target.closest('[data-role=\"objects-splitter\"]')", app_js)
         self.assertIn("list.style.setProperty('--current-sessions-panel-h', nextHeight + 'px');", app_js)
@@ -779,6 +779,33 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("cursor: row-resize;", splitter_css)
         self.assertIn(".conv-objects-splitter.is-dragging", app_css)
         self.assertIn("body.objects-splitter-resizing", app_css)
+
+    def test_evergreen_agents_object_has_own_bottom_section(self):
+        """The Evergreen Agents object should be excluded from Project tree and
+        rendered as its own bottom region in By objects."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const _isEvergreenAgentsObjectTitle = (title) =>", app_js)
+        self.assertIn("replace(/[^a-z0-9]+/g, '') === 'evergreenagents'", app_js)
+        self.assertIn("const _evergreenObjectNodes = new Set();", app_js)
+        self.assertIn("if (_evergreenObjectNodes.has(nodeId)) continue;", app_js)
+        self.assertIn("const _evergreenAgentsHtml = _evergreenRoots.length", app_js)
+        self.assertIn('data-role="evergreen-agents-header"', app_js)
+        self.assertIn('data-role="evergreen-agents-scroll"', app_js)
+        self.assertIn(
+            "_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;",
+            app_js,
+        )
+
+        self.assertIn(".conv-evergreen-agents-header {", app_css)
+        self.assertIn(".conv-evergreen-agents-scroll {", app_css)
+        evergreen_css = app_css[
+            app_css.index(".conv-evergreen-agents-scroll {"):
+            app_css.index(".conv-project-tree {", app_css.index(".conv-evergreen-agents-scroll {"))
+        ]
+        self.assertIn("flex: 0 0 auto;", evergreen_css)
+        self.assertIn("overflow-y: auto;", evergreen_css)
 
     def test_current_sessions_respect_inprogress_window_filter(self):
         """Current sessions should use the same 1d/7d/All window as by-objects."""

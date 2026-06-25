@@ -3921,6 +3921,19 @@
     flex: 1 1 auto;
     max-height: none;
   }
+  .conv-evergreen-agents-header {
+    flex: 0 0 auto;
+    margin: 6px 2px 0 0;
+    border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+    background: color-mix(in srgb, var(--surface-2) 44%, var(--bg));
+  }
+  .conv-evergreen-agents-scroll {
+    flex: 0 0 auto;
+    max-height: clamp(96px, 18vh, 240px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 2px;
+  }
   .conv-project-tree { padding-left: 7px; }
   .conv-project-tree .conv-folder-group { margin: 0; }
   /* Kill the default group vertical rail — we use a per-row border-left

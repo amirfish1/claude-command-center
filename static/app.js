@@ -20049,6 +20049,8 @@
       const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();
       const _objectHasVisibleDrafts = (node) =>
         (flowDraftSessions || []).some(d => d && flowNodeParents[flowNodeKey('draft-session', d.id)] === node);
+      const _isEvergreenAgentsObjectTitle = (title) =>
+        String(title || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '') === 'evergreenagents';
       for (const c of _visibleSessionConvs) {
         const grp = _groupForSession(c);
         if (grp && grp.archived) continue;
@@ -20082,6 +20084,12 @@
         const bMax = b[1].cards.reduce((m, c) => Math.max(m, c.modified || 0), 0);
         return bMax - aMax;
       });
+      const _evergreenObjectNodes = new Set();
+      for (const [nodeId, group] of _objEntries) {
+        if (nodeId.indexOf('object:') === 0 && _isEvergreenAgentsObjectTitle((group && group.title) || '')) {
+          _evergreenObjectNodes.add(nodeId);
+        }
+      }
       const _renderObjGroup = (nodeId, title, cards, depth = 0, ordinal = 0) => {
         // Stable per-node hue so each group keeps its color across renders.
         let hash = 0;
@@ -20187,7 +20195,10 @@
       for (const [nodeId] of _objEntries) {
         const p = _objParentOf(nodeId);
         if (p) { (_childrenOf.get(p) || _childrenOf.set(p, []).get(p)).push(nodeId); }
-        else { _objRoots.push(nodeId); }
+        else {
+          if (_evergreenObjectNodes.has(nodeId)) continue;
+          _objRoots.push(nodeId);
+        }
       }
       // Aggregate session count = a node's own cards + all descendants'. A
       // collapsed parent shows the real weight it hides instead of "0".
@@ -20202,7 +20213,7 @@
         return total;
       };
       const _emittedObj = new Set();
-      const _emitObjTree = (nodeId, depth, ordinal = 0) => {
+      const _emitObjTree = (nodeId, depth, ordinal = 0, opts = {}) => {
         if (_emittedObj.has(nodeId)) return '';   // cycle / dup guard
         _emittedObj.add(nodeId);
         const group = _byObject.get(nodeId);
@@ -20210,10 +20221,20 @@
         let html = _renderObjGroup(nodeId, group.title, group.cards, depth, ordinal);
         // A collapsed parent hides its whole subtree — skip recursing.
         if (_isFolderGroupCollapsed('inprogress', nodeId)) return html;
-        (_childrenOf.get(nodeId) || []).forEach((k, i) => { html += _emitObjTree(k, depth + 1, i + 1); });
+        const includeEvergreen = !!(opts && opts.includeEvergreen);
+        (_childrenOf.get(nodeId) || [])
+          .filter(k => includeEvergreen || !_evergreenObjectNodes.has(k))
+          .forEach((k, i) => { html += _emitObjTree(k, depth + 1, i + 1, opts); });
         return html;
       };
       const _objGroupsHtml = _objRoots.map(n => _emitObjTree(n, 0, 0)).join('');
+      const _evergreenRoots = Array.from(_evergreenObjectNodes)
+        .filter(n => !_evergreenObjectNodes.has(_objParentOf(n) || ''));
+      const _evergreenAgentsHtml = _evergreenRoots.length
+        ? '<div class="conv-project-tree conv-evergreen-agents-tree">'
+          + _evergreenRoots.map((n, i) => _emitObjTree(n, 0, i + 1, { includeEvergreen: true })).join('')
+          + '</div>'
+        : '';
       // Codex-layout: stacked regions in the by-objects view.
       //  1) "Current sessions" — every session active in the selected window
       //     (the live triage list), flat, regardless of object attachment. During search,
@@ -20288,6 +20309,12 @@
       const _projectTreeHeaderHtml = _projectTreeHtml
         ? '<div class="conv-objects-section-label conv-project-tree-header" data-role="project-tree-header">Project tree</div>'
         : '';
+      const _evergreenAgentsHeaderHtml = _evergreenAgentsHtml
+        ? '<div class="conv-objects-section-label conv-evergreen-agents-header" data-role="evergreen-agents-header">Evergreen Agents</div>'
+        : '';
+      const _evergreenAgentsScrollHtml = _evergreenAgentsHtml
+        ? '<div class="conv-evergreen-agents-scroll" data-role="evergreen-agents-scroll">' + _evergreenAgentsHtml + '</div>'
+        : '';
       const _currentIds = new Set(_currentSessions.map(c => c.session_id || c.id));
       const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));
       const _looseHtml = _looseRest.length
@@ -20304,7 +20331,7 @@
       const _objectsSplitHandleHtml = (_currentSessionsScrollHtml && _projectTreeScrollHtml)
         ? '<div class="conv-objects-splitter" data-role="objects-splitter" role="separator" aria-orientation="horizontal" title="Drag to resize Current sessions"></div>'
         : '';
-      _activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml;
+      _activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;
     } else if (_shouldGroupByFolder) {
       // Group cards by folder; preserve folder order by the most
       // recent card in each group (freshest folder appears first).
