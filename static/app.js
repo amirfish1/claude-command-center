@@ -10578,9 +10578,21 @@
       }
       const draftById = new Map((flowDraftSessions || []).filter(d => d && d.id).map(d => [d.id, d]));
       for (const sd of (server.drafts || [])) {
-        if (sd && sd.id && !draftById.has(sd.id)) {
+        if (!sd || !sd.id) continue;
+        const localDraft = draftById.get(sd.id);
+        if (!localDraft) {
           flowDraftSessions.push(Object.assign({ repo_path: '' }, sd));
           draftById.set(sd.id, sd);
+          changed = true;
+        } else if (sd.prompt
+            && sd.prompt !== localDraft.prompt
+            && sd.prompt.length > (localDraft.prompt || '').length
+            && (!localDraft.prompt || localDraft.prompt === (localDraft.title || ''))) {
+          // Self-heal: the local copy has an empty or flattened prompt (prompt
+          // never set, or collapsed to the title by an older title-edit) while
+          // the server holds a richer one. Adopt it. Guarded so a genuine local
+          // edit (prompt that differs from the title) is never clobbered.
+          localDraft.prompt = sd.prompt;
           changed = true;
         }
       }
@@ -12043,8 +12055,15 @@
   function saveFlowDraftInput(id, value) {
     const draft = flowDraftSessions.find(d => d && d.id === id);
     if (!draft) return;
+    const prevTitle = draft.title || '';
     draft.title = String(value || '');
-    draft.prompt = draft.title;
+    // Keep the prompt independent once it diverges from the title: only mirror
+    // title -> prompt while they are still identical (a quick one-line draft
+    // never given a distinct full prompt). Stops a row rename from destroying a
+    // rich prompt authored in the inspector.
+    if (!draft.prompt || draft.prompt === prevTitle) {
+      draft.prompt = draft.title;
+    }
     draft.updated_at = Date.now();
     persistFlowDraftSessions();
   }
@@ -12551,15 +12570,20 @@
     const draft = (flowDraftSessions || []).find(d => d && d.id === draftId);
     if (!draft) return null;
     const nodeId = flowNodeKey('draft-session', draft.id);
+    const _created = flowTimestampSec(draft.created_at);
+    const _addedLabel = _created
+      ? 'Added ' + new Date(_created * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+      : '';
     return {
       ok: true,
       kind: 'draft-session',
       node_id: nodeId,
       object_id: draft.id,
+      draft_id: draft.id,
       repo_path: draft.repo_path || '',
-      state_path: 'Local draft task',
-      title: flowDraftPrompt(draft) || 'Draft session',
-      content: flowDraftInspectorContent(draft),
+      state_path: ['Local draft task', _addedLabel].filter(Boolean).join(' \u00b7 '),
+      title: draft.title || flowDraftPrompt(draft) || 'Draft session',
+      content: flowDraftPrompt(draft),
       fields: { status: 'draft' },
       mtime: flowTimestampSec(draft.updated_at || draft.created_at),
     };
@@ -12704,7 +12728,9 @@
       data.state_path,
     ].filter(Boolean).join(' · ');
     const actionButtons = isDraftSession
-      ? ''
+      ? '<button type="button" class="flow-inspector-tab" data-flow-inspector-tab="edit" aria-pressed="false">Edit prompt</button>'
+        + '<button type="button" class="flow-inspector-btn" data-flow-inspector-action="draft-save">Save</button>'
+        + '<button type="button" class="flow-inspector-btn flow-inspector-btn-primary" data-flow-inspector-action="draft-play">&#9654; Play</button>'
       : '<button type="button" class="flow-inspector-tab" data-flow-inspector-tab="edit" aria-pressed="false">Edit</button>'
         + '<button type="button" class="flow-inspector-btn" data-flow-inspector-action="save">Save</button>'
         + '<button type="button" class="flow-inspector-btn" data-flow-inspector-action="refresh">Refresh auto sections</button>'
@@ -12815,6 +12841,23 @@
     }
   }
 
+  function saveFlowDraftInspector(root, opts) {
+    if (!root || !root._flowInspectorState) return false;
+    const state = root._flowInspectorState;
+    const id = state.draft_id || state.object_id || '';
+    const draft = (flowDraftSessions || []).find(d => d && d.id === id);
+    const editor = root.querySelector('[data-flow-inspector-editor]');
+    if (!draft || !editor) return false;
+    draft.prompt = editor.value || '';
+    if (!draft.title) draft.title = sessionSubjectFromPrompt(draft.prompt);
+    draft.updated_at = Date.now();
+    persistFlowDraftSessions();
+    flowInspectorRenderMarkdown(root);
+    if (!(opts && opts.silent)) flowInspectorSetStatus(root, 'Saved', 'ok');
+    try { renderSidebar(filterConversations($convSearch ? $convSearch.value : ''), { force: true }); } catch (_) {}
+    return true;
+  }
+
   function wireFlowNodeInspector(root) {
     if (!root || root.dataset.flowInspectorWired) return;
     root.dataset.flowInspectorWired = '1';
@@ -12830,6 +12873,15 @@
     }
     const saveBtn = root.querySelector('[data-flow-inspector-action="save"]');
     if (saveBtn) saveBtn.addEventListener('click', () => flowInspectorSave(root));
+    const draftSaveBtn = root.querySelector('[data-flow-inspector-action="draft-save"]');
+    if (draftSaveBtn) draftSaveBtn.addEventListener('click', () => saveFlowDraftInspector(root));
+    const draftPlayBtn = root.querySelector('[data-flow-inspector-action="draft-play"]');
+    if (draftPlayBtn) draftPlayBtn.addEventListener('click', () => {
+      saveFlowDraftInspector(root, { silent: true });
+      const st = root._flowInspectorState || {};
+      const did = st.draft_id || st.object_id || '';
+      if (did) playFlowDraftSession(did);
+    });
     const refreshBtn = root.querySelector('[data-flow-inspector-action="refresh"]');
     if (refreshBtn) refreshBtn.addEventListener('click', () => flowInspectorRefresh(root));
     const openBtn = root.querySelector('[data-flow-inspector-action="open-file"]');
