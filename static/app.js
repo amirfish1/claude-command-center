@@ -31629,9 +31629,17 @@
       _moveToHome('historyStatusPill', $settingsSlot);
       _moveToHome('kptWorktreesBtn',   $settingsSlot);
       _moveToHome('statsBtn',          $settingsSlot);
+      _moveToHome('todayToggleBtn',    $settingsSlot);
+      _moveToHome('annotationNotesBtn', $settingsSlot);
+      _moveToHome('cooPopButton',      $settingsSlot);
       if ($toolbar) {
         const fontCtrls = $toolbar.querySelector('.font-size-controls');
         if (fontCtrls) $settingsSlot.appendChild(fontCtrls);
+      }
+      if (window.MutationObserver) {
+        const cooMoveObserver = new MutationObserver(() => _moveToHome('cooPopButton', $settingsSlot));
+        cooMoveObserver.observe(document.body, { childList: true, subtree: true });
+        setTimeout(() => cooMoveObserver.disconnect(), 8000);
       }
     }
     // Report a bug sits at the very left of the sidebar header action
@@ -31663,9 +31671,14 @@
     //   4. Close & announce (rarer)
     //   5. Jump / Pkood-kill (state-conditional)
     //   6. Footer cluster: Session ID + overflow menu
+    _captureRailEl(document.getElementById('cccBreadcrumb'));
+    _captureRailEl(document.getElementById('convStatus'));
     _captureRailEl(document.getElementById('liveBadgeConv'));
+    _captureRailEl(document.getElementById('topbarTtsControl'));
     _captureRailEl(document.getElementById('launchWrapConv'));
     _captureRailEl(document.getElementById('deployPill'));
+    _captureRailEl(document.getElementById('annotationStartBtn'));
+    _captureRailEl(document.getElementById('annotationScreenBtn'));
     // Capture the WHOLE localhost wrap (pill + caret dropdown + menu), not just
     // the pill — otherwise the rail relocates the bare pill and orphans the
     // CCC-172 caret/menu back in the (hidden) topbar, so the rail view shows no

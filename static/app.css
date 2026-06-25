@@ -12008,6 +12008,18 @@ body.status-pos-right.status-rail-collapsed .conv-pane > .conv-input-context {
 .rail-actions .launch-split { display: flex; gap: 0; padding: 0; border: none; }
 .rail-actions .launch-split .launch-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; flex: 1 1 auto; }
 .rail-actions .launch-split .launch-choice-btn { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; padding: 6px 8px; flex: 0 0 auto; width: auto; }
+.rail-actions #cccBreadcrumb,
+.rail-actions #convStatus {
+  flex: 1 1 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.rail-actions #cccBreadcrumb {
+  padding: 6px 8px;
+}
+.rail-actions #convStatus {
+  color: var(--text-muted);
+}
 /* The deploy pill is an <a>; keep the deploy-dot color cue. */
 .rail-actions #deployPill .deploy-dot {
   width: 8px; height: 8px; border-radius: 50%;

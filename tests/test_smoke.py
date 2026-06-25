@@ -2373,6 +2373,23 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("overflow-y: visible;", activity_css)
         self.assertNotIn("flex: 1 1 auto;", activity_css)
 
+    def test_toolbar_controls_move_to_settings_and_metadata_rail(self):
+        """Right-rail mode should empty the crowded conversation topbar."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("_moveToHome('todayToggleBtn',    $settingsSlot);", app_js)
+        self.assertIn("_moveToHome('annotationNotesBtn', $settingsSlot);", app_js)
+        self.assertIn("_moveToHome('cooPopButton',      $settingsSlot);", app_js)
+        self.assertIn("cooMoveObserver.observe(document.body, { childList: true, subtree: true });", app_js)
+        self.assertIn("_captureRailEl(document.getElementById('cccBreadcrumb'));", app_js)
+        self.assertIn("_captureRailEl(document.getElementById('convStatus'));", app_js)
+        self.assertIn("_captureRailEl(document.getElementById('topbarTtsControl'));", app_js)
+        self.assertIn("_captureRailEl(document.getElementById('annotationStartBtn'));", app_js)
+        self.assertIn("_captureRailEl(document.getElementById('annotationScreenBtn'));", app_js)
+        self.assertIn(".rail-actions #cccBreadcrumb,\n.rail-actions #convStatus {", app_css)
+        self.assertIn("flex: 1 1 100%;", app_css)
+
     def test_files_sidebar_sorts_by_recent_mentions(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("function _ffcRecencyLine(row)", app_js)
