@@ -2015,7 +2015,9 @@ class TestServerImports(unittest.TestCase):
         ]
         self.assertIn("-webkit-appearance: none;", input_css)
         self.assertIn("appearance: none;", input_css)
-        self.assertIn("background: transparent !important;", input_css)
+        self.assertNotIn("background: transparent !important;", input_css)
+        self.assertIn("background: var(--bg) !important;", input_css)
+        self.assertIn("background-color: var(--bg) !important;", input_css)
         self.assertIn("background-image: none !important;", input_css)
         self.assertIn("box-shadow: none;", input_css)
 

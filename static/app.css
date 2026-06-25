@@ -5081,7 +5081,10 @@
     border: none; outline: none;
     -webkit-appearance: none;
     appearance: none;
-    background: transparent !important;
+    /* WKWebView can expose the native macOS textarea backing through a
+       transparent control; paint the composer background explicitly. */
+    background: var(--bg) !important;
+    background-color: var(--bg) !important;
     background-image: none !important;
     box-shadow: none;
     /* Brighter than --text (#c9d1d9) so the prompt has the same legibility
