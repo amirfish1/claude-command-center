@@ -7595,9 +7595,40 @@ def _flow_index_payload():
 SIDECAR_STATE_DIR = Path.home() / ".claude" / "command-center" / "live-state"
 HOOK_SCRIPTS_DIR = Path.home() / ".claude" / "command-center" / "hooks"
 HOOK_MARKER = "command-center/hooks/"
+CCC_HOOK_SCRIPT_NAMES = ("pre-tool-use.py", "post-tool-use.py", "notification.py", "stop.py")
 # Legacy marker (pre-rename) — kept so ensure_hooks_installed can detect old
 # entries in ~/.claude/settings.json and rewrite them to the new path.
 HOOK_MARKER_LEGACY = "log-viewer/hooks/"
+
+
+def _hook_python_executable():
+    """Absolute Python executable for Claude Code hook commands."""
+    exe = sys.executable or ""
+    if exe and not os.path.isabs(exe):
+        exe = shutil.which(exe) or exe
+    if not exe:
+        exe = shutil.which("python3") or shutil.which("python") or "python3"
+    return exe
+
+
+def _hook_script_command(script_path):
+    return f"{shlex.quote(_hook_python_executable())} {shlex.quote(str(script_path))}"
+
+
+def _ccc_hook_command(script_name):
+    return _hook_script_command(HOOK_SCRIPTS_DIR / script_name)
+
+
+def _normalize_ccc_hook_command(command):
+    """Return a PATH-independent command for CCC hook script entries."""
+    if not isinstance(command, str):
+        return command, False
+    rewritten = command.replace(HOOK_MARKER_LEGACY, HOOK_MARKER)
+    for script_name in CCC_HOOK_SCRIPT_NAMES:
+        if script_name in rewritten and HOOK_MARKER in rewritten:
+            normalized = _ccc_hook_command(script_name)
+            return normalized, normalized != command
+    return rewritten, rewritten != command
 
 # Spawned headless Claude sessions
 _spawned_sessions = []  # [{pid, name, log, proc}]
@@ -19122,7 +19153,7 @@ def _session_status_is_busy(status):
     return (status.get("status") or "").lower() in _BUSY_SESSION_STATUSES
 
 
-_CCC_HOOK_SCRIPTS = ("pre-tool-use.py", "post-tool-use.py", "notification.py", "stop.py")
+_CCC_HOOK_SCRIPTS = CCC_HOOK_SCRIPT_NAMES
 
 
 def _is_ccc_hook_command(command):
@@ -47149,7 +47180,7 @@ def ensure_hooks_installed():
     import shutil
     repo_hooks = CCC_ROOT / "hooks"
     HOOK_SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
-    for name in ("post-tool-use.py", "pre-tool-use.py", "notification.py", "stop.py"):
+    for name in CCC_HOOK_SCRIPT_NAMES:
         src = repo_hooks / name
         if not src.exists():
             continue
@@ -47173,16 +47204,18 @@ def ensure_hooks_installed():
 
     hooks = settings.setdefault("hooks", {})
 
-    # Rewrite any legacy `log-viewer/hooks/` paths in existing entries so
-    # users who installed under the old name keep working without a manual edit.
-    rewrote_legacy = False
-    for kind in ("PostToolUse", "Stop"):
+    # Rewrite CCC-owned hook entries to use an absolute Python executable. Claude
+    # Code hook environments can run with a minimal PATH, where bare `python3`
+    # exits 127 before our script even starts.
+    rewrote_hooks = False
+    for kind in ("PreToolUse", "PostToolUse", "Notification", "Stop"):
         for entry in hooks.get(kind, []) or []:
             for h in entry.get("hooks", []) or []:
                 cmd = h.get("command", "")
-                if HOOK_MARKER_LEGACY in cmd:
-                    h["command"] = cmd.replace(HOOK_MARKER_LEGACY, HOOK_MARKER)
-                    rewrote_legacy = True
+                normalized, changed = _normalize_ccc_hook_command(cmd)
+                if changed:
+                    h["command"] = normalized
+                    rewrote_hooks = True
 
     # PreToolUse hook — writes an in-flight marker so the dashboard can show
     # "running X for Ns" while a long tool is still executing, and blocks on a
@@ -47199,7 +47232,7 @@ def ensure_hooks_installed():
             "matcher": "",
             "hooks": [{
                 "type": "command",
-                "command": f"python3 {HOOK_SCRIPTS_DIR / 'pre-tool-use.py'}",
+                "command": _ccc_hook_command("pre-tool-use.py"),
                 "timeout": PRETOOLUSE_HOOK_TIMEOUT,
             }]
         })
@@ -47209,12 +47242,12 @@ def ensure_hooks_installed():
         # timeout so AskUserQuestion relay can block until answered.
         for entry in pre_tool_hooks:
             for h in entry.get("hooks", []) or []:
-                cmd = h.get("command", "")
-                if ("pre-tool-use.py" in cmd and HOOK_MARKER in cmd
-                        and h.get("timeout") != PRETOOLUSE_HOOK_TIMEOUT):
-                    h["timeout"] = PRETOOLUSE_HOOK_TIMEOUT
-                    rewrote_legacy = True
-                    print("  [hooks] Set PreToolUse hook timeout for question relay")
+                    cmd = h.get("command", "")
+                    if ("pre-tool-use.py" in cmd and HOOK_MARKER in cmd
+                            and h.get("timeout") != PRETOOLUSE_HOOK_TIMEOUT):
+                        h["timeout"] = PRETOOLUSE_HOOK_TIMEOUT
+                        rewrote_hooks = True
+                        print("  [hooks] Set PreToolUse hook timeout for question relay")
 
     # PostToolUse hook
     post_tool_hooks = hooks.setdefault("PostToolUse", [])
@@ -47228,7 +47261,7 @@ def ensure_hooks_installed():
             "matcher": "",
             "hooks": [{
                 "type": "command",
-                "command": f"python3 {HOOK_SCRIPTS_DIR / 'post-tool-use.py'}"
+                "command": _ccc_hook_command("post-tool-use.py")
             }]
         })
         print("  [hooks] Installed PostToolUse hook")
@@ -47248,7 +47281,7 @@ def ensure_hooks_installed():
             "matcher": "",
             "hooks": [{
                 "type": "command",
-                "command": f"python3 {HOOK_SCRIPTS_DIR / 'notification.py'}"
+                "command": _ccc_hook_command("notification.py")
             }]
         })
         print("  [hooks] Installed Notification hook")
@@ -47265,19 +47298,19 @@ def ensure_hooks_installed():
             "matcher": "",
             "hooks": [{
                 "type": "command",
-                "command": f"python3 {HOOK_SCRIPTS_DIR / 'stop.py'}"
+                "command": _ccc_hook_command("stop.py")
             }]
         })
         print("  [hooks] Installed Stop hook")
 
     if (not has_pre_tool or not has_post_tool or not has_notification
-            or not has_stop or rewrote_legacy):
+            or not has_stop or rewrote_hooks):
         tmp_path = settings_path.with_suffix(".tmp")
         try:
             tmp_path.write_text(json.dumps(settings, indent=4) + "\n")
             tmp_path.replace(settings_path)
-            if rewrote_legacy:
-                print("  [hooks] Migrated legacy `log-viewer/hooks/` paths in settings.json")
+            if rewrote_hooks:
+                print("  [hooks] Normalized Claude Code hook commands in settings.json")
             print("  [hooks] settings.json updated")
         except OSError as e:
             print(f"  [hooks] Failed to write settings.json: {e}")

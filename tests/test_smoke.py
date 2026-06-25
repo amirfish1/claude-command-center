@@ -8268,6 +8268,64 @@ class TestQuestionRelay(unittest.TestCase):
             "python3 /Users/x/.claude/command-center/hooks/pre-tool-use.py"))
         self.assertFalse(self.server._is_ccc_hook_command("bash -c 'npm test'"))
 
+    def test_hook_installer_migrates_python_hooks_to_absolute_interpreter(self):
+        """Hook commands must not depend on Claude Code's PATH containing python3."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp)
+            installed_hooks = home / ".claude" / "command-center" / "hooks"
+            settings_path = home / ".claude" / "settings.json"
+            settings_path.parent.mkdir(parents=True)
+            settings_path.write_text(json.dumps({
+                "hooks": {
+                    "PreToolUse": [{
+                        "matcher": "",
+                        "hooks": [{
+                            "type": "command",
+                            "command": f"python3 {installed_hooks / 'pre-tool-use.py'}",
+                        }],
+                    }],
+                    "PostToolUse": [{
+                        "matcher": "",
+                        "hooks": [{
+                            "type": "command",
+                            "command": f"python3 {installed_hooks / 'post-tool-use.py'}",
+                        }],
+                    }],
+                    "Notification": [{
+                        "matcher": "",
+                        "hooks": [{
+                            "type": "command",
+                            "command": f"python3 {installed_hooks / 'notification.py'}",
+                        }],
+                    }],
+                    "Stop": [{
+                        "matcher": "",
+                        "hooks": [{
+                            "type": "command",
+                            "command": f"python3 {installed_hooks / 'stop.py'}",
+                        }],
+                    }],
+                },
+            }))
+
+            with mock.patch.object(self.server.Path, "home", return_value=home), \
+                 mock.patch.object(self.server, "HOOK_SCRIPTS_DIR", installed_hooks), \
+                 mock.patch.object(self.server.sys, "executable", "/opt/ccc-test/python3"):
+                self.server.ensure_hooks_installed()
+
+            settings = json.loads(settings_path.read_text())
+            commands = [
+                h["command"]
+                for entries in settings["hooks"].values()
+                for entry in entries
+                for h in entry.get("hooks", [])
+                if "command-center/hooks/" in h.get("command", "")
+            ]
+            self.assertEqual(len(commands), 4)
+            for command in commands:
+                self.assertTrue(command.startswith("/opt/ccc-test/python3 "), command)
+                self.assertNotIn("python3 ", command[:8])
+
 
 class TestQuestionRelayHook(unittest.TestCase):
     """The PreToolUse hook's answer-rendering logic (hooks/pre-tool-use.py)."""
