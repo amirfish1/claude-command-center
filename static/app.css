@@ -4132,9 +4132,9 @@
     height: 20px;
     padding: 2px 7px;
     border-radius: 4px;
-    background: rgba(154, 173, 194, 0.14);
-    border-color: rgba(154, 173, 194, 0.26);
-    color: color-mix(in srgb, var(--text) 82%, var(--text-muted));
+    background: hsla(var(--chip-hue), 60%, 50%, 0.18);
+    border-color: hsla(var(--chip-hue), 55%, 50%, 0.35);
+    color: hsl(var(--chip-hue), 55%, 65%);
     font-size: 11px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     text-align: left;

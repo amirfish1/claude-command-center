@@ -1078,7 +1078,10 @@ class TestServerImports(unittest.TestCase):
         ]
         self.assertIn("font-size: 11px;", hover_chip_css)
         self.assertIn("height: 20px;", hover_chip_css)
-        self.assertIn("color: color-mix(in srgb, var(--text) 82%, var(--text-muted));", hover_chip_css)
+        self.assertIn("background: hsla(var(--chip-hue), 60%, 50%, 0.18);", hover_chip_css)
+        self.assertIn("border-color: hsla(var(--chip-hue), 55%, 50%, 0.35);", hover_chip_css)
+        self.assertIn("color: hsl(var(--chip-hue), 55%, 65%);", hover_chip_css)
+        self.assertNotIn("background: rgba(154, 173, 194, 0.14);", hover_chip_css)
         hover_badge_css = app_css[
             app_css.index(".conv-item .conv-hover-meta-row .branch-badge,"):
             app_css.index(".conv-item .conv-hover-meta-row .conv-goal .conv-goal-icon", app_css.index(".conv-item .conv-hover-meta-row .branch-badge,"))

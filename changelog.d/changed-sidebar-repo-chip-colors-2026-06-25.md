@@ -1,0 +1,1 @@
+- Restore hue-based colorful backgrounds for repository chips in sidebar row previews.
