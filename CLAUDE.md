@@ -131,6 +131,12 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 
 Don't mock external systems (`gh`, `claude`, `pkood`) in the smoke test. The smoke test is about import-time correctness, not behavior.
 
+### Browser / UI verification
+
+To verify UI changes visually, this repo uses **puppeteer** (dependency `puppeteer`), via `snapshot.js` — `node snapshot.js` launches headless Chrome, loads `http://127.0.0.1:8090`, and writes `snapshot.png`. Puppeteer's browser lives in `~/.cache/puppeteer` (separate from any Playwright cache). The `chrome-devtools` MCP also works (drives real Chrome) for interactive checks.
+
+**Do not reach for Playwright.** It is *not* a CCC dependency — "cannot import playwright" / "Playwright browser executable missing" means you picked the wrong tool, not that something is broken. Use `snapshot.js` or chrome-devtools. **Chromium is sufficient**; no WebKit/Firefox needed.
+
 ## Performance gates
 
 Every "CCC is slow" incident has been the same bug: a user-facing path doing
