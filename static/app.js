@@ -20562,7 +20562,13 @@
     if ($convList && !document.hidden && !_userIsTyping && !_skipFlipForTouchScroll) {
       for (const row of $convList.querySelectorAll('[data-id]')) {
         const id = row.getAttribute('data-id');
-        if (id) _flipBefore.set(id, row.getBoundingClientRect().top);
+        // First occurrence wins: a session can appear TWICE now (the Current
+        // sessions triage list AND its row in the Project tree map). Keying the
+        // map by id alone let the lower (tree) instance overwrite the upper one,
+        // so after the rebuild the FLIP compared the top instance against the
+        // tree's old position → a huge phantom delta → 7 rows "moved" every
+        // render. Track only the first instance per id.
+        if (id && !_flipBefore.has(id)) _flipBefore.set(id, row.getBoundingClientRect().top);
       }
     }
     // WKWebView blurs any focused input adjacent to an innerHTML swap.
@@ -20590,9 +20596,15 @@
     if (_flipBefore.size > 0 && !document.hidden) {
       const _flipNewRows = $convList.querySelectorAll('[data-id]');
       const _flipMoves = [];
+      const _flipSeen = new Set();
       for (const row of _flipNewRows) {
         const id = row.getAttribute('data-id');
         if (!id) continue;
+        // Match the first-occurrence-wins capture above: only animate the first
+        // instance of a duplicated id (Current sessions row), never its Project
+        // tree twin — otherwise both animate from one stored position.
+        if (_flipSeen.has(id)) continue;
+        _flipSeen.add(id);
         const oldTop = _flipBefore.get(id);
         if (oldTop === undefined) continue;
         const newTop = row.getBoundingClientRect().top;
