@@ -1,1 +1,0 @@
-- Tightened the Active sidebar by removing the redundant In Progress header, appending new object tasks below existing drafts, and showing Codex working state in rows and the conversation pane.

@@ -1,1 +1,0 @@
-- Mobile conversation rows now avoid first-tap drag interception and defer sidebar refreshes while the list is scrolling.

@@ -1,1 +1,0 @@
-- Keep Current sessions titles visually plain while preserving rename and AI markers in the rest of the sidebar.

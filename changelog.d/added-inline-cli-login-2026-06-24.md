@@ -1,1 +1,0 @@
-- Added inline CLI login for headless onboarding so Claude Code and Codex auth can run inside CCC without SSHing into the host.

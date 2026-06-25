@@ -1,1 +1,0 @@
-- Align By objects draft task rows with real child sessions in the project tree.

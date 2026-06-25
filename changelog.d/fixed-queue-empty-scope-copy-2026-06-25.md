@@ -1,1 +1,0 @@
-- Clarify the Queue tab empty state by showing the scoped project and whether tickets exist in other projects.

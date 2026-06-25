@@ -1,1 +1,0 @@
-- Add an inline Steer action on Codex user messages so previous prompts can steer the running turn directly.

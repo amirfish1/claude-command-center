@@ -1,1 +1,0 @@
-- Restore sidebar search-result previews in the By objects current-sessions band.

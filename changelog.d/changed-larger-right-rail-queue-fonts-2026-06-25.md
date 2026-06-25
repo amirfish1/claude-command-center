@@ -1,1 +1,0 @@
-- Increase right-rail Queue tab typography so ticket rows and empty states are easier to read.

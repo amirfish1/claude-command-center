@@ -1,1 +1,0 @@
-- Fixed by-object hierarchy controls so bulk collapse hides sessions while keeping objects visible, chevrons collapse nested object subtrees immediately, and level colors avoid the purple nested chip.

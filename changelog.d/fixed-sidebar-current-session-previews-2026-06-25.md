@@ -1,1 +1,0 @@
-- Restore Current Sessions hover previews and keep left-side model icons from overlapping row titles.

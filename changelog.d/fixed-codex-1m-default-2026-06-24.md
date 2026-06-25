@@ -1,1 +1,0 @@
-Codex new-session defaults keep `gpt-5.5` as the best-model default while still requesting `model_context_window=1000000`; choose `gpt-5.4` explicitly when the larger effective context window matters more than model quality.

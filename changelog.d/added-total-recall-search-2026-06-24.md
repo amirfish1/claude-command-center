@@ -1,1 +1,0 @@
-- Conversation search now augments local and claude-index matches with Total Recall session hits, filtering out knowledge/document results so the sidebar remains a sessions-only search surface.

@@ -1,1 +1,0 @@
-Sidebar rows now keep object header actions hidden until hover or keyboard focus, label session outcome summaries as muted DONE metadata, identify COO status pills, and render silent Codex completions as quiet non-stuck status rows.

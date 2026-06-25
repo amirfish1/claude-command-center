@@ -1,1 +1,0 @@
-- Label Codex turns with no recorded assistant text as “No visible response” instead of an ordinary Done card.

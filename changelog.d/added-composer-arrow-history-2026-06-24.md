@@ -1,1 +1,0 @@
-- Added ArrowUp recall for the last sent composer command when the input is empty.

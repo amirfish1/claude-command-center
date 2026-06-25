@@ -1,1 +1,0 @@
-Added `POST /api/coo/tracked` — persists the COO row-checkbox tracked-session set to `coo-notes.json` as a top-level `tracked` array, so a shell Monitor and the `/api/sessions/events` SSE stream share one source of truth with the dashboard checkboxes. The browser mirrors toggles to the server (fire-and-forget) and a fresh browser seeds its set from the file.

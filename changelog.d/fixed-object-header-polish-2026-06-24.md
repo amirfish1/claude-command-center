@@ -1,1 +1,0 @@
-- Polish by-objects headers with uppercase root titles, title-click expansion, and larger chevrons.

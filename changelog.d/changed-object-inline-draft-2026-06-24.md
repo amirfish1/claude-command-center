@@ -1,1 +1,0 @@
-- Make sidebar + object create a visible draft object and start inline rename instead of opening a naming dialog.

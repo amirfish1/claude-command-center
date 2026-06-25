@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.0] - 2026-06-25
+
+### Added
+- By-objects view now includes Expand all and Collapse all controls for object groups.
+- Conversation rows now show a codex session's current **goal** as an inline chip after the title. The objective and status come from codex's native `/goal` feature (read server-side from `~/.codex/goals_1.sqlite` in one batched, cached snapshot — no per-row work), colored by status: active = green, paused/blocked/usage-or-budget-limited = amber, complete = muted. Goal set/clear reflects on the next serve without waiting for a transcript rebuild.
+- Show Codex session goals above the composer and distinguish paused or blocked goals in session rows.
+- Codex `/goal` now works on **dormant** sessions, not just a live TUI. `/goal <objective>` and `/goal clear` route through the app-server RPCs (`thread/goal/set` / `thread/goal/clear`) when the session has no live terminal, instead of bouncing `codex_slash_requires_live_tui` — mirroring how `/compact` already drives codex. The `pause`/`resume`/`edit` subcommands have no RPC and still require a live TUI. (Only reaches threads CCC's own app-server owns; a goal set in Codex.app's own UI is out of reach.)
+- Added ArrowUp recall for the last sent composer command when the input is empty.
+- Added a **COO board** — an at-a-glance live-status view of the sessions you're tracking, opened from a new **COO** button in the topbar (left of Today) or the `/coo` route. Starts empty and tracks whichever sessions you add.
+- Added `POST /api/coo/tracked` — persists the COO row-checkbox tracked-session set to `coo-notes.json` as a top-level `tracked` array, so a shell Monitor and the `/api/sessions/events` SSE stream share one source of truth with the dashboard checkboxes. The browser mirrors toggles to the server (fire-and-forget) and a fresh browser seeds its set from the file.
+- Add a compact copy button on successful transcript Done rows to copy the preceding agent answer.
+- Add a by-objects row action to elevate a session into its own new object.
+- Add goal-strip actions so Codex goals can be edited, cleared, paused, or resumed directly from the conversation view.
+- Added inline CLI login for headless onboarding so Claude Code and Codex auth can run inside CCC without SSHing into the host.
+- By-objects headers now include an archive button for custom objects; archived objects and their rows leave the active by-objects conversation view.
+- Added `GET /api/sessions/events` — a Server-Sent Events stream that pushes session-state changes (state, question_waiting, needs_approval) to subscribers, so a monitor session can react to changes instead of polling `/api/sessions` on a timer. Sends a baseline snapshot on connect, then deltas, with a `: keepalive` comment every ~20s.
+- By-objects view now supports Cmd/Ctrl/Shift-selecting multiple conversation rows and dragging them together into an object, with edge auto-scroll while dragging through long lists.
+- Added System Health rows for shared GUI app engines with graceful Quit controls for Cursor.app, Antigravity.app, and Codex.app.
+- Conversation search now augments local and claude-index matches with Total Recall session hits, filtering out knowledge/document results so the sidebar remains a sessions-only search surface.
+- Add an inline Steer action on Codex user messages so previous prompts can steer the running turn directly.
+- Sessions can now be **retired** from the UX-fixes-queue "continue" nudge watcher. Previously a worker that finished its tickets kept getting auto-nudged with `continue` forever as new tickets arrived in its project, with no off switch. New `POST /api/uxq/retire {session_id, retired?}` adds (or removes) a session from a `uxq-nudge-optout.json` skip-list the watcher honors before any ping — muting a parked session without draining the whole project queue.
+- **Worktree init docs.** Added `docs/worktree-init.md` and linked it from the README so repo-specific setup hooks for fresh worktree spawns have a clear user contract.
+
+### Changed
+- By-objects grouping now lists custom objects before repo groups, and newly created objects appear at the top of the object list.
+- Only show row-level COO tracking checkboxes after COO mode is opened, and make by-object group chevrons explicit collapse controls.
+- **Landing page copy.** Updated `ccc.amirfish.ai` metadata, hero, install command, platform language, and comparison table to match current v5 engine and Linux support.
+- Increase right-rail Queue tab typography so ticket rows and empty states are easier to read.
+- Move session provider icons into the left row rail and enlarge right-rail queue ticket text.
+- New-session folder shortcuts are now labeled as recent folder choices, and the folder dropdown is labeled as the full suggestion list.
+- By-objects groups now accept session drops in the group body below the header, and custom object names can be renamed inline from the object header.
+- Increase by-objects header title sizing for easier scanning.
+- Make sidebar + object create a visible draft object and start inline rename instead of opening a naming dialog.
+- Object rows in the by-objects view now use right-side controls for rename, play/pause, archive, and collapse.
+- Move by-object task creation into the object header action row as a compact plus button.
+- Move Files into its own right-rail tab between Metadata and Queue, while keeping Activity inside Metadata.
+- The In progress row-list header now shows **+ object** before switching to by-objects mode, and creating one switches the list to object grouping so the new target is visible.
+- Changed the right-side session rail into compact Metadata, Files, and Activity tabs.
+- Rename the Archived sidebar tab to All and show active plus archived sessions there.
+- Move sidebar row repo/source/branch metadata out of the resting state and reveal it on hover, focus, or active selection.
+- Improve sidebar hover-preview legibility, space the Project Tree header, and remove the Active view grouping toggle.
+- Put repository chips first in sidebar row previews, followed by goals, and remove engine/source labels from the preview line.
+- Keep the by-objects project tree scroll position stable across refreshes, keep the Project tree header fixed outside the tree scroller, make Current sessions resizable with brighter compact titles, avoid duplicate title tooltips in Current sessions, move row metadata and goals into hover-only detail, and limit right-rail Metadata scrolling to the Files list.
+- Move sidebar conversation search into the New session row.
+- Object rename now uses a transparent stroke pencil icon instead of the fallback glyph.
+
+### Removed
+- Remove the manual Done bucket from the Active conversation sidebar so active rows stay in their normal groups.
+
+### Fixed
+- Fixed Active search feedback and Details-off row density for conversation search results.
+- Tightened the Active sidebar by removing the redundant In Progress header, appending new object tasks below existing drafts, and showing Codex working state in rows and the conversation pane.
+- Restore normal sidebar scrolling on the All tab when Active is saved in By objects mode.
+- Preserve By objects split-pane scroll positions across periodic sidebar refreshes.
+- Fixed By objects scrolling so the left conversation list no longer scrolls as a whole; current sessions and the project tree scroll independently.
+- Align By objects draft rows with the real session rows inside object groups.
+- Fixed several Active sidebar polish issues: draggable draft tasks, quieter summary details controls, remembered conversation searches, and separate project-tree scrolling.
+- Codex new-session defaults keep `gpt-5.5` as the best-model default while still requesting `model_context_window=1000000`; choose `gpt-5.4` explicitly when the larger effective context window matters more than model quality.
+- Codex spawn logs no longer show bare `[error]` noise from benign startup stderr or unsupported async plugin hooks above an otherwise normal Thinking state.
+- Clear stale optimistic Thinking indicators when Codex compaction completes.
+- Codex inputs sent during an active app-server turn now use CCC's durable pending queue instead of a volatile app-server queue.
+- Keep Codex app-server queued follow-ups visible as queued input instead of leaving the optimistic echo stuck pending.
+- Label Codex turns with no recorded assistant text as “No visible response” instead of an ordinary Done card.
+- Codex stuck-state wake pills now show in-place feedback while a wake request is being sent.
+- Prevent compaction while a sent message is still pending in the transcript.
+- Conversation history loading now keeps hover prefetches and "Load earlier" paging bounded to transcript windows instead of full-loading large session logs.
+- Cross-repo GitHub issue and Ready to merge feeds now ignore stale recent repos that are no longer in the known repo list.
+- Keep Current sessions titles visually plain while preserving rename and AI markers in the rest of the sidebar.
+- Keep the by-objects Current sessions panel from reopening below the seven-row preview height.
+- Keep by-objects current-session rows compact so the collapsed section shows the intended seven sessions plus More before the project tree.
+- Align by-objects draft task rows with real session rows under the same object.
+- Fixed By objects draft task rows so clicking the task or its inline text opens the task details pane.
+- Claude Code hooks now use an absolute Python interpreter path, preventing PostToolUse failures when the hook environment cannot resolve `python3`.
+- **Linux installer gate.** The curl installer now accepts both macOS and Linux, keeps dependency messages platform-neutral, and opens the app with `xdg-open` when `open` is unavailable.
+- CCC.app's main window can now resize down into the dashboard's narrow single-column layout instead of being clamped at 900px wide.
+- Mobile conversation rows open from the first tap more reliably, and the conversation list avoids touch-scroll jank from per-row touch handlers and reorder measurements.
+- Mobile conversation rows now avoid first-tap drag interception and defer sidebar refreshes while the list is scrolling.
+- Remove the legacy floating mobile reload button so it no longer overlaps the composer.
+- Hide empty object hints when an object contains nested child objects.
+- Fixed the By objects view so current sessions leave room for seven rows plus More, and draft tasks align with session rows while keeping Play visible next to the task text.
+- Object draft task prompts are preserved when titles change and can be edited or launched from the draft inspector.
+- Larger by-object group titles so object rows read clearly in the active conversation list.
+- Fixed the by-objects header plus button so it creates a child object instead of a draft task.
+- Polish by-objects headers with uppercase root titles, title-click expansion, and larger chevrons.
+- Fixed by-object hierarchy controls so bulk collapse hides sessions while keeping objects visible, chevrons collapse nested object subtrees immediately, and level colors avoid the purple nested chip.
+- Keep inline object-task drafts intact when the conversation list refreshes while the user is typing.
+- Number slash-separated by-objects headers so ordered object task lists are easier to scan.
+- Kept timed-out spawn placeholders visible with retry and dismiss actions instead of silently removing them.
+- Align By objects draft task rows with real child sessions in the project tree.
+- Clarify the Queue tab empty state by showing the scoped project and whether tickets exist in other projects.
+- Let right-rail queue rows reveal more note text as the rail is widened instead of pre-truncating every note.
+- Hide empty by-objects groups while filtering conversations with search text.
+- Restore sidebar search-result previews in the By objects current-sessions band.
+- Fixed Push all ship-status polling so sessions with no concrete repo path do not repeatedly request ship status.
+- Show sidebar DONE briefs only on the selected current session instead of on hover.
+- Restore Current Sessions hover previews and keep left-side model icons from overlapping row titles.
+- Align sidebar hover metadata with session titles, center left-side model icons, and make DID briefs brighter while omitting next-step text.
+- Refine sidebar object grouping, tab order, merge-row filtering, and chip color modes.
+- Let sidebar session outcome summaries wrap in a full-width bubble instead of truncating the completed-work text.
+- Sidebar session titles now hide leading pasted-image paths so current-session rows stay focused on the actual task.
+- Sidebar rows now keep object header actions hidden until hover or keyboard focus, label session outcome summaries as muted DONE metadata, identify COO status pills, and render silent Codex completions as quiet non-stuck status rows.
+- Keep the By objects current-sessions band tall enough for seven rows plus More, and consolidate the right status rail into Metadata and Queue tabs.
+- Gave Total Recall conversation search enough time for cold starts so TR results do not disappear as timeouts.
+- Prioritized Total Recall session matches in conversation search so TR results are visible instead of buried after history hits.
+- Sidebar conversation search now paints Total Recall session matches as soon as Recall responds, instead of waiting behind the slower local history search.
+- Kept Total Recall session matches visible at the top of by-objects conversation search results instead of hiding older hits below current sessions.
+- Project-named UX-fixes worker rows now show queue progress even when claims are recorded under a worker alias.
+
 ## [5.3.0] - 2026-06-17
 
 ### Added
@@ -1704,7 +1812,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.2.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.4.0...HEAD
+[5.4.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.4.0
 [5.2.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.2.0
 [5.1.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.1.0
 [5.0.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.0.1

@@ -1,1 +1,0 @@
-- Clear stale optimistic Thinking indicators when Codex compaction completes.

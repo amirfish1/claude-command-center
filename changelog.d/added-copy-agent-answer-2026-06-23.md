@@ -1,1 +1,0 @@
-- Add a compact copy button on successful transcript Done rows to copy the preceding agent answer.

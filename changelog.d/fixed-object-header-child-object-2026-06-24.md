@@ -1,1 +1,0 @@
-- Fixed the by-objects header plus button so it creates a child object instead of a draft task.

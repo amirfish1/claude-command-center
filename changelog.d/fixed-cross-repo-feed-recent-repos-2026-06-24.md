@@ -1,1 +1,0 @@
-- Cross-repo GitHub issue and Ready to merge feeds now ignore stale recent repos that are no longer in the known repo list.

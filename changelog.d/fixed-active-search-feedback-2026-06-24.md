@@ -1,1 +1,0 @@
-- Fixed Active search feedback and Details-off row density for conversation search results.

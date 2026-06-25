@@ -1,1 +1,0 @@
-- Increase by-objects header title sizing for easier scanning.

@@ -1,1 +1,0 @@
-Added `GET /api/sessions/events` — a Server-Sent Events stream that pushes session-state changes (state, question_waiting, needs_approval) to subscribers, so a monitor session can react to changes instead of polling `/api/sessions` on a timer. Sends a baseline snapshot on connect, then deltas, with a `: keepalive` comment every ~20s.
