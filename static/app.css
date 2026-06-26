@@ -9955,6 +9955,15 @@
     font-size: 10px; padding: 1px 7px; border-radius: 10px; font-weight: 700;
   }
   .files-count:empty { display: none; }
+  /* Queue scope picker — change the source the Queue reads the project code
+     from for this session (per-session override). Compact, sits in the header. */
+  .fq-scope-select {
+    background: transparent; color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 4px;
+    font-size: 10px; padding: 1px 4px; max-width: 96px; cursor: pointer;
+  }
+  .fq-scope-select:hover { color: var(--text); border-color: var(--accent); }
+  .fq-scope-select:focus { outline: none; border-color: var(--accent); }
   .files-search-input {
     background: transparent; color: var(--text);
     border: 1px solid var(--border); border-radius: 4px;
