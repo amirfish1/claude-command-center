@@ -32747,19 +32747,29 @@
       let hasVisibleContent = false;
       for (const c of $convToolbar.children) {
         const r = c.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) {
-          // Treat empty containers (cccTopbar with no kids) as invisible
-          // even if their flex layout reports >0 size.
-          if (c.children.length > 0) {
-            // recurse one level: any visible grandchild?
-            for (const cc of c.children) {
-              const rr = cc.getBoundingClientRect();
-              if (rr.width > 0 && rr.height > 0) { hasVisibleContent = true; break; }
-            }
-            if (hasVisibleContent) break;
-          } else if ((c.textContent || '').trim()) {
-            hasVisibleContent = true; break;
+        if (r.width <= 0 || r.height <= 0) continue;
+        // The element's own direct text (e.g. the mobile back button's
+        // "←" glyph) counts as visible even when its only element child —
+        // the " Back" label — is display:none on narrow phones. Without
+        // this, a lone back button reads as "empty", the whole toolbar
+        // collapses to height:0, and mobile users lose the only way back
+        // to the sidebar (CCC-4).
+        let directText = '';
+        for (const node of c.childNodes) {
+          if (node.nodeType === 3) directText += node.textContent;
+        }
+        if (directText.trim()) { hasVisibleContent = true; break; }
+        // Treat empty containers (cccTopbar with no kids) as invisible
+        // even if their flex layout reports >0 size.
+        if (c.children.length > 0) {
+          // recurse one level: any visible grandchild?
+          for (const cc of c.children) {
+            const rr = cc.getBoundingClientRect();
+            if (rr.width > 0 && rr.height > 0) { hasVisibleContent = true; break; }
           }
+          if (hasVisibleContent) break;
+        } else if ((c.textContent || '').trim()) {
+          hasVisibleContent = true; break;
         }
       }
       $convToolbar.classList.toggle('is-empty', !hasVisibleContent);
