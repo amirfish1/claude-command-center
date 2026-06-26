@@ -1308,6 +1308,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-object-chip,", app_css)
         self.assertIn(".conv-item.active .conv-hover-meta-row .conv-object-chip,", app_css)
 
+    def test_sidebar_hover_metadata_empty_object_chip_opens_picker(self):
+        """Rows with no object should show a small + chip that assigns an
+        existing object from a list."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('class="conv-object-chip is-empty"', app_js)
+        self.assertIn('data-role="assign-object-chip"', app_js)
+        self.assertIn("function _flowOpenObjectAssignPicker(sessionId, sessionTitle)", app_js)
+        self.assertIn("flowNodeParents[flowNodeKey('session', sessionId)] = flowNodeKey('object', objectId);", app_js)
+        self.assertIn("$convList.querySelectorAll('[data-role=\"assign-object-chip\"]')", app_js)
+        self.assertIn(".conv-item .conv-hover-meta-row .conv-object-chip.is-empty", app_css)
+        self.assertIn("width: 20px;", app_css)
+
     def test_sidebar_titles_strip_leading_pasted_image_paths(self):
         """Current-session rows should show the human task, not the leading
         pasted-image file path that can be captured in display_name."""

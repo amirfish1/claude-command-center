@@ -4306,6 +4306,23 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  button.conv-object-chip {
+    font: inherit;
+    cursor: pointer;
+  }
+  .conv-item .conv-hover-meta-row .conv-object-chip.is-empty {
+    width: 20px;
+    min-width: 20px;
+    padding: 0;
+    justify-content: center;
+    border-color: rgba(188,140,255,0.42);
+    background: rgba(188,140,255,0.08);
+    font-weight: 700;
+  }
+  .conv-item .conv-hover-meta-row .conv-object-chip.is-empty:hover {
+    background: rgba(188,140,255,0.16);
+    color: var(--text);
+  }
   .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip {
     height: 20px;
     padding: 2px 7px;

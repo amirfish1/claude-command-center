@@ -11400,12 +11400,127 @@
   }
 
   function flowObjectChipHtml(c) {
+    const sid = c && (c.session_id || c.id);
+    if (!sid || (c && (c.source === 'backlog' || c.source === 'github_pr' || c.source === 'pkood'))) return '';
     const obj = flowObjectForConversation(c);
-    if (!obj) return '';
+    if (!obj) {
+      const title = flowRowTitle(c);
+      return '<button type="button" class="conv-object-chip is-empty"'
+        + ' data-role="assign-object-chip"'
+        + ' data-session-id="' + escapeAttr(sid) + '"'
+        + ' data-session-title="' + escapeAttr(title) + '"'
+        + ' title="Add to object" aria-label="Add to object">+</button>';
+    }
     const title = String(obj.title || '').trim() || 'Object';
     return '<span class="conv-object-chip" title="Object: ' + escapeAttr(title) + '">'
       + 'Object &middot; ' + escapeHtml(title)
       + '</span>';
+  }
+
+  function flowObjectPathTitle(objectId) {
+    if (!objectId) return '';
+    const byId = new Map((flowCustomObjects || []).filter(o => o && o.id).map(o => [o.id, o]));
+    const parts = [];
+    let node = flowNodeKey('object', objectId);
+    const seen = new Set();
+    for (let hop = 0; hop < 8 && node && !seen.has(node); hop++) {
+      seen.add(node);
+      if (node.indexOf('object:') !== 0) break;
+      const id = node.slice(7);
+      const obj = byId.get(id);
+      if (obj) parts.unshift(String(obj.title || '').trim() || 'Object');
+      const parent = flowNodeParents[node] || '';
+      if (!parent || parent.indexOf('object:') !== 0) break;
+      node = parent;
+    }
+    return parts.join(' / ');
+  }
+
+  function flowAssignableObjects() {
+    return (flowCustomObjects || [])
+      .filter(o => o && o.id && !o.archived && !isArchivedFlowObjectId(o.id))
+      .map(o => ({
+        id: o.id,
+        title: String(o.title || '').trim() || 'Object',
+        path: flowObjectPathTitle(o.id),
+        updated_at: Number(o.updated_at || o.created_at || 0) || 0,
+      }))
+      .sort((a, b) => {
+        const byTitle = a.title.localeCompare(b.title);
+        if (byTitle) return byTitle;
+        return b.updated_at - a.updated_at;
+      });
+  }
+
+  function _flowOpenObjectAssignPicker(sessionId, sessionTitle) {
+    sessionId = String(sessionId || '').trim();
+    if (!sessionId) return;
+    document.querySelectorAll('.flow-object-assign-picker').forEach(n => n.remove());
+    const modal = document.createElement('div');
+    modal.className = 'upd-overlay flow-object-assign-picker open';
+    const safeTitle = String(sessionTitle || '').trim() || 'session';
+    modal.innerHTML =
+        '<div class="upd-backdrop" data-foap-close></div>'
+      + '<div class="upd-dialog" style="width:min(520px,94vw);max-height:76vh;display:flex;flex-direction:column;">'
+      +   '<div class="upd-header">'
+      +     '<h2 class="upd-title">Add to object</h2>'
+      +     '<button class="upd-close" type="button" data-foap-close aria-label="Close">&times;</button>'
+      +   '</div>'
+      +   '<div class="upd-body" style="overflow:hidden;display:flex;flex-direction:column;gap:8px;min-height:0;">'
+      +     '<div style="font-size:12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(safeTitle) + '</div>'
+      +     '<input type="text" id="flowObjectAssignSearch" class="repo-picker-search" placeholder="Search objects..." style="width:100%;">'
+      +     '<div id="flowObjectAssignList" style="flex:1 1 auto;overflow-y:auto;border:1px solid var(--border);border-radius:6px;"></div>'
+      +   '</div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    const $list = modal.querySelector('#flowObjectAssignList');
+    const $search = modal.querySelector('#flowObjectAssignSearch');
+    const close = () => { modal.remove(); };
+    modal.querySelectorAll('[data-foap-close]').forEach(el => el.addEventListener('click', close));
+    document.addEventListener('keydown', function onKey(ev) {
+      if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
+    });
+    function _render() {
+      const q = ($search.value || '').trim().toLowerCase();
+      const objects = flowAssignableObjects().filter(o => {
+        if (!q) return true;
+        return [o.title, o.path, o.id].join(' ').toLowerCase().indexOf(q) >= 0;
+      });
+      if (!objects.length) {
+        $list.innerHTML = '<div style="padding:24px;color:var(--text-muted);text-align:center;font-size:13px;">No active objects match.</div>';
+        return;
+      }
+      $list.innerHTML = objects.map(o => {
+        const path = o.path && o.path !== o.title ? o.path : '';
+        return ''
+          + '<button type="button" class="flow-object-assign-row" data-object-id="' + escapeAttr(o.id) + '"'
+          + ' style="display:block;width:100%;padding:8px 12px;border:0;border-bottom:1px solid var(--border);background:transparent;color:inherit;text-align:left;cursor:pointer;">'
+          +   '<div style="font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(o.title) + '</div>'
+          +   (path ? '<div style="font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(path) + '</div>' : '')
+          + '</button>';
+      }).join('');
+      $list.querySelectorAll('.flow-object-assign-row').forEach(row => {
+        row.addEventListener('click', () => {
+          const objectId = row.getAttribute('data-object-id') || '';
+          if (!objectId) return;
+          flowNodeParents[flowNodeKey('session', sessionId)] = flowNodeKey('object', objectId);
+          if (expandFlowNodeAndAncestors(flowNodeKey('object', objectId))) persistFlowCollapsedNodes();
+          persistFlowNodeParents();
+          close();
+          if (typeof showOpToast === 'function') showOpToast('Added to object', 'success');
+          if (typeof renderArchiveList === 'function') {
+            renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+          } else if (typeof renderSidebar === 'function' && typeof filterConversations === 'function') {
+            renderSidebar(filterConversations($convSearch ? $convSearch.value : ''), { force: true });
+          }
+        });
+      });
+    }
+    if ($search) {
+      $search.addEventListener('input', _render);
+      setTimeout(() => { try { $search.focus(); } catch (_) {} }, 50);
+    }
+    _render();
   }
 
   function expandFlowNodeAndAncestors(nodeId) {
@@ -21870,6 +21985,16 @@
         ev.preventDefault();
         ev.stopPropagation();
         elevateConversationToOwnObject(btn.getAttribute('data-conv-id') || '');
+      });
+    });
+    $convList.querySelectorAll('[data-role="assign-object-chip"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        _flowOpenObjectAssignPicker(
+          btn.getAttribute('data-session-id') || '',
+          btn.getAttribute('data-session-title') || ''
+        );
       });
     });
     $convList.querySelectorAll('[data-role="archive-object"]').forEach(btn => {
