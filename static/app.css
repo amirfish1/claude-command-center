@@ -3971,6 +3971,23 @@
     border-right: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
     border-radius: 8px 8px 0 0;
     background: rgba(139, 148, 158, 0.08);
+    cursor: pointer;
+    user-select: none;
+  }
+  /* Collapsed: fold the agent list away and close off the header's bottom edge
+     so it reads as a self-contained pill (CCC-282). */
+  .conv-evergreen-agents-header .conv-section-collapse-chevron {
+    font-size: 9px;
+    line-height: 1;
+    opacity: 0.7;
+    margin-right: -2px;
+  }
+  .conv-evergreen-agents-header.is-collapsed {
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+    border-radius: 8px;
+  }
+  .conv-evergreen-agents-scroll.is-collapsed {
+    display: none;
   }
   .conv-evergreen-agents-scroll {
     flex: 0 0 auto;

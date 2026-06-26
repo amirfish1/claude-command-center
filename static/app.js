@@ -20638,11 +20638,22 @@
       const _projectTreeHeaderHtml = _projectTreeHtml
         ? '<div class="conv-objects-section-label conv-project-tree-header" data-role="project-tree-header">Project tree</div>'
         : '';
+      // Collapse/expand for the Evergreen Agents section so it can be folded
+      // down to give the project tree more room (CCC-282). State persists; the
+      // click handler toggles in place (no re-render → no scroll jump).
+      let _evergreenCollapsed = false;
+      try { _evergreenCollapsed = localStorage.getItem('ccc-evergreen-agents-collapsed') === '1'; } catch (_) {}
+      const _evergreenChevron = _evergreenCollapsed ? '&#9656;' : '&#9662;';
       const _evergreenAgentsHeaderHtml = _evergreenAgentsHtml
-        ? '<div class="conv-objects-section-label conv-evergreen-agents-header" data-role="evergreen-agents-header">Evergreen Agents</div>'
+        ? '<div class="conv-objects-section-label conv-evergreen-agents-header' + (_evergreenCollapsed ? ' is-collapsed' : '')
+          + '" data-role="evergreen-agents-header" role="button" tabindex="0"'
+          + ' title="Collapse / expand Evergreen Agents">'
+          + '<span class="conv-section-collapse-chevron" data-role="evergreen-agents-collapse" aria-hidden="true">' + _evergreenChevron + '</span>'
+          + 'Evergreen Agents</div>'
         : '';
       const _evergreenAgentsScrollHtml = _evergreenAgentsHtml
-        ? '<div class="conv-evergreen-agents-scroll" data-role="evergreen-agents-scroll">' + _evergreenAgentsHtml + '</div>'
+        ? '<div class="conv-evergreen-agents-scroll' + (_evergreenCollapsed ? ' is-collapsed' : '')
+          + '" data-role="evergreen-agents-scroll">' + _evergreenAgentsHtml + '</div>'
         : '';
       const _currentIds = new Set(_currentSessions.map(c => c.session_id || c.id));
       const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));
@@ -22160,6 +22171,28 @@
         const block = row && row.nextElementSibling;
         if (block && block.classList.contains('conv-nya-detail')) {
           block.classList.toggle('is-collapsed', nowCollapsed);
+        }
+      });
+    }
+    // Collapse/expand the Evergreen Agents section. Delegated + wired once;
+    // toggles a persisted flag and folds the scroll in place (CCC-282).
+    if (!$convList._evergreenCollapseWired) {
+      $convList._evergreenCollapseWired = true;
+      $convList.addEventListener('click', (ev) => {
+        const hdr = ev.target.closest('[data-role="evergreen-agents-header"]');
+        if (!hdr) return;
+        ev.stopPropagation();
+        ev.preventDefault();
+        let collapsed = false;
+        try { collapsed = localStorage.getItem('ccc-evergreen-agents-collapsed') === '1'; } catch (_) {}
+        const nowCollapsed = !collapsed;
+        try { localStorage.setItem('ccc-evergreen-agents-collapsed', nowCollapsed ? '1' : '0'); } catch (_) {}
+        hdr.classList.toggle('is-collapsed', nowCollapsed);
+        const chev = hdr.querySelector('[data-role="evergreen-agents-collapse"]');
+        if (chev) chev.innerHTML = nowCollapsed ? '&#9656;' : '&#9662;';
+        const scroll = hdr.nextElementSibling;
+        if (scroll && scroll.classList.contains('conv-evergreen-agents-scroll')) {
+          scroll.classList.toggle('is-collapsed', nowCollapsed);
         }
       });
     }
