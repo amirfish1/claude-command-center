@@ -1,0 +1,1 @@
+- Demoted the new-session center panel and grouped newly spawned sessions under a default Inbox object.
