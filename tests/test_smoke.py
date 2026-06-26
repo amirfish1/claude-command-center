@@ -1672,6 +1672,14 @@ class TestServerImports(unittest.TestCase):
         session_done_pos = fn_body.index("const lastFix = uxFixesQueueMeta.lastFixBySession || new Map();")
         self.assertLess(project_done_pos, session_done_pos)
 
+    def test_queue_panel_falls_back_from_empty_repo_project_scope(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("function _uxqResolvePanelProject(items, requestedProject)", app_js)
+        self.assertIn("const fallback = _uxqDominantOpenProject(items);", app_js)
+        self.assertIn("const proj = _uxqResolvePanelProject(items, requestedProject);", app_js)
+        self.assertIn("_uxqLastResolvedProject = proj;", app_js)
+        self.assertIn("const proj = _uxqLastResolvedProject || _uxqWorkerProject();", app_js)
+
     def test_ux_fixes_worker_ids_with_numeric_suffix_are_plausible(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         fn_start = app_js.index("function _uxFixesPlausibleSessionId(value)")
@@ -3302,6 +3310,18 @@ class TestRepoContextHelpers(unittest.TestCase):
         result = self.server.enqueue_annotation_ux_fixes_queue("Annotation: isolated")
         self.assertTrue(result["ok"])
         self.assertTrue(self.ux_fixes_queue_file.exists())
+
+    def test_bym_production_repo_routes_to_bymprod_queue(self):
+        self.assertEqual(
+            self.server.ux_fixes_queue._project_for(
+                repo_path="/tmp/BYM+Finie/apps/bookyourmat"
+            ),
+            "BYMPROD",
+        )
+        self.assertEqual(
+            self.server.ux_fixes_queue._project_for(source="bym"),
+            "BYMPROD",
+        )
 
     def test_repo_path_with_plus_resolves_when_query_decoded_to_space(self):
         """A repo with `+` in its name arrives as a space via URL query-string

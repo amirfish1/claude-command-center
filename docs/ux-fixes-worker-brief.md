@@ -6,7 +6,7 @@ to drain one project's slice of the shared UX-fixes queue and keep it empty.
 A fixer is not a special CCC mode. It is an ordinary session (Claude or Codex)
 running in a project repo, given a `/goal` that points it at this doc. The only
 thing that differs per project is **which repo the session runs in** and
-**which `PROJECT` code it drains** (`CCC`, `BYM`, `HERMES`, …).
+**which `PROJECT` code it drains** (`CCC`, `BYMPROD`, `HERMES`, …).
 
 > Spawning a fixer: open a session in the target repo and send it the
 > canonical goal at the bottom of this file, with `<PROJECT>` filled in.
@@ -17,11 +17,11 @@ thing that differs per project is **which repo the session runs in** and
   `~/.claude/command-center/ux-fixes-queue.json`
   (override with `CCC_STATE_DIR` / `UX_FIXES_QUEUE_FILE`).
 - **Every project lives in that one file**, namespaced by an item's `project`
-  field. A `BYM` fixer only ever touches `project == "BYM"`; it never sees or
+  field. A `BYMPROD` fixer only ever touches `project == "BYMPROD"`; it never sees or
   edits `CCC` items.
 - Annotations route to a project automatically by repo basename (see
   `_REPO_PROJECT` in `ux_fixes_queue.py`) — e.g. `bookyourmat` / `bym+finie`
-  → `BYM`, `claude-command-center` → `CCC`. So you do not "create" a queue;
+  → `BYMPROD`, `claude-command-center` → `CCC`. So you do not "create" a queue;
   annotating a project's pages files tickets into it.
 
 ## The tooling lives in the CCC repo

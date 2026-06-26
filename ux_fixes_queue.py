@@ -153,12 +153,13 @@ def _empty_store() -> Dict[str, Any]:
 
 
 # Map the tool that created an item ("source") to a default project code.
-_SOURCE_PROJECT = {"ccc": "CCC", "bym": "BYM"}
+_SOURCE_PROJECT = {"ccc": "CCC", "bym": "BYMPROD"}
 # Map a repo dir basename to a project code (preferred when repo_path is known).
 _REPO_PROJECT = {
-    "bym+finie": "BYM",
-    "bym-finie": "BYM",
-    "bookyourmat": "BYM",
+    "bym+finie": "BYMPROD",
+    "bym-finie": "BYMPROD",
+    "bookyourmat": "BYMPROD",
+    "bymprod": "BYMPROD",
     "claude-command-center": "CCC",
     "command-center": "CCC",
 }

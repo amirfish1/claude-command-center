@@ -25623,6 +25623,7 @@
   // tickets for the selected session's project scope.
   let _uxqItemsCache = { ts: 0, items: [] };
   let _ffcLastSidebarData = null;
+  let _uxqLastResolvedProject = '';
   async function _fetchUxqItems() {
     if (Date.now() - _uxqItemsCache.ts < 15000) return _uxqItemsCache.items;
     try {
@@ -25659,14 +25660,14 @@
   // Render the health strip at the top of the Queue tab. Scoped to the same
   // project the ticket list shows when one is resolvable; otherwise shows all
   // projects with open tickets. Bust the cache with force=true after a write.
-  async function _renderQueueHealthStrip(force) {
+  async function _renderQueueHealthStrip(force, scopeProject) {
     const $strip = document.getElementById('queueHealthStrip');
     if (!$strip) return;
     if (force) _uxqHealthCache.ts = 0;
     let rows = await _fetchUxqHealth();
-    const proj = _uxqWorkerProject();
+    const proj = scopeProject !== undefined ? _uxqProjectKey(scopeProject) : _uxqWorkerProject();
     if (proj) {
-      const mine = rows.filter(r => (r.project || '') === proj);
+      const mine = rows.filter(r => _uxqProjectKey(r && r.project) === proj);
       if (mine.length) rows = mine;  // scope when this project has open work
     }
     if (!rows.length) {
@@ -25702,9 +25703,12 @@
   // / `_project_for` so the client can scope the Queue by the open session's
   // repo even when it is not a queue-worker (CCC-175).
   const _REPO_PROJECT_MAP = {
-    'bym+finie': 'BYM', 'bym-finie': 'BYM', 'bookyourmat': 'BYM',
+    'bym+finie': 'BYMPROD', 'bym-finie': 'BYMPROD', 'bookyourmat': 'BYMPROD', 'bymprod': 'BYMPROD',
     'claude-command-center': 'CCC', 'command-center': 'CCC',
   };
+  function _uxqProjectKey(value) {
+    return String(value || '').trim().toUpperCase();
+  }
   function _projectForRepoPath(repoPath) {
     if (!repoPath) return '';
     const base = String(repoPath).replace(/\/+$/, '').split('/').pop().toLowerCase();
@@ -25713,9 +25717,38 @@
     // Normalized basename (uppercase, alnum/-/_), mirrors _norm_project.
     return base.toUpperCase().replace(/[^A-Z0-9\-_]/g, '').replace(/^[-_]+|[-_]+$/g, '');
   }
-  // Project the open session's Queue should show (e.g. "BYM", "CCC"). A queue
+  function _uxqProjectHasItems(items, project) {
+    const wanted = _uxqProjectKey(project);
+    if (!wanted) return false;
+    return (Array.isArray(items) ? items : []).some(it => _uxqProjectKey(it && it.project) === wanted);
+  }
+  function _uxqDominantOpenProject(items) {
+    const counts = new Map();
+    for (const it of (Array.isArray(items) ? items : [])) {
+      if (!it || it.status !== 'open') continue;
+      const project = _uxqProjectKey(it.project);
+      if (!project || project === '?') continue;
+      counts.set(project, (counts.get(project) || 0) + 1);
+    }
+    let best = '', bestCount = 0;
+    for (const [project, count] of counts) {
+      if (count > bestCount || (count === bestCount && best === 'CCC' && project !== 'CCC')) {
+        best = project;
+        bestCount = count;
+      }
+    }
+    return best;
+  }
+  function _uxqResolvePanelProject(items, requestedProject) {
+    const requested = _uxqProjectKey(requestedProject);
+    if (!requested) return '';
+    if (_uxqProjectHasItems(items, requested)) return requested;
+    const fallback = _uxqDominantOpenProject(items);
+    return fallback || requested;
+  }
+  // Project the open session's Queue should show (e.g. "BYMPROD", "CCC"). A queue
   // worker uses its progress record (CCC-99); ANY other session falls back to
-  // its repo's project (CCC-175) so a BYM session shows BYM-* tickets instead
+  // its repo's project (CCC-175) so a project session shows its tickets instead
   // of the global, CCC-dominated list.
   function _uxqWorkerProject() {
     try {
@@ -25824,10 +25857,12 @@
   function _renderQueuePanel() {
     const $queue = document.getElementById('sidebarQueueList');
     if (!$queue) return;
-    _renderQueueHealthStrip();
     _fetchUxqItems().then(items => {
-      const proj = _uxqWorkerProject();
-      const scoped = proj ? items.filter(it => (it.project || '') === proj) : items;
+      const requestedProject = _uxqWorkerProject();
+      const proj = _uxqResolvePanelProject(items, requestedProject);
+      _uxqLastResolvedProject = proj;
+      _renderQueueHealthStrip(false, proj);
+      const scoped = proj ? items.filter(it => _uxqProjectKey(it && it.project) === proj) : items;
       const rows = scoped.slice().reverse();  // newest first
       $queue.innerHTML = rows.map(it => {
         const noteFull = String(it.note || '');
@@ -25912,7 +25947,7 @@
   }
   // Add a ticket to the queue straight from the panel header (CCC-145). Routes
   // into the same project scope the panel is showing (_uxqWorkerProject), so a
-  // BYM worker's add lands as a BYM ticket. Refreshes the list on success.
+  // project worker's add lands in that project. Refreshes the list on success.
   {
     const $qadd = document.getElementById('filesQueueAdd');
     if ($qadd) {
@@ -25920,7 +25955,7 @@
         ev.stopPropagation();
         const note = (window.prompt('New queue ticket — describe the fix:') || '').trim();
         if (!note) return;
-        const proj = _uxqWorkerProject();
+        const proj = _uxqLastResolvedProject || _uxqWorkerProject();
         try {
           const res = await fetch('/api/ux-fixes/enqueue', {
             method: 'POST',
