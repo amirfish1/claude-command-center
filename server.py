@@ -29458,6 +29458,99 @@ def _update_spawn_session_id_in_registry(pid, session_id):
         print(f"  [spawn-registry] could not update session_id for pid {pid} ({e})")
 
 
+def _recover_spawn_parent_session_id(entry):
+    """Recover a legacy spawned-session parent from durable launch evidence."""
+    if not isinstance(entry, dict):
+        return "", "", "invalid_entry"
+
+    parent = _parent_session_id_from_return_address_text(
+        entry.get("command_summary") or ""
+    )
+    if parent:
+        return parent, "command_summary", ""
+
+    sid = str(entry.get("session_id") or "").strip()
+    if not sid:
+        return "", "", "missing_session_id"
+
+    transcript = _claude_session_jsonl_path(sid)
+    if not transcript:
+        return "", "", "missing_transcript"
+
+    parent = _parent_session_id_from_transcript_return_address(transcript)
+    if parent:
+        return parent, "transcript", ""
+    return "", "", "unresolved"
+
+
+def backfill_spawn_parent_session_ids(dry_run=False):
+    """Persist recoverable legacy spawn hierarchy into the spawn registry.
+
+    Older CCC versions wrote the report-back footer into the spawned prompt but
+    did not persist `parent_session_id`. This backfill trusts only that durable
+    footer, either in the registry's command summary or in the child's first
+    transcript prompt.
+    """
+    entries = _load_spawn_registry()
+    result = {
+        "ok": True,
+        "dry_run": bool(dry_run),
+        "scanned": 0,
+        "already_linked": 0,
+        "updated": 0,
+        "invalid_entry": 0,
+        "missing_session_id": 0,
+        "missing_transcript": 0,
+        "unresolved": 0,
+        "updates": [],
+    }
+    changed = False
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            result["invalid_entry"] += 1
+            continue
+        result["scanned"] += 1
+        if str(entry.get("parent_session_id") or "").strip():
+            result["already_linked"] += 1
+            continue
+
+        parent, source, reason = _recover_spawn_parent_session_id(entry)
+        if not parent:
+            if reason in result:
+                result[reason] += 1
+            else:
+                result["unresolved"] += 1
+            continue
+
+        result["updated"] += 1
+        update = {
+            "pid": entry.get("pid"),
+            "session_id": str(entry.get("session_id") or "").strip(),
+            "parent_session_id": parent,
+            "source": source,
+        }
+        result["updates"].append(update)
+        if dry_run:
+            continue
+
+        entry["parent_session_id"] = parent
+        sid = update["session_id"]
+        for live_entry in _spawned_sessions:
+            if (
+                isinstance(live_entry, dict)
+                and sid
+                and live_entry.get("session_id") == sid
+                and not live_entry.get("parent_session_id")
+            ):
+                live_entry["parent_session_id"] = parent
+        changed = True
+
+    if changed:
+        _save_spawn_registry(entries)
+    return result
+
+
 
 def _pid_is_engine_process(pid, engine):
     """Verify a PID is actually a process for the given engine before
@@ -43493,6 +43586,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json({"ok": True, "path": str(rp)})
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/sessions/spawned/backfill-parents":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            result = backfill_spawn_parent_session_ids(
+                dry_run=bool(payload.get("dry_run") or payload.get("dryRun"))
+            )
+            self.send_json(result)
         elif path == "/api/sessions/spawn":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
