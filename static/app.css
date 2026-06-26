@@ -2753,6 +2753,46 @@
     height: 100%;
     font-size: 14px;
   }
+  .conv-input-context .new-session-object-context {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    grid-area: object;
+    min-width: 0;
+  }
+  .conv-input-context.is-new-session .new-session-object-context {
+    display: inline-flex;
+  }
+  .conv-input-context.visible.is-new-session {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "object object"
+      "chips chips"
+      "cwd worktree";
+  }
+  .nso-label {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .nso-chip {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--accent, #58a6ff) 45%, var(--border) 55%);
+    background: rgba(88,166,255,0.12);
+    color: var(--accent, #58a6ff);
+    font-size: 12px;
+    font-weight: 650;
+  }
   .conv-input-context .spawn-cwd-quick-chips {
     display: none;
     align-items: center;

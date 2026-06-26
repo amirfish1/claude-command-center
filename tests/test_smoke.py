@@ -310,6 +310,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-input-bar.is-new-session-launch textarea", app_css)
         self.assertIn("min-height: 96px;", app_css)
 
+    def test_new_session_default_object_assignment_is_wired(self):
+        """Every new session should be assigned to a generic durable object."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="newSessionObjectContext"', index_html)
+        self.assertIn("const NEW_SESSION_DEFAULT_OBJECT_ID = 'new-session-inbox';", app_js)
+        self.assertIn("const NEW_SESSION_DEFAULT_OBJECT_TITLE = 'Inbox';", app_js)
+        self.assertIn("function ensureNewSessionDefaultObject()", app_js)
+        self.assertIn("function assignSpawnedSessionToDefaultObject(data)", app_js)
+        self.assertIn("function reconcilePendingNewSessionObjectAssignments()", app_js)
+        self.assertIn("assignSpawnedSessionToDefaultObject(data);", app_js)
+        self.assertIn("_objectsApiPost('assign', { session_node_id: flowNodeKey('session', sid), object_id: objectId })", app_js)
+
     def test_inprogress_header_has_object_shortcut(self):
         """The row-list header should expose + object before by-objects mode."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -5173,6 +5187,52 @@ class TestRepoContextHelpers(unittest.TestCase):
         }])
 
         self.assertEqual(rows[0]["parent_session_id"], parent)
+
+    def test_backfill_spawn_parent_session_ids_persists_legacy_return_address(self):
+        parent = "10000000-0000-4000-8000-000000000015"
+        child = "10000000-0000-4000-8000-000000000016"
+        prompt = self.server._wrap_prompt_with_return_address(
+            "review this",
+            parent,
+            port=8090,
+        )
+        transcript = self.server._canonical_conversation_path(str(self.repo), child)
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(
+            json.dumps({
+                "type": "user",
+                "timestamp": "2026-05-04T00:00:00.000Z",
+                "cwd": str(self.repo),
+                "sessionId": child,
+                "gitBranch": "main",
+                "message": {"role": "user", "content": prompt},
+            }) + "\n",
+            encoding="utf-8",
+        )
+        self.server._record_spawn_to_registry(
+            pid=424245,
+            name="reviewer",
+            log_path=self.repo / ".claude" / "logs" / "spawn-reviewer.log",
+            cwd=str(self.repo),
+            spawned_at="20260504T000000",
+            command_summary="review this",
+            fifo=None,
+            engine="claude",
+            session_id=child,
+            repo_path=str(self.repo),
+        )
+
+        dry_run = self.server.backfill_spawn_parent_session_ids(dry_run=True)
+        self.assertEqual(dry_run["updated"], 1)
+        self.assertFalse(self.server._load_spawn_registry()[-1]["parent_session_id"])
+
+        result = self.server.backfill_spawn_parent_session_ids()
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(result["updates"][0]["source"], "transcript")
+        self.assertEqual(
+            self.server._load_spawn_registry()[-1]["parent_session_id"],
+            parent,
+        )
 
     def test_session_cwd_relocates_after_folder_move(self):
         sid = "00000000-0000-4000-8000-000000000100"

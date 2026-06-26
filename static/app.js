@@ -4606,6 +4606,7 @@
     if ($convInputBar) {
       $convInputBar.classList.toggle('is-new-session-launch', isNewSession);
     }
+    renderNewSessionObjectContext();
     // Backlog GH issue: viewing an issue card in the right pane. Submitting
     // the input bar spawns a session equivalent to clicking "Edit & start"
     // on the kanban card, with the typed text appended to the standard
@@ -9524,6 +9525,7 @@
       // Keep still-pending placeholders on top until they materialize.
       const placeholders = Array.from(pendingSpawns.values());
       conversationsData = [...placeholders, ...fresh];
+      reconcilePendingNewSessionObjectAssignments();
       clearInputDraftKeyCache();
       // Re-apply any in-flight archive/verify overrides so an /api/sessions
       // response that started before a click can't briefly un-archive a card.
@@ -10595,6 +10597,9 @@
   let _objectsSyncTimer = null;
   let _objectsSyncInFlight = false;
   let _objectsSyncQueued = false;
+  const NEW_SESSION_DEFAULT_OBJECT_ID = 'new-session-inbox';
+  const NEW_SESSION_DEFAULT_OBJECT_TITLE = 'Inbox';
+  const NEW_SESSION_PENDING_OBJECT_KEY = 'ccc-pending-new-session-object-assignments';
 
   function _objectsApiPost(path, body) {
     return fetch('/api/objects/' + path, {
@@ -10602,6 +10607,104 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {}),
     }).then(r => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))));
+  }
+
+  function ensureNewSessionDefaultObject() {
+    const existing = (flowCustomObjects || []).find(o => o && o.id === NEW_SESSION_DEFAULT_OBJECT_ID);
+    if (existing) return existing;
+    const now = Date.now();
+    const obj = {
+      id: NEW_SESSION_DEFAULT_OBJECT_ID,
+      title: NEW_SESSION_DEFAULT_OBJECT_TITLE,
+      created_at: now,
+      updated_at: now,
+      status: 'active',
+      objective: 'Triage newly started sessions',
+    };
+    flowCustomObjects.push(obj);
+    persistFlowCustomObjects();
+    return obj;
+  }
+
+  function renderNewSessionObjectContext() {
+    const wrap = document.getElementById('newSessionObjectContext');
+    if (!wrap) return;
+    if (currentConversation !== '__new__') {
+      wrap.innerHTML = '';
+      wrap.style.display = 'none';
+      return;
+    }
+    const obj = ensureNewSessionDefaultObject();
+    wrap.style.display = '';
+    wrap.innerHTML = '<span class="nso-label">Object</span>'
+      + '<span class="nso-chip" title="New sessions are grouped under this object">'
+      + escapeHtml(obj.title || NEW_SESSION_DEFAULT_OBJECT_TITLE)
+      + '</span>';
+  }
+
+  function loadPendingNewSessionObjectAssignments() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(NEW_SESSION_PENDING_OBJECT_KEY) || '{}');
+      return raw && typeof raw === 'object' ? raw : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function savePendingNewSessionObjectAssignments(map) {
+    try { localStorage.setItem(NEW_SESSION_PENDING_OBJECT_KEY, JSON.stringify(map || {})); } catch (_) {}
+  }
+
+  async function assignSessionNodeToObject(sid, objectId) {
+    if (!sid || !objectId) return false;
+    const nodeId = flowNodeKey('session', sid);
+    const parentNode = flowNodeKey('object', objectId);
+    flowNodeParents[nodeId] = parentNode;
+    persistFlowNodeParents();
+    _objectsApiPost('assign', { session_node_id: flowNodeKey('session', sid), object_id: objectId }).catch(() => {});
+    return true;
+  }
+
+  function rememberPendingNewSessionObjectAssignment(spawnId, objectId) {
+    if (!spawnId || !objectId) return;
+    const pending = loadPendingNewSessionObjectAssignments();
+    pending[String(spawnId)] = { object_id: objectId, created_at: Date.now() };
+    savePendingNewSessionObjectAssignments(pending);
+  }
+
+  function assignSpawnedSessionToDefaultObject(data) {
+    const obj = ensureNewSessionDefaultObject();
+    const objectId = obj && obj.id;
+    const sid = data && data.session_id;
+    if (sid) {
+      assignSessionNodeToObject(sid, objectId);
+      return;
+    }
+    const spawnId = (data && (data.spawn_id || data.pid)) || '';
+    rememberPendingNewSessionObjectAssignment(spawnId, objectId);
+  }
+
+  function reconcilePendingNewSessionObjectAssignments() {
+    const pending = loadPendingNewSessionObjectAssignments();
+    const keys = Object.keys(pending);
+    if (!keys.length) return;
+    const now = Date.now();
+    let changed = false;
+    for (const key of keys) {
+      const rec = pending[key] || {};
+      if (now - Number(rec.created_at || 0) > 30 * 60 * 1000) {
+        delete pending[key];
+        changed = true;
+        continue;
+      }
+      const row = (conversationsData || []).find(c => String(c.spawn_pid || c.pid || '') === key);
+      const sid = row && (row.session_id || row.id);
+      if (!sid) continue;
+      assignSessionNodeToObject(sid, rec.object_id || NEW_SESSION_DEFAULT_OBJECT_ID);
+      delete pending[key];
+      changed = true;
+    }
+    if (changed) savePendingNewSessionObjectAssignments(pending);
   }
 
   function _objectsGet() {
@@ -12598,6 +12701,7 @@
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
         const placeholder = adoptPendingSpawnPid(tempPid, data.pid, data.log);
+        assignSpawnedSessionToDefaultObject(data);
         if (placeholder && spawnUsesLogPlaceholder(engine) && typeof selectConversation === 'function') {
           selectConversation(placeholder.id);
         }
@@ -40433,6 +40537,7 @@
     if ($kanbanBoardSplit) $kanbanBoardSplit.querySelectorAll('.kanban-card.active').forEach(el => el.classList.remove('active'));
     if ($flowBoard) $flowBoard.querySelectorAll('.flow-node-session.active').forEach(el => el.classList.remove('active'));
     populateSpawnCwdPicker();
+    renderNewSessionObjectContext();
     ensureSpawnCwdOptionsLoaded(paneId);
     const spawnCwd = getSpawnCwd();
     updatePaneHeader(paneId, {
