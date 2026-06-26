@@ -1791,6 +1791,17 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-project-tree .conv-draft-row[data-draft-id]", app_css)
         self.assertIn("cursor: pointer;", app_css)
 
+    def test_by_objects_uses_server_draft_parent_fallback(self):
+        """API-created draft sessions with only parent_node_id should still
+        appear under their object in By objects."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function flowDraftParentNode(draft)", app_js)
+        self.assertIn("const serverDraftParent = sd.parent_node_id || '';", app_js)
+        self.assertIn("if (serverDraftParent && !flowNodeParents[serverDraftNode])", app_js)
+        self.assertIn("(flowDraftSessions || []).some(d => d && flowDraftParentNode(d) === node)", app_js)
+        self.assertIn("? (flowDraftSessions || []).filter(d => d && flowDraftParentNode(d) === nodeId)", app_js)
+
     def test_flow_object_refresh_reads_parent_map_sessions(self):
         """Refreshing an object inspector should rebuild auto sections from
         Flow's source-of-truth parent map, not only from rendered DOM nodes."""
@@ -9476,6 +9487,15 @@ class TestObjectsStore(unittest.TestCase):
         self.assertEqual(set(by_id), {"srv-d", "brow-d"})
         self.assertEqual(by_id["srv-d"]["title"], "Renamed by browser")
         self.assertEqual(by_id["brow-d"]["repo_path"], "/x")
+
+    def test_import_draft_parent_node_id_seeds_parent_map(self):
+        merged = self.store.import_state(
+            drafts=[
+                {"id": "draft-1", "title": "Call vendor", "parent_node_id": "object:obj-1"},
+            ]
+        )
+
+        self.assertEqual(merged["parents"]["draft-session:draft-1"], "object:obj-1")
 
     def test_import_drafts_does_not_disturb_objects(self):
         self.store.create_object("Obj", id="obj-1")

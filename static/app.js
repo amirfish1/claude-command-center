@@ -10238,6 +10238,11 @@
   } catch (_) {}
   let flowDraftFocusId = '';
   let flowDraftFocusSelection = null;
+  function flowDraftParentNode(draft) {
+    const id = draft && draft.id;
+    const nodeId = id ? flowNodeKey('draft-session', id) : '';
+    return (nodeId && flowNodeParents[nodeId]) || (draft && draft.parent_node_id) || '';
+  }
   let flowSelectedNodes = {};
   let flowNodeMetaCache = {};
   let flowNodeMetaFetchInFlight = false;
@@ -10712,20 +10717,33 @@
       const draftById = new Map((flowDraftSessions || []).filter(d => d && d.id).map(d => [d.id, d]));
       for (const sd of (server.drafts || [])) {
         if (!sd || !sd.id) continue;
+        const serverDraftNode = flowNodeKey('draft-session', sd.id);
+        const serverDraftParent = sd.parent_node_id || '';
         const localDraft = draftById.get(sd.id);
         if (!localDraft) {
-          flowDraftSessions.push(Object.assign({ repo_path: '' }, sd));
-          draftById.set(sd.id, sd);
+          const mergedDraft = Object.assign({ repo_path: '' }, sd);
+          flowDraftSessions.push(mergedDraft);
+          draftById.set(sd.id, mergedDraft);
           changed = true;
-        } else if (sd.prompt
-            && sd.prompt !== localDraft.prompt
-            && sd.prompt.length > (localDraft.prompt || '').length
-            && (!localDraft.prompt || localDraft.prompt === (localDraft.title || ''))) {
-          // Self-heal: the local copy has an empty or flattened prompt (prompt
-          // never set, or collapsed to the title by an older title-edit) while
-          // the server holds a richer one. Adopt it. Guarded so a genuine local
-          // edit (prompt that differs from the title) is never clobbered.
-          localDraft.prompt = sd.prompt;
+        } else {
+          if (serverDraftParent && !localDraft.parent_node_id) {
+            localDraft.parent_node_id = serverDraftParent;
+            changed = true;
+          }
+          if (sd.prompt
+              && sd.prompt !== localDraft.prompt
+              && sd.prompt.length > (localDraft.prompt || '').length
+              && (!localDraft.prompt || localDraft.prompt === (localDraft.title || ''))) {
+            // Self-heal: the local copy has an empty or flattened prompt (prompt
+            // never set, or collapsed to the title by an older title-edit) while
+            // the server holds a richer one. Adopt it. Guarded so a genuine local
+            // edit (prompt that differs from the title) is never clobbered.
+            localDraft.prompt = sd.prompt;
+            changed = true;
+          }
+        }
+        if (serverDraftParent && !flowNodeParents[serverDraftNode]) {
+          flowNodeParents[serverDraftNode] = serverDraftParent;
           changed = true;
         }
       }
@@ -12280,6 +12298,13 @@
     if (!target || target.indexOf('object:') !== 0) return false;
     if (flowNodeParents[draggedNode] === target) return false;
     flowNodeParents[draggedNode] = target;
+    const draftId = draggedNode.slice('draft-session:'.length);
+    const draft = flowDraftSessions.find(d => d && d.id === draftId);
+    if (draft) {
+      draft.parent_node_id = target;
+      draft.updated_at = Date.now();
+      persistFlowDraftSessions();
+    }
     persistFlowNodeParents();
     return true;
   }
@@ -20307,7 +20332,7 @@
       const _unclassified = [];
       const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();
       const _objectHasVisibleDrafts = (node) =>
-        (flowDraftSessions || []).some(d => d && flowNodeParents[flowNodeKey('draft-session', d.id)] === node);
+        (flowDraftSessions || []).some(d => d && flowDraftParentNode(d) === node);
       const _isEvergreenAgentsObjectTitle = (title) =>
         String(title || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '') === 'evergreenagents';
       for (const c of _visibleSessionConvs) {
@@ -20365,7 +20390,7 @@
         // that spawns a real session. Gives billing/ads/admin a home instead of
         // an "Empty — drag sessions here" dead end. Real objects only.
         const _objDrafts = archiveObjectId
-          ? (flowDraftSessions || []).filter(d => d && flowNodeParents[flowNodeKey('draft-session', d.id)] === nodeId)
+          ? (flowDraftSessions || []).filter(d => d && flowDraftParentNode(d) === nodeId)
           : [];
         const _draftsHtml = _objDrafts.map(d => {
           const did = escapeAttr(d.id);

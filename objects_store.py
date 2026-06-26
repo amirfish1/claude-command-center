@@ -552,5 +552,10 @@ def import_state(
                 d_ordered.append(d_by_id[dr["id"]])
                 d_emitted.add(dr["id"])
         state["drafts"] = d_ordered
+        for dr in state["drafts"]:
+            did = dr.get("id")
+            parent = dr.get("parent_node_id")
+            if isinstance(did, str) and did and isinstance(parent, str) and parent:
+                state["parents"].setdefault("draft-session:" + did, parent)
         _write_unlocked(state)
         return json.loads(json.dumps(state))
