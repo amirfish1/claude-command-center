@@ -2435,8 +2435,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("flex: 1 1 auto;", files_scroll_css)
         self.assertNotIn("max-height: clamp(", files_scroll_css)
         activity_css = app_css[app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] > .csh-col-activity {"):app_css.index("body.status-pos-right .status-rail .status-rail-pane > .csh-ask-original .user-msg", app_css.index("body.status-pos-right .status-rail-pane[data-rail-pane=\"metadata\"] > .csh-col-activity {"))]
-        self.assertIn("overflow-y: visible;", activity_css)
-        self.assertNotIn("flex: 1 1 auto;", activity_css)
+        self.assertIn("flex: 1 1 auto;", activity_css)
+        self.assertIn("min-height: 0;", activity_css)
+        self.assertIn("overflow-y: auto;", activity_css)
+        self.assertNotIn("overflow-y: visible;", activity_css)
+        self.assertNotIn("flex: 0 0 auto;", activity_css)
 
     def test_toolbar_controls_move_to_settings_and_metadata_rail(self):
         """Right-rail mode should empty the crowded conversation topbar."""

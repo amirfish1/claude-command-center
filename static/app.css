@@ -4125,6 +4125,17 @@
     max-width: 180px;
     margin-left: 0;
   }
+  /* De-dup an active evergreen row. The compact main row already shows the goal
+     chip (evergreenGoalHtml) and the WIP/idle state pill (.conv-evergreen-state),
+     so suppress the copies the shared hover-meta row and the generic activity
+     signal add when the row is selected — that double render read as "messy"
+     (two FIX… chips, two WIP badges side by side). (CCC-277) */
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-hover-meta-row .conv-goal {
+    display: none;
+  }
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-row-meta .conv-signal.activity-working {
+    display: none;
+  }
   .conv-evergreen-state {
     flex: 0 0 auto;
     align-items: center;
@@ -12494,14 +12505,14 @@ body.status-pos-right .status-rail-pane[data-rail-pane="files"] .files-list {
   overflow-y: auto;
 }
 body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .csh-col-activity {
-  flex: 0 0 auto;
-  min-height: auto;
-  overflow-y: visible;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 body.status-pos-right .status-rail .status-rail-pane[data-rail-pane="metadata"] > .csh-col-activity {
-  flex: 0 0 auto;
-  min-height: auto;
-  overflow-y: visible;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 body.status-pos-right .status-rail .status-rail-pane > .csh-ask-original .user-msg {
   max-height: 30vh;       /* original ask scrolls inside the rail too */
