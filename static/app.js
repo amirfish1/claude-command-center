@@ -1521,6 +1521,38 @@
   })();
   loadTelemetryStatus();
 
+  // ── Dashboard active-time heartbeat ──
+  // Beats every 30s while the tab is visible. Each beat credits 30s to
+  // today's active-seconds bucket on the server. The bucket is only
+  // SHIPPED with the daily opt-in ping; the heartbeat endpoint itself
+  // is non-opt-in (it's local-only and just writes a counter) and is
+  // killed by CCC_TELEMETRY_DISABLED. No content, no session ids, no
+  // url path captured — just an empty POST that means "tab visible
+  // right now."
+  (function wireActiveHeartbeat() {
+    let timer = null;
+    function beat() {
+      if (document.visibilityState !== 'visible') return;
+      fetch('/api/telemetry/heartbeat', { method: 'POST', keepalive: true })
+        .catch(() => { /* swallow — best effort, retries next tick */ });
+    }
+    function start() {
+      if (timer) return;
+      beat();
+      timer = setInterval(beat, 30000);
+    }
+    function stop() {
+      if (!timer) return;
+      clearInterval(timer);
+      timer = null;
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') start();
+      else stop();
+    });
+    if (document.visibilityState === 'visible') start();
+  })();
+
   // ── Repo selection state ──
   // The repo dropdown is a local archive filter, not a server-side switch.
   // Keep this block early: worktrees, Vercel, terminal, and issue actions

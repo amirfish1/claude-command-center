@@ -197,18 +197,28 @@ function renderOptIn(d) {
       <div class="card wide">
         <h2>Recently active opt-in installs</h2>
         <table>
-          <thead><tr><th>install</th><th>last seen</th><th class="num">sessions in last 24h</th></tr></thead>
+          <thead>
+            <tr>
+              <th>install</th>
+              <th>last seen</th>
+              <th class="num">sessions in 24h</th>
+              <th class="num">active time today</th>
+              <th class="num">lifetime sessions</th>
+            </tr>
+          </thead>
           <tbody>
             ${sessionsTodayAll.slice(0, 15).map(r => `
               <tr>
                 <td><span class="pill">${escapeHtml(r.install_id_prefix)}…</span></td>
                 <td class="muted">${escapeHtml(r.last_seen.slice(0, 10))}</td>
                 <td class="num">${r.latest_sessions_today ?? "—"}</td>
+                <td class="num">${formatActive(r.latest_active_seconds_today)}</td>
+                <td class="num">${r.latest_total_sessions_managed ?? "—"}</td>
               </tr>
             `).join("")}
           </tbody>
         </table>
-        <p class="muted">Only the first 8 chars of the install id are shown. Sessions = count of <code>~/.claude/projects/**/*.jsonl</code> files modified in the last 24h on that machine. Empty when the user is on schema v1 (pre-4.10.0).</p>
+        <p class="muted">Only the first 8 chars of the install id are shown. Active time = dashboard tab visible time today (30s granularity). Lifetime sessions = all-time JSONL count on that machine. Empty cells mean the install is on an older schema (pre-4.10.0 for sessions, pre-this-release for active/lifetime).</p>
       </div>
 
       <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Cached at the edge for 5 minutes.</div>
@@ -387,6 +397,16 @@ function uniqueInstallsFromBuckets(rows) {
 
 function sumBuckets(rows, key) {
   return rows.reduce((acc, r) => acc + (r[key] || 0), 0);
+}
+
+function formatActive(seconds) {
+  if (typeof seconds !== "number") return "—";
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const remM = m - h * 60;
+  return remM ? `${h}h ${remM}m` : `${h}h`;
 }
 
 function escapeHtml(s) {

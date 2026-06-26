@@ -19,30 +19,34 @@ issue.
 
 ## What is sent
 
-The complete schema-v2 payload, in JSON, posted once per UTC day to a
+The complete schema-v3 payload, in JSON, posted once per UTC day to a
 single HTTPS endpoint:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "install_id": "00000000-0000-4000-8000-000000000000",
   "version": "4.9.0",
   "platform": "darwin",
   "engines": "claude,codex",
   "last_active_date": "2026-06-07",
-  "sessions_today": 4
+  "sessions_today": 4,
+  "active_seconds_today": 5430,
+  "total_sessions_managed": 287
 }
 ```
 
-| field              | type   | example                            | source                                                                                |
-| ------------------ | ------ | ---------------------------------- | ------------------------------------------------------------------------------------- |
-| `schema_version`   | int    | `2`                                | constant in `server.py`; v1 omits `sessions_today` and is still accepted server-side  |
-| `install_id`       | uuidv4 | random                             | generated locally on first opt-in; never derived from machine identity                |
-| `version`          | semver | `4.9.0`                            | `__version__` from `server.py`                                                        |
-| `platform`         | string | `darwin` / `linux`                 | `sys.platform`                                                                        |
-| `engines`          | string | `claude,codex,cursor,antigravity`  | which of {claude, codex, gemini, cursor, antigravity} binaries are on PATH            |
-| `last_active_date` | string | `2026-06-07` (or `""`)             | newest `~/.claude/projects/**/*.jsonl` mtime, **date only**                            |
-| `sessions_today`   | int    | `4`                                | count of `*.jsonl` files under `~/.claude/projects/` with mtime in the last 24h; capped at 100000 |
+| field                    | type   | example                            | source                                                                                          |
+| ------------------------ | ------ | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `schema_version`         | int    | `3`                                | constant in `server.py`; v1 + v2 are still accepted server-side with missing fields stored NULL |
+| `install_id`             | uuidv4 | random                             | generated locally on first opt-in; never derived from machine identity                          |
+| `version`                | semver | `4.9.0`                            | `__version__` from `server.py`                                                                  |
+| `platform`               | string | `darwin` / `linux`                 | `sys.platform`                                                                                  |
+| `engines`                | string | `claude,codex,cursor,antigravity`  | which of {claude, codex, gemini, cursor, antigravity} binaries are on PATH                      |
+| `last_active_date`       | string | `2026-06-07` (or `""`)             | newest `~/.claude/projects/**/*.jsonl` mtime, **date only**                                     |
+| `sessions_today`         | int    | `4`                                | count of `*.jsonl` files with mtime in the last 24h; capped at 100000                           |
+| `active_seconds_today`   | int    | `5430`                             | sum of dashboard-tab-visible time today (rounded to 30s ticks); capped at 86400                 |
+| `total_sessions_managed` | int    | `287`                              | lifetime count of `*.jsonl` files ever seen under `~/.claude/projects/`; capped at 10000000     |
 
 The HTTP request also carries:
 - `User-Agent: claude-command-center/<version> (telemetry)`.
@@ -103,8 +107,12 @@ version bump and a documented breaking change.
   results, file contents.
 - Usage volume, message counts, per-session timing, token counts, model
   names, costs. (Schema v2 added a single `sessions_today` integer — a
-  count of `*.jsonl` files modified in the last 24h. That is the only
-  usage-shaped field; everything else in this row remains off-limits.)
+  count of `*.jsonl` files modified in the last 24h. Schema v3 added
+  `active_seconds_today` — a coarse 30s-granularity sum of how long the
+  dashboard tab was visible today — and `total_sessions_managed`, the
+  lifetime count of JSONL files ever seen on disk. Those four numbers
+  are the only usage-shaped fields; everything else in this row remains
+  off-limits.)
 - Repo paths, repo names, branch names, file paths, cwd, project slug.
 - User identity: name, email, hostname, username, login, IP address,
   git config, system locale.

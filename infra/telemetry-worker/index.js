@@ -31,8 +31,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function validatePing(body) {
   if (!body || typeof body !== "object") return "body must be a JSON object";
-  if (body.schema_version !== 1 && body.schema_version !== 2) {
-    return "schema_version must be 1 or 2";
+  if (body.schema_version !== 1 && body.schema_version !== 2 && body.schema_version !== 3) {
+    return "schema_version must be 1, 2, or 3";
   }
   if (typeof body.install_id !== "string" || !UUID_RE.test(body.install_id)) {
     return "install_id must be a uuidv4";
@@ -52,9 +52,17 @@ function validatePing(body) {
       (body.last_active_date !== "" && !DATE_RE.test(body.last_active_date))) {
     return "last_active_date must be YYYY-MM-DD or empty";
   }
-  if (body.schema_version === 2) {
+  if (body.schema_version === 2 || body.schema_version === 3) {
     if (!Number.isInteger(body.sessions_today) || body.sessions_today < 0 || body.sessions_today > 100000) {
       return "sessions_today must be a non-negative integer under 100000";
+    }
+  }
+  if (body.schema_version === 3) {
+    if (!Number.isInteger(body.active_seconds_today) || body.active_seconds_today < 0 || body.active_seconds_today > 86400) {
+      return "active_seconds_today must be a non-negative integer no greater than 86400";
+    }
+    if (!Number.isInteger(body.total_sessions_managed) || body.total_sessions_managed < 0 || body.total_sessions_managed > 10000000) {
+      return "total_sessions_managed must be a non-negative integer under 10000000";
     }
   }
   return null;
@@ -90,8 +98,8 @@ async function handlePing(request, env) {
   if (err) return new Response(err, { status: 400 });
   try {
     await env.DB.prepare(
-      "INSERT INTO pings (received_at, install_id, version, platform, engines, last_active_date, sessions_today) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO pings (received_at, install_id, version, platform, engines, last_active_date, sessions_today, active_seconds_today, total_sessions_managed) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).bind(
       new Date().toISOString(),
       body.install_id,
@@ -99,7 +107,9 @@ async function handlePing(request, env) {
       body.platform,
       body.engines,
       body.last_active_date || "",
-      body.schema_version === 2 ? body.sessions_today : null,
+      body.schema_version >= 2 ? body.sessions_today : null,
+      body.schema_version === 3 ? body.active_seconds_today : null,
+      body.schema_version === 3 ? body.total_sessions_managed : null,
     ).run();
   } catch (_) {
     return new Response("", { status: 500 });
@@ -200,7 +210,11 @@ async function handleStats(_request, env) {
     ).all()).results;
 
     const sessionsToday = (await env.DB.prepare(
-      "SELECT install_id, MAX(sessions_today) AS latest_sessions_today, MAX(received_at) AS last_seen " +
+      "SELECT install_id, " +
+      "  MAX(sessions_today) AS latest_sessions_today, " +
+      "  MAX(active_seconds_today) AS latest_active_seconds_today, " +
+      "  MAX(total_sessions_managed) AS latest_total_sessions_managed, " +
+      "  MAX(received_at) AS last_seen " +
       "FROM pings WHERE sessions_today IS NOT NULL AND install_id NOT LIKE '00000000%' AND install_id NOT LIKE '11111111%' AND install_id NOT LIKE '22222222%' AND install_id NOT LIKE '33333333%' " +
       "GROUP BY install_id ORDER BY last_seen DESC LIMIT 50"
     ).all()).results;
@@ -215,6 +229,8 @@ async function handleStats(_request, env) {
       sessions_today_per_install: sessionsToday.map(r => ({
         install_id_prefix: r.install_id.slice(0, 8),
         latest_sessions_today: r.latest_sessions_today,
+        latest_active_seconds_today: r.latest_active_seconds_today,
+        latest_total_sessions_managed: r.latest_total_sessions_managed,
         last_seen: r.last_seen,
       })),
     });

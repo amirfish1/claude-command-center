@@ -42785,6 +42785,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "env_disabled": _telemetry_disabled_env(),
             })
             return
+        if path == "/api/telemetry/heartbeat":
+            # Dashboard heartbeat — fires every 30s while the tab is
+            # visible. Credits one _TELEMETRY_ACTIVE_HEARTBEAT_S bucket
+            # to today's active-seconds counter. Honors the env kill
+            # switch; does NOT require opt-in (the bucket is only read
+            # when the daily ping fires, which is opt-in-gated). Always
+            # returns 204 — no state leak to a watching network user.
+            _telemetry_record_heartbeat()
+            self.send_response(204)
+            self.end_headers()
+            return
         if path == "/api/self-update":
             # Pull the latest main into the install dir and restart the server
             # in-place via os.execvp. The same-origin check above already
@@ -48169,7 +48180,12 @@ def _raise_open_file_limit(min_soft=2048):
 # All telemetry log lines are tagged `[telemetry]` so users grepping the
 # server log can audit exactly when (and whether) anything fires.
 
-_TELEMETRY_SCHEMA_VERSION = 2
+_TELEMETRY_SCHEMA_VERSION = 3
+# Heartbeat cadence (client beats every N seconds while the dashboard
+# tab is visible). Each accepted beat credits N seconds of "active"
+# time to today's bucket. Picked to be coarse enough that the count is
+# privacy-friendly (no per-action timing) but fine enough to be useful.
+_TELEMETRY_ACTIVE_HEARTBEAT_S = 30
 _TELEMETRY_DEFAULT_ENDPOINT = (
     "https://telemetry.claude-command-center.workers.dev/v1/ping"
 )
@@ -48433,8 +48449,93 @@ def _telemetry_count_sessions_today():
     return n
 
 
+def _telemetry_count_total_sessions_managed():
+    """Count every JSONL transcript ever seen under PROJECTS_ROOT.
+
+    Lifetime "sessions CCC has indexed" proxy. Same scan shape as the
+    24h counter, just without the mtime cutoff. Capped at 10000000 to
+    keep the payload bounded; the dashboard cap on its own poll
+    rendering is far below that.
+    """
+    root = PROJECTS_ROOT
+    try:
+        if not root.is_dir():
+            return 0
+    except OSError:
+        return 0
+    n = 0
+    try:
+        for project_dir in root.iterdir():
+            if not project_dir.is_dir():
+                continue
+            try:
+                for jsonl in project_dir.iterdir():
+                    if not jsonl.name.endswith(".jsonl"):
+                        continue
+                    n += 1
+                    if n >= 10_000_000:
+                        return n
+            except OSError:
+                continue
+    except OSError:
+        return n
+    return n
+
+
+def _telemetry_active_state_path():
+    return _telemetry_state_dir() / "telemetry-active.json"
+
+
+def _telemetry_today_utc():
+    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def _telemetry_load_active_state():
+    """Read the rolling daily "active seconds" bucket. Resets on day
+    rollover. Stored under telemetry state dir alongside other opt-in
+    files; mode 0600."""
+    p = _telemetry_active_state_path()
+    today = _telemetry_today_utc()
+    try:
+        raw = p.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if isinstance(data, dict) and data.get("date") == today:
+            seconds = data.get("seconds")
+            if isinstance(seconds, int) and 0 <= seconds <= 86400:
+                return {"date": today, "seconds": seconds}
+    except (OSError, ValueError, TypeError):
+        pass
+    return {"date": today, "seconds": 0}
+
+
+def _telemetry_record_heartbeat():
+    """Credit one heartbeat (_TELEMETRY_ACTIVE_HEARTBEAT_S seconds) to
+    today's active-seconds bucket. Honors CCC_TELEMETRY_DISABLED. Caps
+    at 86400 (full day). Returns the new bucket state."""
+    if _telemetry_disabled_env():
+        return {"date": _telemetry_today_utc(), "seconds": 0}
+    state = _telemetry_load_active_state()
+    state["seconds"] = min(86400, state["seconds"] + _TELEMETRY_ACTIVE_HEARTBEAT_S)
+    p = _telemetry_active_state_path()
+    with _TELEMETRY_STATE_LOCK:
+        try:
+            _telemetry_state_dir()
+            p.write_text(json.dumps(state) + "\n", encoding="utf-8")
+            try:
+                os.chmod(p, 0o600)
+            except OSError:
+                pass
+        except OSError:
+            pass
+    return state
+
+
+def _telemetry_active_seconds_today():
+    return _telemetry_load_active_state()["seconds"]
+
+
 def _build_telemetry_payload():
-    """Assemble the schema-v2 dict. Returns None when no install-id is available."""
+    """Assemble the schema-v3 dict. Returns None when no install-id is available."""
     install_id = _telemetry_load_or_init_install_id()
     if not install_id:
         return None
@@ -48446,6 +48547,8 @@ def _build_telemetry_payload():
         "engines": ",".join(_telemetry_detect_engines()),
         "last_active_date": _telemetry_last_active_date(),
         "sessions_today": _telemetry_count_sessions_today(),
+        "active_seconds_today": _telemetry_active_seconds_today(),
+        "total_sessions_managed": _telemetry_count_total_sessions_managed(),
     }
 
 
