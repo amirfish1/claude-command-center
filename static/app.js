@@ -8502,6 +8502,13 @@
     const RATIO = 1.5;        // |dx| must exceed |dy| * RATIO to count as horizontal
     let sx = 0, sy = 0, active = false, committed = false, decided = false;
     let dragging = false;     // following the finger with a live transform
+    // WhatsApp-style drag-to-dismiss: if the composer keyboard is up when a
+    // vertical drag starts on the message area, blur the input so the keyboard
+    // slides away (matches the native "drag down to dismiss"). Spares the user
+    // hunting for iOS Safari's accessory "Done" bar above the keyboard.
+    let composerFocusedAtStart = false;
+    let kbDismissed = false;
+    const DISMISS_DY = 24;    // px of downward travel before we drop the keyboard
     // Reset any in-progress finger-follow transform back to rest.
     function clearDragStyle() {
       viewEl.style.transform = '';
@@ -8511,18 +8518,33 @@
     }
     viewEl.addEventListener('touchstart', (e) => {
       active = false; committed = false; decided = false;
+      kbDismissed = false; composerFocusedAtStart = false;
       if (e.touches.length !== 1) return;
       // A live text selection means the user is selecting, not swiping.
       const sel = window.getSelection && window.getSelection();
       if (sel && !sel.isCollapsed && String(sel).length) return;
       if (swipeStartBlocked(e.target)) return;
       sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      // Note whether a composer input held focus (keyboard up) as the drag
+      // began — the touchmove handler uses this to decide on drag-to-dismiss.
+      const ae = document.activeElement;
+      composerFocusedAtStart = !!(ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')
+        && ae.closest && ae.closest('.conv-input-bar, .conv-panel-input, .gc-reader-input-row'));
       active = true;
     }, { passive: true });
     viewEl.addEventListener('touchmove', (e) => {
       if (!active || e.touches.length !== 1) return;
       const dx = e.touches[0].clientX - sx;
       const dy = e.touches[0].clientY - sy;
+      // Drag-to-dismiss: a downward drag on the message area while the keyboard
+      // is up blurs the composer so the keyboard slides away (WhatsApp-style).
+      // Vertical-dominant only, so it never steals a left/right conv swipe; the
+      // browser keeps scrolling normally — we just drop the keyboard alongside.
+      if (composerFocusedAtStart && !kbDismissed && dy > DISMISS_DY && dy > Math.abs(dx)) {
+        kbDismissed = true;
+        const ae = document.activeElement;
+        if (ae && typeof ae.blur === 'function') ae.blur();
+      }
       if (!decided) {
         // Wait until the gesture is unambiguous before committing either way.
         if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
