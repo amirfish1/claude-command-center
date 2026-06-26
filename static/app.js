@@ -4601,6 +4601,9 @@
     const isConvTab = activeTab === 'sessions';
     const hasSession = !!currentSession.id;
     const isNewSession = currentConversation === '__new__';
+    if ($convInputBar) {
+      $convInputBar.classList.toggle('is-new-session-launch', isNewSession);
+    }
     // Backlog GH issue: viewing an issue card in the right pane. Submitting
     // the input bar spawns a session equivalent to clicking "Edit & start"
     // on the kanban card, with the typed text appended to the standard
@@ -4780,6 +4783,7 @@
       }
     } else {
       $convInputBar.classList.remove('visible');
+      $convInputBar.classList.remove('is-new-session-launch');
       if ($convInput) {
         $convInput.readOnly = false;
         $convInput.classList.remove('is-readonly');
@@ -25833,7 +25837,7 @@
     let rows = await _fetchUxqHealth();
     const proj = scopeProject !== undefined ? _uxqProjectKey(scopeProject) : _uxqWorkerProject();
     if (proj) {
-      const mine = rows.filter(r => _uxqProjectKey(r && r.project) === proj);
+      const mine = rows.filter(r => _uxqInScope(r && r.project, proj));
       if (mine.length) rows = mine;  // scope when this project has open work
     }
     if (!rows.length) {
@@ -25871,9 +25875,24 @@
   const _REPO_PROJECT_MAP = {
     'bym+finie': 'BYMPROD', 'bym-finie': 'BYMPROD', 'bookyourmat': 'BYMPROD', 'bymprod': 'BYMPROD',
     'claude-command-center': 'CCC', 'command-center': 'CCC',
+    'watchtower': 'WT',
   };
+  // Project "families": a single repo whose work is split across sub-queues
+  // (e.g. WatchTower tracks its own backlog as WT-BUGS / WT-FEATURES so features
+  // don't auto-drain). A session rooted at the family repo shows ALL sub-queues
+  // in one Queue panel; `_UXQ_FAMILY_DEFAULT` routes a "+ add" to the fix-now one.
+  const _UXQ_FAMILY_ROOTS = new Set(['WT']);
+  const _UXQ_FAMILY_DEFAULT = { WT: 'WT-BUGS' };
   function _uxqProjectKey(value) {
     return String(value || '').trim().toUpperCase();
+  }
+  // True when item project Q belongs to panel scope P: exact match, or P is a
+  // family root and Q is one of its sub-queues ("WT" matches "WT-BUGS").
+  function _uxqInScope(itemProject, panelProject) {
+    const a = _uxqProjectKey(itemProject), b = _uxqProjectKey(panelProject);
+    if (!b) return false;
+    if (a === b) return true;
+    return _UXQ_FAMILY_ROOTS.has(b) && a.startsWith(b + '-');
   }
   function _projectForRepoPath(repoPath) {
     if (!repoPath) return '';
@@ -25886,7 +25905,7 @@
   function _uxqProjectHasItems(items, project) {
     const wanted = _uxqProjectKey(project);
     if (!wanted) return false;
-    return (Array.isArray(items) ? items : []).some(it => _uxqProjectKey(it && it.project) === wanted);
+    return (Array.isArray(items) ? items : []).some(it => _uxqInScope(it && it.project, wanted));
   }
   function _uxqDominantOpenProject(items) {
     const counts = new Map();
@@ -26028,7 +26047,7 @@
       const proj = _uxqResolvePanelProject(items, requestedProject);
       _uxqLastResolvedProject = proj;
       _renderQueueHealthStrip(false, proj);
-      const scoped = proj ? items.filter(it => _uxqProjectKey(it && it.project) === proj) : items;
+      const scoped = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
       const rows = scoped.slice().reverse();  // newest first
       $queue.innerHTML = rows.map(it => {
         const noteFull = String(it.note || '');
@@ -26121,7 +26140,10 @@
         ev.stopPropagation();
         const note = (window.prompt('New queue ticket — describe the fix:') || '').trim();
         if (!note) return;
-        const proj = _uxqLastResolvedProject || _uxqWorkerProject();
+        const resolved = _uxqLastResolvedProject || _uxqWorkerProject();
+        // A family root ("WT") isn't a real sub-queue — route the add to its
+        // fix-now child ("WT-BUGS") so it lands somewhere drainable.
+        const proj = _UXQ_FAMILY_DEFAULT[_uxqProjectKey(resolved)] || resolved;
         try {
           const res = await fetch('/api/ux-fixes/enqueue', {
             method: 'POST',
@@ -40296,7 +40318,7 @@
         populateSpawnCwdPicker();
         setSpawnCwdInputValue(data.path);
         showOpToast('Project folder created: ' + data.path, 'success');
-        if (hintEl) hintEl.textContent = '✓ Folder ready. Describe the project below and press Enter to start.';
+        if (hintEl) hintEl.textContent = 'Folder ready. Type the first prompt below and press Enter.';
         const input = composerInputForPane(paneId) || $convInput;
         if (input) {
           input.placeholder = 'What is this project about? Describe it to start the first session…';
@@ -40306,7 +40328,7 @@
         showOpToast('Could not create project: ' + ((err && err.message) || 'unknown'), 'error');
         createBtn.disabled = false;
       } finally {
-        createBtn.textContent = 'Create folder & start';
+        createBtn.textContent = 'Create folder';
       }
     };
     createBtn.addEventListener('click', submit);
@@ -40430,20 +40452,23 @@
       const newSessionHelp = spawnEngine === 'antigravity'
         ? 'Type a prompt below and press Enter to spawn a headless Antigravity run with AGY print mode.'
         : 'Type a prompt below and press Enter to spawn a fresh ' + engineLabel + ' agent. The new session will appear in the sidebar.';
-      $view.innerHTML = '<div class="ns-stage">'
-        + '<div class="empty-state ns-hero" style="height:auto;flex-direction:column;gap:14px;text-align:center;">'
-        + '<div class="ns-hero-title">🚀 Start a new session</div>'
-        + '<div class="ns-choice-card" id="nsCardNewProject">'
-        +   '<div class="ns-choice-title">New project</div>'
-        +   '<span class="ns-name-row">'
-        +     '<input type="text" id="nsNewProjectName" class="ns-input" placeholder="Project name…" autocomplete="off" spellcheck="false">'
-        +     '<button type="button" id="nsNewProjectDice" class="ns-dice-btn" title="Roll another name">&#127922;</button>'
-        +   '</span>'
-        +   '<button type="button" id="nsNewProjectCreate" class="ns-create-btn" disabled>Create folder &amp; start</button>'
-        +   '<div class="ns-muted" id="nsNewProjectHint">Creates a fresh folder, then you describe the project. <strong>Already have a repo?</strong> Skip this — pick it in the <strong>Folder</strong> row below and just type your prompt.</div>'
-        + '</div>'
-        + '<div style="font-size:13px;color:var(--text-muted);max-width:480px;line-height:1.5;">' + escapeHtml(newSessionHelp) + '</div>'
-        // Integration recipes collapsed by default; revealed once templates load
+      $view.innerHTML = '<div class="ns-stage ns-stage-quiet">'
+        + '<div class="empty-state ns-hero ns-hero-quiet" style="height:auto;flex-direction:column;gap:10px;text-align:center;">'
+        + '<div class="ns-stage-title">New session</div>'
+        + '<div class="ns-stage-subtitle">Choose the object and folder below, then type the first message.</div>'
+        + '<details class="ns-new-project-details" id="nsNewProjectDetails">'
+        +   '<summary>Create a fresh folder</summary>'
+        +   '<div class="ns-choice-card ns-choice-card-compact" id="nsCardNewProject">'
+        +     '<div class="ns-choice-title">Fresh folder</div>'
+        +     '<span class="ns-name-row">'
+        +       '<input type="text" id="nsNewProjectName" class="ns-input" placeholder="Project name…" autocomplete="off" spellcheck="false">'
+        +       '<button type="button" id="nsNewProjectDice" class="ns-dice-btn" title="Roll another name">&#127922;</button>'
+        +     '</span>'
+        +     '<button type="button" id="nsNewProjectCreate" class="ns-create-btn" disabled>Create folder</button>'
+        +     '<div class="ns-muted" id="nsNewProjectHint">Creates a folder and selects it below. Then type the first prompt in the composer.</div>'
+        +   '</div>'
+        + '</details>'
+        + '<div class="ns-stage-help">' + escapeHtml(newSessionHelp) + '</div>'
         + '<details class="ns-recipes-details" id="nsExtensionsWrap" style="display:none;">'
         +   '<summary class="ns-recipes-summary">Extend CCC · integration recipes</summary>'
         +   '<div class="nsm-gallery inline-new-session-templates" id="nsExtensionsGallery"></div>'

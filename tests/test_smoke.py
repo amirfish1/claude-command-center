@@ -295,6 +295,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Show all folder suggestions", index_html)
         self.assertIn(".spawn-cwd-chip-label", app_css)
 
+    def test_new_session_stage_demotes_center_card_and_expands_composer(self):
+        """New-session mode should make the bottom composer primary and keep
+        center content as quiet onboarding, not a competing start form."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("class=\"ns-stage ns-stage-quiet\"", app_js)
+        self.assertIn("class=\"ns-stage-title\">New session</div>", app_js)
+        self.assertIn("class=\"ns-new-project-details\"", app_js)
+        self.assertIn("Create a fresh folder", app_js)
+        self.assertNotIn("class=\"ns-hero-title\">🚀 Start a new session</div>", app_js)
+        self.assertIn("$convInputBar.classList.toggle('is-new-session-launch', isNewSession);", app_js)
+        self.assertIn(".conv-input-bar.is-new-session-launch textarea", app_css)
+        self.assertIn("min-height: 96px;", app_css)
+
     def test_inprogress_header_has_object_shortcut(self):
         """The row-list header should expose + object before by-objects mode."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

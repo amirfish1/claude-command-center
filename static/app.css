@@ -14515,21 +14515,49 @@ body:has(.gc-reader) .pwa-install-banner {
   background: rgba(88,166,255,0.10);
 }
 
-/* ── New-session stage (CCC-87): center the chooser, make it inviting. ── */
+/* New-session stage: quiet onboarding. The bottom composer is the primary
+   launch surface, so the center of the pane teaches context without competing
+   with the input. */
 .ns-stage {
-  min-height: 70vh;
-  display: flex; align-items: center; justify-content: center;
+  min-height: min(42vh, 340px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: clamp(32px, 8vh, 84px) 20px 20px;
+  box-sizing: border-box;
 }
-.ns-hero { animation: nsHeroIn 0.25s ease-out; }
+.ns-stage-quiet .ns-hero-quiet {
+  animation: nsHeroIn 0.18s ease-out;
+  opacity: 0.92;
+}
 @keyframes nsHeroIn {
   from { opacity: 0; transform: translateY(10px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.ns-hero-title {
-  font-size: 22px; font-weight: 700;
-  background: linear-gradient(90deg, var(--accent, #58a6ff), var(--purple, #bc8cff));
-  -webkit-background-clip: text; background-clip: text;
-  -webkit-text-fill-color: transparent; color: transparent;
+.ns-stage-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+.ns-stage-subtitle,
+.ns-stage-help {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  max-width: 560px;
+}
+.ns-new-project-details {
+  width: min(460px, 92vw);
+  margin-top: 4px;
+}
+.ns-new-project-details > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  user-select: none;
+}
+.ns-new-project-details[open] > summary {
+  color: var(--accent, #58a6ff);
 }
 .ns-choice-card {
   transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
@@ -14538,6 +14566,15 @@ body:has(.gc-reader) .pwa-install-banner {
   transform: translateY(-2px);
   border-color: color-mix(in srgb, var(--accent, #58a6ff) 45%, var(--border) 55%);
   box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+}
+.ns-choice-card-compact {
+  max-width: none;
+  margin-top: 8px;
+  box-shadow: none;
+}
+.ns-choice-card-compact:hover {
+  transform: none;
+  box-shadow: none;
 }
 /* Adopted CWD + worktree on one row; chips bare below. */
 .ns-cwd-slot {
@@ -14635,26 +14672,21 @@ body:has(.gc-reader) .pwa-install-banner {
    label is redundant with the tab itself but harmless — keep for tools
    (1d/7d, grouping) that live in the header. */
 
-/* ── Centered composer in the new-session stage (CCC-87 follow-up) ────
-   #convInputBar is adopted into #nsComposerSlot while new-session mode
-   is active; restore puts it back above the status rail. */
 .ns-composer-slot { width: 100%; max-width: 720px; margin-top: 4px; }
-.ns-composer-slot .conv-input-bar.is-centered-stage {
-  position: static;
-  width: 100%;
-  border-top: none;
-  background: transparent;
-  padding: 0;
+.conv-input-bar.is-new-session-launch {
+  padding: 12px 22px 18px;
+  background: color-mix(in srgb, var(--bg) 88%, var(--surface) 12%);
+  border-top: 1px solid var(--border);
 }
-.ns-composer-slot .conv-input-bar.is-centered-stage textarea {
-  border: 1px solid var(--accent, #58a6ff);
-  border-radius: 10px;
+.conv-input-bar.is-new-session-launch textarea {
+  min-height: 96px;
+  font-size: 15px;
+  line-height: 1.45;
+  border-color: var(--accent, #58a6ff);
   box-shadow: 0 0 0 3px rgba(88,166,255,0.10);
-  /* Several lines of room — invite people to actually express the idea,
-     not compress it into one line. */
-  min-height: 140px;
-  font-size: 14px;
-  line-height: 1.5;
+}
+.conv-input-context.visible.is-new-session {
+  padding: 8px 22px 0;
 }
 
 /* New-project name row + dice (random fun name) */
