@@ -39,7 +39,8 @@ the watcher catches that.
 | 12 | GitHub Issues backend | Use your repo's GitHub Issues as the queue, drop-in behind the same API | ⬜ Planned |
 | 18 | Queue registry API | First-class create/configure a queue (name, backend, drain policy, owner) instead of implicit create-on-first-write — the enabler for #12 and the "anyone declares a queue" platform move | ⬜ Planned |
 | 19 | Dedup / merge pass | Append-only enqueue + post-hoc dedup: cheap exact-key pre-filter, then a semantic merge+rank agent pass before drain. Pre-enqueue dedup is a TOCTOU race under concurrency, so dedup is never the poster's job for correctness | ⬜ Planned |
-| 20 | Start-a-worker primitive | `watchtower work -q <queue>` (+ API + STUCK-badge button): spawn worker(s) bound to a queue when none exists. The action half of the loop (detect → nudge-if-idle → **start-if-none** → drain → wait). Today only detect+nudge exist, so "stuck with zero workers" rots | ⬜ Planned |
+| 20 | Start-a-worker primitive | `wt spawn-worker -q <queue>` (+ API + STUCK-badge button): spawn worker(s) bound to a queue when none exists. The action half of the loop (detect → nudge-if-idle → **start-if-none** → drain → wait). Today only detect+nudge exist, so "stuck with zero workers" rots | ⬜ Planned |
+| 21 | Auto-drain queue policy | Per-queue `auto_drain` flag; the daemon ensures one worker when an auto-drain queue has depth>0 and no live worker. enqueue STAYS pure (no spawn side-effects — it's called by automation/agents); prioritization backlogs (BYMPROD) opt out | ⬜ Planned |
 | 13 | Cross-project mobile pane | All queues at a glance from your phone; pings only on STUCK | ⬜ Planned |
 | 14 | Spawn-and-reply API | Call a worker as a function: sync `await` + async webhook round-trip | ⬜ Planned |
 | 15 | Monitor-as-a-job | Scheduled sanity checks (e.g. a landing page) that file a fix ticket on failure → worker drains it | ⬜ Planned |
