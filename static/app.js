@@ -18657,10 +18657,15 @@
   // every poll, and baked into row markup it was the dominant driver of the
   // periodic full-list rebuild flicker (most visible in "Current sessions",
   // which surfaces exactly the live rows). Blank it from the structural
-  // signature and patch it in place like the time labels. The inner content
-  // is a flat run of leaf <span>s, so the middle group matches text OR a
-  // single-level span, ending at the slot's own closing tag.
-  const _VOLATILE_STATUS_RE = /(<span class="conv-status-slot">)((?:[^<]|<span\b[^>]*>[^<]*<\/span>)*)(<\/span>)/g;
+  // signature and patch it in place like the time labels. The slot mixes leaf
+  // signal spans (WIP / pushed / read-only) with a live-tool chip that nests one
+  // level (conv-live-tool > conv-live-name / conv-live-file), so the inner
+  // pattern must allow a span whose body is itself text-or-leaf-spans. The old
+  // leaf-only pattern failed to match any slot containing a live tool; because
+  // _patchByOrder bails when match-count != element-count, a SINGLE live tool
+  // anywhere froze live status updates across the whole list in an open tab —
+  // WIP/bash stopped refreshing until the next structural rebuild. (CCC-288)
+  const _VOLATILE_STATUS_RE = /(<span class="conv-status-slot">)((?:[^<]|<span\b[^>]*>(?:[^<]|<span\b[^>]*>[^<]*<\/span>)*<\/span>)*)(<\/span>)/g;
 
   // Update only the volatile bits (time labels + live status slot) in place
   // from freshly-built markup, leaving the rest of the live DOM (and its
