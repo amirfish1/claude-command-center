@@ -17003,6 +17003,49 @@ def _codex_fetch_threads(where="", params=(), limit=None):
     return []
 
 
+def _codex_spawn_parent_by_child():
+    """Map each spawned Codex thread to the thread that spawned it.
+
+    Codex records sub-agent spawns in ~/.codex/state_*.sqlite's
+    `thread_spawn_edges` (parent_thread_id, child_thread_id). CCC uses this to
+    set parent_session_id on a spawned agent's row so it nests under its parent
+    in the Current-sessions tree — a "one job, many agents" fan-out (a fixer
+    plus reviewers) then reads as one cluster instead of a pile of loose rows.
+    Read-only; tolerant of the table being absent on older Codex builds.
+    Returns {child_thread_id: parent_thread_id}. (CCC-298)
+    """
+    out = {}
+    for db in _codex_state_db_candidates():
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.25)
+            con.row_factory = sqlite3.Row
+        except sqlite3.Error:
+            continue
+        try:
+            has_table = con.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='thread_spawn_edges'"
+            ).fetchone()
+            if not has_table:
+                continue
+            for r in con.execute(
+                "SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges"
+            ).fetchall():
+                child = (r["child_thread_id"] or "").strip()
+                parent = (r["parent_thread_id"] or "").strip()
+                # First edge wins (DBs scanned newest-first); never self-parent.
+                if child and parent and child != parent:
+                    out.setdefault(child, parent)
+        except sqlite3.Error:
+            continue
+        finally:
+            try:
+                con.close()
+            except sqlite3.Error:
+                pass
+    return out
+
+
 _codex_goals_cache = {"key": None, "data": {}, "ts": 0.0}
 _codex_goals_lock = threading.Lock()
 _CODEX_GOALS_TTL = 2.0
@@ -18700,6 +18743,10 @@ def find_codex_conversations(
     cutoff = _session_scan_cutoff_ts(include_old)
     max_rows = _session_scan_file_limit(include_old)
     spawn_by_sid = _codex_spawn_pid_by_thread_id()
+    # One read of the spawn-edge table for the whole scan; per-row lookups are
+    # O(1) dict hits (perf gate: no per-row DB work). Lets a spawned agent nest
+    # under its parent in the Current-sessions tree. (CCC-298)
+    codex_parent_by_child = _codex_spawn_parent_by_child()
     # One batched, cached read of the codex goals sqlite for the whole scan —
     # per-row lookups are O(1) dict hits (perf gate: no per-row DB work).
     goals_by_sid = _codex_goals_snapshot()
@@ -18857,7 +18904,14 @@ def find_codex_conversations(
             "last_interacted": last_interactions.get(sid),
             "is_live": spawn_alive,
             "spawn_pid": spawn_pid,
-            "parent_session_id": spawn_info.get("parent_session_id") or "",
+            # Prefer the Codex spawn-edge parent so a spawned sub-agent nests
+            # under the thread that spawned it in the Current-sessions tree;
+            # fall back to the CCC spawn-registry parent. (CCC-298)
+            "parent_session_id": (
+                codex_parent_by_child.get(sid)
+                or spawn_info.get("parent_session_id")
+                or ""
+            ),
             **codex_activity,
             **codex_stale_tool,
             "needs_approval": False,
