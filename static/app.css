@@ -1625,6 +1625,7 @@
     color: var(--text-muted, var(--text-2));
     white-space: nowrap;
   }
+  #cccBreadcrumb .ccc-proc-checked { display: none; }
   :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-refresh {
     flex: 0 0 auto;
     margin-left: 2px;
@@ -1789,7 +1790,8 @@
     .conv-pane-drop-overlay { display: none !important; }
   }
 
-  .conv-scroll-end-btn {
+  .conv-scroll-end-btn,
+  .conv-scroll-last-btn {
     position: absolute;
     right: 20px;
     bottom: 96px;
@@ -1811,17 +1813,21 @@
     transform: translateY(6px);
     transition: opacity 0.14s ease, transform 0.14s ease, border-color 0.14s ease, background 0.14s ease;
   }
-  .conv-scroll-end-btn.visible {
+  .conv-scroll-end-btn.visible,
+  .conv-scroll-last-btn.visible {
     opacity: 1;
     pointer-events: auto;
     transform: translateY(0);
   }
-  .conv-scroll-end-btn:hover {
+  .conv-scroll-end-btn:hover,
+  .conv-scroll-last-btn:hover {
     border-color: var(--accent);
     background: var(--surface-2);
   }
-  .conv-scroll-end-btn svg { flex: none; }
-  .conv-scroll-end-btn span {
+  .conv-scroll-end-btn svg,
+  .conv-scroll-last-btn svg { flex: none; }
+  .conv-scroll-end-btn span,
+  .conv-scroll-last-btn span {
     font-size: 12px;
     font-weight: 600;
     line-height: 1;

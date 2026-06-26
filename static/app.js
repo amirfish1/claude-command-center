@@ -18653,13 +18653,12 @@
       ? 'CCC last polled these processes at ' + clock
       : 'When CCC last polled these processes';
     // A terminal session's stdout is its TUI — it can't be stream-json-tailed.
-    // So rather than a third pill, fold the stream-json state into the headless
-    // pill: "headless · stream-json" (distinct color) when CCC is live-tailing
-    // this session's stdout, plain "headless" when it's only reading the JSONL.
+    // Keep the toolbar pill compact: streaming already implies a headless run
+    // and gets distinct color, so avoid repeating "headless" in the label.
     const streaming = !!(typeof _spawnLiveSid !== 'undefined' && _spawnLiveSid
       && currentSession && _spawnLiveSid === currentSession.id);
     const headActive = headOn || streaming;
-    const headLabel = (stale ? 'headless ⚠' : 'headless') + (streaming ? ' · stream-json' : '');
+    const headLabel = streaming ? (stale ? 'stream-json ⚠' : 'stream-json') : (stale ? 'headless ⚠' : 'headless');
     const headPillTitle = streaming
       ? headTitle + ' — CCC is live-tailing its stdout as stream-json (block-level)'
       : headTitle + (headOn ? ' — reading the JSONL transcript, not stream-tailing' : '');
@@ -24324,6 +24323,15 @@
     });
   }
 
+  // The most recent user message in a conversation view — the anchor the "Last"
+  // affordance jumps to (CCC-292). Excludes task-notification events, which are
+  // rendered as user_text but aren't something the user wrote.
+  function _lastUserMessageEl(view) {
+    if (!view) return null;
+    const list = view.querySelectorAll('.event.user_text:not(.task-notification-event)');
+    return list.length ? list[list.length - 1] : null;
+  }
+
   function positionConversationEndAffordance(view) {
     const btn = view && view._convEndButton;
     const host = btn && btn.parentElement;
@@ -24331,8 +24339,16 @@
     const hostRect = host.getBoundingClientRect();
     const viewRect = view.getBoundingClientRect();
     if (!hostRect.width || !hostRect.height || !viewRect.width || !viewRect.height) return;
-    btn.style.bottom = Math.max(12, Math.round(hostRect.bottom - viewRect.bottom + 14)) + 'px';
-    btn.style.right = Math.max(14, Math.round(hostRect.right - viewRect.right + 20)) + 'px';
+    const endBottom = Math.max(12, Math.round(hostRect.bottom - viewRect.bottom + 14));
+    const right = Math.max(14, Math.round(hostRect.right - viewRect.right + 20));
+    btn.style.bottom = endBottom + 'px';
+    btn.style.right = right + 'px';
+    // Stack the "Last" button above the End button so the two never overlap.
+    const lastBtn = view._convLastButton;
+    if (lastBtn) {
+      lastBtn.style.right = right + 'px';
+      lastBtn.style.bottom = (endBottom + 42) + 'px';
+    }
   }
 
   function updateConversationEndAffordance(view) {
@@ -24340,11 +24356,29 @@
     if (!view._convEndAffordanceAttached) attachConversationEndAffordance(view);
     const btn = view._convEndButton;
     if (!btn) return;
-    const show = view.scrollHeight > view.clientHeight + CONV_BOTTOM_TOLERANCE
-      && !isConversationAtBottom(view);
+    const scrollable = view.scrollHeight > view.clientHeight + CONV_BOTTOM_TOLERANCE;
+    const show = scrollable && !isConversationAtBottom(view);
     btn.classList.toggle('visible', show);
     btn.setAttribute('aria-hidden', show ? 'false' : 'true');
     btn.tabIndex = show ? 0 : -1;
+    // "Last" shows when the start of the latest user message is scrolled above
+    // the top of the pane — i.e. you'd have to scroll up to read the reply from
+    // its beginning. Hidden once that message's start is already in view.
+    const lastBtn = view._convLastButton;
+    if (lastBtn) {
+      let showLast = false;
+      if (scrollable) {
+        const el = _lastUserMessageEl(view);
+        if (el) {
+          const viewRect = view.getBoundingClientRect();
+          const elRect = el.getBoundingClientRect();
+          showLast = elRect.top < viewRect.top - 8;
+        }
+      }
+      lastBtn.classList.toggle('visible', showLast);
+      lastBtn.setAttribute('aria-hidden', showLast ? 'false' : 'true');
+      lastBtn.tabIndex = showLast ? 0 : -1;
+    }
     positionConversationEndAffordance(view);
   }
 
@@ -24483,6 +24517,34 @@
       scrollConversationToEnd(btn._convTargetView || view, 'smooth');
     });
     view._convEndButton = btn;
+    // "Jump to my last message" (CCC-292): reading a fresh reply means scrolling
+    // up to your own message and reading down. This 1-click affordance pins the
+    // start of the latest user message to the top of the pane. Stacked above the
+    // End button; shown only when that message's start is scrolled out of view.
+    let lastBtn = host.querySelector(':scope > .conv-scroll-last-btn');
+    if (!lastBtn) {
+      lastBtn = document.createElement('button');
+      lastBtn.type = 'button';
+      lastBtn.className = 'conv-scroll-last-btn';
+      lastBtn.title = 'Jump to the start of your last message';
+      lastBtn.setAttribute('aria-label', 'Jump to the start of your last message');
+      lastBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg><span>Last</span>';
+      host.appendChild(lastBtn);
+    }
+    lastBtn._convTargetView = view;
+    lastBtn.addEventListener('click', () => {
+      const v = lastBtn._convTargetView || view;
+      const el = _lastUserMessageEl(v);
+      if (!el) return;
+      v._pinnedToBottom = false;
+      const viewRect = v.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const top = Math.max(0, v.scrollTop + (elRect.top - viewRect.top) - 12);
+      if (typeof v.scrollTo === 'function') v.scrollTo({ top, behavior: 'smooth' });
+      else v.scrollTop = top;
+      updateConversationEndAffordance(v);
+    });
+    view._convLastButton = lastBtn;
     view._convEndAffordanceAttached = true;
     // Pin-to-bottom: true means the user wants to follow new content.
     // Initialized true so a brand-new pane auto-scrolls; user scrolling
