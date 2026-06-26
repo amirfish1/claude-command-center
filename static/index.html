@@ -843,17 +843,11 @@
                 <option value="not_planned">Close: not planned</option>
                 <option value="duplicate">Close: duplicate #</option>
               </select>
-              <label class="conv-announced-from" title="Optional sender label added to injected messages so the target agent knows who asked.">
-                <span>Announced from</span>
-                <input id="convAnnouncedFrom" class="conv-announced-from-input"
-                       type="text"
-                       maxlength="80"
-                       autocomplete="off"
-                       autocapitalize="words"
-                       autocorrect="off"
-                       spellcheck="false"
-                       placeholder="sender">
-              </label>
+              <!-- "Announced from" sender label is an API-only field now (set via
+                   the announced_from key in the /api/inject-input payload). It was
+                   never meant as a manual UI input, so the box is removed; the JS
+                   readers (announcedFromForPane) already fall back to '' when the
+                   input is absent. (CCC-287) -->
             </div>
             <div class="conv-input-buttons">
               <button class="esc-btn" id="convEscBtn" title="Send Esc to terminal — cancels in-flight response (or kills a headless spawn)">Esc</button>
