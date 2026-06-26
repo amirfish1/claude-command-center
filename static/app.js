@@ -25837,7 +25837,7 @@
     let rows = await _fetchUxqHealth();
     const proj = scopeProject !== undefined ? _uxqProjectKey(scopeProject) : _uxqWorkerProject();
     if (proj) {
-      const mine = rows.filter(r => _uxqInScope(r && r.project, proj));
+      const mine = rows.filter(r => _uxqProjectKey(r && r.project) === proj);
       if (mine.length) rows = mine;  // scope when this project has open work
     }
     if (!rows.length) {
@@ -25875,24 +25875,9 @@
   const _REPO_PROJECT_MAP = {
     'bym+finie': 'BYMPROD', 'bym-finie': 'BYMPROD', 'bookyourmat': 'BYMPROD', 'bymprod': 'BYMPROD',
     'claude-command-center': 'CCC', 'command-center': 'CCC',
-    'watchtower': 'WT',
   };
-  // Project "families": a single repo whose work is split across sub-queues
-  // (e.g. WatchTower tracks its own backlog as WT-BUGS / WT-FEATURES so features
-  // don't auto-drain). A session rooted at the family repo shows ALL sub-queues
-  // in one Queue panel; `_UXQ_FAMILY_DEFAULT` routes a "+ add" to the fix-now one.
-  const _UXQ_FAMILY_ROOTS = new Set(['WT']);
-  const _UXQ_FAMILY_DEFAULT = { WT: 'WT-BUGS' };
   function _uxqProjectKey(value) {
     return String(value || '').trim().toUpperCase();
-  }
-  // True when item project Q belongs to panel scope P: exact match, or P is a
-  // family root and Q is one of its sub-queues ("WT" matches "WT-BUGS").
-  function _uxqInScope(itemProject, panelProject) {
-    const a = _uxqProjectKey(itemProject), b = _uxqProjectKey(panelProject);
-    if (!b) return false;
-    if (a === b) return true;
-    return _UXQ_FAMILY_ROOTS.has(b) && a.startsWith(b + '-');
   }
   function _projectForRepoPath(repoPath) {
     if (!repoPath) return '';
@@ -25905,7 +25890,7 @@
   function _uxqProjectHasItems(items, project) {
     const wanted = _uxqProjectKey(project);
     if (!wanted) return false;
-    return (Array.isArray(items) ? items : []).some(it => _uxqInScope(it && it.project, wanted));
+    return (Array.isArray(items) ? items : []).some(it => _uxqProjectKey(it && it.project) === wanted);
   }
   function _uxqDominantOpenProject(items) {
     const counts = new Map();
@@ -26047,7 +26032,7 @@
       const proj = _uxqResolvePanelProject(items, requestedProject);
       _uxqLastResolvedProject = proj;
       _renderQueueHealthStrip(false, proj);
-      const scoped = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
+      const scoped = proj ? items.filter(it => _uxqProjectKey(it && it.project) === proj) : items;
       const rows = scoped.slice().reverse();  // newest first
       $queue.innerHTML = rows.map(it => {
         const noteFull = String(it.note || '');
@@ -26140,10 +26125,7 @@
         ev.stopPropagation();
         const note = (window.prompt('New queue ticket — describe the fix:') || '').trim();
         if (!note) return;
-        const resolved = _uxqLastResolvedProject || _uxqWorkerProject();
-        // A family root ("WT") isn't a real sub-queue — route the add to its
-        // fix-now child ("WT-BUGS") so it lands somewhere drainable.
-        const proj = _UXQ_FAMILY_DEFAULT[_uxqProjectKey(resolved)] || resolved;
+        const proj = _uxqLastResolvedProject || _uxqWorkerProject();
         try {
           const res = await fetch('/api/ux-fixes/enqueue', {
             method: 'POST',
