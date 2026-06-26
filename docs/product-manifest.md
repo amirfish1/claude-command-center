@@ -37,6 +37,7 @@ the watcher catches that.
 | 10 | Transcript viewer | Read what any session did — worker or not — back over time | ✅ Built |
 | 11 | Inject / steer | Send input into a running session to correct or unblock it | ✅ Built |
 | 12 | GitHub Issues backend | Use your repo's GitHub Issues as the queue, drop-in behind the same API | ⬜ Planned |
+| 18 | Queue registry API | First-class create/configure a queue (name, backend, drain policy, owner) instead of implicit create-on-first-write — the enabler for #12 and the "anyone declares a queue" platform move | ⬜ Planned |
 | 13 | Cross-project mobile pane | All queues at a glance from your phone; pings only on STUCK | ⬜ Planned |
 | 14 | Spawn-and-reply API | Call a worker as a function: sync `await` + async webhook round-trip | ⬜ Planned |
 | 15 | Monitor-as-a-job | Scheduled sanity checks (e.g. a landing page) that file a fix ticket on failure → worker drains it | ⬜ Planned |
