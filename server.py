@@ -27887,6 +27887,7 @@ never branch, and do NOT push unless explicitly asked.
 # text and a curl the spawned agent runs, so reject anything that could break
 # out of either: shell metachars, quotes, whitespace, control chars.
 _RETURN_ADDRESS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{7,127}$")
+_ANNOUNCED_FROM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_. @:+/-]{0,79}$")
 
 
 def _normalize_return_address(payload):
@@ -27909,6 +27910,35 @@ def _normalize_return_address(payload):
             "(8-128 chars, letters/digits/_.- only)"
         )
     return raw, None
+
+
+def _normalize_announced_from(payload):
+    """Pull the optional injected-message sender label from a payload."""
+    raw = None
+    for key in ("announced_from", "announce_from"):
+        v = payload.get(key)
+        if isinstance(v, str) and v.strip():
+            raw = v.strip()
+            break
+    if raw is None:
+        return None, None
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw):
+        return None, "announced_from must not contain control characters"
+    value = re.sub(r"\s+", " ", raw)
+    if not _ANNOUNCED_FROM_RE.match(value):
+        return None, (
+            "announced_from must be 1-80 chars "
+            "(letters/digits/spaces and _. @:+/- only)"
+        )
+    return value, None
+
+
+def _wrap_injected_text_with_announced_from(text, announced_from):
+    """Prefix injected follow-up text with explicit sender attribution."""
+    label = (announced_from or "").strip()
+    if not label:
+        return text
+    return f"Announced from: {label}\n\n{text}"
 
 
 def _wrap_prompt_with_return_address(prompt, report_to, port=None):
@@ -27934,7 +27964,7 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None):
         "```bash\n"
         f"curl -s --max-time 30 -X POST \"http://127.0.0.1:{p}/api/inject-input\" \\\n"
         "  -H \"Content-Type: application/json\" \\\n"
-        f"  -d '{{\"session_id\": \"{rid}\", \"text\": \"<your report>\"}}'\n"
+        f"  -d '{{\"session_id\": \"{rid}\", \"announced_from\": \"<your session name or id>\", \"text\": \"<your report>\"}}'\n"
         "```\n\n"
         "The report text must contain, in this order:\n"
         "- STATUS: SUCCEEDED or FAILED\n"
@@ -44888,15 +44918,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             text = payload.get("text", "")
             mode = (payload.get("mode") or ("steer" if payload.get("steer") else "send") or "send")
             mode = str(mode).strip().lower()
+            announced_from, announced_from_error = _normalize_announced_from(payload)
             if not sid or not text:
                 self.send_json({"ok": False, "error": "missing session_id or text"})
             elif mode not in ("send", "steer"):
                 self.send_json({"ok": False, "error": "invalid mode"}, 400)
+            elif announced_from_error:
+                self.send_json({"ok": False, "error": announced_from_error}, 400)
             else:
                 # Stamp interaction up-front: the user clicked/typed on this
                 # card, which is the whole signal we want — independent of
                 # whether the keystroke injection itself ends up succeeding.
                 _record_interaction(sid)
+                text = _wrap_injected_text_with_announced_from(text, announced_from)
                 self.send_json(_inject_text_into_session(sid, text, mode=mode))
         elif path == "/api/session/compact":
             length = int(self.headers.get("Content-Length", "0"))

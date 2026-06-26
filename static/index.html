@@ -841,6 +841,17 @@
                 <option value="not_planned">Close: not planned</option>
                 <option value="duplicate">Close: duplicate #</option>
               </select>
+              <label class="conv-announced-from" title="Optional sender label added to injected messages so the target agent knows who asked.">
+                <span>Announced from</span>
+                <input id="convAnnouncedFrom" class="conv-announced-from-input"
+                       type="text"
+                       maxlength="80"
+                       autocomplete="off"
+                       autocapitalize="words"
+                       autocorrect="off"
+                       spellcheck="false"
+                       placeholder="sender">
+              </label>
             </div>
             <div class="conv-input-buttons">
               <button class="esc-btn" id="convEscBtn" title="Send Esc to terminal — cancels in-flight response (or kills a headless spawn)">Esc</button>

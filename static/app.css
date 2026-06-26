@@ -5117,6 +5117,48 @@
     gap: 8px;
     flex-wrap: wrap;
   }
+  .conv-announced-from {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 3px 7px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: rgba(139,148,158,0.08);
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .conv-announced-from.visible { display: inline-flex; }
+  .conv-announced-from:focus-within {
+    border-color: var(--accent);
+    background: rgba(88,166,255,0.10);
+    color: var(--text);
+  }
+  .conv-announced-from span {
+    flex: 0 0 auto;
+  }
+  .conv-input-bar .conv-announced-from-input {
+    flex: 0 1 96px;
+    min-width: 0;
+    width: 96px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    background: transparent !important;
+    color: var(--text);
+    -webkit-text-fill-color: currentColor;
+    caret-color: currentColor;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .conv-input-bar .conv-announced-from-input::placeholder {
+    color: var(--text-muted);
+    opacity: 0.7;
+  }
   .conv-input-buttons {
     display: flex;
     align-items: center;
@@ -5611,6 +5653,8 @@
     }
     .conv-input-row-top { width: 100%; min-width: 0; }
     .conv-input-bar textarea { max-height: 80px; }
+    .conv-announced-from span { display: none; }
+    .conv-input-bar .conv-announced-from-input { width: 74px; flex-basis: 74px; }
     /* TTS: floats as a circle FAB above the right edge of the composer.
        position:absolute on the input-bar (position:relative) places it above
        the input row's top edge — it won't be clipped because .conv-pane has

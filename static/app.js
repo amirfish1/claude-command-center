@@ -4222,6 +4222,8 @@
   const $convSubmitPlusBtn = document.getElementById('convSubmitPlusBtn');
   const $convSteerBtn = document.getElementById('convSteerBtn');
   const $convCompactBtn = document.getElementById('convCompactBtn');
+  const $convAnnouncedFrom = document.getElementById('convAnnouncedFrom');
+  const $convAnnouncedFromControl = $convAnnouncedFrom && $convAnnouncedFrom.closest('.conv-announced-from');
   const $convTtsBtn = document.getElementById('convTtsBtn');
   const $convMicBtn = document.getElementById('convMicBtn');
   const $convEscBtn = document.getElementById('convEscBtn');
@@ -4391,6 +4393,23 @@
     const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
     if (!pane) return paneId === 'p1' ? $convInput : null;
     return pane.querySelector('.conv-input-bar textarea, .conv-input-bar input[type="text"]');
+  }
+
+  function announcedFromInputForPane(paneId) {
+    const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
+    if (!pane) return paneId === 'p1' ? $convAnnouncedFrom : null;
+    return pane.querySelector('.conv-announced-from-input');
+  }
+
+  function announcedFromForPane(paneId) {
+    const input = announcedFromInputForPane(paneId || activePaneId());
+    return (input && input.value || '').trim();
+  }
+
+  function announcedInjectionPreview(text, announcedFrom) {
+    const label = String(announcedFrom || '').trim();
+    if (!label) return text;
+    return 'Announced from: ' + label + '\n\n' + text;
   }
 
   function rememberComposerDraftForPane(paneId) {
@@ -4735,6 +4754,10 @@
       }
       // Issue action selector: only for backlog issues.
       { const $ia = document.getElementById('convInputIssueAction'); if ($ia && !isBacklogIssue) $ia.style.display = 'none'; }
+      if ($convAnnouncedFromControl) {
+        const showAnnouncedFrom = hasSession && !isNewSession && !isBacklogIssue && !isPkood;
+        $convAnnouncedFromControl.classList.toggle('visible', showAnnouncedFrom);
+      }
       // Engine selector occupies the same slot as Esc but only matters
       // when the input is about to spawn a fresh session. Backlog-issue
       // mode also spawns, but its `/api/sessions/spawn` flow is
@@ -4770,6 +4793,7 @@
         $convCompactBtn.classList.remove('visible');
         $convCompactBtn.disabled = true;
       }
+      if ($convAnnouncedFromControl) $convAnnouncedFromControl.classList.remove('visible');
       if ($convCodexAppSrv) $convCodexAppSrv.classList.remove('visible', 'live');
     }
   }
@@ -5546,6 +5570,7 @@
     const $steerBtn = (_paneEl && _paneEl.querySelector('.steer-btn')) || $convSteerBtn;
     const $actionBtn = injectMode === 'steer' ? ($steerBtn || $sendBtn) : $sendBtn;
     const text = ($input && $input.value || '').trim();
+    let announcedFrom = announcedFromForPane(paneId || activePaneId());
     const draftConversation = currentConversation;
     hideSlashCommandMenu();
     // Backlog GH issue: dispatch based on the action selector.
@@ -5614,6 +5639,7 @@
     }
     const compactCommand = /^\/compact(?:\s|$)/i.test(text);
     const clearCommand = /^\/clear(?:\s|$)/i.test(text);
+    if (/^\//.test(text)) announcedFrom = '';
     if (compactCommand && hasPendingSendEchoBeforeCompact(getConvViewForPane(paneId || activePaneId()))) {
       showOpToast('Wait for the pending message to land in the transcript before compacting.', 'error');
       return;
@@ -5628,7 +5654,7 @@
     // TTS, the inject-input fetch) happens after — previously an in-flight TTS
     // teardown was awaited before this line, so sends during playback felt laggy
     // ("sometimes ok" = only when TTS was off).
-    const pendingSend = appendPendingSendEcho(text, sid, paneId || activePaneId());
+    const pendingSend = appendPendingSendEcho(announcedInjectionPreview(text, announcedFrom), sid, paneId || activePaneId());
     updateInputBar();
     $input.value = '';
     clearInputDraftForConversation(draftConversation);
@@ -5683,10 +5709,12 @@
         if ($actionBtn) $actionBtn.disabled = false;
         return;
       } else {
+        const payload = { session_id: sid, text, mode: injectMode };
+        if (announcedFrom) payload.announced_from = announcedFrom;
         res = await fetch('/api/inject-input', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ session_id: sid, text, mode: injectMode }),
+          body: JSON.stringify(payload),
         });
       }
       let data = {};
@@ -18211,9 +18239,11 @@
     });
   }
 
-  async function postInjectInput(sessionId, text, mode) {
+  async function postInjectInput(sessionId, text, mode, opts) {
     const payload = { session_id: sessionId, text };
     if (mode) payload.mode = mode;
+    const announcedFrom = opts && opts.announcedFrom ? String(opts.announcedFrom).trim() : '';
+    if (announcedFrom) payload.announced_from = announcedFrom;
     const res = await fetch('/api/inject-input', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -18461,7 +18491,7 @@
   async function injectToSession(sessionId, text, feedbackEl, clearInput, opts) {
     markSessionSending(sessionId);
     try {
-      const data = await postInjectInput(sessionId, text, opts && opts.mode);
+      const data = await postInjectInput(sessionId, text, opts && opts.mode, opts);
       if (data.ok) {
         // Optimistic: bump local last_interacted so the card jumps to the top
         // and the "Last interacted just now" line appears without a refresh.
@@ -36505,6 +36535,8 @@
       const text = ($cpInput.value || '').trim();
       const sid = currentSession.id;
       if (!text || !sid) return;
+      let announcedFrom = announcedFromForPane(activePaneId());
+      if (/^\//.test(text)) announcedFrom = '';
       hideSlashCommandMenu();
       rememberComposerCommand(text);
       $cpSendBtn.disabled = true;
@@ -36512,7 +36544,7 @@
         $cpInput.style.borderColor = 'var(--red)';
         setTimeout(() => { $cpInput.style.borderColor = ''; }, 1500);
       };
-      const pendingSend = appendPendingSendEcho(text, sid, activePaneId());
+      const pendingSend = appendPendingSendEcho(announcedInjectionPreview(text, announcedFrom), sid, activePaneId());
       const draftConversation = currentConversation;
       $cpInput.value = '';
       clearInputDraftForConversation(draftConversation);
@@ -36541,10 +36573,12 @@
             body: JSON.stringify({ text }),
           });
         } else {
+          const payload = { session_id: sid, text };
+          if (announcedFrom) payload.announced_from = announcedFrom;
           res = await fetch('/api/inject-input', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ session_id: sid, text }),
+            body: JSON.stringify(payload),
           });
         }
         let data = {};

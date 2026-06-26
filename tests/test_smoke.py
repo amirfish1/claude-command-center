@@ -2706,6 +2706,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("sendToTerminal('p1', 'steer')", app_js)
         self.assertIn("mode: injectMode", app_js)
 
+    def test_composer_can_announce_injected_sender(self):
+        """A follow-up injected on behalf of another session needs explicit
+        sender attribution so the target agent does not assume Amir wrote it."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="convAnnouncedFrom"', index_html)
+        self.assertIn("Announced from", index_html)
+        self.assertIn("function announcedFromForPane", app_js)
+        self.assertIn("payload.announced_from", app_js)
+        self.assertIn("announcedInjectionPreview(text, announcedFrom)", app_js)
+        self.assertIn(".conv-announced-from", app_css)
+
     def test_codex_user_messages_have_inline_steer_action(self):
         """Codex user-message bubbles should be steerable in place."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -3878,6 +3892,79 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result["session_id"], sid)
         inject.assert_called_once_with(sid, "Annotation: bad pill")
         spawn.assert_not_called()
+
+    def test_inject_input_wraps_announced_from(self):
+        sid = "00000000-0000-4000-8000-000000000020"
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            with mock.patch.object(
+                self.server,
+                "_inject_text_into_session",
+                return_value={"ok": True, "via": "mock"},
+            ) as inject:
+                req = urllib.request.Request(
+                    base + "/api/inject-input",
+                    data=json.dumps({
+                        "session_id": sid,
+                        "text": "STATUS: done",
+                        "announced_from": "Gerry",
+                    }).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5) as res:
+                    body = json.loads(res.read().decode("utf-8"))
+
+            self.assertTrue(body["ok"])
+            inject.assert_called_once_with(
+                sid,
+                "Announced from: Gerry\n\nSTATUS: done",
+                mode="send",
+            )
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_inject_input_rejects_invalid_announced_from(self):
+        sid = "00000000-0000-4000-8000-000000000021"
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            with mock.patch.object(self.server, "_inject_text_into_session") as inject:
+                req = urllib.request.Request(
+                    base + "/api/inject-input",
+                    data=json.dumps({
+                        "session_id": sid,
+                        "text": "hello",
+                        "announced_from": "Gerry\nbad",
+                    }).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as err:
+                    urllib.request.urlopen(req, timeout=5)
+
+            self.assertEqual(err.exception.code, 400)
+            body = err.exception.read().decode("utf-8")
+            err.exception.close()
+            self.assertIn("announced_from", body)
+            inject.assert_not_called()
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
 
     def test_annotation_ux_queue_spawns_named_session_when_missing(self):
         sid = "00000000-0000-4000-8000-000000000011"
@@ -9161,6 +9248,7 @@ class TestSpawnReturnAddress(unittest.TestCase):
         self.assertIn("do x", out)
         self.assertIn(sid, out)
         self.assertIn("/api/inject-input", out)
+        self.assertIn('"announced_from": "<your session name or id>"', out)
         self.assertIn("STATUS", out)
 
 
