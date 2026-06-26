@@ -3572,6 +3572,12 @@
     background: var(--surface-2); border-radius: 3px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     color: var(--accent);
+    /* Sit above the hover .conv-row-actions overlay (z-index 5) so the
+       click-to-compact badge, which renders just left of the elapsed time,
+       stays clickable while the row is hovered instead of being masked by the
+       pin/archive action bar. (CCC-295) */
+    position: relative;
+    z-index: 6;
   }
   .conv-pct-badge.is-warn {
     color: #FBCA04;
