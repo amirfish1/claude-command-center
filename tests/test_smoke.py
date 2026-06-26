@@ -1907,6 +1907,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("(flowDraftSessions || []).some(d => d && flowDraftParentNode(d) === node)", app_js)
         self.assertIn("? (flowDraftSessions || []).filter(d => d && flowDraftParentNode(d) === nodeId)", app_js)
 
+    def test_object_reconcile_only_deletes_tombstoned_drafts(self):
+        """Open tabs must not delete server-created drafts they have not seen."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const FLOW_DRAFT_DELETED_KEY = 'ccc-flow-draft-deleted-ids';", app_js)
+        self.assertIn("function rememberDeletedFlowDraftSession(id)", app_js)
+        self.assertIn("rememberDeletedFlowDraftSession(id);", app_js)
+        self.assertIn("const deletedDraftIds = loadDeletedFlowDraftSessionIds();", app_js)
+        self.assertIn("deletedDraftIds.has(sd.id)", app_js)
+        self.assertNotIn("!localDraftIds.has(sd.id)", app_js)
+        self.assertIn("clearDeletedFlowDraftSessionIds(clearedDraftIds);", app_js)
+        self.assertIn("mergeServerDraftSessions(server.drafts || [], deletedDraftIds)", app_js)
+
     def test_flow_object_refresh_reads_parent_map_sessions(self):
         """Refreshing an object inspector should rebuild auto sections from
         Flow's source-of-truth parent map, not only from rendered DOM nodes."""

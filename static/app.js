@@ -10241,6 +10241,7 @@
   let flowGestureStartZoom = 1;
   let flowZoomInteractionTimer = 0;
   let flowZoomInteractionTarget = null;
+  const FLOW_DRAFT_DELETED_KEY = 'ccc-flow-draft-deleted-ids';
   let flowDraftSessions = [];
   try {
     const savedDrafts = JSON.parse(localStorage.getItem('ccc-flow-draft-sessions') || '[]');
@@ -10254,6 +10255,32 @@
   } catch (_) {}
   let flowDraftFocusId = '';
   let flowDraftFocusSelection = null;
+  function loadDeletedFlowDraftSessionIds() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(FLOW_DRAFT_DELETED_KEY) || '[]');
+      if (Array.isArray(raw)) return new Set(raw.filter(Boolean));
+    } catch (_) {}
+    return new Set();
+  }
+  function saveDeletedFlowDraftSessionIds(ids) {
+    try {
+      const list = Array.from(ids || []).filter(Boolean);
+      if (list.length) localStorage.setItem(FLOW_DRAFT_DELETED_KEY, JSON.stringify(list));
+      else localStorage.removeItem(FLOW_DRAFT_DELETED_KEY);
+    } catch (_) {}
+  }
+  function rememberDeletedFlowDraftSession(id) {
+    if (!id) return;
+    const ids = loadDeletedFlowDraftSessionIds();
+    ids.add(id);
+    saveDeletedFlowDraftSessionIds(ids);
+  }
+  function clearDeletedFlowDraftSessionIds(ids) {
+    if (!ids || typeof ids.forEach !== 'function') return;
+    const saved = loadDeletedFlowDraftSessionIds();
+    ids.forEach(id => { if (id) saved.delete(id); });
+    saveDeletedFlowDraftSessionIds(saved);
+  }
   function flowDraftParentNode(draft) {
     const id = draft && draft.id;
     const nodeId = id ? flowNodeKey('draft-session', id) : '';
@@ -10733,6 +10760,44 @@
     };
   }
 
+  function mergeServerDraftSessions(serverDrafts, skipDraftIds) {
+    const draftById = new Map((flowDraftSessions || []).filter(d => d && d.id).map(d => [d.id, d]));
+    let changed = false;
+    for (const sd of (serverDrafts || [])) {
+      if (!sd || !sd.id || (skipDraftIds && skipDraftIds.has(sd.id))) continue;
+      const serverDraftNode = flowNodeKey('draft-session', sd.id);
+      const serverDraftParent = sd.parent_node_id || '';
+      const localDraft = draftById.get(sd.id);
+      if (!localDraft) {
+        const mergedDraft = Object.assign({ repo_path: '' }, sd);
+        flowDraftSessions.push(mergedDraft);
+        draftById.set(sd.id, mergedDraft);
+        changed = true;
+      } else {
+        if (serverDraftParent && !localDraft.parent_node_id) {
+          localDraft.parent_node_id = serverDraftParent;
+          changed = true;
+        }
+        if (sd.prompt
+            && sd.prompt !== localDraft.prompt
+            && sd.prompt.length > (localDraft.prompt || '').length
+            && (!localDraft.prompt || localDraft.prompt === (localDraft.title || ''))) {
+          // Self-heal: the local copy has an empty or flattened prompt (prompt
+          // never set, or collapsed to the title by an older title-edit) while
+          // the server holds a richer one. Adopt it. Guarded so a genuine local
+          // edit (prompt that differs from the title) is never clobbered.
+          localDraft.prompt = sd.prompt;
+          changed = true;
+        }
+      }
+      if (serverDraftParent && !flowNodeParents[serverDraftNode]) {
+        flowNodeParents[serverDraftNode] = serverDraftParent;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   async function _reconcileObjectsToServer() {
     if (_objectsSyncInFlight) { _objectsSyncQueued = true; return; }
     _objectsSyncInFlight = true;
@@ -10753,11 +10818,22 @@
             await _objectsApiPost('unassign', { session_node_id: sid }).catch(() => {});
           }
         }
-        const localDraftIds = new Set((local.drafts || []).map(d => d && d.id).filter(Boolean));
+        const deletedDraftIds = loadDeletedFlowDraftSessionIds();
+        const clearedDraftIds = new Set();
+        const serverDraftIds = new Set((server.drafts || []).map(d => d && d.id).filter(Boolean));
+        deletedDraftIds.forEach(id => { if (!serverDraftIds.has(id)) clearedDraftIds.add(id); });
         for (const sd of (server.drafts || [])) {
-          if (sd && sd.id && !localDraftIds.has(sd.id)) {
-            await _objectsApiPost('draft-delete', { id: sd.id }).catch(() => {});
+          if (sd && sd.id && deletedDraftIds.has(sd.id)) {
+            await _objectsApiPost('draft-delete', { id: sd.id })
+              .then(() => { clearedDraftIds.add(sd.id); })
+              .catch(() => {});
           }
+        }
+        if (clearedDraftIds.size) clearDeletedFlowDraftSessionIds(clearedDraftIds);
+        if (mergeServerDraftSessions(server.drafts || [], deletedDraftIds)) {
+          try { localStorage.setItem('ccc-flow-node-parents', JSON.stringify(flowNodeParents)); } catch (_) {}
+          try { localStorage.setItem('ccc-flow-draft-sessions', JSON.stringify(flowDraftSessions)); } catch (_) {}
+          try { renderSidebar(filterConversations($convSearch ? $convSearch.value : '')); } catch (_) {}
         }
       }
     } catch (_) {
@@ -10832,39 +10908,7 @@
       for (const [sid, parent] of Object.entries(server.parents || {})) {
         if (!(sid in flowNodeParents)) { flowNodeParents[sid] = parent; changed = true; }
       }
-      const draftById = new Map((flowDraftSessions || []).filter(d => d && d.id).map(d => [d.id, d]));
-      for (const sd of (server.drafts || [])) {
-        if (!sd || !sd.id) continue;
-        const serverDraftNode = flowNodeKey('draft-session', sd.id);
-        const serverDraftParent = sd.parent_node_id || '';
-        const localDraft = draftById.get(sd.id);
-        if (!localDraft) {
-          const mergedDraft = Object.assign({ repo_path: '' }, sd);
-          flowDraftSessions.push(mergedDraft);
-          draftById.set(sd.id, mergedDraft);
-          changed = true;
-        } else {
-          if (serverDraftParent && !localDraft.parent_node_id) {
-            localDraft.parent_node_id = serverDraftParent;
-            changed = true;
-          }
-          if (sd.prompt
-              && sd.prompt !== localDraft.prompt
-              && sd.prompt.length > (localDraft.prompt || '').length
-              && (!localDraft.prompt || localDraft.prompt === (localDraft.title || ''))) {
-            // Self-heal: the local copy has an empty or flattened prompt (prompt
-            // never set, or collapsed to the title by an older title-edit) while
-            // the server holds a richer one. Adopt it. Guarded so a genuine local
-            // edit (prompt that differs from the title) is never clobbered.
-            localDraft.prompt = sd.prompt;
-            changed = true;
-          }
-        }
-        if (serverDraftParent && !flowNodeParents[serverDraftNode]) {
-          flowNodeParents[serverDraftNode] = serverDraftParent;
-          changed = true;
-        }
-      }
+      if (mergeServerDraftSessions(server.drafts || [])) changed = true;
       if (changed) {
         try { localStorage.setItem('ccc-flow-custom-objects', JSON.stringify(flowCustomObjects)); } catch (_) {}
         try { localStorage.setItem('ccc-flow-node-parents', JSON.stringify(flowNodeParents)); } catch (_) {}
@@ -12655,6 +12699,7 @@
   function deleteFlowDraftSession(id) {
     const draft = flowDraftSessions.find(d => d && d.id === id);
     if (!draft) return;
+    rememberDeletedFlowDraftSession(id);
     const nodeId = flowNodeKey('draft-session', id);
     flowDraftSessions = flowDraftSessions.filter(d => d && d.id !== id);
     delete flowNodePositions[nodeId];
