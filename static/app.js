@@ -3346,7 +3346,7 @@
     if (!input) return false;
     input.value = text;
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    await sendToTerminal(paneId || activePaneId());
+    await sendToTerminal(paneId || activePaneId(), 'answer');
     return true;
   }
 
@@ -5569,7 +5569,15 @@
     if (paneId) {
       setActivePaneById(paneId);
     }
-    const injectMode = mode === 'steer' ? 'steer' : 'send';
+    let injectMode = mode === 'steer' ? 'steer' : (mode === 'answer' ? 'answer' : 'send');
+    if (injectMode === 'send'
+        && liveStatusMatchesOpenConv()
+        && liveStatus
+        && liveStatus.questionWaiting
+        && liveStatus.tty
+        && liveStatus.terminalPresent) {
+      injectMode = 'answer';
+    }
     // Look up the input and send-button scoped to the target pane.
     // The static-HTML p1 element retains the global ids; cloned panes
     // (built by buildPaneElement) had their ids stripped, so we have
@@ -5815,14 +5823,14 @@
         }
         restoreInputAfterSendFailure($input, text);
         flashRed();
-        const failurePrefix = compactCommand ? '/compact failed' : ((injectMode === 'steer' ? 'Steer' : 'Send') + ' failed');
+        const failurePrefix = compactCommand ? '/compact failed' : ((injectMode === 'steer' ? 'Steer' : (injectMode === 'answer' ? 'Answer' : 'Send')) + ' failed');
         showOpToast(failurePrefix + ': ' + reason, 'error');
       }
     } catch (err) {
       removePendingSendEcho(pendingSend);
       restoreInputAfterSendFailure($input, text);
       flashRed();
-      const failurePrefix = compactCommand ? '/compact failed' : ((injectMode === 'steer' ? 'Steer' : 'Send') + ' failed');
+      const failurePrefix = compactCommand ? '/compact failed' : ((injectMode === 'steer' ? 'Steer' : (injectMode === 'answer' ? 'Answer' : 'Send')) + ' failed');
       showOpToast(failurePrefix + ': ' + (err.message || 'network error'), 'error');
     }
     if ($actionBtn) $actionBtn.disabled = false;

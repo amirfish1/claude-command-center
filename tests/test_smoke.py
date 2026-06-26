@@ -2793,6 +2793,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("liveQuestionDisplayOptions", app_js)
         self.assertIn("handleLiveQuestionActionClick", app_js)
         self.assertIn("data-live-question-action", app_js)
+        self.assertIn("sendToTerminal(paneId || activePaneId(), 'answer')", app_js)
+        self.assertIn("liveStatus.questionWaiting", app_js)
+        self.assertIn("injectMode = 'answer';", app_js)
         self.assertIn("Type something", app_js)
         self.assertIn("Chat about this", app_js)
         self.assertIn("cl-question-options", app_js)
@@ -3691,6 +3694,124 @@ class TestRepoContextHelpers(unittest.TestCase):
             with self.server._pending_terminal_input_lock:
                 self.server._pending_terminal_input_queue.clear()
 
+    def test_terminal_question_answer_mode_bypasses_picker_queue(self):
+        sid = "00000000-0000-4000-8000-000000000001"
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue.clear()
+        try:
+            with mock.patch.object(self.server, "_is_codex_session", return_value=False), \
+                 mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+                 mock.patch.object(self.server, "_is_cursor_session", return_value=False), \
+                 mock.patch.object(self.server, "_is_hermes_session", return_value=False), \
+                 mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+                 mock.patch.object(
+                     self.server,
+                     "session_live_status",
+                     return_value={
+                         "live": True,
+                         "tty": "/dev/ttys001",
+                         "terminal_app": "Terminal",
+                         "status": "waiting",
+                     },
+                 ), \
+                 mock.patch.object(self.server, "_ask_question_blocking_inject", return_value=True), \
+                 mock.patch.object(self.server, "_notification_blocks_inject", return_value=True), \
+                 mock.patch.object(self.server, "_terminal_input_queue_has_pending", return_value=True), \
+                 mock.patch.object(self.server, "_queue_terminal_input") as queue, \
+                 mock.patch.object(
+                     self.server,
+                     "inject_input_via_keystroke",
+                     return_value={"ok": True, "via": "terminal-control"},
+                 ) as inject:
+                result = self.server._inject_text_into_session(
+                    sid,
+                    "Per-session override value",
+                    mode="answer",
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["via"], "terminal-control")
+            inject.assert_called_once_with(
+                "/dev/ttys001",
+                "Terminal",
+                "Per-session override value",
+            )
+            queue.assert_not_called()
+        finally:
+            with self.server._pending_terminal_input_lock:
+                self.server._pending_terminal_input_queue.clear()
+
+    def test_terminal_question_option_text_bypasses_stale_tab_queue(self):
+        sid = "00000000-0000-4000-8000-000000000001"
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue.clear()
+            self.server._pending_terminal_input_queue[sid] = [
+                "Repo->code mapping",
+                "Repo->code mapping",
+                "later follow up",
+            ]
+        try:
+            pending_question = {
+                "options": [
+                    "Per-session override value",
+                    "Re-bucket the session's repo",
+                    "Repo->code mapping",
+                ],
+                "option_details": [
+                    {"label": "Repo->code mapping"},
+                ],
+            }
+            with mock.patch.object(self.server, "_is_codex_session", return_value=False), \
+                 mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+                 mock.patch.object(self.server, "_is_cursor_session", return_value=False), \
+                 mock.patch.object(self.server, "_is_hermes_session", return_value=False), \
+                 mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+                 mock.patch.object(
+                     self.server,
+                     "session_live_status",
+                     return_value={
+                         "live": True,
+                         "tty": "/dev/ttys001",
+                         "terminal_app": "Terminal",
+                         "status": "waiting",
+                     },
+                 ), \
+                 mock.patch.object(self.server, "_ask_question_blocking_inject", return_value=True), \
+                 mock.patch.object(
+                     self.server,
+                     "_pending_ask_user_question_for_session",
+                     return_value=pending_question,
+                 ), \
+                 mock.patch.object(self.server, "_notification_blocks_inject", return_value=True), \
+                 mock.patch.object(self.server, "_queue_terminal_input") as queue, \
+                 mock.patch.object(
+                     self.server,
+                     "inject_input_via_keystroke",
+                     return_value={"ok": True, "via": "terminal-control"},
+                 ) as inject:
+                result = self.server._inject_text_into_session(
+                    sid,
+                    "Repo->code mapping",
+                    mode="send",
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["via"], "terminal-control")
+            inject.assert_called_once_with(
+                "/dev/ttys001",
+                "Terminal",
+                "Repo->code mapping",
+            )
+            queue.assert_not_called()
+            with self.server._pending_terminal_input_lock:
+                self.assertEqual(
+                    self.server._pending_terminal_input_queue[sid],
+                    ["later follow up"],
+                )
+        finally:
+            with self.server._pending_terminal_input_lock:
+                self.server._pending_terminal_input_queue.clear()
+
     def test_compact_inject_delegates_to_compact_helper(self):
         sid = "00000000-0000-4000-8000-000000000001"
         with mock.patch.object(
@@ -4057,6 +4178,45 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "Announced from: Gerry\n\nSTATUS: done",
                 mode="send",
+            )
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_inject_input_accepts_answer_mode(self):
+        sid = "00000000-0000-4000-8000-000000000022"
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            with mock.patch.object(
+                self.server,
+                "_inject_text_into_session",
+                return_value={"ok": True, "via": "mock"},
+            ) as inject:
+                req = urllib.request.Request(
+                    base + "/api/inject-input",
+                    data=json.dumps({
+                        "session_id": sid,
+                        "text": "Use the selected scope",
+                        "mode": "answer",
+                    }).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5) as res:
+                    body = json.loads(res.read().decode("utf-8"))
+
+            self.assertTrue(body["ok"])
+            inject.assert_called_once_with(
+                sid,
+                "Use the selected scope",
+                mode="answer",
             )
         finally:
             httpd.shutdown()

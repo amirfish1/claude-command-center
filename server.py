@@ -19179,6 +19179,52 @@ def _session_status_is_busy(status):
     return (status.get("status") or "").lower() in _BUSY_SESSION_STATUSES
 
 
+def _pending_question_option_matches_text(session_id, text):
+    """True when text is exactly one of the current terminal question options."""
+    clean = str(text or "").strip()
+    if not clean:
+        return False
+    pending = _pending_ask_user_question_for_session(session_id)
+    if not isinstance(pending, dict):
+        return False
+    candidates = []
+    options = pending.get("options")
+    if isinstance(options, list):
+        candidates.extend(options)
+    option_details = pending.get("option_details")
+    if isinstance(option_details, list):
+        for detail in option_details:
+            if isinstance(detail, dict):
+                candidates.append(detail.get("label"))
+    return any(str(candidate or "").strip() == clean for candidate in candidates)
+
+
+def _drop_matching_terminal_queue_entries(session_id, text):
+    """Remove stale duplicate answer clicks already parked in the terminal queue."""
+    clean = str(text or "").strip()
+    if not session_id or not clean:
+        return 0
+    removed = 0
+    with _pending_terminal_input_lock:
+        queue = _pending_terminal_input_queue.get(session_id)
+        if not queue:
+            return 0
+        kept = []
+        for item in queue:
+            if str(item or "").strip() == clean:
+                removed += 1
+            else:
+                kept.append(item)
+        if removed:
+            if kept:
+                _pending_terminal_input_queue[session_id] = kept
+            else:
+                _pending_terminal_input_queue.pop(session_id, None)
+    if removed:
+        _save_pending_inputs()
+    return removed
+
+
 _CCC_HOOK_SCRIPTS = CCC_HOOK_SCRIPT_NAMES
 
 
@@ -31951,7 +31997,8 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
             session_id,
             _from_terminal_queue=_from_terminal_queue,
         )
-    mode = "steer" if str(mode or "").lower() == "steer" else "send"
+    mode_value = str(mode or "").strip().lower()
+    mode = mode_value if mode_value in ("answer", "steer") else "send"
     cwd = find_session_cwd(session_id)
     status = session_live_status(session_id, cwd)
     tty = status.get("tty")
@@ -32014,15 +32061,26 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
     # Queue it instead; it flushes once the user resolves the prompt in the UI
     # and the marker clears. Covers direct injects (annotation flows,
     # /api/inject-input) as well as the top-level queue watcher.
-    if not _from_terminal_queue and (
-        _ask_question_blocking_inject(session_id, status)
-        or _notification_blocks_inject(session_id)
-    ):
-        return _queue_terminal_input(session_id, text, {"status": "busy"})
+    answering_tty_question = False
+    if not _from_terminal_queue:
+        question_blocks_inject = _ask_question_blocking_inject(session_id, status)
+        answering_tty_question = (
+            has_tty
+            and question_blocks_inject
+            and (
+                mode == "answer"
+                or _pending_question_option_matches_text(session_id, text)
+            )
+        )
+        if (
+            (question_blocks_inject and not answering_tty_question)
+            or (_notification_blocks_inject(session_id) and not answering_tty_question)
+        ):
+            return _queue_terminal_input(session_id, text, {"status": "busy"})
     if is_codex and mode == "steer":
         return resume_session_codex(session_id, text, steer=True)
     if status.get("live") and has_tty:
-        if not _from_terminal_queue:
+        if not _from_terminal_queue and not answering_tty_question:
             busy_or_pending = (
                 _terminal_input_queue_has_pending(session_id)
                 or _session_status_is_busy(status)
@@ -32042,6 +32100,8 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
             # below still queues if the keystroke can't reach the tab.
             if _terminal_input_queue_has_pending(session_id):
                 return _queue_terminal_input(session_id, text, status)
+        if answering_tty_question:
+            _drop_matching_terminal_queue_entries(session_id, text)
         keystroke_result = inject_input_via_keystroke(tty, term_app or "Terminal", text)
         # If the AppleScript can't find the terminal tab (user switched
         # apps, tab hidden, fullscreen-elsewhere, permission denied),
@@ -45295,7 +45355,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             announced_from, announced_from_error = _normalize_announced_from(payload)
             if not sid or not text:
                 self.send_json({"ok": False, "error": "missing session_id or text"})
-            elif mode not in ("send", "steer"):
+            elif mode not in ("answer", "send", "steer"):
                 self.send_json({"ok": False, "error": "invalid mode"}, 400)
             elif announced_from_error:
                 self.send_json({"ok": False, "error": announced_from_error}, 400)
