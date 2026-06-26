@@ -518,6 +518,23 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("!hasChildObjects", app_js)
         self.assertIn("Empty — drag a session here, or use +.", app_js)
 
+    def test_assign_object_picker_renders_object_hierarchy(self):
+        """The object assignment dialog should show nested objects as a tree."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function flowAssignableObjectTree()", app_js)
+        self.assertIn("depth: depth,", app_js)
+        self.assertIn("childrenByParent.get(parentNode)", app_js)
+        self.assertIn("visit(root, 0);", app_js)
+        self.assertIn("o.matchesSearch || o.hasMatchingDescendant", app_js)
+        self.assertIn("style=\"--object-depth:' + Number(o.depth || 0) + ';\"", app_js)
+        self.assertIn("flow-object-assign-title", app_js)
+        self.assertIn("flow-object-assign-path", app_js)
+        self.assertIn(".flow-object-assign-row {", app_css)
+        self.assertIn("padding-left: calc(12px + (var(--object-depth, 0) * 18px));", app_css)
+        self.assertIn(".flow-object-assign-title::before", app_css)
+
     def test_search_hides_empty_custom_object_groups(self):
         """Searching conversations should not show every empty object group."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -1280,13 +1297,14 @@ class TestServerImports(unittest.TestCase):
         ]
         self.assertIn("+ '<span>' + formatSize(c.size) + '</span>'", row_size_js)
         self.assertNotIn("sourceBadge", row_size_js)
-        self.assertIn("const hoverMetaRowHtml = (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || pctBadgeHtml || branchSlotHtml)", app_js)
+        self.assertIn("const hoverMetaRowHtml = (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
         self.assertIn("+ objectChipHtml\n          + folderChipHtml", app_js)
         self.assertIn("+ hoverMetaRowHtml", app_js)
         row_start = app_js.index("+ '<div class=\"conv-main-row\">'")
         row_end = app_js.index("// Right-edge slot", row_start)
         self.assertNotIn("+ goalChipHtml", app_js[row_start:row_end])
+        self.assertIn("+ (pctBadgeHtml || '')", app_js[row_start:row_end])
         self.assertIn(".conv-item .conv-meta-inline,\n  .conv-item .conv-branch-slot,\n  .conv-item .conv-object-chip,\n  .conv-item .conv-folder-chip,\n  .conv-item .conv-repo-pin", app_css)
         self.assertIn(".conv-item .conv-hover-meta-row {\n    display: none;", app_css)
         hover_meta_css = app_css[

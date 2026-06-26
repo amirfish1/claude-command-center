@@ -14876,6 +14876,50 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .conv-add-object .grouping-opt { color: var(--accent, #58a6ff); }
 
+.flow-object-assign-row {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  padding-left: calc(12px + (var(--object-depth, 0) * 18px));
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.flow-object-assign-row:hover,
+.flow-object-assign-row:focus-visible {
+  background: rgba(88,166,255,0.10);
+  outline: none;
+}
+.flow-object-assign-title {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flow-object-assign-title::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent, #58a6ff) 72%, var(--text-muted));
+  vertical-align: middle;
+  opacity: 0.85;
+}
+.flow-object-assign-path {
+  margin-left: 13px;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Chooser emphasis (CCC-94): the active path is bright, the other dimmed. */
 .ns-choice-card { transition: opacity 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease; }
 .ns-choice-card.is-primary {

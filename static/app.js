@@ -11570,6 +11570,51 @@
       });
   }
 
+  function flowAssignableObjectTree() {
+    const objects = flowAssignableObjects();
+    const byId = new Map(objects.map(o => [o.id, o]));
+    const childrenByParent = new Map();
+    const roots = [];
+    const sortObjects = (a, b) => {
+      const byTitle = a.title.localeCompare(b.title);
+      if (byTitle) return byTitle;
+      return b.updated_at - a.updated_at;
+    };
+    for (const o of objects) {
+      const node = flowNodeKey('object', o.id);
+      const parentNode = flowNodeParents[node] || '';
+      const parentId = parentNode.indexOf('object:') === 0 ? parentNode.slice(7) : '';
+      if (parentId && byId.has(parentId)) {
+        if (!childrenByParent.has(parentNode)) childrenByParent.set(parentNode, []);
+        childrenByParent.get(parentNode).push(o.id);
+      } else {
+        roots.push(o.id);
+      }
+    }
+    const out = [];
+    const seen = new Set();
+    function visit(id, depth) {
+      if (!id || seen.has(id)) return;
+      const obj = byId.get(id);
+      if (!obj) return;
+      seen.add(id);
+      out.push(Object.assign({}, obj, {
+        depth: depth,
+      }));
+      const childIds = (childrenByParent.get(flowNodeKey('object', id)) || [])
+        .slice()
+        .sort((a, b) => sortObjects(byId.get(a), byId.get(b)));
+      childIds.forEach(childId => visit(childId, depth + 1));
+    }
+    roots
+      .slice()
+      .sort((a, b) => sortObjects(byId.get(a), byId.get(b)))
+      .forEach(root => {
+        visit(root, 0);
+      });
+    return out;
+  }
+
   function _flowOpenObjectAssignPicker(sessionId, sessionTitle) {
     sessionId = String(sessionId || '').trim();
     if (!sessionId) return;
@@ -11600,10 +11645,30 @@
     });
     function _render() {
       const q = ($search.value || '').trim().toLowerCase();
-      const objects = flowAssignableObjects().filter(o => {
-        if (!q) return true;
-        return [o.title, o.path, o.id].join(' ').toLowerCase().indexOf(q) >= 0;
-      });
+      const tree = flowAssignableObjectTree();
+      const matchingIds = new Set();
+      const ancestorIds = new Set();
+      const matches = (o) => [o.title, o.path, o.id].join(' ').toLowerCase().indexOf(q) >= 0;
+      if (q) {
+        tree.forEach(o => {
+          if (!matches(o)) return;
+          matchingIds.add(o.id);
+          let parentNode = flowNodeParents[flowNodeKey('object', o.id)] || '';
+          const seen = new Set([flowNodeKey('object', o.id)]);
+          while (parentNode && parentNode.indexOf('object:') === 0 && !seen.has(parentNode)) {
+            seen.add(parentNode);
+            const parentId = parentNode.slice(7);
+            ancestorIds.add(parentId);
+            parentNode = flowNodeParents[parentNode] || '';
+          }
+        });
+      }
+      const objects = tree
+        .map(o => Object.assign({}, o, {
+          matchesSearch: !q || matchingIds.has(o.id),
+          hasMatchingDescendant: q && ancestorIds.has(o.id),
+        }))
+        .filter(o => !q || o.matchesSearch || o.hasMatchingDescendant);
       if (!objects.length) {
         $list.innerHTML = '<div style="padding:24px;color:var(--text-muted);text-align:center;font-size:13px;">No active objects match.</div>';
         return;
@@ -11612,9 +11677,9 @@
         const path = o.path && o.path !== o.title ? o.path : '';
         return ''
           + '<button type="button" class="flow-object-assign-row" data-object-id="' + escapeAttr(o.id) + '"'
-          + ' style="display:block;width:100%;padding:8px 12px;border:0;border-bottom:1px solid var(--border);background:transparent;color:inherit;text-align:left;cursor:pointer;">'
-          +   '<div style="font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(o.title) + '</div>'
-          +   (path ? '<div style="font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(path) + '</div>' : '')
+          + ' style="--object-depth:' + Number(o.depth || 0) + ';">'
+          +   '<div class="flow-object-assign-title">' + escapeHtml(o.title) + '</div>'
+          +   (path ? '<div class="flow-object-assign-path">' + escapeHtml(path) + '</div>' : '')
           + '</button>';
       }).join('');
       $list.querySelectorAll('.flow-object-assign-row').forEach(row => {
