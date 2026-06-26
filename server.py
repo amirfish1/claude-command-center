@@ -18759,11 +18759,17 @@ def find_codex_conversations(
         # Codex's SQLite `title` is the raw first user message when the
         # prompt was too short to summarize — for annotation prompts that
         # can be many kilobytes, so clamp before it becomes the row title.
+        # Codex assigns spawned agents a short random codename (agent_nickname,
+        # e.g. "Euclid") that tells the user nothing about the work. Prefer a
+        # meaningful name: Codex's own (often AI-summarized) title, then the
+        # original ask (first user message) — the same fallback unnamed Claude
+        # sessions use — and only fall back to the codename when there's nothing
+        # else to show. (CCC-296)
         display_name = (
             name_overrides.get(sid)
-            or (row.get("agent_nickname") or "").strip()
             or _truncate_session_name(title)
             or (first_message[:80] if first_message else None)
+            or (row.get("agent_nickname") or "").strip()
         )
         branch = row.get("git_branch") or ""
         tail_branch = tail.get("tail_branch") or ""
