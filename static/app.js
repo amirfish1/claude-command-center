@@ -28783,6 +28783,30 @@
     return { pct, displayTokens, limit, source };
   }
 
+  function _formatTokenOptimizerQuality(u) {
+    const rawScore = u && u.quality_score;
+    if (rawScore === undefined || rawScore === null || rawScore === '') return '';
+    const score = Number(rawScore);
+    if (!Number.isFinite(score)) return '';
+    const grade = String((u && u.quality_grade) || '').trim();
+    const rounded = Math.round(score);
+    let cls = 'wp-quality-pill';
+    if (score >= 80) cls += ' wp-quality-good';
+    else if (score >= 60) cls += ' wp-quality-fair';
+    else if (score >= 40) cls += ' wp-quality-warn';
+    else cls += ' wp-quality-poor';
+    const summary = String((u && u.quality_summary) || '').trim();
+    const title = 'Token Optimizer session quality: '
+      + (grade ? grade + ' · ' : '')
+      + score + '/100'
+      + (summary ? '\n' + summary : '')
+      + ((u && u.quality_timestamp) ? '\nRecorded: ' + u.quality_timestamp : '');
+    const label = 'Q ' + (grade ? grade + ' ' : '') + rounded;
+    return '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
+      + escapeHtml(label)
+      + '</span>';
+  }
+
   function renderSessionUsageIntoStrip() {
     const slot = getInputContextSlot();
     const uSlot = slot && slot.querySelector('[data-usage]');
@@ -28867,8 +28891,9 @@
     const override = canToggleContextLimit ? _getCtxLimitOverride() : 0;
     const limit = override || (hasLiveContext ? liveContextLimit : 0) || u.context_limit || 200000;
     const displayTokens = transcriptLatest || (hasLiveContext ? liveContextTokens : 0);
+    const qualityPill = _formatTokenOptimizerQuality(u);
     if (!displayTokens && !peak) {
-      if (!modelPill) {
+      if (!modelPill && !qualityPill) {
         uSlot.innerHTML = '';
         syncInputContextVisibility(slot);
         scheduleInputContextFit();
@@ -28876,7 +28901,7 @@
       }
       const title = 'No token usage samples were found for this session.\n'
         + 'Model: ' + (displayModel || u.model || 'unknown');
-      uSlot.innerHTML = '<span class="wp-usage-pill wp-usage-missing" title="' + escapeHtml(title) + '">'
+      uSlot.innerHTML = qualityPill + '<span class="wp-usage-pill wp-usage-missing" title="' + escapeHtml(title) + '">'
         + 'ctx unavailable'
         + '</span>' + modelPill;
       syncInputContextVisibility(slot);
@@ -28959,7 +28984,7 @@
     // restore in collapsed-rail mode) is handled via the 40px right
     // padding rule in app.css; narrow-pane overflow clipping is the
     // remaining risk and only manifests in thin split panes.
-    uSlot.innerHTML = '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
+    uSlot.innerHTML = qualityPill + '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
       + sourceLabel + ' ' + _formatTokens(displayTokens) + ' / ' + _formatTokens(limit)
       + ' <span class="wp-usage-pct">(' + calcPct + '%)</span>'
       + slashContextText

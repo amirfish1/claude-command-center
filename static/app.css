@@ -2447,6 +2447,15 @@
     padding: 2px 7px; border-radius: 3px; font-weight: 600;
     color: var(--text-muted); background: rgba(139,148,158,0.10);
   }
+  .conv-input-context .wp-quality-pill {
+    padding: 2px 7px; border-radius: 3px; font-weight: 700;
+    color: var(--text-muted); background: rgba(139,148,158,0.08);
+    cursor: help;
+  }
+  .conv-input-context .wp-quality-good { color: var(--green); background: rgba(63,185,80,0.12); }
+  .conv-input-context .wp-quality-fair { color: var(--text-muted); background: rgba(139,148,158,0.10); }
+  .conv-input-context .wp-quality-warn { color: var(--orange); background: rgba(210,153,34,0.12); }
+  .conv-input-context .wp-quality-poor { color: var(--red); background: rgba(248,81,73,0.14); }
   .conv-input-context .wp-usage-pill.wp-usage-warm { color: var(--orange); background: rgba(210,153,34,0.12); }
   .conv-input-context .wp-usage-pill.wp-usage-hot  { color: var(--red);    background: rgba(248,81,73,0.14); }
   .conv-input-context .wp-usage-pill.wp-usage-missing { color: var(--text-muted); background: rgba(139,148,158,0.10); }

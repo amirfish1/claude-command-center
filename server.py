@@ -37537,6 +37537,114 @@ def _local_command_context_usage(ev):
     }
 
 
+def _token_optimizer_quality_grade(score):
+    if score >= 90:
+        return "S"
+    if score >= 80:
+        return "A"
+    if score >= 70:
+        return "B"
+    if score >= 55:
+        return "C"
+    if score >= 40:
+        return "D"
+    return "F"
+
+
+def _token_optimizer_quality_summary(data):
+    breakdown = data.get("breakdown") if isinstance(data, dict) else {}
+    if not isinstance(breakdown, dict):
+        return ""
+    scored = []
+    neutral = []
+    for item in breakdown.values():
+        if not isinstance(item, dict):
+            continue
+        detail = str(item.get("detail") or "").strip()
+        if not detail:
+            continue
+        try:
+            score = float(item.get("score"))
+        except (TypeError, ValueError):
+            score = 100.0
+        if score < 100:
+            scored.append((score, detail))
+        else:
+            neutral.append(detail)
+    scored.sort(key=lambda x: x[0])
+    details = [detail for _score, detail in scored[:3]]
+    if not details:
+        details = neutral[:2]
+    return "; ".join(details)
+
+
+def _token_optimizer_quality_for_session(session_id):
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {}
+    safe_sid = re.sub(r"[^A-Za-z0-9_-]", "", sid)
+    if not safe_sid:
+        return {}
+    roots = [
+        Path.home() / ".claude" / "token-optimizer",
+        Path.home() / ".codex" / "token-optimizer",
+    ]
+    candidates = []
+    seen = set()
+    for root in roots:
+        exact = root / f"quality-cache-{safe_sid}.json"
+        try:
+            paths = [exact, *root.glob(f"quality-cache-*{safe_sid}.json")]
+        except OSError:
+            continue
+        for path in paths:
+            try:
+                if not path.is_file():
+                    continue
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            candidates.append(path)
+    candidates.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        try:
+            score = float(data.get("score"))
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= score <= 100):
+            continue
+        rounded = round(score, 1)
+        if rounded.is_integer():
+            rounded = int(rounded)
+        grade = str(data.get("grade") or _token_optimizer_quality_grade(score)).strip()
+        return {
+            "quality_score": rounded,
+            "quality_grade": grade,
+            "quality_timestamp": str(data.get("timestamp") or ""),
+            "quality_summary": _token_optimizer_quality_summary(data),
+            "quality_source": "token-optimizer-cache",
+        }
+    return {}
+
+
+def _with_token_optimizer_quality(payload, session_id):
+    if not isinstance(payload, dict):
+        return payload
+    quality = _token_optimizer_quality_for_session(session_id)
+    if quality:
+        return {**payload, **quality}
+    return payload
+
+
 def extract_session_usage(session_id):
     """Walk a session's JSONL transcript and return token-usage stats.
 
@@ -37575,24 +37683,24 @@ def extract_session_usage(session_id):
     if _is_codex_session(session_id):
         result = _extract_codex_usage(session_id)
         result.setdefault("engine", "codex")
-        return result
+        return _with_token_optimizer_quality(result, session_id)
     if _is_gemini_session(session_id):
         result = _extract_gemini_usage(session_id)
         result.setdefault("engine", "gemini")
-        return result
+        return _with_token_optimizer_quality(result, session_id)
     if _is_cursor_session(session_id):
         result = _extract_cursor_usage(session_id)
         result.setdefault("engine", "cursor")
-        return result
+        return _with_token_optimizer_quality(result, session_id)
     if _is_antigravity_session(session_id):
         result = _extract_antigravity_usage(session_id)
         result.setdefault("engine", "antigravity")
-        return result
+        return _with_token_optimizer_quality(result, session_id)
     if _is_hermes_session(session_id):
-        return _extract_hermes_usage(session_id)
+        return _with_token_optimizer_quality(_extract_hermes_usage(session_id), session_id)
     desktop_meta = _load_desktop_app_metadata().get(session_id) or {}
     if not PROJECTS_ROOT.is_dir():
-        return {**empty, "model": desktop_meta.get("model") or ""}
+        return _with_token_optimizer_quality({**empty, "model": desktop_meta.get("model") or ""}, session_id)
     jsonl = None
     for pd in PROJECTS_ROOT.iterdir():
         if not pd.is_dir():
@@ -37602,7 +37710,7 @@ def extract_session_usage(session_id):
             jsonl = cand
             break
     if not jsonl:
-        return {**empty, "model": desktop_meta.get("model") or ""}
+        return _with_token_optimizer_quality({**empty, "model": desktop_meta.get("model") or ""}, session_id)
 
     latest = 0
     peak = 0
@@ -37709,7 +37817,7 @@ def extract_session_usage(session_id):
                 if isinstance(tout, int):
                     total_out += tout
     except OSError:
-        return {**empty, "model": model}
+        return _with_token_optimizer_quality({**empty, "model": model}, session_id)
 
     if not latest and diagnostic_latest:
         latest = diagnostic_latest
@@ -37736,7 +37844,7 @@ def extract_session_usage(session_id):
     cost_total = cost_in + cost_cw + cost_cr + cost_out
 
     override = _get_session_override(session_id)
-    return {
+    return _with_token_optimizer_quality({
         "latest_input_tokens": latest,
         "peak_input_tokens": peak,
         "total_output_tokens": total_out,
@@ -37760,7 +37868,7 @@ def extract_session_usage(session_id):
             "cache_read": round(cost_cr, 4),
             "output": round(cost_out, 4),
         },
-    }
+    }, session_id)
 
 
 # ---------------------------------------------------------------------------

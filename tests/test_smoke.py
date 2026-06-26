@@ -1238,7 +1238,7 @@ class TestServerImports(unittest.TestCase):
         ]
         self.assertIn("+ '<span>' + formatSize(c.size) + '</span>'", row_size_js)
         self.assertNotIn("sourceBadge", row_size_js)
-        self.assertIn("const hoverMetaRowHtml = (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)", app_js)
+        self.assertIn("const hoverMetaRowHtml = (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || pctBadgeHtml || branchSlotHtml)", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
         self.assertIn("+ objectChipHtml\n          + folderChipHtml", app_js)
         self.assertIn("+ hoverMetaRowHtml", app_js)
@@ -8130,6 +8130,75 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("Latest /context output:", js)
         self.assertIn("'calc'", js)
         self.assertIn("' · /ctx '", js)
+
+    def test_context_footer_renders_token_optimizer_quality_score(self):
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
+        self.assertIn("function _formatTokenOptimizerQuality", js)
+        self.assertIn("wp-quality-pill", js)
+        self.assertLess(js.index("qualityPill + '<span class=\"' + cls"), js.index("+ sourceLabel + ' ' + _formatTokens(displayTokens)"))
+        self.assertIn(".conv-input-context .wp-quality-pill", css)
+
+    def test_extract_session_usage_includes_token_optimizer_quality_score(self):
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+        sid = "11111111-2222-4333-8444-999999999999"
+        assistant = {
+            "type": "assistant",
+            "timestamp": "2026-05-26T19:52:30.316Z",
+            "sessionId": sid,
+            "message": {
+                "id": "msg-quality-1",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "done"}],
+                "usage": {
+                    "input_tokens": 12_000,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 3_000,
+                    "output_tokens": 500,
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            home = root / "home"
+            quality_dir = home / ".claude" / "token-optimizer"
+            quality_dir.mkdir(parents=True)
+            (quality_dir / f"quality-cache-{sid}.json").write_text(
+                json.dumps({
+                    "score": 79.2,
+                    "grade": "B",
+                    "timestamp": "2026-06-25T19:53:10.896627+00:00",
+                    "breakdown": {
+                        "context_fill_degradation": {"detail": "45% fill, peak zone"},
+                        "stale_reads": {"detail": "1 stale file read"},
+                    },
+                }),
+                encoding="utf-8",
+            )
+            project = root / "projects" / "-tmp-project-quality"
+            project.mkdir(parents=True)
+            (project / f"{sid}.jsonl").write_text(json.dumps(assistant) + "\n", encoding="utf-8")
+            orig_root = server.PROJECTS_ROOT
+            server.PROJECTS_ROOT = root / "projects"
+            try:
+                with mock.patch.object(server.Path, "home", return_value=home), \
+                     mock.patch.object(server, "_is_codex_session", return_value=False), \
+                     mock.patch.object(server, "_is_gemini_session", return_value=False), \
+                     mock.patch.object(server, "_is_cursor_session", return_value=False), \
+                     mock.patch.object(server, "_is_antigravity_session", return_value=False), \
+                     mock.patch.object(server, "_is_kilo_session", return_value=False), \
+                     mock.patch.object(server, "_load_desktop_app_metadata", return_value={}):
+                    usage = server.extract_session_usage(sid)
+            finally:
+                server.PROJECTS_ROOT = orig_root
+
+        self.assertEqual(usage["quality_score"], 79.2)
+        self.assertEqual(usage["quality_grade"], "B")
+        self.assertEqual(usage["quality_timestamp"], "2026-06-25T19:53:10.896627+00:00")
+        self.assertIn("45% fill, peak zone", usage["quality_summary"])
 
     def test_truncate_session_name_clamps_long_pastes(self):
         """A row title that's a full annotation context blob would stretch
