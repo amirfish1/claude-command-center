@@ -10698,8 +10698,9 @@
         continue;
       }
       const row = (conversationsData || []).find(c => String(c.spawn_pid || c.pid || '') === key);
-      const sid = row && (row.session_id || row.id);
-      if (!sid) continue;
+      if (!row || row.pending_spawn) continue;
+      const sid = row.session_id || row.id;
+      if (!sid || /^spawning-/.test(String(sid))) continue;
       assignSessionNodeToObject(sid, rec.object_id || NEW_SESSION_DEFAULT_OBJECT_ID);
       delete pending[key];
       changed = true;
@@ -12701,7 +12702,6 @@
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
         const placeholder = adoptPendingSpawnPid(tempPid, data.pid, data.log);
-        assignSpawnedSessionToDefaultObject(data);
         if (placeholder && spawnUsesLogPlaceholder(engine) && typeof selectConversation === 'function') {
           selectConversation(placeholder.id);
         }
@@ -26035,8 +26035,33 @@
   // worker uses its progress record (CCC-99); ANY other session falls back to
   // its repo's project (CCC-175) so a project session shows its tickets instead
   // of the global, CCC-dominated list.
+  // Per-session Queue scope override. Keyed by the open session id so each
+  // session remembers what queue you pinned its Queue tab to; '' / 'AUTO' means
+  // derive from the session's repo (default). Persisted in localStorage so a
+  // CCC session can be told "show WT here" without hunting for a WT session.
+  const _UXQ_SCOPE_LS = 'ccc-uxq-scope';
+  function _uxqScopeKey() {
+    try { const r = openConvRow(); return (r && (r.id || r.session_id)) || ''; } catch (_) { return ''; }
+  }
+  function _uxqLoadScopeMap() {
+    try { return JSON.parse(localStorage.getItem(_UXQ_SCOPE_LS) || '{}') || {}; } catch (_) { return {}; }
+  }
+  function _uxqGetScopeOverride() {
+    const k = _uxqScopeKey(); if (!k) return '';
+    const v = _uxqProjectKey(_uxqLoadScopeMap()[k] || '');
+    return v && v !== 'AUTO' ? v : '';
+  }
+  function _uxqSetScopeOverride(val) {
+    const k = _uxqScopeKey(); if (!k) return;
+    const map = _uxqLoadScopeMap();
+    const v = _uxqProjectKey(val);
+    if (!v || v === 'AUTO') delete map[k]; else map[k] = v;
+    try { localStorage.setItem(_UXQ_SCOPE_LS, JSON.stringify(map)); } catch (_) {}
+  }
   function _uxqWorkerProject() {
     try {
+      const ov = _uxqGetScopeOverride();
+      if (ov) return ov;
       const row = openConvRow();
       const prog = row && typeof _uxFixesQueueProgressForRow === 'function'
         ? _uxFixesQueueProgressForRow(row) : null;
@@ -26044,6 +26069,35 @@
       const rp = row && typeof rowRepoPath === 'function' ? rowRepoPath(row) : '';
       return _projectForRepoPath(rp);
     } catch (_) { return ''; }
+  }
+  // Distinct scopes present in the queue, collapsing family sub-queues into
+  // their root ("WT-BUGS"/"WT-FEATURES" -> "WT") for the scope picker.
+  function _uxqAvailableScopes(items) {
+    const set = new Set();
+    for (const it of (Array.isArray(items) ? items : [])) {
+      const p = _uxqProjectKey(it && it.project);
+      if (!p || p === '?') continue;
+      let fam = null;
+      for (const r of _UXQ_FAMILY_ROOTS) { if (p.startsWith(r + '-')) { fam = r; break; } }
+      set.add(fam || p);
+    }
+    return [...set].sort((a, b) => (a === 'CCC' ? -1 : b === 'CCC' ? 1 : a.localeCompare(b)));
+  }
+  // Fill the Queue-header scope picker and reflect the current scope. 'AUTO'
+  // clears the override (back to repo-derived). Built fresh each render so new
+  // projects appear without a reload.
+  function _uxqRenderScopeSelect(items, currentScope) {
+    const $sel = document.getElementById('queueScopeSelect');
+    if (!$sel) return;
+    const override = _uxqGetScopeOverride();
+    const scopes = _uxqAvailableScopes(items);
+    const opts = ['<option value="AUTO">Auto (repo)</option>']
+      .concat(scopes.map(s => '<option value="' + escapeAttr(s) + '">' + escapeHtml(s) + '</option>'));
+    $sel.innerHTML = opts.join('');
+    $sel.value = override || 'AUTO';
+    $sel.title = override
+      ? ('Queue pinned to ' + override + ' for this session — pick Auto to follow the repo')
+      : ('Showing ' + (currentScope || 'all') + ' (from this session’s repo)');
   }
   function _uxqEmptyHtml(project, totalCount) {
     const total = Number(totalCount) || 0;
@@ -40808,6 +40862,7 @@
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
         const placeholder = adoptPendingSpawnPid(tempPid, data.pid, data.log);
+        assignSpawnedSessionToDefaultObject(data);
         // Fire-and-watch engines can stream their spawn log once the real pid
         // is known. Re-select the same placeholder id so fetchConversationEvents
         // starts the log poller without making the user click the sidebar row.

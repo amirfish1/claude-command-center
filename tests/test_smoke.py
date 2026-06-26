@@ -314,6 +314,15 @@ class TestServerImports(unittest.TestCase):
         """Every new session should be assigned to a generic durable object."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        spawn_start = app_js.index("async function spawnFromInlineInput(body) {")
+        spawn_end = app_js.index("\n  // ── Appearance picker", spawn_start)
+        spawn_block = app_js[spawn_start:spawn_end]
+        draft_start = app_js.index("async function playFlowDraftSession(id) {")
+        draft_end = app_js.index("\n  function flowDraftParentLabel", draft_start)
+        draft_block = app_js[draft_start:draft_end]
+        reconcile_start = app_js.index("function reconcilePendingNewSessionObjectAssignments() {")
+        reconcile_end = app_js.index("\n  function _objectsGet()", reconcile_start)
+        reconcile_block = app_js[reconcile_start:reconcile_end]
 
         self.assertIn('id="newSessionObjectContext"', index_html)
         self.assertIn("const NEW_SESSION_DEFAULT_OBJECT_ID = 'new-session-inbox';", app_js)
@@ -321,8 +330,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function ensureNewSessionDefaultObject()", app_js)
         self.assertIn("function assignSpawnedSessionToDefaultObject(data)", app_js)
         self.assertIn("function reconcilePendingNewSessionObjectAssignments()", app_js)
-        self.assertIn("assignSpawnedSessionToDefaultObject(data);", app_js)
+        self.assertIn("const placeholder = adoptPendingSpawnPid(tempPid, data.pid, data.log);", spawn_block)
+        self.assertIn("assignSpawnedSessionToDefaultObject(data);", spawn_block)
+        self.assertNotIn("assignSpawnedSessionToDefaultObject(data);", draft_block)
         self.assertIn("_objectsApiPost('assign', { session_node_id: flowNodeKey('session', sid), object_id: objectId })", app_js)
+        self.assertIn("if (!row || row.pending_spawn) continue;", reconcile_block)
+        self.assertIn("if (!sid || /^spawning-/.test(String(sid))) continue;", reconcile_block)
 
     def test_inprogress_header_has_object_shortcut(self):
         """The row-list header should expose + object before by-objects mode."""
