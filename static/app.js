@@ -11379,6 +11379,35 @@
     return false;
   }
 
+  function flowObjectForConversation(c) {
+    const sid = c && (c.session_id || c.id);
+    if (!sid) return null;
+    let node = flowNodeKey('session', sid);
+    const seen = new Set([node]);
+    for (let hop = 0; hop < 8; hop++) {
+      const parent = flowNodeParents[node];
+      if (!parent || seen.has(parent)) break;
+      if (parent.indexOf('object:') === 0) {
+        const id = parent.slice(7);
+        if (isArchivedFlowObjectId(id)) return null;
+        const obj = (flowCustomObjects || []).find(o => o && o.id === id);
+        return { id, title: (obj && obj.title) || 'Object' };
+      }
+      seen.add(parent);
+      node = parent;
+    }
+    return null;
+  }
+
+  function flowObjectChipHtml(c) {
+    const obj = flowObjectForConversation(c);
+    if (!obj) return '';
+    const title = String(obj.title || '').trim() || 'Object';
+    return '<span class="conv-object-chip" title="Object: ' + escapeAttr(title) + '">'
+      + 'Object &middot; ' + escapeHtml(title)
+      + '</span>';
+  }
+
   function expandFlowNodeAndAncestors(nodeId) {
     if (!nodeId) return false;
     let changed = false;
@@ -19655,6 +19684,7 @@
       }
       const branchSlotHtml = pctBadgeHtml + worktreeBadgeHtml + branch;
       const sessionIdChipHtml = sidebarSessionIdChipHtml(c);
+      const objectChipHtml = flowObjectChipHtml(c);
       // Current-goal chip — codex sessions only (the native `/goal` feature,
       // read server-side from ~/.codex/goals_1.sqlite into c.goal). Status
       // colors mirror codex's enum: active=green, complete=muted, anything
@@ -19684,9 +19714,10 @@
           + '" title="' + escapeAttr(_evergreenStateTitle) + '">'
           + escapeHtml(_evergreenStateLabel) + '</span>';
       }
-      const hoverMetaRowHtml = (sessionIdChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)
+      const hoverMetaRowHtml = (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)
         ? '<div class="conv-hover-meta-row">'
           + sessionIdChipHtml
+          + objectChipHtml
           + folderChipHtml
           + goalChipHtml
           + pinnedHtml

@@ -3884,10 +3884,12 @@
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-meta-row { display: flex; }
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-meta-inline,
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-branch-slot,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-object-chip,
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-folder-chip,
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-repo-pin,
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-meta-inline,
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-branch-slot,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-object-chip,
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-folder-chip,
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
   .conv-current-sessions-scroll.is-search-results .conv-item {
@@ -4288,6 +4290,22 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     text-align: left;
   }
+  .conv-item .conv-hover-meta-row .conv-object-chip {
+    height: 20px;
+    max-width: 180px;
+    padding: 2px 7px;
+    display: inline-flex;
+    align-items: center;
+    border-radius: 4px;
+    border: 1px solid rgba(188,140,255,0.32);
+    background: rgba(188,140,255,0.12);
+    color: var(--purple, #bc8cff);
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip {
     height: 20px;
     padding: 2px 7px;
@@ -4362,12 +4380,14 @@
   .conv-item .conv-status-slot .conv-live-tool { max-width: none; }
   .conv-item .conv-meta-inline,
   .conv-item .conv-branch-slot,
+  .conv-item .conv-object-chip,
   .conv-item .conv-folder-chip,
   .conv-item .conv-repo-pin { display: none; }
   /* Brief reveals only when the row is selected/active (was hover/focus-within). */
   .conv-item.active .conv-hover-meta-row { display: flex; }
   .conv-item.active .conv-hover-meta-row .conv-meta-inline,
   .conv-item.active .conv-hover-meta-row .conv-branch-slot,
+  .conv-item.active .conv-hover-meta-row .conv-object-chip,
   .conv-item.active .conv-hover-meta-row .conv-folder-chip,
   .conv-item.active .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
   .conv-item.active .conv-hover-meta-row .conv-meta-inline .sep { display: inline-flex; }
