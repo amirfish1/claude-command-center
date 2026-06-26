@@ -19802,7 +19802,11 @@
           + ' data-pct="' + ctxPct.pct + '"'
           + ' title="' + escapeAttr(tip) + '">' + ctxPct.pct + '%</span>';
       }
-      const branchSlotHtml = pctBadgeHtml + worktreeBadgeHtml + branch;
+      // Context-utilized % is a direct child of the hover meta row (below), not
+      // tucked inside the branch slot — the branch slot only reveals on :hover,
+      // so the % was invisible on a selected/active row. As its own hover-row
+      // child it shows whenever the hover row shows (hover AND active). (CCC-289)
+      const branchSlotHtml = worktreeBadgeHtml + branch;
       const sessionIdChipHtml = sidebarSessionIdChipHtml(c);
       const objectChipHtml = flowObjectChipHtml(c);
       // Current-goal chip — codex sessions only (the native `/goal` feature,
@@ -19834,7 +19838,7 @@
           + '" title="' + escapeAttr(_evergreenStateTitle) + '">'
           + escapeHtml(_evergreenStateLabel) + '</span>';
       }
-      const hoverMetaRowHtml = (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)
+      const hoverMetaRowHtml = (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || pctBadgeHtml || branchSlotHtml)
         ? '<div class="conv-hover-meta-row">'
           + sessionIdChipHtml
           + objectChipHtml
@@ -19842,6 +19846,7 @@
           + goalChipHtml
           + pinnedHtml
           + (rowSizeHtml || '')
+          + (pctBadgeHtml || '')
           + (branchSlotHtml ? '<span class="conv-branch-slot">' + branchSlotHtml + '</span>' : '')
           + '</div>'
         : '';
