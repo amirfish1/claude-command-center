@@ -1656,6 +1656,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("openConversationPopout(convId, null, null)", app_js)
         self.assertIn(".ccc-breadcrumb-popout", app_css)
 
+    def test_global_breadcrumb_streaming_status_stays_compact(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const headLabel = streaming ? (stale ? 'stream-json ⚠' : 'stream-json')", app_js)
+        self.assertIn("#cccBreadcrumb .ccc-proc-checked { display: none; }", app_css)
+        self.assertNotIn("(stale ? 'headless ⚠' : 'headless') + (streaming ? ' · stream-json' : '')", app_js)
+
     def test_terminal_pick_a_repo_label_is_clickable(self):
         """The terminal panel's "Pick a repo" placeholder used to be
         passive text — user had no way to actually pick a repo from
