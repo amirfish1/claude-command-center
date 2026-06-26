@@ -2396,7 +2396,7 @@ class TestServerImports(unittest.TestCase):
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
-        self.assertIn('<div class="status-rail-title">Session Utilities</div>', index_html)
+        self.assertIn('<div class="status-rail-title" id="statusRailTitle">Session Utilities</div>', index_html)
         self.assertIn('data-rail-tab="metadata"', index_html)
         self.assertIn('data-rail-tab="files"', index_html)
         self.assertIn('data-rail-tab="queue"', index_html)
