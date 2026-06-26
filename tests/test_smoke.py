@@ -2761,15 +2761,15 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("sendToTerminal('p1', 'steer')", app_js)
         self.assertIn("mode: injectMode", app_js)
 
-    def test_composer_can_announce_injected_sender(self):
-        """A follow-up injected on behalf of another session needs explicit
-        sender attribution so the target agent does not assume Amir wrote it."""
+    def test_announced_sender_is_api_only(self):
+        """Injected sender attribution remains available to API callers
+        without exposing a brittle manual composer field."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
 
-        self.assertIn('id="convAnnouncedFrom"', index_html)
-        self.assertIn("Announced from", index_html)
+        self.assertNotIn('id="convAnnouncedFrom"', index_html)
+        self.assertIn("announced_from key", index_html)
         self.assertIn("function announcedFromForPane", app_js)
         self.assertIn("payload.announced_from", app_js)
         self.assertIn("announcedInjectionPreview(text, announcedFrom)", app_js)
@@ -5012,6 +5012,139 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(ctx["repo_path"], str(self.repo))
         self.assertEqual(ctx["cwd"], str(self.repo))
 
+    def test_find_conversations_carries_spawn_parent_session_id(self):
+        parent = "10000000-0000-4000-8000-000000000001"
+        child = "10000000-0000-4000-8000-000000000002"
+        transcript = self.server._canonical_conversation_path(str(self.repo), child)
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(
+            json.dumps({
+                "type": "user",
+                "timestamp": "2026-05-04T00:00:00.000Z",
+                "cwd": str(self.repo),
+                "sessionId": child,
+                "gitBranch": "main",
+                "message": {"role": "user", "content": "review this"},
+            }) + "\n",
+            encoding="utf-8",
+        )
+        self.server._record_spawn_to_registry(
+            pid=424242,
+            name="reviewer",
+            log_path=self.repo / ".claude" / "logs" / "spawn-reviewer.log",
+            cwd=str(self.repo),
+            spawned_at="20260504T000000",
+            command_summary="review this",
+            fifo=None,
+            engine="claude",
+            session_id=child,
+            repo_path=str(self.repo),
+            parent_session_id=parent,
+        )
+
+        row = next(r for r in self.server.find_conversations(str(self.repo))
+                   if r["session_id"] == child)
+        self.assertEqual(row["parent_session_id"], parent)
+
+    def test_find_conversations_recovers_legacy_report_to_parent_from_prompt(self):
+        parent = "10000000-0000-4000-8000-000000000003"
+        child = "10000000-0000-4000-8000-000000000004"
+        prompt = self.server._wrap_prompt_with_return_address(
+            "review this",
+            parent,
+            port=8090,
+        )
+        transcript = self.server._canonical_conversation_path(str(self.repo), child)
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(
+            json.dumps({
+                "type": "user",
+                "timestamp": "2026-05-04T00:00:00.000Z",
+                "cwd": str(self.repo),
+                "sessionId": child,
+                "gitBranch": "main",
+                "message": {"role": "user", "content": prompt},
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        row = next(r for r in self.server.find_conversations(str(self.repo))
+                   if r["session_id"] == child)
+        self.assertEqual(row["parent_session_id"], parent)
+
+    def test_archive_rehydrate_restores_spawn_parent_session_id(self):
+        parent = "10000000-0000-4000-8000-000000000011"
+        child = "10000000-0000-4000-8000-000000000012"
+        self.server._record_spawn_to_registry(
+            pid=424243,
+            name="reviewer",
+            log_path=self.repo / ".claude" / "logs" / "spawn-reviewer.log",
+            cwd=str(self.repo),
+            spawned_at="20260504T000000",
+            command_summary="review this",
+            fifo=None,
+            engine="claude",
+            session_id=child,
+            repo_path=str(self.repo),
+            parent_session_id=parent,
+        )
+
+        rows = self.server._rehydrate_archive_cached_rows([{
+            "session_id": child,
+            "engine": "claude",
+            "mtime": 1782417600.0,
+            "modified": 1782417600.0,
+            "parent_session_id": "",
+        }])
+
+        self.assertEqual(rows[0]["parent_session_id"], parent)
+
+    def test_archive_rehydrate_recovers_legacy_report_to_parent_from_transcript(self):
+        parent = "10000000-0000-4000-8000-000000000013"
+        child = "10000000-0000-4000-8000-000000000014"
+        prompt = self.server._wrap_prompt_with_return_address(
+            "review this",
+            parent,
+            port=8090,
+        )
+        transcript = self.server._canonical_conversation_path(str(self.repo), child)
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(
+            json.dumps({
+                "type": "user",
+                "timestamp": "2026-05-04T00:00:00.000Z",
+                "cwd": str(self.repo),
+                "sessionId": child,
+                "gitBranch": "main",
+                "message": {"role": "user", "content": prompt},
+            }) + "\n",
+            encoding="utf-8",
+        )
+        self.server._record_spawn_to_registry(
+            pid=424244,
+            name="reviewer",
+            log_path=self.repo / ".claude" / "logs" / "spawn-reviewer.log",
+            cwd=str(self.repo),
+            spawned_at="20260504T000000",
+            command_summary="review this",
+            fifo=None,
+            engine="claude",
+            session_id=child,
+            repo_path=str(self.repo),
+        )
+
+        rows = self.server._rehydrate_archive_cached_rows([{
+            "session_id": child,
+            "engine": "claude",
+            "jsonl_path": str(transcript),
+            "mtime": 1782417600.0,
+            "modified": 1782417600.0,
+            "first_message": "review this",
+            "parent_session_id": "",
+        }])
+
+        self.assertEqual(rows[0]["parent_session_id"], parent)
+
     def test_session_cwd_relocates_after_folder_move(self):
         sid = "00000000-0000-4000-8000-000000000100"
         old_cwd = self.repo / "old folder" / "app"
@@ -5176,6 +5309,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 repo_path=None,
                 worktree=False,
                 model="gpt-test",
+                parent_session_id=None,
             )
         finally:
             httpd.shutdown()
@@ -5353,10 +5487,12 @@ class TestRepoContextHelpers(unittest.TestCase):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
-        self.assertTrue(hasattr(server, "spawn_session_codex"))
         import inspect
+        sig = inspect.signature(server.spawn_session)
+        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "parent_session_id"])
+        self.assertTrue(hasattr(server, "spawn_session_codex"))
         sig = inspect.signature(server.spawn_session_codex)
-        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model"])
+        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "parent_session_id"])
 
     def test_spawn_session_gemini_exists(self):
         """`spawn_session_gemini` must exist alongside the other engines
@@ -5367,7 +5503,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(hasattr(server, "spawn_session_gemini"))
         import inspect
         sig = inspect.signature(server.spawn_session_gemini)
-        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model"])
+        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "parent_session_id"])
 
     def test_spawn_session_cursor_exists(self):
         """`spawn_session_cursor` must exist alongside the other engines
@@ -5378,7 +5514,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(hasattr(server, "spawn_session_cursor"))
         import inspect
         sig = inspect.signature(server.spawn_session_cursor)
-        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model"])
+        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "parent_session_id"])
 
     def test_orchestration_spawn_engine_normalization(self):
         for mod in ("server", "morning", "morning_store"):
@@ -5407,11 +5543,13 @@ class TestRepoContextHelpers(unittest.TestCase):
                     cwd=tmp, spawned_at="20260430T000000",
                     command_summary="test", fifo=None, engine="codex",
                     session_id="known-session-id",
+                    parent_session_id="parent-session-id",
                 )
                 with registry_file.open() as f:
                     rows = json.load(f)
                 self.assertEqual(rows[-1]["engine"], "codex")
                 self.assertEqual(rows[-1]["session_id"], "known-session-id")
+                self.assertEqual(rows[-1]["parent_session_id"], "parent-session-id")
             finally:
                 server.SPAWNED_PIDS_FILE = orig
 
@@ -9303,6 +9441,37 @@ class TestSpawnReturnAddress(unittest.TestCase):
         val, err = self.server._normalize_return_address({"report_to": "abc"})
         self.assertIsNone(val)
         self.assertTrue(err)
+
+    def test_spawn_parent_defaults_to_return_address(self):
+        sid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        val, err = self.server._normalize_spawn_parent_session_id({}, report_to=sid)
+        self.assertIsNone(err)
+        self.assertEqual(val, sid)
+
+    def test_spawn_parent_prefers_explicit_parent(self):
+        parent = "parent-session-id"
+        report_to = "report-session-id"
+        val, err = self.server._normalize_spawn_parent_session_id(
+            {"parent_session_id": parent},
+            report_to=report_to,
+        )
+        self.assertIsNone(err)
+        self.assertEqual(val, parent)
+
+    def test_spawn_parent_rejects_shell_metachars(self):
+        val, err = self.server._normalize_spawn_parent_session_id(
+            {"parent_session_id": "x; rm -rf /"}
+        )
+        self.assertIsNone(val)
+        self.assertTrue(err)
+
+    def test_spawn_parent_extracts_legacy_return_address_footer(self):
+        sid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        text = self.server._wrap_prompt_with_return_address("do x", sid, port=8090)
+        self.assertEqual(
+            self.server._parent_session_id_from_return_address_text(text),
+            sid,
+        )
 
     def test_wrap_is_noop_without_address(self):
         self.assertEqual(

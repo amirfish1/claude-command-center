@@ -279,9 +279,11 @@ Spawn calls pass `repo_path` (or `cwd`) plus optional
 `engine: "claude" | "codex" | "cursor" | "antigravity" | "kilo"` to `/api/sessions/spawn`;
 omitted engine/model values use the server-side defaults from the dashboard.
 Legacy `engine: "gemini"` maps to Antigravity. Successful spawns return
-`spawn_id`, `engine`, `repo_path`, `cwd`, and `session_id` when the native
-engine has emitted one; callers can poll `/api/sessions/spawned` if
-`session_id_pending` is true.
+`spawn_id`, `engine`, `repo_path`, `cwd`, optional `parent_session_id`, and
+`session_id` when the native engine has emitted one; callers can poll
+`/api/sessions/spawned` if `session_id_pending` is true. Passing `report_to`
+(or explicit `parent_session_id`) links spawned sibling sessions under the
+dispatcher in Current Sessions.
 
 Once installed, a Claude session can run e.g.:
 

@@ -43,13 +43,13 @@ All operations (except List) use `curl -s -X POST "$CCC_URL<endpoint>" -H "Conte
 - **List Current Repo (GET):** `/api/sessions?repo_path=<URL-encoded abs path>`
   *Returns the unified session list for one repo. Always check if a session for your topic exists before spawning!*
 - **List Spawned Runs (GET):** `/api/sessions/spawned`
-  *Returns recent CCC-owned spawns with `spawn_id`, `session_id`, `engine`, `repo_path`, `cwd`, and `spawned_at`. Use this if a spawn response has `session_id_pending: true`.*
+  *Returns recent CCC-owned spawns with `spawn_id`, `session_id`, `parent_session_id`, `engine`, `repo_path`, `cwd`, and `spawned_at`. Use this if a spawn response has `session_id_pending: true`.*
 - **List All (GET):** `/api/sessions?all=1` (optional `&engine=codex|antigravity|claude`)
   *Returns cross-repo sessions plus the spawned-run registry.*
 - **Spawn:** `/api/sessions/spawn` 
   *Payload:* `{"prompt": "...", "repo_path": "/abs/repo", "engine": "claude|codex|antigravity", "model": "..."}`. `repo_path` (or `cwd`) is required. `engine` and `model` are optional; when omitted, CCC uses the server-side defaults from **Settings → Spawn defaults…**. Legacy `gemini` maps to `antigravity`.
-  *Return address (optional):* Add `"report_to": "<your-session-id>"` (aliases: `return_to`, `reply_to`) to the payload. CCC appends a footer to the spawned agent's prompt instructing it to POST a structured completion report back to your session via `/api/inject-input` when it finishes (success or failure). The report format is: `STATUS: SUCCEEDED|FAILED / SUMMARY: ... / FILES: ... / REASON: ...` (reason only on failure). Use this to get async completion callbacks without polling.
-  *Returns:* `{"ok": true, "session_id": "...", "spawn_id": "123", "engine": "...", "repo_path": "...", "cwd": "...", "session_id_pending": false}`. Prefer `session_id` immediately; if pending, poll Spawned Runs by `spawn_id`.
+  *Return address + hierarchy (recommended for spawned siblings):* Add `"report_to": "<your-session-id>"` (aliases: `return_to`, `reply_to`) to the payload. CCC appends a footer to the spawned agent's prompt instructing it to POST a structured completion report back to your session via `/api/inject-input` when it finishes (success or failure), and uses the same id as `parent_session_id` so the child appears nested under the dispatcher in Current Sessions. Use explicit `"parent_session_id": "<session-id>"` only when the visual parent differs from the report target.
+  *Returns:* `{"ok": true, "session_id": "...", "spawn_id": "123", "parent_session_id": "...", "engine": "...", "repo_path": "...", "cwd": "...", "session_id_pending": false}`. Prefer `session_id` immediately; if pending, poll Spawned Runs by `spawn_id`.
 - **Inject (Fire & Forget):** `/api/inject-input`
   *Payload:* `{"session_id": "<uuid>", "text": "..."}`. CCC detects the target session's engine.
 - **Ask (Sync/Wait):** `/api/ask`

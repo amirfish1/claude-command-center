@@ -3936,6 +3936,26 @@ def _spawn_registry_entry_for_session(session_id, engine=None):
     return None
 
 
+def _spawn_registry_entries_by_session(engine=None):
+    """Return registry entries keyed by native session id.
+
+    Used by list builders so they do not re-read the registry once per row.
+    """
+    out = {}
+    try:
+        entries = _load_spawn_registry()
+    except Exception:
+        return out
+    for entry in entries:
+        if engine and entry.get("engine") != engine:
+            continue
+        for key in ("session_id", "resumed_sid"):
+            sid = str(entry.get(key) or "").strip()
+            if sid and sid not in out:
+                out[sid] = entry
+    return out
+
+
 def _tail_meta_spawn_named(tail_meta):
     """True when Claude's transcript still reflects its launch --name."""
     custom_title = str((tail_meta or {}).get("custom_title") or "").strip()
@@ -3983,6 +4003,7 @@ def _live_registry_conversation_row(
         spawn_entry.get("command_summary") or ""
     ).strip()
     spawn_name = str(spawn_entry.get("name") or "").strip()
+    parent_session_id = str(spawn_entry.get("parent_session_id") or "").strip()
     display_name = (
         overrides.get(sid)
         or (meta or {}).get("name")
@@ -4058,6 +4079,7 @@ def _live_registry_conversation_row(
         "question_preamble": "",
         "question_options": [],
         "question_option_details": [],
+        "parent_session_id": parent_session_id,
     }
     try:
         _add_sidecar_fields(row)
@@ -4124,6 +4146,7 @@ def find_all_conversations(
         repo_pins = _load_repo_pins()
     except Exception:
         repo_pins = {}
+    spawn_registry_by_sid = _spawn_registry_entries_by_session(engine="claude")
 
     # Liveness gate, built once. The cheap "could be live right now" set —
     # Claude registry (one cached `ps`), engine resume-arg scan, sidecar marker
@@ -4420,6 +4443,10 @@ def find_all_conversations(
                 ctx_limit = 1_000_000
             else:
                 ctx_limit = 200_000
+            spawn_entry = spawn_registry_by_sid.get(session_id) or {}
+            parent_session_id = str(spawn_entry.get("parent_session_id") or "").strip()
+            if not parent_session_id:
+                parent_session_id = _parent_session_id_from_return_address_text(first_message)
             out.append({
                 "session_id": session_id,
                 "source": "interactive",
@@ -4501,6 +4528,7 @@ def find_all_conversations(
                 "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
                 "goal": tail_meta.get("goal") or "",
                 "goal_status": tail_meta.get("goal_status") or "",
+                "parent_session_id": parent_session_id,
                 # Context % badge — same fields as find_conversations so
                 # archive rows can render sidebar usage without opening the
                 # session pane.
@@ -5136,6 +5164,10 @@ def _rehydrate_archive_cached_rows(rows):
     except Exception:
         pinned_list = []
     pinned_rank = _pinned_rank_map(pinned_list)
+    try:
+        spawn_registry_by_sid = _spawn_registry_entries_by_session()
+    except Exception:
+        spawn_registry_by_sid = {}
 
     # Same liveness gate as the build path. This rehydrate runs on EVERY
     # stale-cache serve — the path the dashboard hits on each load — so an
@@ -5175,6 +5207,21 @@ def _rehydrate_archive_cached_rows(rows):
             row["verified"] = sid in verified_set
             row["pinned"] = sid in pinned_rank
             row["pin_rank"] = pinned_rank.get(sid)
+            spawn_parent_id = str(
+                (spawn_registry_by_sid.get(sid) or {}).get("parent_session_id") or ""
+            ).strip()
+            if not spawn_parent_id:
+                spawn_parent_id = _parent_session_id_from_return_address_text(
+                    row.get("first_message")
+                )
+            if not spawn_parent_id and sid in spawn_registry_by_sid and row.get("jsonl_path"):
+                spawn_parent_id = _parent_session_id_from_transcript_return_address(
+                    row.get("jsonl_path")
+                )
+            if spawn_parent_id:
+                row["parent_session_id"] = spawn_parent_id
+            else:
+                row.setdefault("parent_session_id", "")
 
             row_ts = row.get("mtime") or row.get("modified") or 0
             if sid in live_candidates or (_now_rehydrate - row_ts) < _LIVE_MTIME_WINDOW:
@@ -7721,7 +7768,8 @@ SPAWN_DEFAULTS_FILE = COMMAND_CENTER_STATE_DIR / "spawn-defaults.json"
 # Persistent registry of spawned headless `claude -p` PIDs, so a server restart
 # can re-discover orphans instead of leaving them unreachable. See
 # _reattach_spawned_orphans() for the boot-time sweep. Schema is a list of
-# {pid, session_id, cwd, spawned_at, name, log, command_summary, model}.
+# {pid, session_id, parent_session_id, cwd, spawned_at, name, log,
+# command_summary, model}.
 SPAWNED_PIDS_FILE = COMMAND_CENTER_STATE_DIR / "spawned-pids.json"
 
 # Per-session model + context override. Set by the click-to-switch picker
@@ -13113,6 +13161,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
     pinned_rank = _pinned_rank_map(pinned_list)
     verified_set = set(_load_verified_conversations())
     last_interactions = _load_last_interactions()
+    spawn_registry_by_sid = _spawn_registry_entries_by_session(engine="claude")
     # If the same session_id (file name) appears in multiple candidate
     # dirs (unlikely — claude-code uses one slug per process — but
     # possible if a repo path was historically encoded both ways), the
@@ -13380,6 +13429,10 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             limit = 1_000_000
         else:
             limit = 200_000
+        spawn_entry = spawn_registry_by_sid.get(sid) or {}
+        parent_session_id = str(spawn_entry.get("parent_session_id") or "").strip()
+        if not parent_session_id:
+            parent_session_id = _parent_session_id_from_return_address_text(first_message)
 
         conversations.append({
             "id": conv_id,
@@ -13466,6 +13519,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
             "goal": tail_meta.get("goal") or "",
             "goal_status": tail_meta.get("goal_status") or "",
+            "parent_session_id": parent_session_id,
             "model": tail_meta.get("model"),
             "archived": sid in archived_set,
             "pinned": sid in pinned_rank,
@@ -18109,6 +18163,7 @@ def _codex_spawn_pid_by_thread_id():
                     "spawned_at": s.get("started") or "",
                     "prompt": s.get("prompt") or "",
                     "model": s.get("model") or "",
+                    "parent_session_id": s.get("parent_session_id") or "",
                 }
     return out
 
@@ -18796,6 +18851,7 @@ def find_codex_conversations(
             "last_interacted": last_interactions.get(sid),
             "is_live": spawn_alive,
             "spawn_pid": spawn_pid,
+            "parent_session_id": spawn_info.get("parent_session_id") or "",
             **codex_activity,
             **codex_stale_tool,
             "needs_approval": False,
@@ -20907,6 +20963,7 @@ def _gemini_spawn_pid_by_session_id():
                     "spawned_at": s.get("started") or "",
                     "prompt": s.get("prompt") or "",
                     "model": s.get("model") or "",
+                    "parent_session_id": s.get("parent_session_id") or "",
                 }
     return out
 
@@ -21354,6 +21411,7 @@ def find_gemini_conversations(
             "last_interacted": last_interactions.get(sid),
             "is_live": spawn_alive,
             "spawn_pid": spawn_pid,
+            "parent_session_id": spawn_info.get("parent_session_id") or "",
             **gemini_activity,
             "needs_approval": False,
             "needs_approval_message": "",
@@ -22253,6 +22311,7 @@ def _cursor_spawn_pid_by_session_id():
                     "spawned_at": s.get("started") or "",
                     "prompt": s.get("prompt") or "",
                     "model": s.get("model") or "",
+                    "parent_session_id": s.get("parent_session_id") or "",
                 }
     return out
 
@@ -22921,6 +22980,7 @@ def find_cursor_conversations(
             "last_interacted": last_interactions.get(sid),
             "is_live": is_live,
             "spawn_pid": spawn_pid,
+            "parent_session_id": spawn_info.get("parent_session_id") or "",
             **cursor_activity,
             "needs_approval": False,
             "needs_approval_message": "",
@@ -25212,6 +25272,7 @@ def _antigravity_spawn_pid_by_session_id():
                     "spawned_at": s.get("started") or "",
                     "prompt": s.get("prompt") or "",
                     "model": meta.get("model") or s.get("model") or "",
+                    "parent_session_id": s.get("parent_session_id") or "",
                 }
     return out
 
@@ -25983,6 +26044,7 @@ def find_antigravity_conversations(
             "last_interacted": last_interactions.get(sid),
             "is_live": is_live,
             "spawn_pid": spawn_pid,
+            "parent_session_id": spawn_info.get("parent_session_id") or "",
             "can_headless_resume": bool(
                 _antigravity_cli_conversation_path(sid)
                 and _antigravity_cli_conversation_path(sid).is_file()
@@ -26088,6 +26150,7 @@ def find_antigravity_conversations(
             "last_interacted": last_interactions.get(sid),
             "is_live": True,
             "spawn_pid": spawn_info.get("pid"),
+            "parent_session_id": spawn_info.get("parent_session_id") or "",
             "can_headless_resume": bool(
                 _antigravity_cli_conversation_path(sid)
                 and _antigravity_cli_conversation_path(sid).is_file()
@@ -26851,7 +26914,7 @@ def resume_session_gemini(session_id, text):
     return {"ok": True, "pid": proc.pid, "log": str(log_path), "resumed": True, "via": "gemini-resume"}
 
 
-def spawn_session_gemini(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None):
+def spawn_session_gemini(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
     """Spawn a headless Gemini CLI run and return tracking info."""
     prompt = _strip_ccc_session_state_instruction(prompt)
     resolved = _resolve_gemini_bin()
@@ -26911,6 +26974,7 @@ def spawn_session_gemini(prompt, name=None, cwd=None, repo_path=None, worktree=F
         "cwd": spawn_cwd,
         "repo_path": repo_for_logs,
         "model": model_to_use or "",
+        "parent_session_id": parent_session_id or "",
     }
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -26924,6 +26988,7 @@ def spawn_session_gemini(prompt, name=None, cwd=None, repo_path=None, worktree=F
         engine="gemini",
         repo_path=repo_for_logs,
         model=model_to_use,
+        parent_session_id=parent_session_id,
     )
     return _finalize_spawn_response(
         {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)},
@@ -27045,7 +27110,7 @@ def resume_session_cursor(session_id, text):
     }
 
 
-def spawn_session_cursor(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None):
+def spawn_session_cursor(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
     """Spawn a headless Cursor Agent run and return tracking info."""
     prompt = _strip_ccc_session_state_instruction(prompt or "")
     if not prompt:
@@ -27129,6 +27194,7 @@ def spawn_session_cursor(prompt, name=None, cwd=None, repo_path=None, worktree=F
         "cwd": spawn_cwd,
         "repo_path": repo_for_logs,
         "model": model_to_use,
+        "parent_session_id": parent_session_id or "",
     }
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -27142,6 +27208,7 @@ def spawn_session_cursor(prompt, name=None, cwd=None, repo_path=None, worktree=F
         engine="cursor",
         repo_path=repo_for_logs,
         model=model_to_use,
+        parent_session_id=parent_session_id,
     )
 
     resp = {
@@ -27158,7 +27225,7 @@ def spawn_session_cursor(prompt, name=None, cwd=None, repo_path=None, worktree=F
     return _finalize_spawn_response(resp, entry, ctx)
 
 
-def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None):
+def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
     """Spawn a headless AGY print-mode run and return tracking info.
 
     If `worktree=True`, create a fresh git worktree off the launch cwd on a
@@ -27282,6 +27349,7 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
         "cwd": spawn_cwd,
         "repo_path": repo_for_logs,
         "model": model_to_use,
+        "parent_session_id": parent_session_id or "",
     }
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -27296,6 +27364,7 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
         session_id=session_id,
         repo_path=repo_for_logs,
         model=model_to_use,
+        parent_session_id=parent_session_id,
     )
     resp = {
         "ok": True,
@@ -27788,6 +27857,8 @@ def _finalize_spawn_response(resp, entry, ctx, *, wait_for_session_id=True):
             resp["repo_path"] = entry["repo_path"]
         if entry.get("cwd"):
             resp["cwd"] = entry["cwd"]
+        if entry.get("parent_session_id"):
+            resp["parent_session_id"] = entry["parent_session_id"]
     sid = (
         _wait_for_spawn_session_id(entry)
         if wait_for_session_id else _spawn_session_id_from_entry(entry)
@@ -27887,6 +27958,9 @@ never branch, and do NOT push unless explicitly asked.
 # text and a curl the spawned agent runs, so reject anything that could break
 # out of either: shell metachars, quotes, whitespace, control chars.
 _RETURN_ADDRESS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{7,127}$")
+_RETURN_ADDRESS_FOOTER_RE = re.compile(
+    r"dispatched by another CCC session \(id `([A-Za-z0-9_.-]{8,128})`\)"
+)
 _ANNOUNCED_FROM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_. @:+/-]{0,79}$")
 
 
@@ -27910,6 +27984,69 @@ def _normalize_return_address(payload):
             "(8-128 chars, letters/digits/_.- only)"
         )
     return raw, None
+
+
+def _normalize_spawn_parent_session_id(payload, report_to=None):
+    """Resolve optional parent linkage for a spawned session.
+
+    `report_to` already identifies the dispatching session for async callbacks,
+    so use it as the default parent when the caller does not pass an explicit
+    parent id.
+    """
+    raw = None
+    for key in ("parent_session_id", "parentSessionId", "parent_sid"):
+        v = payload.get(key)
+        if isinstance(v, str) and v.strip():
+            raw = v.strip()
+            break
+    if raw is None and report_to:
+        raw = str(report_to).strip()
+    if raw is None:
+        return None, None
+    if not _RETURN_ADDRESS_RE.match(raw):
+        return None, (
+            "parent_session_id must be a session id "
+            "(8-128 chars, letters/digits/_.- only)"
+        )
+    return raw, None
+
+
+def _parent_session_id_from_return_address_text(text):
+    """Recover legacy spawn hierarchy from CCC's report-back footer."""
+    if not isinstance(text, str) or "Return address" not in text:
+        return ""
+    m = _RETURN_ADDRESS_FOOTER_RE.search(text)
+    if not m:
+        return ""
+    sid = m.group(1).strip()
+    return sid if _RETURN_ADDRESS_RE.match(sid) else ""
+
+
+def _parent_session_id_from_transcript_return_address(path):
+    """Read a transcript's first user prompt and extract a CCC return address."""
+    try:
+        with open(path, "r") as fh:
+            for i, line in enumerate(fh):
+                if i >= 20:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "user" or ev.get("isMeta"):
+                    continue
+                parent = _parent_session_id_from_return_address_text(
+                    _extract_user_prompt_text(ev)
+                )
+                if parent:
+                    return parent
+                return ""
+    except (OSError, UnicodeDecodeError):
+        pass
+    return ""
 
 
 def _normalize_announced_from(payload):
@@ -27977,7 +28114,7 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None):
     return prompt + footer
 
 
-def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None):
+def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
     """Spawn a headless Claude Code session and return tracking info.
 
     The spawned subprocess requires an explicit cwd or repo_path.
@@ -28081,6 +28218,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         "cwd": spawn_cwd,
         "repo_path": ctx["repo_path"],
         "model": model_to_use,
+        "parent_session_id": parent_session_id or "",
     }
     # Write the initial prompt as the first stream-json user message.
     # Note: headless `claude -p` doesn't support TUI slash commands like /rename
@@ -28113,6 +28251,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         engine="claude",
         repo_path=ctx["repo_path"],
         model=model_to_use,
+        parent_session_id=parent_session_id,
     )
     # Cwd determines the ~/.claude/projects/ bucket the new session
     # logs to, which is how the kanban groups it by repo. Print it so
@@ -28133,7 +28272,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     return _finalize_spawn_response(resp, entry, ctx)
 
 
-def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None):
+def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
     """Spawn a headless Codex CLI run and return tracking info.
 
     Mirrors `spawn_session` but invokes the Codex CLI's `exec`
@@ -28234,6 +28373,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         "cwd": spawn_cwd,
         "repo_path": repo_for_logs,
         "model": model_to_use or "",
+        "parent_session_id": parent_session_id or "",
     }
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -28247,6 +28387,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         engine="codex",
         repo_path=repo_for_logs,
         model=model_to_use,
+        parent_session_id=parent_session_id,
     )
 
     resp = {
@@ -28262,7 +28403,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     return _finalize_spawn_response(resp, entry, ctx)
 
 
-def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None):
+def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
     """Spawn a headless Kilo Code CLI run and return tracking info."""
     prompt = _strip_ccc_session_state_instruction(prompt)
     resolved = _resolve_kilo_bin()
@@ -28311,13 +28452,14 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
         "prompt": prompt[:200], "started": timestamp, "proc": proc,
         "log_fh": log_fh, "fifo": None, "stdin_fd": None,
         "engine": "kilo", "cwd": spawn_cwd, "repo_path": repo_for_logs,
-        "model": model_to_use or "",
+        "model": model_to_use or "", "parent_session_id": parent_session_id or "",
     }
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
         pid=proc.pid, name=session_name, log_path=log_path, cwd=spawn_cwd,
         spawned_at=timestamp, command_summary=prompt[:200],
         fifo=None, engine="kilo", repo_path=repo_for_logs, model=model_to_use,
+        parent_session_id=parent_session_id,
     )
     resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "kilo-spawn"}
     if worktree_path:
@@ -29259,6 +29401,7 @@ def _save_spawn_registry(entries):
 def _record_spawn_to_registry(
     pid, name, log_path, cwd, spawned_at, command_summary,
     fifo=None, engine="claude", session_id=None, model=None, repo_path=None,
+    parent_session_id=None,
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -29284,6 +29427,7 @@ def _record_spawn_to_registry(
         "command_summary": command_summary,
         "engine": engine,
         "model": model or "",
+        "parent_session_id": parent_session_id or "",
     })
     _save_spawn_registry(entries)
 
@@ -29469,6 +29613,7 @@ def _reattach_spawned_orphans():
             "cwd": entry.get("cwd") or "",
             "repo_path": entry.get("repo_path") or "",
             "model": entry.get("model") or "",
+            "parent_session_id": entry.get("parent_session_id") or "",
         }
         if session_id:
             synthetic["session_id"] = session_id
@@ -29486,6 +29631,7 @@ def _reattach_spawned_orphans():
             "command_summary": entry.get("command_summary", ""),
             "engine": engine,
             "model": entry.get("model") or "",
+            "parent_session_id": entry.get("parent_session_id") or "",
         })
         reattached += 1
 
@@ -29517,6 +29663,7 @@ def list_spawned_sessions():
             "cwd": s.get("cwd") or "",
             "repo_path": s.get("repo_path") or "",
             "model": s.get("model") or "",
+            "parent_session_id": s.get("parent_session_id") or "",
             "command_summary": s.get("prompt", ""),
             "running": poll is None,
             "exit_code": poll,
@@ -43250,6 +43397,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             engine_raw = payload.get("engine")
             engine, model = _spawn_request_engine_and_model(payload)
             report_to, report_to_error = _normalize_return_address(payload)
+            parent_session_id, parent_session_error = _normalize_spawn_parent_session_id(
+                payload,
+                report_to=report_to,
+            )
             cwd_raw = payload.get("cwd")
             cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
             cwd_resolved = None
@@ -43296,6 +43447,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
             elif report_to_error:
                 self.send_json({"ok": False, "error": report_to_error}, 400)
+            elif parent_session_error:
+                self.send_json({"ok": False, "error": parent_session_error}, 400)
             else:
                 try:
                     # Return address: spawned session reports back to its
@@ -43310,6 +43463,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             repo_path=payload.get("repo_path"),
                             worktree=worktree_flag,
                             model=model,
+                            parent_session_id=parent_session_id,
                         )
                     elif engine == "cursor":
                         result = spawn_session_cursor(
@@ -43319,6 +43473,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             repo_path=payload.get("repo_path"),
                             worktree=worktree_flag,
                             model=model,
+                            parent_session_id=parent_session_id,
                         )
                     elif engine == "antigravity":
                         result = spawn_session_antigravity(
@@ -43328,6 +43483,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             repo_path=payload.get("repo_path"),
                             worktree=worktree_flag,
                             model=model,
+                            parent_session_id=parent_session_id,
                         )
                     elif engine == "kilo":
                         result = spawn_session_kilo(
@@ -43337,6 +43493,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             repo_path=payload.get("repo_path"),
                             worktree=worktree_flag,
                             model=model,
+                            parent_session_id=parent_session_id,
                         )
                     else:
                         result = spawn_session(
@@ -43346,10 +43503,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             repo_path=payload.get("repo_path"),
                             worktree=worktree_flag,
                             model=model,
+                            parent_session_id=parent_session_id,
                         )
                     result.setdefault("engine", engine)
                     if report_to and isinstance(result, dict):
                         result["report_to"] = report_to
+                    if parent_session_id and isinstance(result, dict):
+                        result["parent_session_id"] = parent_session_id
                     if result.get("code") in (
                         "claude_unavailable",
                         "codex_unavailable",
