@@ -732,7 +732,9 @@
           <div class="status-rail-shell" id="statusRailShell">
             <div class="status-rail-head">
               <div>
-                <div class="status-rail-title">Session Utilities</div>
+                <!-- Shows the active session's name (set by updatePaneHeader);
+                     falls back to "Session Utilities" when nothing is selected. -->
+                <div class="status-rail-title" id="statusRailTitle">Session Utilities</div>
                 <div class="status-rail-context">Context: Active</div>
               </div>
             </div>

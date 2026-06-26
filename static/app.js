@@ -23911,9 +23911,16 @@
           + popoutBtn;
         breadcrumbEl.hidden = false;
         updateConvProcessIndicator();
+        // Mirror the active session's name into the status-rail head, replacing
+        // the static "Session Utilities" label (CCC-281). The rail is global, so
+        // only the active pane drives it.
+        const railTitleEl = document.getElementById('statusRailTitle');
+        if (railTitleEl) railTitleEl.textContent = title || category || 'Session';
       } else if (isActive) {
         breadcrumbEl.innerHTML = '';
         breadcrumbEl.hidden = true;
+        const railTitleEl = document.getElementById('statusRailTitle');
+        if (railTitleEl) railTitleEl.textContent = 'Session Utilities';
       }
     }
     // Conversation size badge — surfaces how big the JSONL is so the
@@ -25662,6 +25669,90 @@
     }
     return '<div class="fq-empty"><div>No queue tickets.</div><div class="fq-empty-sub">Use + to add one.</div></div>';
   }
+  function _uxqItemRef(item) {
+    if (!item) return '';
+    return String(item.ref || ('#' + (item.number || '?')));
+  }
+  function _uxqItemForRef(ref) {
+    const wanted = String(ref || '');
+    if (!wanted) return null;
+    const items = Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [];
+    for (const item of items) {
+      if (_uxqItemRef(item) === wanted) return item;
+    }
+    return null;
+  }
+  function _uxqItemPrompt(item) {
+    if (!item) return '';
+    return String(item.text || item.note || '');
+  }
+  function _uxqMetaRow(label, value) {
+    if (value == null || value === '') return '';
+    const text = String(value);
+    return '<dt>' + escapeHtml(label) + '</dt><dd title="' + escapeAttr(text) + '">' + escapeHtml(text) + '</dd>';
+  }
+  function _uxqOpenItemModal(item) {
+    const existing = document.getElementById('uxqItemModal');
+    if (existing) existing.remove();
+    if (!item) {
+      showOpToast('Queue item not found. Refresh Queue and try again.', 'error');
+      return;
+    }
+    const ref = _uxqItemRef(item);
+    const promptText = _uxqItemPrompt(item);
+    const hasShot = !!item.screenshot_path;
+    const shotSrc = hasShot ? ('/api/pasted-image?path=' + encodeURIComponent(item.screenshot_path)) : '';
+    const metaHtml = [
+      _uxqMetaRow('Ref', ref),
+      _uxqMetaRow('Project', item.project),
+      _uxqMetaRow('Status', item.status || 'open'),
+      _uxqMetaRow('Lane', item.lane),
+      _uxqMetaRow('Source', item.source),
+      _uxqMetaRow('Claimed by', item.claimed_by || item.claimed_session_id),
+      _uxqMetaRow('Created', item.created_at),
+      _uxqMetaRow('Updated', item.updated_at),
+      _uxqMetaRow('URL', item.url),
+      _uxqMetaRow('Selector', item.selector),
+    ].filter(Boolean).join('');
+    const modal = document.createElement('div');
+    modal.id = 'uxqItemModal';
+    modal.className = 'ann-ux-preview-modal uxq-detail-modal';
+    modal.innerHTML =
+      '<div class="ann-ux-preview-card uxq-detail-card" role="dialog" aria-modal="true" aria-label="Queue item details">' +
+        '<div class="ann-ux-preview-title">Queue item details</div>' +
+        '<dl class="uxq-detail-meta">' + metaHtml + '</dl>' +
+        '<div class="ann-ux-preview-shot">' +
+          (hasShot
+            ? '<span class="ann-ux-ok">Screenshot attached</span>'
+              + '<a href="' + shotSrc + '" target="_blank" rel="noopener">'
+              + '<img class="ann-ux-preview-thumb" src="' + shotSrc + '" alt="queue item screenshot"></a>'
+            : '<span class="ann-ux-warn">No screenshot attached.</span>') +
+        '</div>' +
+        '<div class="ann-ux-preview-label">Ticket prompt</div>' +
+        '<textarea class="ann-ux-preview-text" rows="16" readonly spellcheck="false"></textarea>' +
+        '<div class="ann-ux-preview-actions">' +
+          '<button type="button" class="ann-btn" data-ux-copy>Copy</button>' +
+          '<button type="button" class="ann-btn ann-primary" data-ux-close>Close</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    const textArea = modal.querySelector('.ann-ux-preview-text');
+    if (textArea) textArea.value = promptText;
+    const close = () => { modal.remove(); document.removeEventListener('keydown', onKey, true); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    document.addEventListener('keydown', onKey, true);
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    const copyBtn = modal.querySelector('[data-ux-copy]');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        const text = textArea ? textArea.value : promptText;
+        try { await navigator.clipboard.writeText(text); showOpToast('Queue item copied', 'success'); }
+        catch (_) { try { if (textArea) { textArea.select(); document.execCommand('copy'); } } catch (e) {} }
+      });
+    }
+    const closeBtn = modal.querySelector('[data-ux-close]');
+    if (closeBtn) closeBtn.addEventListener('click', close);
+  }
   function _renderQueuePanel() {
     const $queue = document.getElementById('sidebarQueueList');
     if (!$queue) return;
@@ -25673,9 +25764,9 @@
       $queue.innerHTML = rows.map(it => {
         const noteFull = String(it.note || '');
         const status = it.status || 'open';
-        const ref = it.ref || ('#' + (it.number || '?'));
+        const ref = _uxqItemRef(it);
         return '<div class="fq-row is-' + escapeAttr(status) + '" data-ref="' + escapeAttr(ref)
-          + '" title="' + escapeAttr(noteFull) + '\n\nClick to jump to the first mention of ' + escapeAttr(ref) + ' in the conversation.">'
+          + '" title="' + escapeAttr(noteFull) + '\n\nClick to view ticket details.">'
           + '<span class="fq-ref">' + escapeHtml(ref) + '</span>'
           + '<span class="fq-note">' + escapeHtml(noteFull) + '</span>'
           + '<span class="fq-status">' + escapeHtml(status) + '</span>'
@@ -25718,7 +25809,7 @@
     if ($queueList) {
       $queueList.addEventListener('click', (ev) => {
         const row = ev.target && ev.target.closest && ev.target.closest('.fq-row[data-ref]');
-        if (row) _uxqJumpToRef(row.getAttribute('data-ref'));
+        if (row) _uxqOpenItemModal(_uxqItemForRef(row.getAttribute('data-ref')));
       });
     }
     // STUCK badge in the health strip — nudge that project's fixer via the same
