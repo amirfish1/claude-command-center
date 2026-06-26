@@ -14512,6 +14512,52 @@ body:has(.gc-reader) .pwa-install-banner {
   color: var(--faint, var(--text-muted));
 }
 
+/* Queue-health strip: one glanceable line per project with open tickets,
+   above the ticket list. Wraps gracefully at narrow widths. */
+.fq-health {
+  flex: 0 0 auto;
+  display: flex; flex-direction: column;
+  border-bottom: 1px solid rgba(139,148,158,0.14);
+}
+.fq-health:empty { display: none; }
+.fq-health-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 5px;
+  padding: 6px 10px; font-size: 12.5px; line-height: 1.3;
+  border-bottom: 1px solid rgba(139,148,158,0.06);
+}
+.fq-health-row:last-child { border-bottom: none; }
+.fq-health-proj {
+  font-weight: 600; color: var(--text); flex-shrink: 0;
+}
+.fq-health-sep { color: var(--faint, var(--text-muted)); opacity: 0.7; }
+.fq-health-depth,
+.fq-health-age {
+  color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fq-health-badge {
+  margin-left: auto; flex-shrink: 0;
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 1px 7px; border-radius: 999px;
+}
+.fq-health-badge.is-live {
+  background: rgba(63,185,80,0.15); color: var(--green, #3fb950);
+}
+.fq-health-badge.is-stuck {
+  background: rgba(248,81,73,0.18); color: var(--red, #f85149);
+}
+.fq-health-badge.is-nudgeable { cursor: pointer; }
+.fq-health-badge.is-nudgeable:hover { background: rgba(248,81,73,0.30); }
+.fq-health-clear {
+  padding: 8px 10px; font-size: 12.5px;
+  color: var(--green, #3fb950); opacity: 0.85;
+}
+/* Narrow widths: badge keeps right-aligned, the rest can wrap under it. */
+@media (max-width: 420px) {
+  .fq-health-row { font-size: 12px; }
+  .fq-health-badge { margin-left: 0; }
+}
+
 /* Draggable object-group headers in by-objects mode: above/below insert
    lines while reordering, accent ring while nesting. */
 .conv-folder-group-header[draggable="true"] { cursor: grab; }

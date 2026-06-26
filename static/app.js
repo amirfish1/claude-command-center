@@ -3453,14 +3453,10 @@
   // engine wake badges use.
   const _uxNudgeLast = {};            // session_id → last nudge ts (ms)
   const _UX_NUDGE_THROTTLE_MS = 5 * 60 * 1000;
-  async function _handleUxQueueNudge(el) {
-    const item = el.closest('.conv-item');
-    const sid = item ? item.getAttribute('data-session-id') : '';
+  // Core nudge by session id — the same throttle + wake text + /api/inject-input
+  // channel for any caller (a worker-row pill or the Queue health strip).
+  async function _nudgeFixerBySid(sid) {
     if (!sid) return;
-    if (el.dataset.uxNudge === 'working') {
-      if (typeof showOpToast === 'function') showOpToast('Worker is mid-fix — no nudge needed.', 'info');
-      return;
-    }
     const now = Date.now();
     const last = _uxNudgeLast[sid] || 0;
     if (now - last < _UX_NUDGE_THROTTLE_MS) {
@@ -3485,6 +3481,16 @@
       delete _uxNudgeLast[sid];  // failed — allow an immediate retry
       if (typeof showOpToast === 'function') showOpToast('Nudge failed: ' + (err && err.message || 'unknown'), 'error');
     }
+  }
+  async function _handleUxQueueNudge(el) {
+    const item = el.closest('.conv-item');
+    const sid = item ? item.getAttribute('data-session-id') : '';
+    if (!sid) return;
+    if (el.dataset.uxNudge === 'working') {
+      if (typeof showOpToast === 'function') showOpToast('Worker is mid-fix — no nudge needed.', 'info');
+      return;
+    }
+    _nudgeFixerBySid(sid);
   }
   document.addEventListener('click', (ev) => {
     const el = ev.target.closest('.conv-ux-fix-progress[data-ux-nudge]');
@@ -25417,6 +25423,71 @@
     } catch (_) { /* keep stale cache */ }
     return _uxqItemsCache.items;
   }
+  // Per-project queue-health snapshot (GET /api/ux-fixes/health). Same cache
+  // window as the ticket list so a Queue refresh costs one extra cheap GET.
+  let _uxqHealthCache = { ts: 0, rows: [] };
+  async function _fetchUxqHealth() {
+    if (Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache.rows;
+    try {
+      const res = await fetch('/api/ux-fixes/health', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      const rows = Array.isArray(data && data.projects) ? data.projects
+        : (Array.isArray(data) ? data : []);
+      _uxqHealthCache = { ts: Date.now(), rows };
+    } catch (_) { /* keep stale cache */ }
+    return _uxqHealthCache.rows;
+  }
+  // Compact human age: "now", "5m", "5h", "2d".
+  function _uxqFmtAge(secs) {
+    const s = Number(secs);
+    if (!isFinite(s) || s < 0) return '?';
+    if (s < 60) return 'now';
+    if (s < 3600) return Math.round(s / 60) + 'm';
+    if (s < 86400) return Math.round(s / 3600) + 'h';
+    return Math.round(s / 86400) + 'd';
+  }
+  // Render the health strip at the top of the Queue tab. Scoped to the same
+  // project the ticket list shows when one is resolvable; otherwise shows all
+  // projects with open tickets. Bust the cache with force=true after a write.
+  async function _renderQueueHealthStrip(force) {
+    const $strip = document.getElementById('queueHealthStrip');
+    if (!$strip) return;
+    if (force) _uxqHealthCache.ts = 0;
+    let rows = await _fetchUxqHealth();
+    const proj = _uxqWorkerProject();
+    if (proj) {
+      const mine = rows.filter(r => (r.project || '') === proj);
+      if (mine.length) rows = mine;  // scope when this project has open work
+    }
+    if (!rows.length) {
+      $strip.innerHTML = '<div class="fq-health-clear">All queues clear</div>';
+      return;
+    }
+    $strip.innerHTML = rows.map(r => {
+      const project = String(r.project || '?');
+      const depth = Number(r.depth) || 0;
+      const age = _uxqFmtAge(r.oldest_open_age_seconds);
+      const stuck = !!r.stuck;
+      const sid = r.fixer_session_id || '';
+      const canNudge = stuck && !!sid;
+      const badgeText = stuck ? 'STUCK' : 'LIVE';
+      const badgeTip = stuck
+        ? (canNudge ? 'stuck — click to nudge the worker' : 'stuck — no reachable worker')
+        : 'a worker is on it';
+      const badge = '<span class="fq-health-badge ' + (stuck ? 'is-stuck' : 'is-live')
+        + (canNudge ? ' is-nudgeable' : '') + '"'
+        + (canNudge ? ' role="button" tabindex="0" data-nudge-sid="' + escapeAttr(sid) + '"' : '')
+        + ' title="' + escapeAttr(badgeTip) + '">' + badgeText + '</span>';
+      return '<div class="fq-health-row" title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age) + '">'
+        + '<span class="fq-health-proj">' + escapeHtml(project) + '</span>'
+        + '<span class="fq-health-sep">·</span>'
+        + '<span class="fq-health-depth">' + depth + ' open</span>'
+        + '<span class="fq-health-sep">·</span>'
+        + '<span class="fq-health-age">oldest ' + escapeHtml(age) + '</span>'
+        + badge
+        + '</div>';
+    }).join('');
+  }
   // Repo-basename → project code, mirroring ux_fixes_queue.py `_REPO_PROJECT`
   // / `_project_for` so the client can scope the Queue by the open session's
   // repo even when it is not a queue-worker (CCC-175).
@@ -25459,6 +25530,7 @@
   function _renderQueuePanel() {
     const $queue = document.getElementById('sidebarQueueList');
     if (!$queue) return;
+    _renderQueueHealthStrip();
     _fetchUxqItems().then(items => {
       const proj = _uxqWorkerProject();
       const scoped = proj ? items.filter(it => (it.project || '') === proj) : items;
@@ -25514,6 +25586,22 @@
         if (row) _uxqJumpToRef(row.getAttribute('data-ref'));
       });
     }
+    // STUCK badge in the health strip — nudge that project's fixer via the same
+    // throttled /api/inject-input channel the worker-row pill uses.
+    const $health = document.getElementById('queueHealthStrip');
+    if ($health) {
+      const nudgeFromBadge = (ev) => {
+        const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid]');
+        if (!badge) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        _nudgeFixerBySid(badge.getAttribute('data-nudge-sid'));
+      };
+      $health.addEventListener('click', nudgeFromBadge);
+      $health.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') nudgeFromBadge(ev);
+      });
+    }
   }
   // Sync Files panel chrome. Queue is now a status-rail tab, not an inline
   // mode inside the Files panel.
@@ -25550,6 +25638,7 @@
             const ref = (data.item && data.item.ref) || 'ticket';
             showOpToast('Added ' + ref + ' to queue');
             _uxqItemsCache.ts = 0;  // bust cache so the new row shows
+            _uxqHealthCache.ts = 0;
             _renderQueuePanel();
           } else {
             showOpToast('Add failed: ' + ((data && data.error) || 'unknown'));
