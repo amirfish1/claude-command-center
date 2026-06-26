@@ -23848,7 +23848,6 @@
     // them through), and we still populate the topbar from whichever
     // pane is active.
     const breadcrumbEl = document.getElementById('cccBreadcrumb');
-    const sizeBytes = row && typeof row.size === 'number' ? row.size : 0;
     if (breadcrumbEl) {
       const isActive = targetPaneId === activePaneId();
       if (isActive && (category || title)) {
@@ -23906,7 +23905,9 @@
           + uxBadge
           + procSlot
           + (title ? '<span class="ccc-breadcrumb-title">' + escapeHtml(title) + '</span>' : '')
-          + (sizeBytes > 0 ? '<span class="ccc-breadcrumb-size" title="' + sizeBytes.toLocaleString() + ' bytes">' + escapeHtml(formatSize(sizeBytes)) + '</span>' : '')
+          // Transcript size lives in the pane titlebar (.conv-pane-size) already;
+          // duplicating it here just crowded the narrow breadcrumb and forced the
+          // category/title to ellipsize to uselessness ("cod…", "C…"). (CCC-280)
           + popoutBtn;
         breadcrumbEl.hidden = false;
         updateConvProcessIndicator();
