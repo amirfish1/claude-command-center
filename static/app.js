@@ -3842,6 +3842,47 @@
     }
   }
 
+  function sidebarSessionIdChipHtml(c) {
+    if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
+    const sid = String(c.session_id || c.id || '').trim();
+    if (!sid) return '';
+    const shortId = sid.slice(0, 8);
+    return '<button type="button" class="conv-sidebar-session-id-chip"'
+      + ' data-copy-row-session-id="' + escapeAttr(sid) + '"'
+      + ' data-session-id-short="' + escapeAttr(shortId) + '"'
+      + ' title="Copy session ID: ' + escapeAttr(sid) + '"'
+      + ' aria-label="Copy session ID ' + escapeAttr(shortId) + '">'
+      + '<code>' + escapeHtml(shortId) + '</code>'
+      + '</button>';
+  }
+
+  async function handleSidebarSessionIdCopyClick(ev) {
+    const btn = ev.target.closest('[data-copy-row-session-id]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const sid = btn.dataset.copyRowSessionId || '';
+    const shortId = btn.dataset.sessionIdShort || sid.slice(0, 8);
+    const ok = await copyTextValue(sid);
+    if (!ok) {
+      showOpToast('Copy failed — select and copy manually', 'error');
+      return;
+    }
+    const label = btn.querySelector('code') || btn;
+    btn.classList.add('copied');
+    btn.setAttribute('aria-label', 'Copied session ID');
+    btn.title = 'Copied session ID';
+    label.textContent = 'copied';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      btn.setAttribute('aria-label', 'Copy session ID ' + shortId);
+      btn.title = 'Copy session ID: ' + sid;
+      label.textContent = shortId;
+    }, 1000);
+    showOpToast('Copied session ID', 'ok');
+  }
+  document.addEventListener('click', handleSidebarSessionIdCopyClick, true);
+
   document.addEventListener('click', async (ev) => {
     const el = ev.target.closest('[data-copy-session-id]');
     if (!el) return;
@@ -19555,6 +19596,7 @@
           + ' title="' + escapeAttr(tip) + '">' + ctxPct.pct + '%</span>';
       }
       const branchSlotHtml = pctBadgeHtml + worktreeBadgeHtml + branch;
+      const sessionIdChipHtml = sidebarSessionIdChipHtml(c);
       // Current-goal chip — codex sessions only (the native `/goal` feature,
       // read server-side from ~/.codex/goals_1.sqlite into c.goal). Status
       // colors mirror codex's enum: active=green, complete=muted, anything
@@ -19584,8 +19626,9 @@
           + '" title="' + escapeAttr(_evergreenStateTitle) + '">'
           + escapeHtml(_evergreenStateLabel) + '</span>';
       }
-      const hoverMetaRowHtml = (folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)
+      const hoverMetaRowHtml = (sessionIdChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)
         ? '<div class="conv-hover-meta-row">'
+          + sessionIdChipHtml
           + folderChipHtml
           + goalChipHtml
           + pinnedHtml

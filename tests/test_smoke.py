@@ -1234,7 +1234,7 @@ class TestServerImports(unittest.TestCase):
         ]
         self.assertIn("+ '<span>' + formatSize(c.size) + '</span>'", row_size_js)
         self.assertNotIn("sourceBadge", row_size_js)
-        self.assertIn("const hoverMetaRowHtml = (folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)", app_js)
+        self.assertIn("const hoverMetaRowHtml = (sessionIdChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
         self.assertIn("+ folderChipHtml\n          + goalChipHtml", app_js)
         self.assertIn("+ hoverMetaRowHtml", app_js)
@@ -1270,6 +1270,24 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn(".conv-item.active .conv-hover-meta-row .conv-meta-inline .source-badge", app_css)
         self.assertIn(".compact-rows .conv-item.active .conv-hover-meta-row { display: flex; }", app_css)
         self.assertIn(".conv-item.active .conv-hover-meta-row .conv-goal { opacity: 1; }", app_css)
+
+    def test_sidebar_hover_metadata_has_copyable_session_id_chip(self):
+        """Active-row metadata should include a compact copyable session id
+        chip with an inline copied confirmation."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function sidebarSessionIdChipHtml(c)", app_js)
+        self.assertIn("data-copy-row-session-id", app_js)
+        self.assertIn("data-session-id-short", app_js)
+        self.assertIn("const sessionIdChipHtml = sidebarSessionIdChipHtml(c);", app_js)
+        self.assertIn("const hoverMetaRowHtml = (sessionIdChipHtml || folderChipHtml", app_js)
+        self.assertIn("+ sessionIdChipHtml", app_js)
+        self.assertIn("function handleSidebarSessionIdCopyClick(ev)", app_js)
+        self.assertIn("document.addEventListener('click', handleSidebarSessionIdCopyClick, true);", app_js)
+        self.assertIn("Copied session ID", app_js)
+        self.assertIn(".conv-sidebar-session-id-chip", app_css)
+        self.assertIn(".conv-sidebar-session-id-chip.copied", app_css)
 
     def test_sidebar_titles_strip_leading_pasted_image_paths(self):
         """Current-session rows should show the human task, not the leading
