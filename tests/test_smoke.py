@@ -3907,7 +3907,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         backup.assert_called_once_with(sid)
         inject.assert_called_once_with("/dev/ttys001", "Terminal", "/compact")
 
-    def test_compact_dormant_session_launches_interactive_resume(self):
+    def test_compact_dormant_session_returns_manual_when_hidden_pty_fails(self):
         sid = "00000000-0000-4000-8000-000000000001"
         with mock.patch.object(self.server, "_detect_session_engine", return_value="claude"), \
              mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
@@ -3931,17 +3931,14 @@ class TestRepoContextHelpers(unittest.TestCase):
              ) as launch:
             result = self.server.compact_session_context(sid)
 
-        self.assertTrue(result["ok"])
+        self.assertFalse(result["ok"])
         self.assertTrue(result["compact"])
-        self.assertTrue(result["launched"])
-        self.assertEqual(result["via"], "terminal-launch")
-        launch.assert_called_once_with(
-            sid,
-            str(self.repo),
-            None,
-            post_slash_commands=["/compact"],
-            stop_headless=True,
-        )
+        self.assertEqual(result["code"], "compact_needs_manual")
+        self.assertEqual(result["via"], "manual")
+        self.assertEqual(result["backup_path"], "/tmp/backup.jsonl")
+        self.assertEqual(result["fallback_from"], "stubbed in test")
+        self.assertIn("run /compact yourself", result["error"])
+        launch.assert_not_called()
 
     def test_compact_rejects_unsupported_engine(self):
         result = None
