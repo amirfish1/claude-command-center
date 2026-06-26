@@ -2051,12 +2051,27 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("const _hideGroupChatsForSearch = !!_qActive;", app_js)
         self.assertIn(
-            "const _gcItems = _hideGroupChatsForSearch ? [] : (_gcActiveChats || []).map(chat => {",
+            "const _visibleGroupChats = _hideGroupChatsForSearch ? [] : (_gcActiveChats || []).filter(chat => {",
             app_js,
         )
+        self.assertIn("const _gcItems = _visibleGroupChats.map(chat => {", app_js)
         self.assertIn("const _gcCountForSection = _hideGroupChatsForSearch ? 0", app_js)
         self.assertIn("const _archivedGroupChatsForRender = _hideGroupChatsForSearch", app_js)
         self.assertIn("const hasGc = !q && _gcActiveChats && _gcActiveChats.length > 0;", app_js)
+
+    def test_group_chats_respect_inprogress_window_filter(self):
+        """Group chats should disappear from Active rows under 1d/7d just like
+        sessions, while still contributing to the hidden-count footer."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const _groupChatWindowTs = (chat) => {", app_js)
+        self.assertIn("const _visibleGroupChats = _hideGroupChatsForSearch ? [] : (_gcActiveChats || []).filter(chat => {", app_js)
+        self.assertIn("if (!_ipWindowCutoff) return true;", app_js)
+        self.assertIn("return _groupChatWindowTs(chat) >= _ipWindowCutoff;", app_js)
+        self.assertIn("const _gcItems = _visibleGroupChats.map(chat => {", app_js)
+        self.assertIn("const _hiddenGroupChatCount = _hideGroupChatsForSearch", app_js)
+        self.assertIn("+ _hiddenGroupChatCount;", app_js)
+        self.assertNotIn("const _gcItems = _hideGroupChatsForSearch ? [] : (_gcActiveChats || []).map(chat => {", app_js)
 
     def test_flow_popout_button_and_mode_wired(self):
         """Flow toolbar gets a pop-out button (skipped inside the popout

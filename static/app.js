@@ -20372,6 +20372,16 @@
     const _visibleSessionConvs = _hasFolderChips
       ? (_ipWindowCutoff ? _sessionConvs.filter(c => c.pinned || c.source === 'hermes' || c.engine === 'hermes' || (c.modified || 0) >= _ipWindowCutoff) : _sessionConvs)
       : _sessionConvs;
+    const _groupChatWindowTs = (chat) => {
+      const raw = chat && (chat.last_activity || chat.last_mtime || chat.started_at || 0);
+      const ts = Number(raw);
+      if (!Number.isFinite(ts) || ts <= 0) return 0;
+      return ts > 100000000000 ? Math.floor(ts / 1000) : ts;
+    };
+    const _visibleGroupChats = _hideGroupChatsForSearch ? [] : (_gcActiveChats || []).filter(chat => {
+      if (!_ipWindowCutoff) return true;
+      return _groupChatWindowTs(chat) >= _ipWindowCutoff;
+    });
     // Active is the live triage surface, so keep it on the object map without
     // a grouping segmented control. The All tab owns project/time grouping.
     const _ipGrouping = _hasFolderChips ? 'objects' : 'time';
@@ -20627,7 +20637,7 @@
     // (+ child data-roles) so the click / drag / archive handlers
     // wired further down still find them regardless of where the rows
     // ended up in the DOM.
-    const _gcItems = _hideGroupChatsForSearch ? [] : (_gcActiveChats || []).map(chat => {
+    const _gcItems = _visibleGroupChats.map(chat => {
         const isClosed = chat.status === 'closed';
         const isPaused = chat.status === 'paused' || !!chat.paused;
         const chatId = chat.uuid || chat.id || '';
@@ -21298,13 +21308,18 @@
     // without this, rows older than the window simply vanish and the
     // section reads as "rows disappeared" instead of "filtered". Clicking
     // the footer flips the window to "all".
-    const _ipHiddenCount = (_sessionConvs.length || 0) - (_visibleSessionConvs.length || 0);
+    const _hiddenGroupChatCount = _hideGroupChatsForSearch
+      ? 0
+      : Math.max(0, ((_gcActiveChats || []).length || 0) - ((_visibleGroupChats || []).length || 0));
+    const _ipHiddenCount = ((_sessionConvs.length || 0) - (_visibleSessionConvs.length || 0))
+      + _hiddenGroupChatCount;
     if (_ipHiddenCount > 0 && _ipWindow !== 'all') {
       const _winLabel = _ipWindow === '7d' ? '7d' : '1d';
+      const _hiddenUnit = _hiddenGroupChatCount > 0 ? 'item' : 'session';
       _activeRowsHtml += '<div class="conv-inprogress-window-footer" data-role="inprogress-window-footer"'
         + ' role="button" tabindex="0"'
-        + ' title="' + _ipHiddenCount + ' session' + (_ipHiddenCount === 1 ? '' : 's') + ' older than ' + _winLabel + ' are hidden by the window filter. Click to show All.">'
-        + '+ ' + _ipHiddenCount + ' older session' + (_ipHiddenCount === 1 ? '' : 's') + ' hidden by ' + _winLabel
+        + ' title="' + _ipHiddenCount + ' ' + _hiddenUnit + (_ipHiddenCount === 1 ? '' : 's') + ' older than ' + _winLabel + ' are hidden by the window filter. Click to show All.">'
+        + '+ ' + _ipHiddenCount + ' older ' + _hiddenUnit + (_ipHiddenCount === 1 ? '' : 's') + ' hidden by ' + _winLabel
         + ' — <span class="conv-inprogress-window-footer-cta">show All</span>'
         + '</div>';
     }
