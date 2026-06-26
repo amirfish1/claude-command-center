@@ -31856,20 +31856,19 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
         silent = _compact_via_hidden_pty(sid, cwd)
         if silent.get("ok"):
             return _compact_result(silent, backup_path)
-        # stop_headless: this path only runs when the headless is IDLE, and
-        # the whole point is to retire it in favor of the terminal — kill it
-        # cleanly instead of tripping the CCC-96 fork guard ("/compact
-        # failed: headless still running").
-        launched = launch_terminal_for_session(
-            sid, cwd, term_app, post_slash_commands=["/compact"],
-            stop_headless=True,
-        )
-        if launched.get("ok"):
-            launched["via"] = "terminal-launch-headless"
-            launched["launched"] = True
-            launched.setdefault("note", note)
-            launched.setdefault("fallback_from", silent.get("error"))
-        return _compact_result(launched, backup_path)
+        # Hidden-pty failed. The only remaining automatic path opens a NEW
+        # terminal and AppleScript-types /compact into it. When other terminals
+        # are opening that keystroke lands in the wrong window — jarring and a
+        # bad outcome — so we no longer do it automatically (CCC-300). Return a
+        # "needs manual" status; the client surfaces how to run /compact by hand
+        # and offers to open a terminal WITHOUT typing into it.
+        return _compact_result({
+            "ok": False,
+            "code": "compact_needs_manual",
+            "via": "manual",
+            "error": "Couldn't compact in the background. Resume the session and run /compact yourself.",
+            "fallback_from": silent.get("error"),
+        }, backup_path)
 
     live_spawn = _find_live_spawn_entry_for_session(sid) if not has_tty else None
     if live_spawn is not None:
@@ -31962,18 +31961,17 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
     silent = _compact_via_hidden_pty(sid, cwd)
     if silent.get("ok"):
         return _compact_result(silent, backup_path)
-    launched = launch_terminal_for_session(
-        sid,
-        cwd,
-        terminal_app,
-        post_slash_commands=["/compact"],
-        stop_headless=True,
-    )
-    if launched.get("ok"):
-        launched["via"] = "terminal-launch"
-        launched["launched"] = True
-        launched.setdefault("fallback_from", silent.get("error"))
-    return _compact_result(launched, backup_path)
+    # Hidden-pty failed. We no longer auto-open a terminal and type /compact —
+    # that keystroke injection lands in the wrong window when other terminals
+    # are opening (CCC-300). Surface a manual-needed status instead; the client
+    # explains how to run /compact and can open a terminal WITHOUT typing.
+    return _compact_result({
+        "ok": False,
+        "code": "compact_needs_manual",
+        "via": "manual",
+        "error": "Couldn't compact in the background. Resume the session and run /compact yourself.",
+        "fallback_from": silent.get("error"),
+    }, backup_path)
 
 
 def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, mode="send"):
