@@ -14461,7 +14461,9 @@ body:has(.gc-reader) .pwa-install-banner {
 
 /* By-objects group header as a drop target (CCC-88). */
 .conv-folder-group.is-drop-target,
-.conv-folder-group-header.is-drop-target {
+.conv-folder-group-header.is-drop-target,
+.conv-evergreen-agents-header.is-drop-target,
+.conv-evergreen-agents-scroll.is-drop-target {
   outline: 2px dashed var(--accent, #58a6ff);
   outline-offset: -2px;
   background: rgba(88,166,255,0.10);

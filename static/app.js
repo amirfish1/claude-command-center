@@ -20669,16 +20669,26 @@
       let _evergreenCollapsed = false;
       try { _evergreenCollapsed = localStorage.getItem('ccc-evergreen-agents-collapsed') === '1'; } catch (_) {}
       const _evergreenChevron = _evergreenCollapsed ? '&#9656;' : '&#9662;';
+      // Drop target so sessions can be dragged into the Evergreen Agents section
+      // (CCC-284). The existing [data-object-drop-zone] handler reparents dropped
+      // conv ids onto this object node via reparentConversationIdsToObject, which
+      // is exactly how a session "becomes" evergreen (membership in the object
+      // titled "Evergreen Agents"). Tag both the header and the scroll so a drop
+      // works even when the list is collapsed.
+      const _evergreenDropAttr = _evergreenRoots.length
+        ? ' data-object-drop-zone="' + escapeAttr(_evergreenRoots[0]) + '"'
+        : '';
       const _evergreenAgentsHeaderHtml = _evergreenAgentsHtml
         ? '<div class="conv-objects-section-label conv-evergreen-agents-header' + (_evergreenCollapsed ? ' is-collapsed' : '')
           + '" data-role="evergreen-agents-header" role="button" tabindex="0"'
-          + ' title="Collapse / expand Evergreen Agents">'
+          + _evergreenDropAttr
+          + ' title="Collapse / expand Evergreen Agents · drop a session here to add it">'
           + '<span class="conv-section-collapse-chevron" data-role="evergreen-agents-collapse" aria-hidden="true">' + _evergreenChevron + '</span>'
           + 'Evergreen Agents</div>'
         : '';
       const _evergreenAgentsScrollHtml = _evergreenAgentsHtml
         ? '<div class="conv-evergreen-agents-scroll' + (_evergreenCollapsed ? ' is-collapsed' : '')
-          + '" data-role="evergreen-agents-scroll">' + _evergreenAgentsHtml + '</div>'
+          + '" data-role="evergreen-agents-scroll"' + _evergreenDropAttr + '>' + _evergreenAgentsHtml + '</div>'
         : '';
       const _currentIds = new Set(_currentSessions.map(c => c.session_id || c.id));
       const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));
