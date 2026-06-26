@@ -4493,23 +4493,38 @@
     return '';
   }
 
-  function conversationGoalActionButtonsHtml(statusKey) {
+  function conversationGoalSourceKind(source) {
+    const s = String(source || '').trim().toLowerCase();
+    if (s === 'codex') return 'codex';
+    if (s === 'gemini' || s === 'cursor' || s === 'antigravity' || s === 'pkood') return '';
+    return 'claude';
+  }
+
+  function conversationGoalActionButtonsHtml(statusKey, source) {
     const key = String(statusKey || 'active').trim().toLowerCase();
-    const actions = [
-      { action: 'edit', label: 'Edit' },
-    ];
-    if (key === 'active') {
-      actions.push({ action: 'pause', label: 'Pause' });
-    } else if (key === 'paused' || key === 'blocked' || key === 'usage_limited' || key === 'budget_limited') {
-      actions.push({ action: 'resume', label: 'Resume' });
+    const kind = conversationGoalSourceKind(source);
+    let actions = [];
+    if (kind === 'codex') {
+      actions = [
+        { action: 'edit', label: 'Edit' },
+      ];
+      if (key === 'active') {
+        actions.push({ action: 'pause', label: 'Pause' });
+      } else if (key === 'paused' || key === 'blocked' || key === 'usage_limited' || key === 'budget_limited') {
+        actions.push({ action: 'resume', label: 'Resume' });
+      }
+      actions.push({ action: 'clear', label: 'Clear' });
+    } else if (kind === 'claude') {
+      actions.push({ action: 'clear', label: 'Clear', iconHtml: '&times;' });
     }
-    actions.push({ action: 'clear', label: 'Clear' });
+    if (!actions.length) return '';
     return '<span class="conv-goal-strip-actions" aria-label="Goal actions">'
-      + actions.map(a => '<button type="button" class="conv-goal-action"'
-        + ' data-role="conv-goal-action" data-goal-action="' + escapeAttr(a.action) + '"'
+      + actions.map(a => '<button type="button" class="conv-goal-action'
+        + (a.action === 'clear' ? ' is-clear' : '')
+        + '" data-role="conv-goal-action" data-goal-action="' + escapeAttr(a.action) + '"'
         + ' title="' + escapeAttr(a.label + ' goal') + '"'
         + ' aria-label="' + escapeAttr(a.label + ' goal') + '">'
-        + escapeHtml(a.label) + '</button>').join('')
+        + (a.iconHtml || escapeHtml(a.label)) + '</button>').join('')
       + '</span>';
   }
 
@@ -4572,7 +4587,7 @@
     strip.hidden = false;
     strip.className = 'conv-goal-strip ' + ui.className;
     strip.title = ui.label + ': ' + objective;
-    const actionsHtml = (row && row.source === 'codex') ? conversationGoalActionButtonsHtml(ui.key) : '';
+    const actionsHtml = conversationGoalActionButtonsHtml(ui.key, row && row.source);
     strip.innerHTML = '<span class="conv-goal-strip-icon" aria-hidden="true">' + ui.iconHtml + '</span>'
       + '<span class="conv-goal-strip-state">' + escapeHtml(ui.label) + '</span>'
       + '<span class="conv-goal-strip-objective">' + escapeHtml(objective) + '</span>'
