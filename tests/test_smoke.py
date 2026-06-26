@@ -2441,6 +2441,20 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("overflow-y: visible;", activity_css)
         self.assertNotIn("flex: 0 0 auto;", activity_css)
 
+    def test_queue_rows_open_item_detail_modal(self):
+        """Queue row clicks should show the ticket payload/screenshot instead
+        of trying to jump to a brittle transcript reference."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function _uxqOpenItemModal(item)", app_js)
+        self.assertIn("Queue item details", app_js)
+        self.assertIn("Click to view ticket details", app_js)
+        self.assertIn("_uxqOpenItemModal(_uxqItemForRef(row.getAttribute('data-ref')))", app_js)
+        queue_click = app_js[app_js.index("$queueList.addEventListener('click'"):app_js.index("// STUCK badge", app_js.index("$queueList.addEventListener('click'"))]
+        self.assertNotIn("_uxqJumpToRef", queue_click)
+        self.assertIn(".uxq-detail-meta", app_css)
+
     def test_toolbar_controls_move_to_settings_and_metadata_rail(self):
         """Right-rail mode should empty the crowded conversation topbar."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

@@ -7989,6 +7989,29 @@
   .ann-ux-preview-actions {
     display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;
   }
+  .uxq-detail-card {
+    width: min(780px, 96vw);
+  }
+  .uxq-detail-meta {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 4px 10px;
+    margin: 0;
+    font: 12px var(--font-ui);
+    color: var(--text-muted);
+  }
+  .uxq-detail-meta dt {
+    font-weight: 700;
+    color: var(--text-muted);
+  }
+  .uxq-detail-meta dd {
+    margin: 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+  }
   .ann-notes-dialog {
     width: min(760px, 94vw);
     max-height: min(720px, 88vh);
