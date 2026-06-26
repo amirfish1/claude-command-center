@@ -19919,10 +19919,9 @@
           + ' data-pct="' + ctxPct.pct + '"'
           + ' title="' + escapeAttr(tip) + '">' + ctxPct.pct + '%</span>';
       }
-      // Context-utilized % is a direct child of the hover meta row (below), not
-      // tucked inside the branch slot — the branch slot only reveals on :hover,
-      // so the % was invisible on a selected/active row. As its own hover-row
-      // child it shows whenever the hover row shows (hover AND active). (CCC-289)
+      // Context-utilized % is rendered in the always-visible main row, just left
+      // of the elapsed-time slot (see pctBadgeHtml placement below) — it's too
+      // important to hide in the hover row or bury in the branch slot. (CCC-294)
       const branchSlotHtml = worktreeBadgeHtml + branch;
       const sessionIdChipHtml = sidebarSessionIdChipHtml(c);
       const objectChipHtml = flowObjectChipHtml(c);
@@ -19955,7 +19954,7 @@
           + '" title="' + escapeAttr(_evergreenStateTitle) + '">'
           + escapeHtml(_evergreenStateLabel) + '</span>';
       }
-      const hoverMetaRowHtml = (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || pctBadgeHtml || branchSlotHtml)
+      const hoverMetaRowHtml = (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)
         ? '<div class="conv-hover-meta-row">'
           + sessionIdChipHtml
           + objectChipHtml
@@ -19963,7 +19962,6 @@
           + goalChipHtml
           + pinnedHtml
           + (rowSizeHtml || '')
-          + (pctBadgeHtml || '')
           + (branchSlotHtml ? '<span class="conv-branch-slot">' + branchSlotHtml + '</span>' : '')
           + '</div>'
         : '';
@@ -20082,6 +20080,10 @@
             + rowMetaHtml
             + cooStatusHtml
             + cooEscalatedHtml
+            // Context-utilized % sits just left of the elapsed-time slot, in the
+            // always-visible main row (not the hover row) — it's important enough
+            // to read at a glance without hovering. (CCC-294, refines CCC-289)
+            + (pctBadgeHtml || '')
             // Right-edge slot — Omnara-style. Shows the time at rest;
             // swaps to action buttons (merge / start / archive) on hover.
             // Both share the same screen real estate, so the row stays
@@ -26270,6 +26272,7 @@
       const requestedProject = _uxqWorkerProject();
       const proj = _uxqResolvePanelProject(items, requestedProject);
       _uxqLastResolvedProject = proj;
+      _uxqRenderScopeSelect(items, proj);
       _renderQueueHealthStrip(false, proj);
       const scoped = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
       const rows = scoped.slice().reverse();  // newest first
@@ -26353,6 +26356,21 @@
     if ($search) $search.style.display = '';
     if ($label) $label.textContent = 'Files';
     _renderQueuePanel();
+  }
+  // Queue scope picker: change the source the Queue reads this session's
+  // project code from. Picking a code stores a per-session override so e.g. a
+  // CCC session can show WT; "Auto (repo)" clears it back to the repo-derived
+  // code. Bust caches and re-render so the swap is immediate.
+  {
+    const $scope = document.getElementById('queueScopeSelect');
+    if ($scope) {
+      $scope.addEventListener('change', () => {
+        _uxqSetScopeOverride($scope.value);
+        _uxqItemsCache.ts = 0;
+        _uxqHealthCache.ts = 0;
+        _renderQueuePanel();
+      });
+    }
   }
   // Add a ticket to the queue straight from the panel header (CCC-145). Routes
   // into the same project scope the panel is showing (_uxqWorkerProject), so a
