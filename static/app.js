@@ -18826,6 +18826,32 @@
     return postCompactSession(sessionId, terminalApp);
   }
 
+  // When the server can't compact automatically (no live terminal, and the
+  // invisible hidden-pty path failed) it returns code 'compact_needs_manual'
+  // instead of opening a fresh terminal and TYPING /compact into it — that
+  // keystroke used to land in the wrong window (CCC-300). Explain the manual
+  // step and, only if the user opts in, open a terminal WITHOUT typing.
+  async function offerManualCompact(sid) {
+    if (!sid) return;
+    const open = window.confirm(
+      "Couldn't compact automatically — there's no live terminal to run it in.\n\n"
+      + "To compact: open this session's terminal and type /compact yourself.\n\n"
+      + "Open a terminal for this session now? Nothing will be typed into it — "
+      + "you run /compact when you're ready.");
+    if (!open) return;
+    try {
+      const r = await fetch('/api/launch-terminal', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (d && d.ok) showOpToast('Opened a terminal — type /compact there when ready.', 'info');
+      else showOpToast('Could not open terminal: ' + ((d && d.error) || 'unknown'), 'error');
+    } catch (e) {
+      showOpToast('Could not open terminal: ' + ((e && e.message) || 'network'), 'error');
+    }
+  }
+
   // Compact-button handler. Reuses postRunCompactForSession + the same
   // toast/banner/refresh logic as typing /compact so both paths stay
   // consistent. Used by the #convCompactBtn click + the breadcrumb button.
@@ -18864,6 +18890,8 @@
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
         }
+      } else if (data && data.code === 'compact_needs_manual') {
+        offerManualCompact(sid);
       } else {
         const reason = (data && (formatInjectFailure(data, 0) || data.error)) || 'unknown';
         showOpToast('/compact failed: ' + reason, 'error');
@@ -22800,6 +22828,8 @@
               setTimeout(refreshConversationList, 1500);
               setTimeout(refreshConversationList, 3500);
             }
+          } else if (data && data.code === 'compact_needs_manual') {
+            offerManualCompact(sid);
           } else {
             showOpToast('/compact failed: ' + ((data && data.error) || 'unknown'), 'error');
           }
@@ -26482,6 +26512,66 @@
       });
     }
   }
+
+  function openQueueTicketComposer() {
+    return new Promise((resolve) => {
+      document.querySelectorAll('.fq-ticket-composer').forEach(n => n.remove());
+      const modal = document.createElement('div');
+      modal.className = 'upd-overlay fq-ticket-composer open';
+      modal.innerHTML =
+          '<div class="upd-backdrop" data-fq-ticket-cancel></div>'
+        + '<div class="upd-dialog fq-ticket-dialog" role="dialog" aria-modal="true" aria-labelledby="fqTicketTitle">'
+        +   '<div class="fq-ticket-header">'
+        +     '<h2 class="upd-title" id="fqTicketTitle">New queue ticket</h2>'
+        +     '<button type="button" class="fq-ticket-close" data-fq-ticket-cancel aria-label="Close">&times;</button>'
+        +   '</div>'
+        +   '<div class="fq-ticket-body">'
+        +     '<label class="fq-ticket-label" for="fqTicketNote">Describe the fix</label>'
+        +     '<textarea id="fqTicketNote" class="fq-ticket-textarea" rows="7" placeholder="Describe the fix..."></textarea>'
+        +   '</div>'
+        +   '<div class="upd-actions fq-ticket-actions">'
+        +     '<button type="button" class="upd-btn" data-fq-ticket-cancel>Cancel</button>'
+        +     '<button type="button" class="upd-btn upd-primary" data-fq-ticket-submit disabled>Add ticket</button>'
+        +   '</div>'
+        + '</div>';
+      document.body.appendChild(modal);
+      const textarea = modal.querySelector('#fqTicketNote');
+      const submitBtn = modal.querySelector('[data-fq-ticket-submit]');
+      let settled = false;
+      const refresh = () => {
+        if (submitBtn && textarea) submitBtn.disabled = !(textarea.value || '').trim();
+      };
+      const close = (value) => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('keydown', onKey);
+        modal.remove();
+        resolve(String(value || '').trim());
+      };
+      const submit = () => {
+        const note = textarea ? (textarea.value || '').trim() : '';
+        if (note) close(note);
+      };
+      function onKey(ev) {
+        if (ev.key === 'Escape') close('');
+      }
+      modal.querySelectorAll('[data-fq-ticket-cancel]').forEach(el => el.addEventListener('click', () => close('')));
+      if (submitBtn) submitBtn.addEventListener('click', submit);
+      if (textarea) {
+        textarea.addEventListener('input', refresh);
+        textarea.addEventListener('keydown', (ev) => {
+          if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') {
+            ev.preventDefault();
+            submit();
+          }
+        });
+        requestAnimationFrame(() => textarea.focus());
+      }
+      document.addEventListener('keydown', onKey);
+      refresh();
+    });
+  }
+
   // Add a ticket to the queue straight from the panel header (CCC-145). Routes
   // into the same project scope the panel is showing (_uxqWorkerProject), so a
   // project worker's add lands in that project. Refreshes the list on success.
@@ -26490,7 +26580,7 @@
     if ($qadd) {
       $qadd.addEventListener('click', async (ev) => {
         ev.stopPropagation();
-        const note = (window.prompt('New queue ticket — describe the fix:') || '').trim();
+        const note = await openQueueTicketComposer();
         if (!note) return;
         const proj = _uxqLastResolvedProject || _uxqWorkerProject();
         // A family root ("WT") isn't a real sub-queue — route the add to its

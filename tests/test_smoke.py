@@ -2584,6 +2584,21 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("_uxqJumpToRef", queue_click)
         self.assertIn(".uxq-detail-meta", app_css)
 
+    def test_queue_add_uses_large_composer(self):
+        """Adding a queue item should use a multiline composer, not prompt()."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function openQueueTicketComposer()", app_js)
+        self.assertIn("const note = await openQueueTicketComposer();", app_js)
+        self.assertNotIn("window.prompt('New queue ticket", app_js)
+        self.assertIn('class="fq-ticket-textarea"', app_js)
+        self.assertIn('rows="7"', app_js)
+        self.assertIn('data-fq-ticket-submit', app_js)
+        self.assertIn(".fq-ticket-textarea", app_css)
+        self.assertIn("min-height: 150px;", app_css)
+        self.assertIn("resize: vertical;", app_css)
+
     def test_toolbar_controls_move_to_settings_and_metadata_rail(self):
         """Right-rail mode should empty the crowded conversation topbar."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

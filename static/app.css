@@ -14809,6 +14809,58 @@ body:has(.gc-reader) .pwa-install-banner {
   font-size: 12px;
   color: var(--faint, var(--text-muted));
 }
+.fq-ticket-dialog {
+  width: min(640px, 94vw);
+}
+.fq-ticket-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fq-ticket-close {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+.fq-ticket-close:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.fq-ticket-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fq-ticket-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.fq-ticket-textarea {
+  width: 100%;
+  min-height: 150px;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+  line-height: 1.4;
+}
+.fq-ticket-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(88,166,255,0.14);
+}
 
 /* Queue-health strip: one glanceable line per project with open tickets,
    above the ticket list. Wraps gracefully at narrow widths. */
