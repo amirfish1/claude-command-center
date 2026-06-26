@@ -1222,7 +1222,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-history-snippet.is-search-result", app_css)
         self.assertIn("max-height: 9.8em;", app_css)
 
-    def test_sidebar_row_metadata_reveals_on_hover(self):
+    def test_sidebar_row_metadata_reveals_on_active_row(self):
         """Repo/source/branch metadata should not crowd resting rows."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
@@ -1265,12 +1265,11 @@ class TestServerImports(unittest.TestCase):
             app_css.index(".conv-item .conv-hover-meta-row .conv-goal .conv-goal-icon", app_css.index(".conv-item .conv-hover-meta-row .branch-badge,"))
         ]
         self.assertIn("font-size: 11px;", hover_badge_css)
-        self.assertIn(".conv-item:hover .conv-hover-meta-row,\n  .conv-item:focus-within .conv-hover-meta-row { display: flex; }", app_css)
-        self.assertIn(".conv-item:hover .conv-hover-meta-row .conv-meta-inline,\n  .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline,", app_css)
-        self.assertNotIn(".conv-item:hover .conv-hover-meta-row .conv-meta-inline .source-badge", app_css)
-        self.assertIn(".compact-rows .conv-item:hover .conv-hover-meta-row,\n  .compact-rows .conv-item:focus-within .conv-hover-meta-row { display: flex; }", app_css)
-        self.assertNotIn(".conv-item.active .conv-hover-meta-row", app_css)
-        self.assertIn(".conv-item:hover .conv-hover-meta-row .conv-goal,\n  .conv-item:focus-within .conv-hover-meta-row .conv-goal { opacity: 1; }", app_css)
+        self.assertIn(".conv-item.active .conv-hover-meta-row { display: flex; }", app_css)
+        self.assertIn(".conv-item.active .conv-hover-meta-row .conv-meta-inline,", app_css)
+        self.assertNotIn(".conv-item.active .conv-hover-meta-row .conv-meta-inline .source-badge", app_css)
+        self.assertIn(".compact-rows .conv-item.active .conv-hover-meta-row { display: flex; }", app_css)
+        self.assertIn(".conv-item.active .conv-hover-meta-row .conv-goal { opacity: 1; }", app_css)
 
     def test_sidebar_titles_strip_leading_pasted_image_paths(self):
         """Current-session rows should show the human task, not the leading
@@ -1293,7 +1292,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const quietTitleChrome = !!opts.quietTitleChrome;", app_js)
         self.assertIn("if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;", app_js)
         self.assertIn("if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';", app_js)
-        self.assertIn("_curShown.map(c => _renderRow(c, { suppressFolderChip: false, quietTitleChrome: true })).join('')", app_js)
+        self.assertIn("_curShown.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join('')", app_js)
 
     def test_repo_pin_marker_is_not_duplicate_pin_glyph(self):
         """Repo override rows should use a distinct repo chip, not a second pin."""
@@ -2468,6 +2467,28 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Copied agent answer", app_js)
         self.assertIn(".result-copy-agent-answer", app_css)
         self.assertIn(".result-copy-agent-answer.copied", app_css)
+
+    def test_assistant_events_have_read_and_copy_actions_next_to_timestamp(self):
+        """Assistant message metadata should expose small read/copy actions
+        beside the relative timestamp, not only on Done result rows."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function assistantMessageActionsHtml(ev)", app_js)
+        self.assertIn("const hasAssistantText = Array.isArray(ev && ev.blocks)", app_js)
+        self.assertIn("if (!hasAssistantText) return '';", app_js)
+        self.assertIn("data-read-assistant-message", app_js)
+        self.assertIn("data-copy-assistant-message", app_js)
+        self.assertIn('aria-label="Read assistant message aloud"', app_js)
+        self.assertIn('aria-label="Copy assistant message"', app_js)
+        self.assertIn("const btn = ev.target.closest('[data-copy-assistant-message]');", app_js)
+        self.assertIn("const btn = ev.target.closest('[data-read-assistant-message]');", app_js)
+        self.assertIn("assistantNodeTextForCopy(eventEl)", app_js)
+        self.assertIn("speakTextDirect(text, convId, paneId)", app_js)
+        self.assertIn("let html = assistantMessageActionsHtml(ev)", app_js)
+        self.assertIn(".assistant-message-actions", app_css)
+        self.assertIn(".assistant-message-action", app_css)
+        self.assertIn(".conversations-view .event.assistant .msg-ts { right: 104px; }", app_css)
 
     def test_codex_silent_result_is_labeled_as_no_visible_response(self):
         """Codex task_complete rows can lack any assistant text. Those should

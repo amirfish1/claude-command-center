@@ -3797,6 +3797,16 @@
     return parts.join('\n\n').trim();
   }
 
+  function assistantMessageActionsHtml(ev) {
+    const hasAssistantText = Array.isArray(ev && ev.blocks)
+      && ev.blocks.some((b) => b && b.kind === 'text' && String(b.text || '').trim());
+    if (!hasAssistantText) return '';
+    return '<span class="assistant-message-actions" data-role="assistant-message-actions">'
+      + '<button type="button" class="assistant-message-action" data-read-assistant-message title="Read assistant message aloud" aria-label="Read assistant message aloud">&#128266;</button>'
+      + '<button type="button" class="assistant-message-action" data-copy-assistant-message title="Copy assistant message" aria-label="Copy assistant message">&#128203;</button>'
+      + '</span>';
+  }
+
   function agentAnswerTextBeforeResult(resultEl) {
     let node = resultEl ? resultEl.previousElementSibling : null;
     while (node) {
@@ -3877,6 +3887,54 @@
       btn.title = 'Copy agent answer';
     }, 1200);
     showOpToast('Copied agent answer', 'ok');
+  });
+
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-copy-assistant-message]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const eventEl = btn.closest('.event.assistant');
+    const text = assistantNodeTextForCopy(eventEl);
+    if (!text) {
+      showOpToast('No assistant message to copy', 'error');
+      return;
+    }
+    const ok = await copyTextValue(text);
+    if (!ok) {
+      showOpToast('Copy failed — select and copy manually', 'error');
+      return;
+    }
+    btn.classList.add('copied');
+    btn.innerHTML = '&#10003;';
+    btn.setAttribute('aria-label', 'Copied assistant message');
+    btn.title = 'Copied assistant message';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      btn.innerHTML = '&#128203;';
+      btn.setAttribute('aria-label', 'Copy assistant message');
+      btn.title = 'Copy assistant message';
+    }, 1200);
+    showOpToast('Copied assistant message', 'ok');
+  });
+
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-read-assistant-message]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const eventEl = btn.closest('.event.assistant');
+    const text = assistantNodeTextForCopy(eventEl);
+    if (!text) {
+      showOpToast('No assistant message to read', 'error');
+      return;
+    }
+    const pane = eventEl && eventEl.closest ? eventEl.closest('.conv-pane') : null;
+    const paneId = (pane && pane.getAttribute('data-pane-id')) || activePaneId();
+    const paneState = paneId && typeof paneByPaneId === 'function' ? paneByPaneId(paneId) : null;
+    const convId = (paneState && paneState.conversationId) || currentConversation || '';
+    const ok = speakTextDirect(text, convId, paneId);
+    if (!ok) showOpToast('Your browser does not support text-to-speech.', 'error');
   });
 
   document.addEventListener('click', async (ev) => {
@@ -30294,7 +30352,9 @@
           + userSteerHtml;
 
       } else if (ev.type === 'assistant') {
-        let html = '<span class="line-num">L' + ev.line + '</span>' + tsSpan(ev.ts);
+        let html = assistantMessageActionsHtml(ev)
+          + '<span class="line-num">L' + ev.line + '</span>'
+          + tsSpan(ev.ts);
         let hasNonTool = false;
         // Collect block HTML in parts so the per-turn token chip can be merged
         // into the end of the last tool-call (CCC-30) instead of floating as
