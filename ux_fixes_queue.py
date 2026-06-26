@@ -162,6 +162,7 @@ _REPO_PROJECT = {
     "bymprod": "BYMPROD",
     "claude-command-center": "CCC",
     "command-center": "CCC",
+    "watchtower": "WT",
 }
 
 
