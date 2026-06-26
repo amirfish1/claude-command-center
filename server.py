@@ -47856,7 +47856,16 @@ def write_port_file(bind_host):
     """Persist the listening URL to ~/.claude/command-center/port.txt so the
     ccc-orchestration skill (and any other scripted caller) can find this
     server without hardcoding the port. Single line, format
-    `http://<host>:<port>`. Best-effort — failures are logged and ignored."""
+    `http://<host>:<port>`. Best-effort — failures are logged and ignored.
+
+    A secondary/ephemeral instance (e.g. a one-off verification server on an
+    alternate port) must NOT claim the shared port.txt, or it hijacks discovery
+    from the primary. Start such instances with `CCC_EPHEMERAL=1` to skip the
+    write. (Prefer `node snapshot.js` against the already-running server over
+    spinning up a second instance at all.)"""
+    if os.environ.get("CCC_EPHEMERAL"):
+        print("  [skill] CCC_EPHEMERAL set — not claiming shared port.txt")
+        return f"http://127.0.0.1:{PORT}"
     # Bind addresses like 0.0.0.0/:: are not reliable dial targets. The
     # skill runs locally, so always publish a loopback URL for wildcard or
     # loopback binds and reserve the configured host only for explicit
