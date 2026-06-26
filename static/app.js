@@ -26240,15 +26240,15 @@
         ev.stopPropagation();
         const note = (window.prompt('New queue ticket — describe the fix:') || '').trim();
         if (!note) return;
-        const resolved = _uxqLastResolvedProject || _uxqWorkerProject();
+        const proj = _uxqLastResolvedProject || _uxqWorkerProject();
         // A family root ("WT") isn't a real sub-queue — route the add to its
         // fix-now child ("WT-BUGS") so it lands somewhere drainable.
-        const proj = _UXQ_FAMILY_DEFAULT[_uxqProjectKey(resolved)] || resolved;
+        const targetProj = _UXQ_FAMILY_DEFAULT[_uxqProjectKey(proj)] || proj;
         try {
           const res = await fetch('/api/ux-fixes/enqueue', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(proj ? { note, project: proj } : { note }),
+            body: JSON.stringify(targetProj ? { note, project: targetProj } : { note }),
           });
           const data = await res.json().catch(() => ({}));
           if (data && data.ok) {
