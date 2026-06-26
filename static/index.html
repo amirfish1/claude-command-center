@@ -910,10 +910,10 @@
              keyboard-shortcut hint on the right. Kept out of the input row
              itself so the row stays uncluttered. -->
         <div class="conv-input-hint" id="convInputHint">
-          <span class="tty-label" id="convTtyLabel"></span>
-          <!-- Codex app-server / exec status moved to the top breadcrumb
-               (ccc-breadcrumb-proc), alongside Claude's headless/terminal
-               pills — see updateConvProcessIndicator(). -->
+          <!-- Engine/process status (headless, codex, dormant, …) lives in the
+               top breadcrumb pill (ccc-breadcrumb-proc) now — the old in-row
+               tty-label was redundant and was removed. renderConvInputBar still
+               writes to a detached #convTtyLabel stub so its code paths are safe. -->
           <span class="conv-input-kbd"><kbd>⏎</kbd> send &nbsp;·&nbsp; <kbd>⇧⏎</kbd> newline</span>
         </div>
       </div>

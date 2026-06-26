@@ -4227,7 +4227,10 @@
   const $convTtsBtn = document.getElementById('convTtsBtn');
   const $convMicBtn = document.getElementById('convMicBtn');
   const $convEscBtn = document.getElementById('convEscBtn');
-  const $convTtyLabel = document.getElementById('convTtyLabel');
+  // The visible in-row tty-label was removed (engine/process status lives in
+  // the top breadcrumb pill now). Fall back to a detached span so the many
+  // $convTtyLabel.textContent = ... writes below stay harmless no-ops.
+  const $convTtyLabel = document.getElementById('convTtyLabel') || document.createElement('span');
   const $convCodexAppSrv = document.getElementById('convCodexAppSrv');
   const $convCodexAppSrvLabel = document.getElementById('convCodexAppSrvLabel');
   // Guards the Compact button while a compaction request is in flight so a
