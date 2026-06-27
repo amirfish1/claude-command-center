@@ -20844,8 +20844,12 @@
       const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();
       const _objectHasVisibleDrafts = (node) =>
         (flowDraftSessions || []).some(d => d && flowDraftParentNode(d) === node);
+      // Match any object whose title starts with "evergreen" — "Evergreen
+      // Agents", "Evergreens", "EVERGREEN", etc. The old exact === 'evergreenagents'
+      // check silently dropped the whole section (and dumped its sessions into
+      // the project tree) for users who named the object "EVERGREENS".
       const _isEvergreenAgentsObjectTitle = (title) =>
-        String(title || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '') === 'evergreenagents';
+        String(title || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '').startsWith('evergreen');
       for (const c of _visibleSessionConvs) {
         const grp = _groupForSession(c);
         if (grp && grp.archived) continue;
