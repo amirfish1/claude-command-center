@@ -21858,7 +21858,7 @@
     // mtime alongside session rows. They render as a slim custom row with
     // a 💬 prefix so users can tell them apart from session rows.
     //
-    // Grouping: a by-project / by-time toggle in the header mirrors the
+    // Grouping: a by-project / by-time toggle in the toolbar mirrors the
     // In Progress and GH Issues sections. When by-project is active (only
     // possible when there are folder chips and we're not already filtered
     // to a single repo), session rows are bucketed under collapsible
@@ -21963,8 +21963,6 @@
     }
 
     if (_arcCount > 0) {
-      const _arcCollapsed = localStorage.getItem('ccc-archived-collapsed') !== '0';
-      const _arcArrow = _arcCollapsed ? '▸' : '▾';
       const _arcGroupingToggle = _arcHasFolderChips && !_isSpecificFolderFilter
         ? '<span class="conv-grouping-toggle" data-role="archived-grouping-toggle">'
             + '<span class="grouping-opt' + (_arcGrouping !== 'time' ? ' is-active' : '') + '" data-grouping="project">by project</span>'
@@ -22000,16 +21998,11 @@
           + '<span class="grouping-opt' + (_arcWindowCur === 'all' ? ' is-active' : '') + '" data-window="all">All</span>'
         + '</span>';
       const _arcTools = (_arcWindowToggle || _arcGroupingToggle || _arcExpandAllToggle)
-        ? '<span class="conv-archived-tools">' + _arcWindowToggle + _arcGroupingToggle + _arcExpandAllToggle + '</span>'
+        ? '<div class="conv-archived-tools" data-role="archived-tools">' + _arcWindowToggle + _arcGroupingToggle + _arcExpandAllToggle + '</div>'
         : '';
       _archivedHtml =
-        '<div class="conv-archived-section' + (_arcCollapsed ? ' collapsed' : '') + '" data-role="archived-section">'
-        + '<button type="button" class="conv-archived-header" data-role="archived-toggle" aria-expanded="' + (!_arcCollapsed) + '">'
-        +   '<span class="conv-archived-arrow">' + _arcArrow + '</span>'
-        +   '<span class="conv-archived-label">All</span>'
-        +   '<span class="conv-archived-count">' + _arcCount + '</span>'
-        +   _arcTools
-        + '</button>'
+        '<div class="conv-archived-section" data-role="archived-section">'
+        + _arcTools
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + '</div>';
     }

@@ -417,7 +417,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _archivedConvs)", all_block)
         self.assertIn("const _arcHasFolderChips = _allTabConvs.some(c => c.folder_label_chip);", app_js)
         self.assertIn("for (const c of _allTabConvs)", app_js)
-        self.assertIn('<span class="conv-archived-label">All</span>', app_js)
+        archived_markup = app_js[app_js.index("_archivedHtml ="):app_js.index("// Tabs", app_js.index("_archivedHtml ="))]
+        self.assertNotIn('data-role="archived-toggle"', archived_markup)
+        self.assertNotIn("conv-archived-arrow", archived_markup)
+        self.assertNotIn("conv-archived-label", archived_markup)
+        self.assertIn('data-role="archived-tools"', archived_markup)
+        self.assertIn('<div class="conv-archived-list">', archived_markup)
         self.assertIn("_sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))", app_js)
 
     def test_ready_to_merge_only_uses_known_repo_rows(self):
