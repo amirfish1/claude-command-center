@@ -370,7 +370,7 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn('data-role="ip-add-object"', app_js)
         self.assertIn("+ object", app_js)
-        self.assertIn("const _ipAddObjectBtn = _hasFolderChips", app_js)
+        self.assertIn("const _addObjectBtnHtml = _hasFolderChips", app_js)
         self.assertIn("localStorage.setItem('ccc-inprogress-grouping', 'objects')", app_js)
         self.assertNotIn("+ project", app_js)
         self.assertNotIn('data-role="ip-new-project"', app_js)
@@ -979,15 +979,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const evergreenRowClass = opts.evergreenAgent ? ' is-evergreen-agent-row' : '';", app_js)
         self.assertIn("let evergreenStateHtml = '';", app_js)
         self.assertIn("const _evergreenStateLabel = _isAgentRunning ? 'WIP'", app_js)
-        self.assertIn("+ evergreenGoalHtml\n            + uxFixesQueueProgressHtml\n            + evergreenStateHtml", app_js)
-        self.assertNotIn("+ uxFixesQueueProgressHtml\n            + evergreenGoalHtml\n            + evergreenStateHtml", app_js)
-        self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-ux-fix-progress", app_css)
-        self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-goal", app_css)
-        self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-evergreen-state", app_css)
+        self.assertIn("const evergreenMetaRowHtml = opts.evergreenAgent", app_js)
+        self.assertIn("+ evergreenMetaRowHtml", app_js)
+        self.assertIn("const hoverMetaRowHtml = (!opts.evergreenAgent &&", app_js)
+        self.assertNotIn("+ evergreenGoalHtml\n            + uxFixesQueueProgressHtml\n            + evergreenStateHtml", app_js)
+        self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title-row {", app_css)
+        self.assertIn(".conv-evergreen-meta-row {", app_css)
+        self.assertIn(".conv-evergreen-meta-row > .conv-ux-fix-progress", app_css)
+        self.assertIn(".conv-evergreen-meta-row > .conv-goal", app_css)
+        self.assertIn(".conv-evergreen-meta-row > .conv-evergreen-state", app_css)
         self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-row-end", app_css)
         title_css = app_css[
             app_css.index(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title {"):
-            app_css.index(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-ux-fix-progress", app_css.index(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title {"))
+            app_css.index(".conv-evergreen-meta-row {", app_css.index(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title {"))
         ]
         self.assertIn("font-size: 13.5px;", title_css)
         self.assertIn("font-weight: 650;", title_css)
@@ -1047,7 +1051,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _ipGrouping = _hasFolderChips ? 'objects' : 'time';", app_js)
         inprogress_toolbar_js = app_js[
             app_js.index("const _ipWindowToggle = _hasFolderChips"):
-            app_js.index("const _ipAddObjectBtn = _hasFolderChips", app_js.index("const _ipWindowToggle = _hasFolderChips"))
+            app_js.index("const _ipObjectsExpandAll = _shouldGroupByObjects", app_js.index("const _ipWindowToggle = _hasFolderChips"))
         ]
         self.assertIn("const _ipGroupingToggle = '';", inprogress_toolbar_js)
         self.assertNotIn('data-role="grouping-toggle"', inprogress_toolbar_js)
@@ -1412,14 +1416,14 @@ class TestServerImports(unittest.TestCase):
         ]
         self.assertIn("+ '<span>' + formatSize(c.size) + '</span>'", row_size_js)
         self.assertNotIn("sourceBadge", row_size_js)
-        self.assertIn("const hoverMetaRowHtml = (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)", app_js)
+        self.assertIn("const hoverMetaRowHtml = (!opts.evergreenAgent && (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml))", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
         self.assertIn("+ objectChipHtml\n          + folderChipHtml", app_js)
         self.assertIn("+ hoverMetaRowHtml", app_js)
         row_start = app_js.index("+ '<div class=\"conv-main-row\">'")
         row_end = app_js.index("// Right-edge slot", row_start)
         self.assertNotIn("+ goalChipHtml", app_js[row_start:row_end])
-        self.assertIn("+ (pctBadgeHtml || '')", app_js[row_start:row_end])
+        self.assertIn("+ (opts.evergreenAgent ? '' : (pctBadgeHtml || ''))", app_js[row_start:row_end])
         self.assertIn(".conv-item .conv-meta-inline,\n  .conv-item .conv-branch-slot,\n  .conv-item .conv-object-chip,\n  .conv-item .conv-folder-chip,\n  .conv-item .conv-repo-pin", app_css)
         self.assertIn(".conv-item .conv-hover-meta-row {\n    display: none;", app_css)
         hover_meta_css = app_css[
@@ -1460,7 +1464,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("data-copy-row-session-id", app_js)
         self.assertIn("data-session-id-short", app_js)
         self.assertIn("const sessionIdChipHtml = sidebarSessionIdChipHtml(c);", app_js)
-        self.assertIn("const hoverMetaRowHtml = (sessionIdChipHtml || objectChipHtml || folderChipHtml", app_js)
+        self.assertIn("const hoverMetaRowHtml = (!opts.evergreenAgent && (sessionIdChipHtml || objectChipHtml || folderChipHtml", app_js)
         self.assertIn("+ sessionIdChipHtml", app_js)
         self.assertIn("function handleSidebarSessionIdCopyClick(ev)", app_js)
         self.assertIn("document.addEventListener('click', handleSidebarSessionIdCopyClick, true);", app_js)

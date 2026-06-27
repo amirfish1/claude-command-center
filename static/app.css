@@ -4403,11 +4403,24 @@
   }
   .conv-project-tree .conv-item:hover .conv-main-row > .conv-row-end { display: inline-flex; }
 
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row {
+    align-items: stretch;
+    min-height: 44px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
+  }
   .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row {
     gap: 6px;
+    min-height: 18px;
   }
   .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title {
     flex: 1 1 auto;
+    min-width: 0;
     font-size: 13.5px;
     font-weight: 650;
     color: var(--text);
@@ -4416,17 +4429,28 @@
   :root:not([data-theme="light"]) .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title {
     color: #f0f4fb;
   }
-  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-ux-fix-progress,
-  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-goal,
-  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-evergreen-state,
-  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-row-meta,
+  .conv-evergreen-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .conv-evergreen-meta-row > .conv-ux-fix-progress,
+  .conv-evergreen-meta-row > .conv-goal,
+  .conv-evergreen-meta-row > .conv-evergreen-state,
+  .conv-evergreen-meta-row > .conv-row-meta,
+  .conv-evergreen-meta-row > .coo-status,
+  .conv-evergreen-meta-row > .coo-escalated,
+  .conv-evergreen-meta-row > .conv-qc-badge,
+  .conv-evergreen-meta-row > .conv-pct-badge,
   .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-row-end {
     display: inline-flex;
   }
   .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-row-meta:empty {
     display: none;
   }
-  .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-goal {
+  .conv-evergreen-meta-row > .conv-goal {
     max-width: 180px;
     margin-left: 0;
   }

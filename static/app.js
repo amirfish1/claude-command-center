@@ -20803,7 +20803,12 @@
           + '" title="' + escapeAttr(_evergreenStateTitle) + '">'
           + escapeHtml(_evergreenStateLabel) + '</span>';
       }
-      const hoverMetaRowHtml = (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml)
+      const rowMetaHtml = (liveToolHtml || signals)
+        ? '<span class="conv-row-meta">'
+          + '<span class="conv-status-slot">' + liveToolHtml + signals + '</span>'
+          + '</span>'
+        : '';
+      const hoverMetaRowHtml = (!opts.evergreenAgent && (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml))
         ? '<div class="conv-hover-meta-row">'
           + sessionIdChipHtml
           + objectChipHtml
@@ -20813,11 +20818,6 @@
           + (rowSizeHtml || '')
           + (branchSlotHtml ? '<span class="conv-branch-slot">' + branchSlotHtml + '</span>' : '')
           + '</div>'
-        : '';
-      const rowMetaHtml = (liveToolHtml || signals)
-        ? '<span class="conv-row-meta">'
-          + '<span class="conv-status-slot">' + liveToolHtml + signals + '</span>'
-          + '</span>'
         : '';
 
       const groupedRowClass = opts.suppressFolderChip ? ' is-grouped-row' : '';
@@ -20889,6 +20889,18 @@
         ? '<span class="conv-needs-you" title="Needs you — the agent is blocked on your input" aria-label="Needs you">&#9679;</span>'
         : '';
       const needsYouRowClass = _needsYouRow ? ' is-needs-you' : '';
+      const evergreenMetaRowHtml = opts.evergreenAgent
+        ? '<div class="conv-evergreen-meta-row">'
+          + evergreenGoalHtml
+          + uxFixesQueueProgressHtml
+          + evergreenStateHtml
+          + rowMetaHtml
+          + cooStatusHtml
+          + cooEscalatedHtml
+          + (qcBadgeHtml || '')
+          + (pctBadgeHtml || '')
+          + '</div>'
+        : '';
 
       // Outcome line (GOAL-1) — surfaces the session's own end-of-turn
       // self-report. The server already parses the <session-state> block into
@@ -20921,19 +20933,19 @@
             + cooTrackHtml
             + needsYouHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
-            + evergreenGoalHtml
-            + uxFixesQueueProgressHtml
-            + evergreenStateHtml
+            + (opts.evergreenAgent ? '' : evergreenGoalHtml)
+            + (opts.evergreenAgent ? '' : uxFixesQueueProgressHtml)
+            + (opts.evergreenAgent ? '' : evergreenStateHtml)
             + historyBadgeHtml
             + repoBadgeHtml
-            + rowMetaHtml
-            + cooStatusHtml
-            + cooEscalatedHtml
+            + (opts.evergreenAgent ? '' : rowMetaHtml)
+            + (opts.evergreenAgent ? '' : cooStatusHtml)
+            + (opts.evergreenAgent ? '' : cooEscalatedHtml)
             // Context-utilized % sits just left of the elapsed-time slot, in the
             // always-visible main row (not the hover row) — it's important enough
             // to read at a glance without hovering. (CCC-294, refines CCC-289)
-            + (qcBadgeHtml || '')
-            + (pctBadgeHtml || '')
+            + (opts.evergreenAgent ? '' : (qcBadgeHtml || ''))
+            + (opts.evergreenAgent ? '' : (pctBadgeHtml || ''))
             // Right-edge slot — Omnara-style. Shows the time at rest;
             // swaps to action buttons (merge / start / archive) on hover.
             // Both share the same screen real estate, so the row stays
@@ -20944,6 +20956,7 @@
             +   '<span class="conv-row-actions">' + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + archiveBtn + elevateObjectBtn + '</span>'
             + '</span>'
           + '</div>'
+          + evergreenMetaRowHtml
         + '</div>'
         + hoverMetaRowHtml
         + ask
@@ -21842,8 +21855,16 @@
       const _projectTreeHtml = _objGroupsHtml
         ? '<div class="conv-project-tree">' + _objGroupsHtml + '</div>'
         : '';
+      const _addObjectBtnHtml = _hasFolderChips
+        ? '<span class="conv-grouping-toggle conv-add-object" data-role="ip-add-object"'
+          + ' title="Create a new Flow object — appears as an empty group you can drag sessions into">'
+          + '<span class="grouping-opt">+ object</span>'
+          + '</span>'
+        : '';
       const _projectTreeHeaderHtml = _projectTreeHtml
-        ? '<div class="conv-objects-section-label conv-project-tree-header" data-role="project-tree-header">Project tree</div>'
+        ? '<div class="conv-objects-section-label conv-project-tree-header" data-role="project-tree-header">Project tree'
+          + _addObjectBtnHtml
+          + '</div>'
         : '';
       // Collapse/expand for the Evergreen Agents section so it can be folded
       // down to give the project tree more room (CCC-282). State persists; the
@@ -22025,12 +22046,6 @@
       // immediately appears as a group row in by-objects mode. It is visible
       // before by-objects mode too; clicking it flips the grouping after the
       // user names the object so the new empty target is actually visible.
-      const _ipAddObjectBtn = _hasFolderChips
-        ? '<span class="conv-grouping-toggle conv-add-object" data-role="ip-add-object"'
-          + ' title="Create a new Flow object — appears as an empty group you can drag sessions into">'
-          + '<span class="grouping-opt">+ object</span>'
-          + '</span>'
-        : '';
       const _ipObjectsExpandAll = _shouldGroupByObjects
         ? '<span class="conv-grouping-toggle conv-objects-expand-all" data-role="objects-expand-all" title="Expand or collapse all object groups">'
             + '<span class="grouping-opt" data-objects-collapse="0">Expand all</span>'
@@ -22040,8 +22055,8 @@
       // The in-progress "Details" toolbar button (row density toggle) was removed
       // and details default off — rows render compact/lean unless the user opts
       // back into comfortable via the compact-rows control. (CCC-291)
-      const _ipTools = (_ipWindowToggle || _currentSessionsModeToggle || _ipGroupingToggle || _ipAddObjectBtn || _ipObjectsExpandAll)
-        ? '<span class="conv-inprogress-tools">' + _ipAddObjectBtn + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + '</span>'
+      const _ipTools = (_ipWindowToggle || _currentSessionsModeToggle || _ipGroupingToggle || _ipObjectsExpandAll)
+        ? '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + '</span>'
         : '';
       const _ipToolbarHtml = _ipTools
         ? '<div class="conv-inprogress-toolbar" data-role="inprogress-toolbar">' + _ipTools + '</div>'
