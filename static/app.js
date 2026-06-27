@@ -20549,8 +20549,8 @@
             + cooTrackHtml
             + needsYouHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
-            + uxFixesQueueProgressHtml
             + evergreenGoalHtml
+            + uxFixesQueueProgressHtml
             + evergreenStateHtml
             + historyBadgeHtml
             + repoBadgeHtml
