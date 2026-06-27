@@ -6396,7 +6396,18 @@ def _capture_annotation_window_crop(screen, viewport_crop, annotation_id):
         return None, f"window screencapture failed: {e}"
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()[:300]
-        return None, err or f"window screencapture exited {proc.returncode}"
+        hint = err or f"window screencapture exited {proc.returncode}"
+        low = hint.lower()
+        if "intersect" in low or "display" in low or "could not create" in low:
+            # Window was offscreen/minimized/on another Space, or the process
+            # lacks Screen Recording permission — both yield a non-actionable
+            # macOS stderr. Surface the fix so the agent (or its user) can act.
+            hint += (
+                " (bring the CCC browser window fully on-screen — not minimized "
+                "or on another Space — and grant Screen Recording permission to "
+                "your terminal/Claude Code in System Settings → Privacy & Security)"
+            )
+        return None, hint
     try:
         if not tmp_full.is_file() or tmp_full.stat().st_size <= 0:
             return None, "window screencapture produced no image"
