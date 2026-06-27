@@ -340,6 +340,29 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (!row || row.pending_spawn) continue;", reconcile_block)
         self.assertIn("if (!sid || /^spawning-/.test(String(sid))) continue;", reconcile_block)
 
+    def test_new_session_object_picker_is_inline_and_folder_scoped(self):
+        """New-session object choice should be selectable inline and remembered per folder."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const NEW_SESSION_OBJECT_BY_CWD_KEY = 'ccc-new-session-object-by-cwd';", app_js)
+        self.assertIn("function newSessionObjectScopeKey()", app_js)
+        self.assertIn("function getNewSessionSelectedObject()", app_js)
+        self.assertIn("function setNewSessionSelectedObjectId(objectId)", app_js)
+        self.assertIn("function createNewSessionObjectFromTitle(title)", app_js)
+        self.assertIn("function renderNewSessionObjectMenu(query)", app_js)
+        self.assertIn("function wireNewSessionObjectPicker()", app_js)
+        self.assertIn("function focusNewSessionComposer()", app_js)
+        self.assertIn('id="newSessionObjectPicker"', app_js)
+        self.assertIn('data-role="new-session-object-create"', app_js)
+        self.assertIn("focusNewSessionComposer();", app_js)
+        self.assertIn("assignSpawnedSessionToDefaultObject(data);", app_js)
+        self.assertIn("const obj = getNewSessionSelectedObject();", app_js)
+        self.assertIn(".nso-combo", app_css)
+        self.assertIn(".nso-menu", app_css)
+        self.assertIn(".nso-option", app_css)
+        self.assertIn("overflow: visible;", app_css)
+
     def test_inprogress_header_has_object_shortcut(self):
         """The row-list header should expose + object before by-objects mode."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
