@@ -15206,15 +15206,20 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .files-queue-panel.queue-wrap-titles .fq-row {
   align-items: flex-start;
+  flex-wrap: wrap;
 }
 .files-queue-panel.queue-wrap-titles .fq-chips {
   flex-wrap: wrap;
 }
 .files-queue-panel.queue-wrap-titles .fq-note {
+  /* Own full-width row below ref + chips, so the note gets all the space. */
+  order: 10;
+  flex: 0 0 100%;
   white-space: normal;
   overflow: visible;
   text-overflow: clip;
   overflow-wrap: anywhere;
+  padding-top: 3px;
 }
 .files-queue-panel.queue-wrap-titles .fq-status {
   margin-top: 2px;
