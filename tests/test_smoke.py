@@ -2698,6 +2698,18 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("_uxqJumpToRef", queue_click)
         self.assertIn(".uxq-detail-meta", app_css)
 
+    def test_queue_status_icons_are_large_and_in_progress_glows(self):
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        status_css = app_css[app_css.index(".fq-status {"):app_css.index(".fq-row.is-open .fq-status", app_css.index(".fq-status {"))]
+        self.assertIn("width: 14px;", status_css)
+        self.assertIn("height: 14px;", status_css)
+        self.assertIn("box-shadow:", status_css)
+        self.assertIn("@keyframes fq-status-glow", app_css)
+        in_progress_css = app_css[app_css.index(".fq-row.is-in_progress .fq-status {"):app_css.index(".fq-row.is-closed .fq-status", app_css.index(".fq-row.is-in_progress .fq-status {"))]
+        self.assertIn("animation: fq-status-glow 1.5s ease-in-out infinite;", in_progress_css)
+        self.assertIn("will-change: opacity, box-shadow;", in_progress_css)
+
     def test_queue_add_uses_large_composer(self):
         """Adding a queue item should use a multiline composer, not prompt()."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

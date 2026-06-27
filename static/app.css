@@ -15083,11 +15083,29 @@ body:has(.gc-reader) .pwa-install-banner {
    panel has no room for a text pill once the triage chips are inline. Hover for
    the word; the color carries the signal. */
 .fq-status {
-  flex-shrink: 0; width: 8px; height: 8px; padding: 0; border-radius: 50%;
+  flex-shrink: 0; width: 14px; height: 14px; padding: 0; border-radius: 50%;
   font-size: 0; align-self: center;
+  box-shadow: 0 0 0 2px rgba(139,148,158,0.14);
 }
-.fq-row.is-open .fq-status { background: var(--green, #3fb950); }
-.fq-row.is-in_progress .fq-status { background: var(--orange, #d29922); }
+@keyframes fq-status-glow {
+  0%, 100% {
+    opacity: 0.72;
+    box-shadow: 0 0 0 3px rgba(210,153,34,0.14), 0 0 7px rgba(210,153,34,0.26);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 0 4px rgba(210,153,34,0.26), 0 0 18px rgba(210,153,34,0.72);
+  }
+}
+.fq-row.is-open .fq-status {
+  background: var(--green, #3fb950);
+  box-shadow: 0 0 0 3px rgba(63,185,80,0.16);
+}
+.fq-row.is-in_progress .fq-status {
+  background: var(--orange, #d29922);
+  animation: fq-status-glow 1.5s ease-in-out infinite;
+  will-change: opacity, box-shadow;
+}
 .fq-row.is-closed .fq-status { background: rgba(139,148,158,0.55); }
 .fq-row.is-closed .fq-note { color: var(--text-muted); }
 /* Triage chips (WT-FEATURES-23): type / priority / readiness + value/confidence,
