@@ -467,9 +467,15 @@
   // through the existing per-session /model override so the switch lands live.
   let _maTimer = null;
   let _maLast = null;
+  let _maTimeframe = '7d';
   const _maModels = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', fable: 'Fable' };
   function _maEsc(s) { return _shEsc(s); }
-  function _maUsd(n) { const v = Number(n || 0); return '$' + (v >= 100 ? v.toFixed(0) : v.toFixed(2)); }
+  function _maTok(n) {
+    if (!n || n <= 0) return '—';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'm';
+    if (n >= 1e3) return Math.round(n / 1e3) + 'k';
+    return String(Math.round(n));
+  }
   function _maActionLabel(a) {
     return a === 'upgrade' ? 'Upgrade' : a === 'spawn_worker' ? 'Spawn worker' : 'Downgrade';
   }
@@ -498,7 +504,13 @@
         '.ma-cards{display:flex;gap:10px;flex-wrap:wrap;}' +
         '.ma-stat{flex:1 1 120px;background:var(--hover-bg,rgba(127,127,127,.10));border-radius:8px;padding:9px 11px;}' +
         '.ma-stat b{display:block;font-size:18px;font-weight:700;margin-top:2px;}' +
-        '.ma-saved b{color:#3fb950;} .ma-missed b{color:#d29922;}' +
+        '.ma-saved b{color:#3fb950;}' +
+        '.ma-tf{display:flex;gap:6px;}' +
+        '.ma-tf-btn{cursor:pointer;border:1px solid var(--border-color,#30363d);background:transparent;' +
+        'color:var(--text-muted,#8b949e);font:11px/1 ui-monospace,Menlo,monospace;padding:3px 9px;border-radius:5px;}' +
+        '.ma-tf-btn.active{background:var(--hover-bg,rgba(127,127,127,.2));color:inherit;' +
+        'border-color:var(--text-muted,#8b949e);}' +
+        '.ma-tf-btn:hover{background:var(--hover-bg,rgba(127,127,127,.16));}' +
         '.ma-rec{display:flex;align-items:flex-start;gap:10px;padding:9px 10px;border:1px solid var(--border-color,#30363d);' +
         'border-radius:8px;margin-top:7px;}' +
         '.ma-rec-main{min-width:0;flex:1 1 auto;}' +
@@ -589,16 +601,36 @@
   function _renderModelAdvisor(d) {
     const body = document.getElementById('maBody');
     if (!body) return;
-    const s = d.summary || {};
     const live = d.live || [];
+
+    // Filter log by timeframe, exclude pending (those live in the Live section).
+    const allLog = (d.log || []).filter(function (e) { return e.status !== 'pending'; });
+    const cutMs = _maTimeframe === '24h' ? 86400000 : _maTimeframe === '7d' ? 604800000 : 0;
+    const now = Date.now();
+    const filteredLog = cutMs ? allLog.filter(function (e) {
+      return e.logged_at && (now - new Date(e.logged_at).getTime()) <= cutMs;
+    }) : allLog;
+    const appliedLog = filteredLog.filter(function (e) { return e.status === 'applied'; });
+    const savedTok = appliedLog.reduce(function (sum, e) {
+      return sum + Math.max(0, (e.current_out_tokens || 0) - (e.baseline_out_tokens || 0));
+    }, 0);
+
     let html = '';
 
-    // Savings summary cards.
+    // Timeframe selector.
+    html += '<div class="ma-tf">';
+    [['24h', 'Last 24h'], ['7d', 'Last 7 days'], ['all', 'All time']].forEach(function (p) {
+      html += '<button class="ma-tf-btn' + (_maTimeframe === p[0] ? ' active' : '') +
+              '" data-tf="' + p[0] + '">' + p[1] + '</button>';
+    });
+    html += '</div>';
+
+    // Summary cards — no $ amounts, tokens instead.
     html += '<div class="ma-cards">';
-    html += '<div class="ma-stat ma-saved">saved<b>' + _maUsd(s.realized_savings_usd) + '</b></div>';
-    html += '<div class="ma-stat ma-missed">left on table<b>' + _maUsd(s.missed_savings_usd) + '</b></div>';
-    html += '<div class="ma-stat">applied<b>' + (s.applied || 0) + '</b></div>';
-    html += '<div class="ma-stat ccc-adv-hot" style="' + ((d.live || []).length ? '' : 'opacity:.6;') + '">live<b>' + (d.live || []).length + '</b></div>';
+    html += '<div class="ma-stat">applied<b>' + appliedLog.length + '</b></div>';
+    html += '<div class="ma-stat' + (live.length ? ' ccc-adv-hot' : '') + '" style="' +
+            (live.length ? '' : 'opacity:.6;') + '">live<b>' + live.length + '</b></div>';
+    html += '<div class="ma-stat ma-saved">tokens on Sonnet<b>' + _maTok(savedTok) + '</b></div>';
     html += '</div>';
 
     // Live recommendations with actions.
@@ -626,26 +658,28 @@
     }
     html += '</div>';
 
-    // Recent history / monitor log — resolved entries only (pending = live section).
-    const log = (d.log || []).filter(function (e) { return e.status !== 'pending'; }).slice(0, 20);
+    // Recent activity — resolved entries only, scoped to timeframe.
     html += '<div><div class="ma-sec-title">Recent activity</div>';
-    if (!log.length) {
-      html += '<div class="ma-empty">Nothing logged yet.</div>';
+    if (!filteredLog.length) {
+      html += '<div class="ma-empty">No activity in this window.</div>';
     } else {
-      log.forEach(function (e) {
+      filteredLog.slice(0, 30).forEach(function (e) {
         const from = _maModels[e.from_model] || e.from_model;
         const to = _maModels[e.to_model] || e.to_model;
-        const sv = (e.status === 'applied') ? (' · saved ' + _maUsd(e.realized_savings_usd))
-                 : (e.status === 'pending' && e.missed_savings_usd) ? (' · missing ' + _maUsd(e.missed_savings_usd)) : '';
+        const tokDelta = Math.max(0, (e.current_out_tokens || 0) - (e.baseline_out_tokens || 0));
+        const tokStr = e.status === 'applied' && tokDelta >= 1000 ? ' · ' + _maTok(tokDelta) + ' tokens' : '';
         html += '<div class="ma-log-row"><span class="ma-st ma-st-' + _maEsc(e.status) + '">' + _maEsc(e.status) + '</span>' +
                 '<span>' + _maEsc(e.name || (e.session_id || '').slice(0, 8)) + '</span>' +
-                '<span style="opacity:.6">' + _maEsc(from) + ' → ' + _maEsc(to) + sv + '</span>' +
+                '<span style="opacity:.6">' + _maEsc(from) + ' → ' + _maEsc(to) + tokStr + '</span>' +
                 '<span class="ma-spacer"></span></div>';
       });
     }
     html += '</div>';
 
     body.innerHTML = html;
+    body.querySelectorAll('[data-tf]').forEach(function (b) {
+      b.addEventListener('click', function () { _maTimeframe = b.dataset.tf; _renderModelAdvisor(d); });
+    });
     body.querySelectorAll('[data-ma-apply]').forEach(function (b) {
       b.addEventListener('click', function () { _maApply(b.dataset.rec, b.dataset.sid, b.dataset.model); });
     });
