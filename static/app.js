@@ -29558,7 +29558,7 @@
       || (actCol && actCol.querySelector('.csh-ask-earlier'));
     if (!askCol || !actCol || !earlier) return;
     const earlierFirst = earlier.querySelector('[data-earlier-first]');
-    const earlierHasText = !!(earlierFirst && (earlierFirst.textContent || '').trim().length > 1);
+    const earlierHasText = !!(earlierFirst && (earlierFirst.textContent || '').trim());
     const timeline = actCol.querySelector('[data-timeline]');
     const activityHasContent = !!(timeline && timeline.querySelector('.stl-row, .stl-empty'));
     earlier.style.display = earlierHasText ? '' : 'none';

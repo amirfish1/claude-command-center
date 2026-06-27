@@ -13224,11 +13224,12 @@ body.status-pos-right .conv-sticky-header .csh-col-ask {
   padding: 4px 36px 4px 12px;
 }
 
-/* In right-rail mode the sticky panel has nothing to show when there is
-   no earlier-ask. Hide it rather than rendering an empty or trivial box.
-   The comment in _updateStickyAskSlots() calls for exactly this rule. */
-body.status-pos-right .conv-sticky-header.is-earlier-empty {
-  display: none;
+/* In right-rail mode the original-ask and activity are in the side rail;
+   the sticky header has nothing left to show. Hide it entirely — the
+   earlier-ask slot that lived here was already removed once; this rule
+   keeps the regression from surfacing again (CCC-332). */
+body.status-pos-right .conv-sticky-header {
+  display: none !important;
 }
 
 /* ---------------------------------------------------------------------------
