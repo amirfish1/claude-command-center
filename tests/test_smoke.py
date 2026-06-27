@@ -2485,6 +2485,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function _convRowQualityBadge(c)", app_js)
         self.assertIn("quality_score: c.quality_score", app_js)
         self.assertIn("const qcBadgeHtml = pctBadgeHtml ? _convRowQualityBadge(c) : '';", app_js)
+        row_quality = app_js[
+            app_js.index("function _convRowQualityBadge(c)"):
+            app_js.index("function _formatTokenOptimizerQuality", app_js.index("function _convRowQualityBadge(c)"))
+        ]
+        self.assertIn("const label = (grade ? grade + ' ' : '') + rounded;", row_quality)
+        self.assertNotIn("const label = 'Q ' +", row_quality)
         self.assertLess(app_js.index("+ (qcBadgeHtml || '')"), app_js.index("+ (pctBadgeHtml || '')"))
         self.assertIn(".conv-qc-badge", app_css)
         self.assertIn(".conv-qc-badge.is-good", app_css)
@@ -8557,6 +8563,12 @@ class TestModelPicker(unittest.TestCase):
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
         self.assertIn("function _formatTokenOptimizerQuality", js)
         self.assertIn("wp-quality-pill", js)
+        footer_quality = js[
+            js.index("function _formatTokenOptimizerQuality"):
+            js.index("function renderSessionUsageIntoStrip", js.index("function _formatTokenOptimizerQuality"))
+        ]
+        self.assertIn("const label = (grade ? grade + ' ' : '') + rounded;", footer_quality)
+        self.assertNotIn("const label = 'Q ' +", footer_quality)
         self.assertLess(js.index("qualityPill + '<span class=\"' + cls"), js.index("+ sourceLabel + ' ' + _formatTokens(displayTokens)"))
         self.assertIn(".conv-input-context .wp-quality-pill", css)
 
