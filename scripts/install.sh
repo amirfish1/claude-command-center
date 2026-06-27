@@ -7,8 +7,8 @@
 #   ./install.sh --from=readme                     # direct invocation after git clone
 #
 # Behaviour:
-#   - Supports macOS and Linux. On Linux, desktop-only conveniences degrade
-#     the same way they do when running ./run.sh directly.
+#   - Supports macOS and Linux. Windows users should run it inside WSL2, where
+#     it follows the Linux path and desktop-only conveniences degrade cleanly.
 #   - Clones to ~/.ccc/claude-command-center if absent, git pulls if present.
 #   - Verifies git and python3 are on PATH.
 #   - Persists an attribution channel to ~/.claude/command-center/install-source.
@@ -79,7 +79,7 @@ require_supported_platform() {
   case "$uname_s" in
     Darwin|Linux) return 0 ;;
     *)
-      err "CCC install supports macOS or Linux; unsupported OS: ${uname_s}"
+      err "CCC install supports macOS or Linux. On Windows, run it inside WSL2 (for example Ubuntu); unsupported OS: ${uname_s}"
       exit 2
       ;;
   esac

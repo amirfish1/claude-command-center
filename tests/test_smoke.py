@@ -3637,6 +3637,34 @@ class TestRunScript(unittest.TestCase):
         self.assertIn("systemd", result.stdout)
 
 
+class TestPlatformDocs(unittest.TestCase):
+    def test_readme_documents_wsl2_as_windows_route(self):
+        readme = pathlib.Path(PROJECT_ROOT, "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("WSL2", readme)
+        self.assertIn("Native Windows", readme)
+        self.assertIn("systemd", readme)
+
+    def test_installer_points_windows_users_to_wsl2(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_uname = pathlib.Path(tmpdir, "uname")
+            fake_uname.write_text("#!/bin/sh\nprintf 'MINGW64_NT-10.0\\n'\n", encoding="utf-8")
+            fake_uname.chmod(0o755)
+            env = dict(os.environ)
+            env["PATH"] = f"{tmpdir}{os.pathsep}{env.get('PATH', '')}"
+            result = subprocess.run(
+                ["bash", "-c", "source scripts/install.sh; require_supported_platform"],
+                cwd=PROJECT_ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Windows", result.stderr)
+        self.assertIn("WSL2", result.stderr)
+
+
 class TestLinuxCapabilities(unittest.TestCase):
     """Headless-Linux support: macOS-only desktop features must stub cleanly
     (no crash, structured no-op) and the server must report a capabilities

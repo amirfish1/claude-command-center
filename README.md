@@ -83,6 +83,8 @@ that already exists.
 Requirements: macOS or Linux, Python 3, and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed.
 Optional: [`gh`](https://cli.github.com/) for GitHub integration, `vercel` for deploy status.
 Linux is supported for headless / remote-box use (see [Running on Linux](#running-on-linux)); the macOS-only desktop conveniences degrade cleanly there.
+On Windows, run CCC inside WSL2 (Ubuntu or another Linux distro). Native Windows
+shells are not supported.
 
 **curl** — clones into `~/.ccc/claude-command-center` and runs in foreground. Re-running does a `git pull`.
 
@@ -138,6 +140,10 @@ drive) works the same as on macOS. The macOS-only desktop conveniences
 not available on Linux yet; the UI hides those controls automatically, so you
 never see a button that does nothing.
 
+Windows users should use this Linux path under WSL2. Install Python 3, git, and
+your agent CLIs inside the WSL distro, then open `http://localhost:8090` from
+the Windows browser after `./run.sh` starts.
+
 ```bash
 git clone https://github.com/amirfish1/claude-command-center
 cd claude-command-center
@@ -157,6 +163,10 @@ follow logs with `journalctl --user -u ccc -f`, and remove it with
 run `sudo loginctl enable-linger $USER` once so the service survives logout and
 starts at boot. If `systemctl` is not available, run CCC in the foreground or
 under your own process manager instead.
+
+In WSL2, `./run.sh --install-service` requires a distro with systemd enabled.
+If your WSL distro does not expose `systemctl --user`, keep CCC in the
+foreground with `./run.sh` or run it under your own process manager.
 
 To reach the dashboard from another machine, see `SECURITY.md` for the
 `CCC_BIND_HOST` and same-origin options before exposing the port.
@@ -391,7 +401,8 @@ The `CCC_BIND_HOST`, `CCC_ALLOWED_ORIGIN`, and `CCC_TRUST_TAILNET` knobs can als
   [Running on Linux](#running-on-linux)) with a systemd service and clean
   degradation of the macOS-only desktop glue. Native Linux equivalents for
   screenshots, jump-to-terminal, and deep links (X11/Wayland, wmctrl/tmux) are
-  a possible follow-on, not a current goal. Windows is unsupported.
+  a possible follow-on, not a current goal. Native Windows is unsupported; use
+  WSL2 for the supported Windows route.
 - Multi-user / network-exposed mode. This is a local dev tool. If you're
   looking at it on a remote host, something has gone wrong.
 - Electron / native wrap. Browser is the UI on purpose.
