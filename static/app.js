@@ -26350,11 +26350,12 @@
     'watchtower': 'WT',
   };
   // Project "families": a single repo whose work is split across sub-queues
-  // (e.g. WatchTower tracks its own backlog as WT-BUGS / WT-FEATURES so features
-  // don't auto-drain). A session rooted at the family repo shows ALL sub-queues
-  // in one Queue panel; `_UXQ_FAMILY_DEFAULT` routes a "+ add" to the fix-now one.
-  const _UXQ_FAMILY_ROOTS = new Set(['WT']);
-  const _UXQ_FAMILY_DEFAULT = { WT: 'WT-BUGS' };
+  // (a family root "FOO" rolls up "FOO-BAR"/"FOO-BAZ" into one panel;
+  // `_UXQ_FAMILY_DEFAULT` routes a "+ add" to the fix-now sub-queue). Currently
+  // empty — WatchTower used to split WT-BUGS / WT-FEATURES, but those collapsed
+  // into a single WT queue where the item's `type` field carries bug vs feature.
+  const _UXQ_FAMILY_ROOTS = new Set();
+  const _UXQ_FAMILY_DEFAULT = {};
   function _uxqProjectKey(value) {
     return String(value || '').trim().toUpperCase();
   }
@@ -26592,13 +26593,13 @@
         return (b.number || 0) - (a.number || 0);       // closed/in_progress: newest first
       });
       const _readyShort = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'shovel-ready': 'ready' };
+      const _typeShort = { 'feature': 'feat', 'bug': 'bug' };
       const _uxqChips = it => {
         const c = [];
-        if (it.type) c.push('<span class="fq-chip fq-type-' + escapeAttr(it.type) + '">' + escapeHtml(it.type) + '</span>');
+        if (it.type) c.push('<span class="fq-chip fq-type-' + escapeAttr(it.type) + '" title="' + escapeAttr(it.type) + '">' + escapeHtml(_typeShort[it.type] || it.type) + '</span>');
         if (it.priority) c.push('<span class="fq-chip fq-prio-' + escapeAttr(it.priority) + '">' + escapeHtml(it.priority) + '</span>');
         if (it.readiness) c.push('<span class="fq-chip fq-ready-' + escapeAttr(it.readiness) + '">' + escapeHtml(_readyShort[it.readiness] || it.readiness) + '</span>');
-        if (it.value) c.push('<span class="fq-chip fq-vc" title="value">V:' + escapeHtml(it.value) + '</span>');
-        if (it.confidence) c.push('<span class="fq-chip fq-vc" title="confidence">C:' + escapeHtml(it.confidence) + '</span>');
+        if (it.value || it.confidence) c.push('<span class="fq-chip fq-vc" title="value / confidence">' + escapeHtml(it.value || '–') + '/' + escapeHtml(it.confidence || '–') + '</span>');
         return c.length ? '<div class="fq-chips">' + c.join('') + '</div>' : '';
       };
       $queue.innerHTML = rows.map(it => {
@@ -26608,8 +26609,9 @@
         return '<div class="fq-row is-' + escapeAttr(status) + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(noteFull) + '\n\nClick to view ticket details.">'
           + '<span class="fq-ref">' + escapeHtml(ref) + '</span>'
-          + '<div class="fq-main"><span class="fq-note">' + escapeHtml(noteFull) + '</span>' + _uxqChips(it) + '</div>'
-          + '<span class="fq-status">' + escapeHtml(status) + '</span>'
+          + _uxqChips(it)
+          + '<span class="fq-note">' + escapeHtml(noteFull) + '</span>'
+          + '<span class="fq-status" title="' + escapeAttr(status) + '">' + escapeHtml(status) + '</span>'
           + '</div>';
       }).join('') || _uxqEmptyHtml(proj, items.length);
       const $count = document.getElementById('queueCount');

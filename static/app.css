@@ -14896,7 +14896,7 @@ body:has(.gc-reader) .pwa-install-banner {
   display: flex; flex-direction: column;
 }
 .fq-row {
-  display: flex; align-items: flex-start; gap: 7px;
+  display: flex; align-items: center; gap: 4px;
   padding: 6px 10px; font-size: 14px; line-height: 1.35;
   border-bottom: 1px solid rgba(139,148,158,0.08);
   cursor: pointer;
@@ -14912,32 +14912,33 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-ref {
   font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-  font-size: 12.5px; color: var(--text-muted); flex-shrink: 0; min-width: 62px;
+  font-size: 12.5px; color: var(--text-muted); flex-shrink: 0; min-width: 44px;
 }
 .fq-note {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Status as a compact colored dot (open/in_progress/closed) — the 227px Queue
+   panel has no room for a text pill once the triage chips are inline. Hover for
+   the word; the color carries the signal. */
 .fq-status {
-  flex-shrink: 0; font-size: 11px; font-weight: 600; text-transform: uppercase;
-  padding: 1px 6px; border-radius: 999px;
+  flex-shrink: 0; width: 8px; height: 8px; padding: 0; border-radius: 50%;
+  font-size: 0; align-self: center;
 }
-.fq-row.is-open .fq-status { background: rgba(63,185,80,0.15); color: var(--green, #3fb950); }
-.fq-row.is-in_progress .fq-status { background: rgba(210,153,34,0.15); color: var(--orange, #d29922); }
-.fq-row.is-closed .fq-status { background: rgba(139,148,158,0.12); color: var(--text-muted); }
+.fq-row.is-open .fq-status { background: var(--green, #3fb950); }
+.fq-row.is-in_progress .fq-status { background: var(--orange, #d29922); }
+.fq-row.is-closed .fq-status { background: rgba(139,148,158,0.55); }
 .fq-row.is-closed .fq-note { color: var(--text-muted); }
 /* Triage chips (WT-FEATURES-23): type / priority / readiness + value/confidence,
-   so the queue view shows what the engine sees and picks first. */
-.fq-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.fq-main .fq-note { flex: none; }
-.fq-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+   inline on the row so the queue view shows what the engine sees and picks first. */
+.fq-chips { display: inline-flex; flex-wrap: nowrap; flex-shrink: 0; gap: 2px; }
 .fq-chip {
-  font-size: 10px; font-weight: 700; line-height: 1.5; letter-spacing: 0.02em;
-  padding: 0 6px; border-radius: 999px; text-transform: uppercase; white-space: nowrap;
+  font-size: 10px; font-weight: 700; line-height: 1.5; letter-spacing: 0.01em;
+  padding: 0 4px; border-radius: 999px; text-transform: uppercase; white-space: nowrap;
   background: rgba(139,148,158,0.15); color: var(--text-muted);
 }
 .fq-type-bug { background: rgba(248,81,73,0.16); color: #f85149; }
