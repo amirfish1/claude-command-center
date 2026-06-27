@@ -860,6 +860,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-draft-row.dragging", app_js)
         self.assertIn(".conv-project-tree .conv-draft-row[draggable=\"true\"]", app_css)
 
+    def test_by_objects_repo_groups_can_nest_under_objects(self):
+        """Dragging a repo group onto an object should make it a child group."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("dragged.indexOf('object:') !== 0 && dragged.indexOf('repo:') !== 0", app_js)
+        self.assertIn("const _treeParentOf = (nodeId) => {", app_js)
+        self.assertIn("const p = _treeParentOf(nodeId);", app_js)
+        self.assertIn("object groups and repo groups can nest", app_js)
+        self.assertIn("return (p && p.indexOf('object:') === 0 && _byObject.has(p)) ? p : null;", app_js)
+
     def test_by_objects_project_tree_has_own_scroll_region(self):
         """The project tree should scroll separately from current sessions."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

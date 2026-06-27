@@ -21254,19 +21254,19 @@
           + body
           + '</div>';
       };
-      // GOAL-5 — build the object→object tree from flowNodeParents and emit it
-      // depth-first so nested objects render indented under their parent. Only
-      // object groups nest; repo-derived groups are always roots. _objEntries is
-      // already sorted, so roots and each sibling list inherit that order.
-      const _objParentOf = (nodeId) => {
-        if (nodeId.indexOf('object:') !== 0) return null;
+      // GOAL-5 — build the project tree from flowNodeParents and emit it
+      // depth-first so nested groups render indented under their parent. Both
+      // object groups and repo groups can nest; saved parent links decide which
+      // ones are roots. _objEntries is already sorted, so roots and each sibling
+      // list inherit that order.
+      const _treeParentOf = (nodeId) => {
         const p = flowNodeParents[nodeId];
         return (p && p.indexOf('object:') === 0 && _byObject.has(p)) ? p : null;
       };
       const _childrenOf = new Map();
       const _objRoots = [];
       for (const [nodeId] of _objEntries) {
-        const p = _objParentOf(nodeId);
+        const p = _treeParentOf(nodeId);
         if (p) { (_childrenOf.get(p) || _childrenOf.set(p, []).get(p)).push(nodeId); }
         else {
           if (_evergreenObjectNodes.has(nodeId)) continue;
@@ -21304,7 +21304,7 @@
       };
       const _objGroupsHtml = _objRoots.map((n, i) => _emitObjTree(n, 0, i + 1)).join('');
       const _evergreenRoots = Array.from(_evergreenObjectNodes)
-        .filter(n => !_evergreenObjectNodes.has(_objParentOf(n) || ''));
+        .filter(n => !_evergreenObjectNodes.has(_treeParentOf(n) || ''));
       const _renderEvergreenAgentRows = (nodeId) => {
         const seen = new Set();
         const walk = (id) => {
@@ -22785,7 +22785,7 @@
     // (or repo / Unclassified) group header to move it there. Mirrors a
     // Flow-board drag without leaving the sidebar; writes the same
     // flowNodeParents map the board reads.
-    // GOAL-5 — nest one object under another (object:<child> -> object:<parent>).
+    // GOAL-5 — nest one tree node under another (object/repo -> object).
     // Shared by the header drop AND the whole-group-body drop, so "drag an
     // object onto another object" nests whether you land on the thin header or
     // anywhere in the target's cluster. Returns true if it nested.
@@ -22793,7 +22793,7 @@
     // (the un-nest path). Cycle-guarded when nesting. Returns true if it
     // changed anything.
     const _setObjectParent = (dragged, parent) => {
-      if (!dragged || dragged.indexOf('object:') !== 0) return false;
+      if (!dragged || (dragged.indexOf('object:') !== 0 && dragged.indexOf('repo:') !== 0)) return false;
       if (parent && parent.indexOf('object:') === 0) {
         if (dragged === parent) return false;
         // Refuse if target is a descendant of dragged (would loop).
@@ -22811,7 +22811,7 @@
       persistFlowNodeParents();
       return true;
     };
-    // Nest dragged under target (object → object). Thin wrapper kept for the
+    // Nest dragged under target (object/repo → object). Thin wrapper kept for the
     // nest-zone / body-drop callers.
     const _nestObjectUnder = (dragged, target) => {
       if (!target || target.indexOf('object:') !== 0) return false;
