@@ -21302,7 +21302,7 @@
           .forEach((k, i) => { html += _emitObjTree(k, depth + 1, i + 1, opts); });
         return html;
       };
-      const _objGroupsHtml = _objRoots.map(n => _emitObjTree(n, 0, 0)).join('');
+      const _objGroupsHtml = _objRoots.map((n, i) => _emitObjTree(n, 0, i + 1)).join('');
       const _evergreenRoots = Array.from(_evergreenObjectNodes)
         .filter(n => !_evergreenObjectNodes.has(_objParentOf(n) || ''));
       const _renderEvergreenAgentRows = (nodeId) => {

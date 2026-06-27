@@ -722,6 +722,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("numberedObjectTitleHtml(folder, objectOrdinal)", app_js)
         self.assertIn("_renderObjGroup(nodeId, group.title, orderedCards, depth, ordinal)", app_js)
         self.assertIn("_emitObjTree(k, depth + 1, i + 1, opts)", app_js)
+        self.assertIn("_objRoots.map((n, i) => _emitObjTree(n, 0, i + 1)).join('')", app_js)
         self.assertNotIn("raw.split('/').map", app_js)
         self.assertIn(".conv-folder-object-title-text", app_css)
         self.assertIn(".conv-folder-object-number", app_css)
