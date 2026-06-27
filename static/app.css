@@ -14921,6 +14921,31 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-ready-needs-spec { background: rgba(88,166,255,0.18); color: #58a6ff; }
 .fq-ready-needs-shaping { background: rgba(210,153,34,0.16); color: #d29922; }
 .fq-vc { background: rgba(139,148,158,0.12); color: var(--text-muted); }
+/* Blocked-work (WT-28): a ticket waiting on a human. Amber, sorted to the top. */
+.fq-chip.fq-blocked { background: rgba(210,153,34,0.22); color: #e3b341; }
+.fq-row.is-blocked { background: rgba(210,153,34,0.06); }
+.fq-row.is-blocked .fq-status { background: var(--orange, #d29922); }
+.fq-row.is-blocked .fq-note { color: #e3b341; }
+/* Blocked panel inside the ticket detail modal. */
+.uxq-block {
+  margin: 10px 0; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid rgba(210,153,34,0.35); background: rgba(210,153,34,0.08);
+}
+.uxq-block-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: #e3b341; margin-bottom: 6px;
+}
+.uxq-block-q { font-size: 14px; color: var(--text); margin-bottom: 6px; }
+.uxq-block-sub {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--text-muted); margin: 8px 0 3px;
+}
+.uxq-block-note { font-size: 13px; color: var(--text); margin: 2px 0; }
+.uxq-block-cmd {
+  display: block; font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+  font-size: 12px; color: var(--accent); background: rgba(139,148,158,0.10);
+  padding: 4px 7px; border-radius: 5px; margin: 3px 0; user-select: all;
+}
 .fq-empty { padding: 12px 10px; font-size: 13px; color: var(--text-muted); }
 .fq-empty-sub {
   margin-top: 4px;

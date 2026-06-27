@@ -26536,7 +26536,7 @@
     const metaHtml = [
       _uxqMetaRow('Ref', ref),
       _uxqMetaRow('Project', item.project),
-      _uxqMetaRow('Status', item.status || 'open'),
+      _uxqMetaRow('Status', item.needs_input ? 'in_progress · needs input' : (item.status || 'open')),
       _uxqMetaRow('Lane', item.lane),
       _uxqMetaRow('Source', item.source),
       _uxqMetaRow('Claimed by', item.claimed_by || item.claimed_session_id),
@@ -26545,6 +26545,23 @@
       _uxqMetaRow('URL', item.url),
       _uxqMetaRow('Selector', item.selector),
     ].filter(Boolean).join('');
+    // Blocked-work panel (WT-28): the worker's question + how to respond.
+    const _progNotes = Array.isArray(item.progress_notes) ? item.progress_notes : [];
+    const _answers = Array.isArray(item.answers) ? item.answers : [];
+    const _noteText = n => escapeHtml((n && (n.text || n)) ? String(n.text || n) : '');
+    const blockHtml = item.needs_input
+      ? '<div class="uxq-block">'
+        + '<div class="uxq-block-title">Needs human input</div>'
+        + '<div class="uxq-block-q">' + escapeHtml(item.block_question || '(no question recorded)') + '</div>'
+        + (_progNotes.length ? '<div class="uxq-block-sub">Progress so far</div>'
+            + _progNotes.map(p => '<div class="uxq-block-note">' + _noteText(p) + '</div>').join('') : '')
+        + (_answers.length ? '<div class="uxq-block-sub">Answers</div>'
+            + _answers.map(a => '<div class="uxq-block-note">' + _noteText(a) + '</div>').join('') : '')
+        + '<div class="uxq-block-sub">Respond from a terminal</div>'
+        + '<code class="uxq-block-cmd">wt discuss ' + escapeHtml(ref) + '</code>'
+        + '<code class="uxq-block-cmd">wt answer ' + escapeHtml(ref) + ' "your decision"</code>'
+        + '</div>'
+      : '';
     const modal = document.createElement('div');
     modal.id = 'uxqItemModal';
     modal.className = 'ann-ux-preview-modal uxq-detail-modal';
@@ -26552,6 +26569,7 @@
       '<div class="ann-ux-preview-card uxq-detail-card" role="dialog" aria-modal="true" aria-label="Queue item details">' +
         '<div class="ann-ux-preview-title">Queue item details</div>' +
         '<dl class="uxq-detail-meta">' + metaHtml + '</dl>' +
+        blockHtml +
         '<div class="ann-ux-preview-shot">' +
           (hasShot
             ? '<span class="ann-ux-ok">Screenshot attached</span>'
@@ -26605,6 +26623,8 @@
       const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec') ? 1 : 0);
       const _prioRank = it => (it && _PR[it.priority] != null) ? _PR[it.priority] : (it && it.lane === 'express' ? 0 : 2);
       const rows = scoped.slice().sort((a, b) => {
+        // Blocked tickets (needs_input) jump to the very top — they want a human.
+        const bl = (a.needs_input ? 0 : 1) - (b.needs_input ? 0 : 1); if (bl) return bl;
         const st = _statusRank(a.status) - _statusRank(b.status); if (st) return st;
         if (a.status === 'open') {
           const u = _unready(a) - _unready(b); if (u) return u;
@@ -26617,6 +26637,7 @@
       const _typeShort = { 'feature': 'feat', 'bug': 'bug' };
       const _uxqChips = it => {
         const c = [];
+        if (it.needs_input) c.push('<span class="fq-chip fq-blocked" title="' + escapeAttr(it.block_question || 'needs human input') + '">needs input</span>');
         if (it.type) c.push('<span class="fq-chip fq-type-' + escapeAttr(it.type) + '" title="' + escapeAttr(it.type) + '">' + escapeHtml(_typeShort[it.type] || it.type) + '</span>');
         if (it.priority) c.push('<span class="fq-chip fq-prio-' + escapeAttr(it.priority) + '">' + escapeHtml(it.priority) + '</span>');
         if (it.readiness) c.push('<span class="fq-chip fq-ready-' + escapeAttr(it.readiness) + '">' + escapeHtml(_readyShort[it.readiness] || it.readiness) + '</span>');
@@ -26627,12 +26648,17 @@
         const noteFull = String(it.note || '');
         const status = it.status || 'open';
         const ref = _uxqItemRef(it);
-        return '<div class="fq-row is-' + escapeAttr(status) + '" data-ref="' + escapeAttr(ref)
-          + '" title="' + escapeAttr(noteFull) + '\n\nClick to view ticket details.">'
+        // When blocked, the worker's question is the most useful line to show.
+        const blocked = !!it.needs_input;
+        const noteShown = blocked && it.block_question ? String(it.block_question) : noteFull;
+        const tip = (blocked && it.block_question ? ('Needs input: ' + it.block_question + '\n\n') : '')
+          + noteFull + '\n\nClick to view ticket details.';
+        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + '" data-ref="' + escapeAttr(ref)
+          + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref">' + escapeHtml(ref) + '</span>'
           + _uxqChips(it)
-          + '<span class="fq-note">' + escapeHtml(noteFull) + '</span>'
-          + '<span class="fq-status" title="' + escapeAttr(status) + '">' + escapeHtml(status) + '</span>'
+          + '<span class="fq-note">' + escapeHtml(noteShown) + '</span>'
+          + '<span class="fq-status" title="' + escapeAttr(blocked ? 'needs input' : status) + '">' + escapeHtml(status) + '</span>'
           + '</div>';
       }).join('') || _uxqEmptyHtml(proj, items.length);
       const $count = document.getElementById('queueCount');
