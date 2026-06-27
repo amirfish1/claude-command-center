@@ -458,6 +458,201 @@
       .catch(function () { _pollSystemHealth(); });
   }
 
+  // ---- Model Advisor panel -------------------------------------------------
+  // Full-screen overlay opened from the footer. Polls /api/model-advisor and
+  // shows live model-drift recommendations (downgrade an Opus session gone
+  // mechanical, upgrade a cheap session doing hard reasoning, or spawn a worker
+  // on a plan->execute drift) plus the savings monitor: what was recommended,
+  // applied vs ignored, and dollars saved / left on the table. Apply routes
+  // through the existing per-session /model override so the switch lands live.
+  let _maTimer = null;
+  let _maLast = null;
+  const _maModels = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', fable: 'Fable' };
+  function _maEsc(s) { return _shEsc(s); }
+  function _maUsd(n) { const v = Number(n || 0); return '$' + (v >= 100 ? v.toFixed(0) : v.toFixed(2)); }
+  function _maActionLabel(a) {
+    return a === 'upgrade' ? 'Upgrade' : a === 'spawn_worker' ? 'Spawn worker' : 'Downgrade';
+  }
+  function _maActionClass(a) {
+    return a === 'upgrade' ? 'ma-up' : a === 'spawn_worker' ? 'ma-spawn' : 'ma-down';
+  }
+  function _ensureModelAdvisorModal() {
+    if (!document.getElementById('__maStyle')) {
+      const st = document.createElement('style');
+      st.id = '__maStyle';
+      st.textContent =
+        '#maOverlay{position:fixed;inset:0;z-index:9999;display:none;}' +
+        '#maOverlay.open{display:block;}' +
+        '#maBackdrop{position:absolute;inset:0;background:rgba(0,0,0,.5);}' +
+        '#maPanel{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);' +
+        'width:min(820px,94vw);max-height:90vh;overflow:auto;background:var(--bg-primary,#1c2128);' +
+        'color:var(--text-primary,#e6edf3);border:1px solid var(--border-color,#30363d);border-radius:12px;' +
+        'box-shadow:0 18px 60px rgba(0,0,0,.5);font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;}' +
+        '#maPanel h2{margin:0;font-size:14px;font-weight:600;}' +
+        '.ma-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;' +
+        'border-bottom:1px solid var(--border-color,#30363d);position:sticky;top:0;background:var(--bg-primary,#1c2128);}' +
+        '.ma-close{cursor:pointer;border:0;background:transparent;color:inherit;font-size:20px;line-height:1;padding:2px 7px;border-radius:6px;}' +
+        '.ma-close:hover{background:var(--hover-bg,rgba(127,127,127,.16));}' +
+        '.ma-body{padding:14px 16px;display:flex;flex-direction:column;gap:16px;}' +
+        '.ma-sec-title{font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.6;margin-bottom:7px;}' +
+        '.ma-cards{display:flex;gap:10px;flex-wrap:wrap;}' +
+        '.ma-stat{flex:1 1 120px;background:var(--hover-bg,rgba(127,127,127,.10));border-radius:8px;padding:9px 11px;}' +
+        '.ma-stat b{display:block;font-size:18px;font-weight:700;margin-top:2px;}' +
+        '.ma-saved b{color:#3fb950;} .ma-missed b{color:#d29922;}' +
+        '.ma-rec{display:flex;align-items:flex-start;gap:10px;padding:9px 10px;border:1px solid var(--border-color,#30363d);' +
+        'border-radius:8px;margin-top:7px;}' +
+        '.ma-rec-main{min-width:0;flex:1 1 auto;}' +
+        '.ma-rec-title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+        '.ma-rec-reason{opacity:.7;font-size:12px;margin-top:3px;}' +
+        '.ma-badge{font-size:11px;padding:1px 7px;border-radius:5px;white-space:nowrap;}' +
+        '.ma-down{background:rgba(63,185,80,.16);color:#3fb950;} .ma-up{background:rgba(210,153,34,.18);color:#d29922;}' +
+        '.ma-spawn{background:rgba(88,166,255,.16);color:#58a6ff;}' +
+        '.ma-conf{font-size:11px;opacity:.6;margin-left:6px;}' +
+        '.ma-acts{display:flex;flex-direction:column;gap:5px;}' +
+        '.ma-btn{cursor:pointer;border:1px solid var(--border-color,#30363d);background:transparent;color:inherit;' +
+        'font:600 11px/1 ui-monospace,Menlo,monospace;padding:5px 11px;border-radius:6px;white-space:nowrap;}' +
+        '.ma-btn:hover{background:var(--hover-bg,rgba(127,127,127,.16));}' +
+        '.ma-btn-go{border-color:#2ea043;color:#3fb950;} .ma-btn-go:hover{background:rgba(63,185,80,.14);}' +
+        '.ma-log-row{display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:12px;opacity:.85;}' +
+        '.ma-log-row .ma-spacer{flex:1 1 auto;}' +
+        '.ma-st{font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding:1px 6px;border-radius:4px;}' +
+        '.ma-st-applied{background:rgba(63,185,80,.16);color:#3fb950;}' +
+        '.ma-st-pending{background:var(--hover-bg,rgba(127,127,127,.16));}' +
+        '.ma-st-dismissed{background:rgba(248,81,73,.12);color:#f85149;}' +
+        '.ma-empty{opacity:.55;padding:6px 2px;}';
+      document.head.appendChild(st);
+    }
+    let ov = document.getElementById('maOverlay');
+    if (ov) return ov;
+    ov = document.createElement('div');
+    ov.id = 'maOverlay';
+    ov.innerHTML =
+      '<div id="maBackdrop"></div>' +
+      '<div id="maPanel" role="dialog" aria-modal="true" aria-label="Model Advisor">' +
+        '<div class="ma-head"><h2>Model Advisor</h2>' +
+        '<button class="ma-close" aria-label="Close">&times;</button></div>' +
+        '<div class="ma-body" id="maBody"><div style="opacity:.6">Loading…</div></div>' +
+      '</div>';
+    document.body.appendChild(ov);
+    ov.querySelector('#maBackdrop').addEventListener('click', _closeModelAdvisor);
+    ov.querySelector('.ma-close').addEventListener('click', _closeModelAdvisor);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && ov.classList.contains('open')) _closeModelAdvisor();
+    });
+    return ov;
+  }
+  function _openModelAdvisor() {
+    const ov = _ensureModelAdvisorModal();
+    ov.classList.add('open');
+    _pollModelAdvisor();
+    if (_maTimer) clearInterval(_maTimer);
+    _maTimer = setInterval(_pollModelAdvisor, 5000);
+  }
+  function _closeModelAdvisor() {
+    const ov = document.getElementById('maOverlay');
+    if (ov) ov.classList.remove('open');
+    if (_maTimer) { clearInterval(_maTimer); _maTimer = null; }
+  }
+  function _pollModelAdvisor() {
+    if (document.hidden) return;
+    fetch('/api/model-advisor', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { if (d) { _maLast = d; _renderModelAdvisor(d); _updateAdvisorPill(d); } })
+      .catch(function () {});
+  }
+  function _maApply(recId, sid, model) {
+    fetch('/api/model-advisor/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rec_id: recId, session_id: sid, model: model }),
+    }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && !d.ok && typeof showOpToast === 'function') showOpToast('Switch failed: ' + (d.error || 'unknown'), 'error');
+        else if (typeof showOpToast === 'function') showOpToast('Switched to ' + (_maModels[model] || model), 'success');
+        _pollModelAdvisor();
+      })
+      .catch(function () { _pollModelAdvisor(); });
+  }
+  function _maDismiss(recId) {
+    fetch('/api/model-advisor/dismiss', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rec_id: recId }),
+    }).then(function () { _pollModelAdvisor(); }).catch(function () { _pollModelAdvisor(); });
+  }
+  function _renderModelAdvisor(d) {
+    const body = document.getElementById('maBody');
+    if (!body) return;
+    const s = d.summary || {};
+    const live = d.live || [];
+    let html = '';
+
+    // Savings summary cards.
+    html += '<div class="ma-cards">';
+    html += '<div class="ma-stat ma-saved">saved<b>' + _maUsd(s.realized_savings_usd) + '</b></div>';
+    html += '<div class="ma-stat ma-missed">left on table<b>' + _maUsd(s.missed_savings_usd) + '</b></div>';
+    html += '<div class="ma-stat">applied<b>' + (s.applied || 0) + '</b></div>';
+    html += '<div class="ma-stat">pending<b>' + (s.pending || 0) + '</b></div>';
+    html += '</div>';
+
+    // Live recommendations with actions.
+    html += '<div><div class="ma-sec-title">Live recommendations</div>';
+    if (!live.length) {
+      html += '<div class="ma-empty">No drift right now — every live session is on the right model.</div>';
+    } else {
+      live.forEach(function (r) {
+        const from = _maModels[r.current_model] || r.current_model || '?';
+        const to = _maModels[r.to_model] || r.to_model;
+        html += '<div class="ma-rec">';
+        html += '<div class="ma-rec-main">';
+        html += '<div class="ma-rec-title">' + _maEsc(r.name || (r.session_id || '').slice(0, 8)) +
+                ' <span class="ma-badge ' + _maActionClass(r.action) + '">' + _maActionLabel(r.action) +
+                ' ' + _maEsc(from) + ' → ' + _maEsc(to) + '</span>' +
+                '<span class="ma-conf">' + _maEsc(r.confidence || '') + ' · score ' + (r.score == null ? '?' : r.score) + '</span></div>';
+        html += '<div class="ma-rec-reason">' + _maEsc(r.reason || '') + '</div>';
+        html += '</div>';
+        html += '<div class="ma-acts">';
+        html += '<button class="ma-btn ma-btn-go" data-ma-apply="1" data-rec="' + _maEsc(r.id || '') +
+                '" data-sid="' + _maEsc(r.session_id || '') + '" data-model="' + _maEsc(r.to_model) + '">Switch now</button>';
+        html += '<button class="ma-btn" data-ma-dismiss="1" data-rec="' + _maEsc(r.id || '') + '">Dismiss</button>';
+        html += '</div></div>';
+      });
+    }
+    html += '</div>';
+
+    // Recent history / monitor log.
+    const log = (d.log || []).slice(0, 12);
+    html += '<div><div class="ma-sec-title">Recent activity</div>';
+    if (!log.length) {
+      html += '<div class="ma-empty">Nothing logged yet.</div>';
+    } else {
+      log.forEach(function (e) {
+        const from = _maModels[e.from_model] || e.from_model;
+        const to = _maModels[e.to_model] || e.to_model;
+        const sv = (e.status === 'applied') ? (' · saved ' + _maUsd(e.realized_savings_usd))
+                 : (e.status === 'pending' && e.missed_savings_usd) ? (' · missing ' + _maUsd(e.missed_savings_usd)) : '';
+        html += '<div class="ma-log-row"><span class="ma-st ma-st-' + _maEsc(e.status) + '">' + _maEsc(e.status) + '</span>' +
+                '<span>' + _maEsc(e.name || (e.session_id || '').slice(0, 8)) + '</span>' +
+                '<span style="opacity:.6">' + _maEsc(from) + ' → ' + _maEsc(to) + sv + '</span>' +
+                '<span class="ma-spacer"></span></div>';
+      });
+    }
+    html += '</div>';
+
+    body.innerHTML = html;
+    body.querySelectorAll('[data-ma-apply]').forEach(function (b) {
+      b.addEventListener('click', function () { _maApply(b.dataset.rec, b.dataset.sid, b.dataset.model); });
+    });
+    body.querySelectorAll('[data-ma-dismiss]').forEach(function (b) {
+      b.addEventListener('click', function () { _maDismiss(b.dataset.rec); });
+    });
+  }
+  function _updateAdvisorPill(d) {
+    const pill = document.getElementById('cccAdvisorPill');
+    if (!pill) return;
+    const n = (d.live || []).length;
+    pill.querySelector('.ccc-adv-val').textContent = n ? (n + ' drift') : 'models ok';
+    pill.classList.toggle('ccc-adv-hot', n > 0);
+  }
+
   function _initPollerStrip() {
     const footer = document.querySelector('.sidebar-footer');
     if (!footer) { setTimeout(_initPollerStrip, 400); return; }
@@ -557,6 +752,41 @@
     };
     _applyToggle();
     wrap.appendChild(health);
+    // Model Advisor pill: opens the drift/savings monitor; badge shows how many
+    // live sessions are on the wrong model right now.
+    const advPill = document.createElement('div');
+    advPill.id = 'cccAdvisorPill';
+    advPill.title = 'Model Advisor — sessions drifting onto the wrong model (too strong or too weak), and tokens saved. Click to open.';
+    advPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
+      'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
+      'border:1px solid var(--border-color,#30363d);opacity:.8;';
+    advPill.innerHTML = '<span class="ccc-adv-dot" style="width:6px;height:6px;border-radius:50%;background:#7d8590;"></span>' +
+      '<span class="ccc-adv-val">models</span>';
+    advPill.addEventListener('click', _openModelAdvisor);
+    advPill.addEventListener('mouseenter', function () { advPill.style.opacity = '1'; });
+    advPill.addEventListener('mouseleave', function () { advPill.style.opacity = '.8'; });
+    if (!document.getElementById('__advPillStyle')) {
+      const aps = document.createElement('style');
+      aps.id = '__advPillStyle';
+      aps.textContent = '#cccAdvisorPill.ccc-adv-hot{border-color:#d29922;opacity:1;}' +
+        '#cccAdvisorPill.ccc-adv-hot .ccc-adv-dot{background:#d29922;}' +
+        '#cccAdvisorPill.ccc-adv-hot .ccc-adv-val{color:#d29922;}';
+      document.head.appendChild(aps);
+    }
+    wrap.appendChild(advPill);
+    // Light background poll so the pill badge reflects drift without opening the
+    // modal. Reuses the coalesced live-activity snapshot server-side, so cheap.
+    if (!window.__advisorBgTimer) {
+      const _bg = function () {
+        if (document.hidden) return;
+        fetch('/api/model-advisor', { cache: 'no-store' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) { if (d) _updateAdvisorPill(d); })
+          .catch(function () {});
+      };
+      _bg();
+      window.__advisorBgTimer = setInterval(_bg, 45000);
+    }
     wrap.appendChild(toggle);
     wrap.appendChild(strip);
     // Insert just after the active-group-chat pill, before the spacer, so it
