@@ -1,7 +1,22 @@
-const puppeteer = require('puppeteer');
+// Headless screenshot of CCC for agent-side UI verification.
+//
+// By default this launches an EMPTY browser profile, so localStorage-backed
+// state (custom objects, Evergreen Agents section, flowNodeParents /
+// flowCustomObjects, view prefs) is absent — a fresh-profile probe shows
+// "evergreen section gone" etc. as an artifact, not a real regression (OPS-33).
+//
+// To reproduce stateful UI, seed localStorage: dump it from your real browser
+//   (DevTools console: `copy(JSON.stringify(localStorage))`) into a file, then
+//   SNAPSHOT_LOCALSTORAGE=state.json node snapshot.js
+//
+// Env (all optional):
+//   SNAPSHOT_URL          default: port.txt-resolved URL, else http://127.0.0.1:8091
+//   SNAPSHOT_OUT          default snapshot.png
+//   SNAPSHOT_LOCALSTORAGE path to a JSON file of {"key": "value", ...} (strings)
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const puppeteer = require('puppeteer');
 
 // Resolve the live dashboard URL from the command-center port file, written by
 // the server on startup. Falls back to the conventional local port.
@@ -18,12 +33,32 @@ function resolveBaseUrl() {
 }
 
 (async () => {
+  const url = process.env.SNAPSHOT_URL || resolveBaseUrl();
+  const out = process.env.SNAPSHOT_OUT || 'snapshot.png';
+  const lsPath = process.env.SNAPSHOT_LOCALSTORAGE || '';
+
   // --no-sandbox is required on hosts where AppArmor restricts unprivileged
   // user namespaces (Ubuntu 23.10+); safe here since we only load localhost.
   const browser = await puppeteer.launch({ args: ['--no-sandbox'] });
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 800 });
-  await page.goto(resolveBaseUrl(), { waitUntil: 'networkidle2' });
-  await page.screenshot({ path: 'snapshot.png' });
+
+  if (lsPath) {
+    const entries = JSON.parse(fs.readFileSync(lsPath, 'utf8'));
+    // Set before any page script runs, on the right origin, then the app reads
+    // the seeded state on first load.
+    await page.evaluateOnNewDocument((data) => {
+      try {
+        for (const [k, v] of Object.entries(data)) {
+          localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
+        }
+      } catch (e) { /* localStorage unavailable before navigation — ignore */ }
+    }, entries);
+    console.log(`[snapshot] seeded ${Object.keys(entries).length} localStorage keys from ${lsPath}`);
+  }
+
+  await page.goto(url, { waitUntil: 'networkidle2' });
+  await page.screenshot({ path: out });
   await browser.close();
+  console.log(`[snapshot] wrote ${out} (${url})`);
 })();
