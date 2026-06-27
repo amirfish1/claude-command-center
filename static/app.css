@@ -4135,11 +4135,9 @@
   }
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row):not(.conv-hover-meta-row),
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row):not(.conv-hover-meta-row),
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: block; }
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row):not(.conv-hover-meta-row) { display: block; }
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-outcome,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-outcome,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-outcome { display: block; }
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-outcome { display: block; }
   /* Brief (repo/source/branch meta) is the compact row's second line. */
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row,
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row,

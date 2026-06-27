@@ -1140,7 +1140,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(":root:not([data-theme=\"light\"]) .conv-current-sessions-scroll .conv-item .conv-title", app_css)
         self.assertIn("color: #f0f4fb;", app_css)
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: block; }", current_css)
+        self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: block; }", current_css)
 
     def test_by_objects_search_results_show_row_previews(self):
         """Search results in by-objects mode should keep snippets/previews
@@ -1165,7 +1165,7 @@ class TestServerImports(unittest.TestCase):
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }", current_css)
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row):not(.conv-hover-meta-row),", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row):not(.conv-hover-meta-row),", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row):not(.conv-hover-meta-row) { display: block; }", current_css)
         self.assertIn("display: block;", current_css)
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row,", current_css)
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row,", current_css)
@@ -1174,8 +1174,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-meta-inline,", current_css)
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-folder-chip,", current_css)
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-outcome,", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-outcome,", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-outcome { display: block; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-outcome { display: block; }", current_css)
+        self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-outcome", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover:not(.active) > .conv-outcome", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within:not(.active) > .conv-outcome", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
