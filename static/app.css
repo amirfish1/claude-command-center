@@ -9403,6 +9403,7 @@
   }
   .conv-folder-group-header:hover .conv-folder-ship-btn,
   .conv-folder-ship-btn:focus-visible { opacity: 1; }
+  .conv-archived-section .conv-folder-ship-btn { opacity: 0.72; }
   .conv-folder-ship-btn:hover:not(:disabled) {
     background: rgba(88,166,255,0.18);
     color: var(--text);
