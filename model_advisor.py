@@ -529,6 +529,21 @@ def refresh_savings(path, token_lookup):
         return data
 
 
+def expire_stale_pending(path, live_sids):
+    """Mark pending recommendations 'expired' when their session is no longer live.
+    Zeroes missed_savings so expired entries don't inflate 'left on table'."""
+    with _LOG_LOCK:
+        data = _load_log(path)
+        changed = False
+        for e in data.get("recommendations", []):
+            if e.get("status") == "pending" and e.get("session_id") not in live_sids:
+                e["status"] = "expired"
+                e["missed_savings_usd"] = 0.0
+                changed = True
+        if changed:
+            _save_log(path, data)
+
+
 def summarize(data):
     """Roll the log into monitor totals."""
     recs = data.get("recommendations", [])

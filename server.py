@@ -11936,6 +11936,11 @@ def build_model_advisor_report(persist=True):
             )
         except Exception:
             continue
+    # Expire pending entries for sessions that are no longer live.
+    try:
+        model_advisor.expire_stale_pending(MODEL_ADVISOR_LOG_FILE, set(live.keys()))
+    except Exception:
+        pass
     # Roll forward realized/missed savings using fresh token counts.
     try:
         model_advisor.refresh_savings(MODEL_ADVISOR_LOG_FILE, _session_cumulative_out_tokens)
