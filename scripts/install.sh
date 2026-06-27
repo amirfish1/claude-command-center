@@ -191,6 +191,38 @@ launch_server() {
 }
 
 # ---------------------------------------------------------------------------
+# WT-26: install WatchTower alongside CCC so watchtower.queue is importable
+# ---------------------------------------------------------------------------
+install_watchtower() {
+  # Probe for a local WatchTower checkout. Precedence:
+  #   1. $WATCHTOWER_DIR env var (explicit override for CI / non-standard paths)
+  #   2. ~/Apps/watchtower  (default dev location)
+  #   3. ~/dev/watchtower   (alternate dev location)
+  # If none found, warn and continue — CCC still works via its own ux_fixes_queue.
+  local wt_dir=""
+  if [ -n "${WATCHTOWER_DIR:-}" ] && [ -d "$WATCHTOWER_DIR" ]; then
+    wt_dir="$WATCHTOWER_DIR"
+  elif [ -d "$HOME/Apps/watchtower" ]; then
+    wt_dir="$HOME/Apps/watchtower"
+  elif [ -d "$HOME/dev/watchtower" ]; then
+    wt_dir="$HOME/dev/watchtower"
+  fi
+
+  if [ -z "$wt_dir" ]; then
+    printf 'install: WatchTower not found (checked ~/Apps/watchtower, ~/dev/watchtower, $WATCHTOWER_DIR)\n'
+    printf 'install: CCC will use its built-in queue engine. Set WATCHTOWER_DIR or clone WT to enable delegation.\n'
+    return 0
+  fi
+
+  printf 'install: installing WatchTower from %s\n' "$wt_dir"
+  if python3 -m pip install -e "$wt_dir" --quiet; then
+    printf 'install: WatchTower installed — watchtower.queue is now available.\n'
+  else
+    printf 'install: WARNING: pip install of WatchTower failed. CCC will fall back to its built-in queue engine.\n'
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 main() {
@@ -205,6 +237,7 @@ main() {
   printf 'install: attribution channel = %s\n' "$channel"
 
   sync_repo
+  install_watchtower  # WT-26: bundle WT as CCC's queue engine
   launch_server
 }
 

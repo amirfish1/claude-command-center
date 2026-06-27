@@ -173,6 +173,18 @@ ANNOTATION_SCREENSHOT_DIR = COMMAND_CENTER_STATE_DIR / "annotation-screenshots"
 ANNOTATION_UX_FIXES_QUEUE_NAME = "UX-fixes-queue"
 _ANNOTATIONS_LOCK = threading.Lock()
 import ux_fixes_queue  # durable numbered/stateful UX-fixes queue (shared w/ BYM)
+# WT-26 Phase 1: prefer watchtower.queue for write operations when WT is installed.
+# Falls back to ux_fixes_queue so CCC works without WT on PATH.
+try:
+    from watchtower.queue import answer as _wt_queue_answer
+    from watchtower.queue import block as _wt_queue_block
+    _queue_answer = _wt_queue_answer
+    _queue_block = _wt_queue_block
+    _WT_QUEUE_AVAILABLE = True
+except ImportError:
+    _queue_answer = ux_fixes_queue.answer
+    _queue_block = None  # ux_fixes_queue has no standalone block()
+    _WT_QUEUE_AVAILABLE = False
 import objects_store  # durable server-side Flow object/parent/order state (GOAL-3/4)
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 # User-picked repos that live outside the $HOME scan (e.g. ~/dev/foo, /workspaces/bar).
@@ -43511,7 +43523,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "ref and text required"}, 400)
                 return
             try:
-                item = ux_fixes_queue.answer(
+                # WT-26 Phase 1: delegate to watchtower.queue.answer when WT is
+                # installed; fall back to ux_fixes_queue.answer otherwise.
+                # Both write the same store shape — interop is guaranteed.
+                item = _queue_answer(
                     ref, text, session_id=str(payload.get("session_id") or "ccc"),
                 )
                 self.send_json({"ok": bool(item), "item": item})

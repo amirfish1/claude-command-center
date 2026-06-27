@@ -2851,6 +2851,29 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("overflow-y: visible;", activity_css)
         self.assertNotIn("flex: 0 0 auto;", activity_css)
 
+    def test_right_rail_hides_conversation_top_chrome(self):
+        """Right-rail mode should not leave old top chrome above the
+        conversation pane."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        toolbar_empty_css = app_css[
+            app_css.index(".toolbar.is-empty {"):
+            app_css.index("/* Subagent transcripts", app_css.index(".toolbar.is-empty {"))
+        ]
+        self.assertIn("height: 0 !important;", toolbar_empty_css)
+        self.assertIn("$convToolbar.classList.toggle('is-empty', !hasVisibleContent);", app_js)
+
+        right_rail_start = app_css.index("Status-position: right rail")
+        right_rail_css = app_css[
+            right_rail_start:
+            app_css.index("PWA install banner", right_rail_start)
+        ]
+        self.assertIn(
+            "body.status-pos-right .conv-sticky-header {\n  display: none !important;\n}",
+            right_rail_css,
+        )
+
     def test_queue_rows_open_item_detail_modal(self):
         """Queue row clicks should show the ticket payload/screenshot instead
         of trying to jump to a brittle transcript reference."""
@@ -10579,6 +10602,39 @@ class TestObjectsStore(unittest.TestCase):
         self.assertEqual(len(state["objects"]), 1)
         self.assertEqual(state["parents"]["session:abc"], "object:obj-1")
         self.assertEqual(state["drafts"][0]["parent_node_id"], "object:obj-1")
+
+
+class TestWTQueueIntegration(unittest.TestCase):
+    """WT-26: verify watchtower.queue interop when WT is installed."""
+
+    def test_wt_queue_importable(self):
+        """If WT is installed, its queue module must be importable and expose answer()."""
+        try:
+            import watchtower.queue as wq
+            self.assertTrue(
+                callable(getattr(wq, "answer", None)),
+                "watchtower.queue must expose answer()",
+            )
+        except ImportError:
+            self.skipTest("watchtower not installed — Phase 0 not yet applied")
+
+    def test_wt_queue_shim_resolves(self):
+        """The _queue_answer shim in server.py must be callable regardless of
+        whether WT is installed (it falls back to ux_fixes_queue.answer)."""
+        import server
+        self.assertTrue(
+            callable(getattr(server, "_queue_answer", None)),
+            "server._queue_answer must be callable after WT-26 Phase 1 shim",
+        )
+
+    def test_wt_availability_flag_is_bool(self):
+        """_WT_QUEUE_AVAILABLE must be a bool so callers can branch on it."""
+        import server
+        self.assertIsInstance(
+            getattr(server, "_WT_QUEUE_AVAILABLE", None),
+            bool,
+            "server._WT_QUEUE_AVAILABLE must be a bool",
+        )
 
 
 if __name__ == "__main__":
