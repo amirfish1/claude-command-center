@@ -23763,9 +23763,29 @@
   let _draggedFlowNode = '';
   let _sidebarDragAutoScrollRaf = 0;
   let _sidebarDragAutoScrollVelocity = 0;
+  // The element auto-scroll nudges. May be $convList or an inner project-tree
+  // scroll container (each repo's tree has its own overflow-y:auto), so dragging
+  // an object near the top edge scrolls the tree it lives in, not just the
+  // outer list — otherwise drop spots above the fold are unreachable.
+  let _sidebarDragScrollEl = null;
+
+  function sidebarDragScrollTargetFor(ev) {
+    // Prefer the inner scroll container under the pointer when it can scroll.
+    const inners = $convList.querySelectorAll('.conv-project-tree-scroll');
+    for (const inner of inners) {
+      if (inner.scrollHeight <= inner.clientHeight + 1) continue;
+      const r = inner.getBoundingClientRect();
+      if (ev.clientX >= r.left && ev.clientX <= r.right &&
+          ev.clientY >= r.top && ev.clientY <= r.bottom) {
+        return inner;
+      }
+    }
+    return $convList;
+  }
 
   function stopSidebarDragAutoScroll() {
     _sidebarDragAutoScrollVelocity = 0;
+    _sidebarDragScrollEl = null;
     if (_sidebarDragAutoScrollRaf) {
       cancelAnimationFrame(_sidebarDragAutoScrollRaf);
       _sidebarDragAutoScrollRaf = 0;
@@ -23773,20 +23793,21 @@
   }
 
   function sidebarDragAutoScrollStep() {
-    if (!dragSourceId || !_sidebarDragAutoScrollVelocity) {
+    if (!isSidebarDragInProgress() || !_sidebarDragAutoScrollVelocity || !_sidebarDragScrollEl) {
       _sidebarDragAutoScrollRaf = 0;
       return;
     }
-    $convList.scrollTop += _sidebarDragAutoScrollVelocity;
+    _sidebarDragScrollEl.scrollTop += _sidebarDragAutoScrollVelocity;
     _sidebarDragAutoScrollRaf = requestAnimationFrame(sidebarDragAutoScrollStep);
   }
 
   function updateSidebarDragAutoScroll(ev) {
-    if (!dragSourceId) {
+    if (!isSidebarDragInProgress()) {
       stopSidebarDragAutoScroll();
       return;
     }
-    const rect = $convList.getBoundingClientRect();
+    const scrollEl = sidebarDragScrollTargetFor(ev);
+    const rect = scrollEl.getBoundingClientRect();
     const edge = Math.min(90, Math.max(40, rect.height * 0.16));
     let velocity = 0;
     if (ev.clientY < rect.top + edge) {
@@ -23796,6 +23817,7 @@
       const pct = 1 - Math.max(0, rect.bottom - ev.clientY) / edge;
       velocity = Math.ceil(pct * 20);
     }
+    _sidebarDragScrollEl = velocity ? scrollEl : null;
     _sidebarDragAutoScrollVelocity = velocity;
     if (!velocity) {
       stopSidebarDragAutoScroll();
