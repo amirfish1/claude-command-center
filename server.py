@@ -47,6 +47,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# Model-drift advisor (stdlib-only, no back-reference to this module). Lives
+# next to server.py; recommends cheaper/stronger models per live session. See
+# /api/model-advisor and model_advisor.py.
+import model_advisor
+
 # Tool's own assets live next to this file. Repos are never process-global:
 # every repo-scoped request must carry a concrete repo path, cwd, or session id.
 CCC_ROOT = Path(__file__).resolve().parent
@@ -11807,6 +11812,154 @@ def _claude_session_jsonl_path(session_id):
         return None
     matches.sort(key=lambda item: item[0], reverse=True)
     return matches[0][1]
+
+
+# --------------------------------------------------------------------------
+# Model-drift advisor — fleet scan + savings monitor
+# --------------------------------------------------------------------------
+MODEL_ADVISOR_LOG_FILE = str(COMMAND_CENTER_STATE_DIR / "model-advisor-log.json")
+
+# Cache cumulative output-token counts by (mtime,size) so the savings refresh
+# does not re-walk a session JSONL on every poll. Bounded to the logged set.
+_advisor_token_cache = {}
+_advisor_token_cache_lock = threading.Lock()
+
+
+def _session_cumulative_out_tokens(sid):
+    """Sum assistant output tokens across a session's transcript. Cached by
+    (mtime,size) — only the changed files re-parse. Called only for sessions
+    that already carry a recommendation, so the working set is small."""
+    path = _claude_session_jsonl_path(sid)
+    if not path:
+        return 0
+    try:
+        st = path.stat()
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return 0
+    with _advisor_token_cache_lock:
+        hit = _advisor_token_cache.get(sid)
+        if hit and hit[0] == key:
+            return hit[1]
+    total = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if '"output_tokens"' not in line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    continue
+                if o.get("type") != "assistant":
+                    continue
+                u = (o.get("message") or {}).get("usage") or {}
+                total += int(u.get("output_tokens") or 0)
+    except OSError:
+        return 0
+    with _advisor_token_cache_lock:
+        _advisor_token_cache[sid] = (key, total)
+        if len(_advisor_token_cache) > 200:
+            _advisor_token_cache.clear()
+    return total
+
+
+def _advisor_session_name(sid, path):
+    """Best-effort display name from the cheap conv-meta cache (no compute).
+    Falls back to the short sid so a historical log row is still legible."""
+    try:
+        entry = _conv_meta_cache.get(str(path))
+        if isinstance(entry, dict):
+            name = (entry.get("custom_title") or entry.get("agent_name") or "").strip()
+            if name:
+                return name
+    except Exception:
+        pass
+    return str(sid)[:8]
+
+
+def _advisor_current_model(sid, turns):
+    """The model effectively in force: a queued override wins, else the last
+    assistant turn's model from the transcript."""
+    ov = _get_session_override(sid)
+    if ov and ov.get("model"):
+        return ov["model"]
+    for t in reversed(turns):
+        if t.get("role") == "assistant" and t.get("model"):
+            return t["model"]
+    return ""
+
+
+def build_model_advisor_report(persist=True):
+    """Scan the (gated, cached) live-session set, emit recommendations, and roll
+    up the savings monitor. Reuses build_live_sessions_activity() for the live
+    map so we inherit its candidacy gating — no extra full scan."""
+    live_recs = []
+    try:
+        live = build_live_sessions_activity()
+    except Exception:
+        live = {}
+    for sid in list(live.keys()):
+        try:
+            path = _claude_session_jsonl_path(sid)
+            if not path:
+                continue
+            turns = model_advisor.read_recent_turns(path)
+            if not turns:
+                continue
+            current = _advisor_current_model(sid, turns)
+            rec = model_advisor.recommend(current, turns)
+            if not rec:
+                continue
+            # Already switched to (or past) the target? Nothing to nudge.
+            if model_advisor.model_tier(current) <= model_advisor.model_tier(rec["to_model"]) \
+                    and rec["action"] != "upgrade":
+                continue
+            name = _advisor_session_name(sid, path)
+            baseline = _session_cumulative_out_tokens(sid)
+            stored = (
+                model_advisor.log_recommendation(
+                    MODEL_ADVISOR_LOG_FILE, sid, name, rec, baseline
+                )
+                if persist
+                else None
+            )
+            live_recs.append(
+                {
+                    "id": (stored or {}).get("id"),
+                    "session_id": sid,
+                    "name": name,
+                    "current_model": model_advisor._family(current),
+                    "status": (stored or {}).get("status", "pending"),
+                    **rec,
+                }
+            )
+        except Exception:
+            continue
+    # Roll forward realized/missed savings using fresh token counts.
+    try:
+        model_advisor.refresh_savings(MODEL_ADVISOR_LOG_FILE, _session_cumulative_out_tokens)
+    except Exception:
+        pass
+    data = model_advisor._load_log(MODEL_ADVISOR_LOG_FILE)
+    return {
+        "ok": True,
+        "live": live_recs,
+        "log": list(reversed(data.get("recommendations", [])))[:100],
+        "summary": model_advisor.summarize(data),
+    }
+
+
+def apply_model_advisor_recommendation(rec_id, session_id, model, context_1m=False):
+    """Apply a recommended downgrade/upgrade: set the session model (injects
+    `/model` live via the existing override path) and mark the log entry."""
+    result = _set_session_model(session_id, model, context_1m)
+    if result.get("ok") and rec_id:
+        try:
+            model_advisor.mark(MODEL_ADVISOR_LOG_FILE, rec_id, "applied")
+        except Exception:
+            pass
+    return result
 
 
 def _claude_desktop_title_from_text(text, max_len=120):
@@ -41546,6 +41699,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Cheap poll target for the sidebar: refresh WIP / tool chips for
             # every live session without re-running the multi-MB archive scan.
             self.send_json({"sessions": build_live_sessions_activity()})
+        elif path == "/api/model-advisor":
+            # Fleet model-drift report: live recommendations (downgrade /
+            # upgrade / spawn-worker) + the savings monitor log. Reuses the
+            # gated live-session set, so no extra full scan.
+            self.send_json(build_model_advisor_report())
         elif path == "/api/sessions/events":
             # SSE: push session-state changes to a subscriber (e.g. a COO /
             # monitor session) instead of having it poll /api/sessions on a
@@ -43322,6 +43480,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     str(payload.get("status") or ""),
                     session_id=str(payload.get("session_id") or ""),
                     session_uuid=str(payload.get("session_uuid") or ""),
+                )
+                self.send_json({"ok": bool(item), "item": item})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+        if path == "/api/ux-fixes/answer":
+            # Answer a blocked ticket inline from CCC (WT-29): records the human
+            # decision and clears needs_input so the worker's resumed session can
+            # continue. Same-origin already enforced at the top of do_POST.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            ref = str(payload.get("ref") or payload.get("number") or "").strip()
+            text = str(payload.get("text") or "").strip()
+            if not ref or not text:
+                self.send_json({"ok": False, "error": "ref and text required"}, 400)
+                return
+            try:
+                item = ux_fixes_queue.answer(
+                    ref, text, session_id=str(payload.get("session_id") or "ccc"),
                 )
                 self.send_json({"ok": bool(item), "item": item})
             except Exception as e:
@@ -45781,6 +45965,37 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json(result)
                 else:
                     self.send_json(result, 404 if "no pending" in result.get("error", "") else 400)
+        elif path == "/api/model-advisor/apply":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = (payload.get("session_id") or "").strip()
+            model = (payload.get("model") or "").strip()
+            rec_id = (payload.get("rec_id") or "").strip() or None
+            context_1m = bool(payload.get("context_1m", False))
+            if not sid or not model:
+                self.send_json({"ok": False, "error": "session_id and model required"}, 400)
+            else:
+                _record_interaction(sid)
+                self.send_json(
+                    apply_model_advisor_recommendation(rec_id, sid, model, context_1m)
+                )
+        elif path == "/api/model-advisor/dismiss":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            rec_id = (payload.get("rec_id") or "").strip()
+            if not rec_id:
+                self.send_json({"ok": False, "error": "rec_id required"}, 400)
+            else:
+                entry = model_advisor.mark(MODEL_ADVISOR_LOG_FILE, rec_id, "dismissed")
+                self.send_json({"ok": bool(entry), "entry": entry})
         elif re.match(r"^/api/session/[a-zA-Z0-9-]+/model/clear$", path):
             sid = path.split("/")[3]
             _clear_session_override(sid)
