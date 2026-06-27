@@ -2727,6 +2727,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("settleStaleOptimisticAgentIndicator($view);", app_js)
         self.assertIn(".conv-live-tool-inline.is-stale-no-process", app_css)
 
+    def test_mobile_live_command_indicator_collapses_command_detail(self):
+        """Mobile should show a compact Bash/tool pill instead of a multi-line
+        command block at the bottom of the conversation pane."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("@media (max-width: 700px) {", app_css)
+        self.assertIn(".conv-live-tool-inline:not(.is-expanded) .cl-file.is-command", app_css)
+        self.assertIn("display: none;", app_css)
+        self.assertIn(".conv-live-tool-inline.is-expanded .cl-file.is-command", app_css)
+        self.assertIn("max-height: 5.2em;", app_css)
+        self.assertIn("overflow: auto;", app_css)
+
     def test_compact_completion_clears_optimistic_thinking(self):
         """A completed compaction should not leave the optimistic Thinking pill."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
