@@ -2837,6 +2837,26 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("animation: fq-status-glow 1.5s ease-in-out infinite;", in_progress_css)
         self.assertIn("will-change: opacity, box-shadow;", in_progress_css)
 
+    def test_queue_header_can_toggle_wrapped_titles(self):
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="queueWrapToggle"', index_html)
+        self.assertIn('aria-pressed="false"', index_html)
+        self.assertIn("const _UXQ_WRAP_TITLES_LS = 'ccc-uxq-wrap-titles';", app_js)
+        self.assertIn("function _uxqRenderWrapToggle()", app_js)
+        self.assertIn("queuePanel.classList.toggle('queue-wrap-titles', _uxqGetWrapTitles());", app_js)
+        self.assertIn("queueWrapToggle.addEventListener('click'", app_js)
+        self.assertIn(".files-queue-panel.queue-wrap-titles .fq-note {", app_css)
+        wrap_css = app_css[
+            app_css.index(".files-queue-panel.queue-wrap-titles .fq-note {"):
+            app_css.index("/* Status as a compact colored dot", app_css.index(".files-queue-panel.queue-wrap-titles .fq-note {"))
+        ]
+        self.assertIn("white-space: normal;", wrap_css)
+        self.assertIn("overflow: visible;", wrap_css)
+        self.assertIn("overflow-wrap: anywhere;", wrap_css)
+
     def test_queue_add_uses_large_composer(self):
         """Adding a queue item should use a multiline composer, not prompt()."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

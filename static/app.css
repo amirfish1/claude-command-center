@@ -10320,6 +10320,14 @@
   .fq-filter-btn + .fq-filter-btn { border-left: 1px solid var(--border); }
   .fq-filter-btn:hover { color: var(--text); }
   .fq-filter-btn.is-active { background: var(--accent); color: #fff; }
+  .fq-wrap-toggle {
+    background: transparent; color: var(--text-muted); border: 1px solid var(--border);
+    border-radius: 4px; cursor: pointer; font-size: 10px; font-weight: 700;
+    padding: 1px 6px; line-height: 1.6; text-transform: uppercase;
+    letter-spacing: 0.02em; flex-shrink: 0;
+  }
+  .fq-wrap-toggle:hover { color: var(--text); border-color: var(--accent); }
+  .fq-wrap-toggle.is-active { background: var(--accent); color: #fff; border-color: var(--accent); }
   .files-search-input {
     background: transparent; color: var(--text);
     border: 1px solid var(--border); border-radius: 4px;
@@ -15194,6 +15202,21 @@ body:has(.gc-reader) .pwa-install-banner {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.files-queue-panel.queue-wrap-titles .fq-row {
+  align-items: flex-start;
+}
+.files-queue-panel.queue-wrap-titles .fq-chips {
+  flex-wrap: wrap;
+}
+.files-queue-panel.queue-wrap-titles .fq-note {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+.files-queue-panel.queue-wrap-titles .fq-status {
+  margin-top: 2px;
 }
 /* Status as a compact colored dot (open/in_progress/closed) — the 227px Queue
    panel has no room for a text pill once the triage chips are inline. Hover for

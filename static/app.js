@@ -27116,6 +27116,21 @@
       b.classList.toggle('is-active', b.getAttribute('data-uxq-filter') === cur);
     });
   }
+  const _UXQ_WRAP_TITLES_LS = 'ccc-uxq-wrap-titles';
+  function _uxqGetWrapTitles() {
+    try { return localStorage.getItem(_UXQ_WRAP_TITLES_LS) === '1'; } catch (_) { return false; }
+  }
+  function _uxqSetWrapTitles(on) {
+    try { localStorage.setItem(_UXQ_WRAP_TITLES_LS, on ? '1' : '0'); } catch (_) {}
+  }
+  function _uxqRenderWrapToggle() {
+    const $btn = document.getElementById('queueWrapToggle');
+    if (!$btn) return;
+    const on = _uxqGetWrapTitles();
+    $btn.classList.toggle('is-active', on);
+    $btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    $btn.title = on ? 'Keep queue issue titles on one line' : 'Wrap queue issue titles';
+  }
   function _uxqWorkerProject() {
     try {
       const ov = _uxqGetScopeOverride();
@@ -27331,6 +27346,9 @@
   function _renderQueuePanel() {
     const $queue = document.getElementById('sidebarQueueList');
     if (!$queue) return;
+    const queuePanel = document.getElementById('queuePanel');
+    if (queuePanel) queuePanel.classList.toggle('queue-wrap-titles', _uxqGetWrapTitles());
+    _uxqRenderWrapToggle();
     _fetchUxqItems().then(items => {
       const requestedProject = _uxqWorkerProject();
       const proj = _uxqResolvePanelProject(items, requestedProject);
@@ -27478,6 +27496,13 @@
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-uxq-filter]');
         if (!btn) return;
         _uxqSetFilter(btn.getAttribute('data-uxq-filter'));
+        _renderQueuePanel();
+      });
+    }
+    const queueWrapToggle = document.getElementById('queueWrapToggle');
+    if (queueWrapToggle) {
+      queueWrapToggle.addEventListener('click', () => {
+        _uxqSetWrapTitles(!_uxqGetWrapTitles());
         _renderQueuePanel();
       });
     }
