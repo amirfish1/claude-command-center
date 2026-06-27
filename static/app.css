@@ -3564,6 +3564,26 @@
     max-width: 120px; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .conv-qc-badge {
+    display: inline-flex; align-items: center; flex: 0 0 auto;
+    margin-right: 4px; padding: 1px 4px; line-height: 1.4;
+    border-radius: 3px; font-size: 10px; font-weight: 700;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    position: relative; z-index: 6;
+    white-space: nowrap;
+  }
+  .conv-qc-badge.is-good {
+    color: var(--green);
+    background: rgba(63, 185, 80, 0.16);
+  }
+  .conv-qc-badge.is-warn {
+    color: #FBCA04;
+    background: rgba(251, 202, 4, 0.15);
+  }
+  .conv-qc-badge.is-bad {
+    color: var(--red);
+    background: rgba(248, 81, 73, 0.16);
+  }
   /* Context-window % — sits in .conv-branch-slot just left of wt-/branch. */
   .conv-pct-badge {
     display: inline-flex; align-items: center; flex: 0 0 auto;
@@ -4416,6 +4436,7 @@
   .conv-item .conv-hover-meta-row .branch-badge,
   .conv-item .conv-hover-meta-row .conv-wt-badge,
   .conv-item .conv-hover-meta-row .conv-pct-badge,
+  .conv-item .conv-hover-meta-row .conv-qc-badge,
   .conv-item .conv-hover-meta-row .conv-repo-pin,
   .conv-item .conv-hover-meta-row .conv-goal {
     font-size: 11px;
@@ -8048,6 +8069,17 @@
   .ann-note-path {
     font-size: 11px; color: var(--text-muted);
     overflow-wrap: anywhere;
+  }
+  .ann-editor-shot-preview {
+    display: flex; align-items: center; justify-content: center;
+    max-height: 150px; overflow: hidden;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg);
+  }
+  .ann-editor-shot-preview[hidden] { display: none !important; }
+  .ann-editor-shot-preview img {
+    display: block; width: 100%; max-height: 150px;
+    object-fit: contain;
   }
   .ann-editor-error {
     font-size: 12px; color: var(--red);

@@ -4538,6 +4538,7 @@ def find_all_conversations(
                 "live_context_limit": tail_meta.get("live_context_limit") or 0,
                 "live_context_percent": tail_meta.get("live_context_percent") or 0,
                 "context_limit": ctx_limit,
+                **_token_optimizer_quality_for_session(session_id),
                 # Sidecar overlay — only meaningful when is_live; cold
                 # rows get safe defaults that suppress the live pill.
                 **sidecar_fields,
@@ -13449,6 +13450,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "live_context_limit": tail_meta.get("live_context_limit") or 0,
             "live_context_percent": tail_meta.get("live_context_percent") or 0,
             "context_limit": limit,
+            **_token_optimizer_quality_for_session(sid),
             "spawn_named": spawn_named,
             "name_overridden": name_overridden,
             "last_prompt": (tail_meta.get("last_prompt") or "")[:200],
@@ -18920,6 +18922,7 @@ def find_codex_conversations(
             "reasoning_effort": row.get("reasoning_effort") or "",
             "latest_input_tokens": tail.get("latest_input_tokens") or 0,
             "context_limit": tail.get("context_limit") or 0,
+            **_token_optimizer_quality_for_session(sid),
             "goal": _goal.get("objective") or "",
             "goal_status": _goal.get("status") or "",
         })
@@ -37789,6 +37792,10 @@ def _token_optimizer_quality_summary(data):
     return "; ".join(details)
 
 
+_TOKEN_OPTIMIZER_QUALITY_CACHE = {}
+_TOKEN_OPTIMIZER_QUALITY_CACHE_TTL_S = 15.0
+
+
 def _token_optimizer_quality_for_session(session_id):
     sid = str(session_id or "").strip()
     if not sid:
@@ -37796,6 +37803,16 @@ def _token_optimizer_quality_for_session(session_id):
     safe_sid = re.sub(r"[^A-Za-z0-9_-]", "", sid)
     if not safe_sid:
         return {}
+    now = time.time()
+    cached = _TOKEN_OPTIMIZER_QUALITY_CACHE.get(safe_sid)
+    if cached and now - cached.get("ts", 0) < _TOKEN_OPTIMIZER_QUALITY_CACHE_TTL_S:
+        return dict(cached.get("value") or {})
+
+    def _cache_quality(value):
+        out = dict(value or {})
+        _TOKEN_OPTIMIZER_QUALITY_CACHE[safe_sid] = {"ts": now, "value": out}
+        return dict(out)
+
     roots = [
         Path.home() / ".claude" / "token-optimizer",
         Path.home() / ".codex" / "token-optimizer",
@@ -37837,14 +37854,14 @@ def _token_optimizer_quality_for_session(session_id):
         if rounded.is_integer():
             rounded = int(rounded)
         grade = str(data.get("grade") or _token_optimizer_quality_grade(score)).strip()
-        return {
+        return _cache_quality({
             "quality_score": rounded,
             "quality_grade": grade,
             "quality_timestamp": str(data.get("timestamp") or ""),
             "quality_summary": _token_optimizer_quality_summary(data),
             "quality_source": "token-optimizer-cache",
-        }
-    return {}
+        })
+    return _cache_quality({})
 
 
 def _with_token_optimizer_quality(payload, session_id):

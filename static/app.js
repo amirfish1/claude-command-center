@@ -1834,6 +1834,10 @@
       live_context_limit: c.live_context_limit || 0,
       live_context_percent: c.live_context_percent || 0,
       context_limit: c.context_limit || 0,
+      quality_score: c.quality_score,
+      quality_grade: c.quality_grade || '',
+      quality_summary: c.quality_summary || '',
+      quality_timestamp: c.quality_timestamp || '',
     };
   }
 
@@ -20145,6 +20149,7 @@
           + ' data-pct="' + ctxPct.pct + '"'
           + ' title="' + escapeAttr(tip) + '">' + ctxPct.pct + '%</span>';
       }
+      const qcBadgeHtml = pctBadgeHtml ? _convRowQualityBadge(c) : '';
       // Context-utilized % is rendered in the always-visible main row, just left
       // of the elapsed-time slot (see pctBadgeHtml placement below) — it's too
       // important to hide in the hover row or bury in the branch slot. (CCC-294)
@@ -20309,6 +20314,7 @@
             // Context-utilized % sits just left of the elapsed-time slot, in the
             // always-visible main row (not the hover row) — it's important enough
             // to read at a glance without hovering. (CCC-294, refines CCC-289)
+            + (qcBadgeHtml || '')
             + (pctBadgeHtml || '')
             // Right-edge slot — Omnara-style. Shows the time at rest;
             // swaps to action buttons (merge / start / archive) on hover.
@@ -29399,6 +29405,29 @@
     const pct = (hasLiveContext && livePct) ? livePct : calcPct;
     const source = hasLiveContext && !latest ? '/ctx' : 'calc';
     return { pct, displayTokens, limit, source };
+  }
+
+  function _convRowQualityBadge(c) {
+    const rawScore = c && c.quality_score;
+    if (rawScore === undefined || rawScore === null || rawScore === '') return '';
+    const score = Number(rawScore);
+    if (!Number.isFinite(score)) return '';
+    const grade = String((c && c.quality_grade) || '').trim();
+    const rounded = Math.round(score);
+    let cls = 'conv-qc-badge';
+    if (score >= 80) cls += ' is-good';
+    else if (score >= 60) cls += ' is-warn';
+    else cls += ' is-bad';
+    const summary = String((c && c.quality_summary) || '').trim();
+    const title = 'Token Optimizer session quality: '
+      + (grade ? grade + ' · ' : '')
+      + score + '/100'
+      + (summary ? '\n' + summary : '')
+      + ((c && c.quality_timestamp) ? '\nRecorded: ' + c.quality_timestamp : '');
+    const label = 'Q ' + (grade ? grade + ' ' : '') + rounded;
+    return '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
+      + escapeHtml(label)
+      + '</span>';
   }
 
   function _formatTokenOptimizerQuality(u) {
@@ -38780,10 +38809,18 @@
     annotationState.preEditorCaptureAttempted = true;
     const contextRect = annContextRect(annotationState.element, annotationState.rect);
     const captureElement = annotationState.element;
-    return annCaptureDomRegionB64(contextRect, captureElement).catch(() => null);
+    return annCaptureDomRegionB64(contextRect, captureElement)
+      .catch(() => null)
+      .then((b64) => {
+        if (annotationState) annotationState.preEditorScreenshotB64 = b64 || '';
+        return b64 || null;
+      });
   }
 
   async function annResolvePreEditorScreenshot() {
+    if (annotationState && annotationState.preEditorScreenshotB64) {
+      return annotationState.preEditorScreenshotB64;
+    }
     if (!annotationState || !annotationState.preEditorScreenshotPromise) return null;
     try { return await annotationState.preEditorScreenshotPromise; }
     catch (_) { return null; }
@@ -38852,6 +38889,18 @@
     if (top + h > window.innerHeight - margin) top = Math.max(margin, rect.y - h - margin);
     editor.style.left = left + 'px';
     editor.style.top = top + 'px';
+  }
+
+  async function annRenderPreEditorScreenshotPreview(editor) {
+    if (!editor) return;
+    const shotPreviewEl = editor.querySelector('.ann-editor-shot-preview');
+    const shotPreviewImg = shotPreviewEl && shotPreviewEl.querySelector('img');
+    if (!shotPreviewEl || !shotPreviewImg) return;
+    const screenshotB64 = await annResolvePreEditorScreenshot();
+    if (!annotationState || annotationState.editor !== editor || !screenshotB64) return;
+    shotPreviewImg.src = 'data:image/png;base64,' + screenshotB64;
+    shotPreviewEl.hidden = false;
+    annPositionEditor(editor, annotationState.rect);
   }
 
   function annOpenNewSessionWithContext(ann, closeFn, errEl) {
@@ -39026,6 +39075,7 @@
       '<div class="ann-editor-title">Annotation</div>' +
       '<textarea class="ann-editor-note" rows="4" placeholder="Write a note for Claude…"></textarea>' +
       '<div class="ann-editor-meta">' + escapeHtml(summary.selector || summary.tag || 'selected area') + '</div>' +
+      '<div class="ann-editor-shot-preview" hidden><img alt="Annotation screenshot preview"></div>' +
       '<div class="ann-editor-shot-hint" hidden></div>' +
       '<div class="ann-editor-error" hidden></div>' +
       '<div class="ann-editor-actions">' +
@@ -39044,6 +39094,7 @@
     annotationState.overlay.appendChild(editor);
     annotationState.editor = editor;
     annPositionEditor(editor, annotationState.rect);
+    annRenderPreEditorScreenshotPreview(editor);
     const noteEl = editor.querySelector('.ann-editor-note');
     // Cmd-V image paste in the note (CCC-89): same uploader as the composer
     // — pasted screenshots land as a path token the worker can open.

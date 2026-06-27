@@ -892,7 +892,7 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const _isEvergreenAgentsObjectTitle = (title) =>", app_js)
-        self.assertIn("replace(/[^a-z0-9]+/g, '') === 'evergreenagents'", app_js)
+        self.assertIn("replace(/[^a-z0-9]+/g, '').startsWith('evergreen')", app_js)
         self.assertIn("const _evergreenObjectNodes = new Set();", app_js)
         self.assertIn("if (_evergreenObjectNodes.has(nodeId)) continue;", app_js)
         self.assertIn("const _renderEvergreenAgentRows = (nodeId) => {", app_js)
@@ -1771,6 +1771,19 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("annCaptureDomRegionB64(contextRect, captureElement)", persist_body)
         self.assertNotIn("annotationState.overlay.classList.add('ann-capturing')", persist_body)
 
+    def test_annotation_editor_previews_pre_dialog_screenshot(self):
+        """The annotation editor should show the screenshot that was captured
+        before the dialog appeared."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("ann-editor-shot-preview", app_js)
+        self.assertIn("function annRenderPreEditorScreenshotPreview", app_js)
+        self.assertIn("annotationState.preEditorScreenshotB64 = b64 || '';", app_js)
+        self.assertIn("shotPreviewImg.src = 'data:image/png;base64,' + screenshotB64;", app_js)
+        self.assertIn(".ann-editor-shot-preview", app_css)
+        self.assertIn(".ann-editor-shot-preview img", app_css)
+
     def test_ux_fixes_queue_progress_badge_is_rendered_from_queue_api(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
@@ -2462,6 +2475,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("postCompactSession", app_js)
         self.assertIn("/api/session/compact", app_js)
         self.assertIn(".conv-pct-badge.is-actionable", app_css)
+
+    def test_conversation_row_quality_badge_precedes_context_percent(self):
+        """Rows with Token Optimizer quality data should show Q/C before the
+        context percent badge."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function _convRowQualityBadge(c)", app_js)
+        self.assertIn("quality_score: c.quality_score", app_js)
+        self.assertIn("const qcBadgeHtml = pctBadgeHtml ? _convRowQualityBadge(c) : '';", app_js)
+        self.assertLess(app_js.index("+ (qcBadgeHtml || '')"), app_js.index("+ (pctBadgeHtml || '')"))
+        self.assertIn(".conv-qc-badge", app_css)
+        self.assertIn(".conv-qc-badge.is-good", app_css)
+        self.assertIn(".conv-qc-badge.is-warn", app_css)
+        self.assertIn(".conv-qc-badge.is-bad", app_css)
 
     def test_codex_slash_commands_are_wired_as_codex_commands(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
