@@ -31766,9 +31766,17 @@ def _compact_via_hidden_pty(session_id, cwd):
         return {"ok": False, "via": "hidden-pty", "error": f"claude failed to start: {e}"}
     _close_fd_quiet(slave_fd)  # parent keeps only the master end
 
+    # Rolling capture of the LAST few KB of pty output. When claude exits early
+    # or compaction stalls, this is the only window into WHY — without it every
+    # failure collapses to a generic "claude exited" with no diagnosable cause
+    # (the prior version read-and-discarded, so fallbacks were unexplainable).
+    tail_buf = bytearray()
+    TAIL_CAP = 8192
+
     def _drain(timeout):
-        """Read+discard available pty output so the child never blocks on a
-        full pty buffer. Returns True if any bytes were seen this call."""
+        """Read available pty output so the child never blocks on a full pty
+        buffer, keeping a rolling tail for diagnostics. Returns True if any
+        bytes were seen this call."""
         saw = False
         end = time.time() + timeout
         while True:
@@ -31788,7 +31796,33 @@ def _compact_via_hidden_pty(session_id, cwd):
             if not chunk:
                 break
             saw = True
+            tail_buf.extend(chunk)
+            if len(tail_buf) > TAIL_CAP:
+                del tail_buf[:-TAIL_CAP]
         return saw
+
+    def _pty_tail():
+        """De-ANSI'd, whitespace-collapsed tail of claude's pty output for logs
+        and the error payload — what claude said right before it gave up."""
+        raw = bytes(tail_buf)
+        raw = re.sub(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", b"", raw)  # OSC
+        raw = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", raw)            # CSI
+        raw = re.sub(rb"\x1b[ -/]*[0-~]", b"", raw)                    # 2-byte / charset esc
+        txt = raw.decode("utf-8", "replace")
+        txt = re.sub(r"[\x00-\x1f\x7f]+", " ", txt)                   # stray control bytes
+        txt = re.sub(r"\s{2,}", " ", txt).strip()
+        return txt[-600:]
+
+    def _fail(msg):
+        """Attach the captured pty tail to a failure and log it server-side."""
+        tail = _pty_tail()
+        result["error"] = msg
+        if tail:
+            result["pty_tail"] = tail
+        print(f"  [hidden-pty] compact failed for {sid}: {msg}"
+              + (f" | claude said: …{tail}" if tail else " | (no pty output captured)"),
+              file=sys.stderr)
+        return result
 
     result = {"ok": False, "via": "hidden-pty"}
     try:
@@ -31797,8 +31831,7 @@ def _compact_via_hidden_pty(session_id, cwd):
         ready_deadline = time.time() + 25.0
         while time.time() < ready_deadline:
             if proc.poll() is not None:
-                result["error"] = "claude exited before /compact could run"
-                return result
+                return _fail("claude exited before /compact could run")
             if not _drain(0.7):
                 break
         os.write(master_fd, b"/compact\r")
@@ -31815,10 +31848,10 @@ def _compact_via_hidden_pty(session_id, cwd):
                     result["ok"] = True
                     result["note"] = "Compacted in a hidden terminal — no window opened."
                 else:
-                    result["error"] = "claude exited before compaction completed"
+                    _fail("claude exited before compaction completed")
                 break
         else:
-            result["error"] = "compaction did not complete within 180s"
+            _fail("compaction did not complete within 180s")
     finally:
         try:
             os.write(master_fd, b"/exit\r")
@@ -31925,6 +31958,7 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
             "via": "manual",
             "error": "Couldn't compact in the background. Resume the session and run /compact yourself.",
             "fallback_from": silent.get("error"),
+            "fallback_detail": silent.get("pty_tail"),
         }, backup_path)
 
     live_spawn = _find_live_spawn_entry_for_session(sid) if not has_tty else None
