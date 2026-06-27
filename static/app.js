@@ -8640,6 +8640,27 @@
   }
   const $mobileBackBtn = document.getElementById('mobileBackBtn');
   if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => mobileShowMain(false));
+  const $mobileBackHome = document.getElementById('convToolbar');
+  function syncMobileBackIntoTabStrip(strip, visible) {
+    const toolbar = $mobileBackHome || document.getElementById('convToolbar');
+    if (!$mobileBackBtn || !toolbar) return;
+    const inline = !!(strip && visible && isMobile());
+    if (strip) strip.classList.toggle('has-mobile-back', inline);
+    if (inline) {
+      strip.insertBefore($mobileBackBtn, strip.firstChild);
+    } else if ($mobileBackBtn.parentNode !== toolbar) {
+      toolbar.insertBefore($mobileBackBtn, toolbar.firstChild);
+    }
+  }
+  function syncMobileBackForVisibleTabStrip() {
+    const visibleStrip = Array.from(document.querySelectorAll('.conv-tab-strip'))
+      .find(strip => strip && !strip.hidden);
+    syncMobileBackIntoTabStrip(visibleStrip || null, !!visibleStrip);
+  }
+  try {
+    if (_mobileMQ.addEventListener) _mobileMQ.addEventListener('change', syncMobileBackForVisibleTabStrip);
+    else if (_mobileMQ.addListener) _mobileMQ.addListener(syncMobileBackForVisibleTabStrip);
+  } catch (_) {}
   const $cpMobileBackBtn = document.getElementById('cpMobileBackBtn');
   if ($cpMobileBackBtn) $cpMobileBackBtn.addEventListener('click', () => mobileShowConv(false));
 
@@ -28011,6 +28032,7 @@
     if (!strip || !state) return;
     const taskIds = Object.keys(state.tasks);
     if (!taskIds.length) {
+      syncMobileBackIntoTabStrip(strip, false);
       strip.hidden = true;
       strip.innerHTML = '';
       return;
@@ -28028,6 +28050,7 @@
     }
     strip.innerHTML = html;
     strip.hidden = false;
+    syncMobileBackIntoTabStrip(strip, true);
   }
   function _convPaneApplyActiveTab(view) {
     const state = _convPaneTabState(view);

@@ -2158,6 +2158,19 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("mobile-show-main .conv-split[data-orientation=\"\"] .conv-pane > .conv-pane-header", app_css)
         self.assertNotIn("_captureRailEl(document.getElementById('mobileBackBtn'))", app_js)
 
+    def test_mobile_back_button_moves_into_visible_tab_strip(self):
+        """Mobile back should share the Master/Background tab row."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function syncMobileBackIntoTabStrip(strip, visible)", app_js)
+        self.assertIn("strip.insertBefore($mobileBackBtn, strip.firstChild);", app_js)
+        self.assertIn("toolbar.insertBefore($mobileBackBtn, toolbar.firstChild);", app_js)
+        self.assertIn("syncMobileBackIntoTabStrip(strip, true);", app_js)
+        self.assertIn("syncMobileBackIntoTabStrip(strip, false);", app_js)
+        self.assertIn(".conv-tab-strip.has-mobile-back", app_css)
+        self.assertIn(".conv-tab-strip.has-mobile-back #mobileBackBtn", app_css)
+
     def test_mobile_reload_fab_is_not_rendered(self):
         """Mobile should not render the old floating page-reload button."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
