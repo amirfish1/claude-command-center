@@ -26598,8 +26598,10 @@
   // into a single WT queue where the item's `type` field carries bug vs feature.
   const _UXQ_FAMILY_ROOTS = new Set();
   const _UXQ_FAMILY_DEFAULT = {};
+  const _UXQ_PROJECT_ALIASES = { CC: 'CCC' };
   function _uxqProjectKey(value) {
-    return String(value || '').trim().toUpperCase();
+    const key = String(value || '').trim().toUpperCase();
+    return _UXQ_PROJECT_ALIASES[key] || key;
   }
   // True when item project Q belongs to panel scope P: exact match, or P is a
   // family root and Q is one of its sub-queues ("WT" matches "WT-BUGS").

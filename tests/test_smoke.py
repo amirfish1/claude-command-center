@@ -1866,6 +1866,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_uxqLastResolvedProject = proj;", app_js)
         self.assertIn("const proj = _uxqLastResolvedProject || _uxqWorkerProject();", app_js)
 
+    def test_queue_scope_normalizes_cc_alias_to_ccc(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        key_start = app_js.index("function _uxqProjectKey(value)")
+        key_body = app_js[key_start:app_js.index("// True when item project", key_start)]
+        self.assertIn("const _UXQ_PROJECT_ALIASES = { CC: 'CCC' };", app_js)
+        self.assertIn("return _UXQ_PROJECT_ALIASES[key] || key;", key_body)
+
     def test_ux_fixes_worker_ids_with_numeric_suffix_are_plausible(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         fn_start = app_js.index("function _uxFixesPlausibleSessionId(value)")
