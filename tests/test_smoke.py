@@ -2902,7 +2902,15 @@ class TestServerImports(unittest.TestCase):
         """Mobile should show a compact Bash/tool pill instead of a multi-line
         command block at the bottom of the conversation pane."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        base_live_css = app_css[
+            app_css.index(".conv-live-tool-inline {"):
+            app_css.index("@media (max-width: 700px)", app_css.index(".conv-live-tool-inline {"))
+        ]
 
+        self.assertIn(".conv-live-tool-inline:not(.is-expanded) .cl-file.is-command", base_live_css)
+        self.assertIn("display: none;", base_live_css)
+        self.assertIn(".conv-live-tool-inline.is-expanded .cl-file.is-command", base_live_css)
+        self.assertIn("max-height: 7.5em;", base_live_css)
         self.assertIn("@media (max-width: 700px) {", app_css)
         self.assertIn(".conv-live-tool-inline:not(.is-expanded) .cl-file.is-command", app_css)
         self.assertIn("display: none;", app_css)
