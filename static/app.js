@@ -11396,6 +11396,20 @@
     const obj = (flowCustomObjects || []).find(o => o && o.id === id);
     if (!obj) return;
     const currentTitle = (obj.title || chip.textContent || 'Object').trim();
+    const objectNumberText = (chip.querySelector('.conv-folder-object-number')?.textContent || '').trim();
+    function restoreObjectTitleChip(title) {
+      chip.classList.remove('is-renaming');
+      const titleEl = document.createElement('span');
+      titleEl.className = 'conv-folder-object-title-text';
+      if (objectNumberText) {
+        const numberEl = document.createElement('span');
+        numberEl.className = 'conv-folder-object-number';
+        numberEl.textContent = objectNumberText;
+        titleEl.append(numberEl, document.createTextNode(' '));
+      }
+      titleEl.append(document.createTextNode((title || '').trim() || 'Object'));
+      chip.replaceChildren(titleEl);
+    }
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'conv-folder-object-title-input';
@@ -11434,12 +11448,13 @@
         else hdr.setAttribute('draggable', previousDraggable);
       }
       const newTitle = input.value.trim();
+      const finalTitle = (save && newTitle) ? newTitle : currentTitle;
       if (save && newTitle && newTitle !== currentTitle) {
         obj.title = newTitle;
         obj.updated_at = Date.now();
         persistFlowCustomObjects();
       }
-      renderArchiveList(document.getElementById('convSearch')?.value || '');
+      restoreObjectTitleChip(finalTitle);
     }
 
     input.addEventListener('click', ev => ev.stopPropagation());

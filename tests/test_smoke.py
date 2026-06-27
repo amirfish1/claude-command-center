@@ -616,11 +616,15 @@ class TestServerImports(unittest.TestCase):
         """Space in object rename input should not bubble to the header toggle."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        start = app_js.index("input.addEventListener('keydown', ev => {", app_js.index("function startInlineObjectRename"))
+        fn_start = app_js.index("function startInlineObjectRename")
+        fn_body = app_js[fn_start:app_js.index("function rankNewObjectFirst", fn_start)]
+        start = app_js.index("input.addEventListener('keydown', ev => {", fn_start)
         block = app_js[start:app_js.index("});", start) + 3]
         self.assertIn("ev.stopPropagation();", block)
         self.assertIn("if (ev.key === 'Enter')", block)
         self.assertIn("else if (ev.key === 'Escape')", block)
+        self.assertIn("restoreObjectTitleChip(finalTitle);", fn_body)
+        self.assertNotIn("renderArchiveList(document.getElementById('convSearch')?.value || '');", fn_body)
 
     def test_coo_tracking_checkboxes_are_coo_mode_only(self):
         """The per-row COO tracking checkbox should stay hidden unless the
