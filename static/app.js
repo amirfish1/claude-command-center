@@ -26431,6 +26431,23 @@
     if (!v || v === 'AUTO') delete map[k]; else map[k] = v;
     try { localStorage.setItem(_UXQ_SCOPE_LS, JSON.stringify(map)); } catch (_) {}
   }
+  // Status filter for the Queue panel: 'all' or 'open' (open + in_progress,
+  // i.e. everything not closed). A simple global view pref, not per-session.
+  const _UXQ_FILTER_LS = 'ccc-uxq-filter';
+  function _uxqGetFilter() {
+    try { return localStorage.getItem(_UXQ_FILTER_LS) === 'all' ? 'all' : 'open'; } catch (_) { return 'open'; }
+  }
+  function _uxqSetFilter(val) {
+    try { localStorage.setItem(_UXQ_FILTER_LS, val === 'all' ? 'all' : 'open'); } catch (_) {}
+  }
+  function _uxqRenderFilterToggle() {
+    const $t = document.getElementById('queueFilterToggle');
+    if (!$t) return;
+    const cur = _uxqGetFilter();
+    $t.querySelectorAll('[data-uxq-filter]').forEach(b => {
+      b.classList.toggle('is-active', b.getAttribute('data-uxq-filter') === cur);
+    });
+  }
   function _uxqWorkerProject() {
     try {
       const ov = _uxqGetScopeOverride();
@@ -26574,8 +26591,11 @@
       const proj = _uxqResolvePanelProject(items, requestedProject);
       _uxqLastResolvedProject = proj;
       _uxqRenderScopeSelect(items, proj);
+      _uxqRenderFilterToggle();
       _renderQueueHealthStrip(false, proj);
-      const scoped = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
+      const inScope = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
+      // Status filter: 'open' hides closed (shows open + in_progress).
+      const scoped = _uxqGetFilter() === 'all' ? inScope : inScope.filter(it => (it && it.status) !== 'closed');
       // Claim-order sort (mirrors claim_next): the TOP row is what a default
       // execution claim would grab next. open<in_progress<closed; within open,
       // claimable (shovel-ready/unset) before unready; then priority; then age.
@@ -26695,6 +26715,16 @@
         _uxqSetScopeOverride($scope.value);
         _uxqItemsCache.ts = 0;
         _uxqHealthCache.ts = 0;
+        _renderQueuePanel();
+      });
+    }
+    // Status filter toggle (All | Open). 'open' hides closed tickets.
+    const $filter = document.getElementById('queueFilterToggle');
+    if ($filter) {
+      $filter.addEventListener('click', (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('[data-uxq-filter]');
+        if (!btn) return;
+        _uxqSetFilter(btn.getAttribute('data-uxq-filter'));
         _renderQueuePanel();
       });
     }
