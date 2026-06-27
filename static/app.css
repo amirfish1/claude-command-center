@@ -12188,6 +12188,41 @@ body.status-pos-right .conv-pane > .status-rail {
   flex: 1 1 auto;
   min-height: 0;
 }
+.status-rail-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 6px 6px 0 10px;
+}
+.status-rail-annotate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.status-rail-annotate:hover,
+.status-rail-annotate:focus-visible {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.ccc-no-annotate #statusRailAnnotateBtn {
+  display: none !important;
+}
 .status-rail-head {
   flex: 0 0 auto;
   display: flex;
@@ -12392,11 +12427,11 @@ body.status-pos-right .conv-pane > .status-rail {
      overlays the conversation or the rail's own content. */
   .status-rail-close {
     position: sticky;
-    top: 6px;
+    top: 0;
     align-self: flex-end;
     flex: 0 0 auto;
-    margin: 6px 6px 0 0;
-    width: 20px; height: 20px;
+    margin: 0;
+    width: 22px; height: 22px;
     display: none;
     align-items: center; justify-content: center;
     padding: 0;
@@ -12422,6 +12457,9 @@ body.status-pos-right:not(.status-rail-collapsed) .status-rail-close {
 .status-rail-close:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+.rail-actions #annotationStartBtn {
+  display: none !important;
 }
 body.status-rail-resizing {
   cursor: col-resize;

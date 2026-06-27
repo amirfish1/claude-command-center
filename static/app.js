@@ -39998,6 +39998,8 @@
     }
   }
 
+  const $statusRailAnnotateBtn = document.getElementById('statusRailAnnotateBtn');
+  if ($statusRailAnnotateBtn) $statusRailAnnotateBtn.addEventListener('click', annStart);
   if ($annotationStartBtn) $annotationStartBtn.addEventListener('click', annStart);
   if ($annotationScreenBtn) $annotationScreenBtn.addEventListener('click', annCaptureScreen);
   if ($annotationNotesBtn) $annotationNotesBtn.addEventListener('click', annOpenNotes);
