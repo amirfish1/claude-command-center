@@ -11,6 +11,10 @@ Interact with long-running peer sessions via the CCC HTTP server. **Use only for
 Find the CCC URL. DO NOT try to start CCC yourself.
 ```bash
 CCC_URL="$(cat ~/.claude/command-center/port.txt 2>/dev/null || echo "${CCC_URL:-http://127.0.0.1:8090}")"
+# port.txt can be stale — a now-dead secondary server may have left it pointing
+# at a refused port (OPS-41). Verify liveness; fall back to the canonical 8090
+# if the recorded URL doesn't answer, so live checks don't hit a dead port.
+curl -sf --max-time 2 "$CCC_URL/api/health" >/dev/null 2>&1 || CCC_URL="http://127.0.0.1:8090"
 REPO_PATH="${CCC_REPO_PATH:-$(pwd -P)}"
 ```
 
