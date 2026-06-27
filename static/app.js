@@ -10079,20 +10079,22 @@
   const _CURRENT_SESSIONS_ROW_H = 20;
   const _CURRENT_SESSIONS_LABEL_H = 18;
   const _CURRENT_SESSIONS_MIN_VISIBLE_ROWS = 8;
-  const _CURRENT_SESSIONS_MIN_PANEL_H = _CURRENT_SESSIONS_LABEL_H + (_CURRENT_SESSIONS_ROW_H * _CURRENT_SESSIONS_MIN_VISIBLE_ROWS);
+  const _CURRENT_SESSIONS_DEFAULT_PANEL_H = _CURRENT_SESSIONS_LABEL_H + (_CURRENT_SESSIONS_ROW_H * _CURRENT_SESSIONS_MIN_VISIBLE_ROWS);
   function _storedCurrentSessionsPanelHeight() {
     try {
-      const n = parseInt(localStorage.getItem(_CURRENT_SESSIONS_PANEL_H_KEY) || '', 10);
-      return Number.isFinite(n) && n > 0 ? n : 0;
+      const raw = localStorage.getItem(_CURRENT_SESSIONS_PANEL_H_KEY);
+      if (raw == null || raw === '') return null;
+      const n = parseInt(raw, 10);
+      return Number.isFinite(n) && n >= 0 ? n : null;
     } catch (_) {
-      return 0;
+      return null;
     }
   }
   function applyCurrentSessionsPanelHeight() {
     const list = document.getElementById('convList');
     if (!list) return;
     const storedHeight = _storedCurrentSessionsPanelHeight();
-    if (!storedHeight) {
+    if (storedHeight == null) {
       list.style.removeProperty('--current-sessions-panel-h');
       return;
     }
@@ -10103,7 +10105,7 @@
     }
   }
   function _clampObjectsSplitterHeight(list, height) {
-    const minHeight = _CURRENT_SESSIONS_MIN_PANEL_H;
+    const minHeight = 0;
     const containerH = list ? list.getBoundingClientRect().height : 0;
     const maxHeight = containerH ? Math.max(minHeight, containerH - 160) : 520;
     return Math.round(Math.max(minHeight, Math.min(maxHeight, height)));
@@ -10156,7 +10158,11 @@
     ev.preventDefault();
     ev.stopPropagation();
     const startY = ev.clientY;
-    const startHeight = current.getBoundingClientRect().height || current.offsetHeight || _storedCurrentSessionsPanelHeight() || 180;
+    const measuredStartHeight = current.getBoundingClientRect().height || current.offsetHeight;
+    const storedStartHeight = _storedCurrentSessionsPanelHeight();
+    const startHeight = Number.isFinite(measuredStartHeight)
+      ? measuredStartHeight
+      : (storedStartHeight == null ? _CURRENT_SESSIONS_DEFAULT_PANEL_H : storedStartHeight);
     let nextHeight = _clampObjectsSplitterHeight(list, startHeight);
     beginSidebarDrag();
     handle.classList.add('is-dragging');

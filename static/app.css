@@ -4055,7 +4055,7 @@
       34vh,
       420px
     ));
-    min-height: calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows)));
+    min-height: 0;
     max-height: var(--current-sessions-panel-h, clamp(
       calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows))),
       34vh,
