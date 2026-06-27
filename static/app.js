@@ -31372,6 +31372,25 @@
             + tsSpan(ev.ts)
             + '<span class="system-compact-text" title="' + escapeAttr(compactTip) + '">' + escapeHtml(compactText)
             + ' <span class="system-compact-help" aria-hidden="true">?</span></span>';
+        } else if (ev.subtype === 'hermes_failed_turn') {
+          // A turn whose upstream API call failed. Hermes persists only
+          // successful turns to the DB; failures live in request_dump files,
+          // so this is the only place the error (bad model id, out of usage,
+          // rate limit, ...) surfaces in the transcript. Render it as a clear
+          // error block right after the prompt it belongs to.
+          const _ftMsg = String(ev.text || '').trim();
+          const _ftBits = [];
+          if (ev.model) _ftBits.push(String(ev.model));
+          if (ev.status_code) _ftBits.push('HTTP ' + escapeHtml(String(ev.status_code)));
+          if (ev.error_type) _ftBits.push(String(ev.error_type));
+          else if (ev.reason) _ftBits.push(String(ev.reason).replace(/_/g, ' '));
+          const _ftMeta = _ftBits.length ? escapeHtml(_ftBits.join(' · ')) : '';
+          div.classList.add('system-hermes', 'hermes-failed-turn');
+          div.innerHTML = '<span class="label">Failed turn</span>'
+            + '<span class="line-num">L' + ev.line + '</span>'
+            + tsSpan(ev.ts)
+            + (_ftMeta ? '<span class="hermes-failed-meta">' + _ftMeta + '</span>' : '')
+            + (_ftMsg ? '<div class="hermes-failed-detail">' + escapeHtml(_ftMsg) + '</div>' : '');
         } else {
           div.innerHTML = '<span class="label">System</span>'
             + '<span class="line-num">L' + ev.line + '</span>'

@@ -697,6 +697,28 @@
   .event.system.system-hermes .label {
     color: #2dd4bf;
   }
+  /* Failed turn — the upstream API call errored (bad model id, out of usage,
+     rate limit, ...). These exist only as Hermes request_dump files, so this
+     red block is the sole place the failure surfaces in the transcript. */
+  .event.system.system-hermes.hermes-failed-turn {
+    display: block;
+    background: rgba(248, 81, 73, 0.1);
+    border-left-color: var(--red);
+  }
+  .event.system.system-hermes.hermes-failed-turn .label { color: var(--red); }
+  .hermes-failed-meta {
+    margin-left: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .hermes-failed-detail {
+    margin-top: 4px;
+    color: var(--text);
+    font-size: 12px;
+    opacity: 0.92;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
   /* Injected system-prompt panel — collapsed by default via <details>. The
      summary reads like the other compact system rows; the expanded body is a
      scrollable, monospace, read-only dump of what Hermes primed the session

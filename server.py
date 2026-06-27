@@ -23759,6 +23759,100 @@ def _hermes_raw_content_text(value):
     return _strip_ccc_session_state_instruction(dumped).strip()
 
 
+def _hermes_clean_error_message(err):
+    """Best human-readable message from a request_dump 'error' object.
+
+    Prefer the provider's nested error.message (clean text like "claude-...
+    is not a valid model ID" or "You're out of extra usage.") over the
+    top-level 'message', which wraps a python-dict repr and embeds a user_id.
+    """
+    if isinstance(err, str):
+        return err.strip()
+    if not isinstance(err, dict):
+        return ""
+    body = err.get("body")
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except (ValueError, TypeError):
+            body = None
+    if isinstance(body, dict):
+        inner = body.get("error")
+        if isinstance(inner, dict) and inner.get("message"):
+            return str(inner["message"]).strip()
+        if body.get("message"):
+            return str(body["message"]).strip()
+    return str(err.get("message") or "").strip()
+
+
+def _hermes_failed_turns(session_id):
+    """Failed-turn error records for a Hermes session, for inline rendering.
+
+    Successful turns are persisted to the DB messages table, but a turn whose
+    upstream API call failed is written ONLY as a
+    request_dump_<sid>_<ts>.json file in the gateway's sessions/ dir (next to
+    the owning state.db). Without these, the conversation view shows the user
+    prompt with no indication the turn errored. Returns events tagged with a
+    sort epoch so the caller can interleave them with the DB messages.
+    Read-only; never raises (a bad dump must not break the transcript).
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return []
+    out = []
+    try:
+        db = _hermes_db_for_session(sid)
+        if db is None:
+            return []
+        dump_dir = Path(db).expanduser().parent / "sessions"
+        if not dump_dir.is_dir():
+            return []
+        for fp in sorted(dump_dir.glob(f"request_dump_{sid}_*.json")):
+            try:
+                with open(fp, "r", encoding="utf-8") as fh:
+                    dump = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(dump, dict):
+                continue
+            err = dump.get("error")
+            msg = _hermes_clean_error_message(err)
+            reason = str(dump.get("reason") or "").strip()
+            if not msg and not reason:
+                continue
+            error_type = ""
+            status = None
+            if isinstance(err, dict):
+                error_type = str(err.get("type") or "").strip()
+                status = err.get("status_code") or err.get("code")
+            model = ""
+            body = (dump.get("request") or {}).get("body")
+            if isinstance(body, str):
+                try:
+                    body = json.loads(body)
+                except (ValueError, TypeError):
+                    body = None
+            if isinstance(body, dict):
+                model = str(body.get("model") or "").strip()
+            out.append({
+                "_ts_epoch": _hermes_epoch(dump.get("timestamp")),
+                "event": {
+                    "ts": _hermes_iso(dump.get("timestamp")),
+                    "type": "system",
+                    "subtype": "hermes_failed_turn",
+                    "session": sid,
+                    "reason": reason,
+                    "error_type": error_type,
+                    "status_code": status,
+                    "model": model,
+                    "text": msg,
+                },
+            })
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return out
+    return out
+
+
 def _hermes_tool_args(raw):
     parsed = _hermes_jsonish(raw)
     if isinstance(parsed, dict):
@@ -24429,11 +24523,29 @@ def _parse_hermes_conversation(session_id, after_line=0):
                     "source_platform": row.get("source") or "",
                     "model": row.get("model") or "",
                 })
+            # Merge DB messages with failed-turn error records (request_dump
+            # files) and emit them in chronological order. Successful turns live
+            # in the DB; turns whose upstream API call failed exist ONLY as dump
+            # files, so without this the transcript shows the prompt with no
+            # hint the turn errored (the "missing errors" the view was hiding).
+            items = []
+            last_ep = 0.0
+            order = 0
             for msg in _hermes_fetch_messages(con, sid):
-                line += 1
-                parsed = _parse_hermes_message(msg, line, row)
+                parsed = _parse_hermes_message(msg, 0, row)
                 if parsed:
-                    events.append(parsed)
+                    ep = _hermes_epoch(msg.get("timestamp") or msg.get("created_at")) or last_ep
+                    last_ep = ep
+                    items.append((ep, 0, order, parsed))
+                    order += 1
+            for ferr in _hermes_failed_turns(sid):
+                items.append((ferr["_ts_epoch"], 1, order, ferr["event"]))
+                order += 1
+            items.sort(key=lambda t: (t[0], t[1], t[2]))
+            for _ep, _kind, _ord, ev in items:
+                line += 1
+                ev["line"] = line
+                events.append(ev)
     finally:
         con.close()
     try:
