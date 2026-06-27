@@ -517,8 +517,8 @@
         '.ma-log-row .ma-spacer{flex:1 1 auto;}' +
         '.ma-st{font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding:1px 6px;border-radius:4px;}' +
         '.ma-st-applied{background:rgba(63,185,80,.16);color:#3fb950;}' +
-        '.ma-st-pending{background:var(--hover-bg,rgba(127,127,127,.16));}' +
         '.ma-st-dismissed{background:rgba(248,81,73,.12);color:#f85149;}' +
+        '.ma-st-expired{opacity:.5;}' +
         '.ma-empty{opacity:.55;padding:6px 2px;}';
       document.head.appendChild(st);
     }
@@ -598,7 +598,7 @@
     html += '<div class="ma-stat ma-saved">saved<b>' + _maUsd(s.realized_savings_usd) + '</b></div>';
     html += '<div class="ma-stat ma-missed">left on table<b>' + _maUsd(s.missed_savings_usd) + '</b></div>';
     html += '<div class="ma-stat">applied<b>' + (s.applied || 0) + '</b></div>';
-    html += '<div class="ma-stat">pending<b>' + (s.pending || 0) + '</b></div>';
+    html += '<div class="ma-stat ccc-adv-hot" style="' + ((d.live || []).length ? '' : 'opacity:.6;') + '">live<b>' + (d.live || []).length + '</b></div>';
     html += '</div>';
 
     // Live recommendations with actions.
@@ -626,8 +626,8 @@
     }
     html += '</div>';
 
-    // Recent history / monitor log.
-    const log = (d.log || []).slice(0, 12);
+    // Recent history / monitor log — resolved entries only (pending = live section).
+    const log = (d.log || []).filter(function (e) { return e.status !== 'pending'; }).slice(0, 20);
     html += '<div><div class="ma-sec-title">Recent activity</div>';
     if (!log.length) {
       html += '<div class="ma-empty">Nothing logged yet.</div>';
