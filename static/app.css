@@ -719,6 +719,14 @@
     white-space: pre-wrap;
     word-break: break-word;
   }
+  .hermes-failed-reqid {
+    margin-top: 4px;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--text-muted);
+    user-select: all;
+    word-break: break-all;
+  }
   /* Injected system-prompt panel — collapsed by default via <details>. The
      summary reads like the other compact system rows; the expanded body is a
      scrollable, monospace, read-only dump of what Hermes primed the session

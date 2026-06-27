@@ -23785,6 +23785,29 @@ def _hermes_clean_error_message(err):
     return str(err.get("message") or "").strip()
 
 
+def _hermes_error_request_id(err):
+    """Anthropic request id (req_...) from a request_dump 'error' object, if any.
+
+    The single most useful identifier for chasing a failure with provider
+    support. Lives in error.body.request_id (or error.request_id); absent when
+    the request never reached the provider (e.g. an invalid model id rejected
+    locally)."""
+    if not isinstance(err, dict):
+        return ""
+    rid = err.get("request_id")
+    if rid:
+        return str(rid).strip()
+    body = err.get("body")
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except (ValueError, TypeError):
+            body = None
+    if isinstance(body, dict) and body.get("request_id"):
+        return str(body["request_id"]).strip()
+    return ""
+
+
 def _hermes_failed_turns(session_id):
     """Failed-turn error records for a Hermes session, for inline rendering.
 
@@ -23845,6 +23868,7 @@ def _hermes_failed_turns(session_id):
                     "error_type": error_type,
                     "status_code": status,
                     "model": model,
+                    "request_id": _hermes_error_request_id(err),
                     "text": msg,
                 },
             })

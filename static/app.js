@@ -31385,12 +31385,15 @@
           if (ev.error_type) _ftBits.push(String(ev.error_type));
           else if (ev.reason) _ftBits.push(String(ev.reason).replace(/_/g, ' '));
           const _ftMeta = _ftBits.length ? escapeHtml(_ftBits.join(' · ')) : '';
+          const _ftReq = String(ev.request_id || '').trim();
           div.classList.add('system-hermes', 'hermes-failed-turn');
           div.innerHTML = '<span class="label">Failed turn</span>'
             + '<span class="line-num">L' + ev.line + '</span>'
             + tsSpan(ev.ts)
             + (_ftMeta ? '<span class="hermes-failed-meta">' + _ftMeta + '</span>' : '')
-            + (_ftMsg ? '<div class="hermes-failed-detail">' + escapeHtml(_ftMsg) + '</div>' : '');
+            + (_ftMsg ? '<div class="hermes-failed-detail">' + escapeHtml(_ftMsg) + '</div>' : '')
+            + (_ftReq ? '<div class="hermes-failed-reqid" title="Anthropic request id — quote this to support">'
+                + escapeHtml(_ftReq) + '</div>' : '');
         } else {
           div.innerHTML = '<span class="label">System</span>'
             + '<span class="line-num">L' + ev.line + '</span>'
