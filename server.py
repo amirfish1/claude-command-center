@@ -23736,6 +23736,205 @@ def _hermes_visible_text(value):
     return _strip_ccc_session_state_instruction(_hermes_join_text(walk(value))).strip()
 
 
+def _hermes_raw_content_text(value):
+    """Last-resort render of a message's *own* content when the whitelist
+    extraction in _hermes_visible_text yields nothing.
+
+    JSON-mode turns (e.g. the chuck-router classifier) store the model's reply
+    as a bare object like {"intent": "work_request", ...} — it carries none of
+    the whitelisted text keys, so _hermes_visible_text returns "" and the whole
+    turn was being dropped, leaving only the user prompts (the "sparse fragment"
+    bug). This only fires as a fallback, so it never broadens what the whitelist
+    already shows: the `content` column is the message's own payload (model
+    output / inbound text), not nested platform metadata, so rendering it raw is
+    safe and strictly better than dropping the turn.
+    """
+    parsed = _hermes_jsonish(value)
+    if parsed is None:
+        return ""
+    if isinstance(parsed, str):
+        return _strip_ccc_session_state_instruction(parsed).strip()
+    try:
+        dumped = json.dumps(parsed, ensure_ascii=False, indent=2, sort_keys=False)
+    except (TypeError, ValueError):
+        dumped = str(parsed)
+    return _strip_ccc_session_state_instruction(dumped).strip()
+
+
+def _hermes_decision_summary(value):
+    """Compact one-liner for a structured (JSON-object) assistant reply.
+
+    Router/classifier turns answer with a bare object like
+    {"intent": "work_request", "confidence": 0.95, "addressed_to": "becky"} —
+    readable, but you have to parse the JSON in your head. Distil the headline
+    decision, a confidence %, a recipient, and a couple of other short scalar
+    fields into "-> work_request - 95% - to: becky" so the gist is legible
+    above the raw JSON. Returns "" when there's nothing scalar worth showing.
+    """
+    obj = _hermes_jsonish(value)
+    if not isinstance(obj, dict) or not obj:
+        return ""
+    head_keys = ("intent", "action", "decision", "route", "classification",
+                 "category", "type", "label", "status")
+    conf_keys = ("confidence", "score", "probability", "certainty")
+    addr_keys = ("addressed_to", "recipient", "assignee", "target", "to")
+    used = set()
+    parts = []
+    for k in head_keys:
+        v = obj.get(k)
+        if isinstance(v, str) and v.strip():
+            parts.append("→ " + v.strip())
+            used.add(k)
+            break
+    for k in conf_keys:
+        if k in obj:
+            try:
+                f = float(obj.get(k))
+            except (TypeError, ValueError):
+                continue
+            parts.append((str(round(f * 100)) if 0 <= f <= 1 else str(round(f))) + "%")
+            used.add(k)
+            break
+    for k in addr_keys:
+        v = obj.get(k)
+        if isinstance(v, str) and v.strip():
+            parts.append("to: " + v.strip())
+            used.add(k)
+            break
+    extra = 0
+    for k, v in obj.items():
+        if extra >= 2:
+            break
+        if k in used or isinstance(v, bool) or not isinstance(v, (str, int, float)):
+            continue
+        sv = str(v).strip()
+        if not sv or len(sv) > 32:
+            continue
+        parts.append(str(k) + ": " + sv)
+        extra += 1
+    if not parts:
+        return ""
+    return " · ".join(parts)[:160]
+
+
+def _hermes_clean_error_message(err):
+    """Best human-readable message from a request_dump 'error' object.
+
+    Prefer the provider's nested error.message (clean text like "claude-...
+    is not a valid model ID" or "You're out of extra usage.") over the
+    top-level 'message', which wraps a python-dict repr and embeds a user_id.
+    """
+    if isinstance(err, str):
+        return err.strip()
+    if not isinstance(err, dict):
+        return ""
+    body = err.get("body")
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except (ValueError, TypeError):
+            body = None
+    if isinstance(body, dict):
+        inner = body.get("error")
+        if isinstance(inner, dict) and inner.get("message"):
+            return str(inner["message"]).strip()
+        if body.get("message"):
+            return str(body["message"]).strip()
+    return str(err.get("message") or "").strip()
+
+
+def _hermes_error_request_id(err):
+    """Anthropic request id (req_...) from a request_dump 'error' object, if any.
+
+    The single most useful identifier for chasing a failure with provider
+    support. Lives in error.body.request_id (or error.request_id); absent when
+    the request never reached the provider (e.g. an invalid model id rejected
+    locally)."""
+    if not isinstance(err, dict):
+        return ""
+    rid = err.get("request_id")
+    if rid:
+        return str(rid).strip()
+    body = err.get("body")
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except (ValueError, TypeError):
+            body = None
+    if isinstance(body, dict) and body.get("request_id"):
+        return str(body["request_id"]).strip()
+    return ""
+
+
+def _hermes_failed_turns(session_id):
+    """Failed-turn error records for a Hermes session, for inline rendering.
+
+    Successful turns are persisted to the DB messages table, but a turn whose
+    upstream API call failed is written ONLY as a
+    request_dump_<sid>_<ts>.json file in the gateway's sessions/ dir (next to
+    the owning state.db). Without these, the conversation view shows the user
+    prompt with no indication the turn errored. Returns events tagged with a
+    sort epoch so the caller can interleave them with the DB messages.
+    Read-only; never raises (a bad dump must not break the transcript).
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return []
+    out = []
+    try:
+        db = _hermes_db_for_session(sid)
+        if db is None:
+            return []
+        dump_dir = Path(db).expanduser().parent / "sessions"
+        if not dump_dir.is_dir():
+            return []
+        for fp in sorted(dump_dir.glob(f"request_dump_{sid}_*.json")):
+            try:
+                with open(fp, "r", encoding="utf-8") as fh:
+                    dump = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(dump, dict):
+                continue
+            err = dump.get("error")
+            msg = _hermes_clean_error_message(err)
+            reason = str(dump.get("reason") or "").strip()
+            if not msg and not reason:
+                continue
+            error_type = ""
+            status = None
+            if isinstance(err, dict):
+                error_type = str(err.get("type") or "").strip()
+                status = err.get("status_code") or err.get("code")
+            model = ""
+            body = (dump.get("request") or {}).get("body")
+            if isinstance(body, str):
+                try:
+                    body = json.loads(body)
+                except (ValueError, TypeError):
+                    body = None
+            if isinstance(body, dict):
+                model = str(body.get("model") or "").strip()
+            out.append({
+                "_ts_epoch": _hermes_epoch(dump.get("timestamp")),
+                "event": {
+                    "ts": _hermes_iso(dump.get("timestamp")),
+                    "type": "system",
+                    "subtype": "hermes_failed_turn",
+                    "session": sid,
+                    "reason": reason,
+                    "error_type": error_type,
+                    "status_code": status,
+                    "model": model,
+                    "request_id": _hermes_error_request_id(err),
+                    "text": msg,
+                },
+            })
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return out
+    return out
+
+
 def _hermes_tool_args(raw):
     parsed = _hermes_jsonish(raw)
     if isinstance(parsed, dict):
@@ -24290,6 +24489,8 @@ def _parse_hermes_message(msg, line_num, session_row=None):
     ts = _hermes_iso(msg.get("timestamp") or msg.get("created_at"))
     text = _hermes_visible_text(msg.get("content"))
     if role in ("user", "human"):
+        if not text:
+            text = _hermes_raw_content_text(msg.get("content"))
         if text:
             return {"line": line_num, "ts": ts, "type": "user_text", "text": text, "images": []}
         return None
@@ -24307,8 +24508,19 @@ def _parse_hermes_message(msg, line_num, session_row=None):
                 })
         if text:
             blocks.append({"kind": "text", "text": text})
-        for call in _hermes_tool_calls(msg.get("tool_calls")):
-            blocks.append(_hermes_tool_block(call))
+        tool_blocks = [_hermes_tool_block(call) for call in _hermes_tool_calls(msg.get("tool_calls"))]
+        blocks.extend(tool_blocks)
+        if not text and not tool_blocks:
+            # JSON-mode / structured reply: content is a bare object with no
+            # whitelisted text key. Render it raw rather than dropping the turn,
+            # with a distilled one-liner above it when it reads like a decision.
+            raw = _hermes_raw_content_text(msg.get("content"))
+            if raw:
+                block = {"kind": "text", "text": raw}
+                summary = _hermes_decision_summary(msg.get("content"))
+                if summary:
+                    block["summary"] = summary
+                blocks.append(block)
         if blocks:
             ev = {
                 "line": line_num,
@@ -24324,7 +24536,7 @@ def _parse_hermes_message(msg, line_num, session_row=None):
         return None
     if role in ("tool", "function") or msg.get("tool_name") or msg.get("tool_call_id"):
         if not text:
-            text = _hermes_visible_text(msg.get("tool_calls"))
+            text = _hermes_visible_text(msg.get("tool_calls")) or _hermes_raw_content_text(msg.get("content"))
         if len(text) > 800:
             text = text[:800] + "\n..."
         return {
@@ -24350,14 +24562,60 @@ def _parse_hermes_conversation(session_id, after_line=0):
         if session_id not in rows_by_id:
             return {"events": [], "last_line": 0}
         chain = _hermes_lineage_chain(session_id, rows_by_id) or [session_id]
-        # Surface the injected system prompt as a collapsible header event.
+        # Phase 1: build each segment's event list up front — DB messages merged
+        # with failed-turn error records (request_dump files), in chronological
+        # order. Successful turns live in the DB; turns whose upstream API call
+        # failed exist ONLY as dump files, so without this the transcript shows
+        # the prompt with no hint the turn errored. Building first also lets us
+        # tally turns for the summary banner (emitted at line 1, below).
+        chain_blocks = []
+        total_turns = 0
+        total_failed = 0
+        for sid in chain:
+            row = rows_by_id.get(sid) or {}
+            items = []
+            last_ep = 0.0
+            order = 0
+            for msg in _hermes_fetch_messages(con, sid):
+                parsed = _parse_hermes_message(msg, 0, row)
+                if parsed:
+                    ep = _hermes_epoch(msg.get("timestamp") or msg.get("created_at")) or last_ep
+                    last_ep = ep
+                    items.append((ep, 0, order, parsed))
+                    order += 1
+            for ferr in _hermes_failed_turns(sid):
+                items.append((ferr["_ts_epoch"], 1, order, ferr["event"]))
+                order += 1
+            items.sort(key=lambda t: (t[0], t[1], t[2]))
+            seg_events = [ev for _ep, _kind, _ord, ev in items]
+            total_turns += sum(1 for ev in seg_events if ev.get("type") == "user_text")
+            total_failed += sum(1 for ev in seg_events if ev.get("subtype") == "hermes_failed_turn")
+            chain_blocks.append((sid, row, seg_events))
+        # Phase 2: header events. The turn-summary banner goes first (line 1) so
+        # the session's health (how many turns, how many failed) is visible at a
+        # glance; then the injected system prompt and lineage. The after_line
+        # filter below drops all of these from incremental polls — they show
+        # once on open. Read-only.
+        _sum_row = rows_by_id.get(session_id) or {}
+        if total_turns or total_failed:
+            line += 1
+            events.append({
+                "line": line,
+                "ts": _hermes_iso(_sum_row.get("started_at") or _sum_row.get("created_at")),
+                "type": "system",
+                "subtype": "hermes_turn_summary",
+                "session": session_id,
+                "source_platform": _sum_row.get("source") or "",
+                "model": _sum_row.get("model") or "",
+                "turns": total_turns,
+                "failed": total_failed,
+                "succeeded": max(0, total_turns - total_failed),
+            })
         # Hermes assembles a per-session system prompt (persona + skills +
-        # memory + per-conversation context) and persists it on the session
-        # row; CCC otherwise renders only user/assistant/tool messages, so this
-        # priming layer is invisible. Emit it first (line 1) — the after_line
-        # filter below drops it from incremental polls, so it shows once on
-        # open. Read-only.
-        _sys_row = rows_by_id.get(session_id) or {}
+        # memory + per-conversation context) and persists it on the session row;
+        # CCC otherwise renders only user/assistant/tool messages, so this
+        # priming layer would be invisible. Collapsed by default in the UI.
+        _sys_row = _sum_row
         _sys_prompt = (_sys_row.get("system_prompt") or "").strip()
         if _sys_prompt:
             line += 1
@@ -24371,7 +24629,7 @@ def _parse_hermes_conversation(session_id, after_line=0):
                 "char_count": len(_sys_prompt),
             })
         if len(chain) > 1:
-            current = rows_by_id.get(session_id) or {}
+            current = _sum_row
             line += 1
             events.append({
                 "line": line,
@@ -24384,8 +24642,9 @@ def _parse_hermes_conversation(session_id, after_line=0):
                 "source_platform": current.get("source") or "",
                 "model": current.get("model") or "",
             })
-        for idx, sid in enumerate(chain):
-            row = rows_by_id.get(sid) or {}
+        # Phase 3: emit each segment's events (with a continuation marker before
+        # any lineage-inherited segment after the first).
+        for idx, (sid, row, seg_events) in enumerate(chain_blocks):
             if idx > 0:
                 line += 1
                 events.append({
@@ -24398,11 +24657,10 @@ def _parse_hermes_conversation(session_id, after_line=0):
                     "source_platform": row.get("source") or "",
                     "model": row.get("model") or "",
                 })
-            for msg in _hermes_fetch_messages(con, sid):
+            for ev in seg_events:
                 line += 1
-                parsed = _parse_hermes_message(msg, line, row)
-                if parsed:
-                    events.append(parsed)
+                ev["line"] = line
+                events.append(ev)
     finally:
         con.close()
     try:

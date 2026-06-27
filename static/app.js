@@ -31577,7 +31577,29 @@
       }
 
       if (ev.type === 'system') {
-        if (ev.subtype === 'hermes_system_prompt') {
+        if (ev.subtype === 'hermes_turn_summary') {
+          // At-a-glance session health, emitted at the top of the transcript:
+          // how many turns ran and how many failed upstream. Failed turns live
+          // only in request_dump files, so a session can look fine in the list
+          // while most of its turns errored — this surfaces that immediately.
+          const _tsTurns = Number(ev.turns || 0);
+          const _tsFailed = Number(ev.failed || 0);
+          const _tsOk = Number(ev.succeeded || 0);
+          const bits = [];
+          if (ev.source_platform) bits.push('<span class="hts-platform">' + escapeHtml(String(ev.source_platform)) + '</span>');
+          bits.push(escapeHtml(_tsTurns + (_tsTurns === 1 ? ' turn' : ' turns')));
+          if (_tsFailed > 0) {
+            bits.push('<span class="hts-ok">' + escapeHtml(String(_tsOk)) + ' ✓</span>');
+            bits.push('<span class="hts-failed">' + escapeHtml(_tsFailed + ' failed') + '</span>');
+          }
+          if (ev.model) bits.push('<span class="hts-model">' + escapeHtml(String(ev.model)) + '</span>');
+          div.classList.add('system-compact', 'system-hermes', 'hermes-turn-summary');
+          if (_tsFailed > 0) div.classList.add('has-failures');
+          div.innerHTML = '<span class="label">Hermes</span>'
+            + '<span class="line-num">L' + ev.line + '</span>'
+            + tsSpan(ev.ts)
+            + '<span class="system-compact-text">' + bits.join(' · ') + '</span>';
+        } else if (ev.subtype === 'hermes_system_prompt') {
           // The system prompt Hermes injected into this conversation
           // (persona + skills + memory + per-conversation context). Read-only,
           // collapsed by default via native <details> so it doesn't dominate
@@ -31658,6 +31680,28 @@
             + tsSpan(ev.ts)
             + '<span class="system-compact-text" title="' + escapeAttr(compactTip) + '">' + escapeHtml(compactText)
             + ' <span class="system-compact-help" aria-hidden="true">?</span></span>';
+        } else if (ev.subtype === 'hermes_failed_turn') {
+          // A turn whose upstream API call failed. Hermes persists only
+          // successful turns to the DB; failures live in request_dump files,
+          // so this is the only place the error (bad model id, out of usage,
+          // rate limit, ...) surfaces in the transcript. Render it as a clear
+          // error block right after the prompt it belongs to.
+          const _ftMsg = String(ev.text || '').trim();
+          const _ftBits = [];
+          if (ev.model) _ftBits.push(String(ev.model));
+          if (ev.status_code) _ftBits.push('HTTP ' + escapeHtml(String(ev.status_code)));
+          if (ev.error_type) _ftBits.push(String(ev.error_type));
+          else if (ev.reason) _ftBits.push(String(ev.reason).replace(/_/g, ' '));
+          const _ftMeta = _ftBits.length ? escapeHtml(_ftBits.join(' · ')) : '';
+          const _ftReq = String(ev.request_id || '').trim();
+          div.classList.add('system-hermes', 'hermes-failed-turn');
+          div.innerHTML = '<span class="label">Failed turn</span>'
+            + '<span class="line-num">L' + ev.line + '</span>'
+            + tsSpan(ev.ts)
+            + (_ftMeta ? '<span class="hermes-failed-meta">' + _ftMeta + '</span>' : '')
+            + (_ftMsg ? '<div class="hermes-failed-detail">' + escapeHtml(_ftMsg) + '</div>' : '')
+            + (_ftReq ? '<div class="hermes-failed-reqid" title="Anthropic request id — quote this to support">'
+                + escapeHtml(_ftReq) + '</div>' : '');
         } else {
           div.innerHTML = '<span class="label">System</span>'
             + '<span class="line-num">L' + ev.line + '</span>'
@@ -31874,6 +31918,12 @@
             }
           } else if (b.kind === 'text') {
             if (b.text) agentAnswerParts.push(String(b.text));
+            // A structured (JSON-mode) reply carries a distilled one-liner —
+            // the router/classifier decision — shown above the raw JSON so the
+            // gist is legible without parsing the object by eye.
+            if (b.summary) {
+              blockParts.push('<div class="assistant-decision" title="Distilled from the structured reply below">' + escapeHtml(String(b.summary)) + '</div>');
+            }
             blockParts.push('<div class="assistant-text" dir="auto">' + renderMarkdown(b.text) + '</div>');
             hasNonTool = true;
           } else if (b.kind === 'thinking') {

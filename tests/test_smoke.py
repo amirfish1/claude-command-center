@@ -3134,10 +3134,12 @@ class TestServerImports(unittest.TestCase):
                 self.assertEqual(sp[0]["text"], prompt_text)
                 self.assertEqual(sp[0]["char_count"], len(prompt_text))
                 self.assertEqual(sp[0]["type"], "system")
-                # It must be the FIRST event (line 1) so it renders at the top.
-                self.assertEqual(sp[0]["line"], 1)
-                # Incremental polls past line 1 must NOT repeat the big prompt.
-                later = server._parse_hermes_conversation(sid, after_line=1)
+                # The turn-summary banner is line 1; the system prompt follows
+                # right after it at the top of the transcript.
+                self.assertEqual(events[0]["subtype"], "hermes_turn_summary")
+                self.assertEqual(sp[0]["line"], 2)
+                # Incremental polls past the prompt must NOT repeat the big prompt.
+                later = server._parse_hermes_conversation(sid, after_line=sp[0]["line"])
                 self.assertFalse(
                     any(e.get("subtype") == "hermes_system_prompt" for e in later["events"]),
                     "system prompt must not repeat on incremental polls")
@@ -3148,6 +3150,25 @@ class TestServerImports(unittest.TestCase):
                 server._HERMES_ID_CACHE["ids"] = set()
                 server._HERMES_GATEWAY_CACHE["key"] = None
                 server._HERMES_GATEWAY_CACHE["by_session"] = {}
+
+    def test_hermes_decision_summary_distils_structured_reply(self):
+        """A JSON-mode router/classifier reply gets a one-line gist; plain text
+        and purely-nested objects get nothing."""
+        import server
+        f = server._hermes_decision_summary
+        s = f('{"intent":"work_request","complexity":"nontrivial","confidence":0.95,'
+              '"addressed_to":"becky","reply":"","request_text":"a fairly long value '
+              'that exceeds the per-field cap and is skipped"}')
+        self.assertIn("→ work_request", s)
+        self.assertIn("95%", s)
+        self.assertIn("to: becky", s)
+        # Long scalar fields are skipped so the line stays legible.
+        self.assertNotIn("fairly long value", s)
+        # Confidence already on a 0-1 scale renders as a percentage.
+        self.assertIn("40%", f('{"intent":"conversation","confidence":0.4}'))
+        # Not a JSON object -> no summary.
+        self.assertEqual(f("just plain text"), "")
+        self.assertEqual(f('{"meta":{"nested":1}}'), "")
 
     def test_sidebar_filter_matches_hermes_platform_metadata(self):
         """The local sidebar filter must match Hermes engine/platform/model
@@ -7792,9 +7813,13 @@ class TestRepoContextHelpers(unittest.TestCase):
 
                 parsed = server.parse_conversation(child, use_cache=False)
                 events = parsed["events"]
-                self.assertEqual(parsed["last_line"], 7)
-                self.assertEqual(events[0]["subtype"], "hermes_lineage")
-                self.assertEqual(events[0]["lineage_session_ids"], [parent, child])
+                self.assertEqual(parsed["last_line"], 8)
+                # Line 1 is the at-a-glance turn-summary banner; the lineage
+                # header follows it.
+                self.assertEqual(events[0]["subtype"], "hermes_turn_summary")
+                lineage = [e for e in events if e.get("subtype") == "hermes_lineage"]
+                self.assertEqual(len(lineage), 1)
+                self.assertEqual(lineage[0]["lineage_session_ids"], [parent, child])
                 self.assertTrue(any(e.get("type") == "system" and e.get("subtype") == "hermes_segment" for e in events))
                 self.assertTrue(any(e.get("type") == "user_text" and e.get("text") == "Original Hermes request" for e in events))
                 self.assertTrue(any(e.get("type") == "user_text" and e.get("text") == "Please run status" for e in events))

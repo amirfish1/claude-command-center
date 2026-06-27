@@ -697,6 +697,50 @@
   .event.system.system-hermes .label {
     color: #2dd4bf;
   }
+  /* Failed turn — the upstream API call errored (bad model id, out of usage,
+     rate limit, ...). These exist only as Hermes request_dump files, so this
+     red block is the sole place the failure surfaces in the transcript. */
+  .event.system.system-hermes.hermes-failed-turn {
+    display: block;
+    background: rgba(248, 81, 73, 0.1);
+    border-left-color: var(--red);
+  }
+  .event.system.system-hermes.hermes-failed-turn .label { color: var(--red); }
+  .hermes-failed-meta {
+    margin-left: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .hermes-failed-detail {
+    margin-top: 4px;
+    color: var(--text);
+    font-size: 12px;
+    opacity: 0.92;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .hermes-failed-reqid {
+    margin-top: 4px;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--text-muted);
+    user-select: all;
+    word-break: break-all;
+  }
+  /* Turn-summary banner — at-a-glance session health at the top. */
+  .event.system.hermes-turn-summary.has-failures { border-left-color: var(--red); }
+  .hermes-turn-summary .hts-platform { text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.85; }
+  .hermes-turn-summary .hts-ok { color: #2dd4bf; }
+  .hermes-turn-summary .hts-failed { color: var(--red); font-weight: 600; }
+  .hermes-turn-summary .hts-model { opacity: 0.7; }
+  /* Distilled decision line above a structured (JSON-mode) assistant reply. */
+  .assistant-decision {
+    margin: 2px 0 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #2dd4bf;
+    word-break: break-word;
+  }
   /* Injected system-prompt panel — collapsed by default via <details>. The
      summary reads like the other compact system rows; the expanded body is a
      scrollable, monospace, read-only dump of what Hermes primed the session
