@@ -21747,7 +21747,7 @@
             quietTitleChrome: true,
             currentChildDepth: item.depth
           })).join('');
-          return '<div class="conv-current-object-group" data-current-object-group="' + escapeAttr(group.key) + '">'
+          return '<div class="conv-current-object-group" data-current-object-group="' + escapeAttr(group.key) + '" data-object-drop-zone="' + escapeAttr(group.key) + '">'
             + '<div class="conv-current-object-heading">'
             +   '<span class="conv-current-object-title">' + escapeHtml(group.title) + '</span>'
             +   '<span class="conv-current-object-count">' + group.cards.length + '</span>'

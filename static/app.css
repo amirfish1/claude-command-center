@@ -4017,6 +4017,11 @@
   .conv-current-object-group + .conv-current-object-group {
     margin-top: 3px;
   }
+  .conv-current-object-group.is-drop-target {
+    background: rgba(88,166,255,0.10);
+    outline: 1px dashed var(--accent);
+    outline-offset: -2px;
+  }
   .conv-current-object-heading {
     display: flex;
     align-items: center;

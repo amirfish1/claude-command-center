@@ -1216,6 +1216,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("$currentSessionsModeToggle.addEventListener('click'", app_js)
         self.assertIn(".conv-current-object-heading", app_css)
 
+    def test_by_objects_current_session_object_groups_accept_session_drops(self):
+        """Current-session object groups should reuse the object drop path."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('data-current-object-group="\' + escapeAttr(group.key) + \'" data-object-drop-zone="\' + escapeAttr(group.key) + \'"', app_js)
+        self.assertIn("$convList.querySelectorAll('[data-object-drop-zone]').forEach(zone =>", app_js)
+        self.assertIn("if (reparentConversationIdsToObject(target, convIds))", app_js)
+        self.assertIn(".conv-current-object-group.is-drop-target", app_css)
+
     def test_sidebar_left_model_icon_uses_reserved_title_gutter(self):
         """Left-side model icons should center across expanded rows while the
         title and preview rows reserve the same left gutter."""
