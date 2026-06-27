@@ -2957,6 +2957,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("let html = assistantMessageActionsHtml(ev)", app_js)
         self.assertIn(".assistant-message-actions", app_css)
         self.assertIn(".assistant-message-action", app_css)
+        assistant_row_css = app_css[
+            app_css.index(".conversations-view .event.assistant {"):
+            app_css.index("/* Meta (line number + timestamp)", app_css.index(".conversations-view .event.assistant {"))
+        ]
+        self.assertIn("padding: 24px 0 4px;", assistant_row_css)
+        meta_css = app_css[
+            app_css.index(".conversations-view .event.assistant .line-num,"):
+            app_css.index("/* line-num is width-bounded", app_css.index(".conversations-view .event.assistant .line-num,"))
+        ]
+        self.assertIn("font-size: 12px;", meta_css)
+        self.assertIn("line-height: 1.35;", meta_css)
+        self.assertIn("top: 2px;", meta_css)
         self.assertIn(".conversations-view .event.assistant .msg-ts { right: 104px; }", app_css)
 
     def test_codex_silent_result_is_labeled_as_no_visible_response(self):
