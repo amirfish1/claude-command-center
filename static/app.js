@@ -22541,6 +22541,17 @@
         $inProgressToggle.setAttribute('aria-expanded', String(!wasCollapsed));
       });
     }
+    function setObjectSubtreeDomHidden(group, hidden) {
+      if (!group || !group.classList) return;
+      const baseDepth = Number(group.getAttribute('data-object-depth') || '0');
+      let next = group.nextElementSibling;
+      while (next && next.classList && next.classList.contains('conv-folder-group')) {
+        const depth = Number(next.getAttribute('data-object-depth') || '0');
+        if (Number.isFinite(depth) && depth <= baseDepth) break;
+        next.classList.toggle('is-subtree-hidden', !!hidden);
+        next = next.nextElementSibling;
+      }
+    }
     function setInProgressObjectGroupsCollapsed(collapsed) {
       $convList.querySelectorAll('[data-role="inprogress-section"] .conv-folder-group').forEach(group => {
         const header = group.querySelector('[data-role="folder-group-toggle"]');
@@ -22552,6 +22563,7 @@
           localStorage.setItem(_objectSessionsStorageKey(nodeId || key), collapsed ? '1' : '0');
         } catch (_) {}
         group.classList.remove('collapsed');
+        setObjectSubtreeDomHidden(group, false);
         group.classList.toggle('sessions-collapsed', !!collapsed);
         if (header) header.setAttribute('aria-expanded', 'true');
         const arrowEl = header && header.querySelector('.conv-folder-group-arrow');
@@ -23073,6 +23085,7 @@
         const group = hdr.closest('.conv-folder-group');
         if (!group) return;
         const wasCollapsed = group.classList.toggle('collapsed');
+        if (objNodeForToggle) setObjectSubtreeDomHidden(group, wasCollapsed);
         const key = hdr.getAttribute('data-collapse-key') || '';
         if (key) {
           try { localStorage.setItem(key, wasCollapsed ? '1' : '0'); } catch (_) {}

@@ -9686,6 +9686,7 @@
   #convList .conv-folder-group.collapsed > .conv-draft-row,
   #convList .conv-folder-group.collapsed > .conv-object-empty-hint,
   #convList .conv-folder-group.collapsed > .conv-ghissues-more { display: none; }
+  .conv-folder-group.is-subtree-hidden { display: none; }
   #convList .conv-folder-group.sessions-collapsed > .conv-item,
   #convList .conv-folder-group.sessions-collapsed > .conv-gap-separator,
   #convList .conv-folder-group.sessions-collapsed > .conv-draft-row,

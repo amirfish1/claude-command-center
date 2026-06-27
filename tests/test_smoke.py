@@ -769,8 +769,13 @@ class TestServerImports(unittest.TestCase):
     def test_object_triangle_collapse_rerenders_subtree(self):
         """Object header chevrons should collapse nested object subtrees immediately."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const objNodeForToggle = hdr.getAttribute('data-object-drop') || '';", app_js)
+        self.assertIn("function setObjectSubtreeDomHidden(group, hidden)", app_js)
+        self.assertIn("setObjectSubtreeDomHidden(group, wasCollapsed);", app_js)
+        self.assertIn("setObjectSubtreeDomHidden(group, false);", app_js)
+        self.assertIn(".conv-folder-group.is-subtree-hidden { display: none; }", app_css)
         self.assertIn("if (objNodeForToggle) {", app_js)
         self.assertIn("localStorage.removeItem(_objectSessionsStorageKey(objNodeForToggle));", app_js)
         self.assertIn("renderArchiveList(document.getElementById('convSearch')?.value || '');", app_js)
