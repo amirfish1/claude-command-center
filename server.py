@@ -6965,6 +6965,17 @@ def _resolve_runtime_network(port):
     env_bind = os.environ.get("CCC_BIND_HOST", "").strip()
     bind_host = env_bind or (config["bind_host"] or "127.0.0.1")
 
+    # Ephemeral verification servers (CCC_EPHEMERAL=1) must never expose the
+    # network: force loopback regardless of CCC_BIND_HOST or config. Ad-hoc
+    # snapshot/QA servers inherit the primary session's env, which previously
+    # leaked a 0.0.0.0 bind onto the LAN (OPS-30/36/38/39). Pairs with the
+    # write_port_file() CCC_EPHEMERAL skip so they also can't clobber port.txt.
+    if os.environ.get("CCC_EPHEMERAL"):
+        if env_bind and env_bind not in ("127.0.0.1", "localhost"):
+            print(f"   CCC_EPHEMERAL set: ignoring CCC_BIND_HOST={env_bind}, forcing 127.0.0.1")
+        bind_host = "127.0.0.1"
+        env_bind = ""
+
     env_trust = os.environ.get("CCC_TRUST_TAILNET", "").strip().lower() in ("1", "true", "yes", "on")
     trust_tailnet = env_trust or config["trust_tailnet"]
 
