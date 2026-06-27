@@ -1339,6 +1339,24 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("color: var(--cb-text);", cb_css)
         self.assertIn('pre.cb code { background: transparent; padding: 0; font: inherit; color: inherit; }', app_css)
 
+    def test_sticky_header_uses_conversation_palette_in_bright_mode(self):
+        """The sticky Last intent panel should not keep dark hard-coded chrome
+        over a bright conversation background."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn(".conv-pane.has-conv-bg .conv-sticky-header .csh-row {", app_css)
+        sticky_css = app_css[
+            app_css.index(".conv-pane.has-conv-bg .conv-sticky-header .csh-row {"):
+            app_css.index(".conv-pane.has-conv-bg .conv-sticky-header .csh-col-ask {")
+        ]
+        self.assertIn("background: var(--conv-surface-2);", sticky_css)
+        self.assertIn("border-color: var(--conv-border);", sticky_css)
+        self.assertIn("color: var(--conv-text);", sticky_css)
+        self.assertIn("color: var(--conv-text);", app_css[
+            app_css.index(".conv-pane.has-conv-bg .conv-sticky-header .csh-col-ask .ask-first,"):
+            app_css.index(".conv-pane.has-conv-bg .conv-sticky-header .csh-col-ask .ask-rest {")
+        ])
+
     def test_sidebar_rows_have_summary_details_toggle(self):
         """Session rows with session_state should expose an expand/collapse
         affordance for the detailed summary block."""

@@ -2055,6 +2055,25 @@
     background: var(--conv-surface);
     box-shadow: 0 4px 10px var(--conv-shadow);
   }
+  .conv-pane.has-conv-bg .conv-sticky-header .csh-row {
+    background: var(--conv-surface-2);
+    border-color: var(--conv-border);
+    color: var(--conv-text);
+  }
+  .conv-pane.has-conv-bg .conv-sticky-header .csh-col-ask {
+    border-right-color: var(--conv-border);
+  }
+  .conv-pane.has-conv-bg .conv-sticky-header .csh-col-ask > .csh-ask-earlier {
+    border-top-color: var(--conv-border);
+  }
+  .conv-pane.has-conv-bg .conv-sticky-header .csh-col-ask .ask-first,
+  .conv-pane.has-conv-bg .conv-sticky-header .csh-col-ask .earlier-first {
+    color: var(--conv-text);
+  }
+  .conv-pane.has-conv-bg .conv-sticky-header .csh-col-ask .ask-rest {
+    color: var(--conv-text-muted);
+    opacity: 1;
+  }
   .conv-pane.has-conv-bg .conv-sticky-header__collapse:hover {
     background: var(--conv-surface-2);
   }
