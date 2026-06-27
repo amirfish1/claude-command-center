@@ -5246,6 +5246,7 @@ def _rehydrate_archive_cached_rows(rows):
     _apply_pinned_conversation_fields(hydrated, pinned_list)
     hydrated.sort(key=lambda r: r.get("mtime") or r.get("modified") or 0, reverse=True)
     _sort_pinned_conversations_first(hydrated, pinned_list)
+    _stamp_archive_state(hydrated)
     # Layer the current codex goal on every rehydrate (one batched, cached read)
     # so the stale_ok serve the dashboard polls reflects goal set/clear without
     # waiting for a full transcript-signature rebuild.
@@ -5317,6 +5318,7 @@ def _build_archive_conversations(
         progress("pr_states",   state="skipped", detail="Deferred until archive rows are visible.")
     progress("issues",      state="skipped", detail="Loaded by /api/issues/all.")
     progress("group_chats", state="skipped", detail="Loaded by /api/group-chats/archived.")
+    _stamp_archive_state(convs)
     return convs
 
 
