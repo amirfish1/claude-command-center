@@ -20664,6 +20664,10 @@
     // ancestor via flowNodeParents). Sessions not attached to any object
     // fall into a trailing flat list.
     const _shouldGroupByObjects = _ipGrouping === 'objects';
+    const _currentSessionsMode = (() => {
+      try { return localStorage.getItem('ccc-current-sessions-mode') === 'objects' ? 'objects' : 'time'; }
+      catch (_) { return 'time'; }
+    })();
     // Per-row folder chips knob. '' = auto (hidden in by-objects mode where
     // the group header already names the container, shown elsewhere);
     // 'show'/'hide' = explicit user choice via the header knob.
@@ -21420,6 +21424,42 @@
       const _currentSessionRows = _ipSearchActive
         ? _currentSessions.map(c => ({ card: c, depth: 0 }))
         : _currentSessionsTreeRows(_currentSessions);
+      const _currentSessionsByObjects = !_ipSearchActive && _currentSessionsMode === 'objects';
+      function _currentSessionsByObjectGroupsHtml(items) {
+        const groups = [];
+        const byKey = new Map();
+        const addGroup = (key, title) => {
+          if (!byKey.has(key)) {
+            const group = { key, title, cards: [] };
+            byKey.set(key, group);
+            groups.push(group);
+          }
+          return byKey.get(key);
+        };
+        (items || []).forEach(item => {
+          const card = item && item.card;
+          if (!card) return;
+          const grp = _groupForSession(card);
+          const key = (grp && grp.node && !grp.archived) ? grp.node : 'unclassified';
+          const title = (grp && grp.node && !grp.archived) ? (grp.title || 'Object') : 'Unclassified';
+          addGroup(key, title).cards.push(card);
+        });
+        return groups.map(group => {
+          const nestedRows = _currentSessionsTreeRows(group.cards);
+          const rowsHtml = nestedRows.map(item => _renderRow(item.card, {
+            suppressFolderChip: false,
+            quietTitleChrome: true,
+            currentChildDepth: item.depth
+          })).join('');
+          return '<div class="conv-current-object-group" data-current-object-group="' + escapeAttr(group.key) + '">'
+            + '<div class="conv-current-object-heading">'
+            +   '<span class="conv-current-object-title">' + escapeHtml(group.title) + '</span>'
+            +   '<span class="conv-current-object-count">' + group.cards.length + '</span>'
+            + '</div>'
+            + rowsHtml
+            + '</div>';
+        }).join('');
+      }
       // Show ~7 at rest, then a "More" affordance — the live triage list
       // shouldn't push the Project tree way down. Expanded state persists so a
       // poll re-render doesn't collapse it back.
@@ -21434,9 +21474,12 @@
       if (_currentSessions.length) {
         const _currentSessionsLabel = _ipSearchActive ? 'Search results' : 'Current sessions';
         const _currentSessionsSub = _ipSearchActive ? '' : '<span class="conv-objects-section-sub">' + _currentSessionsWindowLabel + '</span>';
+        const _currentSessionsRowsHtml = _currentSessionsByObjects
+          ? _currentSessionsByObjectGroupsHtml(_curShown)
+          : _curShown.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join('');
         _currentSessionsHtml = '<div class="conv-objects-section-label">' + _currentSessionsLabel
           + _currentSessionsSub + '</div>'
-          + _curShown.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join('');
+          + _currentSessionsRowsHtml;
         if (_curHidden > 0) {
           _currentSessionsHtml += '<button type="button" class="conv-current-more"'
             + ' data-role="current-sessions-more" data-expand="1">More (' + _curHidden + ')</button>';
@@ -21620,6 +21663,12 @@
             + '<span class="grouping-opt' + (_ipWindow === 'all' ? ' is-active' : '') + '" data-window="all">All</span>'
           + '</span>'
         : '';
+      const _currentSessionsModeToggle = _shouldGroupByObjects
+        ? '<span class="conv-grouping-toggle conv-current-sessions-mode-toggle" data-role="current-sessions-mode-toggle" title="Show Current sessions by recency or grouped by object">'
+            + '<span class="grouping-opt' + (_currentSessionsMode !== 'objects' ? ' is-active' : '') + '" data-current-sessions-mode="time">Current</span>'
+            + '<span class="grouping-opt' + (_currentSessionsMode === 'objects' ? ' is-active' : '') + '" data-current-sessions-mode="objects">By objects</span>'
+          + '</span>'
+        : '';
       const _ipGroupingToggle = '';
       // "+ object" (CCC-92): create a new (possibly empty) Flow object that
       // immediately appears as a group row in by-objects mode. It is visible
@@ -21640,8 +21689,8 @@
       // The in-progress "Details" toolbar button (row density toggle) was removed
       // and details default off — rows render compact/lean unless the user opts
       // back into comfortable via the compact-rows control. (CCC-291)
-      const _ipTools = (_ipWindowToggle || _ipGroupingToggle || _ipAddObjectBtn || _ipObjectsExpandAll)
-        ? '<span class="conv-inprogress-tools">' + _ipAddObjectBtn + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + '</span>'
+      const _ipTools = (_ipWindowToggle || _currentSessionsModeToggle || _ipGroupingToggle || _ipAddObjectBtn || _ipObjectsExpandAll)
+        ? '<span class="conv-inprogress-tools">' + _ipAddObjectBtn + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + '</span>'
         : '';
       const _ipToolbarHtml = _ipTools
         ? '<div class="conv-inprogress-toolbar" data-role="inprogress-toolbar">' + _ipTools + '</div>'
@@ -22530,7 +22579,7 @@
         // The grouping toggle (project / time) lives inside this header
         // button — its own listener stops propagation, but be defensive.
         if (ev.target.closest('[data-role="objects-expand-all"]')) return;
-        if (ev.target.closest('[data-role="grouping-toggle"], [data-role="window-toggle"], [data-role="ip-add-object"], [data-role="nya-details-toggle"]')) return;
+        if (ev.target.closest('[data-role="grouping-toggle"], [data-role="current-sessions-mode-toggle"], [data-role="window-toggle"], [data-role="ip-add-object"], [data-role="nya-details-toggle"]')) return;
         ev.stopPropagation();
         const section = $inProgressToggle.closest('[data-role="inprogress-section"]');
         if (!section) return;
@@ -22578,6 +22627,17 @@
         const opt = ev.target.closest('[data-objects-collapse]');
         if (!opt) return;
         setInProgressObjectGroupsCollapsed(opt.getAttribute('data-objects-collapse') === '1');
+      });
+    }
+    const $currentSessionsModeToggle = $convList.querySelector('[data-role="current-sessions-mode-toggle"]');
+    if ($currentSessionsModeToggle) {
+      $currentSessionsModeToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const opt = ev.target.closest('[data-current-sessions-mode]');
+        if (!opt) return;
+        const mode = opt.getAttribute('data-current-sessions-mode') === 'objects' ? 'objects' : 'time';
+        try { localStorage.setItem('ccc-current-sessions-mode', mode); } catch (_) {}
+        renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
     $convList.querySelectorAll('[data-role="session-summary-toggle"]').forEach(btn => {

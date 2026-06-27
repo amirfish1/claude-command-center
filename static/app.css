@@ -4009,6 +4009,35 @@
     color: var(--faint, var(--text-muted));
     opacity: 0.8;
   }
+  .conv-current-object-group + .conv-current-object-group {
+    margin-top: 3px;
+  }
+  .conv-current-object-heading {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 17px;
+    margin: 3px 8px 1px;
+    padding: 1px 6px;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  }
+  .conv-current-object-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .conv-current-object-count {
+    margin-left: auto;
+    font-size: 9.5px;
+    font-weight: 600;
+    color: var(--faint, var(--text-muted));
+  }
   .conv-current-more {
     display: block;
     width: calc(100% - 16px);

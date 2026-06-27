@@ -1201,6 +1201,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("--current-child-indent: calc(var(--current-child-depth, 1) * 14px);", current_css)
         self.assertIn("--conv-icon-left: calc(10px + var(--current-child-indent));", current_css)
 
+    def test_by_objects_current_sessions_can_group_by_object(self):
+        """The Current sessions band should have its own by-object toggle."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const _currentSessionsMode = (() => {", app_js)
+        self.assertIn("localStorage.getItem('ccc-current-sessions-mode') === 'objects'", app_js)
+        self.assertIn('data-role="current-sessions-mode-toggle"', app_js)
+        self.assertIn('data-current-sessions-mode="objects">By objects</span>', app_js)
+        self.assertIn("function _currentSessionsByObjectGroupsHtml(items) {", app_js)
+        self.assertIn("const _currentSessionsRowsHtml = _currentSessionsByObjects", app_js)
+        self.assertIn("localStorage.setItem('ccc-current-sessions-mode', mode)", app_js)
+        self.assertIn("$currentSessionsModeToggle.addEventListener('click'", app_js)
+        self.assertIn(".conv-current-object-heading", app_css)
+
     def test_sidebar_left_model_icon_uses_reserved_title_gutter(self):
         """Left-side model icons should center across expanded rows while the
         title and preview rows reserve the same left gutter."""
