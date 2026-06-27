@@ -10092,6 +10092,19 @@
   }
   .fq-scope-select:hover { color: var(--text); border-color: var(--accent); }
   .fq-scope-select:focus { outline: none; border-color: var(--accent); }
+  /* Status filter toggle (All | Open) — segmented control in the Queue header. */
+  .fq-filter {
+    display: inline-flex; border: 1px solid var(--border); border-radius: 4px;
+    overflow: hidden; flex-shrink: 0;
+  }
+  .fq-filter-btn {
+    background: transparent; color: var(--text-muted); border: 0; cursor: pointer;
+    font-size: 10px; font-weight: 600; padding: 1px 6px; line-height: 1.6;
+    text-transform: uppercase; letter-spacing: 0.02em;
+  }
+  .fq-filter-btn + .fq-filter-btn { border-left: 1px solid var(--border); }
+  .fq-filter-btn:hover { color: var(--text); }
+  .fq-filter-btn.is-active { background: var(--accent); color: #fff; }
   .files-search-input {
     background: transparent; color: var(--text);
     border: 1px solid var(--border); border-radius: 4px;
