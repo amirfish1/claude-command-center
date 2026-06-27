@@ -29449,7 +29449,7 @@
       + score + '/100'
       + (summary ? '\n' + summary : '')
       + ((c && c.quality_timestamp) ? '\nRecorded: ' + c.quality_timestamp : '');
-    const label = 'Q ' + (grade ? grade + ' ' : '') + rounded;
+    const label = (grade ? grade + ' ' : '') + rounded;
     return '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
       + escapeHtml(label)
       + '</span>';
@@ -29473,7 +29473,7 @@
       + score + '/100'
       + (summary ? '\n' + summary : '')
       + ((u && u.quality_timestamp) ? '\nRecorded: ' + u.quality_timestamp : '');
-    const label = 'Q ' + (grade ? grade + ' ' : '') + rounded;
+    const label = (grade ? grade + ' ' : '') + rounded;
     return '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
       + escapeHtml(label)
       + '</span>';
