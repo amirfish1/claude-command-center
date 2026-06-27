@@ -10727,6 +10727,10 @@
   const NEW_SESSION_DEFAULT_OBJECT_ID = 'new-session-inbox';
   const NEW_SESSION_DEFAULT_OBJECT_TITLE = 'Inbox';
   const NEW_SESSION_PENDING_OBJECT_KEY = 'ccc-pending-new-session-object-assignments';
+  const NEW_SESSION_OBJECT_BY_CWD_KEY = 'ccc-new-session-object-by-cwd';
+  let _newSessionObjectMenuItems = [];
+  let _newSessionObjectMenuIndex = 0;
+  let _newSessionObjectDocWired = false;
 
   function _objectsApiPost(path, body) {
     return fetch('/api/objects/' + path, {
@@ -10753,6 +10757,221 @@
     return obj;
   }
 
+  function loadNewSessionObjectByCwd() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(NEW_SESSION_OBJECT_BY_CWD_KEY) || '{}');
+      return raw && typeof raw === 'object' ? raw : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function saveNewSessionObjectByCwd(map) {
+    try { localStorage.setItem(NEW_SESSION_OBJECT_BY_CWD_KEY, JSON.stringify(map || {})); } catch (_) {}
+  }
+
+  function newSessionObjectScopeKey() {
+    const cwd = (typeof getSpawnCwd === 'function' && getSpawnCwd()) || selectedRepoPath() || '';
+    return normalizeSpawnCwdPath(cwd) || '__default__';
+  }
+
+  function findActiveFlowObject(objectId) {
+    if (!objectId) return null;
+    return (flowCustomObjects || []).find(o =>
+      o && o.id === objectId && !o.archived && !isArchivedFlowObjectId(o.id)) || null;
+  }
+
+  function getNewSessionSelectedObject() {
+    const map = loadNewSessionObjectByCwd();
+    const obj = findActiveFlowObject(map[newSessionObjectScopeKey()]);
+    return obj || ensureNewSessionDefaultObject();
+  }
+
+  function updateNewSessionObjectPickerValue(force) {
+    const input = document.getElementById('newSessionObjectPicker');
+    if (!input) return;
+    const obj = getNewSessionSelectedObject();
+    input.dataset.objectId = obj.id || '';
+    input.title = obj.title || NEW_SESSION_DEFAULT_OBJECT_TITLE;
+    if (force || document.activeElement !== input || !isNewSessionObjectMenuOpen()) {
+      input.value = obj.title || NEW_SESSION_DEFAULT_OBJECT_TITLE;
+    }
+  }
+
+  function setNewSessionSelectedObjectId(objectId) {
+    const obj = findActiveFlowObject(objectId) || ensureNewSessionDefaultObject();
+    const map = loadNewSessionObjectByCwd();
+    map[newSessionObjectScopeKey()] = obj.id;
+    saveNewSessionObjectByCwd(map);
+    updateNewSessionObjectPickerValue(true);
+    renderNewSessionObjectMenu('');
+    return obj;
+  }
+
+  function createNewSessionObjectFromTitle(title) {
+    const clean = String(title || '').trim();
+    if (!clean) return null;
+    const existing = flowAssignableObjects().find(o => o.title.toLowerCase() === clean.toLowerCase());
+    if (existing) return setNewSessionSelectedObjectId(existing.id);
+    const now = Date.now();
+    const id = 'obj-' + now.toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    const obj = { id, title: clean, created_at: now, updated_at: now, status: 'active' };
+    flowCustomObjects.unshift(obj);
+    persistFlowCustomObjects();
+    if (typeof rankNewObjectFirst === 'function') rankNewObjectFirst(flowNodeKey('object', id));
+    setNewSessionSelectedObjectId(id);
+    if (typeof renderSidebar === 'function' && typeof filterConversations === 'function') {
+      renderSidebar(filterConversations($convSearch ? $convSearch.value : ''), { force: true });
+    }
+    return obj;
+  }
+
+  function isNewSessionObjectMenuOpen() {
+    const menu = document.getElementById('newSessionObjectMenu');
+    return !!(menu && menu.classList.contains('open'));
+  }
+
+  function closeNewSessionObjectMenu() {
+    const menu = document.getElementById('newSessionObjectMenu');
+    if (menu) menu.classList.remove('open');
+    updateNewSessionObjectPickerValue(true);
+  }
+
+  function focusNewSessionComposer() {
+    const input = composerInputForPane(activePaneId()) || $convInput;
+    if (!input) return;
+    try { input.focus(); } catch (_) {}
+  }
+
+  function renderNewSessionObjectMenu(query) {
+    const menu = document.getElementById('newSessionObjectMenu');
+    if (!menu) return;
+    const q = String(query || '').trim().toLowerCase();
+    const selected = getNewSessionSelectedObject();
+    const tree = flowAssignableObjectTree();
+    const matchingIds = new Set();
+    const ancestorIds = new Set();
+    const matches = (o) => [o.title, o.path, o.id].join(' ').toLowerCase().indexOf(q) >= 0;
+    if (q) {
+      tree.forEach(o => {
+        if (!matches(o)) return;
+        matchingIds.add(o.id);
+        let parentNode = flowNodeParents[flowNodeKey('object', o.id)] || '';
+        const seen = new Set([flowNodeKey('object', o.id)]);
+        while (parentNode && parentNode.indexOf('object:') === 0 && !seen.has(parentNode)) {
+          seen.add(parentNode);
+          const parentId = parentNode.slice(7);
+          ancestorIds.add(parentId);
+          parentNode = flowNodeParents[parentNode] || '';
+        }
+      });
+    }
+    const objects = tree
+      .map(o => Object.assign({}, o, {
+        matchesSearch: !q || matchingIds.has(o.id),
+        hasMatchingDescendant: q && ancestorIds.has(o.id),
+      }))
+      .filter(o => !q || o.matchesSearch || o.hasMatchingDescendant);
+    const exact = q && tree.some(o => o.title.toLowerCase() === q);
+    _newSessionObjectMenuItems = objects.map(o => ({ type: 'object', id: o.id }));
+    if (q && !exact) _newSessionObjectMenuItems.push({ type: 'create', title: String(query || '').trim() });
+    if (_newSessionObjectMenuIndex >= _newSessionObjectMenuItems.length) _newSessionObjectMenuIndex = 0;
+    if (_newSessionObjectMenuIndex < 0) _newSessionObjectMenuIndex = Math.max(0, _newSessionObjectMenuItems.length - 1);
+    const rows = objects.map((o, idx) => {
+      const path = o.path && o.path !== o.title ? o.path : '';
+      return '<button type="button" class="nso-option'
+        + (idx === _newSessionObjectMenuIndex ? ' is-active' : '')
+        + (o.id === selected.id ? ' is-selected' : '')
+        + '" data-role="new-session-object-option" data-object-id="' + escapeAttr(o.id) + '"'
+        + ' style="--object-depth:' + Number(o.depth || 0) + ';">'
+        + '<span class="nso-option-title">' + escapeHtml(o.title) + '</span>'
+        + (path ? '<span class="nso-option-path">' + escapeHtml(path) + '</span>' : '')
+        + '</button>';
+    });
+    if (q && !exact) {
+      const idx = _newSessionObjectMenuItems.length - 1;
+      rows.push('<button type="button" class="nso-option nso-create'
+        + (idx === _newSessionObjectMenuIndex ? ' is-active' : '')
+        + '" data-role="new-session-object-create" data-title="' + escapeAttr(String(query || '').trim()) + '">'
+        + '<span class="nso-option-title">Create object "' + escapeHtml(String(query || '').trim()) + '"</span>'
+        + '</button>');
+    }
+    menu.innerHTML = rows.join('') || '<div class="nso-empty">No objects.</div>';
+    menu.classList.add('open');
+  }
+
+  function chooseNewSessionObjectMenuItem(index) {
+    const item = _newSessionObjectMenuItems[index];
+    if (!item) return;
+    if (item.type === 'create') createNewSessionObjectFromTitle(item.title);
+    else setNewSessionSelectedObjectId(item.id);
+    closeNewSessionObjectMenu();
+    focusNewSessionComposer();
+  }
+
+  function wireNewSessionObjectPicker() {
+    const input = document.getElementById('newSessionObjectPicker');
+    const btn = document.getElementById('newSessionObjectMenuBtn');
+    const menu = document.getElementById('newSessionObjectMenu');
+    if (!input || !btn || !menu || input.dataset.wired === '1') return;
+    input.dataset.wired = '1';
+    input.addEventListener('focus', () => {
+      _newSessionObjectMenuIndex = 0;
+      renderNewSessionObjectMenu(input.value);
+      input.select();
+    });
+    input.addEventListener('input', () => {
+      _newSessionObjectMenuIndex = 0;
+      renderNewSessionObjectMenu(input.value);
+    });
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        _newSessionObjectMenuIndex = Math.min(_newSessionObjectMenuItems.length - 1, _newSessionObjectMenuIndex + 1);
+        renderNewSessionObjectMenu(input.value);
+      } else if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        _newSessionObjectMenuIndex = Math.max(0, _newSessionObjectMenuIndex - 1);
+        renderNewSessionObjectMenu(input.value);
+      } else if (ev.key === 'Enter') {
+        ev.preventDefault();
+        if (!isNewSessionObjectMenuOpen()) renderNewSessionObjectMenu(input.value);
+        chooseNewSessionObjectMenuItem(_newSessionObjectMenuIndex);
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        closeNewSessionObjectMenu();
+      }
+    });
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (isNewSessionObjectMenuOpen()) closeNewSessionObjectMenu();
+      else {
+        _newSessionObjectMenuIndex = 0;
+        renderNewSessionObjectMenu('');
+        input.focus();
+      }
+    });
+    menu.addEventListener('mousedown', ev => ev.preventDefault());
+    menu.addEventListener('click', (ev) => {
+      const row = ev.target && ev.target.closest && ev.target.closest('.nso-option');
+      if (!row) return;
+      const createTitle = row.getAttribute('data-title');
+      if (row.getAttribute('data-role') === 'new-session-object-create') createNewSessionObjectFromTitle(createTitle);
+      else setNewSessionSelectedObjectId(row.getAttribute('data-object-id') || '');
+      closeNewSessionObjectMenu();
+      focusNewSessionComposer();
+    });
+    if (!_newSessionObjectDocWired) {
+      document.addEventListener('click', (ev) => {
+        const combo = document.querySelector('[data-role="new-session-object-combo"]');
+        if (combo && combo.contains(ev.target)) return;
+        closeNewSessionObjectMenu();
+      });
+      _newSessionObjectDocWired = true;
+    }
+  }
+
   function renderNewSessionObjectContext() {
     const wrap = document.getElementById('newSessionObjectContext');
     if (!wrap) return;
@@ -10761,12 +10980,20 @@
       wrap.style.display = 'none';
       return;
     }
-    const obj = ensureNewSessionDefaultObject();
     wrap.style.display = '';
-    wrap.innerHTML = '<span class="nso-label">Object</span>'
-      + '<span class="nso-chip" title="New sessions are grouped under this object">'
-      + escapeHtml(obj.title || NEW_SESSION_DEFAULT_OBJECT_TITLE)
-      + '</span>';
+    ensureNewSessionDefaultObject();
+    if (!wrap.querySelector('#newSessionObjectPicker')) {
+      wrap.innerHTML = '<span class="nso-label">Object</span>'
+        + '<span class="nso-combo" data-role="new-session-object-combo">'
+        + '<input type="text" id="newSessionObjectPicker" class="nso-picker"'
+        + ' autocomplete="off" spellcheck="false" aria-label="Object for new session">'
+        + '<button type="button" id="newSessionObjectMenuBtn" class="nso-menu-btn"'
+        + ' title="Choose object" aria-label="Choose object" aria-haspopup="listbox" aria-expanded="false">&#9662;</button>'
+        + '<div id="newSessionObjectMenu" class="nso-menu" role="listbox"></div>'
+        + '</span>';
+      wireNewSessionObjectPicker();
+    }
+    updateNewSessionObjectPickerValue();
   }
 
   function loadPendingNewSessionObjectAssignments() {
@@ -10800,7 +11027,7 @@
   }
 
   function assignSpawnedSessionToDefaultObject(data) {
-    const obj = ensureNewSessionDefaultObject();
+    const obj = getNewSessionSelectedObject();
     const objectId = obj && obj.id;
     const sid = data && data.session_id;
     if (sid) {
