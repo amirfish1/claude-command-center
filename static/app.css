@@ -14815,7 +14815,7 @@ body:has(.gc-reader) .pwa-install-banner {
   display: flex; flex-direction: column;
 }
 .fq-row {
-  display: flex; align-items: center; gap: 7px;
+  display: flex; align-items: flex-start; gap: 7px;
   padding: 6px 10px; font-size: 14px; line-height: 1.35;
   border-bottom: 1px solid rgba(139,148,158,0.08);
   cursor: pointer;
@@ -14849,6 +14849,26 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-row.is-in_progress .fq-status { background: rgba(210,153,34,0.15); color: var(--orange, #d29922); }
 .fq-row.is-closed .fq-status { background: rgba(139,148,158,0.12); color: var(--text-muted); }
 .fq-row.is-closed .fq-note { color: var(--text-muted); }
+/* Triage chips (WT-FEATURES-23): type / priority / readiness + value/confidence,
+   so the queue view shows what the engine sees and picks first. */
+.fq-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.fq-main .fq-note { flex: none; }
+.fq-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.fq-chip {
+  font-size: 10px; font-weight: 700; line-height: 1.5; letter-spacing: 0.02em;
+  padding: 0 6px; border-radius: 999px; text-transform: uppercase; white-space: nowrap;
+  background: rgba(139,148,158,0.15); color: var(--text-muted);
+}
+.fq-type-bug { background: rgba(248,81,73,0.16); color: #f85149; }
+.fq-type-feature { background: rgba(163,113,247,0.18); color: #a371f7; }
+.fq-prio-p0 { background: rgba(248,81,73,0.24); color: #ff7b72; }
+.fq-prio-p1 { background: rgba(210,153,34,0.20); color: #d29922; }
+.fq-prio-p2 { background: rgba(139,148,158,0.16); color: var(--text-muted); }
+.fq-prio-p3 { background: rgba(139,148,158,0.10); color: var(--text-muted); }
+.fq-ready-shovel-ready { background: rgba(63,185,80,0.18); color: #3fb950; }
+.fq-ready-needs-spec { background: rgba(88,166,255,0.18); color: #58a6ff; }
+.fq-ready-needs-shaping { background: rgba(210,153,34,0.16); color: #d29922; }
+.fq-vc { background: rgba(139,148,158,0.12); color: var(--text-muted); }
 .fq-empty { padding: 12px 10px; font-size: 13px; color: var(--text-muted); }
 .fq-empty-sub {
   margin-top: 4px;

@@ -26522,7 +26522,32 @@
       _uxqRenderScopeSelect(items, proj);
       _renderQueueHealthStrip(false, proj);
       const scoped = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
-      const rows = scoped.slice().reverse();  // newest first
+      // Claim-order sort (mirrors claim_next): the TOP row is what a default
+      // execution claim would grab next. open<in_progress<closed; within open,
+      // claimable (shovel-ready/unset) before unready; then priority; then age.
+      const _PR = { p0: 0, p1: 1, p2: 2, p3: 3 };
+      const _statusRank = s => (s === 'open' ? 0 : s === 'in_progress' ? 1 : 2);
+      const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec') ? 1 : 0);
+      const _prioRank = it => (it && _PR[it.priority] != null) ? _PR[it.priority] : (it && it.lane === 'express' ? 0 : 2);
+      const rows = scoped.slice().sort((a, b) => {
+        const st = _statusRank(a.status) - _statusRank(b.status); if (st) return st;
+        if (a.status === 'open') {
+          const u = _unready(a) - _unready(b); if (u) return u;
+          const p = _prioRank(a) - _prioRank(b); if (p) return p;
+          return (a.number || 0) - (b.number || 0);   // oldest first = engine order
+        }
+        return (b.number || 0) - (a.number || 0);       // closed/in_progress: newest first
+      });
+      const _readyShort = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'shovel-ready': 'ready' };
+      const _uxqChips = it => {
+        const c = [];
+        if (it.type) c.push('<span class="fq-chip fq-type-' + escapeAttr(it.type) + '">' + escapeHtml(it.type) + '</span>');
+        if (it.priority) c.push('<span class="fq-chip fq-prio-' + escapeAttr(it.priority) + '">' + escapeHtml(it.priority) + '</span>');
+        if (it.readiness) c.push('<span class="fq-chip fq-ready-' + escapeAttr(it.readiness) + '">' + escapeHtml(_readyShort[it.readiness] || it.readiness) + '</span>');
+        if (it.value) c.push('<span class="fq-chip fq-vc" title="value">V:' + escapeHtml(it.value) + '</span>');
+        if (it.confidence) c.push('<span class="fq-chip fq-vc" title="confidence">C:' + escapeHtml(it.confidence) + '</span>');
+        return c.length ? '<div class="fq-chips">' + c.join('') + '</div>' : '';
+      };
       $queue.innerHTML = rows.map(it => {
         const noteFull = String(it.note || '');
         const status = it.status || 'open';
@@ -26530,7 +26555,7 @@
         return '<div class="fq-row is-' + escapeAttr(status) + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(noteFull) + '\n\nClick to view ticket details.">'
           + '<span class="fq-ref">' + escapeHtml(ref) + '</span>'
-          + '<span class="fq-note">' + escapeHtml(noteFull) + '</span>'
+          + '<div class="fq-main"><span class="fq-note">' + escapeHtml(noteFull) + '</span>' + _uxqChips(it) + '</div>'
           + '<span class="fq-status">' + escapeHtml(status) + '</span>'
           + '</div>';
       }).join('') || _uxqEmptyHtml(proj, items.length);
