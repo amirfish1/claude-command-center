@@ -23759,6 +23759,62 @@ def _hermes_raw_content_text(value):
     return _strip_ccc_session_state_instruction(dumped).strip()
 
 
+def _hermes_decision_summary(value):
+    """Compact one-liner for a structured (JSON-object) assistant reply.
+
+    Router/classifier turns answer with a bare object like
+    {"intent": "work_request", "confidence": 0.95, "addressed_to": "becky"} —
+    readable, but you have to parse the JSON in your head. Distil the headline
+    decision, a confidence %, a recipient, and a couple of other short scalar
+    fields into "-> work_request - 95% - to: becky" so the gist is legible
+    above the raw JSON. Returns "" when there's nothing scalar worth showing.
+    """
+    obj = _hermes_jsonish(value)
+    if not isinstance(obj, dict) or not obj:
+        return ""
+    head_keys = ("intent", "action", "decision", "route", "classification",
+                 "category", "type", "label", "status")
+    conf_keys = ("confidence", "score", "probability", "certainty")
+    addr_keys = ("addressed_to", "recipient", "assignee", "target", "to")
+    used = set()
+    parts = []
+    for k in head_keys:
+        v = obj.get(k)
+        if isinstance(v, str) and v.strip():
+            parts.append("→ " + v.strip())
+            used.add(k)
+            break
+    for k in conf_keys:
+        if k in obj:
+            try:
+                f = float(obj.get(k))
+            except (TypeError, ValueError):
+                continue
+            parts.append((str(round(f * 100)) if 0 <= f <= 1 else str(round(f))) + "%")
+            used.add(k)
+            break
+    for k in addr_keys:
+        v = obj.get(k)
+        if isinstance(v, str) and v.strip():
+            parts.append("to: " + v.strip())
+            used.add(k)
+            break
+    extra = 0
+    for k, v in obj.items():
+        if extra >= 2:
+            break
+        if k in used or isinstance(v, bool) or not isinstance(v, (str, int, float)):
+            continue
+        sv = str(v).strip()
+        if not sv or len(sv) > 32:
+            continue
+        parts.append(str(k) + ": " + sv)
+        extra += 1
+    if not parts:
+        return ""
+    return " · ".join(parts)[:160]
+
+
 def _hermes_clean_error_message(err):
     """Best human-readable message from a request_dump 'error' object.
 
@@ -24454,10 +24510,15 @@ def _parse_hermes_message(msg, line_num, session_row=None):
         blocks.extend(tool_blocks)
         if not text and not tool_blocks:
             # JSON-mode / structured reply: content is a bare object with no
-            # whitelisted text key. Render it raw rather than dropping the turn.
+            # whitelisted text key. Render it raw rather than dropping the turn,
+            # with a distilled one-liner above it when it reads like a decision.
             raw = _hermes_raw_content_text(msg.get("content"))
             if raw:
-                blocks.append({"kind": "text", "text": raw})
+                block = {"kind": "text", "text": raw}
+                summary = _hermes_decision_summary(msg.get("content"))
+                if summary:
+                    block["summary"] = summary
+                blocks.append(block)
         if blocks:
             ev = {
                 "line": line_num,
@@ -24499,59 +24560,17 @@ def _parse_hermes_conversation(session_id, after_line=0):
         if session_id not in rows_by_id:
             return {"events": [], "last_line": 0}
         chain = _hermes_lineage_chain(session_id, rows_by_id) or [session_id]
-        # Surface the injected system prompt as a collapsible header event.
-        # Hermes assembles a per-session system prompt (persona + skills +
-        # memory + per-conversation context) and persists it on the session
-        # row; CCC otherwise renders only user/assistant/tool messages, so this
-        # priming layer is invisible. Emit it first (line 1) — the after_line
-        # filter below drops it from incremental polls, so it shows once on
-        # open. Read-only.
-        _sys_row = rows_by_id.get(session_id) or {}
-        _sys_prompt = (_sys_row.get("system_prompt") or "").strip()
-        if _sys_prompt:
-            line += 1
-            events.append({
-                "line": line,
-                "ts": _hermes_iso(_sys_row.get("started_at") or _sys_row.get("created_at")),
-                "type": "system",
-                "subtype": "hermes_system_prompt",
-                "session": session_id,
-                "text": _sys_prompt,
-                "char_count": len(_sys_prompt),
-            })
-        if len(chain) > 1:
-            current = rows_by_id.get(session_id) or {}
-            line += 1
-            events.append({
-                "line": line,
-                "ts": _hermes_iso(current.get("started_at") or current.get("created_at")),
-                "type": "system",
-                "subtype": "hermes_lineage",
-                "session": session_id,
-                "parent_session_id": current.get("parent_session_id") or "",
-                "lineage_session_ids": chain,
-                "source_platform": current.get("source") or "",
-                "model": current.get("model") or "",
-            })
-        for idx, sid in enumerate(chain):
+        # Phase 1: build each segment's event list up front — DB messages merged
+        # with failed-turn error records (request_dump files), in chronological
+        # order. Successful turns live in the DB; turns whose upstream API call
+        # failed exist ONLY as dump files, so without this the transcript shows
+        # the prompt with no hint the turn errored. Building first also lets us
+        # tally turns for the summary banner (emitted at line 1, below).
+        chain_blocks = []
+        total_turns = 0
+        total_failed = 0
+        for sid in chain:
             row = rows_by_id.get(sid) or {}
-            if idx > 0:
-                line += 1
-                events.append({
-                    "line": line,
-                    "ts": _hermes_iso(row.get("started_at") or row.get("created_at")),
-                    "type": "system",
-                    "subtype": "hermes_segment",
-                    "session": sid,
-                    "parent_session_id": row.get("parent_session_id") or "",
-                    "source_platform": row.get("source") or "",
-                    "model": row.get("model") or "",
-                })
-            # Merge DB messages with failed-turn error records (request_dump
-            # files) and emit them in chronological order. Successful turns live
-            # in the DB; turns whose upstream API call failed exist ONLY as dump
-            # files, so without this the transcript shows the prompt with no
-            # hint the turn errored (the "missing errors" the view was hiding).
             items = []
             last_ep = 0.0
             order = 0
@@ -24566,7 +24585,77 @@ def _parse_hermes_conversation(session_id, after_line=0):
                 items.append((ferr["_ts_epoch"], 1, order, ferr["event"]))
                 order += 1
             items.sort(key=lambda t: (t[0], t[1], t[2]))
-            for _ep, _kind, _ord, ev in items:
+            seg_events = [ev for _ep, _kind, _ord, ev in items]
+            total_turns += sum(1 for ev in seg_events if ev.get("type") == "user_text")
+            total_failed += sum(1 for ev in seg_events if ev.get("subtype") == "hermes_failed_turn")
+            chain_blocks.append((sid, row, seg_events))
+        # Phase 2: header events. The turn-summary banner goes first (line 1) so
+        # the session's health (how many turns, how many failed) is visible at a
+        # glance; then the injected system prompt and lineage. The after_line
+        # filter below drops all of these from incremental polls — they show
+        # once on open. Read-only.
+        _sum_row = rows_by_id.get(session_id) or {}
+        if total_turns or total_failed:
+            line += 1
+            events.append({
+                "line": line,
+                "ts": _hermes_iso(_sum_row.get("started_at") or _sum_row.get("created_at")),
+                "type": "system",
+                "subtype": "hermes_turn_summary",
+                "session": session_id,
+                "source_platform": _sum_row.get("source") or "",
+                "model": _sum_row.get("model") or "",
+                "turns": total_turns,
+                "failed": total_failed,
+                "succeeded": max(0, total_turns - total_failed),
+            })
+        # Hermes assembles a per-session system prompt (persona + skills +
+        # memory + per-conversation context) and persists it on the session row;
+        # CCC otherwise renders only user/assistant/tool messages, so this
+        # priming layer would be invisible. Collapsed by default in the UI.
+        _sys_row = _sum_row
+        _sys_prompt = (_sys_row.get("system_prompt") or "").strip()
+        if _sys_prompt:
+            line += 1
+            events.append({
+                "line": line,
+                "ts": _hermes_iso(_sys_row.get("started_at") or _sys_row.get("created_at")),
+                "type": "system",
+                "subtype": "hermes_system_prompt",
+                "session": session_id,
+                "text": _sys_prompt,
+                "char_count": len(_sys_prompt),
+            })
+        if len(chain) > 1:
+            current = _sum_row
+            line += 1
+            events.append({
+                "line": line,
+                "ts": _hermes_iso(current.get("started_at") or current.get("created_at")),
+                "type": "system",
+                "subtype": "hermes_lineage",
+                "session": session_id,
+                "parent_session_id": current.get("parent_session_id") or "",
+                "lineage_session_ids": chain,
+                "source_platform": current.get("source") or "",
+                "model": current.get("model") or "",
+            })
+        # Phase 3: emit each segment's events (with a continuation marker before
+        # any lineage-inherited segment after the first).
+        for idx, (sid, row, seg_events) in enumerate(chain_blocks):
+            if idx > 0:
+                line += 1
+                events.append({
+                    "line": line,
+                    "ts": _hermes_iso(row.get("started_at") or row.get("created_at")),
+                    "type": "system",
+                    "subtype": "hermes_segment",
+                    "session": sid,
+                    "parent_session_id": row.get("parent_session_id") or "",
+                    "source_platform": row.get("source") or "",
+                    "model": row.get("model") or "",
+                })
+            for ev in seg_events:
                 line += 1
                 ev["line"] = line
                 events.append(ev)
