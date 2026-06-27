@@ -15265,6 +15265,25 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-ready-needs-spec { background: rgba(88,166,255,0.18); color: #58a6ff; }
 .fq-ready-needs-shaping { background: rgba(210,153,34,0.16); color: #d29922; }
 .fq-vc { background: rgba(139,148,158,0.12); color: var(--text-muted); }
+/* Priority bump button — hidden until row hover (CCC-339). */
+.fq-prio-bump {
+  flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  padding: 0; margin: 0;
+  border: 1px solid transparent; border-radius: 4px;
+  background: transparent; cursor: pointer;
+  font-size: 11px; line-height: 1; color: var(--text-muted);
+  opacity: 0; transition: opacity 0.1s, background 0.1s, color 0.1s;
+}
+.fq-row:hover .fq-prio-bump { opacity: 1; }
+.fq-prio-bump:hover {
+  background: rgba(88,166,255,0.16);
+  border-color: rgba(88,166,255,0.30);
+  color: var(--accent, #58a6ff);
+}
+.fq-prio-bump.is-top { opacity: 0 !important; pointer-events: none; }
+
 /* Blocked-work (WT-28): a ticket waiting on a human. Amber, sorted to the top. */
 .fq-chip.fq-blocked { background: rgba(210,153,34,0.22); color: #e3b341; }
 .fq-row.is-blocked { background: rgba(210,153,34,0.06); }

@@ -27397,11 +27397,17 @@
         const noteShown = blocked && it.block_question ? String(it.block_question) : noteFull;
         const tip = (blocked && it.block_question ? ('Needs input: ' + it.block_question + '\n\n') : '')
           + noteFull + '\n\nClick to view ticket details.';
+        const nextPrio = { '': 'p2', p3: 'p2', p2: 'p1', p1: 'p0', p0: 'p0' };
+        const curPrio = it.priority || '';
+        const np = nextPrio[curPrio] || 'p2';
+        const atTop = curPrio === 'p0';
+        const bumpTitle = atTop ? 'Already highest priority (p0)' : ('Bump to ' + np);
         return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref">' + escapeHtml(ref) + '</span>'
           + _uxqChips(it)
           + '<span class="fq-note">' + escapeHtml(noteShown) + '</span>'
+          + '<button class="fq-prio-bump' + (atTop ? ' is-top' : '') + '" data-ref="' + escapeAttr(ref) + '" data-next-prio="' + escapeAttr(np) + '" title="' + escapeAttr(bumpTitle) + '" aria-label="' + escapeAttr(bumpTitle) + '">↑</button>'
           + '<span class="fq-status" title="' + escapeAttr(blocked ? 'needs input' : status) + '">' + escapeHtml(status) + '</span>'
           + '</div>';
       }).join('') || _uxqEmptyHtml(proj, items.length);
@@ -27440,7 +27446,35 @@
   {
     const $queueList = document.getElementById('sidebarQueueList');
     if ($queueList) {
-      $queueList.addEventListener('click', (ev) => {
+      $queueList.addEventListener('click', async (ev) => {
+        // Priority bump button — stop before row click opens the modal.
+        const bumpBtn = ev.target && ev.target.closest && ev.target.closest('.fq-prio-bump[data-ref]');
+        if (bumpBtn) {
+          ev.stopPropagation();
+          if (bumpBtn.classList.contains('is-top')) return; // already p0
+          const ref = bumpBtn.getAttribute('data-ref');
+          const priority = bumpBtn.getAttribute('data-next-prio');
+          bumpBtn.disabled = true;
+          try {
+            const res = await fetch('/api/ux-fixes/set-priority', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ref, priority }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.ok) {
+              _uxqItemsCache.ts = 0;
+              _renderQueuePanel();
+            } else {
+              showOpToast('Priority update failed: ' + (data.error || res.status), 'error');
+              bumpBtn.disabled = false;
+            }
+          } catch (e) {
+            showOpToast('Priority update failed: ' + e, 'error');
+            bumpBtn.disabled = false;
+          }
+          return;
+        }
         const row = ev.target && ev.target.closest && ev.target.closest('.fq-row[data-ref]');
         if (row) _uxqOpenItemModal(_uxqItemForRef(row.getAttribute('data-ref')));
       });

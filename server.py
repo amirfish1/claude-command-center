@@ -43516,6 +43516,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
+        if path == "/api/ux-fixes/set-priority":
+            # Bump/set priority of a ticket from the queue row (CCC-339).
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            ref = str(payload.get("ref") or "").strip()
+            priority = str(payload.get("priority") or "").strip()
+            if not ref:
+                self.send_json({"ok": False, "error": "ref required"}, 400)
+                return
+            try:
+                item = ux_fixes_queue.update(ref, priority=priority)
+                self.send_json({"ok": bool(item), "item": item})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            return
         if path == "/api/ux-fixes/enqueue":
             # Add a ticket to the queue straight from the UI (CCC-145 — the
             # queue panel's "+ Add" affordance). Same-origin is already enforced
