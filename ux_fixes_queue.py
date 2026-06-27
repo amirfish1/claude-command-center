@@ -448,6 +448,7 @@ def update_status(
                         it["claimed_session_id"] = real_sid
                 if status == "closed":
                     it["closed_at"] = now
+                    it["needs_input"] = False  # a closed ticket isn't waiting
                     # Attribute the close so a worker that closed a ticket
                     # by ref (without a prior claim) still gets credited — the
                     # dashboard progress chip credits the closer, and an
@@ -462,6 +463,37 @@ def update_status(
                     it["claimed_at"] = None
                     it["closed_at"] = None
                     it["claimed_session_id"] = None
+                    # reopening drops any block — it's back in the pool
+                    it["needs_input"] = False
+                    it["block_question"] = ""
+                    it["blocked_at"] = None
+                _save_unlocked(data)
+                return it
+    return None
+
+
+def answer(ident: Any, text: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+    """Record a human answer on a blocked ticket and clear ``needs_input`` so the
+    worker's resumed session can continue (WT-28/WT-29). Mirrors the WatchTower
+    engine's ``answer`` so CCC and the ``wt`` CLI write the same shape. Answers
+    are append-only, preserving a back-and-forth. Status is untouched — the
+    ticket stays ``in_progress`` with its worker; the human just unblocked it."""
+    text = _clip(text, 24000)
+    if not text:
+        raise ValueError("answer text is required")
+    with _FileLock(_LOCK_FILE):
+        data = _load_unlocked()
+        for it in data["items"]:
+            if _matches(it, ident):
+                now = _now_iso()
+                ans = it.get("answers")
+                if not isinstance(ans, list):
+                    ans = []
+                ans.append({"at": now, "text": text, "by": str(session_id or "human")})
+                it["answers"] = ans
+                it["needs_input"] = False
+                it["answered_at"] = now
+                it["updated_at"] = now
                 _save_unlocked(data)
                 return it
     return None

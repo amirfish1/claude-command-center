@@ -27241,9 +27241,13 @@
             + _progNotes.map(p => '<div class="uxq-block-note">' + _noteText(p) + '</div>').join('') : '')
         + (_answers.length ? '<div class="uxq-block-sub">Answers</div>'
             + _answers.map(a => '<div class="uxq-block-note">' + _noteText(a) + '</div>').join('') : '')
-        + '<div class="uxq-block-sub">Respond from a terminal</div>'
-        + '<code class="uxq-block-cmd">wt discuss ' + escapeHtml(ref) + '</code>'
-        + '<code class="uxq-block-cmd">wt answer ' + escapeHtml(ref) + ' "your decision"</code>'
+        + '<div class="uxq-block-sub">Answer inline</div>'
+        + '<div class="uxq-answer-row">'
+          + '<input class="uxq-answer-input" type="text" placeholder="Type your decision…" aria-label="Answer this blocked ticket">'
+          + '<button type="button" class="ann-btn ann-primary uxq-answer-send">Send</button>'
+        + '</div>'
+        + '<div class="uxq-block-hint">Clears the block; resume the session to continue: '
+          + '<code class="uxq-block-cmd uxq-block-cmd-inline">wt discuss ' + escapeHtml(ref) + '</code></div>'
         + '</div>'
       : '';
     const modal = document.createElement('div');
@@ -27289,6 +27293,40 @@
     }
     const closeBtn = modal.querySelector('[data-ux-close]');
     if (closeBtn) closeBtn.addEventListener('click', close);
+    // Inline answer (WT-29): POST the decision, clear the block, refresh.
+    const answerInput = modal.querySelector('.uxq-answer-input');
+    const answerSend = modal.querySelector('.uxq-answer-send');
+    if (answerInput && answerSend) {
+      const submitAnswer = async () => {
+        const text = (answerInput.value || '').trim();
+        if (!text) { answerInput.focus(); return; }
+        answerSend.disabled = true;
+        try {
+          const res = await fetch('/api/ux-fixes/answer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ref: ref, text: text }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            showOpToast('Answered ' + ref + ' — block cleared', 'success');
+            _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
+            _renderQueuePanel();
+            close();
+          } else {
+            showOpToast('Answer failed: ' + (data.error || res.status), 'error');
+            answerSend.disabled = false;
+          }
+        } catch (e) {
+          showOpToast('Answer failed: ' + e, 'error');
+          answerSend.disabled = false;
+        }
+      };
+      answerSend.addEventListener('click', submitAnswer);
+      answerInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submitAnswer(); }
+      });
+    }
   }
   function _renderQueuePanel() {
     const $queue = document.getElementById('sidebarQueueList');
