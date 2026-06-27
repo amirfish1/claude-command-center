@@ -481,7 +481,7 @@ def update(ident: Any, **fields: Any) -> Optional[Dict[str, Any]]:
             for k, v in fields.items():
                 if v is None:
                     continue
-                if k == "type":
+                if k in ("type", "item_type"):  # accept enqueue's param name too
                     it["type"] = _norm_choice(v, VALID_TYPES, it.get("type", ""))
                 elif k == "readiness":
                     it["readiness"] = _norm_choice(v, VALID_READINESS, it.get("readiness", ""))
