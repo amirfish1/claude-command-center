@@ -4181,6 +4181,28 @@
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-object-chip,
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-folder-chip,
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
+  /* Brief on HOVER/FOCUS (not the selected row) floats out of flow so the row
+     list never reflows — no jump, no skipped rows when moving the cursor down.
+     pointer-events:none lets the cursor fall through to the row beneath, so the
+     next row hovers normally instead of being skipped under the overlay. The
+     active row keeps its inline second line (stable, no jump). Tradeoff: the
+     hovered brief temporarily covers the name directly below, and its chips are
+     not clickable while floating (Option 2 / side flyout restores that). */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):hover > .conv-hover-meta-row,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):focus-within > .conv-hover-meta-row {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin: 0;
+    padding: 3px 48px 5px var(--conv-content-left);
+    max-width: none;
+    z-index: 6;
+    pointer-events: none;
+    background: var(--bg, #0d1117);
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.30);
+  }
   .conv-current-sessions-scroll.is-search-results .conv-item {
     min-height: 0;
     padding: 8px 10px;
@@ -13251,8 +13273,12 @@ body.status-pos-right .conv-sticky-header .csh-col-ask {
 /* In right-rail mode the original-ask and activity are in the side rail;
    the sticky header has nothing left to show. Hide it entirely — the
    earlier-ask slot that lived here was already removed once; this rule
-   keeps the regression from surfacing again (CCC-332). */
-body.status-pos-right .conv-sticky-header {
+   keeps the regression from surfacing again (CCC-332).
+   The main convToolbar is also hidden: all its controls (launch, announce,
+   breadcrumb, live badge) were moved into the rail by _applyToolbarRailLayout;
+   the bar itself should not occupy vertical space. */
+body.status-pos-right .conv-sticky-header,
+body.status-pos-right #convToolbar {
   display: none !important;
 }
 
