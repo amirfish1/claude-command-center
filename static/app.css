@@ -5988,49 +5988,77 @@
     }
   }
 
-  /* ── One-line composer + TTS floater (user request) ─────────────────────────
-     Collapses the two-row composer (textarea on top, buttons below) into one
-     flex row on mobile. The TTS speaker button is pulled out of the button row
-     and floated just above the composer as a small circular FAB — less clutter
-     in the row, thumb-reachable, shows only when the input bar is open. */
+  /* ── Mobile composer: row layout + shorter textarea ──────────────────────────
+     Textarea on the left (flex: 1), button cluster on the right (flex: 0).
+     Keeps selectors visible in new-session mode (they stack inside .conv-input-row-bottom).
+     TTS returned to inline position — the FAB overlapped the goal strip × (CCC mobile). */
   @media (max-width: 950px) {
     .conv-input-bar { position: relative; }
-    /* Keep the composer a COLUMN on mobile: textarea full-width on its own
-       line, the button/selector row below. The earlier flex-ROW "one line"
-       layout crushed the textarea to ~8px whenever the bottom row was wide
-       (new-session mode shows engine/model/issue selectors), so the long
-       placeholder wrapped into ~10 lines and the input ballooned to fill the
-       page. Column is robust regardless of how many controls the row holds. */
     .conv-input-bar.visible {
-      flex-direction: column;
-      align-items: stretch;
+      flex-direction: row;
+      align-items: flex-end;
       gap: 6px;
       padding: 8px 10px;
       margin: 4px 8px 6px;
     }
-    .conv-input-row-top { width: 100%; min-width: 0; }
-    .conv-input-bar textarea { max-height: 80px; }
+    .conv-input-row-top { flex: 1 1 0; min-width: 0; width: auto; }
+    .conv-input-row-bottom { flex: 0 0 auto; }
+    .conv-input-bar textarea { max-height: 40px; }
     .conv-announced-from span { display: none; }
     .conv-input-bar .conv-announced-from-input { width: 74px; flex-basis: 74px; }
-    /* TTS: floats as a circle FAB above the right edge of the composer.
-       position:absolute on the input-bar (position:relative) places it above
-       the input row's top edge — it won't be clipped because .conv-pane has
-       no overflow:hidden and .main is fixed/inset on mobile. */
+    /* TTS back inline — the FAB position overlapped the goal strip × button
+       (both ended up right: 12px above the input bar). Inline is safe: the
+       button row already has room for it beside mic + send. */
     .conv-input-bar .tts-btn {
-      position: absolute;
-      bottom: calc(100% + 8px);
-      right: 12px;
-      z-index: 50;
-      width: 38px; height: 38px;
+      position: static;
+      bottom: auto; right: auto; z-index: auto;
+      width: 32px; height: 32px;
       border-radius: 50%;
-      background: var(--surface);
+      background: transparent;
       border: 1px solid var(--border);
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      box-shadow: none;
+      -webkit-backdrop-filter: none; backdrop-filter: none;
     }
     /* Submit+ is a desktop "phone-style" feature; on an actual phone the
        regular compose flow IS the phone experience — hide it to slim the row. */
     .conv-input-bar .submit-plus-btn { display: none !important; }
+  }
+
+  /* ── Mobile: status-bar declutter ────────────────────────────────────────────
+     On a 375px phone the bottom context strip shows: kind · branch · path ·
+     quality-grade · calc Xk/YM (Z%) · model. The path and quality grade eat
+     half the strip, leaving no room for the model pill. Drop them on mobile
+     and reduce the usage pill to just the pct (font-size:0 hides the text
+     node, child span gets a real size back). */
+  @media (max-width: 950px) {
+    .wp-path { display: none !important; }
+    .wp-quality-pill { display: none !important; }
+    .wp-usage-pill { font-size: 0 !important; white-space: nowrap; }
+    .wp-usage-pill .wp-usage-pct { font-size: 11px !important; }
+  }
+
+  /* ── Mobile: sticky original-ask solid background ─────────────────────────
+     .conv-sticky-header is position:sticky; its default semi-transparent
+     background lets scrolled message content bleed through on small screens,
+     creating an "overlay" illusion. Solid bg on mobile. */
+  @media (max-width: 950px) {
+    .conv-sticky-header {
+      background: var(--bg, #0d1117) !important;
+    }
+  }
+
+  /* ── Mobile: larger tap target on subagent tab × ─────────────────────────
+     The close × on a background-task tab is ~12px × 20px — too small on a
+     phone. Expand to a comfortable 28px square without changing the glyph. */
+  @media (max-width: 950px) {
+    .conv-tab-close {
+      min-width: 28px;
+      min-height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
   }
 
   /* Submit+ — phone-mode send (teal/green to read as "talk", distinct from
@@ -15200,6 +15228,16 @@ body:has(.gc-reader) .pwa-install-banner {
   font-size: 12px; color: var(--accent); background: rgba(139,148,158,0.10);
   padding: 4px 7px; border-radius: 5px; margin: 3px 0; user-select: all;
 }
+.uxq-answer-row { display: flex; gap: 6px; margin: 3px 0 2px; }
+.uxq-answer-input {
+  flex: 1 1 auto; min-width: 0; font-size: 13px;
+  padding: 5px 8px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--bg, #0d1117); color: var(--text);
+}
+.uxq-answer-input:focus { outline: none; border-color: var(--accent); }
+.uxq-answer-send { flex: 0 0 auto; }
+.uxq-block-hint { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+.uxq-block-cmd-inline { display: inline; padding: 1px 5px; margin: 0; font-size: 11px; }
 .uxq-detail-hero {
   display: flex;
   flex-direction: column;
