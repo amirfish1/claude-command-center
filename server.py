@@ -23734,6 +23734,31 @@ def _hermes_visible_text(value):
     return _strip_ccc_session_state_instruction(_hermes_join_text(walk(value))).strip()
 
 
+def _hermes_raw_content_text(value):
+    """Last-resort render of a message's *own* content when the whitelist
+    extraction in _hermes_visible_text yields nothing.
+
+    JSON-mode turns (e.g. the chuck-router classifier) store the model's reply
+    as a bare object like {"intent": "work_request", ...} — it carries none of
+    the whitelisted text keys, so _hermes_visible_text returns "" and the whole
+    turn was being dropped, leaving only the user prompts (the "sparse fragment"
+    bug). This only fires as a fallback, so it never broadens what the whitelist
+    already shows: the `content` column is the message's own payload (model
+    output / inbound text), not nested platform metadata, so rendering it raw is
+    safe and strictly better than dropping the turn.
+    """
+    parsed = _hermes_jsonish(value)
+    if parsed is None:
+        return ""
+    if isinstance(parsed, str):
+        return _strip_ccc_session_state_instruction(parsed).strip()
+    try:
+        dumped = json.dumps(parsed, ensure_ascii=False, indent=2, sort_keys=False)
+    except (TypeError, ValueError):
+        dumped = str(parsed)
+    return _strip_ccc_session_state_instruction(dumped).strip()
+
+
 def _hermes_tool_args(raw):
     parsed = _hermes_jsonish(raw)
     if isinstance(parsed, dict):
@@ -24288,6 +24313,8 @@ def _parse_hermes_message(msg, line_num, session_row=None):
     ts = _hermes_iso(msg.get("timestamp") or msg.get("created_at"))
     text = _hermes_visible_text(msg.get("content"))
     if role in ("user", "human"):
+        if not text:
+            text = _hermes_raw_content_text(msg.get("content"))
         if text:
             return {"line": line_num, "ts": ts, "type": "user_text", "text": text, "images": []}
         return None
@@ -24305,8 +24332,14 @@ def _parse_hermes_message(msg, line_num, session_row=None):
                 })
         if text:
             blocks.append({"kind": "text", "text": text})
-        for call in _hermes_tool_calls(msg.get("tool_calls")):
-            blocks.append(_hermes_tool_block(call))
+        tool_blocks = [_hermes_tool_block(call) for call in _hermes_tool_calls(msg.get("tool_calls"))]
+        blocks.extend(tool_blocks)
+        if not text and not tool_blocks:
+            # JSON-mode / structured reply: content is a bare object with no
+            # whitelisted text key. Render it raw rather than dropping the turn.
+            raw = _hermes_raw_content_text(msg.get("content"))
+            if raw:
+                blocks.append({"kind": "text", "text": raw})
         if blocks:
             ev = {
                 "line": line_num,
@@ -24322,7 +24355,7 @@ def _parse_hermes_message(msg, line_num, session_row=None):
         return None
     if role in ("tool", "function") or msg.get("tool_name") or msg.get("tool_call_id"):
         if not text:
-            text = _hermes_visible_text(msg.get("tool_calls"))
+            text = _hermes_visible_text(msg.get("tool_calls")) or _hermes_raw_content_text(msg.get("content"))
         if len(text) > 800:
             text = text[:800] + "\n..."
         return {
