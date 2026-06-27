@@ -12371,6 +12371,11 @@ body.status-pos-right.status-rail-collapsed .conv-pane > .conv-input-context {
 .rail-actions #cccBreadcrumb {
   padding: 6px 8px;
 }
+/* The rail header already mirrors the active session title, so the breadcrumb
+   copy in the rail keeps only category/process/popout and drops the repeat. */
+.rail-actions #cccBreadcrumb .ccc-breadcrumb-title {
+  display: none;
+}
 .rail-actions #convStatus {
   color: var(--text-muted);
 }

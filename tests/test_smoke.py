@@ -2683,6 +2683,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".rail-actions #cccBreadcrumb,\n.rail-actions #convStatus {", app_css)
         self.assertIn("flex: 1 1 100%;", app_css)
 
+    def test_rail_breadcrumb_hides_repeated_session_title(self):
+        """The status rail already mirrors the session title in its header, so
+        the moved breadcrumb should not repeat that same title."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("if (railTitleEl) railTitleEl.textContent = title || category || 'Session';", app_js)
+        self.assertIn(".rail-actions #cccBreadcrumb .ccc-breadcrumb-title {", app_css)
+        self.assertIn("display: none;", app_css[
+            app_css.index(".rail-actions #cccBreadcrumb .ccc-breadcrumb-title {"):
+            app_css.index(".rail-actions #convStatus {", app_css.index(".rail-actions #cccBreadcrumb .ccc-breadcrumb-title {"))
+        ])
+
     def test_files_sidebar_sorts_by_recent_mentions(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("function _ffcRecencyLine(row)", app_js)
