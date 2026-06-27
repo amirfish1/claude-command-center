@@ -82,6 +82,34 @@ _LOCK_FILE = QUEUE_FILE.with_suffix(".lock")
 
 VALID_STATUSES = ("open", "in_progress", "closed")
 VALID_LANES = ("normal", "express")
+# Richer triage dimensions (all optional + back-compat: items predating these
+# fields have them empty, which the claim gate treats as claimable).
+VALID_TYPES = ("bug", "feature")
+VALID_READINESS = ("needs-shaping", "needs-spec", "shovel-ready")
+VALID_PRIORITY = ("p0", "p1", "p2", "p3")
+VALID_LMH = ("L", "M", "H")
+# Readiness states an EXECUTION claim must never pick up; only a shaping claim
+# (shaping=True) touches these. Empty/shovel-ready stay executable.
+_UNREADY = ("needs-shaping", "needs-spec")
+_PRIORITY_RANK = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
+
+
+def _prio_rank(it: Dict[str, Any]) -> int:
+    """Lower = claimed first. Falls back to the legacy express lane as a crude
+    p0 so pre-priority items keep their ordering."""
+    p = str(it.get("priority") or "").lower()
+    if p in _PRIORITY_RANK:
+        return _PRIORITY_RANK[p]
+    return 0 if it.get("lane") == "express" else 2
+
+
+def _norm_choice(value: Any, valid: tuple, default: str = "") -> str:
+    """Case-insensitively map a value to its canonical form in ``valid``."""
+    s = str(value or "").strip()
+    for v in valid:
+        if s.lower() == v.lower():
+            return v
+    return default
 
 
 def _now_iso() -> str:
@@ -253,13 +281,31 @@ def enqueue(
     screenshot_path: str = "",
     repo_path: str = "",
     lane: str = "normal",
+    item_type: str = "",
+    readiness: str = "",
+    priority: str = "",
+    value: str = "",
+    confidence: str = "",
 ) -> Dict[str, Any]:
-    """Append a new ``open`` item and return it (with its assigned ref)."""
+    """Append a new ``open`` item and return it (with its assigned ref).
+
+    Triage fields are optional. ``readiness`` defaults from ``item_type`` when
+    omitted: a ``bug`` is born ``shovel-ready`` (a report is usually actionable),
+    a ``feature`` is born ``needs-shaping`` (never build a feature on first
+    mention). ``value``/``confidence`` (L/M/H) are advisory rationale for
+    priority and never gate or sort a claim."""
     note = _clip(note, 4000)
     if not note and not text:
         raise ValueError("note or text is required")
     lane = lane if lane in VALID_LANES else "normal"
     proj = _project_for(source, repo_path, project)
+    t = _norm_choice(item_type, VALID_TYPES, "")
+    rd = _norm_choice(readiness, VALID_READINESS, "")
+    if not rd and t:
+        rd = "shovel-ready" if t == "bug" else "needs-shaping"
+    pr = _norm_choice(priority, VALID_PRIORITY, "")
+    val = _norm_choice(value, VALID_LMH, "")
+    conf = _norm_choice(confidence, VALID_LMH, "")
     with _FileLock(_LOCK_FILE):
         data = _load_unlocked()
         data["counter"] = int(data.get("counter", 0)) + 1
@@ -279,6 +325,11 @@ def enqueue(
             "selector": _clip(selector, 1000),
             "screenshot_path": str(screenshot_path or ""),
             "repo_path": str(repo_path or ""),
+            "type": t,
+            "readiness": rd,
+            "priority": pr,
+            "value": val,
+            "confidence": conf,
             "claimed_by": None,
             "claimed_at": None,
             "closed_at": None,
@@ -321,6 +372,8 @@ def claim_next(
     lane: Optional[str] = None,
     project: Optional[str] = None,
     session_uuid: str = "",
+    item_type: Optional[str] = None,
+    shaping: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Atomically move the oldest ``open`` item to ``in_progress`` and return it.
 
@@ -345,10 +398,22 @@ def claim_next(
             candidates = [it for it in candidates if it.get("project") == proj]
         if lane:
             candidates = [it for it in candidates if it.get("lane") == lane]
+        if item_type:
+            t = _norm_choice(item_type, VALID_TYPES, "")
+            candidates = [it for it in candidates if (it.get("type") or "") == t]
+        # Readiness gate: an EXECUTION claim never picks an unready item
+        # (needs-shaping / needs-spec), so a worker cannot accidentally build a
+        # half-shaped feature or a raw idea. A shaping claim does the inverse —
+        # it ONLY picks unready items, to spec and promote them. Empty readiness
+        # (pre-field items) counts as executable, preserving old behavior.
+        if shaping:
+            candidates = [it for it in candidates if (it.get("readiness") or "") in _UNREADY]
+        else:
+            candidates = [it for it in candidates if (it.get("readiness") or "") not in _UNREADY]
         if not candidates:
             return None
-        # express first, then oldest number.
-        candidates.sort(key=lambda it: (0 if it.get("lane") == "express" else 1, int(it.get("number", 0))))
+        # Highest priority first (p0..p3, express as legacy p0), then oldest.
+        candidates.sort(key=lambda it: (_prio_rank(it), int(it.get("number", 0))))
         item = candidates[0]
         item["status"] = "in_progress"
         item["claimed_by"] = str(session_id)
@@ -399,6 +464,40 @@ def update_status(
                     it["claimed_session_id"] = None
                 _save_unlocked(data)
                 return it
+    return None
+
+
+def update(ident: Any, **fields: Any) -> Optional[Dict[str, Any]]:
+    """Edit an existing item's content/triage fields in place. The first
+    first-class mutation for amending items (so nobody hand-edits the JSON).
+    Promotion happens here: e.g. ``update("WT-12", readiness="shovel-ready",
+    priority="p1")`` after a spec is written. None values are ignored; enum
+    fields are validated, bad values left unchanged. Returns the item."""
+    with _FileLock(_LOCK_FILE):
+        data = _load_unlocked()
+        for it in data["items"]:
+            if not _matches(it, ident):
+                continue
+            for k, v in fields.items():
+                if v is None:
+                    continue
+                if k == "type":
+                    it["type"] = _norm_choice(v, VALID_TYPES, it.get("type", ""))
+                elif k == "readiness":
+                    it["readiness"] = _norm_choice(v, VALID_READINESS, it.get("readiness", ""))
+                elif k == "priority":
+                    it["priority"] = _norm_choice(v, VALID_PRIORITY, it.get("priority", ""))
+                elif k in ("value", "confidence"):
+                    it[k] = _norm_choice(v, VALID_LMH, it.get(k, ""))
+                elif k == "lane":
+                    it["lane"] = v if v in VALID_LANES else it.get("lane", "normal")
+                elif k in ("note", "title", "url"):
+                    it[k] = _clip(str(v), 4000)
+                elif k == "text":
+                    it[k] = _clip(str(v), 24000)
+            it["updated_at"] = _now_iso()
+            _save_unlocked(data)
+            return it
     return None
 
 
