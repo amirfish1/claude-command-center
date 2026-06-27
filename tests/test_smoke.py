@@ -2621,6 +2621,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("background-color: var(--bg) !important;", input_css)
         self.assertIn("background-image: none !important;", input_css)
         self.assertIn("box-shadow: none;", input_css)
+        self.assertNotIn("$convInput.style.height = ($convInput.scrollHeight) + 'px';", app_js)
+
+    def test_image_paste_value_hook_preserves_composer_autosize_hook(self):
+        """Paste cleanup should not replace the composer auto-shrink setter.
+
+        The composer installs an element-level value setter so programmatic
+        clears shrink a previously tall prompt. The paste-image hook must wrap
+        that existing setter instead of going straight back to the prototype.
+        """
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const ownDesc = Object.getOwnPropertyDescriptor(el, 'value');", app_js)
+        self.assertIn("const protoDesc = Object.getOwnPropertyDescriptor(proto, 'value');", app_js)
+        self.assertIn("const desc = ownDesc || protoDesc;", app_js)
 
     def test_composer_textarea_hides_native_scrollbar_chrome(self):
         """The composer textarea should not show WebKit scrollbar thumbs.

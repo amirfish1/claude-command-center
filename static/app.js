@@ -19194,8 +19194,7 @@
           $convInput.value = body;
           setTimeout(() => {
             $convInput.focus();
-            $convInput.style.height = 'auto';
-            $convInput.style.height = ($convInput.scrollHeight) + 'px';
+            _autosizeConvInput();
           }, 30);
         }
       });
@@ -38528,7 +38527,9 @@
     });
     try {
       const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+      const ownDesc = Object.getOwnPropertyDescriptor(el, 'value');
+      const protoDesc = Object.getOwnPropertyDescriptor(proto, 'value');
+      const desc = ownDesc || protoDesc;
       if (desc && desc.set && desc.get && !el._imgPasteValueHook) {
         el._imgPasteValueHook = true;
         const origGet = desc.get;
@@ -38563,8 +38564,7 @@
         }
         setTimeout(() => {
           $convInput.focus();
-          $convInput.style.height = 'auto';
-          $convInput.style.height = ($convInput.scrollHeight) + 'px';
+          _autosizeConvInput();
         }, 30);
       }
     }
