@@ -2733,11 +2733,16 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function _uxqOpenItemModal(item)", app_js)
-        self.assertIn("Queue item details", app_js)
+        self.assertIn("function _uxqItemTitle(item)", app_js)
+        self.assertIn("const detailTitle = _uxqItemTitle(item);", app_js)
+        self.assertIn('class="uxq-detail-title"', app_js)
+        self.assertIn('class="uxq-detail-ref"', app_js)
         self.assertIn("Click to view ticket details", app_js)
         self.assertIn("_uxqOpenItemModal(_uxqItemForRef(row.getAttribute('data-ref')))", app_js)
         queue_click = app_js[app_js.index("$queueList.addEventListener('click'"):app_js.index("// STUCK badge", app_js.index("$queueList.addEventListener('click'"))]
         self.assertNotIn("_uxqJumpToRef", queue_click)
+        self.assertIn(".uxq-detail-hero", app_css)
+        self.assertIn(".uxq-detail-title", app_css)
         self.assertIn(".uxq-detail-meta", app_css)
 
     def test_queue_status_icons_are_large_and_in_progress_glows(self):

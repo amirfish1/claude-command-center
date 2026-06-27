@@ -26773,6 +26773,20 @@
     if (!item) return '';
     return String(item.text || item.note || '');
   }
+  function _uxqItemTitle(item) {
+    if (!item) return '';
+    const candidates = [item.note, item.text, item.title];
+    for (const raw of candidates) {
+      const lines = String(raw || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      for (let line of lines) {
+        if (line === 'Fix the following UX issue based on this annotation:') continue;
+        if (line.indexOf('Annotation:') === 0) line = line.slice('Annotation:'.length).trim();
+        if (!line) continue;
+        return line.length > 220 ? line.slice(0, 217) + '...' : line;
+      }
+    }
+    return _uxqItemRef(item);
+  }
   function _uxqMetaRow(label, value) {
     if (value == null || value === '') return '';
     const text = String(value);
@@ -26787,6 +26801,9 @@
     }
     const ref = _uxqItemRef(item);
     const promptText = _uxqItemPrompt(item);
+    const detailTitle = _uxqItemTitle(item);
+    const detailSubtitle = [item.project, item.needs_input ? 'needs input' : (item.status || ''), item.lane]
+      .filter(Boolean).join(' · ');
     const hasShot = !!item.screenshot_path;
     const shotSrc = hasShot ? ('/api/pasted-image?path=' + encodeURIComponent(item.screenshot_path)) : '';
     const metaHtml = [
@@ -26823,7 +26840,11 @@
     modal.className = 'ann-ux-preview-modal uxq-detail-modal';
     modal.innerHTML =
       '<div class="ann-ux-preview-card uxq-detail-card" role="dialog" aria-modal="true" aria-label="Queue item details">' +
-        '<div class="ann-ux-preview-title">Queue item details</div>' +
+        '<div class="uxq-detail-hero">' +
+          '<div class="uxq-detail-ref">' + escapeHtml(ref) + '</div>' +
+          '<div class="uxq-detail-title" title="' + escapeAttr(detailTitle) + '">' + escapeHtml(detailTitle) + '</div>' +
+          (detailSubtitle ? '<div class="uxq-detail-subtitle">' + escapeHtml(detailSubtitle) + '</div>' : '') +
+        '</div>' +
         '<dl class="uxq-detail-meta">' + metaHtml + '</dl>' +
         blockHtml +
         '<div class="ann-ux-preview-shot">' +
