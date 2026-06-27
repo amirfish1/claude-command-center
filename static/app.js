@@ -18944,6 +18944,21 @@
     }
   }
 
+  // Immediate "it started" feedback fired the MOMENT a /compact request goes
+  // out — not after the await resolves. The Claude hidden-pty path blocks
+  // server-side for the FULL compaction (1-3 min), so deferring the progress
+  // banner until the response came back left a two-minute dead zone: a 5s
+  // toast faded and nothing else signalled that work was ongoing. The banner
+  // carries a live elapsed timer and tears itself down the instant the compact
+  // boundary lands (its own 4s transcript poll), so showing it up front makes
+  // the timer span the real wait. Background sessions (not the foreground
+  // conv view) get a toast instead, since the banner is scoped to that view.
+  function beginCompactProgress(sid, source) {
+    if (source === 'codex') { showOpToast('Compacting conversation…', 'info'); return; }
+    if (currentSession && currentSession.id === sid) showCompactInProgressBanner(sid);
+    else showOpToast('Compacting conversation… (usually 1-3 min)', 'info');
+  }
+
   // Compact-button handler. Reuses postRunCompactForSession + the same
   // toast/banner/refresh logic as typing /compact so both paths stay
   // consistent. Used by the #convCompactBtn click + the breadcrumb button.
@@ -18963,9 +18978,10 @@
     }
     _compactInFlight = true;
     if ($convCompactBtn) $convCompactBtn.disabled = true;
-    // Immediate "it started" feedback — the request (esp. Codex thread/resume
-    // + compact, or Claude queueing) can take a moment to ack.
-    showOpToast('Compacting conversation…', 'info');
+    // Immediate, persistent "it started" feedback BEFORE the await — the Claude
+    // hidden-pty call blocks for the whole compaction, so the banner must go up
+    // now to cover the wait (see beginCompactProgress).
+    beginCompactProgress(sid, source);
     try {
       const data = await postRunCompactForSession(
         sid, source, liveStatus && liveStatus.terminalApp);
@@ -18983,12 +18999,15 @@
           setTimeout(refreshConversationList, 3500);
         }
       } else if (data && data.code === 'compact_needs_manual') {
+        clearCompactInProgressBanner();
         offerManualCompact(sid);
       } else {
+        clearCompactInProgressBanner();
         const reason = (data && (formatInjectFailure(data, 0) || data.error)) || 'unknown';
         showOpToast('/compact failed: ' + reason, 'error');
       }
     } catch (err) {
+      clearCompactInProgressBanner();
       showOpToast('/compact failed: ' + ((err && err.message) || 'network error'), 'error');
     } finally {
       _compactInFlight = false;
@@ -22929,6 +22948,9 @@
         const msg = 'Context is at ' + pct + '%. Compact "' + titleText + '" now? '
           + '(Runs /compact for the session.)';
         if (!window.confirm(msg)) return;
+        // Persistent progress feedback up front — the call blocks for the full
+        // compaction (see beginCompactProgress).
+        beginCompactProgress(sid, source);
         try {
           const data = await postRunCompactForSession(sid, source);
           if (data && data.ok) {
@@ -22942,11 +22964,14 @@
               setTimeout(refreshConversationList, 3500);
             }
           } else if (data && data.code === 'compact_needs_manual') {
+            clearCompactInProgressBanner();
             offerManualCompact(sid);
           } else {
+            clearCompactInProgressBanner();
             showOpToast('/compact failed: ' + ((data && data.error) || 'unknown'), 'error');
           }
         } catch (err) {
+          clearCompactInProgressBanner();
           showOpToast('/compact failed: ' + ((err && err.message) || 'network'), 'error');
         }
       };
