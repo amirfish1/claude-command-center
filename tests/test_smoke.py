@@ -94,9 +94,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("/api/repo/ship", app_js)
         self.assertIn("_startShipPushAll", app_js)
         self.assertIn("function _isShipRepoPath", app_js)
-        self.assertIn("section === 'inprogress' && _isShipRepoPath(repoPath)", app_js)
+        self.assertIn("(section === 'inprogress' || section === 'archived') && _isShipRepoPath(repoPath)", app_js)
+        self.assertIn("const archivedRepoPath = cards[0].folder_path || '';", app_js)
+        self.assertIn("_folderGroupHeaderHtml('archived', folder, cards.length, hue, orphan, collapseKey, '', archivedRepoPath)", app_js)
         self.assertIn("if (!_isShipRepoPath(repo)) return;", app_js)
         self.assertIn(".conv-folder-ship", app_css)
+        self.assertIn(".conv-archived-section .conv-folder-ship-btn", app_css)
         # Editor/cache cruft is junk (gitignore material), not "app/deploy
         # review" — otherwise Push all parks on it every time. The cache/ prefix
         # is anchored so a legit src/cache/ deeper in the tree isn't swept.

@@ -20536,7 +20536,7 @@
       // "Push all" ship control — conversation list only, and only when we
       // know the repo's real path. Status text is hydrated client-side after
       // render (see _hydrateShipControls / _refreshShipStatus).
-      const ship = (section === 'inprogress' && _isShipRepoPath(repoPath))
+      const ship = ((section === 'inprogress' || section === 'archived') && _isShipRepoPath(repoPath))
         ? '<span class="conv-folder-ship" data-ship-repo="' + escapeHtml(repoPath) + '">'
             + '<span class="conv-folder-ship-status" data-role="ship-status"></span>'
             + '<button type="button" class="conv-folder-ship-btn" data-role="ship-push-all"'
@@ -21690,8 +21690,9 @@
         const collapseKey = cards[0].folder_path || folder;
         _arcFolderCollapseKeys.push(_folderGroupStorageKey('archived', collapseKey));
         const collapsed = _isFolderGroupCollapsed('archived', collapseKey);
+        const archivedRepoPath = cards[0].folder_path || '';
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
-          + _folderGroupHeaderHtml('archived', folder, cards.length, hue, orphan, collapseKey)
+          + _folderGroupHeaderHtml('archived', folder, cards.length, hue, orphan, collapseKey, '', archivedRepoPath)
           + cards.map(c => _renderRow(c, { suppressFolderChip: true })).join('')
           + '</div>';
       }).join('');
