@@ -1881,6 +1881,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".ann-editor-shot-preview", app_css)
         self.assertIn(".ann-editor-shot-preview img", app_css)
 
+    def test_annotation_ux_preview_accepts_pasted_images(self):
+        """The editable UX-queue preview should share composer image paste."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        preview_start = app_js.index("function annShowUxFixesPreview(ann, onSubmit)")
+        preview_body = app_js[preview_start:app_js.index("async function annOpenUxFixesQueue", preview_start)]
+        self.assertIn("try { if (typeof attachImagePaste === 'function') attachImagePaste(textArea); } catch (_) {}", preview_body)
+        self.assertIn("function _pastedImageHost(el)", app_js)
+        self.assertIn(".ann-editor, .ann-screen-dialog, .ann-ux-preview-card", app_js)
+
     def test_ux_fixes_queue_progress_badge_is_rendered_from_queue_api(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")

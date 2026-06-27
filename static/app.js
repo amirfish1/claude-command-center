@@ -37895,11 +37895,16 @@
     }
     return null;
   }
+  function _pastedImageHost(el) {
+    return (el && el.closest && el.closest(
+      '.conv-input-bar, .gc-reader-input-row, .new-session-modal-body, .ann-editor, .ann-screen-dialog, .ann-ux-preview-card'
+    )) || (el && el.parentElement) || null;
+  }
   function _pastedImageThumbsContainer(el) {
     // Find or create a thumbnails strip adjacent to the input element.
     // Lives in the input's container so it travels with the composer
     // regardless of which pane / which composer fired the paste.
-    const host = el.closest('.conv-input-bar, .gc-reader-input-row, .new-session-modal-body') || el.parentElement;
+    const host = _pastedImageHost(el);
     if (!host) return null;
     let strip = host.querySelector(':scope > .paste-thumb-strip');
     if (!strip) {
@@ -37943,7 +37948,7 @@
     strip.appendChild(thumb);
   }
   function _clearPastedImageThumbs(el) {
-    const host = el && el.closest('.conv-input-bar, .gc-reader-input-row, .new-session-modal-body');
+    const host = _pastedImageHost(el);
     const strip = host && host.querySelector(':scope > .paste-thumb-strip');
     if (strip) strip.remove();
   }
@@ -39439,6 +39444,7 @@
     document.body.appendChild(modal);
     const textArea = modal.querySelector('.ann-ux-preview-text');
     textArea.value = promptText;
+    try { if (typeof attachImagePaste === 'function') attachImagePaste(textArea); } catch (_) {}
     const close = () => { modal.remove(); document.removeEventListener('keydown', onKey, true); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
     document.addEventListener('keydown', onKey, true);
