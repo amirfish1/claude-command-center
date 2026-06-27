@@ -39166,7 +39166,6 @@
 
   function annBeginPreEditorScreenshotCapture() {
     if (!annotationState || !annotationState.rect) return Promise.resolve(null);
-    annotationState.preEditorCaptureAttempted = true;
     const contextRect = annContextRect(annotationState.element, annotationState.rect);
     const captureElement = annotationState.element;
     return annCaptureDomRegionB64(contextRect, captureElement)
@@ -39221,7 +39220,7 @@
       screen,
       element: annElementSummary(element),
       live_status: liveStatusSnapshot,
-      capture_screen: !(annotationState && annotationState.preEditorCaptureAttempted),
+      capture_screen: !screenshotB64,
     };
     if (screenshotB64) payload.screenshot_b64 = screenshotB64;
     return payload;
@@ -39708,7 +39707,6 @@
       hoverElement: null,
       hoverRect: null,
       preEditorScreenshotPromise: null,
-      preEditorCaptureAttempted: false,
     };
     overlay.addEventListener('pointerdown', annPointerDown);
     overlay.addEventListener('pointermove', annPointerMove);

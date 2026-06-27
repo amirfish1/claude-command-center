@@ -1809,6 +1809,16 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("annCaptureDomRegionB64(contextRect, captureElement)", persist_body)
         self.assertNotIn("annotationState.overlay.classList.add('ann-capturing')", persist_body)
 
+    def test_annotation_empty_pre_editor_capture_allows_native_fallback(self):
+        """A failed DOM/tab pre-capture should not suppress server screenshot fallback."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        build_start = app_js.index("function annBuildPayload(note, screenshotB64)")
+        build_body = app_js[build_start:app_js.index("function annStop()", build_start)]
+        self.assertIn("capture_screen: !screenshotB64,", build_body)
+        self.assertNotIn("capture_screen: !(annotationState && annotationState.preEditorCaptureAttempted)", build_body)
+        self.assertNotIn("preEditorCaptureAttempted", build_body)
+
     def test_annotation_editor_previews_pre_dialog_screenshot(self):
         """The annotation editor should show the screenshot that was captured
         before the dialog appeared."""
