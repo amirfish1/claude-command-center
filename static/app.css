@@ -18,6 +18,11 @@
     --purple: #bc8cff;
     --red: #f85149;
     --cyan: #39d2c0;
+    --cb-bg: #0b1016;
+    --cb-head-bg: rgba(255,255,255,0.035);
+    --cb-border: #26313f;
+    --cb-text: #d6deeb;
+    --cb-muted: #9aa7b5;
     --accent-contrast: #ffffff;     /* readable text/icon color on var(--accent) */
     --status-rail-width: 260px;
     /* Inter primary, system stack fallback. Inter is loaded from Google Fonts
@@ -1280,30 +1285,30 @@
      surface while the user is trying to scroll the conversation. */
   .cb-wrap {
     margin: 8px 0; border-radius: 8px; overflow: hidden;
-    background: #0b1016; border: 1px solid var(--border);
+    background: var(--cb-bg); border: 1px solid var(--cb-border);
   }
   .cb-head {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 5px 10px; background: rgba(255,255,255,0.025);
-    border-bottom: 1px solid var(--border);
+    padding: 5px 10px; background: var(--cb-head-bg);
+    border-bottom: 1px solid var(--cb-border);
     font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-    font-size: 11px; color: var(--text-muted);
+    font-size: 11px; color: var(--cb-muted);
   }
   .cb-lang { letter-spacing: 0.04em; }
   .cb-lang.cb-lang-plain { opacity: 0.55; }
   .cb-copy {
-    background: transparent; border: 1px solid var(--border);
-    color: var(--text-muted); font-family: inherit;
+    background: transparent; border: 1px solid var(--cb-border);
+    color: var(--cb-muted); font-family: inherit;
     font-size: 10px; padding: 2px 8px; border-radius: 4px;
     cursor: pointer; opacity: 0.6;
     transition: opacity 0.15s, color 0.15s, border-color 0.15s;
   }
-  .cb-copy:hover { opacity: 1; color: var(--text); border-color: var(--text-muted); }
+  .cb-copy:hover { opacity: 1; color: var(--cb-text); border-color: var(--cb-muted); }
   .cb-copy.copied { color: var(--green); border-color: rgba(63,185,80,0.5); opacity: 1; }
   pre.cb {
     margin: 0; padding: 12px 14px; overflow-x: hidden;
     font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-    font-size: 13px; line-height: 1.5; color: var(--text);
+    font-size: 13px; line-height: 1.5; color: var(--cb-text);
     white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
     tab-size: 2;
   }
@@ -1313,19 +1318,19 @@
      uses pre.cb styling so an unrendered block still looks correct. */
   .mermaid-block {
     margin: 8px 0; border-radius: 8px; overflow: hidden;
-    background: #0b1016; border: 1px solid var(--border);
+    background: var(--cb-bg); border: 1px solid var(--cb-border);
   }
   .mermaid-block .cb-head {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 5px 10px; background: rgba(255,255,255,0.025);
-    border-bottom: 1px solid var(--border);
+    padding: 5px 10px; background: var(--cb-head-bg);
+    border-bottom: 1px solid var(--cb-border);
     font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-    font-size: 11px; color: var(--text-muted);
+    font-size: 11px; color: var(--cb-muted);
   }
   .mermaid-block pre.mermaid-source {
     margin: 0; padding: 12px 14px;
     font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-    font-size: 13px; line-height: 1.5; color: var(--text);
+    font-size: 13px; line-height: 1.5; color: var(--cb-text);
     white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
   }
   .mermaid-block .mermaid-svg {

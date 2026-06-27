@@ -1315,6 +1315,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (!isBacklogRow && !isGithubPrRow && _ss && _ss.did)", app_js)
         self.assertNotIn("conv-outcome-next", app_js[app_js.index("// Outcome line (GOAL-1)"):app_js.index("const summaryDetailHtml", app_js.index("// Outcome line (GOAL-1)"))])
 
+    def test_code_blocks_keep_readable_contrast_in_light_theme(self):
+        """Fenced transcript code blocks should not inherit dark text from
+        bright conversation themes."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("--cb-bg: #0b1016;", app_css)
+        self.assertIn("--cb-text: #d6deeb;", app_css)
+        self.assertIn("--cb-muted: #9aa7b5;", app_css)
+        cb_css = app_css[app_css.index(".cb-wrap {"):app_css.index(".mermaid-block {", app_css.index(".cb-wrap {"))]
+        self.assertIn("background: var(--cb-bg);", cb_css)
+        self.assertIn("color: var(--cb-muted);", cb_css)
+        self.assertIn("color: var(--cb-text);", cb_css)
+        self.assertIn('pre.cb code { background: transparent; padding: 0; font: inherit; color: inherit; }', app_css)
+
     def test_sidebar_rows_have_summary_details_toggle(self):
         """Session rows with session_state should expose an expand/collapse
         affordance for the detailed summary block."""
