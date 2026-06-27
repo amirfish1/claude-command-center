@@ -4309,9 +4309,6 @@
     display: inline-flex;
     order: 91;
   }
-  /* Plain labels — drop the "1." / "2." ordinal prefix (Codex has none). */
-  .conv-project-tree .conv-folder-object-number { display: none; }
-
   /* ----- Child session rows (Codex `.tree-item.indent`) ----- */
   .conv-project-tree .conv-item {
     display: flex;

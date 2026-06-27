@@ -716,6 +716,7 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("raw.split('/').map", app_js)
         self.assertIn(".conv-folder-object-title-text", app_css)
         self.assertIn(".conv-folder-object-number", app_css)
+        self.assertNotIn(".conv-project-tree .conv-folder-object-number { display: none; }", app_css)
 
     def test_chip_color_toggle_has_hierarchy_level_mode(self):
         """Chip colors should cycle through per-item, per-level, and muted modes."""
