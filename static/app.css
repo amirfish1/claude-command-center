@@ -4163,45 +4163,66 @@
     color: #f0f4fb;
   }
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row):not(.conv-hover-meta-row),
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row):not(.conv-hover-meta-row) { display: block; }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-outcome,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-outcome { display: block; }
-  /* Brief (repo/source/branch meta) is the compact row's second line. */
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-meta-row { display: flex; }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-meta-inline,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-branch-slot,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-object-chip,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-folder-chip,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-repo-pin,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-meta-inline,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-branch-slot,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-object-chip,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-folder-chip,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
-  /* Brief on HOVER/FOCUS (not the selected row) floats out of flow so the row
-     list never reflows — no jump, no skipped rows when moving the cursor down.
-     pointer-events:none lets the cursor fall through to the row beneath, so the
-     next row hovers normally instead of being skipped under the overlay. The
-     active row keeps its inline second line (stable, no jump). Tradeoff: the
-     hovered brief temporarily covers the name directly below, and its chips are
-     not clickable while floating (Option 2 / side flyout restores that). */
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):hover > .conv-hover-meta-row,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):focus-within > .conv-hover-meta-row {
+  /* Reveal the inner meta chips whenever the meta line is shown (hover / focus /
+     active). Descendant combinators so they work whether the meta line is
+     floated inside .conv-hover-extras (hover) or inline (active). */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-meta-inline,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-branch-slot,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-object-chip,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-folder-chip,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-repo-pin,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within .conv-hover-meta-row .conv-branch-slot,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within .conv-hover-meta-row .conv-object-chip,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within .conv-hover-meta-row .conv-folder-chip,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
+  /* Hover extras wrapper. display:contents by default → transparent in every
+     list/mode, so layout is identical to before everywhere except where we
+     explicitly float it below. */
+  .conv-item .conv-hover-extras { display: contents; }
+  /* Active (selected) row: reveal the wrapper inline and show only the meta
+     line (the brief outcome stays hidden until hover, matching prior behavior). */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-extras { display: contents; }
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active:not(:hover):not(:focus-within) .conv-hover-extras > :not(.conv-hover-meta-row) { display: none; }
+  /* HOVER / FOCUS (any row): float the whole extras stack out of flow so the
+     row list never reflows — no jump, no skipped rows when moving the cursor
+     down. pointer-events:none lets the cursor fall through to the row beneath,
+     so the next row hovers normally instead of being skipped under the overlay.
+     The stack flows normally INSIDE the floated panel, so the brief + meta line
+     keep their natural order and heights. Tradeoff: the floating panel covers
+     the name directly below, and its chips are not clickable while floating
+     (Option 2 / side flyout restores both). */
+  /* Hovered item gets a stacking context above its siblings so the floating
+     panel is not painted over by section headers or later rows in DOM order. */
+  .conv-current-sessions-scroll .conv-item:hover { z-index: 1; }
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):hover > .conv-hover-extras,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):focus-within > .conv-hover-extras {
+    display: block;
     position: absolute;
     top: 100%;
     left: 0;
     right: 0;
-    margin: 0;
-    padding: 3px 48px 5px var(--conv-content-left);
-    max-width: none;
     z-index: 6;
-    pointer-events: none;
-    background: var(--bg, #0d1117);
+    pointer-events: auto;
+    padding: 2px 0 8px 0;
+    /* Hard stop at 80px: first 80px transparent so the next row's icon and
+       ~5-6 title chars peek through. Content (chips + brief) starts at 80px
+       where the background becomes fully opaque. */
+    background: linear-gradient(to right, transparent 80px, var(--bg, #0d1117) 80px);
     border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
     box-shadow: 0 6px 14px rgba(0, 0, 0, 0.30);
+  }
+  /* Inside the floated panel: push meta line and brief to start at 80px
+     (after the transparent zone) so content sits on the opaque background. */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):hover > .conv-hover-extras > .conv-hover-meta-row,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):focus-within > .conv-hover-extras > .conv-hover-meta-row {
+    display: flex;
+    margin: 4px 48px 0 80px;
+  }
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):hover > .conv-hover-extras > .conv-outcome,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):focus-within > .conv-hover-extras > .conv-outcome {
+    display: block;
+    margin-left: 80px;
   }
   .conv-current-sessions-scroll.is-search-results .conv-item {
     min-height: 0;

@@ -20807,11 +20807,22 @@
           + '<span class="conv-status-slot">' + liveToolHtml + signals + '</span>'
           + '</span>'
         : '';
-      const hoverMetaRowHtml = (!opts.evergreenAgent && (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml))
+      // Hover meta row — chip order: object → folder → session-id → goal → others.
+      // Suppress object chip when rows are already grouped under an object header
+      // (elevateToObject = by-objects sidebar mode — the chip would be noise).
+      // Dedupe: if the object title matches the folder label exactly (case-insensitive),
+      // drop the folder chip — they're showing the same thing.
+      const _hmObj = flowObjectForConversation(c);
+      const _hmObjTitle = _hmObj ? String(_hmObj.title || '').trim() : '';
+      const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;
+      const _hmFolderChip = (folderChipHtml && _hmObjTitle && c.folder_label_chip
+        && _hmObjTitle.toLowerCase() === String(c.folder_label_chip).toLowerCase())
+        ? '' : folderChipHtml;
+      const hoverMetaRowHtml = (!opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml))
         ? '<div class="conv-hover-meta-row">'
+          + _hmObjectChip
+          + _hmFolderChip
           + sessionIdChipHtml
-          + objectChipHtml
-          + folderChipHtml
           + goalChipHtml
           + pinnedHtml
           + (rowSizeHtml || '')
