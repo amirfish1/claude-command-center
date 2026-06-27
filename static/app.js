@@ -20957,11 +20957,17 @@
           + '</div>'
           + evergreenMetaRowHtml
         + '</div>'
-        + hoverMetaRowHtml
-        + ask
-        + outcomeHtml
-        + summaryDetailHtml
-        + historySnippetHtml
+        // Hover-revealed extras wrapped in one container so the current-sessions
+        // panel can float the whole stack out of flow on hover (no row reflow,
+        // no skipped rows). display:contents by default → transparent in every
+        // other list/mode, so existing layout is unchanged.
+        + '<div class="conv-hover-extras">'
+        +   hoverMetaRowHtml
+        +   ask
+        +   outcomeHtml
+        +   summaryDetailHtml
+        +   historySnippetHtml
+        + '</div>'
       + '</div>'
       // Inline "Details" block: when the In-progress Details toggle is on and
       // this row has a matching Needs-your-attention item, render that exact
@@ -30435,7 +30441,7 @@
     const hasLiveContext = engine === 'claude' && liveContextTokens > 0;
     const ovrNorm = ovr ? _normalizeModelId(ovr.model) : '';
     const liveNorm = _normalizeModelId(u.model || '');
-    const queued = !!ovr && (ovr.applied === 'queued' || (ovrNorm && ovrNorm !== liveNorm));
+    const queued = !!ovr && ovrNorm && ovrNorm !== liveNorm;
     if (displayModel) {
       // 1M pill lights up when override.context_1m or peak provably exceeded
       // 200k (only possible on the 1M variant). Non-Claude engines never
