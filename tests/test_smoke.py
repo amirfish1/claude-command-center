@@ -5469,6 +5469,58 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertEqual(rows[0]["parent_session_id"], parent)
 
+    def test_archive_build_stamps_live_row_state(self):
+        now = time.time()
+        with mock.patch.object(
+            self.server,
+            "find_all_conversations",
+            return_value=[{
+                "session_id": "live-build-state",
+                "engine": "claude",
+                "is_live": True,
+                "sidecar_status": "active",
+                "sidecar_ts": now,
+                "sidecar_in_flight": False,
+                "pending_tool": None,
+                "last_event_type": "assistant",
+            }],
+        ):
+            rows = self.server._build_archive_conversations()
+
+        self.assertEqual(rows[0]["state"], "working")
+        self.assertFalse(rows[0]["ended_blocked"])
+
+    def test_archive_rehydrate_stamps_live_row_state_after_sidecar_refresh(self):
+        now = time.time()
+        sid = "live-rehydrate-state"
+
+        def add_sidecar(row):
+            row.update({
+                "sidecar_status": "active",
+                "sidecar_ts": now,
+                "sidecar_in_flight": False,
+                "sidecar_tool": "Bash",
+                "sidecar_file": "pytest",
+            })
+
+        with mock.patch.object(self.server, "_discover_live_session_ids", return_value={sid}), \
+             mock.patch.object(self.server, "_archive_session_is_live", return_value=True), \
+             mock.patch.object(self.server, "_add_sidecar_fields", side_effect=add_sidecar), \
+             mock.patch.object(self.server, "_load_archived_conversations", return_value=[]), \
+             mock.patch.object(self.server, "_load_verified_conversations", return_value=[]), \
+             mock.patch.object(self.server, "_load_pinned_conversations", return_value=[]):
+            rows = self.server._rehydrate_archive_cached_rows([{
+                "session_id": sid,
+                "engine": "claude",
+                "mtime": now,
+                "modified": now,
+                "last_event_type": "assistant",
+                "pending_tool": None,
+            }])
+
+        self.assertEqual(rows[0]["state"], "working")
+        self.assertEqual(rows[0]["sidecar_tool"], "Bash")
+
     def test_archive_rehydrate_recovers_legacy_report_to_parent_from_transcript(self):
         parent = "10000000-0000-4000-8000-000000000013"
         child = "10000000-0000-4000-8000-000000000014"
