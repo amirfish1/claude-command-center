@@ -1747,6 +1747,30 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("screenshot_warning", server_py)
         self.assertNotIn("other tool", app_js.lower())
 
+    def test_annotation_page_screenshot_starts_before_editor_opens(self):
+        """Page annotation screenshots should represent the selected page
+        before the note/Queue dialog exists."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function annBeginPreEditorScreenshotCapture()", app_js)
+        self.assertIn("function annResolvePreEditorScreenshot()", app_js)
+        pointer_start = app_js.index("function annPointerUp(e)")
+        pointer_body = app_js[pointer_start:app_js.index("function annHandleKeydown", pointer_start)]
+        self.assertIn("annotationState.preEditorScreenshotPromise = annBeginPreEditorScreenshotCapture();", pointer_body)
+        self.assertLess(
+            pointer_body.index("annotationState.preEditorScreenshotPromise = annBeginPreEditorScreenshotCapture();"),
+            pointer_body.index("annShowEditor();"),
+        )
+        self.assertLess(
+            pointer_body.index("await annotationState.preEditorScreenshotPromise;"),
+            pointer_body.index("annShowEditor();"),
+        )
+        persist_start = app_js.index("const persistAnnotation = async (busyLabel) => {")
+        persist_body = app_js[persist_start:app_js.index("const save = async () => {", persist_start)]
+        self.assertIn("const screenshotB64 = await annResolvePreEditorScreenshot();", persist_body)
+        self.assertNotIn("annCaptureDomRegionB64(contextRect, captureElement)", persist_body)
+        self.assertNotIn("annotationState.overlay.classList.add('ann-capturing')", persist_body)
+
     def test_ux_fixes_queue_progress_badge_is_rendered_from_queue_api(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")

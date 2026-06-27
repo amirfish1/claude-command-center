@@ -38724,6 +38724,20 @@
     });
   }
 
+  function annBeginPreEditorScreenshotCapture() {
+    if (!annotationState || !annotationState.rect) return Promise.resolve(null);
+    annotationState.preEditorCaptureAttempted = true;
+    const contextRect = annContextRect(annotationState.element, annotationState.rect);
+    const captureElement = annotationState.element;
+    return annCaptureDomRegionB64(contextRect, captureElement).catch(() => null);
+  }
+
+  async function annResolvePreEditorScreenshot() {
+    if (!annotationState || !annotationState.preEditorScreenshotPromise) return null;
+    try { return await annotationState.preEditorScreenshotPromise; }
+    catch (_) { return null; }
+  }
+
   function annBuildPayload(note, screenshotB64) {
     const rect = annotationState.rect;
     const element = annotationState.element;
@@ -38759,14 +38773,10 @@
       screen,
       element: annElementSummary(element),
       live_status: liveStatusSnapshot,
-      capture_screen: true,
+      capture_screen: !(annotationState && annotationState.preEditorCaptureAttempted),
     };
     if (screenshotB64) payload.screenshot_b64 = screenshotB64;
     return payload;
-  }
-
-  function annNextPaint() {
-    return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   }
 
   function annStop() {
@@ -39082,33 +39092,8 @@
       if (openSessionBtn) openSessionBtn.disabled = true;
       if (uxQueueBtn) uxQueueBtn.disabled = true;
       if (saveBtn) saveBtn.textContent = busyLabel || 'Saving…';
-      let payload = null;
-      if (annotationState && annotationState.overlay) {
-        const contextRect = annContextRect(annotationState.element, annotationState.rect);
-        const captureElement = annotationState.element;
-        // CCC-180: hide the overlay (incl. the editor dialog + HUD) BEFORE any
-        // capture starts. The tab-capture path crops a full-tab frame, so if
-        // the dialog is still visible when that frame is grabbed it lands in
-        // the screenshot. classList.add is synchronous, so getDisplayMedia is
-        // still requested within the same user-activation task (the comment
-        // below) — the hide just wins the race against the frame grab. The
-        // DOM-clone path already excludes the overlay (it clones only the
-        // annotated element's context ancestor).
-        annotationState.overlay.classList.add('ann-capturing');
-        // getDisplayMedia must be requested before the first await or the browser
-        // will not show the tab-sharing prompt (user activation expires).
-        let tabCapturePromise = null;
-        if (annTabCaptureSupported()) {
-          tabCapturePromise = annCaptureTabRegionB64(contextRect);
-        }
-        await annNextPaint();
-        let screenshotB64 = await annCaptureDomRegionB64(contextRect, captureElement);
-        if (!screenshotB64 && tabCapturePromise) screenshotB64 = await tabCapturePromise;
-        payload = annBuildPayload(note, screenshotB64);
-        annotationState.overlay.classList.remove('ann-capturing');
-      } else {
-        payload = annBuildPayload(note, null);
-      }
+      const screenshotB64 = await annResolvePreEditorScreenshot();
+      const payload = annBuildPayload(note, screenshotB64);
       try {
         const res = await fetch('/api/annotations', {
           method: 'POST',
@@ -39214,7 +39199,7 @@
     annUpdateSelection(rect);
   }
 
-  function annPointerUp(e) {
+  async function annPointerUp(e) {
     if (!annotationState || !annotationState.dragging) return;
     e.preventDefault();
     annotationState.dragging = false;
@@ -39225,8 +39210,11 @@
     annotationState.rect = clicked ? annSelectionRectForElement(target, e.clientX, e.clientY) : raw;
     annUpdateSelection(annotationState.rect);
     if (annotationState.hoverLabelEl) annotationState.hoverLabelEl.hidden = true;
+    annotationState.preEditorScreenshotPromise = annBeginPreEditorScreenshotCapture();
     // Fire the tab-capture prompt while the click gesture is still active.
     annBeginTabCaptureRequest();
+    await annotationState.preEditorScreenshotPromise;
+    if (!annotationState) return;
     annShowEditor();
   }
 
@@ -39257,6 +39245,8 @@
       element: null,
       hoverElement: null,
       hoverRect: null,
+      preEditorScreenshotPromise: null,
+      preEditorCaptureAttempted: false,
     };
     overlay.addEventListener('pointerdown', annPointerDown);
     overlay.addEventListener('pointermove', annPointerMove);
