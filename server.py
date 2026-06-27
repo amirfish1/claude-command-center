@@ -6455,7 +6455,7 @@ def _capture_annotation_screen_rect(screen_rect, annotation_id):
             pass
         hint = err or f"screencapture exited {proc.returncode}"
         if "could not create" in hint.lower() or proc.returncode == 1:
-            hint += " (grant Screen Recording to the CCC server process in System Settings)"
+            hint += " (capture failed; check Screen Recording permission, window focus, or region bounds)"
         return None, hint
     try:
         if out.stat().st_size <= 0:
@@ -6635,6 +6635,8 @@ def create_annotation(payload):
             annotation["screenshot_path"] = screenshot_path
         elif capture_err:
             screenshot_warning = capture_err
+    if screenshot_warning and not annotation.get("screenshot_path"):
+        annotation["screenshot_warning"] = screenshot_warning
     with _ANNOTATIONS_LOCK:
         items = _load_annotations()
         items.append(annotation)
@@ -43531,6 +43533,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 item = ux_fixes_queue.update(ref, priority=priority)
+                self.send_json({"ok": bool(item), "item": item})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+        if path == "/api/ux-fixes/edit":
+            # Edit triage fields of a queue item from the detail modal (CCC-338).
+            # Accepts any subset of: note, title, priority, type, readiness,
+            # value, confidence, lane. Unknown keys are silently ignored by
+            # ux_fixes_queue.update().
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            ref = str(payload.get("ref") or "").strip()
+            if not ref:
+                self.send_json({"ok": False, "error": "ref required"}, 400)
+                return
+            editable = ("note", "title", "priority", "type", "readiness",
+                        "value", "confidence", "lane")
+            fields = {k: payload[k] for k in editable if k in payload}
+            try:
+                item = ux_fixes_queue.update(ref, **fields)
                 self.send_json({"ok": bool(item), "item": item})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)

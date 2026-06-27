@@ -1777,6 +1777,44 @@ class TestServerImports(unittest.TestCase):
                 server.ANNOTATIONS_FILE = old_file
                 server.ANNOTATION_SCREENSHOT_DIR = old_dir
 
+    def test_annotation_screenshot_warning_is_persisted(self):
+        """A failed screenshot should carry the actual capture diagnostic into
+        the saved annotation so queue workers do not infer a permission issue."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server.ANNOTATIONS_FILE
+            old_dir = server.ANNOTATION_SCREENSHOT_DIR
+            server.ANNOTATIONS_FILE = pathlib.Path(td) / "annotations.json"
+            server.ANNOTATION_SCREENSHOT_DIR = pathlib.Path(td) / "annotation-screenshots"
+            try:
+                with mock.patch.object(
+                    server,
+                    "_capture_annotation_screenshot_native",
+                    return_value=(None, "window capture failed: front window was unavailable"),
+                ):
+                    result = server.create_annotation({
+                        "note": "Screenshot failed",
+                        "capture_screen": True,
+                    })
+                self.assertTrue(result["ok"])
+                self.assertEqual(
+                    result["screenshot_warning"],
+                    "window capture failed: front window was unavailable",
+                )
+                ann = result["annotation"]
+                self.assertEqual(
+                    ann["screenshot_warning"],
+                    "window capture failed: front window was unavailable",
+                )
+                saved = server.list_annotations(limit=10)["annotations"][0]
+                self.assertEqual(saved["screenshot_warning"], ann["screenshot_warning"])
+            finally:
+                server.ANNOTATIONS_FILE = old_file
+                server.ANNOTATION_SCREENSHOT_DIR = old_dir
+
     def test_breadcrumb_has_popout_button_wired_to_existing_helper(self):
         """The conversation breadcrumb gains a pop-out button that reuses the
         existing drag-to-out-of-window helper. The button is delegated so it
@@ -1858,8 +1896,15 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("annBeginTabCaptureRequest", app_js)
         self.assertIn("annCaptureDomRegionB64", app_js)
         self.assertIn("data-ann-enable-shot", app_js)
+        self.assertIn("CCC will try to attach a screenshot automatically.", app_js)
+        self.assertIn("savedAnnotation.screenshot_warning = (data && data.screenshot_warning) || '';", app_js)
+        self.assertIn("Screenshot warning: ", app_js)
+        self.assertNotIn("Screenshots use macOS Screen Recording — grant it to Claude Command Center", app_js)
+        self.assertNotIn("grant Screen Recording to the CCC server", app_js)
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
         self.assertIn("screenshot_warning", server_py)
+        self.assertIn("capture failed; check Screen Recording permission, window focus, or region bounds", server_py)
+        self.assertNotIn("grant Screen Recording to the CCC server process", server_py)
         self.assertNotIn("other tool", app_js.lower())
 
     def test_annotation_page_screenshot_starts_before_editor_opens(self):

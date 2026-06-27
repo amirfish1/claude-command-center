@@ -27286,6 +27286,20 @@
         '</div>' +
         '<div class="ann-ux-preview-label">Ticket prompt</div>' +
         '<textarea class="ann-ux-preview-text" rows="16" readonly spellcheck="false"></textarea>' +
+        '<details class="uxq-edit-section" open>' +
+          '<summary class="uxq-edit-summary">Edit triage</summary>' +
+          '<div class="uxq-edit-fields">' +
+            '<label class="uxq-edit-row"><span>Note</span><textarea class="uxq-edit-note" rows="3" spellcheck="true" placeholder="Short description…"></textarea></label>' +
+            '<label class="uxq-edit-row"><span>Priority</span><select class="uxq-edit-sel" data-field="priority"><option value="">—</option><option value="p0">p0 (urgent)</option><option value="p1">p1</option><option value="p2">p2</option><option value="p3">p3</option></select></label>' +
+            '<label class="uxq-edit-row"><span>Type</span><select class="uxq-edit-sel" data-field="type"><option value="">—</option><option value="feature">feature</option><option value="bug">bug</option></select></label>' +
+            '<label class="uxq-edit-row"><span>Readiness</span><select class="uxq-edit-sel" data-field="readiness"><option value="">—</option><option value="shovel-ready">shovel-ready</option><option value="needs-spec">needs-spec</option><option value="needs-shaping">needs-shaping</option></select></label>' +
+            '<label class="uxq-edit-row"><span>Value</span><select class="uxq-edit-sel" data-field="value"><option value="">—</option><option value="H">H</option><option value="M">M</option><option value="L">L</option></select></label>' +
+            '<label class="uxq-edit-row"><span>Confidence</span><select class="uxq-edit-sel" data-field="confidence"><option value="">—</option><option value="H">H</option><option value="M">M</option><option value="L">L</option></select></label>' +
+          '</div>' +
+          '<div class="ann-ux-preview-actions uxq-edit-actions">' +
+            '<button type="button" class="ann-btn ann-primary" data-ux-save>Save changes</button>' +
+          '</div>' +
+        '</details>' +
         '<div class="ann-ux-preview-actions">' +
           '<button type="button" class="ann-btn" data-ux-copy>Copy</button>' +
           '<button type="button" class="ann-btn ann-primary" data-ux-close>Close</button>' +
@@ -39880,7 +39894,7 @@
             ? '<span class="ann-ux-ok">✓ Screenshot attached</span>'
               + '<a href="' + shotSrc + '" target="_blank" rel="noopener">'
               + '<img class="ann-ux-preview-thumb" src="' + shotSrc + '" alt="annotation screenshot"></a>'
-            : '<span class="ann-ux-warn">⚠ No screenshot. Cancel, then use “Allow screenshot” / the “Screen” button and re-annotate so the worker can see it.</span>') +
+            : '<span class="ann-ux-warn">⚠ No screenshot. Use the Screen button for a manual region capture, or paste an image into this prompt before submitting.</span>') +
         '</div>' +
         (trunc.length
           ? '<div class="ann-ux-warn">⚠ Stored truncated: ' + escapeHtml(trunc.join(', ')) + '</div>'
@@ -40048,7 +40062,7 @@
         && annTabCaptureStream.getVideoTracks()[0].readyState === 'live');
       if (shotHintEl) {
         if (macApp) {
-          shotHintEl.textContent = 'Screenshots use macOS Screen Recording — grant it to Claude Command Center in System Settings → Privacy.';
+          shotHintEl.textContent = 'CCC will try to attach a screenshot automatically. If it does not, use the Screen button for a manual region capture.';
           shotHintEl.hidden = false;
         } else if (supported && !live) {
           shotHintEl.textContent = 'Click “Allow screenshot” and choose this tab in the browser prompt.';
@@ -40138,6 +40152,7 @@
         // even if the server doesn't echo every custom field. Drop the heavy
         // base64 so it doesn't linger on the in-memory annotation.
         savedAnnotation = Object.assign({}, payload, data.annotation || {});
+        savedAnnotation.screenshot_warning = (data && data.screenshot_warning) || '';
         delete savedAnnotation.screenshot_b64;
         noteEl.disabled = true;
         if (cancelBtn) cancelBtn.hidden = true;
@@ -40148,7 +40163,7 @@
           showOpToast('Annotation saved with screenshot', 'success');
         } else {
           const warn = (data && data.screenshot_warning)
-            || 'No screenshot — choose “This Tab” when prompted, or grant Screen Recording to the CCC server in System Settings.';
+            || 'No screenshot. Use the Screen button for a manual region capture, or paste an image before queueing.';
           showOpToast('Annotation saved (no screenshot): ' + warn, 'error');
         }
         return savedAnnotation;
@@ -40478,6 +40493,7 @@
       anchors.push('Session state: ' + bits.join(' · '));
     }
     if (ann.screenshot_path) anchors.push('Screenshot: ' + ann.screenshot_path);
+    else if (ann.screenshot_warning) anchors.push('Screenshot warning: ' + annClipText(ann.screenshot_warning, 240));
     if (anchors.length) {
       lines.push('', 'Anchors:', anchors.map(v => '- ' + v).join('\n'));
     }
