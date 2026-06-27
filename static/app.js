@@ -27322,6 +27322,49 @@
     }
     const closeBtn = modal.querySelector('[data-ux-close]');
     if (closeBtn) closeBtn.addEventListener('click', close);
+    // Pre-fill edit fields with current item values (CCC-338).
+    const editNote = modal.querySelector('.uxq-edit-note');
+    if (editNote) editNote.value = item.note || '';
+    modal.querySelectorAll('.uxq-edit-sel[data-field]').forEach(sel => {
+      const field = sel.getAttribute('data-field');
+      const val = item[field] || '';
+      const opt = sel.querySelector('option[value="' + val + '"]');
+      if (opt) opt.selected = true;
+    });
+    const saveBtn = modal.querySelector('[data-ux-save]');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        const fields = { ref };
+        if (editNote) fields.note = editNote.value.trim();
+        modal.querySelectorAll('.uxq-edit-sel[data-field]').forEach(sel => {
+          fields[sel.getAttribute('data-field')] = sel.value;
+        });
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving…';
+        try {
+          const res = await fetch('/api/ux-fixes/edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(fields),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            showOpToast('Saved ' + ref, 'success');
+            _uxqItemsCache.ts = 0;
+            _renderQueuePanel();
+            close();
+          } else {
+            showOpToast('Save failed: ' + (data.error || res.status), 'error');
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save changes';
+          }
+        } catch (e) {
+          showOpToast('Save failed: ' + e, 'error');
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save changes';
+        }
+      });
+    }
     // Inline answer (WT-29): POST the decision, clear the block, refresh.
     const answerInput = modal.querySelector('.uxq-answer-input');
     const answerSend = modal.querySelector('.uxq-answer-send');

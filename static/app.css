@@ -15345,6 +15345,61 @@ body:has(.gc-reader) .pwa-install-banner {
   font-size: 12px;
   color: var(--text-muted);
 }
+/* Queue item edit section inside the detail modal (CCC-338). */
+.uxq-edit-section {
+  margin: 12px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.uxq-edit-summary {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  background: rgba(139,148,158,0.06);
+  list-style: none;
+}
+.uxq-edit-summary::-webkit-details-marker { display: none; }
+.uxq-edit-summary::before { content: '▸ '; font-size: 10px; }
+details[open] .uxq-edit-summary::before { content: '▾ '; }
+.uxq-edit-fields {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.uxq-edit-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+}
+.uxq-edit-row > span {
+  flex: 0 0 72px;
+  padding-top: 5px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.uxq-edit-note,
+.uxq-edit-sel {
+  flex: 1;
+  font: inherit;
+  font-size: 12px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 7px;
+  outline: none;
+}
+.uxq-edit-note { resize: vertical; min-height: 52px; }
+.uxq-edit-note:focus,
+.uxq-edit-sel:focus { border-color: var(--accent); }
+.uxq-edit-actions { padding: 4px 12px 10px; margin: 0; }
+
 .fq-empty { padding: 12px 10px; font-size: 13px; color: var(--text-muted); }
 .fq-empty-sub {
   margin-top: 4px;
