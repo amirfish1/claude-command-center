@@ -567,7 +567,15 @@
     }).then(function (r) { return r.json(); })
       .then(function (d) {
         if (d && !d.ok && typeof showOpToast === 'function') showOpToast('Switch failed: ' + (d.error || 'unknown'), 'error');
-        else if (typeof showOpToast === 'function') showOpToast('Switched to ' + (_maModels[model] || model), 'success');
+        else if (typeof showOpToast === 'function') showOpToast('Queued ' + (_maModels[model] || model) + ' — applies on next turn', 'success');
+        // If the switched session is the one open in the reader, re-pull its
+        // usage so the footer model pill flips to "<model> → next" immediately
+        // instead of waiting for the next poll. The switch is queued server-side
+        // (the /model inject lands on the session's next turn), so the chip is
+        // the honest live state.
+        if (sid && sid === _usageSessionId && typeof fetchSessionUsage === 'function') {
+          fetchSessionUsage(sid);
+        }
         _pollModelAdvisor();
       })
       .catch(function () { _pollModelAdvisor(); });
@@ -646,11 +654,69 @@
     });
   }
   function _updateAdvisorPill(d) {
+    // Stash recommendations by session id so the in-conversation nudge can look
+    // up the open session without its own fetch.
+    const bySid = {};
+    (d.live || []).forEach(function (r) { if (r.session_id) bySid[r.session_id] = r; });
+    window.__advisorBySid = bySid;
     const pill = document.getElementById('cccAdvisorPill');
-    if (!pill) return;
-    const n = (d.live || []).length;
-    pill.querySelector('.ccc-adv-val').textContent = n ? (n + ' drift') : 'models ok';
-    pill.classList.toggle('ccc-adv-hot', n > 0);
+    if (pill) {
+      const n = (d.live || []).length;
+      pill.querySelector('.ccc-adv-val').textContent = n ? (n + ' drift') : 'models ok';
+      pill.classList.toggle('ccc-adv-hot', n > 0);
+    }
+    _renderInlineAdvisorNudge();
+  }
+  // Per-session nudge above the composer: when the OPEN conversation is on the
+  // wrong model, surface the recommendation right where the user is looking,
+  // with a one-tap switch that targets THIS session (no ambiguity about which
+  // session the global pill would switch). Dismissable per recommendation.
+  function _renderInlineAdvisorNudge() {
+    const bar = document.getElementById('convInputBar');
+    let nudge = document.getElementById('maInlineNudge');
+    const sid = (typeof _usageSessionId !== 'undefined') ? _usageSessionId : null;
+    const rec = sid && window.__advisorBySid ? window.__advisorBySid[sid] : null;
+    if (!bar || !rec) { if (nudge) nudge.remove(); return; }
+    if (!document.getElementById('__maNudgeStyle')) {
+      const st = document.createElement('style');
+      st.id = '__maNudgeStyle';
+      st.textContent =
+        '#maInlineNudge{display:flex;align-items:center;gap:9px;margin:0 0 6px;padding:6px 10px;' +
+        'border:1px solid var(--border-color,#30363d);border-radius:8px;font:12px/1.4 ui-monospace,Menlo,monospace;' +
+        'background:var(--hover-bg,rgba(127,127,127,.08));}' +
+        '#maInlineNudge.ma-n-up{border-color:#d29922;} #maInlineNudge.ma-n-spawn{border-color:#58a6ff;}' +
+        '#maInlineNudge .ma-n-ico{flex:0 0 auto;}' +
+        '#maInlineNudge .ma-n-text{flex:1 1 auto;min-width:0;}' +
+        '#maInlineNudge .ma-n-text b{font-weight:600;}' +
+        '#maInlineNudge .ma-n-reason{opacity:.6;}' +
+        '#maInlineNudge button{cursor:pointer;border:1px solid var(--border-color,#30363d);background:transparent;' +
+        'color:inherit;font:600 11px/1 ui-monospace,Menlo,monospace;padding:5px 10px;border-radius:6px;white-space:nowrap;}' +
+        '#maInlineNudge .ma-n-go{border-color:#2ea043;color:#3fb950;} #maInlineNudge .ma-n-go:hover{background:rgba(63,185,80,.14);}' +
+        '#maInlineNudge .ma-n-x{opacity:.6;padding:5px 8px;} #maInlineNudge .ma-n-x:hover{opacity:1;}';
+      document.head.appendChild(st);
+    }
+    if (!nudge) {
+      nudge = document.createElement('div');
+      nudge.id = 'maInlineNudge';
+      bar.parentNode.insertBefore(nudge, bar);
+    }
+    nudge.className = rec.action === 'upgrade' ? 'ma-n-up' : rec.action === 'spawn_worker' ? 'ma-n-spawn' : '';
+    const to = _maModels[rec.to_model] || rec.to_model;
+    const verb = rec.action === 'upgrade' ? 'needs more muscle'
+               : rec.action === 'spawn_worker' ? 'is executing — offload to a' : 'looks';
+    const lead = rec.action === 'upgrade' ? ('This session ' + verb + ' — bump to ')
+               : rec.action === 'spawn_worker' ? ('This session ' + verb + ' ')
+               : ('This session ' + verb + ' ' + to + '-grade');
+    const ico = rec.action === 'upgrade' ? '⬆' : rec.action === 'spawn_worker' ? '◆' : '⬇';
+    nudge.innerHTML =
+      '<span class="ma-n-ico">' + ico + '</span>' +
+      '<span class="ma-n-text"><b>' + _maEsc(lead) + (rec.action === 'spawn_worker' ? (_maEsc(to) + ' worker') : '') +
+      '.</b> <span class="ma-n-reason">' + _maEsc(rec.reason || '') + '</span></span>' +
+      '<button class="ma-n-go" data-n-apply="1">' +
+      (rec.action === 'upgrade' ? 'Upgrade to ' : 'Switch to ') + _maEsc(to) + '</button>' +
+      '<button class="ma-n-x" data-n-dismiss="1" aria-label="Dismiss">&times;</button>';
+    nudge.querySelector('[data-n-apply]').onclick = function () { _maApply(rec.id, sid, rec.to_model); };
+    nudge.querySelector('[data-n-dismiss]').onclick = function () { _maDismiss(rec.id); nudge.remove(); };
   }
 
   function _initPollerStrip() {
@@ -30324,6 +30390,8 @@
         if (pm) pm.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openModelPicker(pm); });
       });
     }
+    // Keep the per-session advisor nudge in sync with whatever session is open.
+    if (typeof _renderInlineAdvisorNudge === 'function') _renderInlineAdvisorNudge();
   }
 
   // Curated per-engine model lists. Free-text "Other…" handles unreleased
