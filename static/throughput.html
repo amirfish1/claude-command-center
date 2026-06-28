@@ -918,6 +918,7 @@
     let activeSessionId = null;
     let lastRender = null;   // {turns, summary, isAggregate, bucketMode} for resize redraws
     let weeklyData = null;   // populated by loadWeeklyUsage(); used by drawChart() overlay
+    let weekRankings = {};   // sessionId → rank (1-indexed); populated by fetchWeekRankings()
     const aggregateSessions = [
       { session_id: 'all_1_hour', display_name: 'Total (Last Hour)', engine: 'aggregated', meta: '1h window' },
       { session_id: 'all_today', display_name: 'Total (Today)', engine: 'aggregated', meta: 'today' },
@@ -963,6 +964,30 @@
     }
 
     // Load session list from /api/conversations?all=true
+    // Fetch week-rankings in the background after sessions load.
+    // When the response arrives, re-sorts allSessions by rank (sessions not
+    // in the rankings go to the bottom) and re-renders the sidebar list.
+    // The existing search filter is applied first inside renderSessionList(),
+    // so rank-ordering is preserved within whatever set is currently visible.
+    async function fetchWeekRankings() {
+      try {
+        const res = await fetch('/api/throughput/week-rankings');
+        if (!res.ok) return;
+        const data = await res.json();
+        const rankings = data.rankings || [];
+        weekRankings = {};
+        rankings.forEach((r, i) => { weekRankings[r.session_id] = i + 1; });
+        allSessions.sort((a, b) => {
+          const ra = weekRankings[a.session_id] != null ? weekRankings[a.session_id] : Infinity;
+          const rb = weekRankings[b.session_id] != null ? weekRankings[b.session_id] : Infinity;
+          return ra - rb;
+        });
+        renderSessionList();
+      } catch (_e) {
+        // Non-critical — silently ignore network or parse errors.
+      }
+    }
+
     async function loadSessions() {
       setStatus('Loading sessions...', true);
       try {
@@ -971,6 +996,7 @@
         const data = await res.json();
         allSessions = data.conversations || data.sessions || [];
         renderSessionList();
+        fetchWeekRankings(); // non-blocking: re-sorts when rankings arrive
         const defaultSession = activeSessionId
           ? findSessionById(activeSessionId)
           : aggregateSessions.find(a => a.session_id === 'all_7_days') || aggregateSessions[0];
