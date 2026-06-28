@@ -27984,6 +27984,9 @@
             submit();
           }
         });
+        // Allow CMD-V of an image: auto-upload to a local pasted-images path and
+        // insert the path token (same flow as annotate / the composers).
+        try { if (window.__cccAttachImagePaste) window.__cccAttachImagePaste(textarea); } catch (_) {}
         requestAnimationFrame(() => textarea.focus());
       }
       document.addEventListener('keydown', onKey);
@@ -38785,7 +38788,7 @@
   }
   function _pastedImageHost(el) {
     return (el && el.closest && el.closest(
-      '.conv-input-bar, .gc-reader-input-row, .new-session-modal-body, .ann-editor, .ann-screen-dialog, .ann-ux-preview-card'
+      '.conv-input-bar, .gc-reader-input-row, .new-session-modal-body, .ann-editor, .ann-screen-dialog, .ann-ux-preview-card, .fq-ticket-body'
     )) || (el && el.parentElement) || null;
   }
   function _pastedImageThumbsContainer(el) {
