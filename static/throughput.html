@@ -1563,17 +1563,19 @@
       if (showCumulative && sourceRows.length > 1) {
         let running = 0;
         const cumTokens = sourceRows.map(row => {
-          running += (row.total_tokens || row.input_tokens || 0) +
-                     (row.output_tokens || 0) +
-                     (row.cache_read_tokens || 0) +
-                     (row.cache_write_tokens || 0);
+          // total_tokens already includes output + cache; prefer it to avoid double-counting.
+          running += row.total_tokens || (
+            (row.input_tokens || 0) + (row.output_tokens || 0) +
+            (row.cache_read_tokens || 0) + (row.cache_write_tokens || 0)
+          );
           return running;
         });
         // Convert to % of weekly quota when calibration is available.
         const pptCum = weeklyData && weeklyData.pct_per_token;
         const cumVals = pptCum ? cumTokens.map(t => t * pptCum * 100) : cumTokens;
         const maxCum = cumVals[cumVals.length - 1] || 1;
-        const yCum = v => padding.top + (chartH * (1 - v / maxCum));
+        const _cumH = height - padding.top - padding.bottom;
+        const yCum = v => padding.top + (_cumH * (1 - v / maxCum));
 
         // Faint gridlines at 25/50/75/100% of session total.
         [0.25, 0.5, 0.75, 1].forEach(f => {
