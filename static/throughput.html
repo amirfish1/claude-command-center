@@ -1561,8 +1561,18 @@
 
       // ── Cumulative quota% line (per-session hourly view) ──────────────────
       if (showCumulative && sourceRows.length > 1) {
+        // Respect weekly reset boundary (resets Friday 00:00).
+        const pptCum = weeklyData && weeklyData.pct_per_token;
+        const resetAt = weeklyData && weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
+        const periodStart = resetAt ? new Date(resetAt.getTime() - 7 * 86400000) : null;
+
         let running = 0;
         const cumTokens = sourceRows.map(row => {
+          // Skip hours before the current weekly period.
+          if (periodStart && row.hour) {
+            const rowDate = new Date(row.hour);
+            if (rowDate < periodStart) return running;
+          }
           // total_tokens already includes output + cache; prefer it to avoid double-counting.
           running += row.total_tokens || (
             (row.input_tokens || 0) + (row.output_tokens || 0) +
@@ -1570,8 +1580,6 @@
           );
           return running;
         });
-        // Convert to % of weekly quota when calibration is available.
-        const pptCum = weeklyData && weeklyData.pct_per_token;
         const cumVals = pptCum ? cumTokens.map(t => t * pptCum) : cumTokens;
         const maxCum = cumVals[cumVals.length - 1] || 1;
         const _cumH = height - padding.top - padding.bottom;
