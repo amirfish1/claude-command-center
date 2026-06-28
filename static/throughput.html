@@ -1507,6 +1507,24 @@
           g.cost_usd += row.cost_usd || 0;
           g.active_duration_sec += row.active_duration_sec || 0;
         });
+        // Fill all missing 6h slots across the window with zeros so x-axis
+        // labels (day names at midnight) are always present.
+        if (hourly.length > 0) {
+          const firstH = new Date(hourly[0].hour);
+          const lastH = new Date(hourly[hourly.length - 1].hour);
+          const slotStart = new Date(firstH);
+          slotStart.setUTCHours(Math.floor(firstH.getUTCHours() / 6) * 6, 0, 0, 0);
+          const slotEnd = new Date(lastH);
+          slotEnd.setUTCHours(Math.floor(lastH.getUTCHours() / 6) * 6, 0, 0, 0);
+          for (let dt = new Date(slotStart); dt <= slotEnd; dt = new Date(dt.getTime() + 6 * 3600000)) {
+            const ks = `${dt.toISOString().substring(0, 10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
+            if (!groups.has(ks)) groups.set(ks, {
+              hour: ks, day: ks.substring(0, 10), raw_context_tokens: 0,
+              effective_input_tokens: 0, output_tokens: 0, cache_read_tokens: 0,
+              cache_write_tokens: 0, turns: 0, cost_usd: 0, active_duration_sec: 0
+            });
+          }
+        }
         buckets = Array.from(groups.values()).sort((a,b) => a.hour.localeCompare(b.hour));
       } else if (isAggregate) {
         buckets = daily ? (summary && summary.daily) || [] : (summary && summary.hourly) || [];
