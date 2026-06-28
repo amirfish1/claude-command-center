@@ -491,47 +491,64 @@
         '#maOverlay.open{display:block;}' +
         '#maBackdrop{position:absolute;inset:0;background:rgba(0,0,0,.5);}' +
         '#maPanel{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);' +
-        'width:min(820px,94vw);max-height:90vh;overflow:auto;background:var(--bg-primary,#1c2128);' +
-        'color:var(--text-primary,#e6edf3);border:1px solid var(--border-color,#30363d);border-radius:12px;' +
-        'box-shadow:0 18px 60px rgba(0,0,0,.5);font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;}' +
-        '#maPanel h2{margin:0;font-size:14px;font-weight:600;}' +
-        '.ma-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;' +
-        'border-bottom:1px solid var(--border-color,#30363d);position:sticky;top:0;background:var(--bg-primary,#1c2128);}' +
-        '.ma-close{cursor:pointer;border:0;background:transparent;color:inherit;font-size:20px;line-height:1;padding:2px 7px;border-radius:6px;}' +
-        '.ma-close:hover{background:var(--hover-bg,rgba(127,127,127,.16));}' +
-        '.ma-body{padding:14px 16px;display:flex;flex-direction:column;gap:16px;}' +
-        '.ma-sec-title{font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.6;margin-bottom:7px;}' +
+        'width:min(820px,94vw);max-height:90vh;overflow:auto;background:var(--bg-secondary,#161b22);' +
+        'color:var(--text-primary,#e6edf3);border:1px solid var(--border-color,#30363d);border-radius:14px;' +
+        'box-shadow:0 24px 80px rgba(0,0,0,.7);font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;}' +
+        '#maPanel h2{margin:0;font-size:15px;font-weight:700;letter-spacing:-.01em;}' +
+        '.ma-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;' +
+        'border-bottom:1px solid var(--border-color,#30363d);position:sticky;top:0;' +
+        'background:var(--bg-secondary,#161b22);backdrop-filter:blur(8px);}' +
+        '.ma-close{cursor:pointer;border:0;background:transparent;color:var(--text-muted,#8b949e);' +
+        'font-size:20px;line-height:1;padding:2px 7px;border-radius:6px;}' +
+        '.ma-close:hover{background:var(--hover-bg,rgba(127,127,127,.16));color:inherit;}' +
+        '.ma-body{padding:16px 18px;display:flex;flex-direction:column;gap:18px;}' +
+        '.ma-sec-title{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;' +
+        'color:var(--text-muted,#8b949e);margin-bottom:10px;display:flex;align-items:center;gap:8px;}' +
+        '.ma-sec-title::after{content:"";flex:1;height:1px;background:var(--border-color,#30363d);}' +
         '.ma-cards{display:flex;gap:10px;flex-wrap:wrap;}' +
-        '.ma-stat{flex:1 1 120px;background:var(--hover-bg,rgba(127,127,127,.10));border-radius:8px;padding:9px 11px;}' +
-        '.ma-stat b{display:block;font-size:18px;font-weight:700;margin-top:2px;}' +
-        '.ma-saved b{color:#3fb950;}' +
-        '.ma-tf{display:flex;gap:6px;}' +
+        '.ma-stat{flex:1 1 130px;background:var(--bg-primary,#1c2128);border:1px solid var(--border-color,#30363d);' +
+        'border-radius:10px;padding:12px 14px;border-left-width:3px;}' +
+        '.ma-stat-lbl{font-size:11px;font-weight:500;opacity:.55;text-transform:capitalize;letter-spacing:.01em;}' +
+        '.ma-stat b{display:block;font-size:22px;font-weight:700;margin-top:5px;' +
+        'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:-.02em;}' +
+        '.ma-stat-sub{font-size:10px;opacity:.4;margin-top:2px;}' +
+        '.ma-stat-green{border-left-color:#3fb950;} .ma-stat-green b{color:#3fb950;}' +
+        '.ma-stat-amber{border-left-color:#d29922;} .ma-stat-amber b{color:#d29922;}' +
+        '.ma-stat-blue{border-left-color:#58a6ff;} .ma-stat-blue b{color:#58a6ff;}' +
+        '.ma-stat-neutral{border-left-color:var(--border-color,#30363d);}' +
+        '.ma-tf{display:flex;gap:5px;}' +
         '.ma-tf-btn{cursor:pointer;border:1px solid var(--border-color,#30363d);background:transparent;' +
-        'color:var(--text-muted,#8b949e);font:11px/1 ui-monospace,Menlo,monospace;padding:3px 9px;border-radius:5px;}' +
-        '.ma-tf-btn.active{background:var(--hover-bg,rgba(127,127,127,.2));color:inherit;' +
-        'border-color:var(--text-muted,#8b949e);}' +
-        '.ma-tf-btn:hover{background:var(--hover-bg,rgba(127,127,127,.16));}' +
-        '.ma-rec{display:flex;align-items:flex-start;gap:10px;padding:9px 10px;border:1px solid var(--border-color,#30363d);' +
-        'border-radius:8px;margin-top:7px;}' +
+        'color:var(--text-muted,#8b949e);font:12px/1 -apple-system,system-ui,sans-serif;padding:4px 11px;border-radius:6px;}' +
+        '.ma-tf-btn.active{background:rgba(127,127,127,.18);color:var(--text-primary,#e6edf3);' +
+        'border-color:rgba(127,127,127,.4);font-weight:600;}' +
+        '.ma-tf-btn:hover{background:var(--hover-bg,rgba(127,127,127,.12));}' +
+        '.ma-rec{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;' +
+        'background:var(--bg-primary,#1c2128);border:1px solid var(--border-color,#30363d);' +
+        'border-radius:9px;margin-top:8px;}' +
         '.ma-rec-main{min-width:0;flex:1 1 auto;}' +
-        '.ma-rec-title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-        '.ma-rec-reason{opacity:.7;font-size:12px;margin-top:3px;}' +
-        '.ma-badge{font-size:11px;padding:1px 7px;border-radius:5px;white-space:nowrap;}' +
-        '.ma-down{background:rgba(63,185,80,.16);color:#3fb950;} .ma-up{background:rgba(210,153,34,.18);color:#d29922;}' +
-        '.ma-spawn{background:rgba(88,166,255,.16);color:#58a6ff;}' +
-        '.ma-conf{font-size:11px;opacity:.6;margin-left:6px;}' +
-        '.ma-acts{display:flex;flex-direction:column;gap:5px;}' +
+        '.ma-rec-title{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+        '.ma-rec-reason{color:var(--text-muted,#8b949e);font-size:12px;margin-top:3px;}' +
+        '.ma-badge{font-size:11px;padding:2px 8px;border-radius:5px;white-space:nowrap;font-weight:500;}' +
+        '.ma-down{background:rgba(63,185,80,.14);color:#3fb950;}' +
+        '.ma-up{background:rgba(210,153,34,.14);color:#d29922;}' +
+        '.ma-spawn{background:rgba(88,166,255,.14);color:#58a6ff;}' +
+        '.ma-conf{font-size:11px;color:var(--text-muted,#8b949e);margin-left:6px;}' +
+        '.ma-acts{display:flex;flex-direction:column;gap:5px;flex-shrink:0;}' +
         '.ma-btn{cursor:pointer;border:1px solid var(--border-color,#30363d);background:transparent;color:inherit;' +
-        'font:600 11px/1 ui-monospace,Menlo,monospace;padding:5px 11px;border-radius:6px;white-space:nowrap;}' +
-        '.ma-btn:hover{background:var(--hover-bg,rgba(127,127,127,.16));}' +
-        '.ma-btn-go{border-color:#2ea043;color:#3fb950;} .ma-btn-go:hover{background:rgba(63,185,80,.14);}' +
-        '.ma-log-row{display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:12px;opacity:.85;}' +
+        'font:600 12px/1 -apple-system,system-ui,sans-serif;padding:5px 12px;border-radius:7px;white-space:nowrap;}' +
+        '.ma-btn:hover{background:var(--hover-bg,rgba(127,127,127,.14));}' +
+        '.ma-btn-go{border-color:#2ea043;color:#3fb950;} .ma-btn-go:hover{background:rgba(63,185,80,.12);}' +
+        '.ma-log-row{display:flex;align-items:center;gap:9px;padding:6px 4px;font-size:12px;' +
+        'border-bottom:1px solid rgba(127,127,127,.08);}' +
+        '.ma-log-row:last-child{border-bottom:0;}' +
         '.ma-log-row .ma-spacer{flex:1 1 auto;}' +
-        '.ma-st{font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding:1px 6px;border-radius:4px;}' +
-        '.ma-st-applied{background:rgba(63,185,80,.16);color:#3fb950;}' +
-        '.ma-st-dismissed{background:rgba(248,81,73,.12);color:#f85149;}' +
-        '.ma-st-expired{opacity:.5;}' +
-        '.ma-empty{opacity:.55;padding:6px 2px;}';
+        '.ma-st{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:4px;}' +
+        '.ma-st-applied{background:rgba(63,185,80,.14);color:#3fb950;}' +
+        '.ma-st-dismissed{background:rgba(248,81,73,.10);color:#f85149;}' +
+        '.ma-st-expired{background:rgba(127,127,127,.10);color:var(--text-muted,#8b949e);}' +
+        '.ma-empty{padding:20px 4px;text-align:center;color:var(--text-muted,#8b949e);font-size:13px;}' +
+        '.ma-empty-ok{color:#3fb950;font-size:15px;margin-bottom:6px;}' +
+        '.ma-empty-hint{font-size:11px;opacity:.6;margin-top:4px;}';
       document.head.appendChild(st);
     }
     let ov = document.getElementById('maOverlay');
@@ -627,16 +644,26 @@
 
     // Summary cards — no $ amounts, tokens instead.
     html += '<div class="ma-cards">';
-    html += '<div class="ma-stat">applied<b>' + appliedLog.length + '</b></div>';
-    html += '<div class="ma-stat' + (live.length ? ' ccc-adv-hot' : '') + '" style="' +
-            (live.length ? '' : 'opacity:.6;') + '">live<b>' + live.length + '</b></div>';
-    html += '<div class="ma-stat ma-saved">tokens on Sonnet<b>' + _maTok(savedTok) + '</b></div>';
+    html += '<div class="ma-stat ma-stat-green">' +
+            '<div class="ma-stat-lbl">Applied</div>' +
+            '<b>' + appliedLog.length + '</b>' +
+            '<div class="ma-stat-sub">switches this window</div></div>';
+    html += '<div class="ma-stat ' + (live.length ? 'ma-stat-amber' : 'ma-stat-neutral') + '">' +
+            '<div class="ma-stat-lbl">Live now</div>' +
+            '<b>' + live.length + '</b>' +
+            '<div class="ma-stat-sub">' + (live.length ? 'need attention' : 'all good') + '</div></div>';
+    html += '<div class="ma-stat ma-stat-blue">' +
+            '<div class="ma-stat-lbl">Output on Sonnet</div>' +
+            '<b>' + (savedTok > 0 ? _maTok(savedTok) : '—') + '</b>' +
+            '<div class="ma-stat-sub">tokens on cheaper model</div></div>';
     html += '</div>';
 
     // Live recommendations with actions.
     html += '<div><div class="ma-sec-title">Live recommendations</div>';
     if (!live.length) {
-      html += '<div class="ma-empty">No drift right now — every live session is on the right model.</div>';
+      html += '<div class="ma-empty"><div class="ma-empty-ok">✓</div>' +
+              'All live sessions are on the right model.' +
+              '<div class="ma-empty-hint">The advisor checks every 45 seconds.</div></div>';
     } else {
       live.forEach(function (r) {
         const from = _maModels[r.current_model] || r.current_model || '?';
@@ -661,7 +688,8 @@
     // Recent activity — resolved entries only, scoped to timeframe.
     html += '<div><div class="ma-sec-title">Recent activity</div>';
     if (!filteredLog.length) {
-      html += '<div class="ma-empty">No activity in this window.</div>';
+      html += '<div class="ma-empty">No switches in this window.' +
+              '<div class="ma-empty-hint">Applied and dismissed recommendations appear here.</div></div>';
     } else {
       filteredLog.slice(0, 30).forEach(function (e) {
         const from = _maModels[e.from_model] || e.from_model;
