@@ -1262,51 +1262,72 @@
       const summary = data.summary;
       const isAggregate = !!(data.scope && data.scope.aggregate);
       
-      // Cards — all values in % of weekly quota where possible
+      // Cards — all values in % of weekly quota where possible.
+      // ppt calibrated as real_pct / (raw_context + output) — use that same basis throughout.
       const ppt = weeklyData && weeklyData.pct_per_token;
-      const effectiveTok = (summary.total_effective_input_tokens || 0) + (summary.total_output_tokens || 0);
-      const rawTok = (summary.total_raw_context_tokens || 0) + (summary.total_output_tokens || 0);
-      const actualPct = ppt ? effectiveTok * ppt : null;
+
+      // 7-day rolling totals (for daily burn rate card)
+      const rollingRawTok = (summary.total_raw_context_tokens || 0) + (summary.total_output_tokens || 0);
+      const rollingEffTok = (summary.total_effective_input_tokens || 0) + (summary.total_output_tokens || 0);
+      const rollingPct = ppt ? rollingRawTok * ppt : null;
+
+      // Billing-period totals: filter hourly to same window the chart uses
+      // (resetAt - 7d  →  resetAt), so card 1 matches the "right now" cumulative.
+      const resetAt2 = weeklyData && weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
+      const billingStart = resetAt2 ? new Date(resetAt2.getTime() - 7 * 86400000) : null;
+      const hourlySlots = summary.hourly || [];
+      const billingSlots = billingStart
+        ? hourlySlots.filter(h => new Date(h.hour) >= billingStart)
+        : hourlySlots;
+      const billingRawTok = billingSlots.reduce((s, h) => s + (h.raw_context_tokens||0) + (h.output_tokens||0), 0);
+      const billingEffTok = billingSlots.reduce((s, h) => s + (h.effective_input_tokens||0) + (h.output_tokens||0), 0);
+      const billingCost  = billingSlots.reduce((s, h) => s + (h.cost_usd||0), 0);
+
+      // Card 1 / 3 / 4 use billing-period window; card 2 uses 7-day rolling rate
+      const rawTok = billingRawTok;
+      const effectiveTok = billingEffTok;
+      const periodCost = billingCost || summary.cost_usd || 0;
+      const actualPct = ppt ? rawTok * ppt : null; // same basis and window as chart cumulative
 
       if (isAggregate) {
-        // ── Card 1: % quota used ──────────────────────────────────────────
+        // ── Card 1: % quota used (billing period — matches chart) ─────────
         document.getElementById('lbl-card1').textContent = '% QUOTA USED';
         document.getElementById('val-active-duration').textContent =
-          actualPct != null ? `${actualPct.toFixed(2)}%` : fmtNum(effectiveTok);
+          actualPct != null ? `${actualPct.toFixed(2)}%` : fmtNum(rawTok);
         const totalCalls = summary.total_turns || (data.scope && data.scope.total_turns);
         document.getElementById('val-total-duration').textContent =
-          `${totalCalls.toLocaleString()} Claude calls · ${fmtCost(summary.cost_usd || 0)}`;
+          `${totalCalls.toLocaleString()} Claude calls · ${fmtCost(periodCost)}`;
 
-        // ── Card 2: daily burn (7-day avg) + days to reset ───────────────
+        // ── Card 2: daily burn (7-day rolling avg) + days to reset ───────
         document.getElementById('lbl-card2').textContent = 'DAILY BURN (7d avg)';
-        const resetAt2 = weeklyData && weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
         const daysLeft2 = resetAt2 ? Math.max(0, (resetAt2.getTime() - Date.now()) / 86400000) : 0;
-        const dailyPct = actualPct != null ? actualPct / 7 : null; // always 7-day window
+        const dailyPct = rollingPct != null ? rollingPct / 7 : null;
         document.getElementById('val-total-tokens').textContent =
           dailyPct != null ? `${dailyPct.toFixed(2)}% / day` : '—';
         document.getElementById('val-token-split').textContent =
           resetAt2 ? `${daysLeft2.toFixed(1)}d until reset · ${totalCalls.toLocaleString()} calls` : '';
 
-        // ── Card 3: cache savings ─────────────────────────────────────────
+        // ── Card 3: cache savings (billing period, in cost $) ─────────────
         document.getElementById('lbl-card3').textContent = 'CACHE SAVINGS';
-        const withoutCachePct = ppt ? rawTok * ppt : null;
-        const savedPct = (withoutCachePct != null && actualPct != null) ? withoutCachePct - actualPct : null;
         const cacheHitPct = Math.round((summary.cache_hit_ratio || 0) * 100);
+        const cacheRatio = effectiveTok > 0 ? rawTok / effectiveTok : 1;
+        const uncachedCost = periodCost * cacheRatio;
+        const savedCost = uncachedCost - periodCost;
         document.getElementById('val-in-throughput').textContent =
-          savedPct != null ? `${savedPct.toFixed(1)}% saved` : `${cacheHitPct}% hit`;
+          savedCost > 0 ? `$${savedCost.toFixed(0)} saved` : `${cacheHitPct}% hit`;
         document.getElementById('val-in-tps').textContent =
-          withoutCachePct != null
-            ? `without cache: ${withoutCachePct.toFixed(1)}% · ${cacheHitPct}% hit rate`
+          savedCost > 0
+            ? `${cacheHitPct}% cache hit · $${periodCost.toFixed(0)} actual vs $${uncachedCost.toFixed(0)} uncached`
             : '';
 
-        // ── Card 4: opus-only hypothetical ───────────────────────────────
+        // ── Card 4: opus-only hypothetical (7-day ratio, billing-period base) ──
         document.getElementById('lbl-card4').textContent = 'IF OPUS ONLY';
         const opusRow = (summary.per_model || []).find(m => (m.model || '').toLowerCase().includes('opus'));
         const opusTok = opusRow ? (opusRow.effective_input_tokens || 0) + (opusRow.output_tokens || 0) : 0;
         const opusCost = opusRow ? (opusRow.cost_usd || 0) : 0;
         const opusCostPerTok = (opusTok > 0 && opusCost > 0) ? opusCost / opusTok : null;
         const totalCost = summary.cost_usd || 0;
-        const blendedCostPerTok = (effectiveTok > 0 && totalCost > 0) ? totalCost / effectiveTok : null;
+        const blendedCostPerTok = (rollingEffTok > 0 && totalCost > 0) ? totalCost / rollingEffTok : null;
         const opusRatio = (opusCostPerTok && blendedCostPerTok) ? opusCostPerTok / blendedCostPerTok : null;
         const opusOnlyPct = (actualPct != null && opusRatio) ? actualPct * opusRatio : null;
         document.getElementById('val-out-throughput').textContent =
@@ -1559,27 +1580,81 @@
           const slotBase = new Date(selPeriodStart);
           slotBase.setUTCHours(Math.floor(slotBase.getUTCHours() / 3) * 3, 0, 0, 0);
           const slots = [];
+          // Night-slot carry: accumulate data from skipped UTC slots (local 00–06)
+          // so no activity is silently dropped from the cumulative line.
+          let carry = { raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
+                        cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
           for (let dt = new Date(slotBase); dt < selPeriodEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
-            if (dt.getHours() < 6) continue; // skip midnight–6am local (dead hours)
             const ks = `${dt.toISOString().substring(0,10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
             const actual = allGroups.get(ks);
+            if (dt.getHours() < 6) {
+              // Night slot: roll its data into the carry bucket
+              if (actual) {
+                carry.raw_context_tokens   += actual.raw_context_tokens   || 0;
+                carry.effective_input_tokens += actual.effective_input_tokens || 0;
+                carry.output_tokens        += actual.output_tokens        || 0;
+                carry.cache_read_tokens    += actual.cache_read_tokens    || 0;
+                carry.cache_write_tokens   += actual.cache_write_tokens   || 0;
+                carry.turns                += actual.turns                || 0;
+                carry.cost_usd             += actual.cost_usd             || 0;
+              }
+              continue;
+            }
             const isProj = chartWeekOffset === 0 && dt.getTime() > nowTs;
-            slots.push(actual
+            const base = actual
               ? {...actual, _projected: false}
               : { hour: ks, day: ks.substring(0,10), raw_context_tokens: 0, effective_input_tokens: 0,
                   output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
-                  turns: 0, cost_usd: 0, active_duration_sec: 0, _projected: isProj });
+                  turns: 0, cost_usd: 0, active_duration_sec: 0, _projected: isProj };
+            // Absorb carry from preceding night slots
+            base.raw_context_tokens    = (base.raw_context_tokens    || 0) + carry.raw_context_tokens;
+            base.effective_input_tokens = (base.effective_input_tokens || 0) + carry.effective_input_tokens;
+            base.output_tokens         = (base.output_tokens         || 0) + carry.output_tokens;
+            base.cache_read_tokens     = (base.cache_read_tokens     || 0) + carry.cache_read_tokens;
+            base.cache_write_tokens    = (base.cache_write_tokens    || 0) + carry.cache_write_tokens;
+            base.turns                 = (base.turns                 || 0) + carry.turns;
+            base.cost_usd              = (base.cost_usd              || 0) + carry.cost_usd;
+            carry = { raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
+                      cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
+            slots.push(base);
           }
           buckets = slots;
-          // Previous period rows (position-aligned) for the faded overlay
+          // Previous period rows (position-aligned) for the faded overlay — same carry logic
           const prevEnd = selPeriodStart;
           const prevStart = new Date(prevEnd.getTime() - 7 * 86400000);
           const prevBase = new Date(prevStart);
           prevBase.setUTCHours(Math.floor(prevBase.getUTCHours() / 3) * 3, 0, 0, 0);
+          let prevCarry = { raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
+                            cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
           for (let dt = new Date(prevBase); dt < prevEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
-            if (dt.getHours() < 6) continue; // skip midnight–6am local (dead hours)
             const ks = `${dt.toISOString().substring(0,10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
-            prevPeriodRows.push(allGroups.get(ks) || { hour: ks, raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 });
+            const actual = allGroups.get(ks);
+            if (dt.getHours() < 6) {
+              if (actual) {
+                prevCarry.raw_context_tokens    += actual.raw_context_tokens    || 0;
+                prevCarry.effective_input_tokens += actual.effective_input_tokens || 0;
+                prevCarry.output_tokens         += actual.output_tokens         || 0;
+                prevCarry.cache_read_tokens     += actual.cache_read_tokens     || 0;
+                prevCarry.cache_write_tokens    += actual.cache_write_tokens    || 0;
+                prevCarry.turns                 += actual.turns                 || 0;
+                prevCarry.cost_usd              += actual.cost_usd              || 0;
+              }
+              continue;
+            }
+            const base = actual
+              ? {...actual}
+              : { hour: ks, raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
+                  cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
+            base.raw_context_tokens    = (base.raw_context_tokens    || 0) + prevCarry.raw_context_tokens;
+            base.effective_input_tokens = (base.effective_input_tokens || 0) + prevCarry.effective_input_tokens;
+            base.output_tokens         = (base.output_tokens         || 0) + prevCarry.output_tokens;
+            base.cache_read_tokens     = (base.cache_read_tokens     || 0) + prevCarry.cache_read_tokens;
+            base.cache_write_tokens    = (base.cache_write_tokens    || 0) + prevCarry.cache_write_tokens;
+            base.turns                 = (base.turns                 || 0) + prevCarry.turns;
+            base.cost_usd              = (base.cost_usd              || 0) + prevCarry.cost_usd;
+            prevCarry = { raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
+                          cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
+            prevPeriodRows.push(base);
           }
         } else {
           // Fallback: all available 3h data (no period context)
@@ -1902,20 +1977,30 @@
           t.textContent = `${p}%`; svg.appendChild(t);
         });
 
-        // 4. Previous period overlay — thin, faded, dashed (reference)
+        // 4. Previous period overlay — visible dashed slate line (reference)
         if (cumPrvVals.some(v => v != null)) {
           let pp = '', ppS = false;
+          let lastPrvX = 0, lastPrvY = 0, lastPrvV = 0;
           cumPrvVals.forEach((v, i) => {
             if (v == null) return;
             const x = xScale(i + 1), y = yPct(v);
             pp += ppS ? `L ${x} ${y} ` : `M ${x} ${y} `;
-            ppS = true;
+            ppS = true; lastPrvX = x; lastPrvY = y; lastPrvV = v;
           });
           const ppLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
           ppLine.setAttribute('d', pp); ppLine.setAttribute('fill', 'none');
-          ppLine.setAttribute('stroke', '#f59e0b'); ppLine.setAttribute('stroke-width', '1.2');
-          ppLine.setAttribute('stroke-dasharray', '3,5'); ppLine.setAttribute('opacity', '0.22');
+          ppLine.setAttribute('stroke', '#94a3b8'); ppLine.setAttribute('stroke-width', '2.0');
+          ppLine.setAttribute('stroke-dasharray', '5,3'); ppLine.setAttribute('opacity', '0.55');
           svg.appendChild(ppLine);
+          // Label at end of prev period line
+          if (lastPrvV > 0) {
+            const pl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            pl.setAttribute('x', lastPrvX + 4); pl.setAttribute('y', lastPrvY + 4);
+            pl.setAttribute('fill', '#94a3b8'); pl.setAttribute('font-size', '10');
+            pl.setAttribute('font-family', 'monospace'); pl.setAttribute('opacity', '0.7');
+            pl.textContent = `prev ${lastPrvV.toFixed(0)}%`;
+            svg.appendChild(pl);
+          }
         }
 
         // 5. Current period actual — thick solid orange (dominant)
