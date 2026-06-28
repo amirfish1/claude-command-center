@@ -172,19 +172,18 @@ ANNOTATIONS_FILE = COMMAND_CENTER_STATE_DIR / "annotations.json"
 ANNOTATION_SCREENSHOT_DIR = COMMAND_CENTER_STATE_DIR / "annotation-screenshots"
 ANNOTATION_UX_FIXES_QUEUE_NAME = "UX-fixes-queue"
 _ANNOTATIONS_LOCK = threading.Lock()
-import ux_fixes_queue  # durable numbered/stateful UX-fixes queue (shared w/ BYM)
-# WT-26 Phase 1: prefer watchtower.queue for write operations when WT is installed.
-# Falls back to ux_fixes_queue so CCC works without WT on PATH.
+import ux_fixes_queue  # kept as fallback when watchtower is not installed
+# WT-32 Phase 2: watchtower.queue is now the primary engine. ux_fixes_queue is
+# the fallback so CCC works without WT installed. Both read/write the same store.
 try:
-    from watchtower.queue import answer as _wt_queue_answer
-    from watchtower.queue import block as _wt_queue_block
-    _queue_answer = _wt_queue_answer
-    _queue_block = _wt_queue_block
+    import watchtower.queue as _wt_q
     _WT_QUEUE_AVAILABLE = True
 except ImportError:
-    _queue_answer = ux_fixes_queue.answer
-    _queue_block = None  # ux_fixes_queue has no standalone block()
+    _wt_q = None
     _WT_QUEUE_AVAILABLE = False
+# _q is the active queue engine — use it for all queue operations.
+_q = _wt_q if _WT_QUEUE_AVAILABLE else ux_fixes_queue
+_queue_answer = _q.answer
 import objects_store  # durable server-side Flow object/parent/order state (GOAL-3/4)
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 # User-picked repos that live outside the $HOME scan (e.g. ~/dev/foo, /workspaces/bar).
@@ -40411,46 +40410,143 @@ def _throughput_session_hints(session_id):
     return engine, model
 
 
-# --- Per-transcript throughput-turn cache (in-memory) -----------------------
+# --- Per-transcript throughput-turn cache (in-memory + lazy SQLite disk) -----
 # Aggregate ranges (esp. "Last 7 days") parse every transcript in the window on
 # each load — ~40s cold. But a transcript's past turns never change once
 # written, so we cache the FULL extracted turn list per file keyed by
 # (mtime,size). A reload then re-parses only the handful of files that actually
-# changed (the live sessions); everything else is a dict hit (~20x faster). The
-# cutoff is applied AFTER the cache lookup (never baked into a cached entry) so
-# a 1h load can't poison the 7d cache and vice-versa.
+# changed (the live sessions); everything else is a dict/DB hit (~20x faster).
+# The cutoff is applied AFTER the cache lookup (never baked into a cached entry)
+# so a 1h load can't poison the 7d cache and vice-versa.
 #
-# Deliberately in-memory only, NOT disk-persisted: the full turn lists weigh
-# ~80MB across all sessions, and parsing that JSON at startup would hold the GIL
-# and freeze boot — the exact O(all-transcripts) incident the perf gates guard
-# against. The server is long-lived (LaunchAgent), so the cache warms once and
-# stays warm; only the first load after a rare restart pays the cold cost (and
-# the dashboard shows a spinner + ETA for it).
+# Disk layer: a SQLite DB at ~/.cache/ccc-throughput-cache/turns.db.
+# Entries are loaded LAZILY — only when that specific transcript is requested,
+# not all at once at startup. This avoids the 81MB-parsed-on-boot problem the
+# prior flat-file approach had. SQLite is stdlib; no extra deps.
 _THROUGHPUT_TURN_CACHE = {}        # str(path) -> {"mtime", "size", "turns"}
 _THROUGHPUT_CACHE_LOCK = threading.Lock()
+
+_THROUGHPUT_DISK_CACHE_DIR = Path.home() / ".cache" / "ccc-throughput-cache"
+_THROUGHPUT_DISK_CACHE_DB = _THROUGHPUT_DISK_CACHE_DIR / "turns.db"
+_throughput_disk_conn = None       # sqlite3.Connection, None until first use
+_throughput_disk_conn_lock = threading.Lock()
+_throughput_disk_available = None  # True/False/None (None = not yet tried)
+
+
+def _throughput_disk_connection():
+    """Return a sqlite3 connection (shared across threads via check_same_thread=False),
+    creating the DB and schema on first call. Returns None if SQLite is unavailable
+    or the cache dir can't be created — all callers must handle None gracefully."""
+    import sqlite3  # stdlib; import here so the module import path stays unchanged
+
+    global _throughput_disk_conn, _throughput_disk_available
+    if _throughput_disk_available is False:
+        return None
+    with _throughput_disk_conn_lock:
+        if _throughput_disk_conn is not None:
+            return _throughput_disk_conn
+        try:
+            _THROUGHPUT_DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(
+                str(_THROUGHPUT_DISK_CACHE_DB),
+                check_same_thread=False,
+                timeout=5,
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS turns_cache ("
+                "  path      TEXT    PRIMARY KEY,"
+                "  mtime     REAL    NOT NULL,"
+                "  size      INTEGER NOT NULL,"
+                "  turns_json TEXT   NOT NULL"
+                ")"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_turns_cache_path ON turns_cache(path)"
+            )
+            conn.commit()
+            _throughput_disk_conn = conn
+            _throughput_disk_available = True
+            return conn
+        except Exception:
+            _throughput_disk_available = False
+            return None
+
+
+def _throughput_disk_get(key, mtime, size):
+    """Look up a cache entry in SQLite. Returns the turns list if the stored
+    mtime/size match, otherwise None (stale or missing)."""
+    import sqlite3
+
+    conn = _throughput_disk_connection()
+    if conn is None:
+        return None
+    try:
+        with _throughput_disk_conn_lock:
+            row = conn.execute(
+                "SELECT mtime, size, turns_json FROM turns_cache WHERE path = ?",
+                (key,),
+            ).fetchone()
+        if row and row[0] == mtime and row[1] == size:
+            return json.loads(row[2])
+    except Exception:
+        pass
+    return None
+
+
+def _throughput_disk_put(key, mtime, size, turns):
+    """Write or replace a cache entry in SQLite. Silently swallows errors."""
+    conn = _throughput_disk_connection()
+    if conn is None:
+        return
+    try:
+        turns_json = json.dumps(turns, separators=(",", ":"))
+        with _throughput_disk_conn_lock:
+            conn.execute(
+                "INSERT OR REPLACE INTO turns_cache(path, mtime, size, turns_json)"
+                " VALUES (?, ?, ?, ?)",
+                (key, mtime, size, turns_json),
+            )
+            conn.commit()
+    except Exception:
+        pass
 
 
 def _throughput_file_turns(path, extract_fn):
     """Return the FULL (unfiltered-by-cutoff) turn list for a transcript at
-    `path`, recomputing only if mtime/size changed. `extract_fn()` produces the
-    fresh full turn list on a cache miss. Returns None if the path can't be
-    stat'd (caller falls back to a direct, uncached extraction)."""
+    `path`, recomputing only if mtime/size changed.  `extract_fn()` produces the
+    fresh full turn list on a cache miss.  Returns None if the path can't be
+    stat'd (caller falls back to a direct, uncached extraction).
+
+    Cache hierarchy (fastest first):
+      1. In-memory dict (_THROUGHPUT_TURN_CACHE) — O(1) dict lookup.
+      2. SQLite disk cache — lazy per-entry load, not bulk startup parse.
+      3. extract_fn() — full transcript parse; result written to both layers."""
     try:
         st = os.stat(path)
     except OSError:
         return None
     key = str(path)
+    mtime = st.st_mtime
+    size = st.st_size
+
+    # 1. In-memory hit
     with _THROUGHPUT_CACHE_LOCK:
         cached = _THROUGHPUT_TURN_CACHE.get(key)
-        if cached and cached["mtime"] == st.st_mtime and cached["size"] == st.st_size:
+        if cached and cached["mtime"] == mtime and cached["size"] == size:
             return cached["turns"]
+
+    # 2. Disk cache hit (lazy — reads only this one entry)
+    disk_turns = _throughput_disk_get(key, mtime, size)
+    if disk_turns is not None:
+        with _THROUGHPUT_CACHE_LOCK:
+            _THROUGHPUT_TURN_CACHE[key] = {"mtime": mtime, "size": size, "turns": disk_turns}
+        return disk_turns
+
+    # 3. Full parse — write through to both layers
     turns = extract_fn()
     with _THROUGHPUT_CACHE_LOCK:
-        _THROUGHPUT_TURN_CACHE[key] = {
-            "mtime": st.st_mtime,
-            "size": st.st_size,
-            "turns": turns,
-        }
+        _THROUGHPUT_TURN_CACHE[key] = {"mtime": mtime, "size": size, "turns": turns}
+    _throughput_disk_put(key, mtime, size, turns)
     return turns
 
 
