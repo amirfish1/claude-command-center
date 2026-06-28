@@ -856,6 +856,10 @@
                 <span class="legend-color" style="background: var(--accent);"></span>
                 <span id="chart-legend-label">Adjusted TPM</span>
               </div>
+              <div class="legend-item" id="weekly-overlay-legend" style="display:none;">
+                <span class="legend-color" style="background: #f59e0b; height: 2px; border-radius: 0; border-top: 2px dashed #f59e0b; background: transparent;"></span>
+                <span style="color: #f59e0b;">Cumulative weekly %</span>
+              </div>
             </div>
           </div>
           <div class="chart-container">
@@ -889,6 +893,7 @@
     let allSessions = [];
     let activeSessionId = null;
     let lastRender = null;   // {turns, summary, isAggregate, bucketMode} for resize redraws
+    let weeklyData = null;   // populated by loadWeeklyUsage(); used by drawChart() overlay
     const aggregateSessions = [
       { session_id: 'all_1_hour', display_name: 'Total (Last Hour)', engine: 'aggregated', meta: '1h window' },
       { session_id: 'all_today', display_name: 'Total (Today)', engine: 'aggregated', meta: 'today' },
@@ -1219,10 +1224,17 @@
         ? (daily ? 'Daily adjusted TPM' : 'Hourly adjusted TPM')
         : 'Adjusted TPM';
 
+      // Determine whether the weekly % overlay is available for this view.
+      const showWeeklyOverlay = daily && weeklyData && weeklyData.pct_per_token != null;
+      const overlayLegend = document.getElementById('weekly-overlay-legend');
+      if (overlayLegend) overlayLegend.style.display = showWeeklyOverlay ? 'flex' : 'none';
+
       // Get container width
       const width = svg.clientWidth || 800;
       const height = svg.clientHeight || 300;
-      const padding = { top: 20, right: 30, bottom: 40, left: 60 };
+      // Extra right padding when the secondary axis label needs room.
+      const rightPad = showWeeklyOverlay ? 52 : 30;
+      const padding = { top: 20, right: rightPad, bottom: 40, left: 60 };
 
       const buckets = isAggregate
         ? (daily ? (summary && summary.daily) || [] : (summary && summary.hourly) || [])
@@ -1406,6 +1418,118 @@
         text.textContent = d.label;
         svg.appendChild(text);
       });
+
+      // ── Weekly % overlay (daily mode only) ──────────────────────────────────
+      // Draw a dashed orange line showing cumulative weekly-quota consumption
+      // up to each day. Uses the pct_per_token calibration from /api/weekly_usage
+      // and only counts days on or after the most recent weekly reset boundary.
+      if (showWeeklyOverlay) {
+        const pctPerToken = weeklyData.pct_per_token;
+        const resetAt = weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
+        // weekly_resets_at is the *next* reset; the current period started one
+        // week before that.
+        const periodStart = resetAt ? new Date(resetAt.getTime() - 7 * 86400000) : null;
+
+        // Compute cumulative % for each data point (aligned to sourceRows).
+        let cumPct = 0;
+        const cumPcts = sourceRows.map((row) => {
+          // Check if this day falls within the current weekly period.
+          if (periodStart && row.day) {
+            const rowDate = new Date(row.day + 'T00:00:00');
+            if (rowDate < periodStart) {
+              return null; // before current period — skip
+            }
+          }
+          const tokens = (row.raw_context_tokens || 0) +
+                         (row.output_tokens || 0) +
+                         (row.cache_read_tokens || 0) +
+                         (row.cache_write_tokens || 0);
+          cumPct += tokens * pctPerToken;
+          return cumPct;
+        });
+
+        // Secondary Y scale: 0–(max cumPct rounded up, at least 100%).
+        const maxCumPct = Math.max(100, Math.ceil(cumPct / 10) * 10);
+        const yPct = (pct) =>
+          height - padding.bottom - (pct / maxCumPct) * (height - padding.top - padding.bottom);
+
+        // Draw secondary Y-axis gridlines (faint, dashed differently).
+        const pctSteps = [0, 25, 50, 75, 100];
+        pctSteps.forEach(p => {
+          if (p > maxCumPct) return;
+          const y = yPct(p);
+          const gl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          gl.setAttribute('x1', padding.left);
+          gl.setAttribute('y1', y);
+          gl.setAttribute('x2', width - padding.right);
+          gl.setAttribute('y2', y);
+          gl.setAttribute('stroke', 'rgba(227,179,65,0.12)');
+          gl.setAttribute('stroke-dasharray', '2,6');
+          svg.appendChild(gl);
+
+          // Right-axis label.
+          const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          t.setAttribute('x', width - padding.right + 6);
+          t.setAttribute('y', y + 4);
+          t.setAttribute('fill', 'rgba(227,179,65,0.7)');
+          t.setAttribute('font-size', '9px');
+          t.setAttribute('text-anchor', 'start');
+          t.setAttribute('font-family', 'var(--font-mono)');
+          t.textContent = `${p}%`;
+          svg.appendChild(t);
+        });
+
+        // Build the overlay line path (skip null entries = pre-period days).
+        let overlayPath = '';
+        let started = false;
+        cumPcts.forEach((pct, idx) => {
+          if (pct == null) return;
+          const x = xScale(idx + 1);
+          const y = yPct(pct);
+          if (!started) {
+            overlayPath += `M ${x} ${y} `;
+            started = true;
+          } else {
+            overlayPath += `L ${x} ${y} `;
+          }
+        });
+
+        if (overlayPath) {
+          const overLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          overLine.setAttribute('d', overlayPath);
+          overLine.setAttribute('fill', 'none');
+          overLine.setAttribute('stroke', '#f59e0b');
+          overLine.setAttribute('stroke-width', '1.8');
+          overLine.setAttribute('stroke-dasharray', '5,3');
+          overLine.setAttribute('opacity', '0.85');
+          svg.appendChild(overLine);
+
+          // Small dots at each data point on the overlay line.
+          cumPcts.forEach((pct, idx) => {
+            if (pct == null) return;
+            const x = xScale(idx + 1);
+            const y = yPct(pct);
+            const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            dot.setAttribute('cx', x);
+            dot.setAttribute('cy', y);
+            dot.setAttribute('r', '3');
+            dot.setAttribute('fill', '#f59e0b');
+            dot.setAttribute('opacity', '0.75');
+            svg.appendChild(dot);
+          });
+
+          // Right-axis label ("% quota").
+          const axisLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          axisLabel.setAttribute('x', width - padding.right + 6);
+          axisLabel.setAttribute('y', padding.top - 4);
+          axisLabel.setAttribute('fill', '#f59e0b');
+          axisLabel.setAttribute('font-size', '9px');
+          axisLabel.setAttribute('text-anchor', 'start');
+          axisLabel.setAttribute('font-family', 'var(--font-mono)');
+          axisLabel.textContent = '% quota';
+          svg.appendChild(axisLabel);
+        }
+      }
     }
 
     // Tooltip Helpers
@@ -1548,6 +1672,8 @@
         const res = await fetch('/api/weekly_usage');
         if (!res.ok) return;
         const d = await res.json();
+        // Stash for use by drawChart() — weekly % overlay on daily chart.
+        weeklyData = (d && d.available && d.pct_per_token != null) ? d : null;
         const banner = document.getElementById('weekly-banner');
         if (!d || !d.available || d.display_pct == null) {
           banner.style.display = 'none';
