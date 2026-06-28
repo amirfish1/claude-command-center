@@ -481,6 +481,31 @@
     gap: 16px;
     font-size: 11px;
   }
+
+  .chart-week-nav {
+    display: none;
+    align-items: center;
+    gap: 6px;
+  }
+  .chart-week-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 7px;
+    line-height: 1.5;
+  }
+  .chart-week-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .chart-week-btn:disabled { opacity: 0.28; cursor: default; }
+  .chart-week-range {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    min-width: 92px;
+    text-align: center;
+  }
   
   .legend-item {
     display: flex;
@@ -884,14 +909,21 @@
             <div class="chart-title">
               <span>📈</span> <span id="chart-title-label">Cache-Adjusted Throughput per Turn</span>
             </div>
-            <div class="chart-legend">
-              <div class="legend-item">
-                <span class="legend-color" style="background: var(--accent);"></span>
-                <span id="chart-legend-label">Adjusted TPM</span>
+            <div style="display:flex;align-items:center;gap:14px;">
+              <div class="chart-week-nav" id="chart-week-nav">
+                <button class="chart-week-btn" id="chart-week-prev">&#9664;</button>
+                <span class="chart-week-range" id="chart-week-label"></span>
+                <button class="chart-week-btn" id="chart-week-next">&#9654;</button>
               </div>
-              <div class="legend-item" id="weekly-overlay-legend" style="display:none;">
-                <span class="legend-color" style="background: #f59e0b; height: 2px; border-radius: 0; border-top: 2px dashed #f59e0b; background: transparent;"></span>
-                <span style="color: #f59e0b;">Cumulative weekly %</span>
+              <div class="chart-legend">
+                <div class="legend-item">
+                  <span class="legend-color" style="background: var(--accent);"></span>
+                  <span id="chart-legend-label">Adjusted TPM</span>
+                </div>
+                <div class="legend-item" id="weekly-overlay-legend" style="display:none;">
+                  <span class="legend-color" style="height:2px;border-radius:0;border-top:2px solid #f59e0b;background:transparent;"></span>
+                  <span style="color:#f59e0b;">Cumulative weekly %</span>
+                </div>
               </div>
             </div>
           </div>
@@ -935,6 +967,7 @@
     let activeSessionId = null;
     let lastRender = null;   // {turns, summary, isAggregate, bucketMode} for resize redraws
     let weeklyData = null;   // populated by loadWeeklyUsage(); used by drawChart() overlay
+    let chartWeekOffset = 0; // 0=current billing period, -1=previous, etc.
     let weekRankings = {};   // sessionId → rank (1-indexed); populated by fetchWeekRankings()
     const aggregateSessions = [
       { session_id: 'all_7_days', display_name: 'Total (Last 7 Days)', engine: 'aggregated', meta: '7d window' },
@@ -1218,6 +1251,7 @@
 
     // Populate dashboard details
     function renderDashboard(session, data) {
+      chartWeekOffset = 0; // reset week navigation on session switch
       document.getElementById('empty-state').style.display = 'none';
       document.getElementById('dashboard-content').style.display = 'block';
       
@@ -1474,30 +1508,38 @@
       const showWeeklyOverlay = (daily || sixhourly) && weeklyData && weeklyData.pct_per_token != null;
       const overlayLegend = document.getElementById('weekly-overlay-legend');
       if (overlayLegend) overlayLegend.style.display = showWeeklyOverlay ? 'flex' : 'none';
+      // Hide week nav when not in sixhourly aggregate mode
+      if (!sixhourly) {
+        const _nav = document.getElementById('chart-week-nav');
+        if (_nav) _nav.style.display = 'none';
+      }
 
       // Get container width
       const width = svg.clientWidth || 800;
       const height = svg.clientHeight || 300;
       // Extra right padding when either secondary axis needs room.
       const rightPad = (showWeeklyOverlay || showCumulative) ? 52 : 30;
-      const padding = { top: 20, right: rightPad, bottom: 40, left: 60 };
+      const padding = { top: 20, right: rightPad, bottom: 54, left: 60 };
 
-      // Build sourceRows — aggregate hourly data into 3h buckets for sixhourly mode.
+      // Build sourceRows — aggregate hourly data into 3h buckets scoped to billing period.
       let buckets;
+      let selPeriodStart = null, selPeriodEnd = null, prevPeriodRows = [];
       if (sixhourly) {
         const hourly = (summary && summary.hourly) || [];
-        const groups = new Map();
+        // Aggregate all hourly → 3h slot map (keys in UTC to match slot generator)
+        const allGroups = new Map();
         hourly.forEach(row => {
-          const d = new Date(row.hour);
-          const slot = Math.floor(d.getUTCHours() / 3) * 3;
-          const dayStr = row.hour.substring(0, 10);
-          const key = `${dayStr}T${String(slot).padStart(2,'0')}:00:00`;
-          if (!groups.has(key)) groups.set(key, {
-            hour: key, day: dayStr, raw_context_tokens: 0, effective_input_tokens: 0,
+          const d = new Date(row.hour); // browser parses local-time string
+          const slotHr = Math.floor(d.getUTCHours() / 3) * 3;
+          const slotDt = new Date(d); slotDt.setUTCHours(slotHr, 0, 0, 0);
+          const key = slotDt.toISOString().substring(0, 10) + 'T' +
+            String(slotDt.getUTCHours()).padStart(2, '0') + ':00:00';
+          if (!allGroups.has(key)) allGroups.set(key, {
+            hour: key, day: key.substring(0, 10), raw_context_tokens: 0, effective_input_tokens: 0,
             output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
             turns: 0, cost_usd: 0, active_duration_sec: 0
           });
-          const g = groups.get(key);
+          const g = allGroups.get(key);
           g.raw_context_tokens += row.raw_context_tokens || 0;
           g.effective_input_tokens += row.effective_input_tokens || 0;
           g.output_tokens += row.output_tokens || 0;
@@ -1507,25 +1549,57 @@
           g.cost_usd += row.cost_usd || 0;
           g.active_duration_sec += row.active_duration_sec || 0;
         });
-        // Fill all missing 3h slots across the window with zeros so x-axis
-        // labels (day names at midnight) are always present.
-        if (hourly.length > 0) {
-          const firstH = new Date(hourly[0].hour);
-          const lastH = new Date(hourly[hourly.length - 1].hour);
-          const slotStart = new Date(firstH);
-          slotStart.setUTCHours(Math.floor(firstH.getUTCHours() / 3) * 3, 0, 0, 0);
-          const slotEnd = new Date(lastH);
-          slotEnd.setUTCHours(Math.floor(lastH.getUTCHours() / 3) * 3, 0, 0, 0);
-          for (let dt = new Date(slotStart); dt <= slotEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
-            const ks = `${dt.toISOString().substring(0, 10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
-            if (!groups.has(ks)) groups.set(ks, {
-              hour: ks, day: ks.substring(0, 10), raw_context_tokens: 0,
-              effective_input_tokens: 0, output_tokens: 0, cache_read_tokens: 0,
-              cache_write_tokens: 0, turns: 0, cost_usd: 0, active_duration_sec: 0
-            });
+
+        if (showWeeklyOverlay) {
+          // Period-scoped 56-slot view (current or past billing period)
+          const resetAt = new Date(weeklyData.weekly_resets_at);
+          selPeriodEnd = new Date(resetAt.getTime() + chartWeekOffset * 7 * 86400000);
+          selPeriodStart = new Date(selPeriodEnd.getTime() - 7 * 86400000);
+          const nowTs = Date.now();
+          const slotBase = new Date(selPeriodStart);
+          slotBase.setUTCHours(Math.floor(slotBase.getUTCHours() / 3) * 3, 0, 0, 0);
+          const slots = [];
+          for (let dt = new Date(slotBase); dt < selPeriodEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
+            const ks = `${dt.toISOString().substring(0,10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
+            const actual = allGroups.get(ks);
+            const isProj = chartWeekOffset === 0 && dt.getTime() > nowTs;
+            slots.push(actual
+              ? {...actual, _projected: false}
+              : { hour: ks, day: ks.substring(0,10), raw_context_tokens: 0, effective_input_tokens: 0,
+                  output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+                  turns: 0, cost_usd: 0, active_duration_sec: 0, _projected: isProj });
+          }
+          buckets = slots;
+          // Previous period rows (position-aligned) for the faded overlay
+          const prevEnd = selPeriodStart;
+          const prevStart = new Date(prevEnd.getTime() - 7 * 86400000);
+          const prevBase = new Date(prevStart);
+          prevBase.setUTCHours(Math.floor(prevBase.getUTCHours() / 3) * 3, 0, 0, 0);
+          for (let dt = new Date(prevBase); dt < prevEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
+            const ks = `${dt.toISOString().substring(0,10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
+            prevPeriodRows.push(allGroups.get(ks) || { hour: ks, raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 });
+          }
+        } else {
+          // Fallback: all available 3h data (no period context)
+          const firstH = hourly.length > 0 ? new Date(hourly[0].hour) : null;
+          const lastH  = hourly.length > 0 ? new Date(hourly[hourly.length - 1].hour) : null;
+          if (firstH && lastH) {
+            firstH.setUTCHours(Math.floor(firstH.getUTCHours() / 3) * 3, 0, 0, 0);
+            lastH.setUTCHours(Math.floor(lastH.getUTCHours() / 3) * 3, 0, 0, 0);
+            const slots = [];
+            for (let dt = new Date(firstH); dt <= lastH; dt = new Date(dt.getTime() + 3 * 3600000)) {
+              const ks = `${dt.toISOString().substring(0,10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
+              slots.push(allGroups.get(ks) || {
+                hour: ks, day: ks.substring(0,10), raw_context_tokens: 0, effective_input_tokens: 0,
+                output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+                turns: 0, cost_usd: 0, active_duration_sec: 0
+              });
+            }
+            buckets = slots;
+          } else {
+            buckets = [];
           }
         }
-        buckets = Array.from(groups.values()).sort((a,b) => a.hour.localeCompare(b.hour));
       } else if (isAggregate) {
         buckets = daily ? (summary && summary.daily) || [] : (summary && summary.hourly) || [];
       } else {
@@ -1535,8 +1609,9 @@
 
       // Label helper for 6h slots: show day name at midnight, "HH:00" otherwise.
       const sixhourLabel = (hourStr) => {
-        const h = parseInt(hourStr.substring(11, 13), 10);
-        return h === 0 ? dayLabel(hourStr.substring(0, 10)) : `${String(h).padStart(2,'0')}:00`;
+        const d = new Date(hourStr + 'Z'); // key is UTC — parse explicitly as UTC
+        const localH = d.getHours();
+        return `${String(localH).padStart(2,'0')}:00`;
       };
 
       const data = sourceRows.map((row, idx) => {
@@ -1632,7 +1707,9 @@
       
       if (sixhourly) {
         // Column bars for the 3h aggregate view
-        data.forEach(d => {
+        data.forEach((d, i) => {
+          const row = sourceRows[i];
+          if (row && row._projected) return; // no bar for future projected slots
           const bx = xScale(d.index);
           const by = yScale(d.tpm);
           const bh = (height - padding.bottom) - by;
@@ -1643,11 +1720,11 @@
           rect.setAttribute('width', barW);
           rect.setAttribute('height', bh);
           rect.setAttribute('fill', 'var(--accent)');
-          rect.setAttribute('opacity', '0.65');
+          rect.setAttribute('opacity', '0.28');
           rect.setAttribute('rx', '2');
           rect.style.cursor = 'pointer';
           rect.addEventListener('mouseover', (e) => {
-            rect.setAttribute('opacity', '0.9');
+            rect.setAttribute('opacity', '0.6');
             const lines = [
               `${d.tooltipTitle}`,
               `Cache-adj: <strong>${fmtNum(Math.round(d.tpm))} tokens</strong>`,
@@ -1741,126 +1818,229 @@
         svg.appendChild(text);
       });
 
-      // ── Weekly % overlay (daily / 6-hourly modes) ───────────────────────────
-      // Orange line: faded segment for previous billing period, bright for current.
-      if (showWeeklyOverlay) {
+      // Day-of-week band below hour labels (sixhourly aggregate only)
+      if (sixhourly && isAggregate) {
+        // Find slots where the local calendar date changes
+        const dayStarts = [];
+        sourceRows.forEach((row, i) => {
+          if (!row || !row.hour) return;
+          const d = new Date(row.hour + 'Z');
+          const prev = i > 0 ? sourceRows[i - 1] : null;
+          const prevLocal = prev && prev.hour ? new Date(prev.hour + 'Z').toLocaleDateString() : null;
+          if (prevLocal !== d.toLocaleDateString()) {
+            dayStarts.push({ i, x: xScale(i + 1), d });
+          }
+        });
+        const chartRight = padding.left + chartW;
+        dayStarts.forEach((ds, j) => {
+          const nextX = j + 1 < dayStarts.length ? dayStarts[j + 1].x : chartRight;
+          const centerX = (ds.x + nextX) / 2;
+          // Faint vertical day-divider
+          const vl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          vl.setAttribute('x1', ds.x); vl.setAttribute('y1', padding.top);
+          vl.setAttribute('x2', ds.x); vl.setAttribute('y2', height - padding.bottom + 6);
+          vl.setAttribute('stroke', 'rgba(148,163,184,0.1)'); vl.setAttribute('stroke-width', '1');
+          svg.appendChild(vl);
+          // Day label centered over the day's span
+          const wday = ds.d.toLocaleDateString([], { weekday: 'short' });
+          const mday = ds.d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+          const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          t.setAttribute('x', centerX);
+          t.setAttribute('y', height - padding.bottom + 44);
+          t.setAttribute('fill', 'rgba(148,163,184,0.6)');
+          t.setAttribute('font-size', '10px');
+          t.setAttribute('text-anchor', 'middle');
+          t.setAttribute('font-family', 'var(--font-mono)');
+          t.textContent = `${wday} ${mday}`;
+          svg.appendChild(t);
+        });
+      }
+
+      // ── Weekly % overlay: 3-hour view (projection + prev period overlay) ──────
+      if (showWeeklyOverlay && sixhourly) {
+        const ppt = weeklyData.pct_per_token;
+
+        // 1. Cumulative actual %
+        let cumAct = 0;
+        const cumActVals = sourceRows.map(row => {
+          if (row._projected) return null;
+          cumAct += ((row.raw_context_tokens || 0) + (row.output_tokens || 0)) * ppt;
+          return cumAct;
+        });
+        const lastActIdx = cumActVals.reduce((last, v, i) => v != null ? i : last, -1);
+        const slotsElapsed = lastActIdx + 1;
+        const slotsRemaining = sourceRows.length - slotsElapsed;
+        const burnPerSlot = slotsElapsed > 0 ? cumAct / slotsElapsed : 0;
+        const projectedEnd = cumAct + burnPerSlot * slotsRemaining;
+
+        // 2. Previous period cumulative % (position-aligned)
+        let cumPrv = 0;
+        const cumPrvVals = prevPeriodRows.map(row => {
+          if (!row) return null;
+          cumPrv += ((row.raw_context_tokens || 0) + (row.output_tokens || 0)) * ppt;
+          return cumPrv;
+        });
+
+        const maxCum = Math.max(100, Math.ceil(Math.max(projectedEnd, cumPrv, 10) / 10) * 10);
+        const yPct = p => height - padding.bottom - (p / maxCum) * (height - padding.top - padding.bottom);
+
+        // 3. % gridlines (right axis)
+        [0, 25, 50, 75, 100].forEach(p => {
+          if (p > maxCum) return;
+          const y = yPct(p);
+          const gl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          gl.setAttribute('x1', padding.left); gl.setAttribute('y1', y);
+          gl.setAttribute('x2', width - padding.right); gl.setAttribute('y2', y);
+          gl.setAttribute('stroke', 'rgba(245,158,11,0.08)'); gl.setAttribute('stroke-dasharray', '2,6');
+          svg.appendChild(gl);
+          const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          t.setAttribute('x', width - padding.right + 6); t.setAttribute('y', y + 4);
+          t.setAttribute('fill', 'rgba(245,158,11,0.6)'); t.setAttribute('font-size', '11px');
+          t.setAttribute('text-anchor', 'start'); t.setAttribute('font-family', 'var(--font-mono)');
+          t.textContent = `${p}%`; svg.appendChild(t);
+        });
+
+        // 4. Previous period overlay — thin, faded, dashed (reference)
+        if (cumPrvVals.some(v => v != null)) {
+          let pp = '', ppS = false;
+          cumPrvVals.forEach((v, i) => {
+            if (v == null) return;
+            const x = xScale(i + 1), y = yPct(v);
+            pp += ppS ? `L ${x} ${y} ` : `M ${x} ${y} `;
+            ppS = true;
+          });
+          const ppLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          ppLine.setAttribute('d', pp); ppLine.setAttribute('fill', 'none');
+          ppLine.setAttribute('stroke', '#f59e0b'); ppLine.setAttribute('stroke-width', '1.2');
+          ppLine.setAttribute('stroke-dasharray', '3,5'); ppLine.setAttribute('opacity', '0.22');
+          svg.appendChild(ppLine);
+        }
+
+        // 5. Current period actual — thick solid orange (dominant)
+        if (lastActIdx >= 0) {
+          let ap = '', apS = false;
+          cumActVals.forEach((v, i) => {
+            if (v == null) return;
+            const x = xScale(i + 1), y = yPct(v);
+            ap += apS ? `L ${x} ${y} ` : `M ${x} ${y} `;
+            apS = true;
+          });
+          const actLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          actLine.setAttribute('d', ap); actLine.setAttribute('fill', 'none');
+          actLine.setAttribute('stroke', '#f59e0b'); actLine.setAttribute('stroke-width', '2.5');
+          actLine.setAttribute('stroke-linecap', 'round'); actLine.setAttribute('opacity', '1');
+          svg.appendChild(actLine);
+        }
+
+        // 6. Projection — dashed orange from last actual to period end
+        if (chartWeekOffset === 0 && slotsRemaining > 0 && burnPerSlot > 0 && lastActIdx >= 0) {
+          const sx = xScale(lastActIdx + 1), sy = yPct(cumAct);
+          let pp = `M ${sx} ${sy} `;
+          for (let i = slotsElapsed; i < sourceRows.length; i++) {
+            const proj = cumAct + burnPerSlot * (i - lastActIdx);
+            pp += `L ${xScale(i + 1)} ${yPct(proj)} `;
+          }
+          const projLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          projLine.setAttribute('d', pp); projLine.setAttribute('fill', 'none');
+          projLine.setAttribute('stroke', '#f59e0b'); projLine.setAttribute('stroke-width', '1.8');
+          projLine.setAttribute('stroke-dasharray', '7,4'); projLine.setAttribute('opacity', '0.7');
+          svg.appendChild(projLine);
+          // End-of-period projected label
+          const ex = xScale(sourceRows.length), ey = yPct(projectedEnd);
+          const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          el.setAttribute('x', ex - 4); el.setAttribute('y', ey - 7);
+          el.setAttribute('fill', '#f59e0b'); el.setAttribute('font-size', '11px');
+          el.setAttribute('font-weight', 'bold'); el.setAttribute('text-anchor', 'end');
+          el.setAttribute('font-family', 'var(--font-mono)'); el.setAttribute('opacity', '0.85');
+          el.textContent = `→${projectedEnd.toFixed(1)}%`; svg.appendChild(el);
+        }
+
+        // 7. Right-axis label
+        const axLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        axLbl.setAttribute('x', width - padding.right + 6); axLbl.setAttribute('y', padding.top - 4);
+        axLbl.setAttribute('fill', '#f59e0b'); axLbl.setAttribute('font-size', '11px');
+        axLbl.setAttribute('font-weight', 'bold'); axLbl.setAttribute('text-anchor', 'start');
+        axLbl.setAttribute('font-family', 'var(--font-mono)');
+        axLbl.textContent = '% quota'; svg.appendChild(axLbl);
+
+        // 8. Week navigation buttons
+        const nav = document.getElementById('chart-week-nav');
+        if (nav && selPeriodStart && selPeriodEnd) {
+          nav.style.display = 'flex';
+          const fmtD = d => d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+          document.getElementById('chart-week-label').textContent =
+            `${fmtD(selPeriodStart)} – ${fmtD(new Date(selPeriodEnd.getTime() - 1))}`;
+          const prevBtn = document.getElementById('chart-week-prev');
+          const nextBtn = document.getElementById('chart-week-next');
+          const hasPrevData = prevPeriodRows.some(r => r != null);
+          prevBtn.disabled = chartWeekOffset <= -1 || !hasPrevData;
+          nextBtn.disabled = chartWeekOffset >= 0;
+          prevBtn.onclick = () => {
+            chartWeekOffset--;
+            drawChart(lastRender.turns, lastRender.summary, lastRender.isAggregate, lastRender.bucketMode, lastRender.showCumulative);
+          };
+          nextBtn.onclick = () => {
+            chartWeekOffset++;
+            drawChart(lastRender.turns, lastRender.summary, lastRender.isAggregate, lastRender.bucketMode, lastRender.showCumulative);
+          };
+        }
+      }
+
+      // ── Weekly % overlay (daily view) ────────────────────────────────────────
+      if (showWeeklyOverlay && daily) {
         const pctPerToken = weeklyData.pct_per_token;
         const resetAt = weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
         const periodStart = resetAt ? new Date(resetAt.getTime() - 7 * 86400000) : null;
-
-        // Helper: get datetime for a row (works for daily rows and 6h rows).
         const rowDt = (row) => row.hour ? new Date(row.hour) : (row.day ? new Date(row.day + 'T00:00:00') : null);
-
-        // Compute cumulative % separately for previous period and current period.
         let cumPrev = 0, cumCurr = 0;
         const cumAll = sourceRows.map(row => {
           const rd = rowDt(row);
           const tokens = (row.raw_context_tokens || 0) + (row.output_tokens || 0);
           if (periodStart && rd && rd < periodStart) {
-            cumPrev += tokens * pctPerToken;
-            return { prev: cumPrev, curr: null };
+            cumPrev += tokens * pctPerToken; return { prev: cumPrev, curr: null };
           } else {
-            cumCurr += tokens * pctPerToken;
-            return { prev: null, curr: cumCurr };
+            cumCurr += tokens * pctPerToken; return { prev: null, curr: cumCurr };
           }
         });
-
-        // Secondary Y scale covering both periods.
         const maxCumPct = Math.max(100, Math.ceil(Math.max(cumPrev, cumCurr) / 10) * 10);
-        const yPct = (pct) =>
-          height - padding.bottom - (pct / maxCumPct) * (height - padding.top - padding.bottom);
-
-        // Draw secondary Y-axis gridlines.
-        const pctSteps = [0, 25, 50, 75, 100];
-        pctSteps.forEach(p => {
+        const yPct = p => height - padding.bottom - (p / maxCumPct) * (height - padding.top - padding.bottom);
+        [0, 25, 50, 75, 100].forEach(p => {
           if (p > maxCumPct) return;
           const y = yPct(p);
           const gl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-          gl.setAttribute('x1', padding.left);
-          gl.setAttribute('y1', y);
-          gl.setAttribute('x2', width - padding.right);
-          gl.setAttribute('y2', y);
-          gl.setAttribute('stroke', 'rgba(227,179,65,0.12)');
-          gl.setAttribute('stroke-dasharray', '2,6');
+          gl.setAttribute('x1', padding.left); gl.setAttribute('y1', y);
+          gl.setAttribute('x2', width - padding.right); gl.setAttribute('y2', y);
+          gl.setAttribute('stroke', 'rgba(227,179,65,0.12)'); gl.setAttribute('stroke-dasharray', '2,6');
           svg.appendChild(gl);
           const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          t.setAttribute('x', width - padding.right + 6);
-          t.setAttribute('y', y + 4);
-          t.setAttribute('fill', 'rgba(227,179,65,0.7)');
-          t.setAttribute('font-size', '11px');
-          t.setAttribute('text-anchor', 'start');
-          t.setAttribute('font-family', 'var(--font-mono)');
-          t.textContent = `${p}%`;
-          svg.appendChild(t);
+          t.setAttribute('x', width - padding.right + 6); t.setAttribute('y', y + 4);
+          t.setAttribute('fill', 'rgba(227,179,65,0.7)'); t.setAttribute('font-size', '11px');
+          t.setAttribute('text-anchor', 'start'); t.setAttribute('font-family', 'var(--font-mono)');
+          t.textContent = `${p}%`; svg.appendChild(t);
         });
-
-        // Draw faded previous-period line.
-        const drawSegment = (vals, opacity, strokeW, dotR) => {
+        const drawSeg = (vals, op, sw) => {
           let path = '', started = false;
           vals.forEach((pct, idx) => {
             if (pct == null) return;
-            const x = xScale(idx + 1); const y = yPct(pct);
+            const x = xScale(idx + 1), y = yPct(pct);
             path += started ? `L ${x} ${y} ` : `M ${x} ${y} `;
             started = true;
           });
           if (!path) return;
           const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
           line.setAttribute('d', path); line.setAttribute('fill', 'none');
-          line.setAttribute('stroke', '#f59e0b'); line.setAttribute('stroke-width', String(strokeW));
-          line.setAttribute('stroke-dasharray', '5,3'); line.setAttribute('opacity', String(opacity));
+          line.setAttribute('stroke', '#f59e0b'); line.setAttribute('stroke-width', String(sw));
+          line.setAttribute('stroke-dasharray', '5,3'); line.setAttribute('opacity', String(op));
           svg.appendChild(line);
-          vals.forEach((pct, idx) => {
-            if (pct == null) return;
-            const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-            dot.setAttribute('cx', xScale(idx + 1)); dot.setAttribute('cy', yPct(pct));
-            dot.setAttribute('r', String(dotR)); dot.setAttribute('fill', '#f59e0b');
-            dot.setAttribute('opacity', String(opacity * 0.85));
-            svg.appendChild(dot);
-          });
         };
-
-        drawSegment(cumAll.map(c => c.prev), 0.3, 1.4, 2);   // previous period — faded
-        drawSegment(cumAll.map(c => c.curr), 0.85, 1.8, 3);  // current period — bright
-
-        const hasCurr = cumAll.some(c => c.curr != null);
-        const hasPrev = cumAll.some(c => c.prev != null);
-        if (hasCurr || hasPrev) {
-          // Right-axis label ("% quota").
-          const axisLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          axisLabel.setAttribute('x', width - padding.right + 6);
-          axisLabel.setAttribute('y', padding.top - 4);
-          axisLabel.setAttribute('fill', '#f59e0b');
-          axisLabel.setAttribute('font-size', '11px');
-          axisLabel.setAttribute('font-weight', 'bold');
-          axisLabel.setAttribute('text-anchor', 'start');
-          axisLabel.setAttribute('font-family', 'var(--font-mono)');
-          axisLabel.textContent = '% quota';
-          svg.appendChild(axisLabel);
-
-          // Vertical divider at weekly reset.
-          if (periodStart) {
-            const resetIdx = sourceRows.findIndex(row => {
-              const rd = rowDt(row);
-              return rd && rd >= periodStart;
-            });
-            if (resetIdx > 0) {
-              const rx = xScale(resetIdx + 0.5);
-              const vl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-              vl.setAttribute('x1', rx); vl.setAttribute('x2', rx);
-              vl.setAttribute('y1', padding.top); vl.setAttribute('y2', height - padding.bottom);
-              vl.setAttribute('stroke', 'rgba(245,158,11,0.4)');
-              vl.setAttribute('stroke-dasharray', '4,3');
-              vl.setAttribute('stroke-width', '1');
-              svg.appendChild(vl);
-              const rl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-              rl.setAttribute('x', rx + 3); rl.setAttribute('y', padding.top + 10);
-              rl.setAttribute('fill', 'rgba(245,158,11,0.6)'); rl.setAttribute('font-size', '8px');
-              rl.setAttribute('font-family', 'var(--font-mono)');
-              rl.textContent = 'reset';
-              svg.appendChild(rl);
-            }
-          }
-        }
+        drawSeg(cumAll.map(c => c.prev), 0.3, 1.4);
+        drawSeg(cumAll.map(c => c.curr), 0.9, 2.2);
+        const axLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        axLbl.setAttribute('x', width - padding.right + 6); axLbl.setAttribute('y', padding.top - 4);
+        axLbl.setAttribute('fill', '#f59e0b'); axLbl.setAttribute('font-size', '11px');
+        axLbl.setAttribute('font-weight', 'bold'); axLbl.setAttribute('text-anchor', 'start');
+        axLbl.setAttribute('font-family', 'var(--font-mono)');
+        axLbl.textContent = '% quota'; svg.appendChild(axLbl);
       }
 
       // ── Cumulative quota% line (per-session hourly view) ──────────────────
