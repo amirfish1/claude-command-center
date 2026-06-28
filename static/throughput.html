@@ -1273,7 +1273,7 @@
         document.getElementById('lbl-card1').textContent = '% QUOTA USED';
         document.getElementById('val-active-duration').textContent =
           actualPct != null ? `${actualPct.toFixed(2)}%` : fmtNum(effectiveTok);
-        const totalCalls = (data.scope && data.scope.total_turns) || summary.total_turns;
+        const totalCalls = summary.total_turns || (data.scope && data.scope.total_turns);
         document.getElementById('val-total-duration').textContent =
           `${totalCalls.toLocaleString()} Claude calls · ${fmtCost(summary.cost_usd || 0)}`;
 
@@ -1560,6 +1560,7 @@
           slotBase.setUTCHours(Math.floor(slotBase.getUTCHours() / 3) * 3, 0, 0, 0);
           const slots = [];
           for (let dt = new Date(slotBase); dt < selPeriodEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
+            if (dt.getHours() < 6) continue; // skip midnight–6am local (dead hours)
             const ks = `${dt.toISOString().substring(0,10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
             const actual = allGroups.get(ks);
             const isProj = chartWeekOffset === 0 && dt.getTime() > nowTs;
@@ -1576,6 +1577,7 @@
           const prevBase = new Date(prevStart);
           prevBase.setUTCHours(Math.floor(prevBase.getUTCHours() / 3) * 3, 0, 0, 0);
           for (let dt = new Date(prevBase); dt < prevEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
+            if (dt.getHours() < 6) continue; // skip midnight–6am local (dead hours)
             const ks = `${dt.toISOString().substring(0,10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
             prevPeriodRows.push(allGroups.get(ks) || { hour: ks, raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 });
           }
@@ -1839,7 +1841,7 @@
           const vl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
           vl.setAttribute('x1', ds.x); vl.setAttribute('y1', padding.top);
           vl.setAttribute('x2', ds.x); vl.setAttribute('y2', height - padding.bottom + 6);
-          vl.setAttribute('stroke', 'rgba(148,163,184,0.1)'); vl.setAttribute('stroke-width', '1');
+          vl.setAttribute('stroke', 'rgba(148,163,184,0.3)'); vl.setAttribute('stroke-width', '1');
           svg.appendChild(vl);
           // Day label centered over the day's span
           const wday = ds.d.toLocaleDateString([], { weekday: 'short' });
@@ -1930,6 +1932,19 @@
           actLine.setAttribute('stroke', '#f59e0b'); actLine.setAttribute('stroke-width', '2.5');
           actLine.setAttribute('stroke-linecap', 'round'); actLine.setAttribute('opacity', '1');
           svg.appendChild(actLine);
+          // "Right now" dot + label at end of actual line
+          const nx = xScale(lastActIdx + 1), ny = yPct(cumAct);
+          const nowDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          nowDot.setAttribute('cx', nx); nowDot.setAttribute('cy', ny);
+          nowDot.setAttribute('r', '5'); nowDot.setAttribute('fill', '#f59e0b');
+          svg.appendChild(nowDot);
+          const nowLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          nowLbl.setAttribute('x', nx + 8); nowLbl.setAttribute('y', ny - 6);
+          nowLbl.setAttribute('fill', '#f59e0b'); nowLbl.setAttribute('font-size', '11px');
+          nowLbl.setAttribute('font-weight', 'bold'); nowLbl.setAttribute('text-anchor', 'start');
+          nowLbl.setAttribute('font-family', 'var(--font-mono)');
+          nowLbl.textContent = `${cumAct.toFixed(1)}% · right now`;
+          svg.appendChild(nowLbl);
         }
 
         // 6. Projection — dashed orange from last actual to period end
@@ -1945,17 +1960,66 @@
           projLine.setAttribute('stroke', '#f59e0b'); projLine.setAttribute('stroke-width', '1.8');
           projLine.setAttribute('stroke-dasharray', '7,4'); projLine.setAttribute('opacity', '0.7');
           svg.appendChild(projLine);
-          // End-of-period projected label
-          const ex = xScale(sourceRows.length), ey = yPct(projectedEnd);
-          const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          el.setAttribute('x', ex - 4); el.setAttribute('y', ey - 7);
-          el.setAttribute('fill', '#f59e0b'); el.setAttribute('font-size', '11px');
-          el.setAttribute('font-weight', 'bold'); el.setAttribute('text-anchor', 'end');
-          el.setAttribute('font-family', 'var(--font-mono)'); el.setAttribute('opacity', '0.85');
-          el.textContent = `→${projectedEnd.toFixed(1)}%`; svg.appendChild(el);
+          // End-of-period projected label — big number + subtitle
+          const plx = width - padding.right + 6, plyBase = padding.top + 14;
+          const bigNum = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          bigNum.setAttribute('x', plx); bigNum.setAttribute('y', plyBase);
+          bigNum.setAttribute('fill', '#f59e0b'); bigNum.setAttribute('font-size', '20px');
+          bigNum.setAttribute('font-weight', 'bold'); bigNum.setAttribute('text-anchor', 'start');
+          bigNum.setAttribute('font-family', 'var(--font-mono)'); bigNum.setAttribute('opacity', '0.95');
+          bigNum.textContent = `${projectedEnd.toFixed(1)}%`;
+          svg.appendChild(bigNum);
+          const projWord = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          projWord.setAttribute('x', plx); projWord.setAttribute('y', plyBase + 15);
+          projWord.setAttribute('fill', '#f59e0b'); projWord.setAttribute('font-size', '11px');
+          projWord.setAttribute('font-weight', 'bold'); projWord.setAttribute('text-anchor', 'start');
+          projWord.setAttribute('font-family', 'var(--font-mono)'); projWord.setAttribute('opacity', '0.75');
+          projWord.textContent = 'projected'; svg.appendChild(projWord);
+          const rateNote = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          rateNote.setAttribute('x', plx); rateNote.setAttribute('y', plyBase + 27);
+          rateNote.setAttribute('fill', '#f59e0b'); rateNote.setAttribute('font-size', '9px');
+          rateNote.setAttribute('text-anchor', 'start'); rateNote.setAttribute('opacity', '0.45');
+          rateNote.setAttribute('font-family', 'var(--font-mono)');
+          rateNote.textContent = "at current week's rate"; svg.appendChild(rateNote);
         }
 
-        // 7. Right-axis label
+        // 7. IF OPUS ONLY — red dashed line showing hypothetical all-Opus cumulative %
+        const _opusRow = (summary.per_model || []).find(m => (m.model || '').toLowerCase().includes('opus'));
+        const _opusTok = _opusRow ? (_opusRow.effective_input_tokens || 0) + (_opusRow.output_tokens || 0) : 0;
+        const _opusCost = _opusRow ? (_opusRow.cost_usd || 0) : 0;
+        const _opusCPT = (_opusTok > 0 && _opusCost > 0) ? _opusCost / _opusTok : null;
+        const _effTok = (summary.total_effective_input_tokens || 0) + (summary.total_output_tokens || 0);
+        const _blendCPT = (_effTok > 0 && (summary.cost_usd || 0) > 0) ? (summary.cost_usd || 0) / _effTok : null;
+        const _opusRatio = (_opusCPT && _blendCPT) ? _opusCPT / _blendCPT : null;
+        if (_opusRatio) {
+          let op = '', opS = false;
+          let lastOpusV = null, lastOpusI = -1;
+          cumActVals.forEach((v, i) => {
+            if (v == null) return;
+            const ov = v * _opusRatio;
+            const x = xScale(i + 1), y = yPct(ov);
+            op += opS ? `L ${x} ${y} ` : `M ${x} ${y} `;
+            opS = true; lastOpusV = ov; lastOpusI = i;
+          });
+          if (op) {
+            const opLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            opLine.setAttribute('d', op); opLine.setAttribute('fill', 'none');
+            opLine.setAttribute('stroke', '#ef4444'); opLine.setAttribute('stroke-width', '1.5');
+            opLine.setAttribute('stroke-dasharray', '4,3'); opLine.setAttribute('opacity', '0.65');
+            svg.appendChild(opLine);
+            if (lastOpusI >= 0) {
+              const ox = xScale(lastOpusI + 1), oy = yPct(lastOpusV);
+              const opLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+              opLbl.setAttribute('x', ox + 6); opLbl.setAttribute('y', oy - 4);
+              opLbl.setAttribute('fill', '#ef4444'); opLbl.setAttribute('font-size', '10px');
+              opLbl.setAttribute('font-weight', 'bold'); opLbl.setAttribute('text-anchor', 'start');
+              opLbl.setAttribute('font-family', 'var(--font-mono)'); opLbl.setAttribute('opacity', '0.8');
+              opLbl.textContent = `${lastOpusV.toFixed(1)}% if opus`; svg.appendChild(opLbl);
+            }
+          }
+        }
+
+        // 8. Right-axis label
         const axLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         axLbl.setAttribute('x', width - padding.right + 6); axLbl.setAttribute('y', padding.top - 4);
         axLbl.setAttribute('fill', '#f59e0b'); axLbl.setAttribute('font-size', '11px');
