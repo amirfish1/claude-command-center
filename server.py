@@ -40377,6 +40377,181 @@ def _throughput_file_turns(path, extract_fn):
     return turns
 
 
+# Weekly-usage calibration written by the menu-bar usage meter
+# (~/dev/usage_on_mac/claude-usage.5m.py). It pairs this week's locally-counted
+# tokens with the real Anthropic weekly-limit % scraped from claude.ai, giving a
+# tokens -> "% of weekly limit" multiplier. We reuse it so the throughput
+# dashboard can express burn in the same %-of-weekly unit the user already
+# reads in their top bar, instead of only abstract token counts.
+_WEEKLY_CAL_FILE = Path.home() / ".cache" / "claude-usage-cal.json"
+_WEEKLY_PCT_FILE = Path.home() / ".cache" / "claude-usage-pct.json"
+_weekly_cal_memo = {"mtime": None, "value": None}
+
+
+def _weekly_pct_calibration():
+    """Return {pct_per_token, real_pct, tokens, week_start, calibrated_at} from
+    the menu-bar usage calibration, or None if it's absent/unusable. Memoised on
+    file mtime so we don't re-read on every hit."""
+    try:
+        st = os.stat(_WEEKLY_CAL_FILE)
+    except OSError:
+        return None
+    if _weekly_cal_memo["mtime"] == st.st_mtime:
+        return _weekly_cal_memo["value"]
+    value = None
+    try:
+        with _WEEKLY_CAL_FILE.open("r") as f:
+            data = json.load(f)
+        tokens = data.get("tokens")
+        real_pct = data.get("real_pct")
+        if isinstance(tokens, (int, float)) and tokens > 0 and isinstance(real_pct, (int, float)):
+            value = {
+                "pct_per_token": real_pct / tokens,
+                "real_pct": real_pct,
+                "tokens": tokens,
+                "week_start": data.get("week_start"),
+                "calibrated_at": data.get("calibrated_at"),
+            }
+    except (OSError, json.JSONDecodeError, ValueError):
+        value = None
+    _weekly_cal_memo["mtime"] = st.st_mtime
+    _weekly_cal_memo["value"] = value
+    return value
+
+
+def _live_weekly_usage():
+    """Read the last scraped real usage from the menu-bar cache. Returns
+    {weekly_pct, weekly_resets_at, session_pct, sonnet_pct} (any may be None),
+    or None if the cache is missing/unreadable."""
+    try:
+        with _WEEKLY_PCT_FILE.open("r") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    usage = (data.get("usage") or {}) if isinstance(data, dict) else {}
+    sd = usage.get("seven_day") or {}
+    fh = usage.get("five_hour") or {}
+    sonnet = usage.get("seven_day_sonnet") or {}
+    return {
+        "weekly_pct": sd.get("utilization"),
+        "weekly_resets_at": sd.get("resets_at"),
+        "session_pct": fh.get("utilization"),
+        "session_resets_at": fh.get("resets_at"),
+        "sonnet_pct": sonnet.get("utilization"),
+        "fetched_at": data.get("fetched_at") if isinstance(data, dict) else None,
+    }
+
+
+def _weekly_usage_block():
+    """Apples-to-apples weekly usage: Claude-only token burn since the weekly
+    reset, converted to "% of weekly limit" via the menu-bar calibration, paired
+    with the last real scraped %. This matches the unit the user reads in their
+    macOS top bar (same scope: Claude only, same window: since reset).
+
+    Returns a dict with available=False when calibration is missing."""
+    cal = _weekly_pct_calibration()
+    live = _live_weekly_usage()
+    if not cal:
+        return {"available": False, "live": live}
+
+    rate = cal["pct_per_token"]
+    # Prefer the live reset instant (authoritative) to derive the week start;
+    # fall back to the calibration's own week_start string.
+    week_start_epoch = None
+    if live and live.get("weekly_resets_at"):
+        try:
+            week_start_epoch = (
+                _stats_parse_ts(live["weekly_resets_at"]).timestamp() - 7 * 86400
+            )
+        except Exception:
+            week_start_epoch = None
+    if week_start_epoch is None and cal.get("week_start"):
+        try:
+            week_start_epoch = datetime.fromisoformat(cal["week_start"]).timestamp()
+        except (ValueError, TypeError):
+            week_start_epoch = None
+    if week_start_epoch is None:
+        week_start_epoch = time.time() - 7 * 86400
+
+    # Claude-only token burn since reset, summed the same way the calibration
+    # counted (raw context incl. cache + output). Uses the per-file turn cache.
+    # Turns must be deduped by message_id first: resumed sessions replay the
+    # same API response under fresh event uuids, so a raw sum double-counts
+    # (~2x) — exactly what threw the estimate to 74% instead of ~34%.
+    try:
+        convs = find_all_conversations(
+            resolve_pr_states=False,
+            resolve_effective=False,
+            resolve_worktree_dirty=False,
+        )
+    except Exception:
+        convs = []
+    collected = []
+    for conv_row in convs:
+        sid = conv_row.get("session_id")
+        if not sid:
+            continue
+        modified = (
+            conv_row.get("last_interacted")
+            or conv_row.get("modified")
+            or conv_row.get("mtime")
+            or 0
+        )
+        if modified < week_start_epoch:
+            continue
+        engine = (conv_row.get("engine") or conv_row.get("source") or "").lower()
+        try:
+            if engine == "codex" or _is_codex_session(sid):
+                continue
+        except Exception:
+            continue
+        path = conv_row.get("jsonl_path")
+        if not path:
+            continue
+        name = conv_row.get("display_name") or conv_row.get("name") or ""
+        model_hint = conv_row.get("model") or ""
+
+        def _extract():
+            parsed = parse_conversation(sid)
+            return _throughput_turns_from_events(
+                parsed.get("events") or [],
+                session_id=sid, session_name=name, engine=engine,
+                model_hint=model_hint, cutoff_epoch=None,
+            )
+
+        full_turns = _throughput_file_turns(path, _extract)
+        if not full_turns:
+            continue
+        for t in full_turns:
+            if _throughput_turn_after_cutoff(t, week_start_epoch):
+                collected.append(dict(t))
+
+    deduped = _throughput_dedupe_turns(collected)
+    claude_tokens = sum(
+        (t.get("raw_context_tokens") or 0) + (t.get("tokens_out") or 0)
+        for t in deduped
+    )
+    est_pct = round(claude_tokens * rate, 1)
+    real_pct = (live or {}).get("weekly_pct")
+    # Never show below the last real scrape — the local count lags the server.
+    display_pct = est_pct
+    if isinstance(real_pct, (int, float)):
+        display_pct = max(est_pct, real_pct)
+    return {
+        "available": True,
+        "est_pct": est_pct,
+        "real_pct": real_pct,
+        "display_pct": round(display_pct, 1),
+        "claude_tokens": claude_tokens,
+        "pct_per_token": rate,
+        "week_start_epoch": week_start_epoch,
+        "weekly_resets_at": (live or {}).get("weekly_resets_at"),
+        "session_pct": (live or {}).get("session_pct"),
+        "calibrated_at": cal.get("calibrated_at"),
+        "fetched_at": (live or {}).get("fetched_at"),
+    }
+
+
 def _throughput_turn_after_cutoff(turn, cutoff_epoch):
     """True if a turn ends at/after the cutoff (used to filter cached full
     turn lists down to the requested window)."""
@@ -41709,6 +41884,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 range_key=range_key,
             )
             self.send_json(payload, status)
+            return
+        elif path == "/api/weekly_usage":
+            # Claude-only weekly burn since reset, in the same %-of-weekly unit
+            # the macOS menu bar shows. Independent of the throughput range so
+            # the dashboard can headline it without re-fetching on range switch.
+            try:
+                block = _weekly_usage_block()
+            except Exception as e:
+                self.send_json({"available": False, "error": str(e)}, 200)
+                return
+            self.send_json(block, 200)
             return
         elif path == "/api/morning/sessions":
             # Morning-spawned sessions may live in ANY project slug under

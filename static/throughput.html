@@ -302,6 +302,48 @@
     font-weight: 600;
   }
 
+  /* Weekly usage banner — apples-to-apples with the macOS menu bar. */
+  .weekly-banner {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 18px;
+    margin-bottom: 18px;
+    background: linear-gradient(135deg, rgba(57,210,192,0.10), rgba(123,151,255,0.06));
+    border: 1px solid rgba(57,210,192,0.25);
+    border-radius: 12px;
+  }
+  .weekly-gauge {
+    flex: 0 0 120px;
+    height: 8px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.10);
+    overflow: hidden;
+  }
+  .weekly-gauge-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 6px;
+    background: linear-gradient(90deg, var(--accent), var(--blue));
+    transition: width 0.4s ease, background 0.4s ease;
+  }
+  .weekly-main { display: flex; align-items: baseline; gap: 8px; }
+  .weekly-pct {
+    font-family: var(--font-display);
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .weekly-label { font-size: 13px; color: var(--text-muted); }
+  .weekly-sub {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: right;
+    line-height: 1.5;
+  }
+
   /* Dashboard Grid */
   .dashboard-header {
     margin-bottom: 24px;
@@ -682,7 +724,20 @@
     
     <!-- Main workspace content -->
     <div class="workspace" id="workspace">
-      
+
+      <!-- Weekly usage banner (Claude-only, since reset — matches the macOS
+           menu bar). Hidden until /api/weekly_usage returns calibrated data. -->
+      <div class="weekly-banner" id="weekly-banner" style="display: none;">
+        <div class="weekly-gauge">
+          <div class="weekly-gauge-fill" id="weekly-gauge-fill"></div>
+        </div>
+        <div class="weekly-main">
+          <div class="weekly-pct" id="weekly-pct">–%</div>
+          <div class="weekly-label">of Claude weekly limit</div>
+        </div>
+        <div class="weekly-sub" id="weekly-sub"></div>
+      </div>
+
       <!-- Default Empty State -->
       <div class="empty-state" id="empty-state">
         <div class="empty-state-icon">📊</div>
@@ -1396,8 +1451,49 @@
       }
     });
 
+    // Weekly usage banner — Claude-only burn since reset, in % of weekly
+    // limit (same unit as the macOS menu bar). Independent of the throughput
+    // range, so it loads once on boot and refreshes on a slow timer.
+    function fmtResetCountdown(iso) {
+      if (!iso) return '';
+      const ms = new Date(iso).getTime() - Date.now();
+      if (!(ms > 0)) return 'resets soon';
+      const days = Math.floor(ms / 86400000);
+      const hrs = Math.floor((ms % 86400000) / 3600000);
+      return days >= 1 ? `resets in ${days}d ${hrs}h` : `resets in ${hrs}h`;
+    }
+
+    async function loadWeeklyUsage() {
+      try {
+        const res = await fetch('/api/weekly_usage');
+        if (!res.ok) return;
+        const d = await res.json();
+        const banner = document.getElementById('weekly-banner');
+        if (!d || !d.available || d.display_pct == null) {
+          banner.style.display = 'none';
+          return;
+        }
+        const pct = d.display_pct;
+        document.getElementById('weekly-pct').textContent = `${pct.toFixed(0)}%`;
+        const fill = document.getElementById('weekly-gauge-fill');
+        fill.style.width = `${Math.min(pct, 100)}%`;
+        fill.style.background = pct >= 85
+          ? 'linear-gradient(90deg, var(--orange), #e3603a)'
+          : 'linear-gradient(90deg, var(--accent), var(--blue))';
+        const bits = [];
+        if (d.real_pct != null) bits.push(`${Math.round(d.real_pct)}% last synced from claude.ai`);
+        if (d.est_pct != null) bits.push(`~${d.est_pct.toFixed(0)}% live estimate`);
+        const reset = fmtResetCountdown(d.weekly_resets_at);
+        if (reset) bits.push(reset);
+        document.getElementById('weekly-sub').innerHTML = bits.join('<br>');
+        banner.style.display = 'flex';
+      } catch (e) { /* best effort — banner just stays hidden */ }
+    }
+
     // Boot
     loadSessions();
+    loadWeeklyUsage();
+    setInterval(loadWeeklyUsage, 120000);
   </script>
 </body>
 </html>
