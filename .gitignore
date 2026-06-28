@@ -110,6 +110,11 @@ snapshot.png
 /ingesters/
 .gstack/
 
+# ccc-voice: hands-free voice operator (MVP, one-user experiment). Depends on
+# external API keys + the AI-interviewer voice-agent venv. Kept local like the
+# Morning plugin until it's proven and generalized.
+/ccc-voice/
+
 # Local dev clutter — Node deps pulled in by tooling and a scratch git-log
 # dump. Not part of the app (server is stdlib-only; the UI ships no bundler).
 /node_modules/
