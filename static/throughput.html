@@ -756,6 +756,25 @@
   <div id="annotate-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9000;align-items:center;justify-content:center;">
     <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:24px;width:min(480px,90vw);display:flex;flex-direction:column;gap:14px;">
       <div style="font-weight:600;font-size:14px;color:var(--text);">File issue to THROUGHPUT queue</div>
+      <!-- Picker strip -->
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="btn" id="annotate-pick-btn" onclick="startAnnotatePicker()" title="Click an element on the page to attach it">
+          <span>🎯</span> Pick element
+        </button>
+        <div id="annotate-pick-hint" style="font-size:12px;color:var(--text-muted);display:none;">
+          Click any element on the page…
+        </div>
+      </div>
+      <!-- Selected element preview -->
+      <div id="annotate-element-preview" style="display:none;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:11px;color:var(--text-muted);word-break:break-all;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">
+          <div>
+            <div style="color:var(--text);font-weight:500;margin-bottom:4px;" id="annotate-element-selector"></div>
+            <div id="annotate-element-snippet" style="opacity:0.7;max-height:48px;overflow:hidden;"></div>
+          </div>
+          <button class="btn" onclick="clearAnnotatePick()" style="flex-shrink:0;padding:2px 8px;font-size:11px;">Clear</button>
+        </div>
+      </div>
       <textarea id="annotate-note" rows="4" placeholder="Describe the issue…"
         style="background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-ui);font-size:13px;padding:10px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
       <div style="display:flex;gap:10px;justify-content:flex-end;">
@@ -765,6 +784,11 @@
       <div id="annotate-feedback" style="font-size:12px;color:var(--text-muted);min-height:16px;"></div>
     </div>
   </div>
+  <!-- Picker overlay (sits above everything except the modal, dims the page,
+       captures clicks to select an element) -->
+  <div id="annotate-picker-overlay" style="display:none;position:fixed;inset:0;z-index:8999;cursor:crosshair;"></div>
+  <!-- Highlight box drawn over hovered element during picker mode -->
+  <div id="annotate-picker-highlight" style="display:none;position:fixed;pointer-events:none;z-index:9000;border:2px solid #4f8ef7;background:rgba(79,142,247,0.12);border-radius:3px;transition:none;"></div>
 
   <!-- Main Grid Layout -->
   <div class="layout-container">
@@ -1704,14 +1728,115 @@
       } catch (e) { /* best effort — banner just stays hidden */ }
     }
 
-    // Annotate
+    // Annotate — DOM picker state
+    let _annotatePickedSelector = '';
+    let _annotatePickedOuterHtml = '';
+    let _annotatePickerActive = false;
+    let _annotatePickerTarget = null;
+
+    function _cssSelectorFor(el) {
+      // Build a short, readable CSS selector path for the element.
+      if (!el || el === document.body) return 'body';
+      const parts = [];
+      let node = el;
+      while (node && node !== document.body && parts.length < 5) {
+        let seg = node.tagName.toLowerCase();
+        if (node.id) {
+          seg += '#' + node.id;
+          parts.unshift(seg);
+          break; // id is unique enough
+        }
+        const cls = Array.from(node.classList).slice(0, 2).join('.');
+        if (cls) seg += '.' + cls;
+        const siblings = node.parentElement
+          ? Array.from(node.parentElement.children).filter(c => c.tagName === node.tagName)
+          : [];
+        if (siblings.length > 1) {
+          const idx = siblings.indexOf(node) + 1;
+          seg += `:nth-of-type(${idx})`;
+        }
+        parts.unshift(seg);
+        node = node.parentElement;
+      }
+      return parts.join(' > ');
+    }
+
+    function _pickerMousemove(e) {
+      const pickerEl = document.getElementById('annotate-picker-overlay');
+      const highlight = document.getElementById('annotate-picker-highlight');
+      // Briefly hide the picker overlay so elementFromPoint sees the real page element.
+      pickerEl.style.display = 'none';
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      pickerEl.style.display = 'block';
+      if (!el) return;
+      _annotatePickerTarget = el;
+      const r = el.getBoundingClientRect();
+      Object.assign(highlight.style, {
+        left: r.left + 'px', top: r.top + 'px',
+        width: r.width + 'px', height: r.height + 'px',
+        display: 'block',
+      });
+    }
+
+    function _pickerClick(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const el = _annotatePickerTarget;
+      stopAnnotatePicker();
+      if (!el) return;
+      _annotatePickedSelector = _cssSelectorFor(el);
+      // Capture outer HTML truncated to 800 chars
+      const raw = el.outerHTML || '';
+      _annotatePickedOuterHtml = raw.length > 800 ? raw.slice(0, 800) + '…' : raw;
+      // Show preview in modal
+      document.getElementById('annotate-element-selector').textContent = _annotatePickedSelector;
+      const snippet = (el.textContent || '').trim().slice(0, 120);
+      document.getElementById('annotate-element-snippet').textContent = snippet || _annotatePickedOuterHtml.slice(0, 120);
+      document.getElementById('annotate-element-preview').style.display = 'block';
+      // Re-show modal
+      document.getElementById('annotate-overlay').style.display = 'flex';
+      document.getElementById('annotate-note').focus();
+    }
+
+    function startAnnotatePicker() {
+      // Hide the modal while picking so the user can click page elements
+      document.getElementById('annotate-overlay').style.display = 'none';
+      document.getElementById('annotate-picker-highlight').style.display = 'none';
+      const pickerEl = document.getElementById('annotate-picker-overlay');
+      pickerEl.style.display = 'block';
+      _annotatePickerActive = true;
+      document.getElementById('annotate-pick-hint').style.display = 'inline';
+      pickerEl.addEventListener('mousemove', _pickerMousemove);
+      pickerEl.addEventListener('click', _pickerClick);
+    }
+
+    function stopAnnotatePicker() {
+      _annotatePickerActive = false;
+      const pickerEl = document.getElementById('annotate-picker-overlay');
+      pickerEl.style.display = 'none';
+      pickerEl.removeEventListener('mousemove', _pickerMousemove);
+      pickerEl.removeEventListener('click', _pickerClick);
+      document.getElementById('annotate-picker-highlight').style.display = 'none';
+      document.getElementById('annotate-pick-hint').style.display = 'none';
+    }
+
+    function clearAnnotatePick() {
+      _annotatePickedSelector = '';
+      _annotatePickedOuterHtml = '';
+      document.getElementById('annotate-element-preview').style.display = 'none';
+      document.getElementById('annotate-element-selector').textContent = '';
+      document.getElementById('annotate-element-snippet').textContent = '';
+    }
+
     function openAnnotate() {
+      clearAnnotatePick();
       const overlay = document.getElementById('annotate-overlay');
       overlay.style.display = 'flex';
       document.getElementById('annotate-note').focus();
       document.getElementById('annotate-feedback').textContent = '';
     }
     function closeAnnotate() {
+      stopAnnotatePicker();
       document.getElementById('annotate-overlay').style.display = 'none';
     }
     async function submitAnnotate() {
@@ -1721,15 +1846,24 @@
       btn.disabled = true;
       btn.textContent = 'Filing…';
       try {
+        const payload = {
+          note, text: note,
+          url: location.href, title: document.title,
+        };
+        if (_annotatePickedSelector) {
+          payload.selector = _annotatePickedSelector;
+          payload.outerHtml = _annotatePickedOuterHtml;
+        }
         const res = await fetch('/api/annotations/throughput-queue', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ note, text: note, url: location.href, title: document.title }),
+          body: JSON.stringify(payload),
         });
         const data = await res.json();
         if (data.ok) {
           document.getElementById('annotate-feedback').textContent = `Filed: THROUGHPUT-${data.number}`;
           document.getElementById('annotate-note').value = '';
+          clearAnnotatePick();
           setTimeout(closeAnnotate, 1200);
         } else {
           document.getElementById('annotate-feedback').textContent = `Error: ${data.error || 'unknown'}`;
@@ -1745,7 +1879,14 @@
       if (e.target === this) closeAnnotate();
     });
     document.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape') closeAnnotate();
+      if (e.key === 'Escape') {
+        if (_annotatePickerActive) {
+          stopAnnotatePicker();
+          document.getElementById('annotate-overlay').style.display = 'flex';
+        } else {
+          closeAnnotate();
+        }
+      }
     });
 
     // Boot
