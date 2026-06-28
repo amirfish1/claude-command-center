@@ -899,12 +899,14 @@
           <!-- Model rows populated by JS -->
         </div>
 
-        <!-- Turns Detail Timeline -->
-        <div class="section-title">
-          <span>🗒️</span> Active LLM Turns
-        </div>
-        <div class="turn-list" id="turn-list">
-          <!-- Turns populated by JS -->
+        <!-- Turns Detail Timeline (hidden on aggregate views) -->
+        <div id="turns-section" style="display:none">
+          <div class="section-title">
+            <span>🗒️</span> Active LLM Turns
+          </div>
+          <div class="turn-list" id="turn-list">
+            <!-- Turns populated by JS -->
+          </div>
         </div>
         
       </div>
@@ -987,21 +989,27 @@
       }
     }
 
-    async function loadSessions() {
+    async function loadSessions(prefetchPromise) {
       setStatus('Loading sessions...', true);
       try {
-        const res = await fetch('/api/conversations?all=1');
-        if (!res.ok) throw new Error('API failed');
-        const data = await res.json();
+        // Conversations fetch runs in parallel with the prefetch kicked off in Boot.
+        const [convRes, prefetchData] = await Promise.all([
+          fetch('/api/conversations?all=1'),
+          prefetchPromise || Promise.resolve(null),
+        ]);
+        if (!convRes.ok) throw new Error('API failed');
+        const data = await convRes.json();
         allSessions = data.conversations || data.sessions || [];
         renderSessionList();
         fetchWeekRankings(); // non-blocking: re-sorts when rankings arrive
+        // If the prefetch already rendered the default session, skip the redundant fetch.
+        const prefetchedId = prefetchData && prefetchData.ok ? prefetchData.session_id : null;
         const defaultSession = activeSessionId
           ? findSessionById(activeSessionId)
           : aggregateSessions.find(a => a.session_id === 'all_7_days') || aggregateSessions[0];
-        if (defaultSession) {
+        if (defaultSession && defaultSession.session_id !== prefetchedId) {
           await selectSession(defaultSession);
-        } else {
+        } else if (!defaultSession) {
           setStatus('Idle');
         }
       } catch (err) {
@@ -1240,8 +1248,12 @@
       // Model comparison table
       renderModelBreakdown(summary.per_model || []);
 
-      // Render turns list
-      renderTurnsList(data.turns, isAggregate);
+      // Turns section: only useful for per-session drill-down
+      const turnsSection = document.getElementById('turns-section');
+      if (turnsSection) turnsSection.style.display = isAggregate ? 'none' : '';
+      if (!isAggregate) {
+        renderTurnsList(data.turns, isAggregate, (data.scope && data.scope.total_turns) || data.turns.length);
+      }
     }
 
     function renderModelBreakdown(models) {
@@ -1753,10 +1765,10 @@
     }
 
     // Render turns timeline list
-    function renderTurnsList(turns) {
+    function renderTurnsList(turns, _isAgg, totalTurns) {
       const listEl = document.getElementById('turn-list');
       listEl.innerHTML = '';
-      
+
       if (turns.length === 0) {
         listEl.innerHTML = `<div style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 13px;">No details available</div>`;
         return;
@@ -1766,12 +1778,13 @@
       // turns and a DOM card each froze the tab. Latest first
       // matters most; the chart above still covers every turn.
       const MAX_TURN_CARDS = 200;
+      const realTotal = totalTurns || turns.length;
       let shown = turns;
-      if (turns.length > MAX_TURN_CARDS) {
+      if (realTotal > MAX_TURN_CARDS) {
         shown = turns.slice(-MAX_TURN_CARDS);
         const note = document.createElement('div');
         note.style.cssText = 'padding: 10px 14px; color: var(--text-muted); font-size: 12px;';
-        note.textContent = `Showing the latest ${MAX_TURN_CARDS} of ${turns.length.toLocaleString()} turns (chart covers all).`;
+        note.textContent = `Showing the latest ${MAX_TURN_CARDS} of ${realTotal.toLocaleString()} turns (chart covers all).`;
         listEl.appendChild(note);
       }
 
@@ -2072,8 +2085,23 @@
       }
     });
 
-    // Boot
-    loadSessions();
+    // Boot — prefetch the default all_7_days payload immediately (parallel with
+    // /api/conversations so the chart shows before the sidebar is ready).
+    const _aggDefault = aggregateSessions.find(a => a.session_id === 'all_7_days') || aggregateSessions[0];
+    const _prefetch7d = _aggDefault
+      ? fetch(`/api/throughput?session_id=${encodeURIComponent(_aggDefault.session_id)}`)
+          .then(r => r.json())
+          .then(data => {
+            if (data && data.ok && !activeSessionId) {
+              activeSessionId = _aggDefault.session_id;
+              renderDashboard(_aggDefault, data);
+              setStatus('Idle');
+            }
+            return data;
+          })
+          .catch(() => null)
+      : Promise.resolve(null);
+    loadSessions(_prefetch7d);
     loadWeeklyUsage();
     setInterval(loadWeeklyUsage, 120000);
   </script>

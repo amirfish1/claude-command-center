@@ -40489,8 +40489,10 @@ def _throughput_session_hints(session_id):
 # prior flat-file approach had. SQLite is stdlib; no extra deps.
 _THROUGHPUT_TURN_CACHE = {}        # str(path) -> {"mtime", "size", "turns"}
 _THROUGHPUT_CACHE_LOCK = threading.Lock()
-_THROUGHPUT_AGG_CACHE = {}         # (session_id, cutoff_epoch) -> {"ts": float, "payload": dict, "status": int}
+_THROUGHPUT_AGG_CACHE = {}         # session_id -> {"ts": float, "payload": dict, "status": int}
 _THROUGHPUT_AGG_CACHE_TTL = 60     # seconds
+_THROUGHPUT_RANKINGS_CACHE = {}    # "week" -> {"ts": float, "rankings": list}
+_THROUGHPUT_RANKINGS_CACHE_TTL = 60
 
 _THROUGHPUT_DISK_CACHE_DIR = Path.home() / ".cache" / "ccc-throughput-cache"
 _THROUGHPUT_DISK_CACHE_DB = _THROUGHPUT_DISK_CACHE_DIR / "turns.db"
@@ -40812,6 +40814,9 @@ def _throughput_week_rankings():
     transcript hasn't been cached yet so the response stays fast.  Only
     sessions with week_tokens > 0 are included.  Results are sorted
     descending by week_tokens."""
+    _rk = _THROUGHPUT_RANKINGS_CACHE.get("week")
+    if _rk and (time.time() - _rk["ts"] < _THROUGHPUT_RANKINGS_CACHE_TTL):
+        return _rk["rankings"]
     # Derive week_start_epoch the same way _weekly_usage_block does.
     live = _live_weekly_usage()
     week_start_epoch = None
@@ -40907,13 +40912,14 @@ def _throughput_week_rankings():
         for sid, tok in session_tokens.items()
     ]
     rankings.sort(key=lambda r: r["week_tokens"], reverse=True)
+    _THROUGHPUT_RANKINGS_CACHE["week"] = {"ts": time.time(), "rankings": rankings}
     return rankings
 
 
 def _throughput_payload(session_id, repo_path=None, range_key=None):
     is_aggregate, cutoff_epoch, label = _throughput_scope(session_id, range_key)
     if is_aggregate:
-        _cache_key = (session_id, cutoff_epoch)
+        _cache_key = session_id  # cutoff_epoch shifts every call (float); key on name
         _cached = _THROUGHPUT_AGG_CACHE.get(_cache_key)
         if _cached and (time.time() - _cached["ts"] < _THROUGHPUT_AGG_CACHE_TTL):
             return _cached["payload"], _cached["status"]
@@ -41040,6 +41046,10 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
             )
 
     turns = _throughput_dedupe_turns(turns)
+    # Aggregate views: the chart uses summary.hourly/daily; sending all turns
+    # (potentially 20k+) bloats the payload to 28MB and costs 130ms just in
+    # JSON serialisation. Send the tail only so the per-turn list stays usable.
+    serialised_turns = turns if not is_aggregate else turns[-200:]
     _payload = {
         "ok": True,
         "session_id": session_id,
@@ -41047,13 +41057,14 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
             "aggregate": is_aggregate,
             "range": label,
             "cutoff_epoch": cutoff_epoch,
+            "total_turns": len(turns),
         },
         "summary": _throughput_summary(turns),
-        "turns": turns,
+        "turns": serialised_turns,
     }
     _status = 200
     if is_aggregate:
-        _THROUGHPUT_AGG_CACHE[(session_id, cutoff_epoch)] = {
+        _THROUGHPUT_AGG_CACHE[session_id] = {
             "ts": time.time(),
             "payload": _payload,
             "status": _status,
@@ -50228,13 +50239,12 @@ def main():
     # whose session has been taken over by a live terminal. Runs regardless of
     # any open dashboard so the ~500MB stale process doesn't linger.
     _start_headless_staleness_watcher()
-    # Pre-warm the 7-day aggregate throughput cache so the first page load
-    # is instant (hits _THROUGHPUT_AGG_CACHE instead of re-parsing transcripts).
-    threading.Thread(
-        target=lambda: _throughput_payload("all_7_days"),
-        daemon=True,
-        name="ccc-throughput-prewarm",
-    ).start()
+    # Pre-warm the throughput caches so the first /throughput page load is
+    # instant (hits in-memory caches instead of re-parsing transcripts).
+    def _prewarm_throughput():
+        _throughput_payload("all_7_days")
+        _throughput_week_rankings()
+    threading.Thread(target=_prewarm_throughput, daemon=True, name="ccc-throughput-prewarm").start()
     print()
     try:
         server.serve_forever()
