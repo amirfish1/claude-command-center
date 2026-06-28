@@ -40334,6 +40334,60 @@ def _throughput_session_hints(session_id):
     return engine, model
 
 
+# --- Per-transcript throughput-turn cache (in-memory) -----------------------
+# Aggregate ranges (esp. "Last 7 days") parse every transcript in the window on
+# each load — ~40s cold. But a transcript's past turns never change once
+# written, so we cache the FULL extracted turn list per file keyed by
+# (mtime,size). A reload then re-parses only the handful of files that actually
+# changed (the live sessions); everything else is a dict hit (~20x faster). The
+# cutoff is applied AFTER the cache lookup (never baked into a cached entry) so
+# a 1h load can't poison the 7d cache and vice-versa.
+#
+# Deliberately in-memory only, NOT disk-persisted: the full turn lists weigh
+# ~80MB across all sessions, and parsing that JSON at startup would hold the GIL
+# and freeze boot — the exact O(all-transcripts) incident the perf gates guard
+# against. The server is long-lived (LaunchAgent), so the cache warms once and
+# stays warm; only the first load after a rare restart pays the cold cost (and
+# the dashboard shows a spinner + ETA for it).
+_THROUGHPUT_TURN_CACHE = {}        # str(path) -> {"mtime", "size", "turns"}
+_THROUGHPUT_CACHE_LOCK = threading.Lock()
+
+
+def _throughput_file_turns(path, extract_fn):
+    """Return the FULL (unfiltered-by-cutoff) turn list for a transcript at
+    `path`, recomputing only if mtime/size changed. `extract_fn()` produces the
+    fresh full turn list on a cache miss. Returns None if the path can't be
+    stat'd (caller falls back to a direct, uncached extraction)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = str(path)
+    with _THROUGHPUT_CACHE_LOCK:
+        cached = _THROUGHPUT_TURN_CACHE.get(key)
+        if cached and cached["mtime"] == st.st_mtime and cached["size"] == st.st_size:
+            return cached["turns"]
+    turns = extract_fn()
+    with _THROUGHPUT_CACHE_LOCK:
+        _THROUGHPUT_TURN_CACHE[key] = {
+            "mtime": st.st_mtime,
+            "size": st.st_size,
+            "turns": turns,
+        }
+    return turns
+
+
+def _throughput_turn_after_cutoff(turn, cutoff_epoch):
+    """True if a turn ends at/after the cutoff (used to filter cached full
+    turn lists down to the requested window)."""
+    if cutoff_epoch is None:
+        return True
+    t_end = _stats_parse_ts(turn.get("t_end"))
+    if t_end is None:
+        return True
+    return t_end.timestamp() >= cutoff_epoch
+
+
 def _throughput_payload(session_id, repo_path=None, range_key=None):
     is_aggregate, cutoff_epoch, label = _throughput_scope(session_id, range_key)
     turns = []
@@ -40379,30 +40433,59 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
                 is_codex = engine == "codex" or _is_codex_session(sid)
             except Exception:
                 continue
+
+            # Resolve the transcript path so we can (mtime,size)-cache its full
+            # turn list. Extraction runs with cutoff_epoch=None — the window
+            # filter is applied below, never baked into the cached entry.
             if is_codex:
-                turns.extend(
-                    _throughput_codex_turns_from_file(
-                        sid,
-                        session_name=name,
-                        model_hint=model_hint,
-                        cutoff_epoch=cutoff_epoch,
+                cache_path = _resolve_codex_rollout_path(sid)
+
+                def _extract():
+                    return _throughput_codex_turns_from_file(
+                        sid, session_name=name, model_hint=model_hint, cutoff_epoch=None
                     )
-                )
             else:
-                try:
+                cache_path = conv_row.get("jsonl_path")
+
+                def _extract():
                     parsed = parse_conversation(sid, repo_path=repo_path)
-                except Exception:
-                    continue
-                turns.extend(
-                    _throughput_turns_from_events(
+                    return _throughput_turns_from_events(
                         parsed.get("events") or [],
                         session_id=sid,
                         session_name=name,
                         engine=engine,
                         model_hint=model_hint,
-                        cutoff_epoch=cutoff_epoch,
+                        cutoff_epoch=None,
                     )
-                )
+
+            full_turns = None
+            if cache_path:
+                full_turns = _throughput_file_turns(cache_path, _extract)
+            if full_turns is None:
+                # No stat-able path (or cache disabled) — fall back to a direct,
+                # cutoff-scoped extraction so we never serve nothing.
+                try:
+                    if is_codex:
+                        turns.extend(_throughput_codex_turns_from_file(
+                            sid, session_name=name, model_hint=model_hint,
+                            cutoff_epoch=cutoff_epoch,
+                        ))
+                    else:
+                        parsed = parse_conversation(sid, repo_path=repo_path)
+                        turns.extend(_throughput_turns_from_events(
+                            parsed.get("events") or [],
+                            session_id=sid, session_name=name, engine=engine,
+                            model_hint=model_hint, cutoff_epoch=cutoff_epoch,
+                        ))
+                except Exception:
+                    continue
+                continue
+
+            # Copy each kept turn so the per-request turn_index reassignment
+            # below doesn't mutate the shared cached dicts.
+            for t in full_turns:
+                if _throughput_turn_after_cutoff(t, cutoff_epoch):
+                    turns.append(dict(t))
         turns.sort(key=lambda t: t.get("t_start") or "")
         for idx, turn in enumerate(turns, 1):
             turn["turn_index"] = idx
