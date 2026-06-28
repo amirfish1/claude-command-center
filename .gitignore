@@ -46,6 +46,8 @@ CLAUDE.local.md
 .claude/pasted-images/
 .claude/annotations/
 .claude/snapshots/
+snapshot.png
+*.wt-answer-inline.png
 .claude/screenshots/
 .claude/scheduled_tasks.lock
 .claude/.cozempic-init.lock
