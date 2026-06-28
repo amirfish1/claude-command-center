@@ -1249,8 +1249,8 @@
         ? (daily ? 'Daily Cache-Adjusted Burn' : 'Hourly Cache-Adjusted Burn')
         : 'Cache-Adjusted Throughput per Turn';
       document.getElementById('chart-legend-label').textContent = isAggregate
-        ? (daily ? 'Daily adjusted TPM' : 'Hourly adjusted TPM')
-        : 'Adjusted TPM';
+        ? (daily ? 'Cache-adj tokens / day' : 'Cache-adj tokens / hour')
+        : 'Cache-adj tokens';
 
       // Determine whether the weekly % overlay is available for this view.
       const showWeeklyOverlay = daily && weeklyData && weeklyData.pct_per_token != null;
@@ -1269,14 +1269,15 @@
         : turns;
       const sourceRows = buckets;
       const data = sourceRows.map((row, idx) => {
-        const tpm = isAggregate
-          ? (row.avg_cache_adjusted_total_tpm ?? row.avg_effective_input_tpm ?? 0)
-          : (row.cache_adjusted_total_tpm ?? row.total_tpm);
+        // Total cache-adjusted tokens for the bucket (not a rate).
+        const val = isAggregate
+          ? (row.effective_input_tokens || 0) + (row.output_tokens || 0)
+          : (row.effective_input_tokens ?? row.tokens_in ?? 0) + (row.tokens_out ?? 0);
         return {
           index: idx + 1,
           label: isAggregate ? (daily ? dayLabel(row.day) : hourLabel(row.hour, idx + 1, sourceRows.length)) : `T${row.turn_index}`,
           tooltipTitle: isAggregate ? (daily ? dayLabel(row.day) : (row.hour || `Hour ${idx + 1}`)) : `Turn #${row.turn_index}`,
-          tpm,
+          tpm: val,
           in_tpm: isAggregate ? row.avg_effective_input_tpm : (row.effective_input_tpm ?? row.in_tpm),
           out_tpm: isAggregate ? row.avg_output_tpm : row.out_tpm,
           raw_tpm: isAggregate ? row.avg_raw_context_tpm : row.in_tpm,
@@ -1409,14 +1410,14 @@
           const lines = isAggregate
             ? [
                 `${d.tooltipTitle}`,
-                `Adjusted: <strong>${Math.round(d.tpm).toLocaleString()} TPM</strong>`,
+                `Cache-adj: <strong>${fmtNum(Math.round(d.tpm))} tokens</strong>`,
                 `Cost: <strong>${fmtCost(d.cost)}</strong>`,
                 `Calls: ${fmtNum(d.turns)} · Active: ${fmtNum(d.dur, 1)}s`,
                 `Raw: ${fmtNum(d.raw)} · Cache: ${fmtNum(d.cache)} · Out: ${fmtNum(d.output)}`,
               ]
             : [
                 d.tooltipTitle,
-                `Adjusted: <strong>${Math.round(d.tpm).toLocaleString()} TPM</strong>`,
+                `Cache-adj: <strong>${fmtNum(Math.round(d.tpm))} tokens</strong>`,
                 `Raw input: ${Math.round(d.raw_tpm || 0).toLocaleString()} TPM`,
                 `Duration: ${d.dur}s`,
               ];
