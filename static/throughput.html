@@ -1686,7 +1686,7 @@
               return null; // before current period — skip
             }
           }
-          const tokens = (row.effective_input_tokens || 0) + (row.output_tokens || 0);
+          const tokens = (row.raw_context_tokens || 0) + (row.output_tokens || 0);
           cumPct += tokens * pctPerToken;
           return cumPct;
         });
