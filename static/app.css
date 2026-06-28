@@ -4537,6 +4537,40 @@
     max-width: 180px;
     margin-left: 0;
   }
+  /* Single-line evergreen variant (TRIGGERED WORKERS worker rows): name + state
+     pill + quality score + context % + last-active time all on ONE line. The
+     badges (same markup as the default meta row) sit inline just left of the
+     time slot; the name ellipsizes to make room. */
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line {
+    min-height: 26px;
+  }
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-main-row {
+    gap: 6px;
+    min-height: 18px;
+  }
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-main-row > .conv-evergreen-inline-badges {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .conv-ux-fix-progress,
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .conv-goal,
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .conv-evergreen-state,
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .conv-row-meta,
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .coo-status,
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .coo-escalated,
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .conv-qc-badge,
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .conv-pct-badge {
+    display: inline-flex;
+  }
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .conv-row-meta:empty {
+    display: none;
+  }
+  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-goal {
+    max-width: 140px;
+  }
   /* De-dup an active evergreen row. The compact main row already shows the goal
      chip (evergreenGoalHtml) and the WIP/idle state pill (.conv-evergreen-state),
      so suppress the copies the shared hover-meta row and the generic activity

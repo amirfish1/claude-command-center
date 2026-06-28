@@ -20987,6 +20987,13 @@
 
       const groupedRowClass = opts.suppressFolderChip ? ' is-grouped-row' : '';
       const evergreenRowClass = opts.evergreenAgent ? ' is-evergreen-agent-row' : '';
+      // Single-line evergreen variant (TRIGGERED WORKERS queue rows): name + the
+      // same badges (state / quality / context %) + last-active time all on one
+      // line, instead of a title line plus a separate meta line. Scoped flag so
+      // the project-tree evergreen rows (evergreenAgent without this flag) are
+      // unaffected. Reuses the exact badge markup — just moves it inline.
+      const _egSingleLine = !!(opts.evergreenAgent && opts.evergreenSingleLine);
+      const evergreenSingleLineClass = _egSingleLine ? ' is-evergreen-single-line' : '';
       const currentChildDepth = Math.max(0, Math.min(4, Number(opts.currentChildDepth || 0) || 0));
       const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';
       const currentChildStyle = currentChildDepth > 0
@@ -21054,17 +21061,23 @@
         ? '<span class="conv-needs-you" title="Needs you — the agent is blocked on your input" aria-label="Needs you">&#9679;</span>'
         : '';
       const needsYouRowClass = _needsYouRow ? ' is-needs-you' : '';
-      const evergreenMetaRowHtml = opts.evergreenAgent
-        ? '<div class="conv-evergreen-meta-row">'
-          + evergreenGoalHtml
-          + uxFixesQueueProgressHtml
-          + evergreenStateHtml
-          + rowMetaHtml
-          + cooStatusHtml
-          + cooEscalatedHtml
-          + (qcBadgeHtml || '')
-          + (pctBadgeHtml || '')
-          + '</div>'
+      // Shared badge block — same markup whether it sits on its own meta line
+      // (default evergreen) or inline in the main row (single-line variant).
+      const _evergreenBadgesInner = evergreenGoalHtml
+        + uxFixesQueueProgressHtml
+        + evergreenStateHtml
+        + rowMetaHtml
+        + cooStatusHtml
+        + cooEscalatedHtml
+        + (qcBadgeHtml || '')
+        + (pctBadgeHtml || '');
+      const evergreenMetaRowHtml = (opts.evergreenAgent && !_egSingleLine)
+        ? '<div class="conv-evergreen-meta-row">' + _evergreenBadgesInner + '</div>'
+        : '';
+      // Inline badges live in the main row (before the right-edge time slot) for
+      // the single-line variant only.
+      const evergreenInlineBadgesHtml = _egSingleLine
+        ? '<span class="conv-evergreen-inline-badges">' + _evergreenBadgesInner + '</span>'
         : '';
 
       // Outcome line (GOAL-1) — surfaces the session's own end-of-turn
@@ -21089,7 +21102,7 @@
         + '</div>'
         : '';
 
-      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + currentChildRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row">'
@@ -21111,6 +21124,9 @@
             // to read at a glance without hovering. (CCC-294, refines CCC-289)
             + (opts.evergreenAgent ? '' : (qcBadgeHtml || ''))
             + (opts.evergreenAgent ? '' : (pctBadgeHtml || ''))
+            // Single-line evergreen variant: the badges that normally drop to a
+            // second meta line sit inline here, just left of the time slot.
+            + evergreenInlineBadgesHtml
             // Right-edge slot — Omnara-style. Shows the time at rest;
             // swaps to action buttons (merge / start / archive) on hover.
             // Both share the same screen real estate, so the row stays
@@ -21941,7 +21957,7 @@
           if (card) {
             const cid = card.session_id || card.id;
             if (cid) _evergreenSessionIds.add(cid);
-            return _renderRow(card, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true });
+            return _renderRow(card, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });
           }
           return _twFallbackRow(w);
         }).join('');

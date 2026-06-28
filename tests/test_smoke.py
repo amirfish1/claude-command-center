@@ -994,7 +994,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _twWorkersByQueue = new Map();", app_js)
         # Workers resolve to the EXISTING session row via their cloud session_id.
         self.assertIn("const card = sid ? _twCardById.get(sid) : null;", app_js)
-        self.assertIn("return _renderRow(card, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true });", app_js)
+        self.assertIn("return _renderRow(card, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });", app_js)
         self.assertIn("return _twFallbackRow(w);", app_js)
         self.assertIn("_twQueueHeaderHtml(q, workers.length)", app_js)
         self.assertIn("const _evergreenAgentsHtml = _evergreenAgentsBody", app_js)
@@ -1036,8 +1036,15 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const evergreenRowClass = opts.evergreenAgent ? ' is-evergreen-agent-row' : '';", app_js)
         self.assertIn("let evergreenStateHtml = '';", app_js)
         self.assertIn("const _evergreenStateLabel = _isAgentRunning ? 'WIP'", app_js)
-        self.assertIn("const evergreenMetaRowHtml = opts.evergreenAgent", app_js)
+        self.assertIn("const evergreenMetaRowHtml = (opts.evergreenAgent && !_egSingleLine)", app_js)
         self.assertIn("+ evergreenMetaRowHtml", app_js)
+        # Single-line variant (TRIGGERED WORKERS rows): same badges, inline in the
+        # main row instead of a second meta line. Scoped flag keeps project-tree
+        # evergreen rows two-line.
+        self.assertIn("const _egSingleLine = !!(opts.evergreenAgent && opts.evergreenSingleLine);", app_js)
+        self.assertIn("const evergreenInlineBadgesHtml = _egSingleLine", app_js)
+        self.assertIn("+ evergreenInlineBadgesHtml", app_js)
+        self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-main-row > .conv-evergreen-inline-badges {", app_css)
         self.assertIn("const _hasMetaContent = !opts.evergreenAgent &&", app_js)
         self.assertIn("const hoverMetaRowHtml = _hasMetaContent", app_js)
         self.assertNotIn("+ evergreenGoalHtml\n            + uxFixesQueueProgressHtml\n            + evergreenStateHtml", app_js)
