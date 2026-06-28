@@ -21829,7 +21829,8 @@
           const rowsHtml = nestedRows.map(item => _renderRow(item.card, {
             suppressFolderChip: false,
             quietTitleChrome: true,
-            currentChildDepth: item.depth
+            currentChildDepth: item.depth,
+            elevateToObject: true
           })).join('');
           return '<div class="conv-current-object-group" data-current-object-group="' + escapeAttr(group.key) + '" data-object-drop-zone="' + escapeAttr(group.key) + '">'
             + '<div class="conv-current-object-heading">'
@@ -43843,4 +43844,57 @@
   if (!CONV_POPOUT_MODE) {
     setTimeout(checkOnboarding, 1000);
   }
+
+  // Hover-brief tooltip: position:fixed tooltip to the right of the panel.
+  // JS sets --hb-x/--hb-y + data-hb on the hovered row; CSS renders the
+  // tooltip. Avoids reflow (no row skipping) and keeps session titles visible.
+  (function _initHoverBrief() {
+    let _hbItem = null;
+    let _hbTimer = null;
+
+    const _hbPos = (item) => {
+      const scroll = item.closest('.conv-current-sessions-scroll');
+      const sr = scroll ? scroll.getBoundingClientRect() : null;
+      const ir = item.getBoundingClientRect();
+      const W = window.innerWidth;
+      const TOOLTIP_W = 300; // width + border + padding
+      let x = sr ? (sr.right + 10) : (ir.right + 10);
+      if (x + TOOLTIP_W > W - 8) x = Math.max(8, (sr ? sr.left : ir.left) - TOOLTIP_W - 10);
+      if (x < 8) x = 8;
+      let y = ir.top;
+      if (y + 120 > window.innerHeight) y = Math.max(8, window.innerHeight - 130);
+      item.style.setProperty('--hb-x', x + 'px');
+      item.style.setProperty('--hb-y', y + 'px');
+    };
+
+    const _hbShow = (item) => {
+      clearTimeout(_hbTimer);
+      if (_hbItem && _hbItem !== item) _hbItem.removeAttribute('data-hb');
+      _hbItem = item;
+      _hbPos(item);
+      item.setAttribute('data-hb', '1');
+    };
+
+    const _hbHide = () => {
+      _hbTimer = setTimeout(() => {
+        if (_hbItem) { _hbItem.removeAttribute('data-hb'); _hbItem = null; }
+      }, 80);
+    };
+
+    document.addEventListener('mouseover', (e) => {
+      const item = e.target.closest(
+        '.conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active)'
+      );
+      if (item) { _hbShow(item); return; }
+      // Cursor moved into the fixed tooltip — keep it visible
+      if (_hbItem && _hbItem.querySelector('.conv-hover-extras') &&
+          e.target.closest && e.target === _hbItem.querySelector('.conv-hover-extras') ||
+          (_hbItem && _hbItem.querySelector('.conv-hover-extras') &&
+           _hbItem.querySelector('.conv-hover-extras').contains(e.target))) {
+        clearTimeout(_hbTimer);
+        return;
+      }
+      _hbHide();
+    });
+  }());
 })();

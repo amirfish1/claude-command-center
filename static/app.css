@@ -4184,46 +4184,38 @@
      line (the brief outcome stays hidden until hover, matching prior behavior). */
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-extras { display: contents; }
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active:not(:hover):not(:focus-within) .conv-hover-extras > :not(.conv-hover-meta-row) { display: none; }
-  /* HOVER / FOCUS (any row): float the whole extras stack out of flow so the
-     row list never reflows — no jump, no skipped rows when moving the cursor
-     down. pointer-events:none lets the cursor fall through to the row beneath,
-     so the next row hovers normally instead of being skipped under the overlay.
-     The stack flows normally INSIDE the floated panel, so the brief + meta line
-     keep their natural order and heights. Tradeoff: the floating panel covers
-     the name directly below, and its chips are not clickable while floating
-     (Option 2 / side flyout restores both). */
-  /* Hovered item gets a stacking context above its siblings so the floating
-     panel is not painted over by section headers or later rows in DOM order. */
-  .conv-current-sessions-scroll .conv-item:hover { z-index: 1; }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):hover > .conv-hover-extras,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):focus-within > .conv-hover-extras {
+  /* Tooltip-style hover brief: JS sets data-hb + --hb-x/--hb-y on the row.
+     position:fixed escapes the scroll container so no reflow, no cursor skip.
+     Tooltip appears to the right of the panel so session titles stay visible. */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active)[data-hb] > .conv-hover-extras {
     display: block;
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    z-index: 6;
+    position: fixed;
+    top: var(--hb-y, 0px);
+    left: var(--hb-x, 300px);
+    width: 280px;
+    z-index: 9999;
     pointer-events: auto;
-    padding: 2px 0 8px 0;
-    /* Hard stop at 80px: first 80px transparent so the next row's icon and
-       ~5-6 title chars peek through. Content (chips + brief) starts at 80px
-       where the background becomes fully opaque. */
-    background: linear-gradient(to right, transparent 80px, var(--bg, #0d1117) 80px);
-    border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.30);
+    padding: 6px 10px 10px 10px;
+    background: var(--bg-elevated, var(--bg, #1a1f27));
+    border: 1px solid var(--border, #30363d);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
   }
-  /* Inside the floated panel: push meta line and brief to start at 80px
-     (after the transparent zone) so content sits on the opaque background. */
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):hover > .conv-hover-extras > .conv-hover-meta-row,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):focus-within > .conv-hover-extras > .conv-hover-meta-row {
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active)[data-hb] > .conv-hover-extras > .conv-hover-meta-row {
     display: flex;
-    margin: 4px 48px 0 80px;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 0 0 4px 0;
   }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):hover > .conv-hover-extras > .conv-outcome,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active):focus-within > .conv-hover-extras > .conv-outcome {
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active)[data-hb] > .conv-hover-extras > .conv-outcome {
     display: block;
-    margin-left: 80px;
   }
+  /* Chip reveal inside the data-hb tooltip (mirrors the :hover rule above). */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-meta-inline,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-branch-slot,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-object-chip,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-folder-chip,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
   .conv-current-sessions-scroll.is-search-results .conv-item {
     min-height: 0;
     padding: 8px 10px;
