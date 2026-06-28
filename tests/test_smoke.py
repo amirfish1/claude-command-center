@@ -983,10 +983,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("replace(/[^a-z0-9]+/g, '').startsWith('evergreen')", app_js)
         self.assertIn("const _evergreenObjectNodes = new Set();", app_js)
         self.assertIn("if (_evergreenObjectNodes.has(nodeId)) continue;", app_js)
-        self.assertIn("const _renderEvergreenAgentRows = (nodeId) => {", app_js)
-        self.assertIn("const _evergreenAgentsRowsHtml = _evergreenRoots.map(_renderEvergreenAgentRows).join('');", app_js)
-        self.assertIn("const _evergreenAgentsHtml = _evergreenAgentsRowsHtml", app_js)
-        self.assertIn("+ _evergreenAgentsRowsHtml", app_js)
+        # The section walks the evergreen object tree and emits one queue group
+        # (queue-health header + the queue's existing session rows) per child.
+        self.assertIn("const _renderEvergreenQueueGroup = (nodeId, seen) => {", app_js)
+        self.assertIn("const _evergreenAgentsBody = _evergreenRoots.map(n => _renderEvergreenQueueGroup(n)).join('');", app_js)
+        self.assertIn("const _evergreenAgentsHtml = _evergreenAgentsBody", app_js)
+        self.assertIn("+ _evergreenAgentsBody + '</div>'", app_js)
+        self.assertIn("_evergreenQueueHeaderHtml(group.title || '')", app_js)
+        self.assertIn('class="conv-evergreen-queue-header', app_js)
         self.assertNotIn("_emitObjTree(n, 0, i + 1, { includeEvergreen: true })", app_js)
         self.assertIn('data-role="evergreen-agents-header"', app_js)
         self.assertIn('data-role="evergreen-agents-scroll"', app_js)
@@ -1061,8 +1065,11 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         self.assertIn("const _evergreenSessionIds = new Set();", app_js)
-        self.assertIn("const _collectEvergreenSessionIds = (nodeId) =>", app_js)
-        self.assertIn("_evergreenRoots.forEach(_collectEvergreenSessionIds);", app_js)
+        # Queue-group rendering also collects each evergreen session id so those
+        # sessions stay out of the normal Current sessions list (they live in
+        # their queue group, not twice).
+        self.assertIn("if (sid) _evergreenSessionIds.add(sid);", app_js)
+        self.assertIn("const _evergreenAgentsBody = _evergreenRoots.map(n => _renderEvergreenQueueGroup(n)).join('');", app_js)
         self.assertIn("const _currentSessionSource = _ipSearchActive", app_js)
         self.assertIn("? (_visibleSessionConvs || []).slice()", app_js)
         self.assertIn(": (_visibleSessionConvs || []).filter(c => !_evergreenSessionIds.has(c.session_id || c.id || ''));", app_js)
