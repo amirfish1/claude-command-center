@@ -263,6 +263,17 @@ def _wt_read_workers():
             continue
         row = dict(w)
         row["alive"] = True
+        # Self-heal: if WT hasn't backfilled this worker's cloud session_id into
+        # the file yet, resolve it from the worker's stream-json log in-memory
+        # (no file write -> no race with WT's own writer) so the dashboard can
+        # link the worker to its conversation immediately.
+        if not row.get("session_id") and row.get("log"):
+            try:
+                sid = extract_session_id(row["log"])
+                if sid:
+                    row["session_id"] = sid
+            except Exception:
+                pass
         out.append(row)
     return out
 _queue_answer = _q.answer
