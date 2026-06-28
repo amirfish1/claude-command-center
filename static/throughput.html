@@ -543,6 +543,14 @@
     overflow-x: auto;
     background: rgba(255, 255, 255, 0.02);
   }
+  #top-sessions-table { margin-bottom: 24px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .top-sess-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 12px; align-items: center; padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .top-sess-row:last-child { border-bottom: none; }
+  .top-sess-row.header { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; background: rgba(255,255,255,0.03); }
+  .top-sess-row.other-row { opacity: 0.55; }
+  .top-sess-bar-cell { display: flex; align-items: center; gap: 8px; }
+  .top-sess-bar { height: 4px; border-radius: 2px; background: var(--accent); min-width: 2px; }
+  .top-sess-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
 
   .model-row {
     display: grid;
@@ -848,24 +856,24 @@
         <!-- Metrics Cards -->
         <div class="metrics-grid">
           <div class="metric-card">
-            <div class="metric-label">⏱️ Active LLM Duration</div>
-            <div class="metric-value" id="val-active-duration">0.0s</div>
-            <div class="metric-subtext" id="val-total-duration">Total session time: 0s</div>
+            <div class="metric-label" id="lbl-card1">% QUOTA USED</div>
+            <div class="metric-value" id="val-active-duration">—</div>
+            <div class="metric-subtext" id="val-total-duration"></div>
           </div>
           <div class="metric-card">
-            <div class="metric-label">🔢 Raw Context Tokens</div>
-            <div class="metric-value" id="val-total-tokens">0</div>
-            <div class="metric-subtext" id="val-token-split">In: 0 | Out: 0</div>
+            <div class="metric-label" id="lbl-card2">DAILY BURN</div>
+            <div class="metric-value" id="val-total-tokens">—</div>
+            <div class="metric-subtext" id="val-token-split"></div>
           </div>
           <div class="metric-card">
-            <div class="metric-label">🚀 Cache-Adjusted Input</div>
-            <div class="metric-value" id="val-in-throughput">0 TPM</div>
-            <div class="metric-subtext" id="val-in-tps">0.0 tokens / sec</div>
+            <div class="metric-label" id="lbl-card3">CACHE SAVINGS</div>
+            <div class="metric-value" id="val-in-throughput">—</div>
+            <div class="metric-subtext" id="val-in-tps"></div>
           </div>
           <div class="metric-card">
-            <div class="metric-label">⚡ Output Throughput</div>
-            <div class="metric-value" id="val-out-throughput">0 TPM</div>
-            <div class="metric-subtext" id="val-out-tps">0.0 tokens / sec</div>
+            <div class="metric-label" id="lbl-card4">IF OPUS ONLY</div>
+            <div class="metric-value" id="val-out-throughput">—</div>
+            <div class="metric-subtext" id="val-out-tps"></div>
           </div>
         </div>
         
@@ -897,6 +905,12 @@
         </div>
         <div class="model-breakdown" id="model-breakdown">
           <!-- Model rows populated by JS -->
+        </div>
+
+        <!-- Top sessions table (aggregate only) -->
+        <div id="top-sessions-section" style="display:none">
+          <div class="section-title"><span>🏆</span> Top Sessions This Week</div>
+          <div id="top-sessions-table"></div>
         </div>
 
         <!-- Turns Detail Timeline (hidden on aggregate views) -->
@@ -981,9 +995,13 @@
           weekRankings[r.session_id] = i + 1;
           tokenMap[r.session_id] = r.week_tokens;
         });
-        // Attach _week_tokens so the sidebar can show % per session.
+        // Attach _week_tokens so sidebar and top-sessions table can show %.
         allSessions.forEach(s => { s._week_tokens = tokenMap[s.session_id] || 0; });
         renderSessionList();
+        if (document.getElementById('top-sessions-section') &&
+            document.getElementById('top-sessions-section').style.display !== 'none') {
+          renderTopSessions();
+        }
       } catch (_e) {
         // Non-critical — silently ignore network or parse errors.
       }
@@ -1209,26 +1227,84 @@
       const summary = data.summary;
       const isAggregate = !!(data.scope && data.scope.aggregate);
       
-      // Cards values
-      const activeMin = Math.floor(summary.total_active_duration_sec / 60);
-      const activeSec = Math.round(summary.total_active_duration_sec % 60);
-      document.getElementById('val-active-duration').textContent = `${activeMin}m ${activeSec}s`;
-      document.getElementById('val-total-duration').textContent = isAggregate
-        ? `${summary.total_turns.toLocaleString()} model calls across ${data.scope.range.toLowerCase()}`
-        : `Turns with usage info: ${summary.turns_with_tokens} / ${summary.total_turns}`;
-      
-      document.getElementById('val-total-tokens').textContent = fmtNum(summary.total_raw_context_tokens ?? summary.total_input_tokens);
-      const costText = summary.cost_usd ? ` | Cost: ${fmtCost(summary.cost_usd)}` : '';
-      document.getElementById('val-token-split').textContent =
-        `Fresh: ${fmtNum(summary.total_fresh_input_tokens)} | Cache: ${fmtNum((summary.total_cache_read_tokens || 0) + (summary.total_cache_write_tokens || 0))} | Out: ${fmtNum(summary.total_output_tokens)}${costText}`;
-      
-      document.getElementById('val-in-throughput').textContent = `${fmtNum(summary.avg_effective_input_tpm ?? summary.avg_input_tpm)} TPM`;
-      document.getElementById('val-in-tps').textContent =
-        `${Number(summary.avg_effective_input_tps || 0).toFixed(1)} effective tokens / sec · raw ${fmtNum(summary.avg_input_tpm)} TPM`;
-      
-      document.getElementById('val-out-throughput').textContent = `${Math.round(summary.avg_output_tpm).toLocaleString()} TPM`;
-      document.getElementById('val-out-tps').textContent =
-        `${summary.avg_output_tps.toFixed(1)} tokens / sec · cache hit ${Math.round((summary.cache_hit_ratio || 0) * 100)}%`;
+      // Cards — all values in % of weekly quota where possible
+      const ppt = weeklyData && weeklyData.pct_per_token;
+      const effectiveTok = (summary.total_effective_input_tokens || 0) + (summary.total_output_tokens || 0);
+      const rawTok = (summary.total_raw_context_tokens || 0) + (summary.total_output_tokens || 0);
+      const actualPct = ppt ? effectiveTok * ppt : null;
+
+      if (isAggregate) {
+        // ── Card 1: % quota used ──────────────────────────────────────────
+        document.getElementById('lbl-card1').textContent = '% QUOTA USED';
+        document.getElementById('val-active-duration').textContent =
+          actualPct != null ? `${actualPct.toFixed(2)}%` : fmtNum(effectiveTok);
+        const totalCalls = (data.scope && data.scope.total_turns) || summary.total_turns;
+        document.getElementById('val-total-duration').textContent =
+          `${totalCalls.toLocaleString()} Claude calls · ${fmtCost(summary.cost_usd || 0)}`;
+
+        // ── Card 2: daily burn (7-day avg) + days to reset ───────────────
+        document.getElementById('lbl-card2').textContent = 'DAILY BURN (7d avg)';
+        const resetAt2 = weeklyData && weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
+        const daysLeft2 = resetAt2 ? Math.max(0, (resetAt2.getTime() - Date.now()) / 86400000) : 0;
+        const dailyPct = actualPct != null ? actualPct / 7 : null; // always 7-day window
+        document.getElementById('val-total-tokens').textContent =
+          dailyPct != null ? `${dailyPct.toFixed(2)}% / day` : '—';
+        document.getElementById('val-token-split').textContent =
+          resetAt2 ? `${daysLeft2.toFixed(1)}d until reset · ${totalCalls.toLocaleString()} calls` : '';
+
+        // ── Card 3: cache savings ─────────────────────────────────────────
+        document.getElementById('lbl-card3').textContent = 'CACHE SAVINGS';
+        const withoutCachePct = ppt ? rawTok * ppt : null;
+        const savedPct = (withoutCachePct != null && actualPct != null) ? withoutCachePct - actualPct : null;
+        const cacheHitPct = Math.round((summary.cache_hit_ratio || 0) * 100);
+        document.getElementById('val-in-throughput').textContent =
+          savedPct != null ? `${savedPct.toFixed(1)}% saved` : `${cacheHitPct}% hit`;
+        document.getElementById('val-in-tps').textContent =
+          withoutCachePct != null
+            ? `without cache: ${withoutCachePct.toFixed(1)}% · ${cacheHitPct}% hit rate`
+            : '';
+
+        // ── Card 4: opus-only hypothetical ───────────────────────────────
+        document.getElementById('lbl-card4').textContent = 'IF OPUS ONLY';
+        const opusRow = (summary.per_model || []).find(m => (m.model || '').toLowerCase().includes('opus'));
+        const opusTok = opusRow ? (opusRow.effective_input_tokens || 0) + (opusRow.output_tokens || 0) : 0;
+        const opusCost = opusRow ? (opusRow.cost_usd || 0) : 0;
+        const opusCostPerTok = (opusTok > 0 && opusCost > 0) ? opusCost / opusTok : null;
+        const totalCost = summary.cost_usd || 0;
+        const blendedCostPerTok = (effectiveTok > 0 && totalCost > 0) ? totalCost / effectiveTok : null;
+        const opusRatio = (opusCostPerTok && blendedCostPerTok) ? opusCostPerTok / blendedCostPerTok : null;
+        const opusOnlyPct = (actualPct != null && opusRatio) ? actualPct * opusRatio : null;
+        document.getElementById('val-out-throughput').textContent =
+          opusOnlyPct != null ? `${opusOnlyPct.toFixed(1)}%` : '—';
+        document.getElementById('val-out-tps').textContent =
+          opusRatio != null
+            ? `${opusRatio.toFixed(1)}× vs actual · actual ${(actualPct||0).toFixed(2)}%`
+            : 'no opus data in range';
+
+      } else {
+        // ── Per-session cards ─────────────────────────────────────────────
+        document.getElementById('lbl-card1').textContent = '% QUOTA USED';
+        document.getElementById('val-active-duration').textContent =
+          actualPct != null ? `${actualPct.toFixed(3)}%` : fmtNum(effectiveTok);
+        document.getElementById('val-total-duration').textContent =
+          `${summary.total_turns} calls · ${fmtCost(summary.cost_usd || 0)}`;
+
+        document.getElementById('lbl-card2').textContent = 'MODEL CALLS';
+        document.getElementById('val-total-tokens').textContent = summary.total_turns.toLocaleString();
+        document.getElementById('val-token-split').textContent =
+          `${summary.turns_with_tokens} with usage · ${Math.round(summary.total_active_duration_sec/60)}m active`;
+
+        document.getElementById('lbl-card3').textContent = 'CACHE HIT';
+        document.getElementById('val-in-throughput').textContent =
+          `${Math.round((summary.cache_hit_ratio || 0) * 100)}%`;
+        document.getElementById('val-in-tps').textContent =
+          `saved ${ppt ? (((rawTok - effectiveTok) * ppt).toFixed(3)) : '—'}% by caching`;
+
+        document.getElementById('lbl-card4').textContent = 'COST';
+        document.getElementById('val-out-throughput').textContent = fmtCost(summary.cost_usd || 0);
+        document.getElementById('val-out-tps').textContent =
+          `${summary.avg_output_tps ? summary.avg_output_tps.toFixed(1) : '—'} out tok/s · raw ${fmtNum(summary.avg_input_tpm)} TPM`;
+      }
       
       // Draw chart. Aggregate ranges use hourly buckets; per-session views
       // also use summary.hourly (more readable than one bar per turn).
@@ -1242,17 +1318,75 @@
       const chartIsAggregate = isAggregate || hasHourly;
       // Cache the rendered state so a window resize can redraw the chart from
       // memory instead of re-fetching + re-parsing the whole range.
-      lastRender = { turns: data.turns, summary, isAggregate: chartIsAggregate, bucketMode, showCumulative: hasHourly };
+      lastRender = { turns: data.turns, summary, isAggregate: chartIsAggregate, bucketMode, showCumulative: hasHourly, session, data };
       drawChart(data.turns, summary, chartIsAggregate, bucketMode, hasHourly);
 
       // Model comparison table
       renderModelBreakdown(summary.per_model || []);
+
+      // Top sessions table (aggregate only)
+      const topSessSection = document.getElementById('top-sessions-section');
+      if (topSessSection) topSessSection.style.display = isAggregate ? '' : 'none';
+      if (isAggregate) renderTopSessions();
 
       // Turns section: only useful for per-session drill-down
       const turnsSection = document.getElementById('turns-section');
       if (turnsSection) turnsSection.style.display = isAggregate ? 'none' : '';
       if (!isAggregate) {
         renderTurnsList(data.turns, isAggregate, (data.scope && data.scope.total_turns) || data.turns.length);
+      }
+    }
+
+    function renderTopSessions() {
+      const el = document.getElementById('top-sessions-table');
+      if (!el) return;
+      el.innerHTML = '';
+      const ppt = weeklyData && weeklyData.pct_per_token;
+      // Merge allSessions with _week_tokens; sort by tokens desc; top 20 + Other
+      const withTokens = allSessions
+        .filter(s => (s._week_tokens || 0) > 0)
+        .sort((a, b) => (b._week_tokens || 0) - (a._week_tokens || 0));
+      const top = withTokens.slice(0, 20);
+      const rest = withTokens.slice(20);
+      const maxTok = top[0] ? top[0]._week_tokens : 1;
+
+      // Header
+      const hdr = document.createElement('div');
+      hdr.className = 'top-sess-row header';
+      hdr.innerHTML = `<div>Session</div><div>% Quota</div><div>Tokens</div><div>Cost</div>`;
+      el.appendChild(hdr);
+
+      top.forEach(s => {
+        const tok = s._week_tokens || 0;
+        const pctStr = ppt ? `${(tok * ppt).toFixed(2)}%` : '—';
+        const barW = Math.round((tok / maxTok) * 80);
+        const row = document.createElement('div');
+        row.className = 'top-sess-row';
+        row.style.cursor = 'pointer';
+        row.onclick = () => selectSession(s);
+        const name = s.display_name || s.name || s.title || s.session_id.substring(0, 8);
+        row.innerHTML = `
+          <div class="top-sess-bar-cell">
+            <div class="top-sess-bar" style="width:${barW}px"></div>
+            <span class="top-sess-name" title="${name}">${name}</span>
+          </div>
+          <div style="font-weight:600;color:var(--accent)">${pctStr}</div>
+          <div style="color:var(--text-muted)">${fmtNum(tok)}</div>
+          <div style="color:var(--text-muted)">${s._cost_usd ? fmtCost(s._cost_usd) : '—'}</div>`;
+        el.appendChild(row);
+      });
+
+      if (rest.length > 0) {
+        const otherTok = rest.reduce((s, r) => s + (r._week_tokens || 0), 0);
+        const otherPct = ppt ? `${(otherTok * ppt).toFixed(2)}%` : '—';
+        const row = document.createElement('div');
+        row.className = 'top-sess-row other-row';
+        row.innerHTML = `
+          <div style="color:var(--text-muted)">Other (${rest.length} sessions)</div>
+          <div style="font-weight:600">${otherPct}</div>
+          <div style="color:var(--text-muted)">${fmtNum(otherTok)}</div>
+          <div>—</div>`;
+        el.appendChild(row);
       }
     }
 
@@ -1888,7 +2022,14 @@
         if (!res.ok) return;
         const d = await res.json();
         // Stash for use by drawChart() — weekly % overlay on daily chart.
+        const hadWeeklyData = !!weeklyData;
         weeklyData = (d && d.available && d.pct_per_token != null) ? d : null;
+        // If the chart rendered before weeklyData arrived, redraw now so the
+        // cumulative % line and card values reflect the correct pct_per_token.
+        if (!hadWeeklyData && weeklyData && lastRender) {
+          drawChart(lastRender.turns, lastRender.summary, lastRender.isAggregate, lastRender.bucketMode, lastRender.showCumulative);
+          if (lastRender.session && lastRender.data) renderDashboard(lastRender.session, lastRender.data);
+        }
         const banner = document.getElementById('weekly-banner');
         if (!d || !d.available || d.display_pct == null) {
           banner.style.display = 'none';
