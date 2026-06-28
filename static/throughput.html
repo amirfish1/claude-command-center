@@ -548,6 +548,7 @@
   .top-sess-row:last-child { border-bottom: none; }
   .top-sess-row.header { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; background: rgba(255,255,255,0.03); }
   .top-sess-row.other-row { opacity: 0.55; }
+  .top-sess-row.total-row { background: rgba(255,255,255,0.04); border-top: 1px solid var(--border); }
   .top-sess-bar-cell { display: flex; align-items: center; gap: 8px; }
   .top-sess-bar { height: 4px; border-radius: 2px; background: var(--accent); min-width: 2px; }
   .top-sess-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
@@ -1388,6 +1389,19 @@
           <div>—</div>`;
         el.appendChild(row);
       }
+
+      // Total row
+      const totalTok = withTokens.reduce((s, r) => s + (r._week_tokens || 0), 0);
+      const totalCost = withTokens.reduce((s, r) => s + (r._cost_usd || 0), 0);
+      const totalPct = ppt ? `${(totalTok * ppt).toFixed(2)}%` : '—';
+      const totalRow = document.createElement('div');
+      totalRow.className = 'top-sess-row total-row';
+      totalRow.innerHTML = `
+        <div style="font-weight:700">Total (${withTokens.length} sessions)</div>
+        <div style="font-weight:700;color:var(--accent)">${totalPct}</div>
+        <div style="font-weight:700">${fmtNum(totalTok)}</div>
+        <div style="font-weight:700">${totalCost ? fmtCost(totalCost) : '—'}</div>`;
+      el.appendChild(totalRow);
     }
 
     function renderModelBreakdown(models) {
