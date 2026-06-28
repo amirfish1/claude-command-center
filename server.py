@@ -40729,7 +40729,7 @@ def _throughput_week_rankings():
         # message_id under a fresh event uuid (would otherwise double-count).
         deduped = _throughput_dedupe_turns(week_turns)
         week_tok = sum(
-            (t.get("raw_context_tokens") or 0) + (t.get("tokens_out") or 0)
+            (t.get("effective_input_tokens") or t.get("raw_context_tokens") or 0) + (t.get("tokens_out") or 0)
             for t in deduped
         )
         if week_tok > 0:
