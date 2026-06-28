@@ -40798,6 +40798,114 @@ def _throughput_turn_after_cutoff(turn, cutoff_epoch):
     return t_end.timestamp() >= cutoff_epoch
 
 
+def _throughput_week_rankings():
+    """Return per-session token contribution for the current weekly period.
+
+    Uses the same week-start derivation as _weekly_usage_block (live
+    weekly_resets_at → resets_at - 7d, falling back to now - 7d).
+
+    Cache-only: checks in-memory then disk cache; skips sessions whose
+    transcript hasn't been cached yet so the response stays fast.  Only
+    sessions with week_tokens > 0 are included.  Results are sorted
+    descending by week_tokens."""
+    # Derive week_start_epoch the same way _weekly_usage_block does.
+    live = _live_weekly_usage()
+    week_start_epoch = None
+    if live and live.get("weekly_resets_at"):
+        try:
+            week_start_epoch = (
+                _stats_parse_ts(live["weekly_resets_at"]).timestamp() - 7 * 86400
+            )
+        except Exception:
+            week_start_epoch = None
+    if week_start_epoch is None:
+        week_start_epoch = time.time() - 7 * 86400
+
+    try:
+        convs = find_all_conversations(
+            resolve_pr_states=False,
+            resolve_effective=False,
+            resolve_worktree_dirty=False,
+        )
+    except Exception:
+        convs = []
+
+    session_tokens = {}
+    for conv_row in convs:
+        sid = conv_row.get("session_id")
+        if not sid:
+            continue
+        modified = (
+            conv_row.get("last_interacted")
+            or conv_row.get("modified")
+            or conv_row.get("mtime")
+            or 0
+        )
+        if modified < week_start_epoch:
+            continue
+        engine = (conv_row.get("engine") or conv_row.get("source") or "").lower()
+        try:
+            if engine == "codex" or _is_codex_session(sid):
+                continue
+        except Exception:
+            continue
+        path = conv_row.get("jsonl_path")
+        if not path:
+            continue
+
+        # Cache-only lookup: check in-memory cache, then disk cache.
+        # Skip entirely if neither has data — don't block on a full parse.
+        key = str(path)
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        mtime = st.st_mtime
+        size = st.st_size
+
+        full_turns = None
+        with _THROUGHPUT_CACHE_LOCK:
+            cached = _THROUGHPUT_TURN_CACHE.get(key)
+            if cached and cached["mtime"] == mtime and cached["size"] == size:
+                full_turns = cached["turns"]
+
+        if full_turns is None:
+            disk_turns = _throughput_disk_get(key, mtime, size)
+            if disk_turns is not None:
+                with _THROUGHPUT_CACHE_LOCK:
+                    _THROUGHPUT_TURN_CACHE[key] = {
+                        "mtime": mtime, "size": size, "turns": disk_turns
+                    }
+                full_turns = disk_turns
+
+        if full_turns is None:
+            continue  # not yet cached — skip to stay fast
+
+        week_turns = [
+            dict(t) for t in full_turns
+            if _throughput_turn_after_cutoff(t, week_start_epoch)
+        ]
+        if not week_turns:
+            continue
+
+        # Per-session dedupe handles resumed sessions that replay the same
+        # message_id under a fresh event uuid (would otherwise double-count).
+        deduped = _throughput_dedupe_turns(week_turns)
+        week_tok = sum(
+            (t.get("raw_context_tokens") or 0) + (t.get("tokens_out") or 0)
+            for t in deduped
+        )
+        if week_tok > 0:
+            session_tokens[sid] = session_tokens.get(sid, 0) + week_tok
+
+    rankings = [
+        {"session_id": sid, "week_tokens": tok}
+        for sid, tok in session_tokens.items()
+    ]
+    rankings.sort(key=lambda r: r["week_tokens"], reverse=True)
+    return rankings
+
+
 def _throughput_payload(session_id, repo_path=None, range_key=None):
     is_aggregate, cutoff_epoch, label = _throughput_scope(session_id, range_key)
     turns = []
@@ -42150,6 +42258,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 range_key=range_key,
             )
             self.send_json(payload, status)
+            return
+        elif path == "/api/throughput/week-rankings":
+            # Per-session token contribution for the current weekly period,
+            # sorted descending. Uses the turn disk cache only — skips
+            # uncached sessions so the response returns quickly. The frontend
+            # can call this non-blocking right after loadSessions().
+            try:
+                rankings = _throughput_week_rankings()
+            except Exception as e:
+                self.send_json({"error": str(e), "rankings": []}, 200)
+                return
+            self.send_json({"rankings": rankings}, 200)
             return
         elif path == "/api/weekly_usage":
             # Claude-only weekly burn since reset, in the same %-of-weekly unit
