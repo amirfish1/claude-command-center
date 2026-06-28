@@ -40489,6 +40489,8 @@ def _throughput_session_hints(session_id):
 # prior flat-file approach had. SQLite is stdlib; no extra deps.
 _THROUGHPUT_TURN_CACHE = {}        # str(path) -> {"mtime", "size", "turns"}
 _THROUGHPUT_CACHE_LOCK = threading.Lock()
+_THROUGHPUT_AGG_CACHE = {}         # (session_id, cutoff_epoch) -> {"ts": float, "payload": dict, "status": int}
+_THROUGHPUT_AGG_CACHE_TTL = 60     # seconds
 
 _THROUGHPUT_DISK_CACHE_DIR = Path.home() / ".cache" / "ccc-throughput-cache"
 _THROUGHPUT_DISK_CACHE_DB = _THROUGHPUT_DISK_CACHE_DIR / "turns.db"
@@ -40910,6 +40912,11 @@ def _throughput_week_rankings():
 
 def _throughput_payload(session_id, repo_path=None, range_key=None):
     is_aggregate, cutoff_epoch, label = _throughput_scope(session_id, range_key)
+    if is_aggregate:
+        _cache_key = (session_id, cutoff_epoch)
+        _cached = _THROUGHPUT_AGG_CACHE.get(_cache_key)
+        if _cached and (time.time() - _cached["ts"] < _THROUGHPUT_AGG_CACHE_TTL):
+            return _cached["payload"], _cached["status"]
     turns = []
     if is_aggregate:
         try:
@@ -41033,7 +41040,7 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
             )
 
     turns = _throughput_dedupe_turns(turns)
-    return {
+    _payload = {
         "ok": True,
         "session_id": session_id,
         "scope": {
@@ -41043,7 +41050,15 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
         },
         "summary": _throughput_summary(turns),
         "turns": turns,
-    }, 200
+    }
+    _status = 200
+    if is_aggregate:
+        _THROUGHPUT_AGG_CACHE[(session_id, cutoff_epoch)] = {
+            "ts": time.time(),
+            "payload": _payload,
+            "status": _status,
+        }
+    return _payload, _status
 
 
 _MORNING_BRAINDUMP_PROMPT = """You are analyzing the user's morning brain-dump.
@@ -50213,6 +50228,13 @@ def main():
     # whose session has been taken over by a live terminal. Runs regardless of
     # any open dashboard so the ~500MB stale process doesn't linger.
     _start_headless_staleness_watcher()
+    # Pre-warm the 7-day aggregate throughput cache so the first page load
+    # is instant (hits _THROUGHPUT_AGG_CACHE instead of re-parsing transcripts).
+    threading.Thread(
+        target=lambda: _throughput_payload("all_7_days"),
+        daemon=True,
+        name="ccc-throughput-prewarm",
+    ).start()
     print()
     try:
         server.serve_forever()
