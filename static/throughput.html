@@ -236,17 +236,39 @@
      main view with a capped, scrollable height so the chart is always
      visible. */
   @media (max-width: 768px) {
+    /* Desktop locks the page to 100vh and scrolls the workspace internally (a
+       nested scroll container). On a phone that traps the chart inside a tiny
+       inner scroll. Collapse to one natural page scroll instead. */
+    body { height: auto; min-height: 100vh; overflow-y: auto; }
     .layout-container { flex-direction: column; overflow: visible; }
+    .workspace { overflow: visible; }
+    .tp-loader, .empty-state { height: auto; min-height: 45vh; }
     .sidebar {
       width: 100%;
-      max-height: 34vh;
+      max-height: 22vh;
       border-right: none;
       border-bottom: 1px solid var(--border);
     }
+    .weekly-banner { margin-bottom: 12px; }
     .session-title { max-width: none; }
     .workspace { padding: 16px; }
     .weekly-banner { flex-wrap: wrap; gap: 10px; }
     .weekly-sub { margin-left: 0; text-align: left; width: 100%; }
+
+    /* Pull the chart to the top so the graph is the first thing visible after
+       the header — otherwise it's buried under the metric cards and an
+       18,000px turns list and reads as "no graph on mobile". */
+    /* !important beats the inline display:block that renderDashboard() sets,
+       which would otherwise keep this block (not flex) and ignore `order`. */
+    #dashboard-content { display: flex !important; flex-direction: column; }
+    #dashboard-content > * { order: 3; }
+    #dashboard-content > .dashboard-header { order: 0; }
+    #dashboard-content > .chart-card { order: 1; }
+    #dashboard-content > .metrics-grid { order: 2; }
+    /* Compact metric cards: 2x2 instead of 4 tall rows. */
+    .metrics-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+    /* Cap the turns list so the page isn't ~19,000px of scroll. */
+    .turn-list { max-height: 55vh; overflow-y: auto; }
   }
 
   /* Empty state */
