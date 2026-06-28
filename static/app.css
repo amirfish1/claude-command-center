@@ -9790,6 +9790,59 @@
   .ship-log-line.warn .ship-log-txt { color: #d29922; }
   .ship-log-line.error .ship-log-txt { color: #f85149; }
   .ship-log-line.ok .ship-log-txt { color: #3fb950; }
+  .ship-waiting-summary {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(88,166,255,0.08);
+  }
+  .ship-waiting-copy {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    overflow: hidden;
+  }
+  .ship-waiting-label {
+    flex: none;
+    color: var(--text-muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .ship-waiting-names {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 650;
+  }
+  .ship-waiting-done {
+    flex: none;
+    color: #3fb950;
+    font-size: 10px;
+  }
+  .ship-continue-btn {
+    flex: none;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid rgba(88,166,255,0.45);
+    background: rgba(88,166,255,0.12);
+    color: #58a6ff;
+  }
+  .ship-continue-btn:hover:not(:disabled) {
+    background: rgba(88,166,255,0.20);
+    color: var(--text);
+  }
+  .ship-continue-btn:disabled { opacity: 0.45; cursor: default; }
   /* Approve/Reject action rows (build 3) */
   .ship-actions {
     flex: none;

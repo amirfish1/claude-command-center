@@ -82,7 +82,7 @@ class TestServerImports(unittest.TestCase):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
         for name in ("start_repo_ship", "repo_ship_status",
-                     "_ship_candidate_sessions", "_run_ship_flow"):
+                     "continue_repo_ship", "_ship_candidate_sessions", "_run_ship_flow"):
             self.assertTrue(hasattr(server, name), name)
         # The Tier-A nudge must steer sessions toward path-scoped commits and
         # away from the index-sweeping forms that clobber sibling sessions.
@@ -98,8 +98,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const archivedRepoPath = cards[0].folder_path || '';", app_js)
         self.assertIn("_folderGroupHeaderHtml('archived', folder, cards.length, hue, orphan, collapseKey, '', archivedRepoPath)", app_js)
         self.assertIn("if (!_isShipRepoPath(repo)) return;", app_js)
+        self.assertIn("/api/repo/ship/continue", app_js)
+        self.assertIn("ship-waiting-summary", app_js)
+        self.assertIn("Continue now", app_js)
+        self.assertIn("waiting_on", app_js)
         self.assertIn(".conv-folder-ship", app_css)
         self.assertIn(".conv-archived-section .conv-folder-ship-btn", app_css)
+        self.assertIn(".ship-waiting-summary", app_css)
         # Editor/cache cruft is junk (gitignore material), not "app/deploy
         # review" — otherwise Push all parks on it every time. The cache/ prefix
         # is anchored so a legit src/cache/ deeper in the tree isn't swept.
@@ -126,6 +131,37 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(server._ship_classify_remaining("snapshot.png"), "infra")
         self.assertEqual(server._ship_classify_remaining("snapshot.js"), "infra")
         self.assertEqual(server._ship_classify_remaining("apps/x/page.tsx"), "review")
+
+    def test_repo_ship_continue_marks_waiting_job(self):
+        """Push all can be told to stop waiting for commit replies."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        repo = "/tmp/ccc-ship-continue-test"
+        with server._ship_jobs_lock:
+            old_jobs = dict(server._ship_jobs)
+            server._ship_jobs.clear()
+            server._ship_jobs[repo] = {
+                "phase": "waiting_commits",
+                "running": True,
+                "log": [],
+                "waiting_on": [
+                    {"sid": "abc12345", "name": "Session A", "status": "pending"},
+                ],
+            }
+        try:
+            result = server.continue_repo_ship(repo)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["job"]["continue_requested"])
+            self.assertTrue(any(
+                "Continue requested" in line.get("text", "")
+                for line in result["job"]["log"]
+            ))
+        finally:
+            with server._ship_jobs_lock:
+                server._ship_jobs.clear()
+                server._ship_jobs.update(old_jobs)
 
     def test_system_health_gui_app_contract(self):
         """GUI app-server engines are visible but never reapable. Their only
@@ -1168,18 +1204,17 @@ class TestServerImports(unittest.TestCase):
 
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row):not(.conv-hover-meta-row),", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row):not(.conv-hover-meta-row) { display: block; }", current_css)
-        self.assertIn("display: block;", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row,", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row,", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-meta-row", current_css)
+        self.assertIn(".conv-item .conv-hover-extras { display: contents; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-extras { display: contents; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active:not(:hover):not(:focus-within) .conv-hover-extras > :not(.conv-hover-meta-row) { display: none; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] > .conv-hover-extras {", current_css)
+        self.assertIn("position: fixed;", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] > .conv-hover-extras > .conv-hover-meta-row {", current_css)
         self.assertIn("display: flex;", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-meta-inline,", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-hover-meta-row .conv-folder-chip,", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-outcome,", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > .conv-outcome { display: block; }", current_css)
-        self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-outcome", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] > .conv-hover-extras > .conv-outcome {\n    display: block;", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-meta-inline,", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-folder-chip,", current_css)
+        self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-extras > .conv-outcome", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover:not(.active) > .conv-outcome", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within:not(.active) > .conv-outcome", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
@@ -1416,10 +1451,11 @@ class TestServerImports(unittest.TestCase):
         ]
         self.assertIn("+ '<span>' + formatSize(c.size) + '</span>'", row_size_js)
         self.assertNotIn("sourceBadge", row_size_js)
-        self.assertIn("const hoverMetaRowHtml = (!opts.evergreenAgent && (sessionIdChipHtml || objectChipHtml || folderChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml))", app_js)
+        self.assertIn("const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;", app_js)
+        self.assertIn("const hoverMetaRowHtml = (!opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml))", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
-        self.assertIn("+ objectChipHtml\n          + folderChipHtml", app_js)
-        self.assertIn("+ hoverMetaRowHtml", app_js)
+        self.assertIn("+ _hmObjectChip\n          + _hmFolderChip", app_js)
+        self.assertIn("+   hoverMetaRowHtml", app_js)
         row_start = app_js.index("+ '<div class=\"conv-main-row\">'")
         row_end = app_js.index("// Right-edge slot", row_start)
         self.assertNotIn("+ goalChipHtml", app_js[row_start:row_end])
@@ -1464,7 +1500,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("data-copy-row-session-id", app_js)
         self.assertIn("data-session-id-short", app_js)
         self.assertIn("const sessionIdChipHtml = sidebarSessionIdChipHtml(c);", app_js)
-        self.assertIn("const hoverMetaRowHtml = (!opts.evergreenAgent && (sessionIdChipHtml || objectChipHtml || folderChipHtml", app_js)
+        self.assertIn("const hoverMetaRowHtml = (!opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml", app_js)
         self.assertIn("+ sessionIdChipHtml", app_js)
         self.assertIn("function handleSidebarSessionIdCopyClick(ev)", app_js)
         self.assertIn("document.addEventListener('click', handleSidebarSessionIdCopyClick, true);", app_js)
@@ -1480,11 +1516,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function flowObjectForConversation(c)", app_js)
         self.assertIn("function flowObjectChipHtml(c)", app_js)
         self.assertIn("const objectChipHtml = flowObjectChipHtml(c);", app_js)
-        self.assertIn("sessionIdChipHtml || objectChipHtml || folderChipHtml", app_js)
-        self.assertIn("+ objectChipHtml\n          + folderChipHtml", app_js)
+        self.assertIn("_hmObjectChip || _hmFolderChip || sessionIdChipHtml", app_js)
+        self.assertIn("+ _hmObjectChip\n          + _hmFolderChip", app_js)
         self.assertIn("Object &middot; ", app_js)
         self.assertIn(".conv-item .conv-hover-meta-row .conv-object-chip", app_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > .conv-hover-meta-row .conv-object-chip,", app_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-object-chip,", app_css)
         self.assertIn(".conv-item.active .conv-hover-meta-row .conv-object-chip,", app_css)
 
     def test_sidebar_hover_metadata_empty_object_chip_opens_picker(self):
@@ -2888,7 +2924,7 @@ class TestServerImports(unittest.TestCase):
             app_css.index("PWA install banner", right_rail_start)
         ]
         self.assertIn(
-            "body.status-pos-right .conv-sticky-header {\n  display: none !important;\n}",
+            "body.status-pos-right .conv-sticky-header,\nbody.status-pos-right #convToolbar {\n  display: none !important;\n}",
             right_rail_css,
         )
 
