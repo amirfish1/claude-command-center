@@ -1572,7 +1572,7 @@
         });
         // Convert to % of weekly quota when calibration is available.
         const pptCum = weeklyData && weeklyData.pct_per_token;
-        const cumVals = pptCum ? cumTokens.map(t => t * pptCum * 100) : cumTokens;
+        const cumVals = pptCum ? cumTokens.map(t => t * pptCum) : cumTokens;
         const maxCum = cumVals[cumVals.length - 1] || 1;
         const _cumH = height - padding.top - padding.bottom;
         const yCum = v => padding.top + (_cumH * (1 - v / maxCum));
