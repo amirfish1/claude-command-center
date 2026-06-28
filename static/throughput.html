@@ -1567,11 +1567,12 @@
         const periodStart = resetAt ? new Date(resetAt.getTime() - 7 * 86400000) : null;
 
         let running = 0;
+        let crossedReset = false;
         const cumTokens = sourceRows.map(row => {
-          // Skip hours before the current weekly period.
-          if (periodStart && row.hour) {
+          // Drop to 0 at the weekly reset boundary, then accumulate fresh.
+          if (periodStart && row.hour && !crossedReset) {
             const rowDate = new Date(row.hour);
-            if (rowDate < periodStart) return running;
+            if (rowDate >= periodStart) { running = 0; crossedReset = true; }
           }
           // total_tokens already includes output + cache; prefer it to avoid double-counting.
           running += row.total_tokens || (
@@ -1581,7 +1582,7 @@
           return running;
         });
         const cumVals = pptCum ? cumTokens.map(t => t * pptCum) : cumTokens;
-        const maxCum = cumVals[cumVals.length - 1] || 1;
+        const maxCum = Math.max(...cumVals) || 1;
         const _cumH = height - padding.top - padding.bottom;
         const yCum = v => padding.top + (_cumH * (1 - v / maxCum));
 
