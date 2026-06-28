@@ -6094,7 +6094,7 @@
     }
     .conv-input-row-top { flex: 1 1 0; min-width: 0; width: auto; }
     .conv-input-row-bottom { flex: 0 0 auto; }
-    .conv-input-bar textarea { max-height: 120px; }
+    .conv-input-bar textarea { min-height: 44px; max-height: 120px; }
     .conv-announced-from span { display: none; }
     .conv-input-bar .conv-announced-from-input { width: 74px; flex-basis: 74px; }
     /* TTS back inline — the FAB position overlapped the goal strip × button
@@ -13293,6 +13293,13 @@ body.status-pos-right .conv-sticky-header .csh-col-ask {
 body.status-pos-right .conv-sticky-header,
 body.status-pos-right #convToolbar {
   display: none !important;
+}
+/* On mobile the right-rail doesn't exist; restore #convToolbar so the mobile
+   back button (which lives there when there are no subagent tabs) is visible. */
+@media (max-width: 950px) {
+  body.status-pos-right #convToolbar {
+    display: flex !important;
+  }
 }
 
 /* ---------------------------------------------------------------------------
