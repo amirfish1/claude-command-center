@@ -1559,7 +1559,7 @@
         }
       }
 
-      // ── Cumulative tokens line (per-session hourly view) ──────────────────
+      // ── Cumulative quota% line (per-session hourly view) ──────────────────
       if (showCumulative && sourceRows.length > 1) {
         let running = 0;
         const cumTokens = sourceRows.map(row => {
@@ -1569,10 +1569,13 @@
                      (row.cache_write_tokens || 0);
           return running;
         });
-        const maxCum = cumTokens[cumTokens.length - 1] || 1;
+        // Convert to % of weekly quota when calibration is available.
+        const pptCum = weeklyData && weeklyData.pct_per_token;
+        const cumVals = pptCum ? cumTokens.map(t => t * pptCum * 100) : cumTokens;
+        const maxCum = cumVals[cumVals.length - 1] || 1;
         const yCum = v => padding.top + (chartH * (1 - v / maxCum));
 
-        // Faint gridlines at 25/50/75/100%.
+        // Faint gridlines at 25/50/75/100% of session total.
         [0.25, 0.5, 0.75, 1].forEach(f => {
           const y = yCum(maxCum * f);
           const gl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
@@ -1585,12 +1588,13 @@
           lbl.setAttribute('y', y + 3);
           lbl.setAttribute('fill', '#47a6ff'); lbl.setAttribute('font-size', '8px');
           lbl.setAttribute('font-family', 'var(--font-mono)');
-          lbl.textContent = fmtNum(Math.round(maxCum * f));
+          const val = maxCum * f;
+          lbl.textContent = pptCum ? `${val.toFixed(3)}%` : fmtNum(Math.round(val));
           svg.appendChild(lbl);
         });
 
         // Line path.
-        const cumPath = cumTokens.map((v, idx) => {
+        const cumPath = cumVals.map((v, idx) => {
           const x = xScale(idx + 1);
           const y = yCum(v);
           return `${idx === 0 ? 'M' : 'L'}${x},${y}`;
@@ -1612,7 +1616,7 @@
         cumLabel.setAttribute('font-size', '9px');
         cumLabel.setAttribute('text-anchor', 'start');
         cumLabel.setAttribute('font-family', 'var(--font-mono)');
-        cumLabel.textContent = 'cumulative';
+        cumLabel.textContent = pptCum ? '% quota' : 'cumulative';
         svg.appendChild(cumLabel);
       }
     }
