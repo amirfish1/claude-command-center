@@ -4313,6 +4313,44 @@
     border-radius: 0 0 8px 8px;
     background: rgba(139, 148, 158, 0.06);
   }
+  /* Evergreen section: per-queue group = a compact health header above that
+     queue's worker session rows. Header borrows the queue-health-strip idiom
+     (name · depth · workers · drain · state) but sits inline in the sidebar. */
+  .conv-evergreen-queue-group { margin: 0 0 2px; }
+  .conv-evergreen-queue-header {
+    display: flex; align-items: center; gap: 5px;
+    padding: 3px 6px 3px 7px; margin-top: 2px;
+    font-size: 11px; line-height: 1.3;
+    color: var(--text-muted);
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 30%, transparent);
+  }
+  .conv-evergreen-queue-header .ceq-name {
+    font-weight: 700; color: var(--text);
+    text-transform: uppercase; letter-spacing: 0.03em;
+    flex-shrink: 0;
+  }
+  .conv-evergreen-queue-header .ceq-meta {
+    display: inline-flex; align-items: center; gap: 4px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0;
+  }
+  .conv-evergreen-queue-header .ceq-sep { opacity: 0.45; }
+  .conv-evergreen-queue-header .ceq-drain.is-on { color: var(--green, #3fb950); }
+  .conv-evergreen-queue-header .ceq-drain.is-off { opacity: 0.7; }
+  .conv-evergreen-queue-header .ceq-state {
+    margin-left: auto; flex-shrink: 0;
+    font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+    padding: 1px 6px; border-radius: 999px;
+  }
+  .conv-evergreen-queue-header .ceq-state.is-draining {
+    background: rgba(63,185,80,0.15); color: var(--green, #3fb950);
+  }
+  .conv-evergreen-queue-header .ceq-state.is-backlog {
+    background: rgba(139,148,158,0.16); color: var(--text-muted);
+  }
+  .conv-evergreen-queue-header .ceq-state.is-stuck {
+    background: rgba(248,81,73,0.18); color: var(--red, #f85149);
+  }
   .conv-project-tree { padding-left: 7px; }
   .conv-project-tree .conv-folder-group { margin: 0; }
   /* Kill the default group vertical rail — we use a per-row border-left

@@ -189,6 +189,15 @@ try:
 except ImportError:
     _wt_workers = None
     _WT_WORKERS_AVAILABLE = False
+try:
+    # Queue-level policy (auto_drain) and the durable configured-queue list.
+    # Used to enrich /api/ux-fixes/health with per-queue drain state so the
+    # dashboard can show queues (durable) instead of ephemeral workers.
+    import watchtower.config as _wt_config
+    _WT_CONFIG_AVAILABLE = True
+except ImportError:
+    _wt_config = None
+    _WT_CONFIG_AVAILABLE = False
 _queue_answer = _q.answer
 import objects_store  # durable server-side Flow object/parent/order state (GOAL-3/4)
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
@@ -20199,6 +20208,83 @@ def compute_ux_fixes_health():
             "stuck": stuck,
         })
     out.sort(key=lambda r: (-r["depth"], r["project"]))
+    return out
+
+
+def compute_queues_health(health=None, wt_workers=None):
+    """Per-QUEUE snapshot for the dashboard's "Evergreen" sidebar section.
+
+    WatchTower workers are ephemeral (spawned/reaped on a short TTL, so they
+    flicker), but queues are durable — the right thing to watch over time. This
+    folds three durable/semi-durable sources into one row per queue:
+
+      - the configured-queue list (``watchtower.config.all_queues()``) so a
+        queue with zero open work and zero live workers still shows;
+      - per-project open depth + stuck flag from ``compute_ux_fixes_health()``;
+      - live worker counts from the annotated ``wt_workers`` rows.
+
+    Each row: ``{queue, depth, oldest_open_age_seconds, workers, auto_drain,
+    stuck, state, fixer_session_id}`` where ``state`` is one of
+    ``stuck`` / ``draining`` / ``backlog``.
+
+    PERFORMANCE: no O(all sessions/transcripts) work. It consumes the already
+    computed ``health`` and ``wt_workers`` and reads the small queue-config file
+    once (``all_queues()``). No subprocess, no per-row transcript parse.
+    """
+    if health is None:
+        health = compute_ux_fixes_health()
+    if wt_workers is None:
+        wt_workers = []
+
+    def _norm(s):
+        return str(s or "").strip().upper()
+
+    # Live worker counts per queue (one pass over the annotated worker rows).
+    worker_counts = {}
+    for w in (wt_workers or []):
+        q = _norm(w.get("queue"))
+        if not q:
+            continue
+        worker_counts[q] = worker_counts.get(q, 0) + 1
+
+    # Durable configured-queue list keyed by normalized name → auto_drain.
+    cfg_drain = {}
+    if _WT_CONFIG_AVAILABLE:
+        try:
+            for name, conf in (_wt_config.all_queues() or {}).items():
+                cfg_drain[_norm(name)] = bool((conf or {}).get("auto_drain", False))
+        except Exception:
+            cfg_drain = {}
+
+    health_by_q = {_norm(r.get("project")): r for r in (health or [])}
+
+    names = set()
+    names.update(cfg_drain.keys())
+    names.update(health_by_q.keys())
+    names.update(worker_counts.keys())
+    names.discard("")
+    names.discard("?")
+
+    out = []
+    for q in names:
+        hr = health_by_q.get(q) or {}
+        depth = int(hr.get("depth") or 0)
+        workers = int(worker_counts.get(q, 0))
+        auto = bool(cfg_drain.get(q, False))
+        stuck = bool(hr.get("stuck")) and depth > 0
+        state = "stuck" if stuck else ("draining" if auto else "backlog")
+        out.append({
+            "queue": q,
+            "depth": depth,
+            "oldest_open_age_seconds": hr.get("oldest_open_age_seconds"),
+            "workers": workers,
+            "auto_drain": auto,
+            "stuck": stuck,
+            "state": state,
+            "fixer_session_id": hr.get("fixer_session_id"),
+        })
+    # Stuck first, then deepest, then most workers, then name — most-urgent top.
+    out.sort(key=lambda r: (0 if r["stuck"] else 1, -r["depth"], -r["workers"], r["queue"]))
     return out
 
 
@@ -41806,7 +41892,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         wt_workers = live_rows
                     except Exception:
                         pass
-                self.send_json({"ok": True, "projects": health, "count": len(health), "wt_workers": wt_workers})
+                # Per-queue rollup (durable) for the dashboard's Evergreen
+                # section: depth + live worker count + drain state + status.
+                try:
+                    queues = compute_queues_health(health, wt_workers)
+                except Exception:
+                    queues = []
+                self.send_json({"ok": True, "projects": health, "count": len(health),
+                                "wt_workers": wt_workers, "queues": queues})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/wt/workers":

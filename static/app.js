@@ -21845,37 +21845,104 @@
       const _objGroupsHtml = _objRoots.map((n, i) => _emitObjTree(n, 0, i + 1)).join('');
       const _evergreenRoots = Array.from(_evergreenObjectNodes)
         .filter(n => !_evergreenObjectNodes.has(_treeParentOf(n) || ''));
-      const _renderEvergreenAgentRows = (nodeId) => {
-        const seen = new Set();
-        const walk = (id) => {
-          if (seen.has(id)) return '';
-          seen.add(id);
-          const group = _byObject.get(id);
-          if (!group) return '';
-          let html = sortedObjectCardsForRender(id, group.cards || [])
-            .map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true }))
-            .join('');
-          (_childrenOf.get(id) || []).forEach((k) => { html += walk(k); });
-          return html;
-        };
-        return walk(nodeId);
+      // EVERGREEN AGENTS — the user parks long-lived /loop worker sessions under
+      // Flow objects, one object per queue (object title == queue name). These
+      // workers are manually run, NOT WatchTower-spawned, so they are not in
+      // workers.json and cannot be auto-mapped to a queue — the Flow object IS
+      // the grouping. We walk that object tree and, per object node, emit:
+      //   1) a compact queue-health HEADER (object title, enriched by matching
+      //      the title to a queue in the cached /api/ux-fixes/health "queues"
+      //      array: open depth · live workers · drain on/off · state), then
+      //   2) that object's session cards as the EXISTING worker rows (unchanged
+      //      `_renderRow(..., evergreenAgent:true)` format).
+      // Workers flicker (ephemeral); the queue header is the durable anchor.
+      const _evergreenQueuesData = (_uxqHealthCache && Array.isArray(_uxqHealthCache.queues))
+        ? _uxqHealthCache.queues : [];
+      const _evergreenQueueByName = new Map();
+      _evergreenQueuesData.forEach((q) => {
+        if (q && q.queue) _evergreenQueueByName.set(String(q.queue).toUpperCase(), q);
+      });
+      // Match an object title to a queue (case-insensitive). Try the normalized
+      // project key (uppercased + alias map, e.g. "ccc" → CCC, "BYM" → BYM),
+      // then a spaces-stripped fallback ("ux fixes" → UXFIXES). No match → the
+      // header still renders (title only), never hidden, never an error.
+      const _evergreenQueueForTitle = (title) => {
+        const t = String(title || '').trim();
+        if (!t) return null;
+        return _evergreenQueueByName.get(_uxqProjectKey(t))
+          || _evergreenQueueByName.get(t.replace(/\s+/g, '').toUpperCase())
+          || null;
       };
-      const _evergreenAgentsRowsHtml = _evergreenRoots.map(_renderEvergreenAgentRows).join('');
-      const _evergreenAgentsHtml = _evergreenAgentsRowsHtml
-        ? '<div class="conv-project-tree conv-evergreen-agents-tree">'
-          + _evergreenAgentsRowsHtml
-          + '</div>'
-        : '';
+      const _evergreenQueueHeaderHtml = (title) => {
+        const label = String(title || '').trim() || 'Untitled';
+        const q = _evergreenQueueForTitle(title);
+        let meta = '';
+        let tip = label;
+        if (q) {
+          const depth = Number(q.depth) || 0;
+          const workers = Number(q.workers) || 0;
+          const drainOn = !!q.auto_drain;
+          const state = String(q.state || (drainOn ? 'draining' : 'backlog'));
+          const stateCls = state === 'stuck' ? 'is-stuck' : (state === 'draining' ? 'is-draining' : 'is-backlog');
+          tip = label + ': ' + depth + ' open · ' + workers + ' worker' + (workers === 1 ? '' : 's')
+            + ' · drain ' + (drainOn ? 'on' : 'off') + ' · ' + state;
+          meta = '<span class="ceq-meta">'
+            + '<span class="ceq-depth">' + depth + ' open</span>'
+            + '<span class="ceq-sep">·</span>'
+            + '<span class="ceq-workers">' + workers + ' worker' + (workers === 1 ? '' : 's') + '</span>'
+            + '<span class="ceq-sep">·</span>'
+            + '<span class="ceq-drain ' + (drainOn ? 'is-on' : 'is-off') + '">drain ' + (drainOn ? 'on' : 'off') + '</span>'
+            + '</span>'
+            + '<span class="ceq-state ' + stateCls + '">' + escapeHtml(state) + '</span>';
+        }
+        return '<div class="conv-evergreen-queue-header' + (q ? '' : ' is-unmatched') + '"'
+          + ' title="' + escapeAttr(tip) + '">'
+          + '<span class="ceq-name">' + escapeHtml(label) + '</span>'
+          + meta
+          + '</div>';
+      };
+      // Walk the evergreen object tree. The evergreen-titled container node
+      // ("Evergreen Agents") is the section itself, so it does NOT emit its own
+      // header — only its child objects (one per queue: "CCC", "BYM", ...) get a
+      // queue header. Each queue object → one group (header + its session rows);
+      // its session ids are collected so those sessions are still suppressed
+      // from the normal "Current sessions" list (they live here, not twice).
       const _evergreenSessionIds = new Set();
-      const _collectEvergreenSessionIds = (nodeId) => {
+      const _renderEvergreenQueueGroup = (nodeId, seen) => {
+        seen = seen || new Set();
+        if (seen.has(nodeId)) return '';
+        seen.add(nodeId);
         const group = _byObject.get(nodeId);
-        ((group && group.cards) || []).forEach(c => {
+        if (!group) return '';
+        const isContainer = _evergreenObjectNodes.has(nodeId);
+        const cards = sortedObjectCardsForRender(nodeId, group.cards || []);
+        cards.forEach(c => {
           const sid = c.session_id || c.id || '';
           if (sid) _evergreenSessionIds.add(sid);
         });
-        (_childrenOf.get(nodeId) || []).forEach(_collectEvergreenSessionIds);
+        const rows = cards
+          .map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true }))
+          .join('');
+        let html = '';
+        if (isContainer) {
+          // Section container: no header; render any direct sessions plainly.
+          if (rows) html += '<div class="conv-evergreen-queue-group">' + rows + '</div>';
+        } else {
+          html += '<div class="conv-evergreen-queue-group">'
+            + _evergreenQueueHeaderHtml(group.title || '')
+            + rows
+            + '</div>';
+        }
+        (_childrenOf.get(nodeId) || []).forEach(k => { html += _renderEvergreenQueueGroup(k, seen); });
+        return html;
       };
-      _evergreenRoots.forEach(_collectEvergreenSessionIds);
+      const _evergreenAgentsBody = _evergreenRoots.map(n => _renderEvergreenQueueGroup(n)).join('');
+      const _evergreenAgentsHtml = _evergreenAgentsBody
+        ? '<div class="conv-project-tree conv-evergreen-agents-tree">' + _evergreenAgentsBody + '</div>'
+        : '';
+      // Warm the queue-health cache in the background; re-renders once when the
+      // queue snapshot changes so the headers fill in after first paint.
+      _ensureEvergreenQueuesFresh();
       // Codex-layout: stacked regions in the by-objects view.
       //  1) "Current sessions" — every session active in the selected window
       //     (the live triage list), flat, regardless of object attachment. During search,
@@ -27153,7 +27220,7 @@
   }
   // Per-project queue-health snapshot (GET /api/ux-fixes/health). Same cache
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
-  let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [] };
+  let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [] };
   async function _fetchUxqHealth() {
     if (Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache;
     try {
@@ -27162,9 +27229,29 @@
       const rows = Array.isArray(data && data.projects) ? data.projects
         : (Array.isArray(data) ? data : []);
       const wt_workers = Array.isArray(data && data.wt_workers) ? data.wt_workers : [];
-      _uxqHealthCache = { ts: Date.now(), rows, wt_workers };
+      const queues = Array.isArray(data && data.queues) ? data.queues : [];
+      _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues };
     } catch (_) { /* keep stale cache */ }
     return _uxqHealthCache;
+  }
+  // The Evergreen sidebar section renders queue headers synchronously from the
+  // cache (above), then this warms the cache in the background and triggers ONE
+  // re-render when the queue snapshot actually changes. Mirrors the queue-health
+  // strip's async-fetch-then-render pattern, but the sidebar render is sync so we
+  // re-render rather than patch a static node. Sig-gated → no render storm.
+  let _evergreenQueuesSig = null;
+  async function _ensureEvergreenQueuesFresh() {
+    try {
+      await _fetchUxqHealth();
+      const queues = (_uxqHealthCache && _uxqHealthCache.queues) || [];
+      const sig = JSON.stringify(queues.map(q => [q.queue, q.depth, q.workers, q.auto_drain, q.state]));
+      if (sig !== _evergreenQueuesSig) {
+        _evergreenQueuesSig = sig;
+        if (typeof conversationsData !== 'undefined' && conversationsData) {
+          try { renderConversationList(conversationsData); } catch (_) {}
+        }
+      }
+    } catch (_) { /* keep stale cache */ }
   }
   // Compact human age: "now", "5m", "5h", "2d".
   function _uxqFmtAge(secs) {
