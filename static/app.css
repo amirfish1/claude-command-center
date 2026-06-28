@@ -4162,60 +4162,46 @@
   :root:not([data-theme="light"]) .conv-current-sessions-scroll .conv-item .conv-title {
     color: #f0f4fb;
   }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }
-  /* Reveal the inner meta chips whenever the meta line is shown (hover / focus /
-     active). Descendant combinators so they work whether the meta line is
-     floated inside .conv-hover-extras (hover) or inline (active). */
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-meta-inline,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-branch-slot,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-object-chip,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-folder-chip,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-repo-pin,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within .conv-hover-meta-row .conv-meta-inline,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within .conv-hover-meta-row .conv-branch-slot,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within .conv-hover-meta-row .conv-object-chip,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within .conv-hover-meta-row .conv-folder-chip,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
-  /* Hover extras wrapper. display:contents by default → transparent in every
-     list/mode, so layout is identical to before everywhere except where we
-     explicitly float it below. */
-  .conv-item .conv-hover-extras { display: contents; }
-  /* Active (selected) row: reveal the wrapper inline and show only the meta
-     line (the brief outcome stays hidden until hover, matching prior behavior). */
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-extras { display: contents; }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active:not(:hover):not(:focus-within) .conv-hover-extras > :not(.conv-hover-meta-row) { display: none; }
-  /* Tooltip-style hover brief: JS sets data-hb + --hb-x/--hb-y on the row.
-     position:fixed escapes the scroll container so no reflow, no cursor skip.
-     Top-left corner = cursor position. Works for active and inactive rows. */
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] > .conv-hover-extras {
-    display: block;
-    position: fixed;
-    top: var(--hb-y, 0px);
-    left: var(--hb-x, 300px);
-    width: 280px;
-    z-index: 9999;
-    pointer-events: auto;
-    padding: 6px 10px 10px 10px;
-    background: var(--bg-elevated, var(--bg, #1a1f27));
-    border: 1px solid var(--border, #30363d);
-    border-radius: 6px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
-  }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] > .conv-hover-extras > .conv-hover-meta-row {
+  /* Current-sessions panel: meta row is the always-visible "second row".
+     The brief (.conv-outcome) is hidden until the disclosure chevron opens it.
+     ask/summary/history stay hidden in this panel (they belong to the reader). */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-extras { display: contents; }
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 4px;
-    margin: 0 0 4px 0;
   }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] > .conv-hover-extras > .conv-outcome {
-    display: block;
+  /* Chips in the meta row are always visible here (no hover gating). */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-meta-inline,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-branch-slot,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-object-chip,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-folder-chip,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
+  /* The brief: hidden by default, revealed when the row is expanded. */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-outcome { display: none; }
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.is-brief-open .conv-outcome { display: block; }
+  /* last-message preview / summary detail / history snippet do not belong in this panel. */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-extras > .conv-last,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-extras > .conv-session-summary-detail,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-extras > .conv-history-snippet { display: none; }
+  /* Disclosure chevron styling. */
+  .conv-brief-chevron {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    color: var(--text-dim, #8b949e);
+    cursor: pointer;
+    font-size: 10px;
+    line-height: 1;
+    padding: 0 2px;
+    margin: 0;
   }
-  /* Chip reveal inside the data-hb tooltip (mirrors the :hover rule above). */
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-meta-inline,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-branch-slot,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-object-chip,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-folder-chip,
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
+  .conv-brief-chevron:hover { color: var(--text, #e6edf3); }
+  /* Hover extras wrapper. display:contents by default → transparent in every
+     list/mode, so layout is identical to before everywhere except where we
+     explicitly show it in the current-sessions panel above. */
+  .conv-item .conv-hover-extras { display: contents; }
   .conv-current-sessions-scroll.is-search-results .conv-item {
     min-height: 0;
     padding: 8px 10px;

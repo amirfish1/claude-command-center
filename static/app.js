@@ -2061,6 +2061,17 @@
   function _nyaSaveCollapsedSet(s) {
     try { localStorage.setItem(NYA_COLLAPSED_KEY, JSON.stringify([...s])); } catch (_) {}
   }
+  // Per-row brief disclosure (the chevron on the always-visible meta row). Set
+  // of session ids whose brief is expanded inline. Persisted so the 5s poll
+  // re-render keeps an opened brief open. Toggled in place — no full re-render.
+  const BRIEF_EXPANDED_KEY = 'ccc-brief-expanded';
+  function _briefExpandedSet() {
+    try { return new Set(JSON.parse(localStorage.getItem(BRIEF_EXPANDED_KEY) || '[]')); }
+    catch (_) { return new Set(); }
+  }
+  function _briefSaveExpandedSet(s) {
+    try { localStorage.setItem(BRIEF_EXPANDED_KEY, JSON.stringify([...s])); } catch (_) {}
+  }
   const $convFolderFilter = document.getElementById('convFolderFilter');
   let repoListState = { repos: [], current: '', recent: [] };
   // Folder filtering removed: the conversation list always shows everything.
@@ -20196,6 +20207,8 @@
     let _nyaDetailsForRows = false;
     // Collapsed-block session_ids, read once per render (not per row).
     let _nyaCollapsedRows = new Set();
+    // Per-row brief disclosure state, read once per render (same pattern).
+    let _briefExpandedRows = new Set();
     function sessionSummaryStorageKey(sid) {
       return 'ccc-session-summary-expanded:' + String(sid || '').slice(0, 180);
     }
@@ -20943,8 +20956,24 @@
       const _hmFolderChip = (folderChipHtml && _hmObjTitle && c.folder_label_chip
         && _hmObjTitle.toLowerCase() === String(c.folder_label_chip).toLowerCase())
         ? '' : folderChipHtml;
-      const hoverMetaRowHtml = (!opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml))
+      // Brief disclosure chevron — only for rows that have a did brief.
+      // _briefExpandedRows is loaded once per render from localStorage.
+      const _briefSid = c.session_id || c.id || '';
+      const _briefDid = (!isBacklogRow && !isGithubPrRow && c.session_state && c.session_state.did)
+        ? String(c.session_state.did).trim() : '';
+      const _hasBrief = !!_briefDid;
+      const _briefOpen = _hasBrief && _briefExpandedRows.has(_briefSid);
+      const _briefChevronHtml = _hasBrief
+        ? '<button type="button" class="conv-brief-chevron" data-role="brief-toggle"'
+          + ' data-brief-sid="' + escapeHtml(_briefSid) + '"'
+          + ' title="Show / hide brief" aria-expanded="' + (_briefOpen ? 'true' : 'false') + '">'
+          + (_briefOpen ? '&#9662;' : '&#9656;') + '</button>'
+        : '';
+      // Meta row: always shown when there are chips or a brief chevron.
+      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);
+      const hoverMetaRowHtml = _hasMetaContent
         ? '<div class="conv-hover-meta-row">'
+          + _briefChevronHtml
           + _hmObjectChip
           + _hmFolderChip
           + sessionIdChipHtml
@@ -21059,7 +21088,7 @@
         + '</div>'
         : '';
 
-      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + currentChildRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + currentChildRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row">'
@@ -21590,6 +21619,7 @@
     // that header). Turned off again right after _activeRowsHtml is built.
     _nyaDetailsForRows = _ipNyaOn;
     _nyaCollapsedRows = _ipNyaOn ? _nyaCollapsedSet() : new Set();
+    _briefExpandedRows = _briefExpandedSet();
     let _activeRowsHtml;
     if (_shouldGroupByObjects) {
       // Resolve a session to its grouping node (CCC-83 + CCC-88):
@@ -23578,6 +23608,27 @@
         if (block && block.classList.contains('conv-nya-detail')) {
           block.classList.toggle('is-collapsed', nowCollapsed);
         }
+      });
+    }
+    // Per-row brief disclosure chevron. Delegated + wired once; toggles the
+    // always-visible brief inline without a full re-render.
+    if (!$convList._briefToggleWired) {
+      $convList._briefToggleWired = true;
+      $convList.addEventListener('click', (ev) => {
+        const chev = ev.target.closest('[data-role="brief-toggle"]');
+        if (!chev) return;
+        ev.stopPropagation();
+        ev.preventDefault();
+        const sid = chev.getAttribute('data-brief-sid') || '';
+        if (!sid) return;
+        const set = _briefExpandedSet();
+        const nowOpen = !set.has(sid);
+        if (nowOpen) set.add(sid); else set.delete(sid);
+        _briefSaveExpandedSet(set);
+        chev.innerHTML = nowOpen ? '&#9662;' : '&#9656;';
+        chev.setAttribute('aria-expanded', nowOpen ? 'true' : 'false');
+        const row = chev.closest('.conv-item');
+        if (row) row.classList.toggle('is-brief-open', nowOpen);
       });
     }
     // Collapse/expand the Evergreen Agents section. Delegated + wired once;
@@ -44011,53 +44062,4 @@
     setTimeout(checkOnboarding, 1000);
   }
 
-  // Hover-brief tooltip: position:fixed tooltip at the cursor position.
-  // JS sets --hb-x/--hb-y + data-hb on the hovered row; CSS renders the
-  // bordered card. Works for both active and inactive rows.
-  (function _initHoverBrief() {
-    let _hbItem = null;
-    let _hbTimer = null;
-
-    const _hbPos = (item) => {
-      const titleEl = item.querySelector('.conv-title');
-      const anchor = titleEl ? titleEl.getBoundingClientRect() : item.getBoundingClientRect();
-      const ir = item.getBoundingClientRect();
-      const W = window.innerWidth;
-      const TOOLTIP_W = 300;
-      let x = anchor.right + 8;
-      if (x + TOOLTIP_W > W - 8) x = Math.max(8, W - TOOLTIP_W - 8);
-      let y = ir.top;
-      if (y + 130 > window.innerHeight) y = Math.max(8, window.innerHeight - 140);
-      item.style.setProperty('--hb-x', x + 'px');
-      item.style.setProperty('--hb-y', y + 'px');
-    };
-
-    const _hbShow = (item) => {
-      clearTimeout(_hbTimer);
-      if (_hbItem && _hbItem !== item) _hbItem.removeAttribute('data-hb');
-      _hbItem = item;
-      _hbPos(item);
-      item.setAttribute('data-hb', '1');
-    };
-
-    const _hbHide = () => {
-      _hbTimer = setTimeout(() => {
-        if (_hbItem) { _hbItem.removeAttribute('data-hb'); _hbItem = null; }
-      }, 80);
-    };
-
-    const _hbSelector = '.conv-current-sessions-scroll:not(.is-search-results) .conv-item';
-
-    document.addEventListener('mouseover', (e) => {
-      const item = e.target.closest(_hbSelector);
-      if (item) { _hbShow(item); return; }
-      // Cursor moved into the fixed tooltip (position:fixed child) — keep visible
-      if (_hbItem) {
-        const extras = _hbItem.querySelector('.conv-hover-extras');
-        if (extras && extras.contains(e.target)) { clearTimeout(_hbTimer); return; }
-      }
-      _hbHide();
-    });
-
-  }());
 })();
