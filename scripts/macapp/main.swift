@@ -18,6 +18,10 @@ import Sparkle
 
 let CCC_PORT = 8090
 let CCC_INSTALL_DIR = NSString(string: "~/.ccc/claude-command-center").expandingTildeInPath
+// Optional local "Car Mode (Voice)" launcher. The public app ships no voice helper;
+// if the user has wired one (see ccc-voice), they drop an executable .command here and
+// the menu item appears. Graceful absence, like the Morning view plugin.
+let CCC_CAR_MODE_CMD = NSString(string: "~/.ccc/car-mode.command").expandingTildeInPath
 let CCC_URL = URL(string: "http://localhost:\(CCC_PORT)")!
 let CCC_BUNDLE_VERSION = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev"
 let CCC_MAIN_MIN_WIDTH: CGFloat = 420
@@ -40,6 +44,10 @@ func portIsBound(_ port: Int) -> Bool {
     } catch {
         return false
     }
+}
+
+func carModeCommandExists() -> Bool {
+    FileManager.default.isExecutableFile(atPath: CCC_CAR_MODE_CMD)
 }
 
 func augmentedPath() -> String {
@@ -506,6 +514,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updatesItem.target = updaterController
         appMenu.addItem(updatesItem)
         appMenu.addItem(NSMenuItem.separator())
+        // Car Mode (Voice) — only when a local launcher is wired (see ccc-voice).
+        if carModeCommandExists() {
+            appMenu.addItem(withTitle: "Start Car Mode (Voice)…",
+                            action: #selector(startCarMode),
+                            keyEquivalent: "")
+            appMenu.addItem(NSMenuItem.separator())
+        }
         appMenu.addItem(withTitle: "Hide Command Center",
                         action: #selector(NSApplication.hide(_:)),
                         keyEquivalent: "h")
@@ -639,6 +654,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         """
         alert.alertStyle = .informational
         alert.runModal()
+    }
+
+    // Launch the local Car Mode voice helper. `open` runs the .command in Terminal,
+    // which gives the voice agent's console mode the controlling TTY it needs.
+    @objc func startCarMode() {
+        let proc = Process()
+        proc.launchPath = "/usr/bin/open"
+        proc.arguments = [CCC_CAR_MODE_CMD]
+        do {
+            try proc.run()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Could not start Car Mode"
+            alert.informativeText = "Failed to open \(CCC_CAR_MODE_CMD)\n\n\(error)"
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
     }
 
     func activeWebView() -> WKWebView {
