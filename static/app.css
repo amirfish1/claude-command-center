@@ -4345,6 +4345,10 @@
   .conv-evergreen-queue-header .ceq-state.is-draining {
     background: rgba(63,185,80,0.15); color: var(--green, #3fb950);
   }
+  /* Idle / drained — calm positive green, distinct from active "Draining". */
+  .conv-evergreen-queue-header .ceq-state.is-ready {
+    background: rgba(63,185,80,0.15); color: var(--green, #3fb950);
+  }
   .conv-evergreen-queue-header .ceq-state.is-backlog {
     background: rgba(139,148,158,0.16); color: var(--text-muted);
   }

@@ -21896,20 +21896,30 @@
       const _twQueueHeaderHtml = (q, liveWorkers) => {
         const label = String((q && q.queue) || '').trim() || 'Untitled';
         const depth = Number(q && q.depth) || 0;
+        const closed = Number(q && q.closed) || 0;
+        const total = Number(q && q.total) || 0;
         const workers = Number(liveWorkers) || 0;
         const drainOn = !!(q && q.auto_drain);
-        const state = String((q && q.state) || (drainOn ? 'draining' : 'backlog'));
-        const stateCls = state === 'stuck' ? 'is-stuck' : (state === 'draining' ? 'is-draining' : 'is-backlog');
-        const tip = label + ': ' + depth + ' open · ' + workers + ' worker' + (workers === 1 ? '' : 's')
-          + ' · drain ' + (drainOn ? 'on' : 'off') + ' · ' + state;
+        const stuck = !!(q && q.stuck);
+        // Pill is derived client-side from the row's data fields (depth/auto_drain/
+        // stuck) — no new server states. Idle (0 open) reads "Ready", not DRAINING.
+        let stateLabel, stateCls;
+        if (stuck) { stateLabel = 'Stuck'; stateCls = 'is-stuck'; }
+        else if (depth === 0) { stateLabel = 'Ready'; stateCls = 'is-ready'; }
+        else if (drainOn) { stateLabel = 'Draining'; stateCls = 'is-draining'; }
+        else { stateLabel = 'Backlog'; stateCls = 'is-backlog'; }
+        const progress = closed + '/' + total;
+        const tip = label + ': ' + progress + ' done · ' + depth + ' open · '
+          + workers + ' worker' + (workers === 1 ? '' : 's')
+          + ' · drain ' + (drainOn ? 'on' : 'off') + ' · ' + stateLabel;
         const meta = '<span class="ceq-meta">'
-          + '<span class="ceq-depth">' + depth + ' open</span>'
+          + '<span class="ceq-depth">' + escapeHtml(progress) + '</span>'
           + '<span class="ceq-sep">·</span>'
           + '<span class="ceq-workers">' + workers + ' worker' + (workers === 1 ? '' : 's') + '</span>'
           + '<span class="ceq-sep">·</span>'
           + '<span class="ceq-drain ' + (drainOn ? 'is-on' : 'is-off') + '">drain ' + (drainOn ? 'on' : 'off') + '</span>'
           + '</span>'
-          + '<span class="ceq-state ' + stateCls + '">' + escapeHtml(state) + '</span>';
+          + '<span class="ceq-state ' + stateCls + '">' + escapeHtml(stateLabel) + '</span>';
         return '<div class="conv-evergreen-queue-header"'
           + ' title="' + escapeAttr(tip) + '">'
           + '<span class="ceq-name">' + escapeHtml(label) + '</span>'

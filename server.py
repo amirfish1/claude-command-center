@@ -20301,9 +20301,10 @@ def compute_queues_health(health=None, wt_workers=None):
       - per-project open depth + stuck flag from ``compute_ux_fixes_health()``;
       - live worker counts from the annotated ``wt_workers`` rows.
 
-    Each row: ``{queue, depth, oldest_open_age_seconds, workers, auto_drain,
-    stuck, state, fixer_session_id}`` where ``state`` is one of
-    ``stuck`` / ``draining`` / ``backlog``.
+    Each row: ``{queue, depth, closed, total, oldest_open_age_seconds, workers,
+    auto_drain, stuck, state, fixer_session_id}`` where ``state`` is one of
+    ``stuck`` / ``draining`` / ``backlog``. ``depth`` is the open count;
+    ``closed`` / ``total`` give a done/total progress count for the queue.
 
     PERFORMANCE: no O(all sessions/transcripts) work. It consumes the already
     computed ``health`` and ``wt_workers`` and reads the small queue-config file
@@ -20336,10 +20337,28 @@ def compute_queues_health(health=None, wt_workers=None):
 
     health_by_q = {_norm(r.get("project")): r for r in (health or [])}
 
+    # Closed + total counts per queue from ONE list_items() pass (one JSON file
+    # read, no per-row subprocess/transcript parse — see PERFORMANCE note above).
+    # `open` stays = depth (from health); these add a done/total progress count.
+    closed_by_q = {}
+    total_by_q = {}
+    try:
+        for it in (_q.list_items() or []):
+            qn = _norm(it.get("project"))
+            if not qn or qn == "?":
+                continue
+            total_by_q[qn] = total_by_q.get(qn, 0) + 1
+            if it.get("status") == "closed":
+                closed_by_q[qn] = closed_by_q.get(qn, 0) + 1
+    except Exception:
+        closed_by_q = {}
+        total_by_q = {}
+
     names = set()
     names.update(cfg_drain.keys())
     names.update(health_by_q.keys())
     names.update(worker_counts.keys())
+    names.update(total_by_q.keys())
     names.discard("")
     names.discard("?")
 
@@ -20354,6 +20373,8 @@ def compute_queues_health(health=None, wt_workers=None):
         out.append({
             "queue": q,
             "depth": depth,
+            "closed": int(closed_by_q.get(q, 0)),
+            "total": int(total_by_q.get(q, 0)),
             "oldest_open_age_seconds": hr.get("oldest_open_age_seconds"),
             "workers": workers,
             "auto_drain": auto,
@@ -40366,22 +40387,30 @@ def _throughput_finalize_bucket(bucket):
     return out
 
 
-def _throughput_summary(turns):
-    total_turns = len(turns)
+def _throughput_summary(turns, stat_cutoff_epoch=None):
+    # stat_turns: the scoped subset used for aggregate card totals (e.g. last 7d).
+    # `turns` covers a wider window so hourly/daily buckets reach back further
+    # (e.g. previous billing period for the chart overlay).
+    stat_turns = (
+        [t for t in turns if _throughput_turn_after_cutoff(t, stat_cutoff_epoch)]
+        if stat_cutoff_epoch is not None else turns
+    )
+    total_turns = len(stat_turns)
     turns_with_tokens = sum(
-        1 for t in turns if (t.get("tokens_in") or 0) > 0 or (t.get("tokens_out") or 0) > 0
+        1 for t in stat_turns if (t.get("tokens_in") or 0) > 0 or (t.get("tokens_out") or 0) > 0
     )
     total_bucket = _throughput_empty_bucket()
     per_model = {}
     hourly = {}
     daily = {}
-    for t in turns:
+    for t in stat_turns:
         _throughput_add_bucket(total_bucket, t)
         model_key = t.get("model") or t.get("engine") or "unknown"
         model_bucket = per_model.setdefault(model_key, _throughput_empty_bucket())
         model_bucket["model"] = t.get("model") or ""
         model_bucket["engine"] = t.get("engine") or ""
         _throughput_add_bucket(model_bucket, t)
+    for t in turns:
         t_end = _stats_parse_ts(t.get("t_end"))
         if t_end:
             hour_key = t_end.strftime("%Y-%m-%d %H:00")
@@ -40936,7 +40965,16 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
                 or conv_row.get("mtime")
                 or 0
             )
-            if cutoff_epoch is not None and modified < cutoff_epoch:
+            # For all_7_days, discover sessions from the last 14 days so the
+            # previous billing period (up to ~14d ago) has full hourly coverage
+            # for the chart overlay.  Aggregate card stats stay 7-day scoped via
+            # stat_cutoff_epoch passed to _throughput_summary below.
+            _discover_cutoff = (
+                time.time() - 14 * 86400
+                if session_id == "all_7_days" and cutoff_epoch is not None
+                else cutoff_epoch
+            )
+            if _discover_cutoff is not None and modified < _discover_cutoff:
                 continue
             if repo_path:
                 try:
@@ -40993,18 +41031,23 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
             if full_turns is None:
                 # No stat-able path (or cache disabled) — fall back to a direct,
                 # cutoff-scoped extraction so we never serve nothing.
+                _fb_cutoff = (
+                    time.time() - 14 * 86400
+                    if session_id == "all_7_days" and cutoff_epoch is not None
+                    else cutoff_epoch
+                )
                 try:
                     if is_codex:
                         turns.extend(_throughput_codex_turns_from_file(
                             sid, session_name=name, model_hint=model_hint,
-                            cutoff_epoch=cutoff_epoch,
+                            cutoff_epoch=_fb_cutoff,
                         ))
                     else:
                         parsed = parse_conversation(sid, repo_path=repo_path)
                         turns.extend(_throughput_turns_from_events(
                             parsed.get("events") or [],
                             session_id=sid, session_name=name, engine=engine,
-                            model_hint=model_hint, cutoff_epoch=cutoff_epoch,
+                            model_hint=model_hint, cutoff_epoch=_fb_cutoff,
                         ))
                 except Exception:
                     continue
@@ -41012,8 +41055,13 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
 
             # Copy each kept turn so the per-request turn_index reassignment
             # below doesn't mutate the shared cached dicts.
+            _turn_cutoff = (
+                time.time() - 14 * 86400
+                if session_id == "all_7_days" and cutoff_epoch is not None
+                else cutoff_epoch
+            )
             for t in full_turns:
-                if _throughput_turn_after_cutoff(t, cutoff_epoch):
+                if _throughput_turn_after_cutoff(t, _turn_cutoff):
                     turns.append(dict(t))
         turns.sort(key=lambda t: t.get("t_start") or "")
         for idx, turn in enumerate(turns, 1):
@@ -41055,7 +41103,10 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
             "cutoff_epoch": cutoff_epoch,
             "total_turns": len(turns),
         },
-        "summary": _throughput_summary(turns),
+        "summary": _throughput_summary(
+            turns,
+            stat_cutoff_epoch=cutoff_epoch if session_id == "all_7_days" else None,
+        ),
         "turns": serialised_turns,
     }
     _status = 200
