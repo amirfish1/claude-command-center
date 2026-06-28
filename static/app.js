@@ -728,9 +728,10 @@
             '</div>';
 
     if (_maTab === 'scanned') {
+      const scanHours = d.scan_window_hours || 2;
       if (!scanned.length) {
-        html += '<div class="ma-empty">No live sessions scanned yet.' +
-                '<div class="ma-empty-hint">Advisor checks every 45s. Pure heuristic — no model calls.</div></div>';
+        html += '<div class="ma-empty">No sessions active in the last ' + scanHours + 'h.' +
+                '<div class="ma-empty-hint">Pure heuristic — no model calls.</div></div>';
       } else {
         html += '<table class="ma-scan-table"><thead><tr>' +
                 '<th>Session</th><th>Model</th><th>Score</th><th>Signals</th><th>Verdict</th>' +
@@ -772,7 +773,7 @@
             '</tr>';
         });
         html += '</tbody></table>';
-        html += '<div style="font-size:10px;opacity:.35;margin-top:8px;text-align:right;">Pure heuristic · no model calls</div>';
+        html += '<div style="font-size:10px;opacity:.35;margin-top:8px;text-align:right;">Sessions active in last ' + scanHours + 'h · pure heuristic · no model calls</div>';
       }
     } else {
       // Recent activity tab
