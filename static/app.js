@@ -559,6 +559,7 @@
       '<div id="maBackdrop"></div>' +
       '<div id="maPanel" role="dialog" aria-modal="true" aria-label="Model Advisor">' +
         '<div class="ma-head"><h2>Model Advisor</h2>' +
+        '<span id="maLastChecked" style="font-size:11px;opacity:.45;margin-right:auto;margin-left:10px;"></span>' +
         '<button class="ma-close" aria-label="Close">&times;</button></div>' +
         '<div class="ma-body" id="maBody"><div style="opacity:.6">Loading…</div></div>' +
       '</div>';
@@ -582,11 +583,19 @@
     if (ov) ov.classList.remove('open');
     if (_maTimer) { clearInterval(_maTimer); _maTimer = null; }
   }
+  let _maLastScan = 0;
   function _pollModelAdvisor() {
     if (document.hidden) return;
     fetch('/api/model-advisor', { cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (d) { if (d) { _maLast = d; _renderModelAdvisor(d); _updateAdvisorPill(d); } })
+      .then(function (d) {
+        if (d) {
+          _maLast = d; _maLastScan = Date.now();
+          _renderModelAdvisor(d); _updateAdvisorPill(d);
+          const lc = document.getElementById('maLastChecked');
+          if (lc) lc.textContent = 'checked just now';
+        }
+      })
       .catch(function () {});
   }
   function _maApply(recId, sid, model) {
@@ -621,11 +630,13 @@
     const live = d.live || [];
 
     // Filter log by timeframe, exclude pending (those live in the Live section).
+    // Field name in the log is "ts" (not "logged_at").
     const allLog = (d.log || []).filter(function (e) { return e.status !== 'pending'; });
     const cutMs = _maTimeframe === '24h' ? 86400000 : _maTimeframe === '7d' ? 604800000 : 0;
     const now = Date.now();
     const filteredLog = cutMs ? allLog.filter(function (e) {
-      return e.logged_at && (now - new Date(e.logged_at).getTime()) <= cutMs;
+      const t = e.ts || e.logged_at;
+      return t && (now - new Date(t).getTime()) <= cutMs;
     }) : allLog;
     const appliedLog = filteredLog.filter(function (e) { return e.status === 'applied'; });
     const savedTok = appliedLog.reduce(function (sum, e) {
@@ -634,9 +645,10 @@
 
     let html = '';
 
-    // Timeframe selector.
+    // Timeframe selector — "All" shows total count so user knows scope.
+    const totalCount = allLog.length;
     html += '<div class="ma-tf">';
-    [['24h', 'Last 24h'], ['7d', 'Last 7 days'], ['all', 'All time']].forEach(function (p) {
+    [['24h', 'Last 24h'], ['7d', 'Last 7 days'], ['all', 'All (' + totalCount + ')']].forEach(function (p) {
       html += '<button class="ma-tf-btn' + (_maTimeframe === p[0] ? ' active' : '') +
               '" data-tf="' + p[0] + '">' + p[1] + '</button>';
     });
