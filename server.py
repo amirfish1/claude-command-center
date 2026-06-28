@@ -12042,12 +12042,14 @@ def build_model_advisor_report(persist=True):
         model_advisor.refresh_savings(MODEL_ADVISOR_LOG_FILE, _session_cumulative_out_tokens)
     except Exception:
         pass
+    import datetime as _dt
     data = model_advisor._load_log(MODEL_ADVISOR_LOG_FILE)
     return {
         "ok": True,
         "live": live_recs,
         "scanned": scanned,
         "scan_window_hours": 2,
+        "scanned_at": _dt.datetime.now().strftime("%H:%M"),
         "log": list(reversed(data.get("recommendations", [])))[:100],
         "summary": model_advisor.summarize(data),
     }
