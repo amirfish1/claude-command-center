@@ -468,6 +468,7 @@
   let _maTimer = null;
   let _maLast = null;
   let _maTimeframe = '7d';
+  let _maTab = 'scanned';
   const _maModels = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', fable: 'Fable' };
   function _maEsc(s) { return _shEsc(s); }
   function _maTok(n) {
@@ -548,7 +549,28 @@
         '.ma-st-expired{background:rgba(127,127,127,.10);color:var(--text-muted,#8b949e);}' +
         '.ma-empty{padding:20px 4px;text-align:center;color:var(--text-muted,#8b949e);font-size:13px;}' +
         '.ma-empty-ok{color:#3fb950;font-size:15px;margin-bottom:6px;}' +
-        '.ma-empty-hint{font-size:11px;opacity:.6;margin-top:4px;}';
+        '.ma-empty-hint{font-size:11px;opacity:.6;margin-top:4px;}' +
+        '.ma-tabs{display:flex;gap:0;border-bottom:1px solid var(--border-color,#30363d);margin-bottom:14px;}' +
+        '.ma-tab{cursor:pointer;padding:7px 14px;font-size:12px;font-weight:500;border:0;background:transparent;' +
+        'color:var(--text-muted,#8b949e);border-bottom:2px solid transparent;margin-bottom:-1px;}' +
+        '.ma-tab.active{color:var(--text-primary,#e6edf3);border-bottom-color:#58a6ff;}' +
+        '.ma-tab:hover{color:var(--text-primary,#e6edf3);}' +
+        '.ma-scan-table{width:100%;border-collapse:collapse;font-size:12px;}' +
+        '.ma-scan-table th{text-align:left;padding:4px 8px;font-size:10px;font-weight:600;letter-spacing:.06em;' +
+        'text-transform:uppercase;color:var(--text-muted,#8b949e);border-bottom:1px solid var(--border-color,#30363d);}' +
+        '.ma-scan-table td{padding:6px 8px;border-bottom:1px solid rgba(127,127,127,.07);vertical-align:top;}' +
+        '.ma-scan-table tr:last-child td{border-bottom:0;}' +
+        '.ma-scan-table tr:hover td{background:rgba(127,127,127,.05);}' +
+        '.ma-score-bar{display:inline-block;width:40px;height:5px;border-radius:3px;vertical-align:middle;' +
+        'background:linear-gradient(90deg,#3fb950,#d29922,#f85149);position:relative;margin-right:5px;}' +
+        '.ma-score-dot{position:absolute;top:-2px;width:9px;height:9px;border-radius:50%;' +
+        'border:2px solid var(--bg-secondary,#161b22);background:currentColor;}' +
+        '.ma-sig{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;margin:1px;' +
+        'background:rgba(127,127,127,.12);color:var(--text-muted,#8b949e);}' +
+        '.ma-sig-hot{background:rgba(248,81,73,.12);color:#f85149;}' +
+        '.ma-verdict-ok{color:#3fb950;font-weight:500;}' +
+        '.ma-verdict-gray{color:var(--text-muted,#8b949e);}' +
+        '.ma-verdict-drift{color:#d29922;font-weight:500;}';
       document.head.appendChild(st);
     }
     let ov = document.getElementById('maOverlay');
@@ -697,26 +719,85 @@
     }
     html += '</div>';
 
-    // Recent activity — resolved entries only, scoped to timeframe.
-    html += '<div><div class="ma-sec-title">Recent activity</div>';
-    if (!filteredLog.length) {
-      html += '<div class="ma-empty">No switches in this window.' +
-              '<div class="ma-empty-hint">Applied and dismissed recommendations appear here.</div></div>';
+    // Tabs: Sessions Scanned / Recent Activity
+    const scanned = d.scanned || [];
+    html += '<div>';
+    html += '<div class="ma-tabs">' +
+            '<button class="ma-tab' + (_maTab === 'scanned' ? ' active' : '') + '" data-ma-tab="scanned">Sessions scanned (' + scanned.length + ')</button>' +
+            '<button class="ma-tab' + (_maTab === 'activity' ? ' active' : '') + '" data-ma-tab="activity">Recent activity</button>' +
+            '</div>';
+
+    if (_maTab === 'scanned') {
+      if (!scanned.length) {
+        html += '<div class="ma-empty">No live sessions scanned yet.' +
+                '<div class="ma-empty-hint">Advisor checks every 45s. Pure heuristic — no model calls.</div></div>';
+      } else {
+        html += '<table class="ma-scan-table"><thead><tr>' +
+                '<th>Session</th><th>Model</th><th>Score</th><th>Signals</th><th>Verdict</th>' +
+                '</tr></thead><tbody>';
+        scanned.forEach(function (s) {
+          const score = s.score == null ? 50 : s.score;
+          const scoreColor = score <= 32 ? '#3fb950' : score >= 72 ? '#f85149' : '#d29922';
+          const dotPct = Math.round(score / 100 * 100);
+          const f = s.features || {};
+          const signals = [];
+          if (f.exec_tools > 0) signals.push(['exec×' + f.exec_tools, f.exec_tools >= 3]);
+          if (f.reasoning_tools > 0) signals.push(['reason×' + f.reasoning_tools, false]);
+          if (f.open_ended > 0) signals.push(['open×' + f.open_ended, false]);
+          if (f.imperative > 0) signals.push(['cmd×' + f.imperative, f.imperative >= 3]);
+          if (f.planning_prose > 0) signals.push(['plan×' + f.planning_prose, false]);
+          if (f.autonomy > 0) signals.push(['auto ' + f.autonomy + 'x', f.autonomy >= 3]);
+          const sigsHtml = signals.map(function (p) {
+            return '<span class="ma-sig' + (p[1] ? ' ma-sig-hot' : '') + '">' + _maEsc(p[0]) + '</span>';
+          }).join('');
+          let verdict = '<span class="ma-verdict-ok">✓ ok</span>';
+          if (s.rec) {
+            const lbl = s.rec.action === 'downgrade' ? '⬇ downgrade' :
+                        s.rec.action === 'upgrade' ? '⬆ upgrade' : '◆ spawn';
+            verdict = '<span class="ma-verdict-drift">' + _maEsc(lbl) + ' → ' + _maEsc(s.rec.to_model) + '</span>';
+          } else if (score > 32 && score < 72) {
+            verdict = '<span class="ma-verdict-gray">~ gray zone</span>';
+          }
+          html += '<tr>' +
+            '<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + _maEsc(s.name || s.session_id) + '">' +
+            _maEsc((s.name || s.session_id || '').slice(0, 32)) + '</td>' +
+            '<td><span class="ma-badge ' + (s.current_model === 'opus' ? 'ma-up' : s.current_model === 'sonnet' ? 'ma-down' : '') + '">' +
+            _maEsc(_maModels[s.current_model] || s.current_model || '?') + '</span></td>' +
+            '<td style="white-space:nowrap;">' +
+            '<span class="ma-score-bar"><span class="ma-score-dot" style="left:' + dotPct + '%;color:' + scoreColor + ';"></span></span>' +
+            '<span style="color:' + scoreColor + ';font-size:11px;font-family:ui-monospace,Menlo,monospace;">' + Math.round(score) + '</span>' +
+            '<span style="font-size:10px;opacity:.5;margin-left:4px;">' + _maEsc(s.phase || '') + '</span></td>' +
+            '<td>' + (sigsHtml || '<span style="opacity:.35">—</span>') + '</td>' +
+            '<td>' + verdict + '</td>' +
+            '</tr>';
+        });
+        html += '</tbody></table>';
+        html += '<div style="font-size:10px;opacity:.35;margin-top:8px;text-align:right;">Pure heuristic · no model calls</div>';
+      }
     } else {
-      filteredLog.slice(0, 30).forEach(function (e) {
-        const from = _maModels[e.from_model] || e.from_model;
-        const to = _maModels[e.to_model] || e.to_model;
-        const tokDelta = Math.max(0, (e.current_out_tokens || 0) - (e.baseline_out_tokens || 0));
-        const tokStr = e.status === 'applied' && tokDelta >= 1000 ? ' · ' + _maTok(tokDelta) + ' tokens' : '';
-        html += '<div class="ma-log-row"><span class="ma-st ma-st-' + _maEsc(e.status) + '">' + _maEsc(e.status) + '</span>' +
-                '<span>' + _maEsc(e.name || (e.session_id || '').slice(0, 8)) + '</span>' +
-                '<span style="opacity:.6">' + _maEsc(from) + ' → ' + _maEsc(to) + tokStr + '</span>' +
-                '<span class="ma-spacer"></span></div>';
-      });
+      // Recent activity tab
+      if (!filteredLog.length) {
+        html += '<div class="ma-empty">No switches in this window.' +
+                '<div class="ma-empty-hint">Applied and dismissed recommendations appear here.</div></div>';
+      } else {
+        filteredLog.slice(0, 30).forEach(function (e) {
+          const from = _maModels[e.from_model] || e.from_model;
+          const to = _maModels[e.to_model] || e.to_model;
+          const tokDelta = Math.max(0, (e.current_out_tokens || 0) - (e.baseline_out_tokens || 0));
+          const tokStr = e.status === 'applied' && tokDelta >= 1000 ? ' · ' + _maTok(tokDelta) + ' tokens' : '';
+          html += '<div class="ma-log-row"><span class="ma-st ma-st-' + _maEsc(e.status) + '">' + _maEsc(e.status) + '</span>' +
+                  '<span>' + _maEsc(e.name || (e.session_id || '').slice(0, 8)) + '</span>' +
+                  '<span style="opacity:.6">' + _maEsc(from) + ' → ' + _maEsc(to) + tokStr + '</span>' +
+                  '<span class="ma-spacer"></span></div>';
+        });
+      }
     }
     html += '</div>';
 
     body.innerHTML = html;
+    body.querySelectorAll('[data-ma-tab]').forEach(function (b) {
+      b.addEventListener('click', function () { _maTab = b.dataset.maTab; _renderModelAdvisor(d); });
+    });
     body.querySelectorAll('[data-tf]').forEach(function (b) {
       b.addEventListener('click', function () { _maTimeframe = b.dataset.tf; _renderModelAdvisor(d); });
     });
