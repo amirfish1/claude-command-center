@@ -183,6 +183,12 @@ except ImportError:
     _WT_QUEUE_AVAILABLE = False
 # _q is the active queue engine — use it for all queue operations.
 _q = _wt_q if _WT_QUEUE_AVAILABLE else ux_fixes_queue
+try:
+    import watchtower.workers as _wt_workers
+    _WT_WORKERS_AVAILABLE = True
+except ImportError:
+    _wt_workers = None
+    _WT_WORKERS_AVAILABLE = False
 _queue_answer = _q.answer
 import objects_store  # durable server-side Flow object/parent/order state (GOAL-3/4)
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
@@ -1265,10 +1271,11 @@ def _get_session_override(session_id):
 
 def _set_session_override(session_id, model, context_1m, engine):
     overrides = _load_session_overrides()
+    engine = str(engine or "claude")
     overrides[session_id] = {
         "model": str(model),
-        "context_1m": bool(context_1m),
-        "engine": str(engine or "claude"),
+        "context_1m": _model_context_1m_allowed(model, context_1m, engine),
+        "engine": engine,
         "set_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     _save_session_overrides(overrides)
@@ -1298,6 +1305,15 @@ def _short_model_alias(model):
         if alias.endswith(tail):
             alias = alias[: -len(tail)]
     return alias.strip()
+
+
+def _claude_model_supports_1m(model):
+    alias = _short_model_alias(model).lower()
+    return alias in ("opus-4-8", "opus-4-7")
+
+
+def _model_context_1m_allowed(model, context_1m, engine="claude"):
+    return bool(context_1m) and str(engine or "claude") == "claude" and _claude_model_supports_1m(model)
 
 
 def _cli_model_flag(model):
@@ -1331,7 +1347,7 @@ def _build_slash_model_command(model, context_1m):
     alias = _short_model_alias(model)
     if not alias:
         return ""
-    if context_1m:
+    if _model_context_1m_allowed(model, context_1m, "claude"):
         return f"/model {alias}[1m]"
     return f"/model {alias}"
 
@@ -11961,6 +11977,7 @@ def build_model_advisor_report(persist=True):
     for sid, (_mt, path) in list(recent.items()):
         try:
             if not path:
+                continue
             turns = model_advisor.read_recent_turns(path)
             if not turns:
                 continue
@@ -41813,9 +41830,40 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _uxq_nudge_tick()
                     except Exception:
                         pass
-                self.send_json({"ok": True, "projects": health, "count": len(health)})
+                wt_workers = []
+                if _WT_WORKERS_AVAILABLE:
+                    try:
+                        rows = _wt_workers.list_workers(prune=False)
+                        live_rows = [r for r in rows if r.get("alive")]
+                        if live_rows:
+                            try:
+                                items = _q.list_items()
+                            except Exception:
+                                items = []
+                            _wt_workers.annotate_activity(live_rows, items)
+                        wt_workers = live_rows
+                    except Exception:
+                        pass
+                self.send_json({"ok": True, "projects": health, "count": len(health), "wt_workers": wt_workers})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/wt/workers":
+            # Live worker list from watchtower.workers — raw registry annotated
+            # with queue-item activity (active_ref, active_since_human).
+            if not _WT_WORKERS_AVAILABLE:
+                self.send_json({"ok": False, "error": "watchtower not available"})
+            else:
+                try:
+                    rows = _wt_workers.list_workers(prune=False)
+                    counts = _wt_workers.worker_counts(prune=False)
+                    try:
+                        items = _q.list_items()
+                    except Exception:
+                        items = []
+                    _wt_workers.annotate_activity(rows, items)
+                    self.send_json({"ok": True, "workers": rows, "counts": counts, "total": len(rows)})
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/telemetry/status":
             # Anonymous-telemetry opt-in state. Drives the dashboard bar:
             # only render when opt_in is null (never asked) AND not env-disabled.

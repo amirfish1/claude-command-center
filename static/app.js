@@ -27152,17 +27152,18 @@
   }
   // Per-project queue-health snapshot (GET /api/ux-fixes/health). Same cache
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
-  let _uxqHealthCache = { ts: 0, rows: [] };
+  let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [] };
   async function _fetchUxqHealth() {
-    if (Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache.rows;
+    if (Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache;
     try {
       const res = await fetch('/api/ux-fixes/health', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       const rows = Array.isArray(data && data.projects) ? data.projects
         : (Array.isArray(data) ? data : []);
-      _uxqHealthCache = { ts: Date.now(), rows };
+      const wt_workers = Array.isArray(data && data.wt_workers) ? data.wt_workers : [];
+      _uxqHealthCache = { ts: Date.now(), rows, wt_workers };
     } catch (_) { /* keep stale cache */ }
-    return _uxqHealthCache.rows;
+    return _uxqHealthCache;
   }
   // Compact human age: "now", "5m", "5h", "2d".
   function _uxqFmtAge(secs) {
@@ -27180,40 +27181,61 @@
     const $strip = document.getElementById('queueHealthStrip');
     if (!$strip) return;
     if (force) _uxqHealthCache.ts = 0;
-    let rows = await _fetchUxqHealth();
+    const health = await _fetchUxqHealth();
+    let rows = health.rows;
+    const wtWorkers = health.wt_workers || [];
     const proj = scopeProject !== undefined ? _uxqProjectKey(scopeProject) : _uxqWorkerProject();
     if (proj) {
       const mine = rows.filter(r => _uxqInScope(r && r.project, proj));
       if (mine.length) rows = mine;  // scope when this project has open work
     }
+    let html = '';
     if (!rows.length) {
-      $strip.innerHTML = '<div class="fq-health-clear">All queues clear</div>';
-      return;
+      html += '<div class="fq-health-clear">All queues clear</div>';
+    } else {
+      html += rows.map(r => {
+        const project = String(r.project || '?');
+        const depth = Number(r.depth) || 0;
+        const age = _uxqFmtAge(r.oldest_open_age_seconds);
+        const stuck = !!r.stuck;
+        const sid = r.fixer_session_id || '';
+        const canNudge = stuck && !!sid;
+        const badgeText = stuck ? 'STUCK' : 'LIVE';
+        const badgeTip = stuck
+          ? (canNudge ? 'stuck — click to nudge the worker' : 'stuck — no reachable worker')
+          : 'a worker is on it';
+        const badge = '<span class="fq-health-badge ' + (stuck ? 'is-stuck' : 'is-live')
+          + (canNudge ? ' is-nudgeable' : '') + '"'
+          + (canNudge ? ' role="button" tabindex="0" data-nudge-sid="' + escapeAttr(sid) + '"' : '')
+          + ' title="' + escapeAttr(badgeTip) + '">' + badgeText + '</span>';
+        return '<div class="fq-health-row" title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age) + '">'
+          + '<span class="fq-health-proj">' + escapeHtml(project) + '</span>'
+          + '<span class="fq-health-sep">·</span>'
+          + '<span class="fq-health-depth">' + depth + ' open</span>'
+          + '<span class="fq-health-sep">·</span>'
+          + '<span class="fq-health-age">oldest ' + escapeHtml(age) + '</span>'
+          + badge
+          + '</div>';
+      }).join('');
     }
-    $strip.innerHTML = rows.map(r => {
-      const project = String(r.project || '?');
-      const depth = Number(r.depth) || 0;
-      const age = _uxqFmtAge(r.oldest_open_age_seconds);
-      const stuck = !!r.stuck;
-      const sid = r.fixer_session_id || '';
-      const canNudge = stuck && !!sid;
-      const badgeText = stuck ? 'STUCK' : 'LIVE';
-      const badgeTip = stuck
-        ? (canNudge ? 'stuck — click to nudge the worker' : 'stuck — no reachable worker')
-        : 'a worker is on it';
-      const badge = '<span class="fq-health-badge ' + (stuck ? 'is-stuck' : 'is-live')
-        + (canNudge ? ' is-nudgeable' : '') + '"'
-        + (canNudge ? ' role="button" tabindex="0" data-nudge-sid="' + escapeAttr(sid) + '"' : '')
-        + ' title="' + escapeAttr(badgeTip) + '">' + badgeText + '</span>';
-      return '<div class="fq-health-row" title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age) + '">'
-        + '<span class="fq-health-proj">' + escapeHtml(project) + '</span>'
-        + '<span class="fq-health-sep">·</span>'
-        + '<span class="fq-health-depth">' + depth + ' open</span>'
-        + '<span class="fq-health-sep">·</span>'
-        + '<span class="fq-health-age">oldest ' + escapeHtml(age) + '</span>'
-        + badge
+    // Real WT workers strip — only shown when watchtower reports live workers.
+    if (wtWorkers.length) {
+      html += '<div class="fq-wt-workers">'
+        + wtWorkers.map(w => {
+          const wid = String(w.worker_id || '').slice(0, 20);
+          const queue = String(w.queue || '');
+          const ref = w.active_ref ? String(w.active_ref) : '';
+          const age = w.active_since_human ? String(w.active_since_human) : '';
+          const tip = queue + (ref ? ' · working ' + ref + (age ? ' for ' + age : '') : ' · idle');
+          return '<span class="fq-wt-worker" title="' + escapeAttr(tip) + '">'
+            + '<span class="fq-wt-worker-queue">' + escapeHtml(queue) + '</span>'
+            + '<span class="fq-wt-worker-id">' + escapeHtml(wid) + '</span>'
+            + (ref ? '<span class="fq-wt-worker-ref">' + escapeHtml(ref) + (age ? ' <span class="fq-wt-worker-age">' + escapeHtml(age) + '</span>' : '') + '</span>' : '<span class="fq-wt-worker-idle">idle</span>')
+            + '</span>';
+        }).join('')
         + '</div>';
-    }).join('');
+    }
+    $strip.innerHTML = html;
   }
   // Repo-basename → project code, mirroring ux_fixes_queue.py `_REPO_PROJECT`
   // / `_project_for` so the client can scope the Queue by the open session's
@@ -30525,6 +30547,11 @@
     return v === 1_000_000 || v === 200_000 ? v : 0;
   }
 
+  function claudeModelSupportsOneM(model) {
+    const n = _normalizeModelId(model);
+    return n === 'opus-4-8' || n === 'opus-4-7';
+  }
+
   // Context % for sidebar rows — mirrors the conv-pane usage pill math.
   function _convRowContextPct(c) {
     const engine = c.engine || 'claude';
@@ -30631,12 +30658,12 @@
     const liveNorm = _normalizeModelId(u.model || '');
     const queued = !!ovr && ovrNorm && ovrNorm !== liveNorm;
     if (displayModel) {
-      // 1M pill lights up when override.context_1m or peak provably exceeded
-      // 200k (only possible on the 1M variant). Non-Claude engines never
-      // show the 1M pill.
+      // 1M is model-specific. Sonnet remains a 200k model even if stale
+      // override/live-context state claims 1M.
+      const modelSupportsOneM = engine === 'claude' && claudeModelSupportsOneM(displayModel);
       const ovrIsOneM = !!(ovr && ovr.context_1m);
       const serverLimitIsOneM = Number(u.context_limit || 0) >= 1000000;
-      const isOneM = engine === 'claude' && (
+      const isOneM = modelSupportsOneM && (
         ovrIsOneM
         || serverLimitIsOneM
         || liveContextLimit >= 1000000
@@ -30815,16 +30842,16 @@
 
   // Curated per-engine model lists. Free-text "Other…" handles unreleased
   // models without a code change. The `oneM` flag controls whether the
-  // 1M-context toggle is offered for that model (Claude only — opus and
-  // sonnet support the 1M-context beta header; haiku does not).
+  // 1M-context toggle is offered for that model (Claude only — current 1M
+  // variants are Opus 4.7/4.8; Sonnet remains 200k).
   const MODEL_OPTIONS_BY_ENGINE = {
     claude: [
       { id: 'fable-5',    label: 'fable-5',    oneM: false },
-      { id: 'sonnet-4-8', label: 'sonnet-4-8', oneM: true },
+      { id: 'sonnet-4-8', label: 'sonnet-4-8', oneM: false },
       { id: 'opus-4-8',   label: 'opus-4-8',   oneM: true },
       { id: 'opus-4-7',   label: 'opus-4-7',   oneM: true },
-      { id: 'sonnet-4-7', label: 'sonnet-4-7', oneM: true },
-      { id: 'sonnet-4-6', label: 'sonnet-4-6', oneM: true },
+      { id: 'sonnet-4-7', label: 'sonnet-4-7', oneM: false },
+      { id: 'sonnet-4-6', label: 'sonnet-4-6', oneM: false },
       { id: 'haiku-4-8',  label: 'haiku-4-8',  oneM: false },
       { id: 'haiku-4-5',  label: 'haiku-4-5',  oneM: false },
     ],
