@@ -3590,6 +3590,9 @@
     // (>60s) should keep showing "Thinking…", not vanish. Real activity still
     // clears it sooner via clearOptimisticAgentIndicator.
     _armOptimisticAgentSafetyTimer($view, 600000);
+    // Immediately reflect thinking state in sidebar row without waiting for next poll.
+    const _sid = currentSession && currentSession.id;
+    if (_sid) markSessionSending(_sid);
   }
 
   function isCommandActivityTool(tool) {
@@ -20587,7 +20590,7 @@
       // stamped a definitive `state` (idle/waiting/working/ended), trust that
       // and drop the optimistic override. While `state` is still unknown
       // (brand-new send, server hasn't scanned yet) the bridge still applies.
-      const _isOptimisticallySending = sidVal && !c.state && sessionIsOptimisticallySending(sidVal);
+      const _isOptimisticallySending = sidVal && (!c.state || c.state === 'interactive') && sessionIsOptimisticallySending(sidVal);
       let _isAgentRunning = !!c.pending_spawn
         || _hasLivePendingTool
         || _codexOpenTurn
