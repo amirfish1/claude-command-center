@@ -1017,7 +1017,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _evergreenStateLabel = _isAgentRunning ? 'WIP'", app_js)
         self.assertIn("const evergreenMetaRowHtml = opts.evergreenAgent", app_js)
         self.assertIn("+ evergreenMetaRowHtml", app_js)
-        self.assertIn("const hoverMetaRowHtml = (!opts.evergreenAgent &&", app_js)
+        self.assertIn("const _hasMetaContent = !opts.evergreenAgent &&", app_js)
+        self.assertIn("const hoverMetaRowHtml = _hasMetaContent", app_js)
         self.assertNotIn("+ evergreenGoalHtml\n            + uxFixesQueueProgressHtml\n            + evergreenStateHtml", app_js)
         self.assertIn(".conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-title-row {", app_css)
         self.assertIn(".conv-evergreen-meta-row {", app_css)
@@ -1179,7 +1180,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("letter-spacing: 0;", current_css)
         self.assertIn(":root:not([data-theme=\"light\"]) .conv-current-sessions-scroll .conv-item .conv-title", app_css)
         self.assertIn("color: #f0f4fb;", app_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-extras { display: contents; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row {", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-outcome { display: none; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.is-brief-open .conv-outcome { display: block; }", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: block; }", current_css)
 
     def test_by_objects_search_results_show_row_previews(self):
@@ -1191,7 +1195,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _currentSessionsScrollClass = 'conv-current-sessions-scroll' + (_ipSearchActive ? ' is-search-results' : '');", app_js)
         self.assertIn("'<div class=\"' + _currentSessionsScrollClass + '\" data-role=\"current-sessions-scroll\">'", app_js)
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-extras { display: contents; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-extras > .conv-last,", current_css)
         self.assertIn(".conv-current-sessions-scroll.is-search-results .conv-item {", current_css)
         search_css = current_css[current_css.index(".conv-current-sessions-scroll.is-search-results .conv-item {"):]
         self.assertIn("padding: 8px 10px;", search_css)
@@ -1203,18 +1208,15 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item > :not(.conv-title-row) { display: none; }", current_css)
-        self.assertIn(".conv-item .conv-hover-extras { display: contents; }", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-extras { display: contents; }", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active:not(:hover):not(:focus-within) .conv-hover-extras > :not(.conv-hover-meta-row) { display: none; }", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] > .conv-hover-extras {", current_css)
-        self.assertIn("position: fixed;", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] > .conv-hover-extras > .conv-hover-meta-row {", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-extras { display: contents; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row {", current_css)
         self.assertIn("display: flex;", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] > .conv-hover-extras > .conv-outcome {\n    display: block;", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-meta-inline,", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-folder-chip,", current_css)
-        self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > .conv-hover-extras > .conv-outcome", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-meta-inline,", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-folder-chip,", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-outcome { display: none; }", current_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.is-brief-open .conv-outcome { display: block; }", current_css)
+        self.assertIn(".conv-brief-chevron {", current_css)
+        self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb]", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover:not(.active) > .conv-outcome", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within:not(.active) > .conv-outcome", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
@@ -1452,8 +1454,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("+ '<span>' + formatSize(c.size) + '</span>'", row_size_js)
         self.assertNotIn("sourceBadge", row_size_js)
         self.assertIn("const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;", app_js)
-        self.assertIn("const hoverMetaRowHtml = (!opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml))", app_js)
+        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);", app_js)
+        self.assertIn("const hoverMetaRowHtml = _hasMetaContent", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
+        self.assertIn("+ _briefChevronHtml", app_js)
         self.assertIn("+ _hmObjectChip\n          + _hmFolderChip", app_js)
         self.assertIn("+   hoverMetaRowHtml", app_js)
         row_start = app_js.index("+ '<div class=\"conv-main-row\">'")
@@ -1500,7 +1504,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("data-copy-row-session-id", app_js)
         self.assertIn("data-session-id-short", app_js)
         self.assertIn("const sessionIdChipHtml = sidebarSessionIdChipHtml(c);", app_js)
-        self.assertIn("const hoverMetaRowHtml = (!opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml", app_js)
+        self.assertIn("_hmObjectChip || _hmFolderChip || sessionIdChipHtml", app_js)
         self.assertIn("+ sessionIdChipHtml", app_js)
         self.assertIn("function handleSidebarSessionIdCopyClick(ev)", app_js)
         self.assertIn("document.addEventListener('click', handleSidebarSessionIdCopyClick, true);", app_js)
@@ -1520,7 +1524,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("+ _hmObjectChip\n          + _hmFolderChip", app_js)
         self.assertIn("Object &middot; ", app_js)
         self.assertIn(".conv-item .conv-hover-meta-row .conv-object-chip", app_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] .conv-hover-meta-row .conv-object-chip,", app_css)
+        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-object-chip,", app_css)
         self.assertIn(".conv-item.active .conv-hover-meta-row .conv-object-chip,", app_css)
 
     def test_sidebar_hover_metadata_empty_object_chip_opens_picker(self):
@@ -8622,7 +8626,7 @@ class TestModelPicker(unittest.TestCase):
         import server
         self.assertEqual(server._build_slash_model_command("opus-4-7", False), "/model opus-4-7")
         self.assertEqual(server._build_slash_model_command("opus-4-7", True), "/model opus-4-7[1m]")
-        self.assertEqual(server._build_slash_model_command("claude-sonnet-4-6", True), "/model sonnet-4-6[1m]")
+        self.assertEqual(server._build_slash_model_command("claude-sonnet-4-6", True), "/model sonnet-4-6")
         self.assertEqual(server._build_slash_model_command("", True), "")
 
     def test_session_override_roundtrip_through_sidecar(self):
@@ -8635,15 +8639,32 @@ class TestModelPicker(unittest.TestCase):
             server.SESSION_OVERRIDES_FILE = path
             try:
                 self.assertIsNone(server._get_session_override("sid-1"))
+                server._set_session_override("sid-1", "claude-opus-4-8", True, "claude")
+                got = server._get_session_override("sid-1")
+                self.assertEqual(got["model"], "claude-opus-4-8")
+                self.assertTrue(got["context_1m"])
                 server._set_session_override("sid-1", "claude-sonnet-4-6", True, "claude")
                 got = server._get_session_override("sid-1")
                 self.assertEqual(got["model"], "claude-sonnet-4-6")
-                self.assertTrue(got["context_1m"])
+                self.assertFalse(got["context_1m"])
                 self.assertEqual(got["engine"], "claude")
                 server._clear_session_override("sid-1")
                 self.assertIsNone(server._get_session_override("sid-1"))
             finally:
                 server.SESSION_OVERRIDES_FILE = orig
+
+    def test_sonnet_is_not_marked_as_one_m_context_in_model_picker(self):
+        """Sonnet is a 200k-context model; only Opus variants get the 1M badge."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+
+        self.assertIn("function claudeModelSupportsOneM(model)", js)
+        self.assertIn("return n === 'opus-4-8' || n === 'opus-4-7';", js)
+        self.assertIn("const modelSupportsOneM = engine === 'claude' && claudeModelSupportsOneM(displayModel);", js)
+        self.assertIn("const isOneM = modelSupportsOneM && (", js)
+        self.assertIn("{ id: 'sonnet-4-8', label: 'sonnet-4-8', oneM: false }", js)
+        self.assertIn("{ id: 'sonnet-4-7', label: 'sonnet-4-7', oneM: false }", js)
+        self.assertIn("{ id: 'sonnet-4-6', label: 'sonnet-4-6', oneM: false }", js)
+        self.assertNotIn("{ id: 'sonnet-4-6', label: 'sonnet-4-6', oneM: true }", js)
 
     def test_pinned_conversations_roundtrip_and_sort_first(self):
         for mod in ("server",):
