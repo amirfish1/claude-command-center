@@ -615,7 +615,7 @@
           _maLast = d; _maLastScan = Date.now();
           _renderModelAdvisor(d); _updateAdvisorPill(d);
           const lc = document.getElementById('maLastChecked');
-          if (lc) lc.textContent = 'checked just now';
+          if (lc) lc.textContent = d.scanned_at ? 'scanned at ' + d.scanned_at : 'checked just now';
         }
       })
       .catch(function () {});
@@ -722,8 +722,9 @@
     // Tabs: Sessions Scanned / Recent Activity
     const scanned = d.scanned || [];
     html += '<div>';
+    const scannedAt = d.scanned_at ? ' · ' + d.scanned_at : '';
     html += '<div class="ma-tabs">' +
-            '<button class="ma-tab' + (_maTab === 'scanned' ? ' active' : '') + '" data-ma-tab="scanned">Sessions scanned (' + scanned.length + ')</button>' +
+            '<button class="ma-tab' + (_maTab === 'scanned' ? ' active' : '') + '" data-ma-tab="scanned">Sessions scanned (' + scanned.length + ')' + _maEsc(scannedAt) + '</button>' +
             '<button class="ma-tab' + (_maTab === 'activity' ? ' active' : '') + '" data-ma-tab="activity">Recent activity</button>' +
             '</div>';
 
