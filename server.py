@@ -41911,6 +41911,18 @@ def _load_index_html():
 HTML_PAGE = _load_index_html()
 
 
+# Voice-focus signal: a tiny remote-focus channel. An external controller (e.g. the
+# ccc-voice operator) POSTs the session it wants the dashboard to open; the browser
+# polls and selects that session. In-memory only (process-lifetime), O(1).
+_VOICE_FOCUS = {"session_id": None, "ts": 0.0}
+
+
+def _set_voice_focus(session_id: str) -> dict:
+    _VOICE_FOCUS["session_id"] = session_id or None
+    _VOICE_FOCUS["ts"] = time.time()
+    return dict(_VOICE_FOCUS)
+
+
 class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
     def _is_morning_path(self, path):
         """True if the request targets the (opt-in) Morning sub-feature."""
@@ -41935,6 +41947,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if path == "" or path == "/":
             # Re-read on every request so edits to static/index.html are live.
             self.send_html(_load_index_html())
+        elif path == "/api/voice-focus":
+            # Current remote-focus target (set via POST). O(1) in-memory poll.
+            self.send_json(dict(_VOICE_FOCUS))
         elif path == "/api/attention":
             qs = urllib.parse.parse_qs(parsed.query)
             include_all = qs.get("all", ["0"])[0] in ("1", "true")
@@ -43657,6 +43672,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "error": "Morning view is disabled. Set CCC_ENABLE_MORNING=1 to enable."
             }, 404)
+            return
+
+        if path == "/api/voice-focus":
+            # External controller (ccc-voice) asks the dashboard to open a session.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                sid = (data.get("session_id") or "").strip()
+                self.send_json({"ok": True, **_set_voice_focus(sid)})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 400)
             return
 
         if path == "/api/client-log":
