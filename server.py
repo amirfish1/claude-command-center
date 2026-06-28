@@ -6715,7 +6715,7 @@ def _find_annotation_ux_queue_session(queue_name=ANNOTATION_UX_FIXES_QUEUE_NAME)
 
 
 def enqueue_annotation_ux_fixes_queue(
-    text, queue_name=ANNOTATION_UX_FIXES_QUEUE_NAME, engine="claude", meta=None, inject=False
+    text, queue_name=ANNOTATION_UX_FIXES_QUEUE_NAME, engine="claude", meta=None, inject=False, project=""
 ):
     """Append annotation context to the durable, numbered UX-fixes queue.
 
@@ -6754,6 +6754,7 @@ def enqueue_annotation_ux_fixes_queue(
             screenshot_path=str(meta.get("screenshot_path") or ""),
             repo_path=_repo_path,
             lane=str(meta.get("lane") or "normal"),
+            project=str(project or meta.get("project") or ""),
         )
     except Exception as e:  # never lose a capture to a queue error
         item = None
@@ -43800,6 +43801,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 engine=engine,
                 meta=meta,
                 inject=bool(payload.get("inject")),
+            )
+            status = int(result.pop("status", 200 if result.get("ok") else 500))
+            self.send_json(result, status)
+            return
+        if path == "/api/annotations/throughput-queue":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            meta = {
+                "note": payload.get("note") or "",
+                "url": payload.get("url") or "",
+                "title": payload.get("title") or "",
+                "source": "throughput-ui",
+                "project": "THROUGHPUT",
+            }
+            result = enqueue_annotation_ux_fixes_queue(
+                payload.get("text") or payload.get("note") or "",
+                meta=meta,
+                project="THROUGHPUT",
             )
             status = int(result.pop("status", 200 if result.get("ok") else 500))
             self.send_json(result, status)

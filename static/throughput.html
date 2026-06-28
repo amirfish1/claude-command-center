@@ -743,6 +743,23 @@
       <button class="btn btn-primary" onclick="loadSessions()">
         <span>🔄</span> Refresh Sessions
       </button>
+      <button class="btn" id="annotate-btn" onclick="openAnnotate()" title="File a bug or note to the THROUGHPUT queue">
+        <span>📝</span> Annotate
+      </button>
+    </div>
+  </div>
+
+  <!-- Annotate modal -->
+  <div id="annotate-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9000;align-items:center;justify-content:center;">
+    <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:24px;width:min(480px,90vw);display:flex;flex-direction:column;gap:14px;">
+      <div style="font-weight:600;font-size:14px;color:var(--text);">File issue to THROUGHPUT queue</div>
+      <textarea id="annotate-note" rows="4" placeholder="Describe the issue…"
+        style="background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-ui);font-size:13px;padding:10px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button class="btn" onclick="closeAnnotate()">Cancel</button>
+        <button class="btn btn-primary" id="annotate-submit-btn" onclick="submitAnnotate()">File</button>
+      </div>
+      <div id="annotate-feedback" style="font-size:12px;color:var(--text-muted);min-height:16px;"></div>
     </div>
   </div>
 
@@ -1549,6 +1566,50 @@
         banner.style.display = 'flex';
       } catch (e) { /* best effort — banner just stays hidden */ }
     }
+
+    // Annotate
+    function openAnnotate() {
+      const overlay = document.getElementById('annotate-overlay');
+      overlay.style.display = 'flex';
+      document.getElementById('annotate-note').focus();
+      document.getElementById('annotate-feedback').textContent = '';
+    }
+    function closeAnnotate() {
+      document.getElementById('annotate-overlay').style.display = 'none';
+    }
+    async function submitAnnotate() {
+      const note = document.getElementById('annotate-note').value.trim();
+      if (!note) return;
+      const btn = document.getElementById('annotate-submit-btn');
+      btn.disabled = true;
+      btn.textContent = 'Filing…';
+      try {
+        const res = await fetch('/api/annotations/throughput-queue', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ note, text: note, url: location.href, title: document.title }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          document.getElementById('annotate-feedback').textContent = `Filed: THROUGHPUT-${data.number}`;
+          document.getElementById('annotate-note').value = '';
+          setTimeout(closeAnnotate, 1200);
+        } else {
+          document.getElementById('annotate-feedback').textContent = `Error: ${data.error || 'unknown'}`;
+        }
+      } catch (e) {
+        document.getElementById('annotate-feedback').textContent = `Error: ${e.message}`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'File';
+      }
+    }
+    document.getElementById('annotate-overlay').addEventListener('click', function(e) {
+      if (e.target === this) closeAnnotate();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') closeAnnotate();
+    });
 
     // Boot
     loadSessions();
