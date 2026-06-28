@@ -1165,16 +1165,20 @@
       document.getElementById('val-out-tps').textContent =
         `${summary.avg_output_tps.toFixed(1)} tokens / sec · cache hit ${Math.round((summary.cache_hit_ratio || 0) * 100)}%`;
       
-      // Draw chart. Aggregate ranges use hourly buckets; individual sessions
-      // use per-turn points. Wide aggregate ranges (7d / all time) use DAILY
-      // buckets — hourly is far too crowded across a week (~168 points).
+      // Draw chart. Aggregate ranges use hourly buckets; per-session views
+      // also use summary.hourly (more readable than one bar per turn).
+      // Wide aggregate ranges (7d / all time) use DAILY buckets.
       const sid = (session.session_id || '');
-      const bucketMode = (isAggregate && (sid === 'all_7_days' || sid === 'all' || sid === 'all_time'))
-        ? 'daily' : 'hourly';
+      const isWide = isAggregate && (sid === 'all_7_days' || sid === 'all' || sid === 'all_time');
+      const bucketMode = isWide ? 'daily' : 'hourly';
+      // Per-session: use hourly buckets if the server returned them (they always do).
+      // Treat as aggregate for charting purposes so the same bucket field names apply.
+      const hasHourly = !isAggregate && summary && summary.hourly && summary.hourly.length > 0;
+      const chartIsAggregate = isAggregate || hasHourly;
       // Cache the rendered state so a window resize can redraw the chart from
       // memory instead of re-fetching + re-parsing the whole range.
-      lastRender = { turns: data.turns, summary, isAggregate, bucketMode };
-      drawChart(data.turns, summary, isAggregate, bucketMode);
+      lastRender = { turns: data.turns, summary, isAggregate: chartIsAggregate, bucketMode, showCumulative: hasHourly };
+      drawChart(data.turns, summary, chartIsAggregate, bucketMode, hasHourly);
 
       // Model comparison table
       renderModelBreakdown(summary.per_model || []);
@@ -1236,7 +1240,7 @@
       return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
     }
 
-    function drawChart(turns, summary, isAggregate = false, bucketMode = 'hourly') {
+    function drawChart(turns, summary, isAggregate = false, bucketMode = 'hourly', showCumulative = false) {
       const svg = document.getElementById('throughput-chart');
       if (!svg) return;
       svg.innerHTML = '';
@@ -1256,8 +1260,8 @@
       // Get container width
       const width = svg.clientWidth || 800;
       const height = svg.clientHeight || 300;
-      // Extra right padding when the secondary axis label needs room.
-      const rightPad = showWeeklyOverlay ? 52 : 30;
+      // Extra right padding when either secondary axis needs room.
+      const rightPad = (showWeeklyOverlay || showCumulative) ? 52 : 30;
       const padding = { top: 20, right: rightPad, bottom: 40, left: 60 };
 
       const buckets = isAggregate
@@ -1554,6 +1558,63 @@
           svg.appendChild(axisLabel);
         }
       }
+
+      // ── Cumulative tokens line (per-session hourly view) ──────────────────
+      if (showCumulative && sourceRows.length > 1) {
+        let running = 0;
+        const cumTokens = sourceRows.map(row => {
+          running += (row.total_tokens || row.input_tokens || 0) +
+                     (row.output_tokens || 0) +
+                     (row.cache_read_tokens || 0) +
+                     (row.cache_write_tokens || 0);
+          return running;
+        });
+        const maxCum = cumTokens[cumTokens.length - 1] || 1;
+        const yCum = v => padding.top + (chartH * (1 - v / maxCum));
+
+        // Faint gridlines at 25/50/75/100%.
+        [0.25, 0.5, 0.75, 1].forEach(f => {
+          const y = yCum(maxCum * f);
+          const gl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          gl.setAttribute('x1', padding.left); gl.setAttribute('x2', width - padding.right);
+          gl.setAttribute('y1', y); gl.setAttribute('y2', y);
+          gl.setAttribute('stroke', 'rgba(71,166,255,0.12)'); gl.setAttribute('stroke-dasharray', '3,4');
+          svg.appendChild(gl);
+          const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          lbl.setAttribute('x', width - padding.right + 4);
+          lbl.setAttribute('y', y + 3);
+          lbl.setAttribute('fill', '#47a6ff'); lbl.setAttribute('font-size', '8px');
+          lbl.setAttribute('font-family', 'var(--font-mono)');
+          lbl.textContent = fmtNum(Math.round(maxCum * f));
+          svg.appendChild(lbl);
+        });
+
+        // Line path.
+        const cumPath = cumTokens.map((v, idx) => {
+          const x = xScale(idx + 1);
+          const y = yCum(v);
+          return `${idx === 0 ? 'M' : 'L'}${x},${y}`;
+        }).join(' ');
+        const cumLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        cumLine.setAttribute('d', cumPath);
+        cumLine.setAttribute('fill', 'none');
+        cumLine.setAttribute('stroke', '#47a6ff');
+        cumLine.setAttribute('stroke-width', '1.8');
+        cumLine.setAttribute('stroke-dasharray', '5,3');
+        cumLine.setAttribute('opacity', '0.8');
+        svg.appendChild(cumLine);
+
+        // Axis header.
+        const cumLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        cumLabel.setAttribute('x', width - padding.right + 4);
+        cumLabel.setAttribute('y', padding.top - 4);
+        cumLabel.setAttribute('fill', '#47a6ff');
+        cumLabel.setAttribute('font-size', '9px');
+        cumLabel.setAttribute('text-anchor', 'start');
+        cumLabel.setAttribute('font-family', 'var(--font-mono)');
+        cumLabel.textContent = 'cumulative';
+        svg.appendChild(cumLabel);
+      }
     }
 
     // Tooltip Helpers
@@ -1675,7 +1736,7 @@
       if (!lastRender) return;
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        drawChart(lastRender.turns, lastRender.summary, lastRender.isAggregate, lastRender.bucketMode);
+        drawChart(lastRender.turns, lastRender.summary, lastRender.isAggregate, lastRender.bucketMode, lastRender.showCumulative);
       }, 200);
     });
 
@@ -1781,7 +1842,12 @@
     function _pickerClick(e) {
       e.preventDefault();
       e.stopPropagation();
-      const el = _annotatePickerTarget;
+      // Use elementFromPoint at click coords directly — more reliable than
+      // the mousemove-cached _annotatePickerTarget which can be stale or null.
+      const pickerEl = document.getElementById('annotate-picker-overlay');
+      pickerEl.style.display = 'none';
+      const el = document.elementFromPoint(e.clientX, e.clientY) || _annotatePickerTarget;
+      pickerEl.style.display = 'block';
       stopAnnotatePicker();
       if (!el) return;
       _annotatePickedSelector = _cssSelectorFor(el);
