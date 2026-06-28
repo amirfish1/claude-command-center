@@ -198,6 +198,73 @@ try:
 except ImportError:
     _wt_config = None
     _WT_CONFIG_AVAILABLE = False
+
+
+# WatchTower stores its state as plain JSON under ~/.watchtower. CCC is
+# stdlib-only at runtime (no pip deps), and `import watchtower` is NOT available
+# in the deployed server — so rather than depend on the import, read those files
+# DIRECTLY. This is how the dashboard gets durable queue config (drain state)
+# and live worker records (with their cloud session UUID) regardless of whether
+# the watchtower package is importable. Cheap: two small JSON reads.
+_WT_HOME = Path(os.environ.get("WATCHTOWER_HOME") or (Path.home() / ".watchtower"))
+
+
+def _wt_config_path():
+    return Path(os.environ.get("WATCHTOWER_CONFIG_FILE")
+                or (_WT_HOME / "queue-config.json"))
+
+
+def _wt_workers_path():
+    return Path(os.environ.get("WATCHTOWER_WORKERS_FILE")
+                or (_WT_HOME / "workers.json"))
+
+
+def _wt_read_config():
+    """{queue: {auto_drain, repo_path, ...}} read straight from queue-config.json.
+    Empty dict if the file is absent/unreadable. No watchtower import needed."""
+    try:
+        with open(_wt_config_path()) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _wt_read_workers():
+    """Live WatchTower worker records read straight from workers.json.
+
+    Each row is annotated with ``alive`` (os.kill liveness) and carries the
+    fields WatchTower persists, notably ``queue`` and ``session_id`` (the cloud
+    UUID, backfilled by WT) so the dashboard can link a worker to its session.
+    Only live workers are returned. No watchtower import needed."""
+    try:
+        with open(_wt_workers_path()) as f:
+            data = json.load(f)
+        rows = data.get("workers", []) if isinstance(data, dict) else []
+    except (OSError, ValueError):
+        return []
+    out = []
+    for w in rows:
+        if not isinstance(w, dict):
+            continue
+        pid = int(w.get("pid", 0) or 0)
+        alive = False
+        if pid:
+            try:
+                os.kill(pid, 0)
+                alive = True
+            except ProcessLookupError:
+                alive = False
+            except PermissionError:
+                alive = True
+            except OSError:
+                alive = False
+        if not alive:
+            continue
+        row = dict(w)
+        row["alive"] = True
+        out.append(row)
+    return out
 _queue_answer = _q.answer
 import objects_store  # durable server-side Flow object/parent/order state (GOAL-3/4)
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
@@ -20248,13 +20315,13 @@ def compute_queues_health(health=None, wt_workers=None):
         worker_counts[q] = worker_counts.get(q, 0) + 1
 
     # Durable configured-queue list keyed by normalized name → auto_drain.
+    # Read the config file directly (no watchtower import dependency).
     cfg_drain = {}
-    if _WT_CONFIG_AVAILABLE:
-        try:
-            for name, conf in (_wt_config.all_queues() or {}).items():
-                cfg_drain[_norm(name)] = bool((conf or {}).get("auto_drain", False))
-        except Exception:
-            cfg_drain = {}
+    try:
+        for name, conf in (_wt_read_config() or {}).items():
+            cfg_drain[_norm(name)] = bool((conf or {}).get("auto_drain", False))
+    except Exception:
+        cfg_drain = {}
 
     health_by_q = {_norm(r.get("project")): r for r in (health or [])}
 
@@ -41878,20 +41945,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # stuck project with no resolvable fixer is reported, never spawned.
             try:
                 health = compute_ux_fixes_health()
+                # Live WT workers, read straight from workers.json (no watchtower
+                # import dependency). Carries each worker's cloud session UUID so
+                # the dashboard can link a worker row to its conversation.
                 wt_workers = []
-                if _WT_WORKERS_AVAILABLE:
-                    try:
-                        rows = _wt_workers.list_workers(prune=False)
-                        live_rows = [r for r in rows if r.get("alive")]
-                        if live_rows:
-                            try:
-                                items = _q.list_items()
-                            except Exception:
-                                items = []
-                            _wt_workers.annotate_activity(live_rows, items)
-                        wt_workers = live_rows
-                    except Exception:
-                        pass
+                try:
+                    wt_workers = _wt_read_workers()
+                except Exception:
+                    wt_workers = []
                 # Per-queue rollup (durable) for the dashboard's Evergreen
                 # section: depth + live worker count + drain state + status.
                 try:
@@ -41903,22 +41964,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/wt/workers":
-            # Live worker list from watchtower.workers — raw registry annotated
-            # with queue-item activity (active_ref, active_since_human).
-            if not _WT_WORKERS_AVAILABLE:
-                self.send_json({"ok": False, "error": "watchtower not available"})
-            else:
-                try:
-                    rows = _wt_workers.list_workers(prune=False)
-                    counts = _wt_workers.worker_counts(prune=False)
-                    try:
-                        items = _q.list_items()
-                    except Exception:
-                        items = []
-                    _wt_workers.annotate_activity(rows, items)
-                    self.send_json({"ok": True, "workers": rows, "counts": counts, "total": len(rows)})
-                except Exception as e:
-                    self.send_json({"ok": False, "error": str(e)}, 500)
+            # Live worker list read straight from workers.json (no watchtower
+            # import dependency). Each row carries queue + cloud session_id.
+            try:
+                rows = _wt_read_workers()
+                counts = {}
+                for w in rows:
+                    q = str(w.get("queue") or "")
+                    c = counts.setdefault(q, {"total": 0, "live": 0})
+                    c["total"] += 1
+                    c["live"] += 1
+                self.send_json({"ok": True, "workers": rows, "counts": counts,
+                                "total": len(rows)})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/telemetry/status":
             # Anonymous-telemetry opt-in state. Drives the dashboard bar:
             # only render when opt_in is null (never asked) AND not env-disabled.
