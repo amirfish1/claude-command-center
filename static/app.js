@@ -43845,33 +43845,31 @@
     setTimeout(checkOnboarding, 1000);
   }
 
-  // Hover-brief tooltip: position:fixed tooltip to the right of the panel.
+  // Hover-brief tooltip: position:fixed tooltip at the cursor position.
   // JS sets --hb-x/--hb-y + data-hb on the hovered row; CSS renders the
-  // tooltip. Avoids reflow (no row skipping) and keeps session titles visible.
+  // bordered card. Works for both active and inactive rows.
   (function _initHoverBrief() {
     let _hbItem = null;
     let _hbTimer = null;
 
-    const _hbPos = (item) => {
-      const scroll = item.closest('.conv-current-sessions-scroll');
-      const sr = scroll ? scroll.getBoundingClientRect() : null;
-      const ir = item.getBoundingClientRect();
+    const _hbPos = (item, e) => {
       const W = window.innerWidth;
-      const TOOLTIP_W = 300; // width + border + padding
-      let x = sr ? (sr.right + 10) : (ir.right + 10);
-      if (x + TOOLTIP_W > W - 8) x = Math.max(8, (sr ? sr.left : ir.left) - TOOLTIP_W - 10);
-      if (x < 8) x = 8;
-      let y = ir.top;
-      if (y + 120 > window.innerHeight) y = Math.max(8, window.innerHeight - 130);
+      const H = window.innerHeight;
+      const TOOLTIP_W = 300;
+      const TOOLTIP_H = 130;
+      let x = e.clientX;
+      let y = e.clientY;
+      if (x + TOOLTIP_W > W - 8) x = Math.max(8, W - TOOLTIP_W - 8);
+      if (y + TOOLTIP_H > H - 8) y = Math.max(8, H - TOOLTIP_H - 8);
       item.style.setProperty('--hb-x', x + 'px');
       item.style.setProperty('--hb-y', y + 'px');
     };
 
-    const _hbShow = (item) => {
+    const _hbShow = (item, e) => {
       clearTimeout(_hbTimer);
       if (_hbItem && _hbItem !== item) _hbItem.removeAttribute('data-hb');
       _hbItem = item;
-      _hbPos(item);
+      _hbPos(item, e);
       item.setAttribute('data-hb', '1');
     };
 
@@ -43881,20 +43879,23 @@
       }, 80);
     };
 
+    const _hbSelector = '.conv-current-sessions-scroll:not(.is-search-results) .conv-item';
+
     document.addEventListener('mouseover', (e) => {
-      const item = e.target.closest(
-        '.conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active)'
-      );
-      if (item) { _hbShow(item); return; }
-      // Cursor moved into the fixed tooltip — keep it visible
-      if (_hbItem && _hbItem.querySelector('.conv-hover-extras') &&
-          e.target.closest && e.target === _hbItem.querySelector('.conv-hover-extras') ||
-          (_hbItem && _hbItem.querySelector('.conv-hover-extras') &&
-           _hbItem.querySelector('.conv-hover-extras').contains(e.target))) {
-        clearTimeout(_hbTimer);
-        return;
+      const item = e.target.closest(_hbSelector);
+      if (item) { _hbShow(item, e); return; }
+      // Cursor moved into the fixed tooltip (position:fixed child) — keep visible
+      if (_hbItem) {
+        const extras = _hbItem.querySelector('.conv-hover-extras');
+        if (extras && extras.contains(e.target)) { clearTimeout(_hbTimer); return; }
       }
       _hbHide();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!_hbItem) return;
+      const item = e.target.closest(_hbSelector);
+      if (item && item === _hbItem) _hbPos(_hbItem, e);
     });
   }());
 })();

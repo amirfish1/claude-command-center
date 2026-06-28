@@ -4186,8 +4186,8 @@
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active:not(:hover):not(:focus-within) .conv-hover-extras > :not(.conv-hover-meta-row) { display: none; }
   /* Tooltip-style hover brief: JS sets data-hb + --hb-x/--hb-y on the row.
      position:fixed escapes the scroll container so no reflow, no cursor skip.
-     Tooltip appears to the right of the panel so session titles stay visible. */
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active)[data-hb] > .conv-hover-extras {
+     Top-left corner = cursor position. Works for active and inactive rows. */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] > .conv-hover-extras {
     display: block;
     position: fixed;
     top: var(--hb-y, 0px);
@@ -4201,13 +4201,13 @@
     border-radius: 6px;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
   }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active)[data-hb] > .conv-hover-extras > .conv-hover-meta-row {
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] > .conv-hover-extras > .conv-hover-meta-row {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
     margin: 0 0 4px 0;
   }
-  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:not(.active)[data-hb] > .conv-hover-extras > .conv-outcome {
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb] > .conv-hover-extras > .conv-outcome {
     display: block;
   }
   /* Chip reveal inside the data-hb tooltip (mirrors the :hover rule above). */
