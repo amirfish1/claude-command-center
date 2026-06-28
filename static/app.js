@@ -21917,6 +21917,16 @@
           }
         });
       });
+      // Also exclude EVERY session that was ever a WatchTower worker, from the
+      // persistent ledger (survives WT pruning, served as worker_session_ids on
+      // /api/ux-fixes/health). A reaped worker leaves a dead "worker" session
+      // behind; this hides those from Current sessions regardless of liveness.
+      // Data-driven (session_id ledger), never name-based. They remain reachable
+      // via search/all and can still render live in TRIGGERED WORKERS above.
+      try {
+        ((_uxqHealthCache && _uxqHealthCache.worker_session_ids) || [])
+          .forEach((sid) => { if (sid) _evergreenSessionIds.add(String(sid)); });
+      } catch (_) {}
       // Minimal fallback when a worker's session isn't in the loaded list.
       const _twFallbackRow = (w) => {
         const wid = String((w && w.worker_id) || 'worker');
@@ -27258,7 +27268,7 @@
   }
   // Per-project queue-health snapshot (GET /api/ux-fixes/health). Same cache
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
-  let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [] };
+  let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [] };
   async function _fetchUxqHealth() {
     if (Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache;
     try {
@@ -27268,7 +27278,12 @@
         : (Array.isArray(data) ? data : []);
       const wt_workers = Array.isArray(data && data.wt_workers) ? data.wt_workers : [];
       const queues = Array.isArray(data && data.queues) ? data.queues : [];
-      _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues };
+      // Persistent ledger of every session that was ever a WT worker (survives
+      // pruning). Unioned into the Current-sessions exclusion set so reaped
+      // workers don't linger in that list.
+      const worker_session_ids = Array.isArray(data && data.worker_session_ids)
+        ? data.worker_session_ids : [];
+      _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues, worker_session_ids };
     } catch (_) { /* keep stale cache */ }
     return _uxqHealthCache;
   }

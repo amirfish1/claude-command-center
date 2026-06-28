@@ -276,6 +276,32 @@ def _wt_read_workers():
                 pass
         out.append(row)
     return out
+
+
+def _wt_worker_sessions_path():
+    return Path(os.environ.get("WATCHTOWER_WORKER_SESSIONS_FILE")
+                or (_WT_HOME / "worker-sessions.json"))
+
+
+def _wt_read_worker_session_ids():
+    """Persistent set of every cloud session_id that was EVER a WT worker.
+
+    Read straight from worker-sessions.json (WatchTower's append-only ledger that
+    survives worker pruning). CCC uses this to hide past/present worker sessions
+    from the Current-sessions list -- a reaped worker leaves a dead session
+    behind. Returns a list of session_ids; empty list if absent/unreadable. No
+    watchtower import needed."""
+    try:
+        with open(_wt_worker_sessions_path()) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    ids = data.get("session_ids")
+    if not isinstance(ids, list):
+        return []
+    return [str(s) for s in ids if isinstance(s, str)]
 _queue_answer = _q.answer
 import objects_store  # durable server-side Flow object/parent/order state (GOAL-3/4)
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
@@ -42021,8 +42047,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     queues = compute_queues_health(health, wt_workers)
                 except Exception:
                     queues = []
+                # Persistent ledger of every cloud session_id that was ever a WT
+                # worker (survives pruning). The client unions these into the
+                # Current-sessions exclusion set so reaped workers don't linger.
+                try:
+                    worker_session_ids = _wt_read_worker_session_ids()
+                except Exception:
+                    worker_session_ids = []
                 self.send_json({"ok": True, "projects": health, "count": len(health),
-                                "wt_workers": wt_workers, "queues": queues})
+                                "wt_workers": wt_workers, "queues": queues,
+                                "worker_session_ids": worker_session_ids})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/wt/workers":
