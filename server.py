@@ -39813,6 +39813,8 @@ def _throughput_scope(session_id, range_key=None):
         return is_all, local_midnight.timestamp(), "Today"
     if sid == "all_7_days" or rk in ("7d", "week", "last_7_days"):
         return is_all, now - 7 * 86400, "Last 7 days"
+    if sid == "all_56_days":
+        return True, now - 56 * 86400, "Last 56 days"
     if sid in ("all", "all_time"):
         return True, None, "All time"
     return False, None, "Session"
@@ -42360,6 +42362,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 range_key=range_key,
             )
             self.send_json(payload, status)
+            return
+        elif path == "/api/throughput/history":
+            # 56-day daily aggregates for the week-over-week history chart.
+            # Returns just the daily buckets (no hourly, no per-session list)
+            # so the response is lighter even on cold start.
+            try:
+                payload, status = _throughput_payload("all_56_days")
+                if status != 200:
+                    self.send_json(payload, status)
+                    return
+                daily = (payload.get("summary") or {}).get("daily") or []
+                self.send_json({"ok": True, "daily": daily}, 200)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e), "daily": []}, 200)
             return
         elif path == "/api/throughput/week-rankings":
             # Per-session token contribution for the current weekly period,

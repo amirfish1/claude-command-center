@@ -940,6 +940,14 @@
           <!-- Model rows populated by JS -->
         </div>
 
+        <!-- Weekly history bar chart (aggregate only, lazy-loaded) -->
+        <div id="weekly-history-section" style="display:none">
+          <div class="section-title"><span>📅</span> Week over Week</div>
+          <div id="weekly-history-chart" style="min-height:120px;position:relative;">
+            <span id="weekly-history-loading" style="color:#64748b;font-size:12px;padding:8px 0;display:block;">Loading history…</span>
+          </div>
+        </div>
+
         <!-- Top sessions table (aggregate only) -->
         <div id="top-sessions-section" style="display:none">
           <div class="section-title"><span>🏆</span> Top Sessions This Week</div>
@@ -1380,6 +1388,11 @@
       // Model comparison table
       renderModelBreakdown(summary.per_model || []);
 
+      // Weekly history chart (aggregate only, lazy-loaded)
+      const histSection = document.getElementById('weekly-history-section');
+      if (histSection) histSection.style.display = isAggregate ? '' : 'none';
+      if (isAggregate) loadWeeklyHistory();
+
       // Top sessions table (aggregate only)
       const topSessSection = document.getElementById('top-sessions-section');
       if (topSessSection) topSessSection.style.display = isAggregate ? '' : 'none';
@@ -1391,6 +1404,160 @@
       if (!isAggregate) {
         renderTurnsList(data.turns, isAggregate, (data.scope && data.scope.total_turns) || data.turns.length);
       }
+    }
+
+    // ── Weekly history chart ───────────────────────────────────────────────
+    let _weeklyHistoryData = null;   // cached so resize can redraw without re-fetch
+
+    async function loadWeeklyHistory() {
+      if (_weeklyHistoryData) { drawWeeklyHistory(_weeklyHistoryData); return; }
+      try {
+        const res = await fetch('/api/throughput/history');
+        if (!res.ok) return;
+        const d = await res.json();
+        if (!d.ok || !d.daily || !d.daily.length) return;
+        _weeklyHistoryData = d.daily;
+        drawWeeklyHistory(d.daily);
+      } catch (e) {
+        const el = document.getElementById('weekly-history-loading');
+        if (el) el.textContent = 'History unavailable.';
+      }
+    }
+
+    function drawWeeklyHistory(daily) {
+      const container = document.getElementById('weekly-history-chart');
+      if (!container) return;
+      const ppt = weeklyData && weeklyData.pct_per_token;
+      const resetAt = weeklyData && weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
+      if (!ppt || !resetAt) { return; }
+
+      // Group daily rows into 7-day billing-period buckets.
+      // Use LOCAL calendar dates (midnight) so Jun 26 = first day of current
+      // billing period even though resetAt is technically Jun 25 23:59:59 PDT.
+      const resetMidnight = new Date(resetAt);
+      resetMidnight.setHours(0, 0, 0, 0); // midnight of reset calendar day (PDT)
+      // Billing end = midnight of day AFTER reset day (e.g. Jul 3 00:00 PDT)
+      const billingEnd = new Date(resetMidnight.getTime() + 86400000);
+      const WEEKS_BACK = 8;
+      const weeks = [];
+      for (let w = WEEKS_BACK - 1; w >= 0; w--) {
+        const wEnd   = new Date(billingEnd.getTime() - w * 7 * 86400000);
+        const wStart = new Date(wEnd.getTime() - 7 * 86400000);
+        weeks.push({ wStart, wEnd, raw: 0, out: 0, turns: 0, cost: 0, days: 0 });
+      }
+      const nowMs = Date.now();
+      daily.forEach(row => {
+        // Parse "YYYY-MM-DD" as local midnight to match billing-period day boundaries
+        const d = new Date((row.day || row.hour || '').substring(0, 10) + 'T00:00:00');
+        const tMs = d.getTime();
+        weeks.forEach(w => {
+          if (tMs >= w.wStart.getTime() && tMs < w.wEnd.getTime()) {
+            w.raw   += (row.raw_context_tokens || 0) + (row.output_tokens || 0);
+            w.out   += row.output_tokens || 0;
+            w.turns += row.turns || 0;
+            w.cost  += row.cost_usd || 0;
+            w.days  += 1;
+          }
+        });
+      });
+
+      // Filter out weeks with zero data (before history started)
+      const filled = weeks.filter(w => w.days > 0 || w.wStart >= new Date(resetAt.getTime() - 7 * 86400000));
+      if (!filled.length) return;
+
+      const pcts = filled.map(w => w.raw * ppt);
+      const maxPct = Math.max(130, Math.ceil(Math.max(...pcts) / 10) * 10 + 10);
+
+      // SVG dimensions
+      const W = container.clientWidth || 680;
+      const pad = { top: 24, right: 60, bottom: 48, left: 48 };
+      const chartW = W - pad.left - pad.right;
+      const chartH = 140;
+      const H = chartH + pad.top + pad.bottom;
+      const barGap = 4;
+      const barW = Math.max(8, Math.floor(chartW / filled.length) - barGap);
+
+      const xPos = i => pad.left + i * (barW + barGap) + barGap / 2;
+      const yPct = pct => pad.top + chartH - Math.min(pct / maxPct, 1.0) * chartH;
+
+      const svgNS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(svgNS, 'svg');
+      svg.setAttribute('width', W); svg.setAttribute('height', H);
+      svg.setAttribute('style', 'display:block;');
+
+      // Y gridlines + labels
+      [0, 25, 50, 75, 100, 125].filter(p => p <= maxPct).forEach(p => {
+        const y = yPct(p);
+        const line = document.createElementNS(svgNS, 'line');
+        line.setAttribute('x1', pad.left); line.setAttribute('x2', W - pad.right);
+        line.setAttribute('y1', y); line.setAttribute('y2', y);
+        line.setAttribute('stroke', p === 100 ? 'rgba(239,68,68,0.4)' : 'rgba(148,163,184,0.12)');
+        line.setAttribute('stroke-width', p === 100 ? 1.5 : 1);
+        if (p === 100) line.setAttribute('stroke-dasharray', '4,3');
+        svg.appendChild(line);
+        const lbl = document.createElementNS(svgNS, 'text');
+        lbl.setAttribute('x', pad.left - 4); lbl.setAttribute('y', y + 4);
+        lbl.setAttribute('text-anchor', 'end'); lbl.setAttribute('font-size', '9');
+        lbl.setAttribute('font-family', 'monospace');
+        lbl.setAttribute('fill', p === 100 ? 'rgba(239,68,68,0.7)' : 'rgba(148,163,184,0.55)');
+        lbl.textContent = `${p}%`;
+        svg.appendChild(lbl);
+      });
+
+      // Bars — use billingEnd-based boundary to match how wStart was computed
+      const currentPeriodStart = new Date(billingEnd.getTime() - 7 * 86400000);
+      filled.forEach((w, i) => {
+        const pct = w.raw * ppt;
+        const isCurrent = w.wStart >= currentPeriodStart;
+        const isPartial = isCurrent && nowMs < w.wEnd.getTime();
+        const x = xPos(i);
+        const barH = Math.max(2, (pct / maxPct) * chartH);
+        const y = pad.top + chartH - barH;
+
+        const color = isCurrent ? '#f59e0b' : '#2dd4bf';
+        const bar = document.createElementNS(svgNS, 'rect');
+        bar.setAttribute('x', x); bar.setAttribute('y', y);
+        bar.setAttribute('width', barW); bar.setAttribute('height', barH);
+        bar.setAttribute('fill', color);
+        bar.setAttribute('opacity', isPartial ? '0.65' : '0.85');
+        bar.setAttribute('rx', '2');
+        svg.appendChild(bar);
+
+        // % label above bar
+        if (pct > 0) {
+          const lbl = document.createElementNS(svgNS, 'text');
+          lbl.setAttribute('x', x + barW / 2); lbl.setAttribute('y', y - 4);
+          lbl.setAttribute('text-anchor', 'middle'); lbl.setAttribute('font-size', '9');
+          lbl.setAttribute('font-family', 'monospace');
+          lbl.setAttribute('fill', isCurrent ? '#f59e0b' : 'rgba(148,163,184,0.8)');
+          lbl.textContent = pct < 10 ? `${pct.toFixed(1)}%` : `${Math.round(pct)}%`;
+          svg.appendChild(lbl);
+        }
+
+        // Week label on x-axis
+        const mo = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const xlbl = document.createElementNS(svgNS, 'text');
+        xlbl.setAttribute('x', x + barW / 2); xlbl.setAttribute('y', H - pad.bottom + 14);
+        xlbl.setAttribute('text-anchor', 'middle'); xlbl.setAttribute('font-size', '8');
+        xlbl.setAttribute('font-family', 'monospace');
+        xlbl.setAttribute('fill', isCurrent ? '#f59e0b' : 'rgba(148,163,184,0.5)');
+        xlbl.textContent = mo(w.wStart);
+        svg.appendChild(xlbl);
+
+        // "partial" indicator
+        if (isPartial) {
+          const pi = document.createElementNS(svgNS, 'text');
+          pi.setAttribute('x', x + barW / 2); pi.setAttribute('y', H - pad.bottom + 24);
+          pi.setAttribute('text-anchor', 'middle'); pi.setAttribute('font-size', '7');
+          pi.setAttribute('font-family', 'monospace'); pi.setAttribute('fill', '#f59e0b');
+          pi.textContent = 'in progress';
+          svg.appendChild(pi);
+        }
+      });
+
+      // Replace loading placeholder
+      container.innerHTML = '';
+      container.appendChild(svg);
     }
 
     function renderTopSessions() {
