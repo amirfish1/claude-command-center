@@ -40254,6 +40254,7 @@ def _throughput_summary(turns):
     total_bucket = _throughput_empty_bucket()
     per_model = {}
     hourly = {}
+    daily = {}
     for t in turns:
         _throughput_add_bucket(total_bucket, t)
         model_key = t.get("model") or t.get("engine") or "unknown"
@@ -40267,6 +40268,13 @@ def _throughput_summary(turns):
             hour_bucket = hourly.setdefault(hour_key, _throughput_empty_bucket())
             hour_bucket["hour"] = hour_key
             _throughput_add_bucket(hour_bucket, t)
+            # Daily buckets too — the 7-day view is far too crowded at hourly
+            # granularity (168 points); the frontend picks daily for wide ranges.
+            day_key = t_end.strftime("%Y-%m-%d")
+            day_bucket = daily.setdefault(day_key, _throughput_empty_bucket())
+            day_bucket["hour"] = day_key  # reuse the "hour" field as the bucket label
+            day_bucket["day"] = day_key
+            _throughput_add_bucket(day_bucket, t)
 
     finalized_total = _throughput_finalize_bucket(total_bucket)
     total_active_sec = finalized_total["active_duration_sec"]
@@ -40313,6 +40321,10 @@ def _throughput_summary(turns):
         "hourly": [
             _throughput_finalize_bucket(hourly[k])
             for k in sorted(hourly)
+        ],
+        "daily": [
+            _throughput_finalize_bucket(daily[k])
+            for k in sorted(daily)
         ],
     }
     return out

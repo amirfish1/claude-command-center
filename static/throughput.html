@@ -868,6 +868,7 @@
   <script>
     let allSessions = [];
     let activeSessionId = null;
+    let lastRender = null;   // {turns, summary, isAggregate, bucketMode} for resize redraws
     const aggregateSessions = [
       { session_id: 'all_1_hour', display_name: 'Total (Last Hour)', engine: 'aggregated', meta: '1h window' },
       { session_id: 'all_today', display_name: 'Total (Today)', engine: 'aggregated', meta: 'today' },
@@ -1116,12 +1117,19 @@
         `${summary.avg_output_tps.toFixed(1)} tokens / sec · cache hit ${Math.round((summary.cache_hit_ratio || 0) * 100)}%`;
       
       // Draw chart. Aggregate ranges use hourly buckets; individual sessions
-      // use per-turn points.
-      drawChart(data.turns, summary, isAggregate);
+      // use per-turn points. Wide aggregate ranges (7d / all time) use DAILY
+      // buckets — hourly is far too crowded across a week (~168 points).
+      const sid = (session.session_id || '');
+      const bucketMode = (isAggregate && (sid === 'all_7_days' || sid === 'all' || sid === 'all_time'))
+        ? 'daily' : 'hourly';
+      // Cache the rendered state so a window resize can redraw the chart from
+      // memory instead of re-fetching + re-parsing the whole range.
+      lastRender = { turns: data.turns, summary, isAggregate, bucketMode };
+      drawChart(data.turns, summary, isAggregate, bucketMode);
 
       // Model comparison table
       renderModelBreakdown(summary.per_model || []);
-      
+
       // Render turns list
       renderTurnsList(data.turns, isAggregate);
     }
@@ -1172,32 +1180,42 @@
       return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
     }
 
-    function drawChart(turns, summary, isAggregate = false) {
+    function dayLabel(day) {
+      if (!day) return '';
+      const date = new Date(day + 'T00:00:00');
+      if (Number.isNaN(date.getTime())) return day;
+      return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+    }
+
+    function drawChart(turns, summary, isAggregate = false, bucketMode = 'hourly') {
       const svg = document.getElementById('throughput-chart');
       if (!svg) return;
       svg.innerHTML = '';
+      const daily = bucketMode === 'daily';
       document.getElementById('chart-title-label').textContent = isAggregate
-        ? 'Hourly Cache-Adjusted Burn'
+        ? (daily ? 'Daily Cache-Adjusted Burn' : 'Hourly Cache-Adjusted Burn')
         : 'Cache-Adjusted Throughput per Turn';
       document.getElementById('chart-legend-label').textContent = isAggregate
-        ? 'Hourly adjusted TPM'
+        ? (daily ? 'Daily adjusted TPM' : 'Hourly adjusted TPM')
         : 'Adjusted TPM';
-      
+
       // Get container width
       const width = svg.clientWidth || 800;
       const height = svg.clientHeight || 300;
       const padding = { top: 20, right: 30, bottom: 40, left: 60 };
-      
-      const hourly = (summary && summary.hourly) || [];
-      const sourceRows = isAggregate ? hourly : turns;
+
+      const buckets = isAggregate
+        ? (daily ? (summary && summary.daily) || [] : (summary && summary.hourly) || [])
+        : turns;
+      const sourceRows = buckets;
       const data = sourceRows.map((row, idx) => {
         const tpm = isAggregate
           ? (row.avg_cache_adjusted_total_tpm ?? row.avg_effective_input_tpm ?? 0)
           : (row.cache_adjusted_total_tpm ?? row.total_tpm);
         return {
           index: idx + 1,
-          label: isAggregate ? hourLabel(row.hour, idx + 1, sourceRows.length) : `T${row.turn_index}`,
-          tooltipTitle: isAggregate ? (row.hour || `Hour ${idx + 1}`) : `Turn #${row.turn_index}`,
+          label: isAggregate ? (daily ? dayLabel(row.day) : hourLabel(row.hour, idx + 1, sourceRows.length)) : `T${row.turn_index}`,
+          tooltipTitle: isAggregate ? (daily ? dayLabel(row.day) : (row.hour || `Hour ${idx + 1}`)) : `Turn #${row.turn_index}`,
           tpm,
           in_tpm: isAggregate ? row.avg_effective_input_tpm : (row.effective_input_tpm ?? row.in_tpm),
           out_tpm: isAggregate ? row.avg_output_tpm : row.out_tpm,
@@ -1479,15 +1497,18 @@
       }
     }
 
-    // Window resize handler to redraw charts
+    // Window resize handler — redraw the chart from the LAST rendered data,
+    // debounced. Previously this called selectSession() on every resize event,
+    // which re-fetched and re-parsed the whole range; on mobile the URL-bar
+    // show/hide fires resize constantly, so the server recalculated every few
+    // seconds. Redraw-from-memory is instant and hits nothing.
+    let resizeTimer = null;
     window.addEventListener('resize', () => {
-      if (activeSessionId) {
-        // Redraw active chart
-        const activeSession = findSessionById(activeSessionId);
-        if (activeSession) {
-          selectSession(activeSession);
-        }
-      }
+      if (!lastRender) return;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        drawChart(lastRender.turns, lastRender.summary, lastRender.isAggregate, lastRender.bucketMode);
+      }, 200);
     });
 
     // Weekly usage banner — Claude-only burn since reset, in % of weekly
