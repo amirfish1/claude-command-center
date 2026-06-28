@@ -40794,6 +40794,10 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
                 is_codex = engine == "codex" or _is_codex_session(sid)
             except Exception:
                 continue
+            # Codex usage does not count against Claude's weekly quota.
+            # Skip here; a future parallel Codex view can aggregate separately.
+            if is_codex:
+                continue
 
             # Resolve the transcript path so we can (mtime,size)-cache its full
             # turn list. Extraction runs with cutoff_epoch=None — the window
