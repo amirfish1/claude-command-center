@@ -1312,7 +1312,7 @@
       // Wide aggregate ranges (7d / all time) use DAILY buckets.
       const sid = (session.session_id || '');
       const isWide = isAggregate && (sid === 'all_7_days' || sid === 'all' || sid === 'all_time');
-      const bucketMode = isWide ? 'daily' : 'hourly';
+      const bucketMode = isWide ? 'sixhourly' : 'hourly';
       // Per-session: use hourly buckets if the server returned them (they always do).
       // Treat as aggregate for charting purposes so the same bucket field names apply.
       const hasHourly = !isAggregate && summary && summary.hourly && summary.hourly.length > 0;
@@ -1462,15 +1462,16 @@
       if (!svg) return;
       svg.innerHTML = '';
       const daily = bucketMode === 'daily';
+      const sixhourly = bucketMode === 'sixhourly';
       document.getElementById('chart-title-label').textContent = isAggregate
-        ? (daily ? 'Daily Cache-Adjusted Burn' : 'Hourly Cache-Adjusted Burn')
+        ? (daily ? 'Daily Cache-Adjusted Burn' : sixhourly ? '6-Hour Cache-Adjusted Burn' : 'Hourly Cache-Adjusted Burn')
         : 'Cache-Adjusted Throughput per Turn';
       document.getElementById('chart-legend-label').textContent = isAggregate
-        ? (daily ? 'Cache-adj tokens / day' : 'Cache-adj tokens / hour')
+        ? (daily ? 'Cache-adj tokens / day' : sixhourly ? 'Cache-adj tokens / 6h' : 'Cache-adj tokens / hour')
         : 'Cache-adj tokens';
 
       // Determine whether the weekly % overlay is available for this view.
-      const showWeeklyOverlay = daily && weeklyData && weeklyData.pct_per_token != null;
+      const showWeeklyOverlay = (daily || sixhourly) && weeklyData && weeklyData.pct_per_token != null;
       const overlayLegend = document.getElementById('weekly-overlay-legend');
       if (overlayLegend) overlayLegend.style.display = showWeeklyOverlay ? 'flex' : 'none';
 
@@ -1481,19 +1482,57 @@
       const rightPad = (showWeeklyOverlay || showCumulative) ? 52 : 30;
       const padding = { top: 20, right: rightPad, bottom: 40, left: 60 };
 
-      const buckets = isAggregate
-        ? (daily ? (summary && summary.daily) || [] : (summary && summary.hourly) || [])
-        : turns;
+      // Build sourceRows — aggregate hourly data into 6h buckets for sixhourly mode.
+      let buckets;
+      if (sixhourly) {
+        const hourly = (summary && summary.hourly) || [];
+        const groups = new Map();
+        hourly.forEach(row => {
+          const d = new Date(row.hour);
+          const slot = Math.floor(d.getUTCHours() / 6) * 6;
+          const dayStr = row.hour.substring(0, 10);
+          const key = `${dayStr}T${String(slot).padStart(2,'0')}:00:00`;
+          if (!groups.has(key)) groups.set(key, {
+            hour: key, day: dayStr, raw_context_tokens: 0, effective_input_tokens: 0,
+            output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+            turns: 0, cost_usd: 0, active_duration_sec: 0
+          });
+          const g = groups.get(key);
+          g.raw_context_tokens += row.raw_context_tokens || 0;
+          g.effective_input_tokens += row.effective_input_tokens || 0;
+          g.output_tokens += row.output_tokens || 0;
+          g.cache_read_tokens += row.cache_read_tokens || 0;
+          g.cache_write_tokens += row.cache_write_tokens || 0;
+          g.turns += row.turns || 0;
+          g.cost_usd += row.cost_usd || 0;
+          g.active_duration_sec += row.active_duration_sec || 0;
+        });
+        buckets = Array.from(groups.values()).sort((a,b) => a.hour.localeCompare(b.hour));
+      } else if (isAggregate) {
+        buckets = daily ? (summary && summary.daily) || [] : (summary && summary.hourly) || [];
+      } else {
+        buckets = turns;
+      }
       const sourceRows = buckets;
+
+      // Label helper for 6h slots: show day name at midnight, "HH:00" otherwise.
+      const sixhourLabel = (hourStr) => {
+        const h = parseInt(hourStr.substring(11, 13), 10);
+        return h === 0 ? dayLabel(hourStr.substring(0, 10)) : `${String(h).padStart(2,'0')}:00`;
+      };
+
       const data = sourceRows.map((row, idx) => {
         // Total cache-adjusted tokens for the bucket (not a rate).
         const val = isAggregate
           ? (row.effective_input_tokens || 0) + (row.output_tokens || 0)
           : (row.effective_input_tokens ?? row.tokens_in ?? 0) + (row.tokens_out ?? 0);
+        const lbl = isAggregate
+          ? (daily ? dayLabel(row.day) : sixhourly ? sixhourLabel(row.hour) : hourLabel(row.hour, idx + 1, sourceRows.length))
+          : `T${row.turn_index}`;
         return {
           index: idx + 1,
-          label: isAggregate ? (daily ? dayLabel(row.day) : hourLabel(row.hour, idx + 1, sourceRows.length)) : `T${row.turn_index}`,
-          tooltipTitle: isAggregate ? (daily ? dayLabel(row.day) : (row.hour || `Hour ${idx + 1}`)) : `Turn #${row.turn_index}`,
+          label: lbl,
+          tooltipTitle: isAggregate ? (daily ? dayLabel(row.day) : sixhourly ? sixhourLabel(row.hour) : (row.hour || `Hour ${idx + 1}`)) : `Turn #${row.turn_index}`,
           tpm: val,
           in_tpm: isAggregate ? row.avg_effective_input_tpm : (row.effective_input_tpm ?? row.in_tpm),
           out_tpm: isAggregate ? row.avg_output_tpm : row.out_tpm,
@@ -1665,38 +1704,36 @@
         svg.appendChild(text);
       });
 
-      // ── Weekly % overlay (daily mode only) ──────────────────────────────────
-      // Draw a dashed orange line showing cumulative weekly-quota consumption
-      // up to each day. Uses the pct_per_token calibration from /api/weekly_usage
-      // and only counts days on or after the most recent weekly reset boundary.
+      // ── Weekly % overlay (daily / 6-hourly modes) ───────────────────────────
+      // Orange line: faded segment for previous billing period, bright for current.
       if (showWeeklyOverlay) {
         const pctPerToken = weeklyData.pct_per_token;
         const resetAt = weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
-        // weekly_resets_at is the *next* reset; the current period started one
-        // week before that.
         const periodStart = resetAt ? new Date(resetAt.getTime() - 7 * 86400000) : null;
 
-        // Compute cumulative % for each data point (aligned to sourceRows).
-        let cumPct = 0;
-        const cumPcts = sourceRows.map((row) => {
-          // Check if this day falls within the current weekly period.
-          if (periodStart && row.day) {
-            const rowDate = new Date(row.day + 'T00:00:00');
-            if (rowDate < periodStart) {
-              return null; // before current period — skip
-            }
-          }
+        // Helper: get datetime for a row (works for daily rows and 6h rows).
+        const rowDt = (row) => row.hour ? new Date(row.hour) : (row.day ? new Date(row.day + 'T00:00:00') : null);
+
+        // Compute cumulative % separately for previous period and current period.
+        let cumPrev = 0, cumCurr = 0;
+        const cumAll = sourceRows.map(row => {
+          const rd = rowDt(row);
           const tokens = (row.raw_context_tokens || 0) + (row.output_tokens || 0);
-          cumPct += tokens * pctPerToken;
-          return cumPct;
+          if (periodStart && rd && rd < periodStart) {
+            cumPrev += tokens * pctPerToken;
+            return { prev: cumPrev, curr: null };
+          } else {
+            cumCurr += tokens * pctPerToken;
+            return { prev: null, curr: cumCurr };
+          }
         });
 
-        // Secondary Y scale: 0–(max cumPct rounded up, at least 100%).
-        const maxCumPct = Math.max(100, Math.ceil(cumPct / 10) * 10);
+        // Secondary Y scale covering both periods.
+        const maxCumPct = Math.max(100, Math.ceil(Math.max(cumPrev, cumCurr) / 10) * 10);
         const yPct = (pct) =>
           height - padding.bottom - (pct / maxCumPct) * (height - padding.top - padding.bottom);
 
-        // Draw secondary Y-axis gridlines (faint, dashed differently).
+        // Draw secondary Y-axis gridlines.
         const pctSteps = [0, 25, 50, 75, 100];
         pctSteps.forEach(p => {
           if (p > maxCumPct) return;
@@ -1709,8 +1746,6 @@
           gl.setAttribute('stroke', 'rgba(227,179,65,0.12)');
           gl.setAttribute('stroke-dasharray', '2,6');
           svg.appendChild(gl);
-
-          // Right-axis label.
           const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
           t.setAttribute('x', width - padding.right + 6);
           t.setAttribute('y', y + 4);
@@ -1722,45 +1757,37 @@
           svg.appendChild(t);
         });
 
-        // Build the overlay line path (skip null entries = pre-period days).
-        let overlayPath = '';
-        let started = false;
-        cumPcts.forEach((pct, idx) => {
-          if (pct == null) return;
-          const x = xScale(idx + 1);
-          const y = yPct(pct);
-          if (!started) {
-            overlayPath += `M ${x} ${y} `;
-            started = true;
-          } else {
-            overlayPath += `L ${x} ${y} `;
-          }
-        });
-
-        if (overlayPath) {
-          const overLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          overLine.setAttribute('d', overlayPath);
-          overLine.setAttribute('fill', 'none');
-          overLine.setAttribute('stroke', '#f59e0b');
-          overLine.setAttribute('stroke-width', '1.8');
-          overLine.setAttribute('stroke-dasharray', '5,3');
-          overLine.setAttribute('opacity', '0.85');
-          svg.appendChild(overLine);
-
-          // Small dots at each data point on the overlay line.
-          cumPcts.forEach((pct, idx) => {
+        // Draw faded previous-period line.
+        const drawSegment = (vals, opacity, strokeW, dotR) => {
+          let path = '', started = false;
+          vals.forEach((pct, idx) => {
             if (pct == null) return;
-            const x = xScale(idx + 1);
-            const y = yPct(pct);
+            const x = xScale(idx + 1); const y = yPct(pct);
+            path += started ? `L ${x} ${y} ` : `M ${x} ${y} `;
+            started = true;
+          });
+          if (!path) return;
+          const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          line.setAttribute('d', path); line.setAttribute('fill', 'none');
+          line.setAttribute('stroke', '#f59e0b'); line.setAttribute('stroke-width', String(strokeW));
+          line.setAttribute('stroke-dasharray', '5,3'); line.setAttribute('opacity', String(opacity));
+          svg.appendChild(line);
+          vals.forEach((pct, idx) => {
+            if (pct == null) return;
             const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-            dot.setAttribute('cx', x);
-            dot.setAttribute('cy', y);
-            dot.setAttribute('r', '3');
-            dot.setAttribute('fill', '#f59e0b');
-            dot.setAttribute('opacity', '0.75');
+            dot.setAttribute('cx', xScale(idx + 1)); dot.setAttribute('cy', yPct(pct));
+            dot.setAttribute('r', String(dotR)); dot.setAttribute('fill', '#f59e0b');
+            dot.setAttribute('opacity', String(opacity * 0.85));
             svg.appendChild(dot);
           });
+        };
 
+        drawSegment(cumAll.map(c => c.prev), 0.3, 1.4, 2);   // previous period — faded
+        drawSegment(cumAll.map(c => c.curr), 0.85, 1.8, 3);  // current period — bright
+
+        const hasCurr = cumAll.some(c => c.curr != null);
+        const hasPrev = cumAll.some(c => c.prev != null);
+        if (hasCurr || hasPrev) {
           // Right-axis label ("% quota").
           const axisLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
           axisLabel.setAttribute('x', width - padding.right + 6);
@@ -1773,9 +1800,12 @@
           axisLabel.textContent = '% quota';
           svg.appendChild(axisLabel);
 
-          // Vertical divider at weekly reset (Friday 00:00).
+          // Vertical divider at weekly reset.
           if (periodStart) {
-            const resetIdx = sourceRows.findIndex(row => row.day && new Date(row.day + 'T00:00:00') >= periodStart);
+            const resetIdx = sourceRows.findIndex(row => {
+              const rd = rowDt(row);
+              return rd && rd >= periodStart;
+            });
             if (resetIdx > 0) {
               const rx = xScale(resetIdx + 0.5);
               const vl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
