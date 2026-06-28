@@ -34545,6 +34545,23 @@
           }).join('')
         + '</div>'
       : '';
+    const waitingOn = Array.isArray(job.waiting_on) ? job.waiting_on : [];
+    const pendingWait = waitingOn.filter(w => (w.status || '') !== 'done');
+    const doneWait = waitingOn.filter(w => (w.status || '') === 'done');
+    const waitingHtml = job.running && phase === 'waiting_commits'
+      ? '<div class="ship-waiting-summary">'
+        + '<div class="ship-waiting-copy">'
+          + '<span class="ship-waiting-label">Waiting on</span>'
+          + '<span class="ship-waiting-names">'
+          + (pendingWait.length
+              ? pendingWait.map(w => escapeHtml(w.name || (w.sid || '').slice(0, 8) || 'session')).join(', ')
+              : 'No remaining tracked sessions')
+          + '</span>'
+          + (doneWait.length ? '<span class="ship-waiting-done">' + doneWait.length + ' done</span>' : '')
+        + '</div>'
+        + '<button type="button" class="ship-continue-btn" data-role="ship-continue">Continue now</button>'
+      + '</div>'
+      : '';
     $list.innerHTML =
       '<div class="ship-log">'
       + '<div class="ship-log-head">'
@@ -34554,6 +34571,7 @@
         + (done ? '<button type="button" class="ship-log-dismiss" data-role="ship-log-dismiss">✕ close</button>' : '')
       + '</div>'
       + actionsHtml
+      + waitingHtml
       + (isStalled
           ? '<div class="ship-log-line warn"><span class="ship-log-txt">⚠ No progress for a while — the run looks interrupted (the CCC server may have restarted). Close this and run Push all again.</span></div>'
           : '')
@@ -34564,6 +34582,12 @@
     if (body) body.scrollTop = body.scrollHeight;
     const dz = $list.querySelector('[data-role="ship-log-dismiss"]');
     if (dz) dz.addEventListener('click', (e) => { e.stopPropagation(); _shipDismissLog(); });
+    const cz = $list.querySelector('[data-role="ship-continue"]');
+    if (cz) cz.addEventListener('click', (e) => {
+      e.stopPropagation();
+      cz.disabled = true;
+      _continueShipWait(repo);
+    });
     $list.querySelectorAll('.ship-act-approve, .ship-act-reject').forEach(b => {
       b.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -34571,6 +34595,23 @@
         _applyShipAction(repo, b.getAttribute('data-id'), b.getAttribute('data-act'));
       });
     });
+  }
+
+  async function _continueShipWait(repo) {
+    if (!repo) return;
+    try {
+      const res = await fetch('/api/repo/ship/continue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_path: repo }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.job) _renderShipLogPanel(repo, data);
+      else await _openShipLog(repo);
+      _refreshShipStatus(repo);
+    } catch (_) {
+      await _openShipLog(repo);
+    }
   }
 
   async function _applyShipAction(repo, id, decision) {
@@ -43880,24 +43921,25 @@
     let _hbItem = null;
     let _hbTimer = null;
 
-    const _hbPos = (item, e) => {
+    const _hbPos = (item) => {
+      const titleEl = item.querySelector('.conv-title');
+      const anchor = titleEl ? titleEl.getBoundingClientRect() : item.getBoundingClientRect();
+      const ir = item.getBoundingClientRect();
       const W = window.innerWidth;
-      const H = window.innerHeight;
       const TOOLTIP_W = 300;
-      const TOOLTIP_H = 130;
-      let x = e.clientX;
-      let y = e.clientY;
+      let x = anchor.right + 8;
       if (x + TOOLTIP_W > W - 8) x = Math.max(8, W - TOOLTIP_W - 8);
-      if (y + TOOLTIP_H > H - 8) y = Math.max(8, H - TOOLTIP_H - 8);
+      let y = ir.top;
+      if (y + 130 > window.innerHeight) y = Math.max(8, window.innerHeight - 140);
       item.style.setProperty('--hb-x', x + 'px');
       item.style.setProperty('--hb-y', y + 'px');
     };
 
-    const _hbShow = (item, e) => {
+    const _hbShow = (item) => {
       clearTimeout(_hbTimer);
       if (_hbItem && _hbItem !== item) _hbItem.removeAttribute('data-hb');
       _hbItem = item;
-      _hbPos(item, e);
+      _hbPos(item);
       item.setAttribute('data-hb', '1');
     };
 
@@ -43911,7 +43953,7 @@
 
     document.addEventListener('mouseover', (e) => {
       const item = e.target.closest(_hbSelector);
-      if (item) { _hbShow(item, e); return; }
+      if (item) { _hbShow(item); return; }
       // Cursor moved into the fixed tooltip (position:fixed child) — keep visible
       if (_hbItem) {
         const extras = _hbItem.querySelector('.conv-hover-extras');
@@ -43920,10 +43962,5 @@
       _hbHide();
     });
 
-    document.addEventListener('mousemove', (e) => {
-      if (!_hbItem) return;
-      const item = e.target.closest(_hbSelector);
-      if (item && item === _hbItem) _hbPos(_hbItem, e);
-    });
   }());
 })();
