@@ -1604,6 +1604,27 @@
           svg.appendChild(lbl);
         });
 
+        // Vertical divider at weekly reset boundary.
+        if (periodStart) {
+          const resetIdx = sourceRows.findIndex(row => row.hour && new Date(row.hour) >= periodStart);
+          if (resetIdx > 0) {
+            const rx = xScale(resetIdx + 0.5);
+            const vline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            vline.setAttribute('x1', rx); vline.setAttribute('x2', rx);
+            vline.setAttribute('y1', padding.top); vline.setAttribute('y2', height - padding.bottom);
+            vline.setAttribute('stroke', 'rgba(71,166,255,0.35)');
+            vline.setAttribute('stroke-dasharray', '4,3');
+            vline.setAttribute('stroke-width', '1');
+            svg.appendChild(vline);
+            const rlbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            rlbl.setAttribute('x', rx + 3); rlbl.setAttribute('y', padding.top + 10);
+            rlbl.setAttribute('fill', 'rgba(71,166,255,0.6)'); rlbl.setAttribute('font-size', '8px');
+            rlbl.setAttribute('font-family', 'var(--font-mono)');
+            rlbl.textContent = 'reset';
+            svg.appendChild(rlbl);
+          }
+        }
+
         // Line path.
         const cumPath = cumVals.map((v, idx) => {
           const x = xScale(idx + 1);
