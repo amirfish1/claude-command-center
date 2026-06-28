@@ -232,6 +232,23 @@
     background: radial-gradient(circle at top right, rgba(57, 210, 192, 0.03), transparent 40%), var(--bg);
   }
   
+  /* Mobile: a fixed 340px sidebar swallows the screen. Stack it above the
+     main view with a capped, scrollable height so the chart is always
+     visible. */
+  @media (max-width: 768px) {
+    .layout-container { flex-direction: column; overflow: visible; }
+    .sidebar {
+      width: 100%;
+      max-height: 34vh;
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+    }
+    .session-title { max-width: none; }
+    .workspace { padding: 16px; }
+    .weekly-banner { flex-wrap: wrap; gap: 10px; }
+    .weekly-sub { margin-left: 0; text-align: left; width: 100%; }
+  }
+
   /* Empty state */
   .empty-state {
     display: flex;
