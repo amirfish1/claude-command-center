@@ -6742,7 +6742,7 @@ def enqueue_annotation_ux_fixes_queue(
     if not _repo_path and _src in ("", "ccc"):
         _repo_path = CCC_ROOT
     try:
-        item = ux_fixes_queue.enqueue(
+        item = _q.enqueue(
             note=meta.get("note") or text,
             text=text,
             source=str(meta.get("source") or "ccc"),
@@ -20105,7 +20105,7 @@ def _uxq_parse_ts(value):
 
 
 def _uxq_nudge_tick():
-    items = ux_fixes_queue.list_items()
+    items = _q.list_items()
     now = time.time()
     open_by_project = {}
     # Highest OPEN ticket seq per project. New work arriving (a freshly
@@ -20234,7 +20234,7 @@ def compute_ux_fixes_health():
     fork per project/row.
     """
     try:
-        items = ux_fixes_queue.list_items()
+        items = _q.list_items()
     except Exception:
         items = []
     now = time.time()
@@ -28444,7 +28444,7 @@ def _ux_fixes_scope_project(payload):
     repo_path = str(payload.get("repo_path") or "").strip()
     if not project and not repo_path:
         return None
-    return ux_fixes_queue._project_for(repo_path=repo_path, project=project)
+    return _q._project_for(repo_path=repo_path, project=project)
 
 
 def _ux_fixes_worker_prompt(project, repo_path, ccc_url, extra_message=""):
@@ -41750,7 +41750,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             status_filter = (qs.get("status", [""])[0] or "").strip() or None
             lane_filter = (qs.get("lane", [""])[0] or "").strip() or None
             try:
-                items = ux_fixes_queue.list_items(status=status_filter, lane=lane_filter)
+                items = _q.list_items(status=status_filter, lane=lane_filter)
                 self.send_json({"ok": True, "items": items, "count": len(items)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -43916,11 +43916,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "note": payload.get("note") or "",
                 "url": payload.get("url") or "",
                 "title": payload.get("title") or "",
+                "selector": _annotation_text(payload.get("selector") or "", 400),
+                "outer_html": _annotation_text(payload.get("outerHtml") or "", 2000),
                 "source": "throughput-ui",
                 "project": "THROUGHPUT",
             }
+            # Build a richer text body including DOM picker context when present.
+            _base_note = payload.get("text") or payload.get("note") or ""
+            _selector = meta["selector"]
+            _outer = meta["outer_html"]
+            if _selector and _base_note:
+                _full_text = f"{_base_note}
+
+Selector: {_selector}"
+                if _outer:
+                    _full_text += f"
+
+Element HTML:
+{_outer}"
+            else:
+                _full_text = _base_note
             result = enqueue_annotation_ux_fixes_queue(
-                payload.get("text") or payload.get("note") or "",
+                _full_text,
                 meta=meta,
                 project="THROUGHPUT",
             )
@@ -43943,7 +43960,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # given we keep the historical global behavior for back-compat.
             scope_project = _ux_fixes_scope_project(payload)
             try:
-                item = ux_fixes_queue.claim_next(
+                item = _q.claim_next(
                     sid, lane=payload.get("lane") or None, project=scope_project,
                     session_uuid=str(payload.get("session_uuid") or ""),
                 )
@@ -43965,7 +43982,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             close_n = payload.get("close_number")
             scope_project = _ux_fixes_scope_project(payload)
             try:
-                result = ux_fixes_queue.next_item(
+                result = _q.next_item(
                     sid,
                     close_ident=int(close_n) if close_n is not None else None,
                     lane=payload.get("lane") or None,
@@ -43984,7 +44001,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 payload = {}
             try:
-                item = ux_fixes_queue.update_status(
+                item = _q.update_status(
                     int(payload.get("number")),
                     str(payload.get("status") or ""),
                     session_id=str(payload.get("session_id") or ""),
@@ -44037,7 +44054,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "ref required"}, 400)
                 return
             try:
-                item = ux_fixes_queue.update(ref, priority=priority)
+                item = _q.update(ref, priority=priority)
                 self.send_json({"ok": bool(item), "item": item})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
@@ -44061,7 +44078,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "value", "confidence", "lane")
             fields = {k: payload[k] for k in editable if k in payload}
             try:
-                item = ux_fixes_queue.update(ref, **fields)
+                item = _q.update(ref, **fields)
                 self.send_json({"ok": bool(item), "item": item})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
@@ -44086,7 +44103,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "note required"}, 400)
                 return
             try:
-                item = ux_fixes_queue.enqueue(
+                item = _q.enqueue(
                     note=note,
                     source=str(payload.get("source") or "ccc"),
                     project=str(payload.get("project") or "").strip(),
@@ -44116,7 +44133,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not repo_path:
                 self.send_json({"ok": False, "error": "repo_path required"}, 400)
                 return
-            project = ux_fixes_queue._project_for(
+            project = _q._project_for(
                 repo_path=repo_path, project=str(payload.get("project") or "").strip()
             )
             name = (payload.get("name") or "").strip() or f"UX worker · {project}"
