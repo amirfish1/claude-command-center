@@ -11830,6 +11830,30 @@ def _claude_desktop_workspace_for_summary(summary, existing_path=None):
     return dirs[0]
 
 
+def _recent_session_ids(hours=2):
+    """Session IDs whose JSONL was written to in the last ``hours`` hours.
+    More stable than the process-registry gate: catches sessions that ended
+    but whose conversation is still relevant for model-routing advice."""
+    cutoff = time.time() - hours * 3600
+    sids = {}  # sid -> (mtime, path)
+    if not PROJECTS_ROOT.is_dir():
+        return sids
+    try:
+        for path in PROJECTS_ROOT.glob("*/*.jsonl"):
+            try:
+                mt = path.stat().st_mtime
+            except OSError:
+                continue
+            if mt < cutoff:
+                continue
+            sid = path.stem
+            if sid not in sids or mt > sids[sid][0]:
+                sids[sid] = (mt, path)
+    except (OSError, RuntimeError):
+        pass
+    return sids  # {sid: (mtime, path)}
+
+
 def _claude_session_jsonl_path(session_id):
     sid = str(session_id or "").strip()
     if not sid or not PROJECTS_ROOT.is_dir():
@@ -11927,20 +11951,16 @@ def _advisor_current_model(sid, turns):
 
 
 def build_model_advisor_report(persist=True):
-    """Scan the (gated, cached) live-session set, emit recommendations, and roll
-    up the savings monitor. Reuses build_live_sessions_activity() for the live
-    map so we inherit its candidacy gating — no extra full scan."""
+    """Scan sessions active in the last 2 hours and emit model-routing advice.
+    Uses mtime-based candidacy (more stable than process registry) so sessions
+    that ended recently are still scored. The process-live set is kept separately
+    only for expiring stale pending log entries."""
     live_recs = []
     scanned = []
-    try:
-        live = build_live_sessions_activity()
-    except Exception:
-        live = {}
-    for sid in list(live.keys()):
+    recent = _recent_session_ids(hours=2)  # {sid: (mtime, path)}
+    for sid, (_mt, path) in list(recent.items()):
         try:
-            path = _claude_session_jsonl_path(sid)
             if not path:
-                continue
             turns = model_advisor.read_recent_turns(path)
             if not turns:
                 continue
@@ -11995,9 +12015,9 @@ def build_model_advisor_report(persist=True):
             )
         except Exception:
             continue
-    # Expire pending entries for sessions that are no longer live.
+    # Expire pending entries for sessions no longer in the recent window.
     try:
-        model_advisor.expire_stale_pending(MODEL_ADVISOR_LOG_FILE, set(live.keys()))
+        model_advisor.expire_stale_pending(MODEL_ADVISOR_LOG_FILE, set(recent.keys()))
     except Exception:
         pass
     # Roll forward realized/missed savings using fresh token counts.
@@ -12010,6 +12030,7 @@ def build_model_advisor_report(persist=True):
         "ok": True,
         "live": live_recs,
         "scanned": scanned,
+        "scan_window_hours": 2,
         "log": list(reversed(data.get("recommendations", [])))[:100],
         "summary": model_advisor.summarize(data),
     }
