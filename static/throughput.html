@@ -1228,8 +1228,8 @@
             <div class="model-name" title="${label}">${label}</div>
             <div class="model-cell">${fmtNum(m.turns)}</div>
             <div class="model-cell">${fmtNum(m.active_duration_sec, 1)}s</div>
-            <div class="model-cell">${fmtNum(m.avg_effective_input_tpm)}</div>
-            <div class="model-cell">${fmtNum(m.avg_raw_context_tpm)}</div>
+            <div class="model-cell">${fmtNum(m.effective_input_tokens)}</div>
+            <div class="model-cell">${fmtNum(m.raw_context_tokens)}</div>
             <div class="model-cell">${Math.round((m.cache_hit_ratio || 0) * 100)}%</div>
             <div class="model-cell">${cost}</div>
           </div>
@@ -1240,8 +1240,8 @@
           <div>Model</div>
           <div class="model-cell">Turns</div>
           <div class="model-cell">Active</div>
-          <div class="model-cell">Adj TPM</div>
-          <div class="model-cell">Raw TPM</div>
+          <div class="model-cell">Adj tokens</div>
+          <div class="model-cell">Raw tokens</div>
           <div class="model-cell">Cache</div>
           <div class="model-cell">Cost</div>
         </div>
