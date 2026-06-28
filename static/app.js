@@ -21898,6 +21898,25 @@
         const sid = c.session_id || c.id;
         if (sid && !_twCardById.has(sid)) _twCardById.set(sid, c);
       });
+      // Exclusion set — the worker sessions that WILL render in TRIGGERED WORKERS
+      // (drain-on queues, resolved to a loaded card). Computed UP FRONT, before
+      // the Current-sessions list is filtered below, so a worker session never
+      // shows in both lists regardless of render order (the render loop also
+      // adds to it, but relying on that side-effect alone was order-fragile).
+      // Fallback-only workers (no resolvable card) are NOT added: they don't
+      // render as a real session row in TW, so they may still belong in Current.
+      const _evergreenSessionIds = new Set();
+      _twQueues.forEach((q) => {
+        const key = String((q && q.queue) || '').trim().toUpperCase();
+        (_twWorkersByQueue.get(key) || []).forEach((w) => {
+          const sid = w && w.session_id;
+          const card = sid ? _twCardById.get(sid) : null;
+          if (card) {
+            const cid = card.session_id || card.id;
+            if (cid) _evergreenSessionIds.add(cid);
+          }
+        });
+      });
       // Minimal fallback when a worker's session isn't in the loaded list.
       const _twFallbackRow = (w) => {
         const wid = String((w && w.worker_id) || 'worker');
@@ -21942,9 +21961,8 @@
           + meta
           + '</div>';
       };
-      // Worker sessions live here, not twice — collect their ids so the flat
-      // "Current sessions" list below suppresses them (same intent as before).
-      const _evergreenSessionIds = new Set();
+      // Worker sessions live here, not twice — the flat "Current sessions" list
+      // below suppresses them via _evergreenSessionIds (populated up front).
       // Stable order: alphabetical by queue name (depth churns every poll).
       const _twQueuesSorted = _twQueues.slice().sort((a, b) =>
         String((a && a.queue) || '').localeCompare(String((b && b.queue) || '')));
