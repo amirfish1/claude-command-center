@@ -974,24 +974,41 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("body.objects-splitter-resizing", app_css)
 
     def test_evergreen_agents_object_has_own_bottom_section(self):
-        """The Evergreen Agents object should be excluded from Project tree and
-        rendered as its own bottom region in By objects."""
+        """The Triggered Workers section is its own bottom region in By objects,
+        driven PURELY by WatchTower server data (drain-on queues + live workers)
+        with NO Flow-object / localStorage dependency."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
+        # The legacy Evergreen flow-object detection is retained ONLY to keep a
+        # legacy "Evergreen Agents" object out of the Project tree — it no longer
+        # feeds the bottom section.
         self.assertIn("const _isEvergreenAgentsObjectTitle = (title) =>", app_js)
         self.assertIn("replace(/[^a-z0-9]+/g, '').startsWith('evergreen')", app_js)
         self.assertIn("const _evergreenObjectNodes = new Set();", app_js)
         self.assertIn("if (_evergreenObjectNodes.has(nodeId)) continue;", app_js)
-        # The section walks the evergreen object tree and emits one queue group
-        # (queue-health header + the queue's existing session rows) per child.
-        self.assertIn("const _renderEvergreenQueueGroup = (nodeId, seen) => {", app_js)
-        self.assertIn("const _evergreenAgentsBody = _evergreenRoots.map(n => _renderEvergreenQueueGroup(n)).join('');", app_js)
+        # The section is built from the cached server endpoints only: drain-on
+        # queues from /api/ux-fixes/health and live workers from /api/wt/workers.
+        self.assertIn("_uxqHealthCache.queues.filter(q => q && q.auto_drain === true)", app_js)
+        self.assertIn("const _twWorkers = (_wtWorkersCache && Array.isArray(_wtWorkersCache.workers))", app_js)
+        self.assertIn("const _twWorkersByQueue = new Map();", app_js)
+        # Workers resolve to the EXISTING session row via their cloud session_id.
+        self.assertIn("const card = sid ? _twCardById.get(sid) : null;", app_js)
+        self.assertIn("return _renderRow(card, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true });", app_js)
+        self.assertIn("return _twFallbackRow(w);", app_js)
+        self.assertIn("_twQueueHeaderHtml(q, workers.length)", app_js)
         self.assertIn("const _evergreenAgentsHtml = _evergreenAgentsBody", app_js)
         self.assertIn("+ _evergreenAgentsBody + '</div>'", app_js)
-        self.assertIn("_evergreenQueueHeaderHtml(group.title || '')", app_js)
         self.assertIn('class="conv-evergreen-queue-header', app_js)
+        # The section must NOT read Flow-object state for its data.
+        self.assertNotIn("const _renderEvergreenQueueGroup", app_js)
+        self.assertNotIn("_evergreenRoots", app_js)
         self.assertNotIn("_emitObjTree(n, 0, i + 1, { includeEvergreen: true })", app_js)
+        # Server-driven warm of BOTH caches with a single sig-gated re-render.
+        self.assertIn("async function _fetchWtWorkers()", app_js)
+        self.assertIn("await Promise.all([_fetchUxqHealth(), _fetchWtWorkers()]);", app_js)
+        # Section header renamed to Triggered Workers.
+        self.assertIn("+ 'Triggered Workers</div>'", app_js)
         self.assertIn('data-role="evergreen-agents-header"', app_js)
         self.assertIn('data-role="evergreen-agents-scroll"', app_js)
         self.assertIn(
@@ -1065,11 +1082,10 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         self.assertIn("const _evergreenSessionIds = new Set();", app_js)
-        # Queue-group rendering also collects each evergreen session id so those
-        # sessions stay out of the normal Current sessions list (they live in
-        # their queue group, not twice).
-        self.assertIn("if (sid) _evergreenSessionIds.add(sid);", app_js)
-        self.assertIn("const _evergreenAgentsBody = _evergreenRoots.map(n => _renderEvergreenQueueGroup(n)).join('');", app_js)
+        # When a worker resolves to a loaded session card, its id is collected so
+        # that session stays out of the normal Current sessions list (it lives in
+        # its queue group, not twice).
+        self.assertIn("if (cid) _evergreenSessionIds.add(cid);", app_js)
         self.assertIn("const _currentSessionSource = _ipSearchActive", app_js)
         self.assertIn("? (_visibleSessionConvs || []).slice()", app_js)
         self.assertIn(": (_visibleSessionConvs || []).filter(c => !_evergreenSessionIds.has(c.session_id || c.id || ''));", app_js)

@@ -21843,105 +21843,108 @@
         return html;
       };
       const _objGroupsHtml = _objRoots.map((n, i) => _emitObjTree(n, 0, i + 1)).join('');
-      const _evergreenRoots = Array.from(_evergreenObjectNodes)
-        .filter(n => !_evergreenObjectNodes.has(_treeParentOf(n) || ''));
-      // EVERGREEN AGENTS — the user parks long-lived /loop worker sessions under
-      // Flow objects, one object per queue (object title == queue name). These
-      // workers are manually run, NOT WatchTower-spawned, so they are not in
-      // workers.json and cannot be auto-mapped to a queue — the Flow object IS
-      // the grouping. We walk that object tree and, per object node, emit:
-      //   1) a compact queue-health HEADER (object title, enriched by matching
-      //      the title to a queue in the cached /api/ux-fixes/health "queues"
-      //      array: open depth · live workers · drain on/off · state), then
-      //   2) that object's session cards as the EXISTING worker rows (unchanged
-      //      `_renderRow(..., evergreenAgent:true)` format).
-      // Workers flicker (ephemeral); the queue header is the durable anchor.
-      const _evergreenQueuesData = (_uxqHealthCache && Array.isArray(_uxqHealthCache.queues))
-        ? _uxqHealthCache.queues : [];
-      const _evergreenQueueByName = new Map();
-      _evergreenQueuesData.forEach((q) => {
-        if (q && q.queue) _evergreenQueueByName.set(String(q.queue).toUpperCase(), q);
+      // TRIGGERED WORKERS — driven PURELY by WatchTower server data. This
+      // section reads NO Flow-object / localStorage state (no flowNodeParents,
+      // no flowCustomObjects, no _byObject). It is built from two cached server
+      // endpoints:
+      //   1) /api/ux-fixes/health "queues" → the drain-on queues (auto_drain
+      //      === true). Each becomes a header row with badges (open depth · live
+      //      worker count · drain on/off · state). A queue with zero workers
+      //      still shows its header — the queue is the durable anchor.
+      //   2) /api/wt/workers "workers" → live WatchTower workers, grouped by the
+      //      worker's own `queue` field. Each worker renders as the EXISTING
+      //      session row by resolving its cloud `session_id` to the loaded
+      //      conversation and calling `_renderRow(..., evergreenAgent:true)`. If
+      //      the session isn't in the loaded list (ephemeral / cross-project),
+      //      a minimal fallback row (worker id + queue) is rendered — never a
+      //      crash, never a silent skip.
+      // Workers are reaped after ~5min idle, so /api/wt/workers may be empty;
+      // headers still render. Scope: WatchTower queues + their workers only.
+      const _twQueues = (_uxqHealthCache && Array.isArray(_uxqHealthCache.queues))
+        ? _uxqHealthCache.queues.filter(q => q && q.auto_drain === true)
+        : [];
+      const _twWorkers = (_wtWorkersCache && Array.isArray(_wtWorkersCache.workers))
+        ? _wtWorkersCache.workers : [];
+      // Group live workers by their queue (uppercased key, e.g. "CCC").
+      const _twWorkersByQueue = new Map();
+      _twWorkers.forEach((w) => {
+        if (!w) return;
+        const key = String(w.queue || '').trim().toUpperCase();
+        if (!key) return;
+        (_twWorkersByQueue.get(key) || _twWorkersByQueue.set(key, []).get(key)).push(w);
       });
-      // Match an object title to a queue (case-insensitive). Try the normalized
-      // project key (uppercased + alias map, e.g. "ccc" → CCC, "BYM" → BYM),
-      // then a spaces-stripped fallback ("ux fixes" → UXFIXES). No match → the
-      // header still renders (title only), never hidden, never an error.
-      const _evergreenQueueForTitle = (title) => {
-        const t = String(title || '').trim();
-        if (!t) return null;
-        return _evergreenQueueByName.get(_uxqProjectKey(t))
-          || _evergreenQueueByName.get(t.replace(/\s+/g, '').toUpperCase())
-          || null;
+      // Resolve a worker's cloud session_id to its loaded conversation card so
+      // it renders as the normal session row. Workers can live in any project,
+      // so the lookup spans the full loaded conversation list.
+      const _twCardById = new Map();
+      (Array.isArray(conversationsData) ? conversationsData : []).forEach((c) => {
+        if (!c) return;
+        const sid = c.session_id || c.id;
+        if (sid && !_twCardById.has(sid)) _twCardById.set(sid, c);
+      });
+      // Minimal fallback when a worker's session isn't in the loaded list.
+      const _twFallbackRow = (w) => {
+        const wid = String((w && w.worker_id) || 'worker');
+        const q = String((w && w.queue) || '');
+        return '<div class="conv-evergreen-worker-fallback" title="'
+          + escapeAttr(wid + (q ? ' · ' + q : '')) + '">'
+          + '<span class="cewf-dot" aria-hidden="true">&#9679;</span>'
+          + '<span class="cewf-id">' + escapeHtml(wid.slice(0, 28)) + '</span>'
+          + (q ? '<span class="cewf-queue">' + escapeHtml(q) + '</span>' : '')
+          + '</div>';
       };
-      const _evergreenQueueHeaderHtml = (title) => {
-        const label = String(title || '').trim() || 'Untitled';
-        const q = _evergreenQueueForTitle(title);
-        let meta = '';
-        let tip = label;
-        if (q) {
-          const depth = Number(q.depth) || 0;
-          const workers = Number(q.workers) || 0;
-          const drainOn = !!q.auto_drain;
-          const state = String(q.state || (drainOn ? 'draining' : 'backlog'));
-          const stateCls = state === 'stuck' ? 'is-stuck' : (state === 'draining' ? 'is-draining' : 'is-backlog');
-          tip = label + ': ' + depth + ' open · ' + workers + ' worker' + (workers === 1 ? '' : 's')
-            + ' · drain ' + (drainOn ? 'on' : 'off') + ' · ' + state;
-          meta = '<span class="ceq-meta">'
-            + '<span class="ceq-depth">' + depth + ' open</span>'
-            + '<span class="ceq-sep">·</span>'
-            + '<span class="ceq-workers">' + workers + ' worker' + (workers === 1 ? '' : 's') + '</span>'
-            + '<span class="ceq-sep">·</span>'
-            + '<span class="ceq-drain ' + (drainOn ? 'is-on' : 'is-off') + '">drain ' + (drainOn ? 'on' : 'off') + '</span>'
-            + '</span>'
-            + '<span class="ceq-state ' + stateCls + '">' + escapeHtml(state) + '</span>';
-        }
-        return '<div class="conv-evergreen-queue-header' + (q ? '' : ' is-unmatched') + '"'
+      const _twQueueHeaderHtml = (q, liveWorkers) => {
+        const label = String((q && q.queue) || '').trim() || 'Untitled';
+        const depth = Number(q && q.depth) || 0;
+        const workers = Number(liveWorkers) || 0;
+        const drainOn = !!(q && q.auto_drain);
+        const state = String((q && q.state) || (drainOn ? 'draining' : 'backlog'));
+        const stateCls = state === 'stuck' ? 'is-stuck' : (state === 'draining' ? 'is-draining' : 'is-backlog');
+        const tip = label + ': ' + depth + ' open · ' + workers + ' worker' + (workers === 1 ? '' : 's')
+          + ' · drain ' + (drainOn ? 'on' : 'off') + ' · ' + state;
+        const meta = '<span class="ceq-meta">'
+          + '<span class="ceq-depth">' + depth + ' open</span>'
+          + '<span class="ceq-sep">·</span>'
+          + '<span class="ceq-workers">' + workers + ' worker' + (workers === 1 ? '' : 's') + '</span>'
+          + '<span class="ceq-sep">·</span>'
+          + '<span class="ceq-drain ' + (drainOn ? 'is-on' : 'is-off') + '">drain ' + (drainOn ? 'on' : 'off') + '</span>'
+          + '</span>'
+          + '<span class="ceq-state ' + stateCls + '">' + escapeHtml(state) + '</span>';
+        return '<div class="conv-evergreen-queue-header"'
           + ' title="' + escapeAttr(tip) + '">'
           + '<span class="ceq-name">' + escapeHtml(label) + '</span>'
           + meta
           + '</div>';
       };
-      // Walk the evergreen object tree. The evergreen-titled container node
-      // ("Evergreen Agents") is the section itself, so it does NOT emit its own
-      // header — only its child objects (one per queue: "CCC", "BYM", ...) get a
-      // queue header. Each queue object → one group (header + its session rows);
-      // its session ids are collected so those sessions are still suppressed
-      // from the normal "Current sessions" list (they live here, not twice).
+      // Worker sessions live here, not twice — collect their ids so the flat
+      // "Current sessions" list below suppresses them (same intent as before).
       const _evergreenSessionIds = new Set();
-      const _renderEvergreenQueueGroup = (nodeId, seen) => {
-        seen = seen || new Set();
-        if (seen.has(nodeId)) return '';
-        seen.add(nodeId);
-        const group = _byObject.get(nodeId);
-        if (!group) return '';
-        const isContainer = _evergreenObjectNodes.has(nodeId);
-        const cards = sortedObjectCardsForRender(nodeId, group.cards || []);
-        cards.forEach(c => {
-          const sid = c.session_id || c.id || '';
-          if (sid) _evergreenSessionIds.add(sid);
-        });
-        const rows = cards
-          .map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true }))
-          .join('');
-        let html = '';
-        if (isContainer) {
-          // Section container: no header; render any direct sessions plainly.
-          if (rows) html += '<div class="conv-evergreen-queue-group">' + rows + '</div>';
-        } else {
-          html += '<div class="conv-evergreen-queue-group">'
-            + _evergreenQueueHeaderHtml(group.title || '')
-            + rows
-            + '</div>';
-        }
-        (_childrenOf.get(nodeId) || []).forEach(k => { html += _renderEvergreenQueueGroup(k, seen); });
-        return html;
-      };
-      const _evergreenAgentsBody = _evergreenRoots.map(n => _renderEvergreenQueueGroup(n)).join('');
+      // Stable order: alphabetical by queue name (depth churns every poll).
+      const _twQueuesSorted = _twQueues.slice().sort((a, b) =>
+        String((a && a.queue) || '').localeCompare(String((b && b.queue) || '')));
+      const _evergreenAgentsBody = _twQueuesSorted.map((q) => {
+        const key = String((q && q.queue) || '').trim().toUpperCase();
+        const workers = _twWorkersByQueue.get(key) || [];
+        const rows = workers.map((w) => {
+          const sid = w && w.session_id;
+          const card = sid ? _twCardById.get(sid) : null;
+          if (card) {
+            const cid = card.session_id || card.id;
+            if (cid) _evergreenSessionIds.add(cid);
+            return _renderRow(card, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true });
+          }
+          return _twFallbackRow(w);
+        }).join('');
+        return '<div class="conv-evergreen-queue-group">'
+          + _twQueueHeaderHtml(q, workers.length)
+          + rows
+          + '</div>';
+      }).join('');
       const _evergreenAgentsHtml = _evergreenAgentsBody
         ? '<div class="conv-project-tree conv-evergreen-agents-tree">' + _evergreenAgentsBody + '</div>'
         : '';
-      // Warm the queue-health cache in the background; re-renders once when the
-      // queue snapshot changes so the headers fill in after first paint.
+      // Warm the queue-health + worker caches in the background; re-renders once
+      // when either snapshot changes so headers/rows fill in after first paint.
       _ensureEvergreenQueuesFresh();
       // Codex-layout: stacked regions in the by-objects view.
       //  1) "Current sessions" — every session active in the selected window
@@ -22106,32 +22109,23 @@
           + _addObjectBtnHtml
           + '</div>'
         : '';
-      // Collapse/expand for the Evergreen Agents section so it can be folded
+      // Collapse/expand for the Triggered Workers section so it can be folded
       // down to give the project tree more room (CCC-282). State persists; the
-      // click handler toggles in place (no re-render → no scroll jump).
+      // click handler toggles in place (no re-render → no scroll jump). No
+      // object drop-target: the section is server-driven, not Flow-backed.
       let _evergreenCollapsed = false;
       try { _evergreenCollapsed = localStorage.getItem('ccc-evergreen-agents-collapsed') === '1'; } catch (_) {}
       const _evergreenChevron = _evergreenCollapsed ? '&#9656;' : '&#9662;';
-      // Drop target so sessions can be dragged into the Evergreen Agents section
-      // (CCC-284). The existing [data-object-drop-zone] handler reparents dropped
-      // conv ids onto this object node via reparentConversationIdsToObject, which
-      // is exactly how a session "becomes" evergreen (membership in the object
-      // titled "Evergreen Agents"). Tag both the header and the scroll so a drop
-      // works even when the list is collapsed.
-      const _evergreenDropAttr = _evergreenRoots.length
-        ? ' data-object-drop-zone="' + escapeAttr(_evergreenRoots[0]) + '"'
-        : '';
       const _evergreenAgentsHeaderHtml = _evergreenAgentsHtml
         ? '<div class="conv-objects-section-label conv-evergreen-agents-header' + (_evergreenCollapsed ? ' is-collapsed' : '')
           + '" data-role="evergreen-agents-header" role="button" tabindex="0"'
-          + _evergreenDropAttr
-          + ' title="Collapse / expand Evergreen Agents · drop a session here to add it">'
+          + ' title="Collapse / expand Triggered Workers">'
           + '<span class="conv-section-collapse-chevron" data-role="evergreen-agents-collapse" aria-hidden="true">' + _evergreenChevron + '</span>'
-          + 'Evergreen Agents</div>'
+          + 'Triggered Workers</div>'
         : '';
       const _evergreenAgentsScrollHtml = _evergreenAgentsHtml
         ? '<div class="conv-evergreen-agents-scroll' + (_evergreenCollapsed ? ' is-collapsed' : '')
-          + '" data-role="evergreen-agents-scroll"' + _evergreenDropAttr + '>' + _evergreenAgentsHtml + '</div>'
+          + '" data-role="evergreen-agents-scroll">' + _evergreenAgentsHtml + '</div>'
         : '';
       const _currentIds = new Set(_currentSessions.map(c => c.session_id || c.id));
       const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));
@@ -27234,17 +27228,38 @@
     } catch (_) { /* keep stale cache */ }
     return _uxqHealthCache;
   }
-  // The Evergreen sidebar section renders queue headers synchronously from the
-  // cache (above), then this warms the cache in the background and triggers ONE
-  // re-render when the queue snapshot actually changes. Mirrors the queue-health
-  // strip's async-fetch-then-render pattern, but the sidebar render is sync so we
-  // re-render rather than patch a static node. Sig-gated → no render storm.
+  // Live WatchTower workers (GET /api/wt/workers). Sibling cache to the queue
+  // snapshot so the Triggered Workers sidebar section can render synchronously
+  // and refresh on the same background warm. Each row carries `queue` and the
+  // cloud `session_id` used to resolve the worker to its session row.
+  let _wtWorkersCache = { ts: 0, workers: [] };
+  async function _fetchWtWorkers() {
+    if (Date.now() - _wtWorkersCache.ts < 15000) return _wtWorkersCache;
+    try {
+      const res = await fetch('/api/wt/workers', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      const workers = Array.isArray(data && data.workers) ? data.workers : [];
+      _wtWorkersCache = { ts: Date.now(), workers };
+    } catch (_) { /* keep stale cache */ }
+    return _wtWorkersCache;
+  }
+  // The Triggered Workers sidebar section renders queue headers + worker rows
+  // synchronously from the caches (above), then this warms BOTH caches in the
+  // background and triggers ONE re-render when either snapshot actually changes.
+  // Mirrors the queue-health strip's async-fetch-then-render pattern, but the
+  // sidebar render is sync so we re-render rather than patch a static node.
+  // Sig-gated → no render storm.
   let _evergreenQueuesSig = null;
   async function _ensureEvergreenQueuesFresh() {
     try {
-      await _fetchUxqHealth();
-      const queues = (_uxqHealthCache && _uxqHealthCache.queues) || [];
-      const sig = JSON.stringify(queues.map(q => [q.queue, q.depth, q.workers, q.auto_drain, q.state]));
+      await Promise.all([_fetchUxqHealth(), _fetchWtWorkers()]);
+      const queues = ((_uxqHealthCache && _uxqHealthCache.queues) || [])
+        .filter(q => q && q.auto_drain === true);
+      const workers = (_wtWorkersCache && _wtWorkersCache.workers) || [];
+      const sig = JSON.stringify([
+        queues.map(q => [q.queue, q.depth, q.workers, q.auto_drain, q.state]),
+        workers.map(w => [w.worker_id, w.queue, w.session_id, w.alive]),
+      ]);
       if (sig !== _evergreenQueuesSig) {
         _evergreenQueuesSig = sig;
         if (typeof conversationsData !== 'undefined' && conversationsData) {

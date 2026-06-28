@@ -4351,6 +4351,26 @@
   .conv-evergreen-queue-header .ceq-state.is-stuck {
     background: rgba(248,81,73,0.18); color: var(--red, #f85149);
   }
+  /* Fallback worker row — shown when a live worker's cloud session_id isn't in
+     the loaded conversation list (ephemeral / cross-project / not yet
+     discovered). Minimal: a dot, the worker id, and its queue. */
+  .conv-evergreen-worker-fallback {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 6px 3px 9px;
+    font-size: 11.5px; line-height: 1.3;
+    color: var(--text-muted);
+  }
+  .conv-evergreen-worker-fallback .cewf-dot {
+    color: var(--green, #3fb950); font-size: 8px; flex-shrink: 0;
+  }
+  .conv-evergreen-worker-fallback .cewf-id {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: var(--mono, ui-monospace, monospace);
+  }
+  .conv-evergreen-worker-fallback .cewf-queue {
+    margin-left: auto; flex-shrink: 0; opacity: 0.7;
+    text-transform: uppercase; letter-spacing: 0.03em; font-size: 9.5px;
+  }
   .conv-project-tree { padding-left: 7px; }
   .conv-project-tree .conv-folder-group { margin: 0; }
   /* Kill the default group vertical rail — we use a per-row border-left
