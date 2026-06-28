@@ -1513,7 +1513,17 @@
   var host = window.location.hostname || '127.0.0.1';
   if (host === 'localhost' || host === '::1' || host === '[::1]') host = '127.0.0.1';
   if (host.indexOf(':') !== -1 && host.charAt(0) !== '[') host = '[' + host + ']';
-  document.write('<script src="http://' + host + ':' + port + '/ccc-plugin.js" defer><\/script>');
+  var url = 'http://' + host + ':' + port + '/ccc-plugin.js';
+  // Probe first with a short abort timeout so a slow or absent gateway doesn't
+  // block page-load or networkidle2 (OPS-6). The Hermes plugin is optional.
+  var ctrl = new AbortController();
+  setTimeout(function() { ctrl.abort(); }, 400);
+  fetch(url, { signal: ctrl.signal }).then(function(r) {
+    if (!r.ok) return;
+    var s = document.createElement('script');
+    s.src = url;
+    document.head.appendChild(s);
+  }).catch(function() {});
 })();
 </script>
 <script src="/static/app.js"></script>
