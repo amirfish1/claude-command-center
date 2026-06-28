@@ -34529,6 +34529,19 @@ def _append_ship_log(job, text, level):
         del log[: len(log) - 200]
 
 
+def _ship_waiting_on_from_acks(acks):
+    """Small serializable waiting list for the Push all panel."""
+    out = []
+    for a in acks or []:
+        status = "done" if a.get("acked") else ("pending" if a.get("jsonl") is not None else "sent")
+        out.append({
+            "sid": a.get("sid") or "",
+            "name": a.get("name") or str(a.get("sid") or "")[:8],
+            "status": status,
+        })
+    return out
+
+
 def _ship_log(repo_path, text, level="info"):
     """Append a standalone log line (no phase change)."""
     with _ship_jobs_lock:
@@ -34608,6 +34621,11 @@ def _ship_read_reply(jsonl_path, start_offset, since_epoch):
 
 _SHIP_JUNK_MARKERS = (
     "__pycache__/", ".claude/annotations/", ".DS_Store",
+    # Annotation screenshots and pasted images captured by the CCC annotation
+    # tool. These live under .claude/command-center/ and are input data for the
+    # UX-fixes queue — they're never repo assets.
+    ".claude/command-center/annotation-screenshots/",
+    ".claude/command-center/pasted-images/",
     # Editor / tool local state — always gitignore material, never committed.
     # Matched as substrings because they live anywhere in the tree (e.g.
     # apps/x/.obsidian/). Without them, this cruft falls through to
@@ -34615,13 +34633,23 @@ _SHIP_JUNK_MARKERS = (
     # apps/ prefix, and parks Push all every time on pure junk.
     ".obsidian/", ".idea/",
 )
-# Top-level cruft dirs, matched by prefix so a legit src/cache/ deeper in the
-# tree is never swept (e.g. repo-root cache/projects.json → junk).
-_SHIP_JUNK_PREFIXES = ("cache/",)
+# Top-level cruft dirs/files, matched by prefix so a legit src/cache/ deeper
+# in the tree is never swept (e.g. repo-root cache/projects.json → junk).
+# .wt-* / .wk-* are worktree-scoped temp files dropped at the repo root by
+# Claude worktree workflows (snapshots, inline answers, etc.) — never assets.
+_SHIP_JUNK_PREFIXES = ("cache/", ".wt-", ".wk-")
+
+# Media extensions that are always junk when they appear under .claude/ —
+# screenshots, pasted images, captures. They are not repo assets.
+_SHIP_CLAUDE_MEDIA_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov")
 
 
 def _ship_is_junk(path):
     """Untracked cruft that should be gitignored, never committed."""
+    # Any image/media file anywhere under .claude/ is a screenshot or capture,
+    # not a repo asset (CLAUDE.md, rules/*.md etc. are text and not affected).
+    if path.startswith(".claude/") and path.lower().endswith(_SHIP_CLAUDE_MEDIA_EXTS):
+        return True
     return (
         path.endswith((".pyc", ".DS_Store"))
         or path.startswith(_SHIP_JUNK_PREFIXES)
@@ -35308,13 +35336,19 @@ def _run_ship_flow(repo_path, branch):
             # only when there's a reply we can actually read; a short grace
             # suffices when every nudge went to a non-readable engine.
             wait_cap = 0 if not nudged else (SHIP_COMMIT_WAIT_CAP if trackable else 15)
+            waiting_on = _ship_waiting_on_from_acks(acks)
             _ship_update(repo_path, "waiting_commits",
                          f"Waiting for {len(nudged)} session(s) to reply…",
-                         nudged=nudged)
+                         nudged=nudged, waiting_on=waiting_on)
             deadline = time.time() + wait_cap
             last_remaining = None
             while time.time() < deadline:
+                with _ship_jobs_lock:
+                    continue_requested = bool((_ship_jobs.get(repo_path) or {}).get("continue_requested"))
+                if continue_requested:
+                    break
                 # Listen for each session's reply (the missing back-channel).
+                waiting_changed = False
                 for a in trackable:
                     if a["acked"]:
                         continue
@@ -35324,10 +35358,17 @@ def _run_ship_flow(repo_path, branch):
                     # (e.g. it answering a different question).
                     if reply and re.search(r"\bDONE\b", reply):
                         a["acked"] = True
+                        waiting_changed = True
                         _record_ship_ack(a["sid"])
                         done_line = next((l.strip() for l in reply.splitlines()
                                           if "DONE" in l), reply.splitlines()[0])
                         _ship_log(repo_path, f"✓ {a['name']}: {done_line[:140]}", "ok")
+                if waiting_changed:
+                    pending = len([a for a in trackable if not a.get("acked")])
+                    _ship_update(repo_path, "waiting_commits",
+                                 f"Waiting for {pending} session(s) to reply…",
+                                 log=False, nudged=nudged,
+                                 waiting_on=_ship_waiting_on_from_acks(acks))
                 rc, out, err = _git(["status", "--porcelain"], repo_path)
                 if rc == 0 and not out.strip():
                     dirty = False
@@ -35483,6 +35524,29 @@ def repo_ship_status(repo_path):
         "last_ship_sha": persisted.get("last_ship_sha"),
         "vercel": bool(_resolve_vercel_project(repo_path)),
     }
+
+
+def continue_repo_ship(repo_path):
+    """Ask a live Push all wait loop to stop waiting for remaining replies."""
+    with _ship_jobs_lock:
+        job = _ship_jobs.get(repo_path)
+        if not job:
+            return {"ok": False, "error": "no active ship job"}
+        if not job.get("running") or job.get("phase") != "waiting_commits":
+            return {"ok": False, "error": "ship job is not waiting for replies", "job": dict(job)}
+        job["continue_requested"] = True
+        job["updated_at"] = time.time()
+        _append_ship_log(
+            job,
+            "Continue requested — no longer waiting for remaining commit replies.",
+            "warn",
+        )
+        snapshot = dict(job)
+    try:
+        _persist_ship_job(repo_path, snapshot)
+    except OSError:
+        pass
+    return {"ok": True, "job": snapshot}
 
 
 def _execute_ship_action(repo_path, action):
@@ -44101,6 +44165,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 ctx = require_repo_context(payload, allow_session=False)
                 self.send_json(apply_ship_action(
                     ctx["repo_path"], payload.get("id"), payload.get("decision")))
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+            return
+        if path == "/api/repo/ship/continue":
+            # Stop waiting for remaining Push-all commit replies and advance to
+            # the normal source-of-truth git check / handoff path.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            try:
+                ctx = require_repo_context(payload, allow_session=False)
+                result = continue_repo_ship(ctx["repo_path"])
+                self.send_json(result, 200 if result.get("ok") else 409)
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
             return
