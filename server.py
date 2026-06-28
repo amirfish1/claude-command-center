@@ -20020,26 +20020,13 @@ def _start_resume_queue_watcher() -> None:
     threading.Thread(target=_watcher, daemon=True, name="resume-queue-watcher").start()
 
 
-# ── UX-fixes queue worker nudge (CCC-100) ───────────────────────────────────
-# Periodically nudges idle queue-worker sessions with "continue" while their
-# project still has open tickets. Flood safety, in order of authority:
-#   1. Never nudge a session that is live AND busy (mid-turn, tool running,
-#      transcript recently written, or an AskUserQuestion pending).
-#   2. One ping per progress level: we remember the worker's highest closed
-#      ticket seq at ping time; if that number has not advanced since the
-#      last ping, no second ping is sent — a stuck or dead worker gets
-#      exactly one nudge, not a drumbeat.
-#   3. A minimum 10-minute gap between pings to the same session, even
-#      across progress levels.
-_UXQ_NUDGE_STATE_FILE = Path.home() / ".claude" / "command-center" / "uxq-nudge-state.json"
-# Sessions the user has explicitly retired: the nudge watcher must never inject
-# "continue" into them, even while their project has open tickets. A finished
-# worker (all its claims closed) otherwise keeps getting pinged forever as new
-# tickets arrive — see _uxq_nudge_tick. JSON list of session-id strings.
-_UXQ_NUDGE_OPTOUT_FILE = Path.home() / ".claude" / "command-center" / "uxq-nudge-optout.json"
-_UXQ_NUDGE_INTERVAL_S = 120
-_UXQ_NUDGE_MIN_GAP_S = 600
-_UXQ_NUDGE_TEXT = "continue"
+# ── UX-fixes queue fixer resolution ─────────────────────────────────────────
+# The old CCC-100 "continue" nudge watcher was removed: WatchTower now owns
+# queue draining end-to-end (it pushes new work to a live worker's stream-json
+# FIFO and resumes blocked sessions itself), so CCC injecting "continue" into
+# queue workers is redundant — and worse, its loose claimer-resolution could
+# match and double-wake a WT-spawned worker. The fixer-resolution helpers below
+# survive because /api/ux-fixes/health still reports per-project liveness/stuck.
 _UXQ_NUDGE_LOOKBACK_S = 48 * 3600
 _UXQ_SESSION_ID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -20104,171 +20091,12 @@ def _uxq_spawn_names_to_sids():
     return out
 
 
-def _uxq_nudge_load_state():
-    try:
-        with open(_UXQ_NUDGE_STATE_FILE) as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _uxq_nudge_save_state(state):
-    try:
-        _UXQ_NUDGE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = str(_UXQ_NUDGE_STATE_FILE) + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(state, f, indent=2)
-        os.replace(tmp, _UXQ_NUDGE_STATE_FILE)
-    except OSError:
-        pass
-
-
-def _uxq_nudge_load_optout():
-    """Set of lowercased session-ids the user retired from queue nudging."""
-    try:
-        with open(_UXQ_NUDGE_OPTOUT_FILE) as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return set()
-    if isinstance(data, dict):
-        data = data.get("sessions") or []
-    if not isinstance(data, list):
-        return set()
-    return {str(s).strip().lower() for s in data if str(s).strip()}
-
-
-def _uxq_nudge_set_optout(session_id, retired=True):
-    """Add or remove a session-id from the nudge opt-out list. Returns the new
-    sorted list (lowercased). Atomic write."""
-    sid = str(session_id or "").strip().lower()
-    if not sid:
-        return sorted(_uxq_nudge_load_optout())
-    current = _uxq_nudge_load_optout()
-    if retired:
-        current.add(sid)
-    else:
-        current.discard(sid)
-    out = sorted(current)
-    try:
-        _UXQ_NUDGE_OPTOUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = str(_UXQ_NUDGE_OPTOUT_FILE) + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump({"sessions": out}, f, indent=2)
-        os.replace(tmp, _UXQ_NUDGE_OPTOUT_FILE)
-    except OSError:
-        pass
-    return out
-
-
 def _uxq_parse_ts(value):
     try:
         return datetime.fromisoformat(str(value or "").replace("Z", "+00:00")).timestamp()
     except (ValueError, TypeError):
         return 0
 
-
-def _uxq_nudge_tick():
-    items = _q.list_items()
-    now = time.time()
-    open_by_project = {}
-    # Highest OPEN ticket seq per project. New work arriving (a freshly
-    # enqueued ticket with a seq above what we'd seen) is a legitimate reason
-    # to re-nudge an idle worker even if its closed-ticket progress is flat —
-    # otherwise a worker that already spent its one nudge never learns that
-    # new tickets landed and they sit unworked forever.
-    open_max_seq = {}
-    workers = {}  # sid(lower) → {project, progress, last_ts}
-    # First pass: open-ticket depth per project. We must know which projects
-    # have open work before resolving label-claimed fixers, so the (cheap)
-    # spawn-registry read is candidacy-gated to only those projects.
-    for it in items:
-        if it.get("status") == "open":
-            proj = str(it.get("project") or "?")
-            open_by_project[proj] = open_by_project.get(proj, 0) + 1
-            open_max_seq[proj] = max(open_max_seq.get(proj, 0), int(it.get("seq") or 0))
-    # Build the name→sid map once, only if some project actually has open work
-    # (otherwise there is nothing to nudge and no reason to read the registry).
-    registry_by_name = _uxq_spawn_names_to_sids() if open_by_project else {}
-    for it in items:
-        proj = str(it.get("project") or "?")
-        # Only resolve fixers for projects with open tickets — same candidacy
-        # gate as the registry read above; nothing else can be nudged.
-        if open_by_project.get(proj, 0) <= 0:
-            continue
-        sid = _uxq_resolve_fixer_sid(it, registry_by_name=registry_by_name)
-        if not sid:
-            continue
-        ts = _uxq_parse_ts(it.get("updated_at") or it.get("claimed_at"))
-        if not ts or (now - ts) > _UXQ_NUDGE_LOOKBACK_S:
-            continue
-        key = sid.lower()
-        w = workers.setdefault(key, {"project": proj, "progress": 0, "last_ts": 0})
-        if it.get("status") == "closed":
-            w["progress"] = max(w["progress"], int(it.get("seq") or 0))
-        if ts > w["last_ts"]:
-            w["last_ts"] = ts
-            w["project"] = proj
-    if not workers:
-        return
-    optout = _uxq_nudge_load_optout()
-    state = _uxq_nudge_load_state()
-    changed = False
-    for sid, w in workers.items():
-        if sid in optout:
-            continue  # user retired this session — never nudge it
-        if open_by_project.get(w["project"], 0) <= 0:
-            continue  # queue drained for this worker's project
-        st = state.get(sid) or {}
-        cur_open_seq = open_max_seq.get(w["project"], 0)
-        # Rule 2 (refined): re-ping only when something changed since the last
-        # ping — EITHER the worker closed a new ticket (progress advanced) OR a
-        # newer ticket was enqueued for its project (cur_open_seq advanced).
-        # If neither moved, the worker is stuck/dead with no new work: one
-        # nudge per progress level, no drumbeat. (Legacy state lacks
-        # pinged_at_open_seq → defaults to -1 → new work re-pings once.)
-        if (st.get("pinged_at_progress") == w["progress"]
-                and st.get("pinged_at_open_seq", -1) == cur_open_seq):
-            continue
-        if st.get("pinged_at") and (now - float(st["pinged_at"])) < _UXQ_NUDGE_MIN_GAP_S:
-            continue  # rule 3
-        try:
-            status = session_live_status(sid, find_session_cwd(sid)) or {}
-        except Exception:
-            continue
-        if _ask_question_blocking_inject(sid, status):
-            continue
-        if status.get("live") and (
-            _session_status_is_busy(status)
-            or status.get("recently_written")
-            or (status.get("sidecar_status") == "active" and status.get("sidecar_in_flight"))
-        ):
-            continue  # working — leave it alone (rule 1)
-        try:
-            _inject_text_into_session(sid, _UXQ_NUDGE_TEXT)
-        except Exception:
-            continue
-        state[sid] = {
-            "pinged_at_progress": w["progress"],
-            "pinged_at_open_seq": cur_open_seq,
-            "pinged_at": now,
-            "project": w["project"],
-        }
-        changed = True
-    if changed:
-        _uxq_nudge_save_state(state)
-
-
-def start_uxq_nudge_watcher():
-    def _watcher():
-        time.sleep(90)  # let the server finish booting before the first scan
-        while True:
-            try:
-                _uxq_nudge_tick()
-            except Exception:
-                pass
-            time.sleep(_UXQ_NUDGE_INTERVAL_S)
-    threading.Thread(target=_watcher, daemon=True, name="uxq-nudge-watcher").start()
 
 
 # Minutes a fixer can make no closing progress before its project's queue is
@@ -41954,18 +41782,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/ux-fixes/health":
             # Candidacy-gated per-project queue-health: depth, oldest-open age,
-            # the fixer's liveness, and whether the project is STUCK. When any
-            # project is stuck we run the existing nudge tick (autonomous detect
-            # → inject the same wake the manual nudge sends), honouring its own
-            # per-session throttle/opt-out state — no second throttle map. A
+            # the fixer's liveness, and whether the project is STUCK. Reporting
+            # only — WatchTower owns waking/spawning workers now (FIFO push +
+            # reconcile); CCC no longer injects "continue" into queue workers. A
             # stuck project with no resolvable fixer is reported, never spawned.
             try:
                 health = compute_ux_fixes_health()
-                if any(p.get("stuck") for p in health):
-                    try:
-                        _uxq_nudge_tick()
-                    except Exception:
-                        pass
                 wt_workers = []
                 if _WT_WORKERS_AVAILABLE:
                     try:
@@ -43624,28 +43446,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 tmp.write_text(json.dumps(existing, indent=1) + "\n")
                 tmp.replace(notes_file)
                 self.send_json({"ok": True, "count": len(clean)})
-            except Exception as e:
-                self.send_json({"error": str(e)}, 400)
-            return
-
-        if path == "/api/uxq/retire":
-            # Retire (or un-retire) a session from the UX-fixes-queue nudge
-            # watcher, which otherwise keeps injecting "continue" into a worker
-            # whose project still has open tickets — forever, for a finished
-            # session. Body: {session_id, retired?: bool (default true)}.
-            # Same-origin already enforced by do_POST's _check_same_origin.
-            try:
-                content_len = int(self.headers.get("Content-Length", 0) or 0)
-                body = self.rfile.read(content_len) if content_len else b""
-                data = json.loads(body) if body else {}
-                sid = str(data.get("session_id") or "").strip()
-                if not sid:
-                    self.send_json({"error": "session_id required"}, 400)
-                    return
-                retired = data.get("retired", True)
-                out = _uxq_nudge_set_optout(sid, retired=bool(retired))
-                self.send_json({"ok": True, "retired": bool(retired),
-                                "session_id": sid, "count": len(out)})
             except Exception as e:
                 self.send_json({"error": str(e)}, 400)
             return
@@ -50161,7 +49961,6 @@ def main():
     _load_cwd_relocation_cache()
     _load_session_cwd_overrides()
     _load_stats_file_cache()
-    start_uxq_nudge_watcher()
     try:
         _SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
     except OSError:
