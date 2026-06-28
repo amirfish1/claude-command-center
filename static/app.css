@@ -6094,7 +6094,7 @@
     }
     .conv-input-row-top { flex: 1 1 0; min-width: 0; width: auto; }
     .conv-input-row-bottom { flex: 0 0 auto; }
-    .conv-input-bar textarea { max-height: 40px; }
+    .conv-input-bar textarea { max-height: 120px; }
     .conv-announced-from span { display: none; }
     .conv-input-bar .conv-announced-from-input { width: 74px; flex-basis: 74px; }
     /* TTS back inline — the FAB position overlapped the goal strip × button
