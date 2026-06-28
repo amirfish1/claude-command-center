@@ -11931,6 +11931,7 @@ def build_model_advisor_report(persist=True):
     up the savings monitor. Reuses build_live_sessions_activity() for the live
     map so we inherit its candidacy gating — no extra full scan."""
     live_recs = []
+    scanned = []
     try:
         live = build_live_sessions_activity()
     except Exception:
@@ -11944,14 +11945,36 @@ def build_model_advisor_report(persist=True):
             if not turns:
                 continue
             current = _advisor_current_model(sid, turns)
+            window = model_advisor.score_window(turns)
             rec = model_advisor.recommend(current, turns)
+            name = _advisor_session_name(sid, path)
+            family = model_advisor._family(current)
+
+            # Every checked session goes into the scan log (transparency).
+            scanned.append({
+                "session_id": sid,
+                "name": name,
+                "current_model": family,
+                "score": window.get("score"),
+                "recent_score": window.get("recent_score"),
+                "phase": window.get("phase"),
+                "recent_phase": window.get("recent_phase"),
+                "transition": window.get("transition"),
+                "features": window.get("features", {}),
+                "rec": {
+                    "action": rec["action"],
+                    "to_model": rec["to_model"],
+                    "reason": rec.get("reason", ""),
+                    "confidence": rec.get("confidence", ""),
+                } if rec else None,
+            })
+
             if not rec:
                 continue
             # Already switched to (or past) the target? Nothing to nudge.
             if model_advisor.model_tier(current) <= model_advisor.model_tier(rec["to_model"]) \
                     and rec["action"] != "upgrade":
                 continue
-            name = _advisor_session_name(sid, path)
             baseline = _session_cumulative_out_tokens(sid)
             stored = (
                 model_advisor.log_recommendation(
@@ -11965,7 +11988,7 @@ def build_model_advisor_report(persist=True):
                     "id": (stored or {}).get("id"),
                     "session_id": sid,
                     "name": name,
-                    "current_model": model_advisor._family(current),
+                    "current_model": family,
                     "status": (stored or {}).get("status", "pending"),
                     **rec,
                 }
@@ -11986,6 +12009,7 @@ def build_model_advisor_report(persist=True):
     return {
         "ok": True,
         "live": live_recs,
+        "scanned": scanned,
         "log": list(reversed(data.get("recommendations", [])))[:100],
         "summary": model_advisor.summarize(data),
     }
