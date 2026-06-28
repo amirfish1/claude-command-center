@@ -43926,14 +43926,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             _selector = meta["selector"]
             _outer = meta["outer_html"]
             if _selector and _base_note:
-                _full_text = f"{_base_note}
-
-Selector: {_selector}"
+                _full_text = f"{_base_note}\n\nSelector: {_selector}"
                 if _outer:
-                    _full_text += f"
-
-Element HTML:
-{_outer}"
+                    _full_text += f"\n\nElement HTML:\n{_outer}"
             else:
                 _full_text = _base_note
             result = enqueue_annotation_ux_fixes_queue(
