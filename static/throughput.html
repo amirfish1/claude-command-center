@@ -1464,10 +1464,10 @@
       const daily = bucketMode === 'daily';
       const sixhourly = bucketMode === 'sixhourly';
       document.getElementById('chart-title-label').textContent = isAggregate
-        ? (daily ? 'Daily Cache-Adjusted Burn' : sixhourly ? '6-Hour Cache-Adjusted Burn' : 'Hourly Cache-Adjusted Burn')
+        ? (daily ? 'Daily Cache-Adjusted Burn' : sixhourly ? '3-Hour Cache-Adjusted Burn' : 'Hourly Cache-Adjusted Burn')
         : 'Cache-Adjusted Throughput per Turn';
       document.getElementById('chart-legend-label').textContent = isAggregate
-        ? (daily ? 'Cache-adj tokens / day' : sixhourly ? 'Cache-adj tokens / 6h' : 'Cache-adj tokens / hour')
+        ? (daily ? 'Cache-adj tokens / day' : sixhourly ? 'Cache-adj tokens / 3h' : 'Cache-adj tokens / hour')
         : 'Cache-adj tokens';
 
       // Determine whether the weekly % overlay is available for this view.
@@ -1482,14 +1482,14 @@
       const rightPad = (showWeeklyOverlay || showCumulative) ? 52 : 30;
       const padding = { top: 20, right: rightPad, bottom: 40, left: 60 };
 
-      // Build sourceRows — aggregate hourly data into 6h buckets for sixhourly mode.
+      // Build sourceRows — aggregate hourly data into 3h buckets for sixhourly mode.
       let buckets;
       if (sixhourly) {
         const hourly = (summary && summary.hourly) || [];
         const groups = new Map();
         hourly.forEach(row => {
           const d = new Date(row.hour);
-          const slot = Math.floor(d.getUTCHours() / 6) * 6;
+          const slot = Math.floor(d.getUTCHours() / 3) * 3;
           const dayStr = row.hour.substring(0, 10);
           const key = `${dayStr}T${String(slot).padStart(2,'0')}:00:00`;
           if (!groups.has(key)) groups.set(key, {
@@ -1507,16 +1507,16 @@
           g.cost_usd += row.cost_usd || 0;
           g.active_duration_sec += row.active_duration_sec || 0;
         });
-        // Fill all missing 6h slots across the window with zeros so x-axis
+        // Fill all missing 3h slots across the window with zeros so x-axis
         // labels (day names at midnight) are always present.
         if (hourly.length > 0) {
           const firstH = new Date(hourly[0].hour);
           const lastH = new Date(hourly[hourly.length - 1].hour);
           const slotStart = new Date(firstH);
-          slotStart.setUTCHours(Math.floor(firstH.getUTCHours() / 6) * 6, 0, 0, 0);
+          slotStart.setUTCHours(Math.floor(firstH.getUTCHours() / 3) * 3, 0, 0, 0);
           const slotEnd = new Date(lastH);
-          slotEnd.setUTCHours(Math.floor(lastH.getUTCHours() / 6) * 6, 0, 0, 0);
-          for (let dt = new Date(slotStart); dt <= slotEnd; dt = new Date(dt.getTime() + 6 * 3600000)) {
+          slotEnd.setUTCHours(Math.floor(lastH.getUTCHours() / 3) * 3, 0, 0, 0);
+          for (let dt = new Date(slotStart); dt <= slotEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
             const ks = `${dt.toISOString().substring(0, 10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
             if (!groups.has(ks)) groups.set(ks, {
               hour: ks, day: ks.substring(0, 10), raw_context_tokens: 0,
@@ -1577,10 +1577,15 @@
         maxTpm = trueMax;
       }
       
-      const xScale = (index) => {
-        if (data.length <= 1) return padding.left + (width - padding.left - padding.right) / 2;
-        return padding.left + ((index - 1) / (data.length - 1)) * (width - padding.left - padding.right);
-      };
+      const chartW = width - padding.left - padding.right;
+      const slotW = chartW / Math.max(1, data.length);
+      const barW = Math.max(2, slotW * 0.72);
+      const xScale = sixhourly
+        ? (index) => padding.left + (index - 0.5) * slotW
+        : (index) => {
+            if (data.length <= 1) return padding.left + chartW / 2;
+            return padding.left + ((index - 1) / (data.length - 1)) * chartW;
+          };
       
       const yScale = (tpm) => {
         const rawY = height - padding.bottom - (tpm / (maxTpm * 1.1)) * (height - padding.top - padding.bottom);
@@ -1625,87 +1630,101 @@
       `;
       svg.appendChild(defs);
       
-      // Draw Area under curve
-      let pathD = '';
-      let areaD = `M ${xScale(1)} ${height - padding.bottom} `;
-      
-      data.forEach((d, idx) => {
-        const x = xScale(d.index);
-        const y = yScale(d.tpm);
-        if (idx === 0) {
-          pathD += `M ${x} ${y} `;
-          areaD += `L ${x} ${y} `;
-        } else {
-          pathD += `L ${x} ${y} `;
-          areaD += `L ${x} ${y} `;
-        }
-      });
-      
-      areaD += `L ${xScale(data.length)} ${height - padding.bottom} Z`;
-      
-      const areaPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      areaPath.setAttribute('d', areaD);
-      areaPath.setAttribute('fill', 'url(#chart-area-grad)');
-      svg.appendChild(areaPath);
-      
-      // Draw Line path
-      const linePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      linePath.setAttribute('d', pathD);
-      linePath.setAttribute('fill', 'none');
-      linePath.setAttribute('stroke', 'var(--accent)');
-      linePath.setAttribute('stroke-width', '2.5');
-      svg.appendChild(linePath);
-      
-      // Draw Points — downsampled. The aggregated 7-day view can hold
-      // thousands of turns; a circle (with listeners) per turn froze the
-      // tab and an x-label per turn forced a huge intrinsic SVG width
-      // that crushed the flex layout. Cap markers and labels;
-      // the line path itself still plots every turn.
-      const MAX_POINTS = 120;
-      const pointStride = Math.max(1, Math.ceil(data.length / MAX_POINTS));
-      const sampledPoints = data.filter((_, i) => i % pointStride === 0);
-      sampledPoints.forEach(d => {
-        const x = xScale(d.index);
-        const y = yScale(d.tpm);
-
-        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        circle.setAttribute('cx', x);
-        circle.setAttribute('cy', y);
-        circle.setAttribute('r', '5');
-        circle.setAttribute('fill', 'var(--surface)');
-        circle.setAttribute('stroke', 'var(--accent)');
-        circle.setAttribute('stroke-width', '2');
-        circle.style.cursor = 'pointer';
-        circle.style.transition = 'all 0.15s';
-        
-        circle.addEventListener('mouseover', (e) => {
-          circle.setAttribute('r', '7');
-          circle.setAttribute('fill', 'var(--accent)');
-          const lines = isAggregate
-            ? [
-                `${d.tooltipTitle}`,
-                `Cache-adj: <strong>${fmtNum(Math.round(d.tpm))} tokens</strong>`,
-                `Cost: <strong>${fmtCost(d.cost)}</strong>`,
-                `Calls: ${fmtNum(d.turns)} · Active: ${fmtNum(d.dur, 1)}s`,
-                `Raw: ${fmtNum(d.raw)} · Cache: ${fmtNum(d.cache)} · Out: ${fmtNum(d.output)}`,
-              ]
-            : [
-                d.tooltipTitle,
-                `Cache-adj: <strong>${fmtNum(Math.round(d.tpm))} tokens</strong>`,
-                `Raw input: ${Math.round(d.raw_tpm || 0).toLocaleString()} TPM`,
-                `Duration: ${d.dur}s`,
-              ];
-          showTooltip(e, lines.join('<br>'));
+      if (sixhourly) {
+        // Column bars for the 3h aggregate view
+        data.forEach(d => {
+          const bx = xScale(d.index);
+          const by = yScale(d.tpm);
+          const bh = (height - padding.bottom) - by;
+          if (bh <= 0) return;
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('x', bx - barW / 2);
+          rect.setAttribute('y', by);
+          rect.setAttribute('width', barW);
+          rect.setAttribute('height', bh);
+          rect.setAttribute('fill', 'var(--accent)');
+          rect.setAttribute('opacity', '0.65');
+          rect.setAttribute('rx', '2');
+          rect.style.cursor = 'pointer';
+          rect.addEventListener('mouseover', (e) => {
+            rect.setAttribute('opacity', '0.9');
+            const lines = [
+              `${d.tooltipTitle}`,
+              `Cache-adj: <strong>${fmtNum(Math.round(d.tpm))} tokens</strong>`,
+              `Cost: <strong>${fmtCost(d.cost)}</strong>`,
+              `Calls: ${fmtNum(d.turns)} · Active: ${fmtNum(d.dur, 1)}s`,
+              `Raw: ${fmtNum(d.raw)} · Cache: ${fmtNum(d.cache)} · Out: ${fmtNum(d.output)}`,
+            ];
+            showTooltip(e, lines.join('<br>'));
+          });
+          rect.addEventListener('mouseout', () => {
+            rect.setAttribute('opacity', '0.65');
+            hideTooltip();
+          });
+          svg.appendChild(rect);
         });
-        
-        circle.addEventListener('mouseout', () => {
-          circle.setAttribute('r', '5');
-          circle.setAttribute('fill', 'var(--surface)');
-          hideTooltip();
+      } else {
+        // Line + area + circles for per-session and hourly views
+        let pathD = '';
+        let areaD = `M ${xScale(1)} ${height - padding.bottom} `;
+        data.forEach((d, idx) => {
+          const x = xScale(d.index);
+          const y = yScale(d.tpm);
+          if (idx === 0) {
+            pathD += `M ${x} ${y} `;
+            areaD += `L ${x} ${y} `;
+          } else {
+            pathD += `L ${x} ${y} `;
+            areaD += `L ${x} ${y} `;
+          }
         });
-        
-        svg.appendChild(circle);
-      });
+        areaD += `L ${xScale(data.length)} ${height - padding.bottom} Z`;
+        const areaPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        areaPath.setAttribute('d', areaD);
+        areaPath.setAttribute('fill', 'url(#chart-area-grad)');
+        svg.appendChild(areaPath);
+        const linePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        linePath.setAttribute('d', pathD);
+        linePath.setAttribute('fill', 'none');
+        linePath.setAttribute('stroke', 'var(--accent)');
+        linePath.setAttribute('stroke-width', '2.5');
+        svg.appendChild(linePath);
+        // Points — downsampled to avoid freezing on large turn counts.
+        const MAX_POINTS = 120;
+        const pointStride = Math.max(1, Math.ceil(data.length / MAX_POINTS));
+        data.filter((_, i) => i % pointStride === 0).forEach(d => {
+          const x = xScale(d.index);
+          const y = yScale(d.tpm);
+          const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          circle.setAttribute('cx', x); circle.setAttribute('cy', y);
+          circle.setAttribute('r', '5'); circle.setAttribute('fill', 'var(--surface)');
+          circle.setAttribute('stroke', 'var(--accent)'); circle.setAttribute('stroke-width', '2');
+          circle.style.cursor = 'pointer'; circle.style.transition = 'all 0.15s';
+          circle.addEventListener('mouseover', (e) => {
+            circle.setAttribute('r', '7'); circle.setAttribute('fill', 'var(--accent)');
+            const lines = isAggregate
+              ? [
+                  `${d.tooltipTitle}`,
+                  `Cache-adj: <strong>${fmtNum(Math.round(d.tpm))} tokens</strong>`,
+                  `Cost: <strong>${fmtCost(d.cost)}</strong>`,
+                  `Calls: ${fmtNum(d.turns)} · Active: ${fmtNum(d.dur, 1)}s`,
+                  `Raw: ${fmtNum(d.raw)} · Cache: ${fmtNum(d.cache)} · Out: ${fmtNum(d.output)}`,
+                ]
+              : [
+                  d.tooltipTitle,
+                  `Cache-adj: <strong>${fmtNum(Math.round(d.tpm))} tokens</strong>`,
+                  `Raw input: ${Math.round(d.raw_tpm || 0).toLocaleString()} TPM`,
+                  `Duration: ${d.dur}s`,
+                ];
+            showTooltip(e, lines.join('<br>'));
+          });
+          circle.addEventListener('mouseout', () => {
+            circle.setAttribute('r', '5'); circle.setAttribute('fill', 'var(--surface)');
+            hideTooltip();
+          });
+          svg.appendChild(circle);
+        });
+      }
       
       // Render X labels — at most ~16, evenly spaced (see MAX_POINTS note).
       const labelStride = Math.max(1, Math.ceil(data.length / 16));
