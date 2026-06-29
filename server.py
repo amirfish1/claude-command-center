@@ -31122,6 +31122,21 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
     # Honor the disable knob even if a stray caller reaches here.
     if _group_chat_is_paused(real_path):
         return {"ok": False, "error": "paused"}
+    # Server-side debounce for non-targeted (auto) nudges: the reader polls
+    # every 3s and fires /api/group-chat/nudge every 15s on content change,
+    # bypassing the watcher's _COORD_NUDGE_INTERVAL debounce. Without this
+    # check the reader can fire 4 nudges/minute — each one spawning a
+    # claude --resume or keystrokes — causing the CPU-hog symptom on chat
+    # creation. Targeted nudges (UI "Nudge" button with an explicit
+    # target_sid) are exempt so the user can manually ping any participant.
+    if not target_sid:
+        with _coord_lock:
+            _entry = _active_coordinations.get(real_path)
+        if _entry is not None:
+            _elapsed = time.time() - _entry.get("last_nudge", 0)
+            if _elapsed < _COORD_NUDGE_INTERVAL:
+                return {"ok": True, "debounced": True,
+                        "reason": f"last nudge {_elapsed:.0f}s ago (interval {_COORD_NUDGE_INTERVAL}s)"}
     sidecar_path = real_path[:-3] + ".json" if real_path.endswith(".md") else real_path + ".json"
     try:
         with open(sidecar_path, "r", encoding="utf-8") as fh:
