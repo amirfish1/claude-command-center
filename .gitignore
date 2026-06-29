@@ -47,6 +47,9 @@ CLAUDE.local.md
 .claude/annotations/
 .claude/snapshots/
 snapshot.png
+snapshot2.png
+snapshot3.png
+throughput_*.png
 *.wt-answer-inline.png
 .claude/screenshots/
 .claude/scheduled_tasks.lock
