@@ -445,7 +445,7 @@ def log_recommendation(path, session_id, name, rec, baseline_out_tokens):
                 e.get("session_id") == session_id
                 and e.get("action") == rec["action"]
                 and e.get("to_model") == rec["to_model"]
-                and e.get("status") in ("pending", "applied")
+                and e.get("status") in ("pending", "applied", "dismissed")
             ):
                 try:
                     age = now - datetime.strptime(

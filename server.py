@@ -12144,6 +12144,9 @@ def build_model_advisor_report(persist=True):
                 if persist
                 else None
             )
+            # Don't surface recently-dismissed recs as live (user clicked X).
+            if (stored or {}).get("status") == "dismissed":
+                continue
             live_recs.append(
                 {
                     "id": (stored or {}).get("id"),
