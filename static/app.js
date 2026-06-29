@@ -1010,6 +1010,46 @@
       _bg();
       window.__advisorBgTimer = setInterval(_bg, 45000);
     }
+    // Throughput pill: opens the standalone throughput dashboard tab; badge
+    // shows today's total token count fetched from the history endpoint.
+    const tputPill = document.createElement('div');
+    tputPill.id = 'cccThroughputPill';
+    tputPill.title = 'Throughput Dashboard — daily token usage, output speed, and session rankings. Click to open.';
+    tputPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
+      'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
+      'border:1px solid var(--border-color,#30363d);opacity:.8;';
+    tputPill.innerHTML = '<span style="opacity:.7;">&#128202;</span>' +
+      '<span class="ccc-tput-val">throughput</span>';
+    tputPill.addEventListener('click', function () { window.open('/throughput.html', '_blank'); });
+    tputPill.addEventListener('mouseenter', function () { tputPill.style.opacity = '1'; });
+    tputPill.addEventListener('mouseleave', function () { tputPill.style.opacity = '.8'; });
+    wrap.appendChild(tputPill);
+    if (!window.__tputPillTimer) {
+      var _tputBg = function () {
+        if (document.hidden) return;
+        fetch('/api/throughput/history', { cache: 'no-store' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            if (!d || !d.daily) return;
+            var today = new Date().toISOString().slice(0, 10);
+            var bucket = null;
+            for (var i = d.daily.length - 1; i >= 0; i--) {
+              if ((d.daily[i].day || d.daily[i].hour || '').slice(0, 10) === today) {
+                bucket = d.daily[i]; break;
+              }
+            }
+            var el = document.getElementById('cccThroughputPill');
+            if (!el) return;
+            var val = el.querySelector('.ccc-tput-val');
+            if (!val) return;
+            var tot = bucket ? (bucket.total_tokens || 0) : 0;
+            val.textContent = tot > 0 ? (_formatTokens(tot) + ' today') : 'throughput';
+          })
+          .catch(function () {});
+      };
+      _tputBg();
+      window.__tputPillTimer = setInterval(_tputBg, 90000);
+    }
     wrap.appendChild(toggle);
     wrap.appendChild(strip);
     // Insert just after the active-group-chat pill, before the spacer, so it
