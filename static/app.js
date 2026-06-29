@@ -21983,10 +21983,16 @@
         (_twWorkersByQueue.get(key) || _twWorkersByQueue.set(key, []).get(key)).push(w);
       });
       // Resolve a worker's cloud session_id to its loaded conversation card so
-      // it renders as the normal session row. Workers can live in any project,
-      // so the lookup spans the full loaded conversation list.
+      // it renders as the normal session row. Workers can live in any project;
+      // _wtWorkerConvsCache holds cross-repo cards fetched by _fetchMissingWorkerConvs.
       const _twCardById = new Map();
       (Array.isArray(conversationsData) ? conversationsData : []).forEach((c) => {
+        if (!c) return;
+        const sid = c.session_id || c.id;
+        if (sid && !_twCardById.has(sid)) _twCardById.set(sid, c);
+      });
+      // Supplement with cross-repo worker session cards.
+      Object.values(_wtWorkerConvsCache).forEach((c) => {
         if (!c) return;
         const sid = c.session_id || c.id;
         if (sid && !_twCardById.has(sid)) _twCardById.set(sid, c);
@@ -27403,6 +27409,49 @@
     } catch (_) { /* keep stale cache */ }
     return _wtWorkersCache;
   }
+  // Cross-repo session cards for workers whose session_id isn't in the current
+  // repo's conversationsData. Keyed by session_id. Populated by
+  // _fetchMissingWorkerConvs() so _twCardById can resolve cross-repo workers
+  // and render the full session card instead of the fallback row.
+  const _wtWorkerConvsCache = {};
+  async function _fetchMissingWorkerConvs() {
+    const workers = (_wtWorkersCache && _wtWorkersCache.workers) || [];
+    const currentSids = new Set(
+      (Array.isArray(conversationsData) ? conversationsData : [])
+        .map(c => c && (c.session_id || c.id)).filter(Boolean)
+    );
+    const missing = workers.filter(w =>
+      w && w.session_id && !currentSids.has(w.session_id) && !_wtWorkerConvsCache[w.session_id]
+    );
+    if (!missing.length) return false;
+    // Build queue -> repo_path from the queues cache (server now includes repo_path).
+    const queueToRepo = new Map();
+    ((_uxqHealthCache && _uxqHealthCache.queues) || []).forEach(q => {
+      if (q && q.queue && q.repo_path) queueToRepo.set(String(q.queue).toUpperCase(), q.repo_path);
+    });
+    // Group missing workers by repo_path.
+    const repoToSids = new Map();
+    missing.forEach(w => {
+      const rp = queueToRepo.get(String(w.queue || '').toUpperCase());
+      if (!rp) return;
+      if (!repoToSids.has(rp)) repoToSids.set(rp, new Set());
+      repoToSids.get(rp).add(w.session_id);
+    });
+    if (!repoToSids.size) return false;
+    let found = false;
+    await Promise.all([...repoToSids.entries()].map(async ([repoPath, sids]) => {
+      try {
+        const res = await fetch('/api/conversations?repo_path=' + encodeURIComponent(repoPath), { cache: 'no-store' });
+        const data = await res.json().catch(() => ([]));
+        const convs = Array.isArray(data) ? data : ((data && data.conversations) || []);
+        convs.forEach(c => {
+          const sid = c && (c.session_id || c.id);
+          if (sid && sids.has(sid)) { _wtWorkerConvsCache[sid] = c; found = true; }
+        });
+      } catch (_) {}
+    }));
+    return found;
+  }
   // The Triggered Workers sidebar section renders queue headers + worker rows
   // synchronously from the caches (above), then this warms BOTH caches in the
   // background and triggers ONE re-render when either snapshot actually changes.
@@ -27413,6 +27462,9 @@
   async function _ensureEvergreenQueuesFresh() {
     try {
       await Promise.all([_fetchUxqHealth(), _fetchWtWorkers()]);
+      // Fetch cross-repo conv cards for any workers not in current conversationsData.
+      // If new cards were found, force a re-render regardless of the queue sig.
+      const gotNewCards = await _fetchMissingWorkerConvs();
       const queues = ((_uxqHealthCache && _uxqHealthCache.queues) || [])
         .filter(q => q && q.auto_drain === true);
       const workers = (_wtWorkersCache && _wtWorkersCache.workers) || [];
@@ -27420,7 +27472,7 @@
         queues.map(q => [q.queue, q.depth, q.workers, q.auto_drain, q.state]),
         workers.map(w => [w.worker_id, w.queue, w.session_id, w.alive]),
       ]);
-      if (sig !== _evergreenQueuesSig) {
+      if (sig !== _evergreenQueuesSig || gotNewCards) {
         _evergreenQueuesSig = sig;
         if (typeof conversationsData !== 'undefined' && conversationsData) {
           try { renderConversationList(conversationsData); } catch (_) {}

@@ -20408,14 +20408,19 @@ def compute_queues_health(health=None, wt_workers=None):
             continue
         worker_counts[q] = worker_counts.get(q, 0) + 1
 
-    # Durable configured-queue list keyed by normalized name → auto_drain.
+    # Durable configured-queue list keyed by normalized name → auto_drain + repo_path.
     # Read the config file directly (no watchtower import dependency).
     cfg_drain = {}
+    cfg_repo = {}
     try:
         for name, conf in (_wt_read_config() or {}).items():
             cfg_drain[_norm(name)] = bool((conf or {}).get("auto_drain", False))
+            rp = str((conf or {}).get("repo_path") or "").strip()
+            if rp:
+                cfg_repo[_norm(name)] = rp
     except Exception:
         cfg_drain = {}
+        cfg_repo = {}
 
     health_by_q = {_norm(r.get("project")): r for r in (health or [])}
 
@@ -20463,6 +20468,7 @@ def compute_queues_health(health=None, wt_workers=None):
             "stuck": stuck,
             "state": state,
             "fixer_session_id": hr.get("fixer_session_id"),
+            "repo_path": cfg_repo.get(q, ""),
         })
     # Stuck first, then deepest, then most workers, then name — most-urgent top.
     out.sort(key=lambda r: (0 if r["stuck"] else 1, -r["depth"], -r["workers"], r["queue"]))
