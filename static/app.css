@@ -1092,6 +1092,30 @@
   .tool-call.tool-file .tool-detail {
     color: var(--text);
   }
+  .tool-edit-body { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+  .tool-edit-multi-item { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+  .tool-edit-section { display: flex; flex-direction: column; gap: 2px; }
+  .tool-edit-label {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 2px 6px; border-radius: 3px 3px 0 0; width: fit-content;
+  }
+  .tool-edit-old .tool-edit-label { background: rgba(255,80,80,0.18); color: #f87171; }
+  .tool-edit-new .tool-edit-label { background: rgba(60,200,100,0.18); color: #4ade80; }
+  .tool-edit-old pre {
+    margin: 0; padding: 7px 10px; max-height: 260px; overflow: auto;
+    background: rgba(255,80,80,0.07); border: 1px solid rgba(255,80,80,0.22);
+    border-radius: 0 4px 4px 4px;
+    color: var(--text); font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .tool-edit-new pre {
+    margin: 0; padding: 7px 10px; max-height: 260px; overflow: auto;
+    background: rgba(60,200,100,0.07); border: 1px solid rgba(60,200,100,0.22);
+    border-radius: 0 4px 4px 4px;
+    color: var(--text); font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .tool-edit-truncated { font-size: 11px; color: var(--text-muted); padding: 3px 0; }
   .hide-tools .tool-call { display: none !important; }
   .hide-tools .event.tool-only { display: none !important; }
 

@@ -15703,6 +15703,45 @@ def _ask_user_question_structured(tool_input):
     return {"questions": out_questions}
 
 
+def _edit_tool_input(name, inp, max_str=4000):
+    """Extract before/after content for Edit/Write/MultiEdit blocks (UI disclosure)."""
+    if not isinstance(inp, dict):
+        return None
+    if name == "Edit":
+        old_s = str(inp.get("old_string") or "")
+        new_s = str(inp.get("new_string") or "")
+        if not old_s and not new_s:
+            return None
+        trunc = len(old_s) > max_str or len(new_s) > max_str
+        result = {"old_string": old_s[:max_str], "new_string": new_s[:max_str]}
+        if trunc:
+            result["truncated"] = True
+        return result
+    if name == "Write":
+        content = str(inp.get("content") or "")
+        if not content:
+            return None
+        trunc = len(content) > max_str
+        result = {"content": content[:max_str]}
+        if trunc:
+            result["truncated"] = True
+        return result
+    if name == "MultiEdit":
+        edits = inp.get("edits")
+        if not isinstance(edits, list) or not edits:
+            return None
+        half = max_str // 2
+        return {
+            "edits": [
+                {"old_string": str(e.get("old_string") or "")[:half],
+                 "new_string": str(e.get("new_string") or "")[:half]}
+                for e in edits[:10]
+                if isinstance(e, dict)
+            ]
+        }
+    return None
+
+
 def _tool_use_detail(name, tool_input, max_len=200):
     if not isinstance(tool_input, dict):
         tool_input = {}
@@ -16265,6 +16304,9 @@ def _parse_conversation_event(ev, line_num):
                     ask = _ask_user_question_structured(inp)
                     if ask:
                         tool_block["question"] = ask
+                edit_inp = _edit_tool_input(name, inp)
+                if edit_inp:
+                    tool_block["edit_input"] = edit_inp
                 blocks.append(tool_block)
             elif btype == "text":
                 txt = block.get("text", "").strip()

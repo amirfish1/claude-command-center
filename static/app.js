@@ -31852,6 +31852,34 @@
       + '</details>';
   }
 
+  function renderEditDisclosure(b) {
+    const editInput = b && b.edit_input;
+    if (!editInput) return '';
+    const name = toolDisplayName(b.name || '');
+    let body = '';
+    if (name === 'Edit' && (editInput.old_string != null || editInput.new_string != null)) {
+      body = '<div class="tool-edit-section tool-edit-old"><span class="tool-edit-label">Before</span><pre>' + escapeHtml(String(editInput.old_string || '')) + '</pre></div>'
+           + '<div class="tool-edit-section tool-edit-new"><span class="tool-edit-label">After</span><pre>' + escapeHtml(String(editInput.new_string || '')) + '</pre></div>';
+    } else if (name === 'Write' && editInput.content != null) {
+      body = '<div class="tool-edit-section tool-edit-new"><span class="tool-edit-label">Content</span><pre>' + escapeHtml(String(editInput.content || '')) + '</pre></div>';
+    } else if (name === 'MultiEdit' && Array.isArray(editInput.edits)) {
+      body = editInput.edits.map(function (e, i) {
+        return '<div class="tool-edit-multi-item">'
+          + '<div class="tool-edit-section tool-edit-old"><span class="tool-edit-label">Before ' + (editInput.edits.length > 1 ? (i + 1) : '') + '</span><pre>' + escapeHtml(String(e.old_string || '')) + '</pre></div>'
+          + '<div class="tool-edit-section tool-edit-new"><span class="tool-edit-label">After ' + (editInput.edits.length > 1 ? (i + 1) : '') + '</span><pre>' + escapeHtml(String(e.new_string || '')) + '</pre></div>'
+          + '</div>';
+      }).join('');
+    }
+    if (!body) return '';
+    const truncNote = editInput.truncated
+      ? '<div class="tool-edit-truncated">… content truncated</div>'
+      : '';
+    return '<details class="tool-command-disclosure tool-edit-disclosure">'
+      + '<summary><span>View edit</span></summary>'
+      + '<div class="tool-edit-body">' + body + truncNote + '</div>'
+      + '</details>';
+  }
+
   function summarizeToolCall(div) {
     const tc = div.querySelector('.tool-call');
     if (!tc) return 'Ran 1 command';
@@ -32958,7 +32986,8 @@
               }).join('');
             }
             const commandDisclosure = renderToolCommandDisclosure(b, detail);
-            const commandClass = commandDisclosure ? ' has-command-disclosure' : '';
+            const editDisclosure = renderEditDisclosure(b);
+            const commandClass = (commandDisclosure || editDisclosure) ? ' has-command-disclosure' : '';
             const toolUseId = String(b.id || b.tool_use_id || '').trim();
             blockParts.push('<div class="tool-call' + toolClass + detail.className + commandClass + '" data-tool-detail="' + escapeAttr(detail.full) + '" data-tool-source="' + escapeAttr(source) + '" data-tool-use-id="' + escapeAttr(toolUseId) + '">'
               + '<span class="arrow">-></span> '
@@ -32968,6 +32997,7 @@
                   ? askBody
                   : (detail.display ? ' <span class="tool-detail" title="' + escapeAttr(detail.full) + '">' + escapeHtml(detail.display) + '</span>' : ''))
               + commandDisclosure
+              + editDisclosure
               + '</div>');
             lastToolPartIdx = blockParts.length - 1;
             // CCC-50: render the image inline under file tool-calls that point
