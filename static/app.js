@@ -22289,7 +22289,10 @@
       const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));
       const _looseHtml = _looseRest.length
         ? _renderObjGroup('unclassified', 'Unclassified', sortedObjectCardsForRender('unclassified', _looseRest)) : '';
-      const _currentSessionsExtraHtml = (_gcItems || []).map(it => it.html).join('');
+      const _gcSectionLabel = (_gcItems && _gcItems.length > 0)
+        ? '<div class="conv-objects-section-label">Group chats</div>'
+        : '';
+      const _currentSessionsExtraHtml = _gcSectionLabel + (_gcItems || []).map(it => it.html).join('');
       const _currentSessionsBodyHtml = _currentSessionsHtml + _currentSessionsExtraHtml;
       const _currentSessionsScrollClass = 'conv-current-sessions-scroll' + (_ipSearchActive ? ' is-search-results' : '');
       const _currentSessionsScrollHtml = (_currentSessionsBodyHtml)
@@ -22751,15 +22754,17 @@
           + cards.map(c => _renderRow(c, { suppressFolderChip: true })).join('')
           + '</div>';
       }).join('');
-      const _gcRowsFlat = _archivedGroupChatsForRender.length
+      const _gcUnarchivedRowsFlat = (_gcItems || []).map(it => it.html).join('');
+      const _gcRowsFlat = (_archivedGroupChatsForRender.length || _gcUnarchivedRowsFlat)
         ? _archivedGroupChatsForRender
             .slice()
             .sort((a, b) => ((b.archived_at || b.closed_at || b.last_mtime || 0) - (a.archived_at || a.closed_at || a.last_mtime || 0)))
             .map(_renderArchivedGcRow)
             .join('')
+            + _gcUnarchivedRowsFlat
         : '';
       _arcRows = _folderRowsHtml + _gcRowsFlat;
-      _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length;
+      _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + (_gcItems || []).length;
     } else {
       // Flat chronological list — original behavior.
       const _archivedItems = [];
@@ -22775,6 +22780,12 @@
           const ago = (gc.archived_at || gc.closed_at || gc.last_mtime) || 0;
           _archivedItems.push({ pinRank: Infinity, mtime: ago, html: _renderArchivedGcRow(gc) });
         }
+      }
+      // Also include active/paused/closed (unarchived) group chats so they
+      // appear in the All view, not just in Current Sessions. Mirrors how
+      // in-progress sessions appear in both sections.
+      for (const gci of (_gcItems || [])) {
+        _archivedItems.push({ pinRank: Infinity, mtime: gci.mtime || 0, html: gci.html });
       }
       _archivedItems.sort((a, b) => {
         if (a.pinRank !== b.pinRank) return a.pinRank - b.pinRank;
