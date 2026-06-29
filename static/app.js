@@ -3446,6 +3446,25 @@
       refreshLiveStatus();
       refreshLiveSessionsActivity();
     }), 5000);
+    // Voice-focus: an external controller (ccc-voice) can ask the dashboard to open a
+    // session by POSTing /api/voice-focus. Poll the O(1) signal; when its ts changes,
+    // open + scroll that session into view. Primes on first poll so it doesn't jump on load.
+    if (window._voiceFocusTimer) clearInterval(window._voiceFocusTimer);
+    window._voiceFocusTimer = setInterval(_gated('voiceFocus', async () => {
+      try {
+        const r = await fetch('/api/voice-focus', { cache: 'no-store' });
+        const d = await r.json();
+        if (!d) return;
+        const ts = d.ts || 0;
+        if (window._voiceFocusLastTs === undefined) { window._voiceFocusLastTs = ts; return; }
+        if (ts === window._voiceFocusLastTs || !d.session_id) return;
+        window._voiceFocusLastTs = ts;
+        await selectConversation(d.session_id);
+        const row = document.querySelector('.conv-item[data-session-id="' + d.session_id + '"]')
+                 || document.querySelector('.conv-item[data-id="' + d.session_id + '"]');
+        if (row) row.scrollIntoView({ block: 'nearest' });
+      } catch (e) {}
+    }), 2000);
     liveStatusRenderTicker = setInterval(_gated('liveToolStrip', () => {
       updateLiveToolStrip();
       // Codex sessions never get sidecar_status==='active' (that branch is
@@ -6855,8 +6874,25 @@
     } catch (_) {}
   }
 
+  function updateTtsCaption(charIndex, charLength, sourceText) {
+    const el = document.getElementById('ttsFloatingControl');
+    if (!el) return;
+    const cap = el.querySelector('.tts-fc-caption');
+    if (!cap) return;
+    const word = (sourceText || '').slice(charIndex, charIndex + charLength).trim();
+    if (word) cap.textContent = word;
+  }
+
+  function clearTtsCaption() {
+    const el = document.getElementById('ttsFloatingControl');
+    if (!el) return;
+    const cap = el.querySelector('.tts-fc-caption');
+    if (cap) cap.textContent = '';
+  }
+
   async function stopTextToSpeech() {
     clearTtsHighlight();
+    clearTtsCaption();
     if (window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -7030,7 +7066,7 @@
     };
     utterance.onboundary = (e) => {
       if (_ttsUtterance !== utterance) return;
-      if (e.name === 'word') _ttsLastCharIndex = e.charIndex;
+      if (e.name === 'word') { _ttsLastCharIndex = e.charIndex; updateTtsCaption(e.charIndex, e.charLength, clipped); }
     };
     window.speechSynthesis.speak(utterance);
     // Reflect state immediately in case onstart is slow to fire.
@@ -7149,6 +7185,7 @@
       if (e.name === 'word') {
         _ttsLastCharIndex = e.charIndex;
         highlightTtsWord(e.charIndex, e.charLength);
+        updateTtsCaption(e.charIndex, e.charLength, textToSpeak);
       }
     };
 
@@ -7286,6 +7323,7 @@
       if (e.name === 'word') {
         _ttsLastCharIndex = offset + e.charIndex;
         highlightTtsWord(_ttsLastCharIndex, e.charLength);
+        updateTtsCaption(e.charIndex, e.charLength, rest);
       }
     };
     utterance.onend = () => { if (_ttsUtterance === utterance) stopTextToSpeech(); };
@@ -27361,12 +27399,19 @@
         const age = _uxqFmtAge(r.oldest_open_age_seconds);
         const stuck = !!r.stuck;
         const sid = r.fixer_session_id || '';
-        const canNudge = stuck && !!sid;
-        const badgeText = stuck ? 'STUCK' : 'LIVE';
-        const badgeTip = stuck
+        // "STUCK" should mean a worker was assigned but stalled — genuinely jammed.
+        // A queue with open tickets and NO worker assigned isn't stuck, it is just
+        // unattended; the red STUCK alarm reads as stale/wrong there. Split it out
+        // into a neutral WAITING state so the alarm is reserved for real stalls.
+        const waiting = stuck && !sid;
+        const reallyStuck = stuck && !!sid;
+        const canNudge = reallyStuck && !!sid;
+        const badgeText = reallyStuck ? 'STUCK' : (waiting ? 'WAITING' : 'LIVE');
+        const badgeTip = reallyStuck
           ? (canNudge ? 'stuck — click to nudge the worker' : 'stuck — no reachable worker')
-          : 'a worker is on it';
-        const badge = '<span class="fq-health-badge ' + (stuck ? 'is-stuck' : 'is-live')
+          : (waiting ? 'open tickets — no worker assigned yet' : 'a worker is on it');
+        const badgeCls = reallyStuck ? 'is-stuck' : (waiting ? 'is-waiting' : 'is-live');
+        const badge = '<span class="fq-health-badge ' + badgeCls
           + (canNudge ? ' is-nudgeable' : '') + '"'
           + (canNudge ? ' role="button" tabindex="0" data-nudge-sid="' + escapeAttr(sid) + '"' : '')
           + ' title="' + escapeAttr(badgeTip) + '">' + badgeText + '</span>';

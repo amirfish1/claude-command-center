@@ -6464,6 +6464,17 @@
     user-select: none;
     min-width: 52px;
   }
+  .tts-floating-control .tts-fc-caption {
+    font-size: 0.8em;
+    opacity: 0.75;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: none;
+    transition: opacity 0.1s;
+  }
+  .tts-floating-control .tts-fc-caption:empty { display: none; }
   .tts-floating-control .tts-fc-btn {
     width: 28px; height: 28px; flex-shrink: 0;
     border-radius: 999px;
@@ -15703,6 +15714,9 @@ details[open] .uxq-edit-summary::before { content: '▾ '; }
 }
 .fq-health-badge.is-stuck {
   background: rgba(248,81,73,0.18); color: var(--red, #f85149);
+}
+.fq-health-badge.is-waiting {
+  background: rgba(210,153,34,0.16); color: var(--yellow, #d29922);
 }
 .fq-health-badge.is-nudgeable { cursor: pointer; }
 .fq-health-badge.is-nudgeable:hover { background: rgba(248,81,73,0.30); }
