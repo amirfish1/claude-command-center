@@ -6335,12 +6335,14 @@
           scheduleFireAndWatchRefresh(paneId || activePaneId());
         } else if (compactCommand) {
           showOpToast(compactRequestSuccessMessage(data, currentSession.source));
-          if (currentSession.source !== 'codex') {
-            showCompactInProgressBanner(sid);
-            scheduleCompactUsageRefresh(sid);
-          } else {
+          if (currentSession.source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
+            // Finished compacting server-side — nothing left to poll for.
+            clearCompactInProgressBanner();
             setTimeout(refreshConversationList, 1500);
             setTimeout(refreshConversationList, 3500);
+          } else {
+            showCompactInProgressBanner(sid);
+            scheduleCompactUsageRefresh(sid);
           }
         } else {
           // Plain inject success — Claude TTY ('terminal-control') or headless
@@ -19761,22 +19763,31 @@
       if (data && data.ok) {
         showOpToast(compactRequestSuccessMessage(data, source), 'success');
         touchSessionOptimistically(sid);
-        if (source !== 'codex') {
-          showCompactInProgressBanner(sid);
-          scheduleCompactUsageRefresh(sid);
-        } else {
+        if (source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
+          // These paths already FINISHED compacting server-side (Codex via RPC;
+          // the live spawn ran /compact itself and we watched compact_result).
+          // There's no boundary still to poll for, so tear the banner down and
+          // refresh the list rather than leaving a stuck "Compacting…" spinner.
+          clearCompactInProgressBanner();
           // Codex compact has completed; any optimistic Thinking pill is stale.
+          // (The live-spawn-stdin path is likewise done — same teardown.)
           clearOptimisticAgentIndicator(getConvView());
           clearSessionSending(sid);
+          if (source !== 'codex' && typeof fetchSessionUsage === 'function') fetchSessionUsage(sid);
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
+        } else {
+          showCompactInProgressBanner(sid);
+          scheduleCompactUsageRefresh(sid);
         }
       } else if (data && data.code === 'compact_needs_manual') {
         clearCompactInProgressBanner();
         offerManualCompact(sid);
       } else {
         clearCompactInProgressBanner();
-        const reason = (data && (formatInjectFailure(data, 0) || data.error)) || 'unknown';
+        // Surface the engine's real compact_error when it told us why it failed
+        // (e.g. "Not enough messages to compact.") instead of a generic message.
+        const reason = (data && (data.compact_error || formatInjectFailure(data, 0) || data.error)) || 'unknown';
         showOpToast('/compact failed: ' + reason, 'error');
       }
     } catch (err) {
@@ -19793,6 +19804,10 @@
     if (data && data.queued) return 'Queued /compact until the terminal session is idle.';
     if (data && data.submit_key === 'tab') return 'Queued Codex /compact in the live terminal.';
     if (source === 'codex' && data && data.via === 'terminal-control') return '/compact sent to the live Codex terminal.';
+    // Native in-stream compaction on a live spawn already completed server-side
+    // (we watched its stdout for compact_result:"success"), so say so plainly
+    // rather than "waiting for the boundary" — there's nothing left to wait for.
+    if (data && data.via === 'live-spawn-stdin') return 'Conversation compacted in place.';
     if (data && data.launched) return 'Opened Claude terminal and requested /compact.';
     if (data && data.via === 'bg-agent-pty') return '/compact sent to background agent.';
     return 'Compact requested. Waiting for Claude to write the compact boundary.';
@@ -23984,19 +23999,22 @@
           if (data && data.ok) {
             showOpToast(compactRequestSuccessMessage(data, source), 'success');
             touchSessionOptimistically(sid);
-            if (source !== 'codex') {
-              showCompactInProgressBanner(sid);
-              scheduleCompactUsageRefresh(sid);
-            } else {
+            if (source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
+              // Already finished compacting server-side — no boundary left to
+              // poll for; clear the banner instead of leaving it spinning.
+              clearCompactInProgressBanner();
               setTimeout(refreshConversationList, 1500);
               setTimeout(refreshConversationList, 3500);
+            } else {
+              showCompactInProgressBanner(sid);
+              scheduleCompactUsageRefresh(sid);
             }
           } else if (data && data.code === 'compact_needs_manual') {
             clearCompactInProgressBanner();
             offerManualCompact(sid);
           } else {
             clearCompactInProgressBanner();
-            showOpToast('/compact failed: ' + ((data && data.error) || 'unknown'), 'error');
+            showOpToast('/compact failed: ' + ((data && (data.compact_error || data.error)) || 'unknown'), 'error');
           }
         } catch (err) {
           clearCompactInProgressBanner();

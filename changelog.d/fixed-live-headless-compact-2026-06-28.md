@@ -1,0 +1,1 @@
+`/compact` on a live headless stream-json session (voice/car-mode) now compacts in place by sending `/compact` over the session's own stdin, instead of killing the session and waiting 180s in a hidden terminal for a boundary that never appeared. The live status (Compacting… → Compacted, or the exact engine error) is surfaced in the response and toast.
