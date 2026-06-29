@@ -22024,8 +22024,13 @@
       const _twFallbackRow = (w) => {
         const wid = String((w && w.worker_id) || 'worker');
         const q = String((w && w.queue) || '');
-        return '<div class="conv-evergreen-worker-fallback" title="'
-          + escapeAttr(wid + (q ? ' · ' + q : '')) + '">'
+        const sid = (w && w.session_id) || '';
+        // If we have a cloud session_id, make the row clickable to open that session.
+        const clickAttr = sid
+          ? ' role="button" tabindex="0" style="cursor:pointer" onclick="selectConversation(' + JSON.stringify(sid) + ')"'
+          : '';
+        const tip = escapeAttr(wid + (q ? ' · ' + q : '') + (sid ? ' · ' + sid.slice(0, 8) : ''));
+        return '<div class="conv-evergreen-worker-fallback"' + clickAttr + ' title="' + tip + '">'
           + '<span class="cewf-dot" aria-hidden="true">&#9679;</span>'
           + '<span class="cewf-id">' + escapeHtml(wid.slice(0, 28)) + '</span>'
           + (q ? '<span class="cewf-queue">' + escapeHtml(q) + '</span>' : '')
