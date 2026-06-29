@@ -1454,10 +1454,21 @@ def _cli_model_flag(model):
 
 
 def _build_slash_model_command(model, context_1m):
-    """Compose the `/model <alias>[1m]` text injected into a live Claude
+    """Compose the `/model <id>[1m]` text injected into a live Claude
     session. Returns an empty string if model is missing — caller should
-    treat that as a no-op."""
-    alias = _short_model_alias(model)
+    treat that as a no-op.
+
+    Use the FULL prefixed model ID (e.g. ``claude-haiku-4-5``), not the bare
+    versioned alias. The TUI `/model` command only resolves bare *family*
+    names (``haiku``/``sonnet``/``opus``/``fable``) or a full model ID; a
+    versioned bare alias like ``haiku-4-5`` is rejected at runtime with
+    "Model 'haiku-4-5' not found" and the switch silently no-ops (the bug this
+    fixes — it hit every versioned model, just first noticed on Haiku).
+    ``_cli_model_flag`` prefixes ``claude-`` for versioned 4.x ids and passes
+    families / already-prefixed ids through unchanged. The ``[1m]`` suffix is
+    a TUI-only affordance the slash command accepts on a full id
+    (``claude-opus-4-8[1m]``)."""
+    alias = _cli_model_flag(model)
     if not alias:
         return ""
     if _model_context_1m_allowed(model, context_1m, "claude"):

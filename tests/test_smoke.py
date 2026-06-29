@@ -8654,9 +8654,14 @@ class TestModelPicker(unittest.TestCase):
         for mod in ("server",):
             sys.modules.pop(mod, None)
         import server
-        self.assertEqual(server._build_slash_model_command("opus-4-7", False), "/model opus-4-7")
-        self.assertEqual(server._build_slash_model_command("opus-4-7", True), "/model opus-4-7[1m]")
-        self.assertEqual(server._build_slash_model_command("claude-sonnet-4-6", True), "/model sonnet-4-6")
+        # Full prefixed model IDs — the TUI /model command rejects bare
+        # versioned aliases ("Model 'haiku-4-5' not found"), so we emit the
+        # claude- prefixed id (verified accepted live).
+        self.assertEqual(server._build_slash_model_command("opus-4-7", False), "/model claude-opus-4-7")
+        self.assertEqual(server._build_slash_model_command("opus-4-7", True), "/model claude-opus-4-7[1m]")
+        self.assertEqual(server._build_slash_model_command("haiku-4-5", False), "/model claude-haiku-4-5")
+        # Sonnet has no 1M tier, so the [1m] suffix is dropped.
+        self.assertEqual(server._build_slash_model_command("claude-sonnet-4-6", True), "/model claude-sonnet-4-6")
         self.assertEqual(server._build_slash_model_command("", True), "")
 
     def test_session_override_roundtrip_through_sidecar(self):
