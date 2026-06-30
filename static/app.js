@@ -22171,7 +22171,7 @@
             const endedAt = String(pw.ended_at_iso || '');
             const sid = String(pw.session_id || '');
             const clickAttrs = sid
-              ? ' role="button" tabindex="0" style="cursor:pointer" onclick="selectConversation(' + JSON.stringify(sid) + ')"'
+              ? ' role="button" tabindex="0" style="cursor:pointer" data-cepw-sid="' + escapeAttr(sid) + '"'
               : '';
             return '<span class="cepw-row"' + clickAttrs + ' title="' + escapeAttr(wid + ' · ended ' + endedAt) + '">'
               + '<span class="cepw-id">' + escapeHtml(wid.slice(0, 24)) + '</span>'
@@ -23976,6 +23976,18 @@
         if (latest && latest.session_id && typeof selectConversation === 'function') {
           selectConversation(latest.session_id);
         }
+      });
+    }
+    // Past-worker chip click — opens the worker's session in the conv pane.
+    if (!$convList._cepwChipWired) {
+      $convList._cepwChipWired = true;
+      $convList.addEventListener('click', (ev) => {
+        const chip = ev.target && ev.target.closest && ev.target.closest('.cepw-row[data-cepw-sid]');
+        if (!chip) return;
+        ev.stopPropagation();
+        ev.preventDefault();
+        const sid = chip.getAttribute('data-cepw-sid') || '';
+        if (sid) selectConversation(sid);
       });
     }
     // "See log" button — opens the Watchtower activity log in a floating pane.
