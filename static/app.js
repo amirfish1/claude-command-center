@@ -28242,7 +28242,7 @@
       _uxqLastResolvedProject = proj;
       _uxqRenderScopeSelect(items, proj);
       _uxqRenderFilterToggle();
-      _renderQueueHealthStrip(false); // always show all queues regardless of scope
+      _renderQueueHealthStrip(false, null); // always show all queues regardless of scope/dropdown
       const inScope = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
       // Status filter: 'open' hides closed (shows open + in_progress).
       const scoped = _uxqGetFilter() === 'all' ? inScope : inScope.filter(it => (it && it.status) !== 'closed');
@@ -28394,7 +28394,7 @@
         } catch (_) {}
         btn.style.opacity = '';
         _uxqHealthCache.ts = 0;
-        _renderQueueHealthStrip(true);
+        _renderQueueHealthStrip(true, null);
       };
       const cycleClaimTypes = async (ev) => {
         const btn = ev.target && ev.target.closest && ev.target.closest('.fq-health-type-toggle[data-claim-queue]');
@@ -28419,7 +28419,7 @@
         } catch (_) {}
         btn.style.opacity = '';
         _uxqHealthCache.ts = 0;
-        _renderQueueHealthStrip(true);
+        _renderQueueHealthStrip(true, null);
       };
       const scopeFromRow = (ev) => {
         const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid], .fq-health-drain-toggle, .fq-health-type-toggle');
