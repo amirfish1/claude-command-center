@@ -27676,7 +27676,9 @@
           + ' title="' + (autoDrain ? 'Auto-drain is on — click to disable' : 'Auto-drain is off — click to enable') + '">'
           + 'Auto&#x2011;drain&nbsp;<span class="fq-health-drain-val">' + (autoDrain ? 'on' : 'off') + '</span>'
           + '</span>';
-        return '<div class="fq-health-row" title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age) + '">'
+        return '<div class="fq-health-row" data-fq-project="' + escapeAttr(project) + '"'
+          + ' role="button" tabindex="0"'
+          + ' title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age + ' — click to scope queue') + '">'
           + '<span class="fq-health-proj">' + escapeHtml(project) + '</span>'
           + '<span class="fq-health-sep">·</span>'
           + '<span class="fq-health-depth">' + depth + ' open</span>'
@@ -28268,10 +28270,26 @@
         _uxqHealthCache.ts = 0;
         _renderQueueHealthStrip(true);
       };
+      const scopeFromRow = (ev) => {
+        const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid], .fq-health-drain-toggle');
+        if (badge) return;
+        const row = ev.target && ev.target.closest && ev.target.closest('.fq-health-row[data-fq-project]');
+        if (!row) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const project = row.getAttribute('data-fq-project') || '';
+        _uxqSetScopeOverride(project);
+        // Reflect in the scope <select> so it matches visually.
+        const $sel = document.getElementById('queueScopeSelect');
+        if ($sel) { $sel.value = project; }
+        _uxqItemsCache.ts = 0;
+        _renderQueuePanel();
+      };
       $health.addEventListener('click', nudgeFromBadge);
       $health.addEventListener('click', toggleDrain);
+      $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { nudgeFromBadge(ev); toggleDrain(ev); }
+        if (ev.key === 'Enter' || ev.key === ' ') { nudgeFromBadge(ev); toggleDrain(ev); scopeFromRow(ev); }
       });
     }
   }
