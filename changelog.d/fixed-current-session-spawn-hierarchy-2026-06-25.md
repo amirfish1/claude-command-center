@@ -1,1 +1,0 @@
-Spawned sibling sessions now persist parent linkage from `report_to`/`parent_session_id`, recover legacy return-address footers when available, and render nested under their dispatcher in Current Sessions.

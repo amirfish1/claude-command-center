@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.5.0] - 2026-06-29
+
+### Added
+- Telemetry schema v3: opt-in daily ping now includes two more aggregate fields — `active_seconds_today` (sum of dashboard-tab-visible time today, 30s granularity, capped at 86400) and `total_sessions_managed` (lifetime count of *.jsonl files ever seen under ~/.claude/projects/, capped at 10000000). Worker still accepts v1 + v2 payloads. New `/api/telemetry/heartbeat` endpoint on the server is the local-only counter the dashboard pings every 30s while the tab is visible; CCC_TELEMETRY_DISABLED kills it. Stats page shows both new numbers per-install in the recently-active table.
+- Added a Push all waiting summary with a Continue action while sessions are replying to commit nudges.
+- Show Token Optimizer quality scores beside sidebar context percentages, and preview captured annotation screenshots in the annotation editor.
+- Add a Queue header toggle for wrapping long issue titles in the right rail.
+- Show Token Optimizer session quality beside the context estimate in the conversation input strip.
+
+### Changed
+- Document browser/UI verification (puppeteer via node snapshot.js) in AGENTS.md for Codex sessions — not the iab in-app browser or Playwright.
+- Reveal the sidebar row brief (repo/source/branch metadata + goal) only on the selected/active row — no longer on hover or focus.
+- Document the browser/UI verification path (puppeteer via snapshot.js, or chrome-devtools MCP) in CLAUDE.md — Playwright is not a dependency.
+- Demoted the new-session center panel and grouped newly spawned sessions under a default Inbox object.
+- Changed the queue add control to use a larger multiline ticket composer instead of the native browser prompt.
+- Restore hue-based colorful backgrounds for repository chips in sidebar row previews.
+- Document WSL2 as the supported Windows route and point unsupported installer runs there.
+
+### Fixed
+- Remove the redundant collapsible All header from the All sessions tab.
+- Fixed page annotation screenshots so they are captured before the note/queue dialog opens.
+- Let annotations fall back to native screenshot capture when browser pre-capture fails.
+- Improve annotation screenshot failure diagnostics and carry warnings into queue context.
+- Restore the Push all control on All/by-project repo headers.
+- Improve assistant-message timestamp spacing and readability in conversations.
+- Fixed Claude goal strips so active goals show a compact clear action instead of being stuck without a cancel affordance.
+- Fixed crowded conversation breadcrumbs by shortening the stream-json process pill and hiding the toolbar-only freshness clock.
+- Fixed the conversation composer so clearing a tall draft shrinks the input box again.
+- Composer textareas no longer rely on native field sizing, avoiding a WebKit/WKWebView gray overlay artifact in the input box.
+- Show current-session DONE briefs on row hover and keyboard focus.
+- Spawned sibling sessions now persist parent linkage from `report_to`/`parent_session_id`, recover legacy return-address footers when available, and render nested under their dispatcher in Current Sessions.
+- Current sessions now respect the Active view's 1d/7d/All time filter.
+- Unassigned session rows now show a small `+` object chip that opens an object picker and assigns the session to the selected object.
+- Move the Evergreen Agents object into its own bottom section in By objects and keep it out of Project tree.
+- Place Evergreen Agent queue progress directly before the state badge.
+- Fixed CPU spike on group-chat creation: added server-side 60 s debounce to `/api/group-chat/nudge` so the reader's 3 s poll no longer triggers back-to-back LLM calls per participant.
+- Fixed 78–95 % CPU when a group chat is open: `_group_chat_participant_meta` now caches per-session liveness for 10 s instead of forking `ps` up to 20 times per participant on every 3 s poll. Read cache TTL also raised from 2 s to 3.5 s so consecutive polls share one build.
+- Fixed group-chat rows so they obey the In Progress 1d/7d/All time window.
+- `/compact` on a live headless stream-json session (voice/car-mode) now compacts in place by sending `/compact` over the session's own stdin, instead of killing the session and waiting 180s in a hidden terminal for a boundary that never appeared. The live status (Compacting… → Compacted, or the exact engine error) is surfaced in the response and toast.
+- Keep live WIP and tool-state badges visible after archive cache rebuilds.
+- Markdown file previews now temporarily widen the right rail and restore the previous rail width when closed.
+- Fixed mobile live Bash/tool indicators so long command details stay collapsed by default.
+- Fixed the add-to-object picker so it shows nested objects as a hierarchy.
+- Make object rename Enter/Save apply immediately without rerendering the full sidebar.
+- Allow the by-objects splitter to collapse Current Sessions completely.
+- Restore object number prefixes in the project tree.
+- Drop the redundant "Q" prefix from Token Optimizer quality badges.
+- Normalize the Queue scope alias CC to the CCC project.
+- Make queue status icons larger and add a glow to in-progress tickets.
+- Move the right-rail Annotate action into the rail top bar.
+- Hide the repeated session title from the status-rail breadcrumb while keeping the rail header title visible.
+- Fixed object draft sync so open tabs preserve and ingest server-created drafts they have not loaded yet.
+- Fixed Sonnet model pills and queued model switches so they no longer show or send a 1M-context variant.
+- Fixed legacy spawned sessions missing hierarchy by adding a backfill that persists recoverable parent session links from CCC return-address prompts.
+- Fixed terminal question answers getting queued instead of waking the waiting session.
+- Show numbering on top-level objects in the by-objects view.
+
 ## [5.4.0] - 2026-06-25
 
 ### Added
@@ -1812,7 +1869,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.4.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.5.0...HEAD
+[5.5.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.5.0
 [5.4.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.4.0
 [5.2.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.2.0
 [5.1.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.1.0

@@ -1,1 +1,0 @@
-- Fixed the conversation composer so clearing a tall draft shrinks the input box again.

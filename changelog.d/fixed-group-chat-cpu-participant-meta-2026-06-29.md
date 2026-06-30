@@ -1,1 +1,0 @@
-Fixed 78–95 % CPU when a group chat is open: `_group_chat_participant_meta` now caches per-session liveness for 10 s instead of forking `ps` up to 20 times per participant on every 3 s poll. Read cache TTL also raised from 2 s to 3.5 s so consecutive polls share one build.

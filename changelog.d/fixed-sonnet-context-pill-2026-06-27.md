@@ -1,1 +1,0 @@
-- Fixed Sonnet model pills and queued model switches so they no longer show or send a 1M-context variant.
