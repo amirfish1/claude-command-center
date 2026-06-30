@@ -22079,8 +22079,9 @@
           + '<span class="ceq-drain ' + (drainOn ? 'is-on' : 'is-off') + '">drain ' + (drainOn ? 'on' : 'off') + '</span>'
           + '</span>'
           + '<span class="ceq-state ' + stateCls + '">' + escapeHtml(stateLabel) + '</span>';
-        return '<div class="conv-evergreen-queue-header"'
-          + ' title="' + escapeAttr(tip) + '">'
+        return '<div class="conv-evergreen-queue-header" role="button" tabindex="0"'
+          + ' data-queue-name="' + escapeAttr(label) + '"'
+          + ' title="' + escapeAttr(tip + ' — click to open queue') + '">'
           + '<span class="ceq-name">' + escapeHtml(label) + '</span>'
           + meta
           + '</div>';
@@ -23889,6 +23890,30 @@
         chev.setAttribute('aria-expanded', nowOpen ? 'true' : 'false');
         const row = chev.closest('.conv-item');
         if (row) row.classList.toggle('is-brief-open', nowOpen);
+      });
+    }
+    // Queue header click: switch status rail to Queue tab, scope to that queue,
+    // open latest worker session in conversation pane.
+    if (!$convList._queueHeaderWired) {
+      $convList._queueHeaderWired = true;
+      $convList.addEventListener('click', (ev) => {
+        const hdr = ev.target && ev.target.closest && ev.target.closest('.conv-evergreen-queue-header[data-queue-name]');
+        if (!hdr) return;
+        ev.stopPropagation();
+        ev.preventDefault();
+        const queueName = hdr.getAttribute('data-queue-name') || '';
+        // Switch status rail to queue tab and scope it.
+        if (typeof setStatusRailTab === 'function') setStatusRailTab('queue');
+        if (typeof _uxqSetScopeOverride === 'function') _uxqSetScopeOverride(queueName);
+        if (typeof _uxqItemsCache !== 'undefined') _uxqItemsCache.ts = 0;
+        if (typeof _renderQueuePanel === 'function') _renderQueuePanel();
+        // Open latest worker session for this queue in the conversation pane.
+        const workers = (_wtWorkersCache && _wtWorkersCache.workers) || [];
+        const queueWorkers = workers.filter(w => String(w.queue || '').toUpperCase() === queueName.toUpperCase());
+        const latest = queueWorkers.find(w => w.session_id) || null;
+        if (latest && latest.session_id && typeof selectConversation === 'function') {
+          selectConversation(latest.session_id);
+        }
       });
     }
     // "See log" button — opens the Watchtower activity log in a floating pane.
