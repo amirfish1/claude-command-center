@@ -21974,6 +21974,16 @@
         : [];
       const _twWorkers = (_wtWorkersCache && Array.isArray(_wtWorkersCache.workers))
         ? _wtWorkersCache.workers : [];
+      // Past workers from the last 24h, grouped by queue.
+      const _twPastWorkers = (_uxqHealthCache && Array.isArray(_uxqHealthCache.past_workers))
+        ? _uxqHealthCache.past_workers : [];
+      const _twPastByQueue = new Map();
+      _twPastWorkers.forEach((w) => {
+        if (!w) return;
+        const key = String(w.queue || '').trim().toUpperCase();
+        if (!key) return;
+        (_twPastByQueue.get(key) || _twPastByQueue.set(key, []).get(key)).push(w);
+      });
       // Group live workers by their queue (uppercased key, e.g. "CCC").
       const _twWorkersByQueue = new Map();
       _twWorkers.forEach((w) => {
@@ -22093,9 +22103,26 @@
           }
           return _twFallbackRow(w);
         }).join('');
+        // Past workers for this queue (last 24h, log-file based).
+        const pastWorkers = _twPastByQueue.get(key) || [];
+        const pastRows = pastWorkers.length === 0 ? '' :
+          '<div class="conv-evergreen-past-workers">'
+          + '<span class="cepw-label">Past 24h</span>'
+          + pastWorkers.map((pw) => {
+            const wid = String(pw.worker_id || '');
+            const agoS = Number(pw.ended_ago_seconds) || 0;
+            const age = _uxqFmtAge(agoS);
+            const endedAt = String(pw.ended_at_iso || '');
+            return '<span class="cepw-row" title="' + escapeAttr(wid + ' · ended ' + endedAt) + '">'
+              + '<span class="cepw-id">' + escapeHtml(wid.slice(0, 24)) + '</span>'
+              + '<span class="cepw-age">' + escapeHtml(age) + ' ago</span>'
+              + '</span>';
+          }).join('')
+          + '</div>';
         return '<div class="conv-evergreen-queue-group">'
           + _twQueueHeaderHtml(q, workers.length)
           + rows
+          + pastRows
           + '</div>';
       }).join('');
       const _evergreenAgentsHtml = _evergreenAgentsBody
@@ -27386,7 +27413,7 @@
   }
   // Per-project queue-health snapshot (GET /api/ux-fixes/health). Same cache
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
-  let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [] };
+  let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [], past_workers: [] };
   async function _fetchUxqHealth() {
     if (Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache;
     try {
@@ -27401,7 +27428,9 @@
       // workers don't linger in that list.
       const worker_session_ids = Array.isArray(data && data.worker_session_ids)
         ? data.worker_session_ids : [];
-      _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues, worker_session_ids };
+      // Past workers from the last 24h (log file scan, excludes live workers).
+      const past_workers = Array.isArray(data && data.past_workers) ? data.past_workers : [];
+      _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues, worker_session_ids, past_workers };
     } catch (_) { /* keep stale cache */ }
     return _uxqHealthCache;
   }
@@ -27479,9 +27508,11 @@
       const queues = ((_uxqHealthCache && _uxqHealthCache.queues) || [])
         .filter(q => q && q.auto_drain === true);
       const workers = (_wtWorkersCache && _wtWorkersCache.workers) || [];
+      const pastWorkers = (_uxqHealthCache && _uxqHealthCache.past_workers) || [];
       const sig = JSON.stringify([
         queues.map(q => [q.queue, q.depth, q.workers, q.auto_drain, q.state]),
         workers.map(w => [w.worker_id, w.queue, w.session_id, w.alive]),
+        pastWorkers.map(pw => [pw.worker_id, pw.queue, pw.ended_ago_seconds]),
       ]);
       if (sig !== _evergreenQueuesSig || gotNewCards) {
         _evergreenQueuesSig = sig;

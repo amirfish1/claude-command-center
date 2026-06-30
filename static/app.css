@@ -4366,8 +4366,9 @@
     font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
     padding: 1px 6px; border-radius: 999px;
   }
+  /* Active work in flight — blue, distinct from the calm green of "Ready". */
   .conv-evergreen-queue-header .ceq-state.is-draining {
-    background: rgba(63,185,80,0.15); color: var(--green, #3fb950);
+    background: rgba(47,129,247,0.16); color: var(--blue, #2f81f7);
   }
   /* Idle / drained — calm positive green, distinct from active "Draining". */
   .conv-evergreen-queue-header .ceq-state.is-ready {
@@ -15796,6 +15797,25 @@ details[open] .uxq-edit-summary::before { content: '▾ '; }
 }
 .fq-wt-worker-age { color: var(--text-muted); opacity: 0.75; }
 .fq-wt-worker-idle { color: var(--text-muted); opacity: 0.5; font-style: italic; }
+/* Past workers (last 24h) — compact chip strip below live worker rows */
+.conv-evergreen-past-workers {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+  padding: 4px 10px 5px 24px;
+  border-top: 1px solid rgba(139,148,158,0.08);
+}
+.cepw-label {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted); opacity: 0.55; flex-shrink: 0; margin-right: 2px;
+}
+.cepw-row {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 6px; border-radius: 999px; font-size: 10.5px;
+  background: rgba(139,148,158,0.08); color: var(--text-muted);
+  border: 1px solid rgba(139,148,158,0.12);
+  white-space: nowrap; cursor: default;
+}
+.cepw-id { opacity: 0.65; }
+.cepw-age { font-weight: 600; opacity: 0.5; }
 
 /* Draggable object-group headers in by-objects mode: above/below insert
    lines while reordering, accent ring while nesting. */

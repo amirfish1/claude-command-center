@@ -302,6 +302,59 @@ def _wt_read_worker_session_ids():
     if not isinstance(ids, list):
         return []
     return [str(s) for s in ids if isinstance(s, str)]
+
+
+_HEX_SFX_RE = re.compile(r'^(.+)-([0-9a-f]{8})$')
+
+
+def _wt_past_workers(hours=24):
+    """Past (exited) WT workers whose log was modified within the last N hours.
+
+    Scans ~/.watchtower/logs/*.log, skips currently-live workers (still in
+    workers.json), extracts worker_id + queue from the filename
+    ({queue}-{hex_suffix}.log) and mtime as ended_at. Returns a list of dicts:
+    {worker_id, queue, ended_at_iso, ended_ago_seconds}. Light-weight — no
+    subprocess, no per-file full-read. Empty list on any error."""
+    try:
+        logs_dir = _WT_HOME / "logs"
+        if not logs_dir.is_dir():
+            return []
+        now = time.time()
+        cutoff = now - hours * 3600
+        live_ids = set()
+        try:
+            live = _wt_read_workers()
+            live_ids = {str(w.get("worker_id", "")) for w in live if w.get("worker_id")}
+        except Exception:
+            live_ids = set()
+        out = []
+        for p in sorted(logs_dir.iterdir(), key=lambda x: -x.stat().st_mtime if not x.name.endswith('.stdin') else 0):
+            if p.suffix != '.log' or p.name.endswith('.stdin.log'):
+                continue
+            worker_id = p.stem
+            if worker_id in live_ids:
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            if st.st_mtime < cutoff:
+                continue
+            m = _HEX_SFX_RE.match(worker_id)
+            queue = m.group(1).upper() if m else worker_id.upper()
+            ended_ago = int(now - st.st_mtime)
+            ended_iso = datetime.utcfromtimestamp(st.st_mtime).strftime('%Y-%m-%dT%H:%M:%SZ')
+            out.append({
+                "worker_id": worker_id,
+                "queue": queue,
+                "ended_at_iso": ended_iso,
+                "ended_ago_seconds": ended_ago,
+            })
+        return out
+    except Exception:
+        return []
+
+
 _queue_answer = _q.answer
 import objects_store  # durable server-side Flow object/parent/order state (GOAL-3/4)
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
@@ -42313,9 +42366,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     worker_session_ids = _wt_read_worker_session_ids()
                 except Exception:
                     worker_session_ids = []
+                # Past workers from the last 24h (log files, excluding live).
+                try:
+                    past_workers = _wt_past_workers(hours=24)
+                except Exception:
+                    past_workers = []
                 self.send_json({"ok": True, "projects": health, "count": len(health),
                                 "wt_workers": wt_workers, "queues": queues,
-                                "worker_session_ids": worker_session_ids})
+                                "worker_session_ids": worker_session_ids,
+                                "past_workers": past_workers})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/wt/workers":
