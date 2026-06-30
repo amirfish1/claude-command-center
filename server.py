@@ -30637,7 +30637,7 @@ def _group_chat_post(path, text, chat_uuid="", session_id="", name="", emoji="")
 # result per chat path; single-flight so at most one build runs per path at a
 # time. Invalidated immediately on post so a participant always sees their own
 # message without waiting out the TTL.
-_GROUP_CHAT_READ_TTL = 2.0
+_GROUP_CHAT_READ_TTL = 3.5  # > poll interval (3 s) so consecutive polls share one build
 _group_chat_read_cache = {}  # real_path -> {"ts": float, "data": (result, err)}
 _group_chat_read_cache_lock = threading.Lock()
 
@@ -31650,6 +31650,7 @@ def _start_coordination_watcher() -> None:
     t.start()
 
 
+@_ttl_memo_keyed(10.0)
 def _group_chat_participant_meta(session_id: str) -> dict:
     """Cheap-ish status snapshot for one participant of a group chat.
 
@@ -31658,9 +31659,11 @@ def _group_chat_participant_meta(session_id: str) -> dict:
     show whether each session is active, what tool is running, etc. —
     the same chips the main conversation list uses, scoped to one row.
 
-    Cheap because it only reads the per-session sidecar JSON files
-    (small) and stats the transcript file. No git probes, no jsonl
-    parsing.
+    Memoised per session_id for 10 s (_ttl_memo_keyed): session_live_status
+    forks ps (up to 20 times via _proc_ancestor_terminal) on each call, and
+    this function is invoked per participant on every group-chat read cache
+    miss (~every 3 s). 10 s liveness staleness is imperceptible in the chat
+    reader and eliminates the CPU spike on group-chat creation.
     """
     meta = {
         "last_activity": 0,
