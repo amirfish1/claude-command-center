@@ -15624,13 +15624,32 @@ body:has(.gc-reader) .pwa-install-banner {
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
+.uxq-detail-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
 .uxq-detail-title {
   font-size: 22px;
   line-height: 1.2;
   font-weight: 800;
   color: var(--text);
   overflow-wrap: anywhere;
+  flex: 1;
 }
+.uxq-title-pencil {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 16px;
+  padding: 4px 4px 0;
+  line-height: 1;
+  opacity: 0.6;
+  margin-top: 3px;
+}
+.uxq-title-pencil:hover { opacity: 1; color: var(--accent); }
 .uxq-detail-subtitle {
   font-size: 12px;
   color: var(--text-muted);
@@ -15689,6 +15708,34 @@ details[open] .uxq-edit-summary::before { content: '▾ '; }
 .uxq-edit-note:focus,
 .uxq-edit-sel:focus { border-color: var(--accent); }
 .uxq-edit-actions { padding: 4px 12px 10px; margin: 0; }
+.uxq-resolution {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--card-bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 8px;
+}
+.uxq-resolution-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+.uxq-resolution-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+.uxq-res-label {
+  flex-shrink: 0;
+  width: 82px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.uxq-res-val { color: var(--text); overflow-wrap: anywhere; }
 
 .fq-empty { padding: 12px 10px; font-size: 13px; color: var(--text-muted); }
 .fq-empty-sub {

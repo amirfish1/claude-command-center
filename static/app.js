@@ -28068,12 +28068,28 @@
       _uxqMetaRow('Status', item.needs_input ? 'in_progress · needs input' : (item.status || 'open')),
       _uxqMetaRow('Lane', item.lane),
       _uxqMetaRow('Source', item.source),
-      _uxqMetaRow('Claimed by', item.claimed_by || item.claimed_session_id),
+      _uxqMetaRow('Claimed by', item.claimed_by),
+      _uxqMetaRow('Claimed at', item.claimed_at),
+      _uxqMetaRow('Worker session', item.claimed_session_id),
+      _uxqMetaRow('Closed', item.closed_at),
       _uxqMetaRow('Created', item.created_at),
       _uxqMetaRow('Updated', item.updated_at),
       _uxqMetaRow('URL', item.url),
       _uxqMetaRow('Selector', item.selector),
     ].filter(Boolean).join('');
+    const _fmtResField = v => Array.isArray(v)
+      ? v.map(x => escapeHtml(String(x))).join('<br>')
+      : escapeHtml(String(v));
+    const resolutionHtml = (item.summary || item.caveat || item.follow_up || item.unresolved)
+      ? '<div class="uxq-resolution">'
+        + '<div class="uxq-resolution-title">Resolution</div>'
+        + (item.summary ? '<div class="uxq-resolution-row"><span class="uxq-res-label">Summary</span><div class="uxq-res-val">' + _fmtResField(item.summary) + '</div></div>' : '')
+        + (item.caveat ? '<div class="uxq-resolution-row"><span class="uxq-res-label">Caveat</span><div class="uxq-res-val">' + _fmtResField(item.caveat) + '</div></div>' : '')
+        + (item.follow_up ? '<div class="uxq-resolution-row"><span class="uxq-res-label">Follow-up</span><div class="uxq-res-val">' + _fmtResField(item.follow_up) + '</div></div>' : '')
+        + (item.unresolved ? '<div class="uxq-resolution-row"><span class="uxq-res-label">Unresolved</span><div class="uxq-res-val">' + _fmtResField(item.unresolved) + '</div></div>' : '')
+        + '</div>'
+      : '';
+    const showPrompt = !!(promptText && promptText.trim() !== (item.note || '').trim());
     // Blocked-work panel (WT-28): the worker's question + how to respond.
     const _progNotes = Array.isArray(item.progress_notes) ? item.progress_notes : [];
     const _answers = Array.isArray(item.answers) ? item.answers : [];
@@ -28102,10 +28118,14 @@
       '<div class="ann-ux-preview-card uxq-detail-card" role="dialog" aria-modal="true" aria-label="Queue item details">' +
         '<div class="uxq-detail-hero">' +
           '<div class="uxq-detail-ref">' + escapeHtml(ref) + '</div>' +
-          '<div class="uxq-detail-title" title="' + escapeAttr(detailTitle) + '">' + escapeHtml(detailTitle) + '</div>' +
+          '<div class="uxq-detail-title-row">' +
+            '<div class="uxq-detail-title" title="' + escapeAttr(detailTitle) + '">' + escapeHtml(detailTitle) + '</div>' +
+            '<button type="button" class="uxq-title-pencil" title="Edit note/title" aria-label="Edit note">✎</button>' +
+          '</div>' +
           (detailSubtitle ? '<div class="uxq-detail-subtitle">' + escapeHtml(detailSubtitle) + '</div>' : '') +
         '</div>' +
         '<dl class="uxq-detail-meta">' + metaHtml + '</dl>' +
+        resolutionHtml +
         blockHtml +
         '<div class="ann-ux-preview-shot">' +
           (hasShot
@@ -28114,8 +28134,7 @@
               + '<img class="ann-ux-preview-thumb" src="' + shotSrc + '" alt="queue item screenshot"></a>'
             : '<span class="ann-ux-warn">No screenshot attached.</span>') +
         '</div>' +
-        '<div class="ann-ux-preview-label">Ticket prompt</div>' +
-        '<textarea class="ann-ux-preview-text" rows="16" readonly spellcheck="false"></textarea>' +
+        (showPrompt ? '<div class="ann-ux-preview-label">Ticket prompt</div><textarea class="ann-ux-preview-text" rows="10" readonly spellcheck="false"></textarea>' : '') +
         '<details class="uxq-edit-section" open>' +
           '<summary class="uxq-edit-summary">Edit triage</summary>' +
           '<div class="uxq-edit-fields">' +
@@ -28138,6 +28157,15 @@
     document.body.appendChild(modal);
     const textArea = modal.querySelector('.ann-ux-preview-text');
     if (textArea) textArea.value = promptText;
+    const pencilBtn = modal.querySelector('.uxq-title-pencil');
+    if (pencilBtn) {
+      pencilBtn.addEventListener('click', () => {
+        const editSection = modal.querySelector('.uxq-edit-section');
+        if (editSection) editSection.open = true;
+        const noteField = modal.querySelector('.uxq-edit-note');
+        if (noteField) { noteField.focus(); noteField.select(); noteField.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+      });
+    }
     const close = () => { modal.remove(); document.removeEventListener('keydown', onKey, true); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
     document.addEventListener('keydown', onKey, true);
