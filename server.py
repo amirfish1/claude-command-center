@@ -42377,6 +42377,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 "past_workers": past_workers})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/wt/activity-log":
+            # Last N lines of ~/.watchtower/activity.log for the log panel.
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                lines_cap = max(1, min(int(qs.get("lines", ["200"])[0]), 2000))
+            except (ValueError, IndexError):
+                lines_cap = 200
+            log_path = _WT_HOME / "activity.log"
+            try:
+                with open(log_path) as f:
+                    all_lines = f.readlines()
+                tail = all_lines[-lines_cap:] if len(all_lines) > lines_cap else all_lines
+                self.send_json({"ok": True, "lines": [l.rstrip("\n") for l in tail],
+                                "path": str(log_path), "total": len(all_lines)})
+            except FileNotFoundError:
+                self.send_json({"ok": True, "lines": [], "path": str(log_path), "total": 0})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/wt/workers":
             # Live worker list read straight from workers.json (no watchtower
             # import dependency). Each row carries queue + cloud session_id.

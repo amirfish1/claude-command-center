@@ -22306,7 +22306,9 @@
           + '" data-role="evergreen-agents-header" role="button" tabindex="0"'
           + ' title="Collapse / expand Triggered Workers">'
           + '<span class="conv-section-collapse-chevron" data-role="evergreen-agents-collapse" aria-hidden="true">' + _evergreenChevron + '</span>'
-          + 'Triggered Workers</div>'
+          + 'Triggered Workers'
+          + '<span class="evergreen-log-btn" data-role="evergreen-log-btn" role="button" tabindex="0" title="Open Watchtower activity log">See log</span>'
+          + '</div>'
         : '';
       const _evergreenAgentsScrollHtml = _evergreenAgentsHtml
         ? '<div class="conv-evergreen-agents-scroll' + (_evergreenCollapsed ? ' is-collapsed' : '')
@@ -23889,6 +23891,17 @@
         if (row) row.classList.toggle('is-brief-open', nowOpen);
       });
     }
+    // "See log" button — opens the Watchtower activity log in a floating pane.
+    if (!$convList._wtLogBtnWired) {
+      $convList._wtLogBtnWired = true;
+      $convList.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('[data-role="evergreen-log-btn"]');
+        if (!btn) return;
+        ev.stopPropagation();
+        ev.preventDefault();
+        _openWtLogPanel();
+      });
+    }
     // Collapse/expand the Evergreen Agents section. Delegated + wired once;
     // toggles a persisted flag and folds the scroll in place (CCC-282).
     if (!$convList._evergreenCollapseWired) {
@@ -23896,6 +23909,7 @@
       $convList.addEventListener('click', (ev) => {
         const hdr = ev.target.closest('[data-role="evergreen-agents-header"]');
         if (!hdr) return;
+        if (ev.target.closest('[data-role="evergreen-log-btn"]')) return;
         ev.stopPropagation();
         ev.preventDefault();
         let collapsed = false;
@@ -27521,6 +27535,54 @@
         }
       }
     } catch (_) { /* keep stale cache */ }
+  }
+  // Watchtower activity log panel — floating overlay over the conversation area.
+  let _wtLogTimer = null;
+  function _openWtLogPanel() {
+    let panel = document.getElementById('wtLogPanel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'wtLogPanel';
+      panel.className = 'wt-log-panel';
+      panel.innerHTML =
+        '<div class="wt-log-panel-bar">'
+        + '<span class="wt-log-panel-title">Watchtower activity log</span>'
+        + '<span class="wt-log-panel-path" id="wtLogPath"></span>'
+        + '<button class="wt-log-panel-close" id="wtLogClose" title="Close" aria-label="Close">&times;</button>'
+        + '</div>'
+        + '<pre class="wt-log-panel-pre" id="wtLogPre">Loading…</pre>';
+      document.body.appendChild(panel);
+      document.getElementById('wtLogClose').addEventListener('click', () => {
+        panel.remove();
+        if (_wtLogTimer) { clearInterval(_wtLogTimer); _wtLogTimer = null; }
+      });
+    }
+    const _refresh = async () => {
+      try {
+        const res = await fetch('/api/wt/activity-log?lines=300', { cache: 'no-store' });
+        const data = await res.json().catch(() => ({}));
+        const pre = document.getElementById('wtLogPre');
+        const pathEl = document.getElementById('wtLogPath');
+        if (pre) {
+          if (data.ok && Array.isArray(data.lines)) {
+            pre.textContent = data.lines.length ? data.lines.join('\n') : '(log is empty)';
+            pre.scrollTop = pre.scrollHeight;
+          } else {
+            pre.textContent = data.error || 'Could not load log.';
+          }
+        }
+        if (pathEl && data.path) pathEl.textContent = data.path;
+      } catch (e) {
+        const pre = document.getElementById('wtLogPre');
+        if (pre) pre.textContent = 'Error: ' + e.message;
+      }
+    };
+    _refresh();
+    if (_wtLogTimer) clearInterval(_wtLogTimer);
+    _wtLogTimer = setInterval(() => {
+      if (!document.getElementById('wtLogPanel')) { clearInterval(_wtLogTimer); _wtLogTimer = null; return; }
+      _refresh();
+    }, 3000);
   }
   // Compact human age: "now", "5m", "5h", "2d".
   function _uxqFmtAge(secs) {

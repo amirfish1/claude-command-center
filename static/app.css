@@ -4325,6 +4325,15 @@
   .conv-evergreen-agents-scroll.is-collapsed {
     display: none;
   }
+  .evergreen-log-btn {
+    margin-left: auto; flex-shrink: 0;
+    font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 1px 6px; border-radius: 999px;
+    background: rgba(88,166,255,0.12); color: var(--accent, #58a6ff);
+    border: 1px solid rgba(88,166,255,0.20);
+    cursor: pointer; white-space: nowrap;
+  }
+  .evergreen-log-btn:hover { background: rgba(88,166,255,0.22); }
   .conv-evergreen-agents-scroll {
     flex: 0 0 auto;
     max-height: clamp(96px, 18vh, 240px);
@@ -15993,3 +16002,40 @@ details[open] .uxq-edit-summary::before { content: '▾ '; }
 .ccc-no-annotate [data-flow-action="annotate"] {
   display: none !important;
 }
+/* Watchtower activity log floating panel */
+.wt-log-panel {
+  position: fixed; right: 0; top: 0; bottom: 0;
+  width: clamp(320px, 40vw, 600px);
+  background: var(--bg, #0d1117); color: var(--text);
+  border-left: 1px solid rgba(139,148,158,0.20);
+  display: flex; flex-direction: column;
+  z-index: 9800;
+  box-shadow: -4px 0 24px rgba(0,0,0,0.35);
+}
+.wt-log-panel-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; flex-shrink: 0;
+  border-bottom: 1px solid rgba(139,148,158,0.14);
+  background: rgba(139,148,158,0.06);
+}
+.wt-log-panel-title {
+  font-size: 12px; font-weight: 600; color: var(--text);
+}
+.wt-log-panel-path {
+  font-size: 10px; color: var(--text-muted); opacity: 0.6;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.wt-log-panel-close {
+  flex-shrink: 0; background: none; border: none; cursor: pointer;
+  color: var(--text-muted); font-size: 16px; line-height: 1;
+  padding: 2px 4px; border-radius: 4px; opacity: 0.7;
+}
+.wt-log-panel-close:hover { opacity: 1; background: rgba(248,81,73,0.15); color: var(--red, #f85149); }
+.wt-log-panel-pre {
+  flex: 1; margin: 0; padding: 10px 12px;
+  font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+  font-size: 11px; line-height: 1.5;
+  overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  color: var(--text-muted);
+}
+
