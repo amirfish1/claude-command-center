@@ -27639,7 +27639,8 @@
         + '<button class="wt-log-panel-close" id="wtLogClose" title="Close" aria-label="Close">&times;</button>'
         + '</div>'
         + '<pre class="wt-log-panel-pre" id="wtLogPre">Loading…</pre>';
-      document.body.appendChild(panel);
+      const _convView = getConvView() || document.body;
+      _convView.appendChild(panel);
       document.getElementById('wtLogClose').addEventListener('click', () => {
         panel.remove();
         if (_wtLogTimer) { clearInterval(_wtLogTimer); _wtLogTimer = null; }
