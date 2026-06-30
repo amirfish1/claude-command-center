@@ -28241,7 +28241,7 @@
       _uxqLastResolvedProject = proj;
       _uxqRenderScopeSelect(items, proj);
       _uxqRenderFilterToggle();
-      _renderQueueHealthStrip(false, proj);
+      _renderQueueHealthStrip(false); // always show all queues regardless of scope
       const inScope = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
       // Status filter: 'open' hides closed (shows open + in_progress).
       const scoped = _uxqGetFilter() === 'all' ? inScope : inScope.filter(it => (it && it.status) !== 'closed');
