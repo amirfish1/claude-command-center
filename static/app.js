@@ -27639,8 +27639,13 @@
     // `rows` (compute_ux_fixes_health). Build a project→auto_drain map so the
     // strip's Auto-drain toggle reflects real config instead of defaulting off.
     const _drainByQueue = new Map();
+    const _workersByQueue = new Map();
     (health.queues || []).forEach(q => {
-      if (q && q.queue != null) _drainByQueue.set(String(q.queue).toUpperCase(), !!q.auto_drain);
+      if (q && q.queue != null) {
+        const key = String(q.queue).toUpperCase();
+        _drainByQueue.set(key, !!q.auto_drain);
+        _workersByQueue.set(key, Number(q.workers) || 0);
+      }
     });
     let html = '';
     if (!rows.length) {
@@ -27652,12 +27657,17 @@
         const age = _uxqFmtAge(r.oldest_open_age_seconds);
         const stuck = !!r.stuck;
         const sid = r.fixer_session_id || '';
+        // A live WT worker on this queue means it's being drained — LIVE, even if
+        // the ticket's claimed_session_id hasn't been backfilled yet (a ~30s
+        // window right after a fresh claim). Without this the badge flashes
+        // WAITING between claim and the next reconciler backfill tick.
+        const hasLiveWorker = (_workersByQueue.get(project.toUpperCase()) || 0) > 0;
         // "STUCK" should mean a worker was assigned but stalled — genuinely jammed.
         // A queue with open tickets and NO worker assigned isn't stuck, it is just
         // unattended; the red STUCK alarm reads as stale/wrong there. Split it out
         // into a neutral WAITING state so the alarm is reserved for real stalls.
-        const waiting = stuck && !sid;
-        const reallyStuck = stuck && !!sid;
+        const waiting = stuck && !sid && !hasLiveWorker;
+        const reallyStuck = stuck && !!sid && !hasLiveWorker;
         const canNudge = reallyStuck && !!sid;
         const badgeText = reallyStuck ? 'STUCK' : (waiting ? 'WAITING' : 'LIVE');
         const badgeTip = reallyStuck
