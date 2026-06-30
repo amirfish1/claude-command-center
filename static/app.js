@@ -10760,6 +10760,59 @@
     document.addEventListener('pointerup', onUp);
     document.addEventListener('pointercancel', onUp);
   }
+  const _EVERGREEN_PANEL_H_KEY = 'ccc-evergreen-agents-panel-h';
+  function _storedEvergreenPanelHeight() {
+    try {
+      const raw = localStorage.getItem(_EVERGREEN_PANEL_H_KEY);
+      if (raw == null || raw === '') return null;
+      const n = parseInt(raw, 10);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    } catch (_) { return null; }
+  }
+  function applyEvergreenPanelHeight() {
+    const list = document.getElementById('convList');
+    if (!list) return;
+    const h = _storedEvergreenPanelHeight();
+    if (h == null) { list.style.removeProperty('--evergreen-agents-panel-h'); return; }
+    const clamped = Math.round(Math.max(60, Math.min(h, list.getBoundingClientRect().height || 800)));
+    list.style.setProperty('--evergreen-agents-panel-h', clamped + 'px');
+  }
+  function beginEvergreenSplitterResize(ev) {
+    const handle = ev.target && ev.target.closest && ev.target.closest('[data-role="evergreen-agents-splitter"]');
+    if (!handle) return;
+    const list = handle.closest('#convList');
+    const scroll = list && list.querySelector('[data-role="evergreen-agents-scroll"]');
+    if (!list || !scroll) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const startY = ev.clientY;
+    const startHeight = scroll.getBoundingClientRect().height || _storedEvergreenPanelHeight() || 200;
+    let nextHeight = startHeight;
+    beginSidebarDrag();
+    handle.classList.add('is-dragging');
+    document.body.classList.add('evergreen-splitter-resizing');
+    try { handle.setPointerCapture(ev.pointerId); } catch (_) {}
+    const applyHeight = (clientY) => {
+      // Dragging UP increases height (negative deltaY = bigger panel)
+      nextHeight = Math.round(Math.max(60, Math.min(startHeight - (clientY - startY), list.getBoundingClientRect().height - 80)));
+      list.style.setProperty('--evergreen-agents-panel-h', nextHeight + 'px');
+    };
+    const onMove = (moveEv) => { moveEv.preventDefault(); applyHeight(moveEv.clientY); };
+    const onUp = (upEv) => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+      handle.classList.remove('is-dragging');
+      document.body.classList.remove('evergreen-splitter-resizing');
+      try { handle.releasePointerCapture(upEv.pointerId); } catch (_) {}
+      try { localStorage.setItem(_EVERGREEN_PANEL_H_KEY, String(nextHeight)); } catch (_) {}
+      _sidebarDragInProgress = false;
+      flushSidebarRenderAfterDrag();
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  }
   function deferSidebarRenderIfDragging() {
     if (!isSidebarDragInProgress()) return false;
     _sidebarRenderPendingAfterDrag = true;
@@ -22340,7 +22393,10 @@
       const _objectsSplitHandleHtml = (_currentSessionsScrollHtml && _projectTreeScrollHtml)
         ? '<div class="conv-objects-splitter" data-role="objects-splitter" role="separator" aria-orientation="horizontal" title="Drag to resize Current sessions"></div>'
         : '';
-      _activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;
+      const _evergreenSplitHandleHtml = _evergreenAgentsScrollHtml
+        ? '<div class="conv-evergreen-agents-splitter" data-role="evergreen-agents-splitter" role="separator" aria-orientation="horizontal" title="Drag to resize Triggered Workers"></div>'
+        : '';
+      _activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenSplitHandleHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;
     } else if (_shouldGroupByFolder) {
       // Group cards by folder; preserve folder order by the most
       // recent card in each group (freshest folder appears first).
@@ -22913,8 +22969,8 @@
     const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
     const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;
     $convList.classList.toggle('objects-scroll-split', _objectsSplitActive);
-    if (_objectsSplitActive) applyCurrentSessionsPanelHeight();
-    else $convList.style.removeProperty('--current-sessions-panel-h');
+    if (_objectsSplitActive) { applyCurrentSessionsPanelHeight(); applyEvergreenPanelHeight(); }
+    else { $convList.style.removeProperty('--current-sessions-panel-h'); $convList.style.removeProperty('--evergreen-agents-panel-h'); }
     // Flicker guard. The 10s bulk-sessions poll and the 5s live-status tick both
     // re-run this render constantly. The wholesale innerHTML reset below tears
     // down and rebuilds every row, which the user sees as the whole list
@@ -23973,6 +24029,7 @@
     if (!$convList._objectsSplitterWired) {
       $convList._objectsSplitterWired = true;
       $convList.addEventListener('pointerdown', beginObjectsSplitterResize);
+      $convList.addEventListener('pointerdown', beginEvergreenSplitterResize);
     }
     const $windowToggle = $convList.querySelector('[data-role="window-toggle"]');
     if ($windowToggle) {
