@@ -409,7 +409,7 @@
     <div class="brand">
       <span class="dot"></span>
       <span>claude command center</span>
-      <span class="version">v5.3</span>
+      <span class="version">v5.5</span>
     </div>
     <nav class="nav-links">
       <a href="#whats-new">What's new</a>
@@ -426,7 +426,7 @@
   <section class="hero" style="border-top: 0;">
     <div class="wrap hero-inner">
       <div class="eyebrow fade-target">
-        <span class="badge">v5.3</span>
+        <span class="badge">v5.5</span>
         <span>Claude Code, Codex, Cursor, Antigravity, and Kilo Code</span>
       </div>
       <h1 class="hero-title fade-target">
@@ -478,30 +478,30 @@
 
   <section id="whats-new">
     <div class="wrap">
-      <div class="section-eyebrow fade-target">Recent releases · June 2026</div>
-      <h2 class="fade-target">Three things that ship <span class="orange">now</span>.</h2>
+      <div class="section-eyebrow fade-target">What's new · v5.5 · June 2026</div>
+      <h2 class="fade-target">The fleet runs <span class="orange">itself</span>.</h2>
       <p class="section-lede fade-target">
-        The dashboard grew past its original Claude-only loop: more engines, reusable launch templates, Linux headless support, and worktree-aware spawning.
+        v5.5 ships three capabilities that move CCC from "dashboard you watch" to "dashboard that works while you sleep": multi-agent group chats, an autonomous task queue, and a canvas that maps the whole operation.
       </p>
 
       <div class="news-grid stagger-grid">
         <div class="news-card headline">
           <span class="pill">★ Headline</span>
-          <h3>Five engine board</h3>
-          <p>Claude Code, Codex, Cursor, Antigravity, and Kilo Code sessions appear in one board, including sessions started outside CCC.</p>
-          <div class="sub">// attach first, spawn when useful</div>
+          <h3>Group-chat coordination</h3>
+          <p>Multiple agent sessions read the same shared chat file and respond in turn. Drop a topic, add participants, and let the agents discuss, delegate, and deliver. No orchestration code.</p>
+          <div class="sub">// ~/.claude/group-chats/*.md</div>
         </div>
         <div class="news-card">
-          <span class="pill">Templates</span>
-          <h3>Launch recipes</h3>
-          <p>The template gallery pre-fills repeatable new-session prompts with engine and worktree defaults, so common workflows start in one click.</p>
-          <div class="sub">// static/templates.json</div>
+          <span class="pill">Watchtower</span>
+          <h3>Autonomous task queue</h3>
+          <p>Drop a ticket into the queue. A bound agent worker claims it, fixes it, commits, and moves to the next. A background watcher keeps the health strip green — stuck workers get nudged automatically.</p>
+          <div class="sub">// wt claim -q CCC --worker &lt;id&gt; --json</div>
         </div>
         <div class="news-card">
-          <span class="pill">Runtime</span>
-          <h3>Linux + worktrees</h3>
-          <p>The curl installer supports macOS and Linux, and spawned sessions can run in fresh git worktrees with optional per-worktree setup hooks.</p>
-          <div class="sub">// macOS desktop, Linux headless</div>
+          <span class="pill">Flow</span>
+          <h3>Canvas workspace</h3>
+          <p>Drag repos, sessions, group chats, and objects onto an infinite canvas. Edge-link related nodes. The board remembers your layout. Pan, zoom, and see the whole fleet at a glance.</p>
+          <div class="sub">// ?ccc_popout=flow</div>
         </div>
       </div>
     </div>
@@ -600,7 +600,7 @@ agy --conversation &lt;sid&gt;</pre>
           <thead>
             <tr>
               <th></th>
-              <th class="us">CCC v5</th>
+              <th class="us">CCC v5.5</th>
               <th>claude-squad</th>
               <th>Conductor</th>
               <th>Sculptor</th>
@@ -704,7 +704,7 @@ open http://localhost:8090</pre>
 <span class="comment"># or via Homebrew</span>
 brew tap amirfish1/ccc
 brew install ccc</pre>
-          <p class="req">DMG bundles a launcher that triggers the installer on first run. Unsigned (open source, no Apple developer account) — first launch needs a right-click → Open. Homebrew installs the <code>ccc</code> command and can run CCC as a background service.</p>
+          <p class="req">DMG is notarized and signed by Apple — drag, drop, double-click. Homebrew installs the <code>ccc</code> command and can run CCC as a background service.</p>
         </div>
       </div>
     </div>
