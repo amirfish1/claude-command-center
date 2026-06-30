@@ -15505,6 +15505,7 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-row.is-closed .fq-status { background: rgba(139,148,158,0.55); }
 .fq-row.is-closed .fq-note { color: var(--text-muted); }
+.fq-row.is-closed .fq-chip { background: rgba(139,148,158,0.10) !important; color: var(--text-muted) !important; opacity: 0.6; }
 /* Triage chips (WT-FEATURES-23): type / priority / readiness + value/confidence,
    inline on the row so the queue view shows what the engine sees and picks first. */
 .fq-chips { display: inline-flex; flex-wrap: nowrap; flex-shrink: 0; gap: 2px; }
