@@ -27055,7 +27055,7 @@
     syncActivePaneChrome(id);
     // Update split panel session ID display
     if ($cpSessionId) {
-      const sid = selectedRow && selectedRow.pending_spawn ? '' : (sessionIdByConv[id] || '');
+      const sid = selectedRow && selectedRow.pending_spawn ? '' : (sessionIdByConv[id] || (selectedRow && selectedRow.session_id) || '');
       setCopyableSessionId($cpSessionId, sid);
     }
     const paneEl = document.querySelector(`.conv-pane[data-pane-id="${paneId}"]`);
@@ -27081,8 +27081,8 @@
     } else {
       setCurrentSession(
         source,
-        sessionIdByConv[id],
-        sessionCwdByConv[id],
+        sessionIdByConv[id] || (selectedRow && selectedRow.session_id) || null,
+        sessionCwdByConv[id] || (selectedRow && selectedRow.cwd) || null,
         sessionCwdExistsByConv[id],
         sessionSpawnPidByConv[id],
         rowRepoPath(selectedConv) || selectedRepoPath()
@@ -27127,7 +27127,7 @@
         // Block-level streaming from the spawn log — only succeeds if the
         // backend finds a CCC-spawned headless process for this session.
         // No-op for externally launched, IDE-launched, or pkood sessions.
-        const sid = sessionIdByConv[id] || '';
+        const sid = sessionIdByConv[id] || (selectedRow && selectedRow.session_id) || '';
         if (sid && source !== 'codex' && source !== 'cursor' && source !== 'antigravity' && source !== 'hermes' && source !== 'backlog') startSpawnStream(sid, paneId);
       }
     } finally {
