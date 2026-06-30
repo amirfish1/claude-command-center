@@ -30818,7 +30818,16 @@ def _group_chat_read_uncached(real_path):
         last_activity = active_entry.get("last_activity") or 0
 
         waiting = _group_chat_compute_waiting(real_path, sids, nm)
-        participant_meta = {sid: _group_chat_participant_meta(sid) for sid in sids}
+        # Parallelise per-participant liveness probes. On a cold _ttl_memo_keyed
+        # cache each call does find_session_cwd + session_live_status (up to 20
+        # ps forks). Sequential over 4 participants blocked the first load for
+        # several seconds. Threads are safe here: each key is independent.
+        if sids:
+            with ThreadPoolExecutor(max_workers=min(len(sids), 4)) as _pm_ex:
+                _pm_futs = {sid: _pm_ex.submit(_group_chat_participant_meta, sid) for sid in sids}
+                participant_meta = {sid: fut.result() for sid, fut in _pm_futs.items()}
+        else:
+            participant_meta = {}
         # Count participant sessions CCC currently considers live — these are the
         # ones a nudge would wake (the actual token cost).
         live_count = sum(1 for m in participant_meta.values() if m and m.get("is_live"))
