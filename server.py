@@ -6970,6 +6970,16 @@ def enqueue_annotation_ux_fixes_queue(
     else:
         queue_error = None
 
+    # Dispatch NOW (nudge a live worker, else spawn) + log the decision so a
+    # captured ticket is handled immediately and the activity log explains the
+    # outcome instead of going silent after ENQUEUE. Best-effort.
+    if item and _WT_WORKERS_AVAILABLE and _wt_workers is not None:
+        try:
+            _wt_workers.dispatch_after_enqueue(
+                str(item.get("project") or ""), str(item.get("ref") or ""))
+        except Exception:
+            pass
+
     if not inject:
         if item:
             return {
@@ -44796,6 +44806,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     repo_path=str(payload.get("repo_path") or "").strip(),
                     lane=str(payload.get("lane") or "normal"),
                 )
+                # Dispatch NOW (nudge a live worker, else spawn) + log the decision,
+                # so a dashboard-filed ticket is handled immediately instead of
+                # waiting for the next reconciler tick. Best-effort.
+                if _WT_WORKERS_AVAILABLE and _wt_workers is not None and item:
+                    try:
+                        _wt_workers.dispatch_after_enqueue(
+                            str(item.get("project") or ""), str(item.get("ref") or ""))
+                    except Exception:
+                        pass
                 self.send_json({"ok": True, "item": item})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
