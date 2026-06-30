@@ -27767,6 +27767,8 @@
   function _uxqResolvePanelProject(items, requestedProject) {
     const requested = _uxqProjectKey(requestedProject);
     if (!requested) return '';
+    // "All queues" sentinel — empty scope means no project filter (show all).
+    if (requested === 'ALL') return '';
     if (_uxqProjectHasItems(items, requested)) return requested;
     const fallback = _uxqDominantOpenProject(items);
     return fallback || requested;
@@ -27863,7 +27865,8 @@
     if (!$sel) return;
     const override = _uxqGetScopeOverride();
     const scopes = _uxqAvailableScopes(items);
-    const opts = ['<option value="AUTO">Auto (repo)</option>']
+    const opts = ['<option value="AUTO">Auto (repo)</option>',
+                  '<option value="ALL">All queues</option>']
       .concat(scopes.map(s => '<option value="' + escapeAttr(s) + '">' + escapeHtml(s) + '</option>'));
     $sel.innerHTML = opts.join('');
     $sel.value = override || 'AUTO';
