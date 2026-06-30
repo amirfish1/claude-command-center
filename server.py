@@ -307,14 +307,19 @@ def _wt_read_worker_session_ids():
 _HEX_SFX_RE = re.compile(r'^(.+)-([0-9a-f]{8})$')
 
 
-def _wt_past_workers(hours=24):
+def _wt_past_workers(hours=24, max_per_queue=3):
     """Past (exited) WT workers whose log was modified within the last N hours.
 
     Scans ~/.watchtower/logs/*.log, skips currently-live workers (still in
     workers.json), extracts worker_id + queue from the filename
     ({queue}-{hex_suffix}.log) and mtime as ended_at. Returns a list of dicts:
     {worker_id, queue, ended_at_iso, ended_ago_seconds}. Light-weight — no
-    subprocess, no per-file full-read. Empty list on any error."""
+    subprocess, no per-file full-read. Empty list on any error.
+
+    ``max_per_queue`` caps how many recent dead workers are returned PER queue
+    (most-recent first) so a churn episode — e.g. a misconfigured queue that
+    spawned 30+ short-lived workers — doesn't flood the Triggered Workers list
+    with historical noise. 0/None means no cap."""
     try:
         logs_dir = _WT_HOME / "logs"
         if not logs_dir.is_dir():
@@ -328,6 +333,7 @@ def _wt_past_workers(hours=24):
         except Exception:
             live_ids = set()
         out = []
+        per_queue = {}  # queue → count emitted (for max_per_queue cap)
         for p in sorted(logs_dir.iterdir(), key=lambda x: -x.stat().st_mtime if not x.name.endswith('.stdin') else 0):
             if p.suffix != '.log' or p.name.endswith('.stdin.log'):
                 continue
@@ -342,6 +348,12 @@ def _wt_past_workers(hours=24):
                 continue
             m = _HEX_SFX_RE.match(worker_id)
             queue = m.group(1).upper() if m else worker_id.upper()
+            # Cap per queue (logs are walked most-recent-first, so we keep the
+            # freshest N and drop older churn for the same queue).
+            if max_per_queue:
+                if per_queue.get(queue, 0) >= max_per_queue:
+                    continue
+                per_queue[queue] = per_queue.get(queue, 0) + 1
             ended_ago = int(now - st.st_mtime)
             ended_iso = datetime.utcfromtimestamp(st.st_mtime).strftime('%Y-%m-%dT%H:%M:%SZ')
             # Extract session_id from first matching line in log so chips can be clickable.
