@@ -27546,6 +27546,13 @@
       const mine = rows.filter(r => _uxqInScope(r && r.project, proj));
       if (mine.length) rows = mine;  // scope when this project has open work
     }
+    // auto_drain lives on the `queues` array (compute_queues_health), NOT on
+    // `rows` (compute_ux_fixes_health). Build a project→auto_drain map so the
+    // strip's Auto-drain toggle reflects real config instead of defaulting off.
+    const _drainByQueue = new Map();
+    (health.queues || []).forEach(q => {
+      if (q && q.queue != null) _drainByQueue.set(String(q.queue).toUpperCase(), !!q.auto_drain);
+    });
     let html = '';
     if (!rows.length) {
       html += '<div class="fq-health-clear">All queues clear</div>';
@@ -27572,7 +27579,9 @@
           + (canNudge ? ' is-nudgeable' : '') + '"'
           + (canNudge ? ' role="button" tabindex="0" data-nudge-sid="' + escapeAttr(sid) + '"' : '')
           + ' title="' + escapeAttr(badgeTip) + '">' + badgeText + '</span>';
-        const autoDrain = !!r.auto_drain;
+        const autoDrain = _drainByQueue.has(project.toUpperCase())
+          ? _drainByQueue.get(project.toUpperCase())
+          : !!r.auto_drain;
         const drainToggle = '<span class="fq-health-drain-toggle' + (autoDrain ? ' is-on' : '') + '"'
           + ' role="button" tabindex="0"'
           + ' data-drain-queue="' + escapeAttr(project) + '"'
