@@ -15758,20 +15758,22 @@ details[open] .uxq-edit-summary::before { content: '▾ '; }
 }
 .fq-health:empty { display: none; }
 .fq-health-row {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 5px;
-  padding: 6px 10px; font-size: 12.5px; line-height: 1.3;
+  display: flex; align-items: center; flex-wrap: nowrap; gap: 5px;
+  padding: 5px 10px; font-size: 12.5px; line-height: 1.3;
   border-bottom: 1px solid rgba(139,148,158,0.06);
   cursor: pointer; user-select: none;
 }
 .fq-health-row:hover { background: rgba(139,148,158,0.06); }
 .fq-health-row:last-child { border-bottom: none; }
 .fq-health-proj {
-  font-weight: 600; color: var(--text); flex-shrink: 0;
+  font-weight: 600; color: var(--text);
+  flex: 0 1 auto; min-width: 0; max-width: 28%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.fq-health-sep { color: var(--faint, var(--text-muted)); opacity: 0.7; }
+.fq-health-sep { color: var(--faint, var(--text-muted)); opacity: 0.7; flex-shrink: 0; }
 .fq-health-depth,
 .fq-health-age {
-  color: var(--text-muted);
+  color: var(--text-muted); flex-shrink: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .fq-health-badge {

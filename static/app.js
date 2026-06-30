@@ -27735,8 +27735,8 @@
     });
     // Compact label for the claim-types restriction shown on the toggle.
     const _claimLabel = (ct) => {
-      if (!ct || !ct.length) return 'all types';
-      if (ct.length === 1) return ct[0] + 's only';
+      if (!ct || !ct.length) return 'any';
+      if (ct.length === 1) return ct[0] + 's';
       return ct.join(',');
     };
     let html = '';
@@ -27782,7 +27782,7 @@
           + ' data-drain-queue="' + escapeAttr(project) + '"'
           + ' data-drain-on="' + (autoDrain ? '1' : '0') + '"'
           + ' title="' + (autoDrain ? 'Auto-drain is on — click to disable' : 'Auto-drain is off — click to enable') + '">'
-          + 'Auto&#x2011;drain&nbsp;<span class="fq-health-drain-val">' + (autoDrain ? 'on' : 'off') + '</span>'
+          + 'drain&nbsp;<span class="fq-health-drain-val">' + (autoDrain ? 'on' : 'off') + '</span>'
           + '</span>';
         // Claim-types restriction control: click-cycles all → bug → feature.
         // Only meaningful while auto-drain is on (the policy only affects
@@ -27795,7 +27795,7 @@
           + ' data-claim-queue="' + escapeAttr(project) + '"'
           + ' data-claim-types="' + escapeAttr(JSON.stringify(claimTypes || [])) + '"'
           + ' title="Claim filter — click to cycle all / bug / feature">'
-          + 'Claim&nbsp;<span class="fq-health-type-val">' + escapeHtml(_claimLabel(claimTypes)) + '</span>'
+          + '<span class="fq-health-type-val">' + escapeHtml(_claimLabel(claimTypes)) + '</span>'
           + '</span>';
         return '<div class="fq-health-row" data-fq-project="' + escapeAttr(project) + '"'
           + ' role="button" tabindex="0"'
