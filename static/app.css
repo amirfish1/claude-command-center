@@ -1392,13 +1392,9 @@
   }
   .thinking-toggle:hover { color: var(--text); }
   .t-body { white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
-  /* Signature-only thinking: the reasoning text was not persisted, so we show
-     a compact, non-expandable "thinking happened" marker instead of an empty
-     toggle. Small and muted, but not italic-noise. */
-  /* Signature-only "🧠 thought" markers were removed (no persisted text behind
-     them — pure noise that appeared after the turn). A turn left with nothing
-     but silent thinking is hidden entirely. The live "🧠 Thinking…" optimistic
-     indicator still covers the in-flight signal. */
+  /* Signature-only: reasoning text not persisted; show compact non-expandable marker. */
+  .thinking-block-silent .thinking-toggle { cursor: default; opacity: 0.6; }
+  .thinking-block-silent .thinking-toggle:hover { color: var(--text-muted); }
   .event.assistant.is-silent-thinking-only { display: none !important; }
 
   /* Per-turn token chips — rendered under an assistant event when the

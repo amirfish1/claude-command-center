@@ -32419,6 +32419,24 @@
     }
     if ((cmd === 'npm' || cmd === 'pnpm' || cmd === 'yarn') && sub) return cmd + ' ' + sub;
     if ((cmd === 'python' || cmd === 'python3') && sub) return sub === '-m' && words[2] ? cmd + ' -m ' + words[2] : cmd + ' ' + sub;
+    if (cmd === 'ssh' || cmd === 'scp' || cmd === 'sftp') {
+      // Find host: first non-flag, non-consumed-by-flag arg.
+      // ssh flags that consume the next argument: -b -c -D -E -e -F -I -i -J -l -L -m -N -o -p -Q -R -S -w
+      let host = '', remoteFirst = '';
+      for (let _i = 1; _i < words.length; _i++) {
+        const _w = words[_i];
+        if (/^-[bcDEeFIiJlLmNopQRSw]$/.test(_w)) { _i++; continue; }
+        if (_w.startsWith('-')) continue;
+        if (!host) { host = _w; continue; }
+        // next non-flag after host = remote command (already shell-split)
+        remoteFirst = splitShellWords(_w)[0] || '';
+        break;
+      }
+      if (host) {
+        const suffix = remoteFirst ? ': ' + _short(remoteFirst) : '';
+        return cmd + ' ' + _short(host) + suffix;
+      }
+    }
     if (cmd) return cmd;
     return raw.length > 40 ? raw.slice(0, 39) + '…' : raw;
   }
@@ -33416,13 +33434,11 @@
             hasNonTool = true;
           } else if (b.kind === 'thinking') {
             if (b.signature_only || !b.text) {
-              // Signature-only: the reasoning text was NOT persisted (only a
-              // cryptographic signature survived a resume). The old "🧠 thought"
-              // marker therefore carried no content and only appeared after the
-              // turn finished — noise, not signal. Drop it. The live
-              // "🧠 Thinking…" optimistic indicator still covers in-flight turns;
-              // a turn that is ONLY silent thinking is hidden below.
-              // (intentionally renders nothing)
+              // Signature-only: reasoning text not persisted (only signature survived
+              // a resume). Show a compact non-expandable marker so the turn stays
+              // visible as a record that thinking occurred.
+              blockParts.push('<div class="thinking-block thinking-block-silent"><span class="thinking-toggle">💭 thought</span></div>');
+              hasNonTool = true;
             } else {
               // Text present: visible block with a collapsed, expandable body.
               blockParts.push('<div class="thinking-block"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">💭 Thinking</span><div class="t-body" style="display:none">' + escapeHtml(b.text) + '</div></div>');
