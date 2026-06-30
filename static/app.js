@@ -22116,7 +22116,11 @@
             const agoS = Number(pw.ended_ago_seconds) || 0;
             const age = _uxqFmtAge(agoS);
             const endedAt = String(pw.ended_at_iso || '');
-            return '<span class="cepw-row" title="' + escapeAttr(wid + ' · ended ' + endedAt) + '">'
+            const sid = String(pw.session_id || '');
+            const clickAttrs = sid
+              ? ' role="button" tabindex="0" style="cursor:pointer" onclick="selectConversation(' + JSON.stringify(sid) + ')"'
+              : '';
+            return '<span class="cepw-row"' + clickAttrs + ' title="' + escapeAttr(wid + ' · ended ' + endedAt) + '">'
               + '<span class="cepw-id">' + escapeHtml(wid.slice(0, 24)) + '</span>'
               + '<span class="cepw-age">' + escapeHtml(age) + ' ago</span>'
               + '</span>';
@@ -27640,13 +27644,21 @@
     // strip's Auto-drain toggle reflects real config instead of defaulting off.
     const _drainByQueue = new Map();
     const _workersByQueue = new Map();
+    const _claimTypesByQueue = new Map();
     (health.queues || []).forEach(q => {
       if (q && q.queue != null) {
         const key = String(q.queue).toUpperCase();
         _drainByQueue.set(key, !!q.auto_drain);
         _workersByQueue.set(key, Number(q.workers) || 0);
+        _claimTypesByQueue.set(key, Array.isArray(q.claim_types) ? q.claim_types.slice() : []);
       }
     });
+    // Compact label for the claim-types restriction shown on the toggle.
+    const _claimLabel = (ct) => {
+      if (!ct || !ct.length) return 'all types';
+      if (ct.length === 1) return ct[0] + 's only';
+      return ct.join(',');
+    };
     let html = '';
     if (!rows.length) {
       html += '<div class="fq-health-clear">All queues clear</div>';
@@ -27688,6 +27700,19 @@
           + ' title="' + (autoDrain ? 'Auto-drain is on — click to disable' : 'Auto-drain is off — click to enable') + '">'
           + 'Auto&#x2011;drain&nbsp;<span class="fq-health-drain-val">' + (autoDrain ? 'on' : 'off') + '</span>'
           + '</span>';
+        // Claim-types restriction control: click-cycles all → bug → feature.
+        // Only meaningful while auto-drain is on (the policy only affects
+        // auto-drain workers), but always shown so the user can preset it.
+        const claimTypes = _claimTypesByQueue.has(project.toUpperCase())
+          ? _claimTypesByQueue.get(project.toUpperCase())
+          : (Array.isArray(r.claim_types) ? r.claim_types : []);
+        const typeToggle = '<span class="fq-health-type-toggle' + (claimTypes && claimTypes.length ? ' is-restricted' : '') + '"'
+          + ' role="button" tabindex="0"'
+          + ' data-claim-queue="' + escapeAttr(project) + '"'
+          + ' data-claim-types="' + escapeAttr(JSON.stringify(claimTypes || [])) + '"'
+          + ' title="Claim filter — click to cycle all / bug / feature">'
+          + 'Claim&nbsp;<span class="fq-health-type-val">' + escapeHtml(_claimLabel(claimTypes)) + '</span>'
+          + '</span>';
         return '<div class="fq-health-row" data-fq-project="' + escapeAttr(project) + '"'
           + ' role="button" tabindex="0"'
           + ' title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age + ' — click to scope queue') + '">'
@@ -27698,6 +27723,7 @@
           + '<span class="fq-health-age">oldest ' + escapeHtml(age) + '</span>'
           + badge
           + drainToggle
+          + typeToggle
           + '</div>';
       }).join('');
     }
@@ -28282,8 +28308,33 @@
         _uxqHealthCache.ts = 0;
         _renderQueueHealthStrip(true);
       };
+      const cycleClaimTypes = async (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('.fq-health-type-toggle[data-claim-queue]');
+        if (!btn) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const queue = btn.getAttribute('data-claim-queue');
+        let current = [];
+        try { current = JSON.parse(btn.getAttribute('data-claim-types') || '[]'); } catch (_) { current = []; }
+        // Cycle: all ([]) → bug → feature → all.
+        const CYCLE = [[], ['bug'], ['feature']];
+        const norm = JSON.stringify((current || []).slice().sort());
+        const idx = CYCLE.findIndex(c => JSON.stringify(c.slice().sort()) === norm);
+        const next = CYCLE[(idx + 1) % CYCLE.length];
+        btn.style.opacity = '0.4';
+        try {
+          await fetch('/api/wt/queue/claim-types', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({queue, claim_types: next}),
+          });
+        } catch (_) {}
+        btn.style.opacity = '';
+        _uxqHealthCache.ts = 0;
+        _renderQueueHealthStrip(true);
+      };
       const scopeFromRow = (ev) => {
-        const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid], .fq-health-drain-toggle');
+        const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid], .fq-health-drain-toggle, .fq-health-type-toggle');
         if (badge) return;
         const row = ev.target && ev.target.closest && ev.target.closest('.fq-health-row[data-fq-project]');
         if (!row) return;
@@ -28299,9 +28350,10 @@
       };
       $health.addEventListener('click', nudgeFromBadge);
       $health.addEventListener('click', toggleDrain);
+      $health.addEventListener('click', cycleClaimTypes);
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { nudgeFromBadge(ev); toggleDrain(ev); scopeFromRow(ev); }
+        if (ev.key === 'Enter' || ev.key === ' ') { nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); scopeFromRow(ev); }
       });
     }
   }

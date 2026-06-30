@@ -344,11 +344,27 @@ def _wt_past_workers(hours=24):
             queue = m.group(1).upper() if m else worker_id.upper()
             ended_ago = int(now - st.st_mtime)
             ended_iso = datetime.utcfromtimestamp(st.st_mtime).strftime('%Y-%m-%dT%H:%M:%SZ')
+            # Extract session_id from first matching line in log so chips can be clickable.
+            session_id = ""
+            try:
+                with open(p, "r", errors="replace") as lf:
+                    for raw in lf:
+                        try:
+                            obj = json.loads(raw)
+                            sid = obj.get("session_id", "")
+                            if sid:
+                                session_id = str(sid)
+                                break
+                        except (ValueError, AttributeError):
+                            continue
+            except OSError:
+                pass
             out.append({
                 "worker_id": worker_id,
                 "queue": queue,
                 "ended_at_iso": ended_iso,
                 "ended_ago_seconds": ended_ago,
+                "session_id": session_id,
             })
         return out
     except Exception:
@@ -20465,15 +20481,19 @@ def compute_queues_health(health=None, wt_workers=None):
     # Read the config file directly (no watchtower import dependency).
     cfg_drain = {}
     cfg_repo = {}
+    cfg_claim = {}
     try:
         for name, conf in (_wt_read_config() or {}).items():
             cfg_drain[_norm(name)] = bool((conf or {}).get("auto_drain", False))
             rp = str((conf or {}).get("repo_path") or "").strip()
             if rp:
                 cfg_repo[_norm(name)] = rp
+            ct = (conf or {}).get("claim_types", [])
+            cfg_claim[_norm(name)] = [t for t in ct if t in ("bug", "feature")] if isinstance(ct, list) else []
     except Exception:
         cfg_drain = {}
         cfg_repo = {}
+        cfg_claim = {}
 
     health_by_q = {_norm(r.get("project")): r for r in (health or [])}
 
@@ -20528,6 +20548,7 @@ def compute_queues_health(health=None, wt_workers=None):
             "state": state,
             "fixer_session_id": hr.get("fixer_session_id"),
             "repo_path": cfg_repo.get(q, ""),
+            "claim_types": cfg_claim.get(q, []),
         })
     # Stuck first, then deepest, then most workers, then name — most-urgent top.
     out.sort(key=lambda r: (0 if r["stuck"] else 1, -r["depth"], -r["workers"], r["queue"]))
@@ -44844,6 +44865,59 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     json.dump(cfg, f, indent=2)
                 tmp.replace(cfg_path)
                 self.send_json({"ok": True, "queue": key, "auto_drain": auto_drain})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/wt/queue/claim-types":
+            # Restrict which ticket types an auto-drain worker claims.
+            # Body: {queue: "CCC", claim_types: ["bug"]}  ([] = no restriction).
+            # Same-origin already enforced at the top of do_POST — same posture
+            # as /api/queue/drain (no extra allow-list; it only writes the small
+            # queue-config.json).
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            queue_name = str(payload.get("queue") or "").strip().upper()
+            if not queue_name:
+                self.send_json({"ok": False, "error": "queue required"}, 400)
+                return
+            raw = payload.get("claim_types", [])
+            if not isinstance(raw, list):
+                self.send_json({"ok": False, "error": "claim_types must be a list"}, 400)
+                return
+            claim_types = [t for t in raw if t in ("bug", "feature")]
+            try:
+                # Prefer the watchtower helper when importable (it normalizes and
+                # pops the key when empty); fall back to a direct atomic write of
+                # queue-config.json (same tmp+replace pattern as the drain toggle).
+                if _WT_CONFIG_AVAILABLE and _wt_config is not None:
+                    _wt_config.set_claim_types(queue_name, claim_types)
+                    # Resolve the stored key for the response (matches existing case).
+                    cfg = _wt_read_config() or {}
+                    matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
+                    key = matched if matched else queue_name
+                else:
+                    cfg_path = _wt_config_path()
+                    cfg = _wt_read_config() or {}
+                    matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
+                    key = matched if matched else queue_name
+                    if key not in cfg or not isinstance(cfg[key], dict):
+                        cfg[key] = {}
+                    if claim_types:
+                        cfg[key]["claim_types"] = claim_types
+                    else:
+                        cfg[key].pop("claim_types", None)
+                    tmp = cfg_path.with_suffix(".json.tmp")
+                    with open(tmp, "w") as f:
+                        json.dump(cfg, f, indent=2)
+                    tmp.replace(cfg_path)
+                self.send_json({"ok": True, "queue": key, "claim_types": claim_types})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return
