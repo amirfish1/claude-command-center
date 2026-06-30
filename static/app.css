@@ -4704,6 +4704,10 @@
     font-weight: 650;
     letter-spacing: 0;
     white-space: nowrap;
+    gap: 4px;
+  }
+  .conv-item .conv-ux-fix-ref {
+    font-weight: 500; opacity: 0.75; font-size: 10px;
   }
   .conv-item .conv-row-meta {
     display: inline-flex;

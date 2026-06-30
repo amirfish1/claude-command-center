@@ -22100,7 +22100,9 @@
           if (card) {
             const cid = card.session_id || card.id;
             if (cid) _evergreenSessionIds.add(cid);
-            return _renderRow(card, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });
+            // Attach worker_id so _uxFixesRowIdentityKeys can match claims by worker id.
+            const enriched = w.worker_id ? Object.assign(Object.create(null), card, { _worker_id: w.worker_id }) : card;
+            return _renderRow(enriched, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });
           }
           return _twFallbackRow(w);
         }).join('');
@@ -36905,6 +36907,9 @@
     if (m) return m[1].toUpperCase();
     m = text.match(/^ux worker ([a-z0-9]+)$/);
     if (m) return m[1].toUpperCase();
+    // Watchtower worker sessions: "CCC queue worker", "OPS queue worker"
+    m = text.match(/^([a-z0-9]+) queue worker$/);
+    if (m) return m[1].toUpperCase();
     return '';
   }
 
@@ -36935,7 +36940,9 @@
   function _uxFixesRowIdentityKeys(c) {
     if (!c) return [];
     const keys = [];
-    for (const v of [c.session_id, c.id, c.display_name, c.ai_title]) {
+    // Include _worker_id if present — Watchtower workers claim tickets via
+    // their worker_id (e.g. "ccc-fbbe9e53"), not their session UUID.
+    for (const v of [c.session_id, c.id, c._worker_id, c.display_name, c.ai_title]) {
       const k = _uxFixesIdentityKey(v);
       if (k && keys.indexOf(k) === -1) keys.push(k);
     }
@@ -37127,8 +37134,10 @@
     // working state can't be misread as complete: "▶ (141/141)" = working the
     // 141st, vs "✓ (141/141)" = finished it (CCC-142). Without the glyph the two
     // were identical and an in-progress (often stalled) item looked done.
+    // Also show active ticket ref when available: "▶ (371/376) CCC-371".
+    const refLabel = progress.ref ? ' <span class="conv-ux-fix-ref">' + escapeHtml(progress.ref) + '</span>' : '';
     return '<span class="conv-ux-fix-progress conv-ux-fix-working" role="button" tabindex="0" data-ux-nudge="working"'
-      + ' style="cursor:pointer" title="' + escapeAttr(title) + '">▶ ' + count + '</span>';
+      + ' style="cursor:pointer" title="' + escapeAttr(title) + '">▶ ' + count + refLabel + '</span>';
   }
 
   async function refreshUxFixesQueueMeta(opts = {}) {
