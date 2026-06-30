@@ -138,7 +138,7 @@ def test_ux_fixes_health_no_all_sessions_or_subprocess(monkeypatch):
         + [_item(i, "BYM", "closed", claimed_by=sid_b) for i in range(200, 260)]
         + [_item(300, "BYM", "open")]
     )
-    monkeypatch.setattr(uxq, "list_items", lambda *a, **k: list(items))
+    monkeypatch.setattr(server._q, "list_items", lambda *a, **k: list(items))
 
     live_calls = _count_calls(monkeypatch, "_archive_session_is_live", passthrough_return=False)
     # The full archive build is the O(all sessions) path; it must never run.
@@ -214,7 +214,7 @@ def test_ux_fixes_health_resolves_label_claimed_fixer(monkeypatch):
         + [_item(i, "LBLC", "open") for i in range(90, 93)]
         + [_item(120, "LBLC", "in_progress", claimed_by=f"codex:{sid_c}")]
     )
-    monkeypatch.setattr(uxq, "list_items", lambda *a, **k: list(items))
+    monkeypatch.setattr(server._q, "list_items", lambda *a, **k: list(items))
     # Spawn registry: only LBLB's label maps to a session id (the (b) path).
     monkeypatch.setattr(
         server, "_load_spawn_registry",
