@@ -20502,6 +20502,7 @@ def compute_queues_health(health=None, wt_workers=None):
     # `open` stays = depth (from health); these add a done/total progress count.
     closed_by_q = {}
     total_by_q = {}
+    last_activity_q = {}  # queue → most-recent item-touch epoch (any status)
     try:
         for it in (_q.list_items() or []):
             qn = _norm(it.get("project"))
@@ -20510,9 +20511,20 @@ def compute_queues_health(health=None, wt_workers=None):
             total_by_q[qn] = total_by_q.get(qn, 0) + 1
             if it.get("status") == "closed":
                 closed_by_q[qn] = closed_by_q.get(qn, 0) + 1
+            # Most recent touch = newest of updated/closed/created — drives the
+            # "active in last N days" filter so a drained-but-recent queue still
+            # shows while a long-dead queue drops off.
+            ts = max(
+                _uxq_parse_ts(it.get("updated_at")),
+                _uxq_parse_ts(it.get("closed_at")),
+                _uxq_parse_ts(it.get("created_at")),
+            )
+            if ts and ts > last_activity_q.get(qn, 0):
+                last_activity_q[qn] = ts
     except Exception:
         closed_by_q = {}
         total_by_q = {}
+        last_activity_q = {}
 
     names = set()
     names.update(cfg_drain.keys())
@@ -20549,6 +20561,9 @@ def compute_queues_health(health=None, wt_workers=None):
             "fixer_session_id": hr.get("fixer_session_id"),
             "repo_path": cfg_repo.get(q, ""),
             "claim_types": cfg_claim.get(q, []),
+            "last_activity_seconds": (
+                int(time.time() - last_activity_q[q]) if q in last_activity_q else None
+            ),
         })
     # Stuck first, then deepest, then most workers, then name — most-urgent top.
     out.sort(key=lambda r: (0 if r["stuck"] else 1, -r["depth"], -r["workers"], r["queue"]))

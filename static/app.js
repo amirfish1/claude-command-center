@@ -27632,7 +27632,30 @@
     if (!$strip) return;
     if (force) _uxqHealthCache.ts = 0;
     const health = await _fetchUxqHealth();
-    let rows = health.rows;
+    let rows = (health.rows || []).slice();
+    // Keep recently-active queues visible even when fully drained (0 open) — a
+    // queue that closed a ticket a minute ago is still worth seeing — while
+    // long-dead/bogus queues drop off. Append synthetic rows for configured
+    // queues with activity in the last 7 days that have no open-ticket row.
+    const _ACTIVE_WINDOW_S = 7 * 24 * 3600;
+    const _haveProject = new Set(rows.map(r => _uxqProjectKey(r && r.project)));
+    (health.queues || []).forEach(q => {
+      if (!q || q.queue == null) return;
+      const key = _uxqProjectKey(q.queue);
+      if (!key || key === '?' || _haveProject.has(key)) return;
+      if ((Number(q.depth) || 0) > 0) return;  // open-ticket queues already in rows
+      const la = q.last_activity_seconds;
+      if (la == null || la > _ACTIVE_WINDOW_S) return;  // stale/never-active → skip
+      rows.push({
+        project: q.queue,
+        depth: 0,
+        oldest_open_age_seconds: null,
+        stuck: false,
+        fixer_session_id: '',
+        last_activity_seconds: la,
+        _drained: true,
+      });
+    });
     const wtWorkers = health.wt_workers || [];
     const proj = scopeProject !== undefined ? _uxqProjectKey(scopeProject) : _uxqWorkerProject();
     if (proj) {
@@ -27681,11 +27704,15 @@
         const waiting = stuck && !sid && !hasLiveWorker;
         const reallyStuck = stuck && !!sid && !hasLiveWorker;
         const canNudge = reallyStuck && !!sid;
-        const badgeText = reallyStuck ? 'STUCK' : (waiting ? 'WAITING' : 'LIVE');
+        // A drained queue (0 open) shown only because it was recently active reads
+        // as a calm CLEAR, not LIVE — there's no open work and no alarm.
+        const drained = depth === 0 && !reallyStuck && !waiting;
+        const badgeText = reallyStuck ? 'STUCK' : (waiting ? 'WAITING' : (drained ? 'CLEAR' : 'LIVE'));
         const badgeTip = reallyStuck
           ? (canNudge ? 'stuck — click to nudge the worker' : 'stuck — no reachable worker')
-          : (waiting ? 'open tickets — no worker assigned yet' : 'a worker is on it');
-        const badgeCls = reallyStuck ? 'is-stuck' : (waiting ? 'is-waiting' : 'is-live');
+          : (waiting ? 'open tickets — no worker assigned yet'
+             : (drained ? 'drained — recently active, no open tickets' : 'a worker is on it'));
+        const badgeCls = reallyStuck ? 'is-stuck' : (waiting ? 'is-waiting' : (drained ? 'is-clear' : 'is-live'));
         const badge = '<span class="fq-health-badge ' + badgeCls
           + (canNudge ? ' is-nudgeable' : '') + '"'
           + (canNudge ? ' role="button" tabindex="0" data-nudge-sid="' + escapeAttr(sid) + '"' : '')

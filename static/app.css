@@ -15761,6 +15761,10 @@ details[open] .uxq-edit-summary::before { content: '▾ '; }
 .fq-health-badge.is-waiting {
   background: rgba(210,153,34,0.16); color: var(--yellow, #d29922);
 }
+/* Drained-but-recently-active queue: calm neutral, not the active green of LIVE. */
+.fq-health-badge.is-clear {
+  background: rgba(139,148,158,0.14); color: var(--text-muted);
+}
 .fq-health-badge.is-nudgeable { cursor: pointer; }
 .fq-health-badge.is-nudgeable:hover { background: rgba(248,81,73,0.30); }
 .fq-health-drain-toggle {
