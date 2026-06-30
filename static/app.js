@@ -27541,6 +27541,14 @@
           + (canNudge ? ' is-nudgeable' : '') + '"'
           + (canNudge ? ' role="button" tabindex="0" data-nudge-sid="' + escapeAttr(sid) + '"' : '')
           + ' title="' + escapeAttr(badgeTip) + '">' + badgeText + '</span>';
+        const autoDrain = !!r.auto_drain;
+        const drainToggle = '<span class="fq-health-drain-toggle' + (autoDrain ? ' is-on' : '') + '"'
+          + ' role="button" tabindex="0"'
+          + ' data-drain-queue="' + escapeAttr(project) + '"'
+          + ' data-drain-on="' + (autoDrain ? '1' : '0') + '"'
+          + ' title="' + (autoDrain ? 'Auto-drain is on — click to disable' : 'Auto-drain is off — click to enable') + '">'
+          + 'Auto&#x2011;drain&nbsp;<span class="fq-health-drain-val">' + (autoDrain ? 'on' : 'off') + '</span>'
+          + '</span>';
         return '<div class="fq-health-row" title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age) + '">'
           + '<span class="fq-health-proj">' + escapeHtml(project) + '</span>'
           + '<span class="fq-health-sep">·</span>'
@@ -27548,6 +27556,7 @@
           + '<span class="fq-health-sep">·</span>'
           + '<span class="fq-health-age">oldest ' + escapeHtml(age) + '</span>'
           + badge
+          + drainToggle
           + '</div>';
       }).join('');
     }
@@ -28110,9 +28119,29 @@
         ev.stopPropagation();
         _nudgeFixerBySid(badge.getAttribute('data-nudge-sid'));
       };
+      const toggleDrain = async (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('.fq-health-drain-toggle[data-drain-queue]');
+        if (!btn) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const queue = btn.getAttribute('data-drain-queue');
+        const newVal = btn.getAttribute('data-drain-on') !== '1';
+        btn.style.opacity = '0.4';
+        try {
+          await fetch('/api/queue/drain', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({queue, auto_drain: newVal}),
+          });
+        } catch (_) {}
+        btn.style.opacity = '';
+        _uxqHealthCache.ts = 0;
+        _renderQueueHealthStrip(true);
+      };
       $health.addEventListener('click', nudgeFromBadge);
+      $health.addEventListener('click', toggleDrain);
       $health.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') nudgeFromBadge(ev);
+        if (ev.key === 'Enter' || ev.key === ' ') { nudgeFromBadge(ev); toggleDrain(ev); }
       });
     }
   }

@@ -15744,6 +15744,22 @@ details[open] .uxq-edit-summary::before { content: '▾ '; }
 }
 .fq-health-badge.is-nudgeable { cursor: pointer; }
 .fq-health-badge.is-nudgeable:hover { background: rgba(248,81,73,0.30); }
+.fq-health-drain-toggle {
+  flex-shrink: 0; cursor: pointer;
+  font-size: 10.5px; font-weight: 500; letter-spacing: 0.02em;
+  padding: 1px 7px; border-radius: 999px;
+  background: rgba(139,148,158,0.10); color: var(--text-muted);
+  border: 1px solid rgba(139,148,158,0.18);
+  transition: background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.fq-health-drain-toggle:hover { background: rgba(139,148,158,0.18); border-color: rgba(139,148,158,0.30); }
+.fq-health-drain-toggle.is-on {
+  background: rgba(63,185,80,0.10); border-color: rgba(63,185,80,0.22);
+  color: var(--green, #3fb950);
+}
+.fq-health-drain-toggle.is-on:hover { background: rgba(63,185,80,0.18); }
+.fq-health-drain-val { font-weight: 700; }
 .fq-health-clear {
   padding: 8px 10px; font-size: 12.5px;
   color: var(--green, #3fb950); opacity: 0.85;

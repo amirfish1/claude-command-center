@@ -20455,7 +20455,13 @@ def compute_queues_health(health=None, wt_workers=None):
         depth = int(hr.get("depth") or 0)
         workers = int(worker_counts.get(q, 0))
         auto = bool(cfg_drain.get(q, False))
-        stuck = bool(hr.get("stuck")) and depth > 0
+        # A queue with a live WatchTower worker is NOT stuck — the worker is
+        # draining it. The legacy fixer-based `stuck` (compute_ux_fixes_health)
+        # only sees stuck because WT workers claim with a non-UUID worker_id and
+        # never write their cloud session_id onto the ticket, so it can't resolve
+        # a "live fixer". A hung worker is a worker-health concern surfaced on the
+        # worker row, not a queue-level stuck. Trust WT ground-truth: workers > 0.
+        stuck = bool(hr.get("stuck")) and depth > 0 and workers == 0
         state = "stuck" if stuck else ("draining" if auto else "backlog")
         out.append({
             "queue": q,
@@ -44728,6 +44734,39 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json(result)
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/queue/drain":
+            # Toggle auto_drain for a queue by writing queue-config.json.
+            # Body: {queue: "CCC", auto_drain: true|false}
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            queue_name = str(payload.get("queue") or "").strip().upper()
+            if not queue_name:
+                self.send_json({"ok": False, "error": "queue required"}, 400)
+                return
+            auto_drain = bool(payload.get("auto_drain", False))
+            cfg_path = _wt_config_path()
+            try:
+                cfg = _wt_read_config() or {}
+                matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
+                key = matched if matched else queue_name
+                if key not in cfg or not isinstance(cfg[key], dict):
+                    cfg[key] = {}
+                cfg[key]["auto_drain"] = auto_drain
+                tmp = cfg_path.with_suffix(".json.tmp")
+                with open(tmp, "w") as f:
+                    json.dump(cfg, f, indent=2)
+                tmp.replace(cfg_path)
+                self.send_json({"ok": True, "queue": key, "auto_drain": auto_drain})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return
