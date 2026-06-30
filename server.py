@@ -4164,7 +4164,7 @@ def _live_registry_conversation_row(
         overrides.get(sid)
         or (meta or {}).get("name")
         or spawn_name
-        or f"Live session {sid[:8]}"
+        or (f"Session in {natural_folder_label}" if natural_folder_label and natural_folder_label not in ("Live session",) else f"Live session {sid[:8]}")
     )
     spawn_named = bool(spawn_name and display_name == spawn_name and not overrides.get(sid))
     mtime = (
