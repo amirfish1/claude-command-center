@@ -2051,6 +2051,35 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("uxFixesQueueMeta.lastFixByProject || new Map()", app_js)
         self.assertIn(".conv-item .conv-ux-fix-progress", app_css)
 
+    def test_compute_queues_health_marks_configured_empty_queues(self):
+        """Configured queues with zero tickets are intentional and should be
+        distinguishable from stale historical queues in the CCC Queue tab."""
+        server = importlib.import_module("server")
+
+        with mock.patch.object(server, "_wt_read_config", return_value={
+            "BYM-GH-FINIE": {
+                "backend": "github",
+                "repo_path": "/Users/amirfish/Apps/BYM+Finie",
+                "auto_drain": False,
+            },
+        }), mock.patch.object(server._q, "list_items", return_value=[]):
+            rows = {r["queue"]: r for r in server.compute_queues_health([], [])}
+
+        row = rows["BYM-GH-FINIE"]
+        self.assertTrue(row["configured"])
+        self.assertEqual(row["total"], 0)
+        self.assertIsNone(row["last_activity_seconds"])
+        self.assertEqual(row["repo_path"], "/Users/amirfish/Apps/BYM+Finie")
+
+    def test_queue_health_strip_keeps_configured_never_active_queues(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        strip = app_js[
+            app_js.index("async function _renderQueueHealthStrip"):
+            app_js.index("const wtWorkers = health.wt_workers || [];", app_js.index("async function _renderQueueHealthStrip"))
+        ]
+        self.assertIn("const configured = !!q.configured;", strip)
+        self.assertIn("if (!configured && (la == null || la > _ACTIVE_WINDOW_S)) return;", strip)
+
     def test_project_worker_progress_prefers_latest_project_fix(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         fn_start = app_js.index("function _uxFixesQueueProgressForRow(c)")

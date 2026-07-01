@@ -20620,18 +20620,22 @@ def compute_queues_health(health=None, wt_workers=None):
     cfg_drain = {}
     cfg_repo = {}
     cfg_claim = {}
+    cfg_names = set()
     try:
         for name, conf in (_wt_read_config() or {}).items():
-            cfg_drain[_norm(name)] = bool((conf or {}).get("auto_drain", False))
+            qn = _norm(name)
+            cfg_names.add(qn)
+            cfg_drain[qn] = bool((conf or {}).get("auto_drain", False))
             rp = str((conf or {}).get("repo_path") or "").strip()
             if rp:
-                cfg_repo[_norm(name)] = rp
+                cfg_repo[qn] = rp
             ct = (conf or {}).get("claim_types", [])
-            cfg_claim[_norm(name)] = [t for t in ct if t in ("bug", "feature")] if isinstance(ct, list) else []
+            cfg_claim[qn] = [t for t in ct if t in ("bug", "feature")] if isinstance(ct, list) else []
     except Exception:
         cfg_drain = {}
         cfg_repo = {}
         cfg_claim = {}
+        cfg_names = set()
 
     health_by_q = {_norm(r.get("project")): r for r in (health or [])}
 
@@ -20730,6 +20734,7 @@ def compute_queues_health(health=None, wt_workers=None):
             "fixer_session_id": hr.get("fixer_session_id"),
             "repo_path": cfg_repo.get(q, ""),
             "claim_types": cfg_claim.get(q, []),
+            "configured": q in cfg_names,
             "last_activity_seconds": (
                 int(time.time() - last_activity_q[q]) if q in last_activity_q else None
             ),
