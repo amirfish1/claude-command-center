@@ -28053,6 +28053,9 @@
     // "All queues" sentinel — empty scope means no project filter (show all).
     if (requested === 'ALL') return '';
     if (_uxqProjectHasItems(items, requested)) return requested;
+    // Honor an explicit user override (e.g. clicking a health-row) even when
+    // the queue has 0 items — show its empty state, not the dominant project.
+    if (_uxqGetScopeOverride() === requested) return requested;
     const fallback = _uxqDominantOpenProject(items);
     return fallback || requested;
   }
