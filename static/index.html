@@ -71,6 +71,17 @@
       cs.defer = true;
       (document.head || document.documentElement).appendChild(cs);
     }).catch(() => {});
+    // Settings-menu dashboard launchers for optional plugins. Each link is
+    // hidden by default in the HTML; reveal only when installed.
+    fetch('/api/features').then(r => r.json()).then(f => {
+      if (!f) return;
+      const show = (id, on) => {
+        const el = document.getElementById(id);
+        if (el && on) el.style.display = '';
+      };
+      show('openTotalRecallBtn', f.total_recall);
+      show('openTokenOptimizerBtn', f.token_optimizer);
+    }).catch(() => {});
     const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
       window.matchMedia('(display-mode: window-controls-overlay)').matches ||
@@ -545,6 +556,11 @@
           <button class="pop-item" type="button" id="spawnDefaultsBtn"><span class="pop-icon">&#9673;</span><span>Spawn defaults…</span></button>
           <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
           <button class="pop-item" type="button" id="restartServerBtn"><span class="pop-icon">&#8635;</span><span id="restartServerLabel">Restart server</span></button>
+          <!-- Launchers for third-party plugin dashboards. Hidden by default;
+               shown only when /api/features confirms the plugin is installed
+               (see the feature-flag fetch below). -->
+          <a class="pop-item" id="openTotalRecallBtn" href="http://localhost:24824/total-recall" target="_blank" rel="noopener" style="display:none;"><span class="pop-icon">&#129504;</span><span>Total Recall dashboard</span></a>
+          <a class="pop-item" id="openTokenOptimizerBtn" href="http://localhost:24842/token-optimizer" target="_blank" rel="noopener" style="display:none;"><span class="pop-icon">&#128202;</span><span>Token Optimizer dashboard</span></a>
           <a class="pop-item" href="https://github.com/amirfish1/claude-command-center#readme" target="_blank" rel="noopener"><span class="pop-icon">?</span><span>Get help</span></a>
         </div>
       </div>

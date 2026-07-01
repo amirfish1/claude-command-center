@@ -44202,6 +44202,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # COO board launcher. True when the board file is present, so
                 # the topbar button shows wherever the board ships.
                 "coo": (STATIC_DIR / "coo-board.html").exists(),
+                # Third-party Claude Code plugins that ship their own local
+                # dashboard server. Detected by their state-dir marker so the
+                # settings menu only offers a launcher when installed.
+                "total_recall": (Path.home() / ".claude" / "total-recall").is_dir(),
+                "token_optimizer": (Path.home() / ".claude" / "token-optimizer").is_dir(),
             })
         elif path == "/api/healthcheck":
             # Surface the state of every external dependency CCC delegates to.
