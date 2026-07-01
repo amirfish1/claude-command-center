@@ -13,9 +13,11 @@ If one fails, a hot path lost its gating or caching — don't relax the bound,
 restore the gate. See CLAUDE.md "Performance gates".
 """
 import importlib
+import concurrent.futures
 import json
 import os
 import sys
+import threading
 import time
 import uuid
 
@@ -488,6 +490,44 @@ def test_archive_all_serve_cache_coalesces_concurrent_polls(big_projects, isolat
         "serve-cache window must not even rehydrate — concurrent polls within "
         "the TTL must share one snapshot (the per-request liveness-probe drain)"
     )
+
+
+def test_ux_fixes_health_payload_coalesces_concurrent_polls(monkeypatch):
+    """Queue health is a dashboard poll target; concurrent clients must share
+    one expensive queue/log scan instead of each request rebuilding it."""
+    assert hasattr(server, "build_ux_fixes_health_payload")
+
+    server._ux_fixes_health_snapshot["ts"] = 0.0
+    server._ux_fixes_health_snapshot["data"] = None
+    monkeypatch.setattr(server, "_UX_FIXES_HEALTH_TTL", 60.0)
+
+    calls = []
+    lock = threading.Lock()
+
+    def slow_health():
+        with lock:
+            calls.append(time.time())
+        time.sleep(0.05)
+        return [{"project": "CCC", "depth": 1, "stuck": False}]
+
+    monkeypatch.setattr(server, "compute_ux_fixes_health", slow_health)
+    monkeypatch.setattr(server, "_wt_read_workers", lambda: [])
+    monkeypatch.setattr(server, "compute_queues_health", lambda health, workers: [{"queue": "CCC"}])
+    monkeypatch.setattr(server, "_wt_read_worker_session_ids", lambda: [])
+    monkeypatch.setattr(server, "_wt_past_workers", lambda hours=24: [])
+
+    barrier = threading.Barrier(4)
+
+    def call_payload():
+        barrier.wait()
+        return server.build_ux_fixes_health_payload()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: call_payload(), range(4)))
+
+    assert len(calls) == 1, "concurrent /api/ux-fixes/health polls rebuilt independently"
+    assert all(r["count"] == 1 for r in results)
+    assert all(r["queues"] == [{"queue": "CCC"}] for r in results)
 
 
 def test_archive_rows_carry_state_stamp_cache_safe(big_projects, isolated_archive_cache, monkeypatch):
