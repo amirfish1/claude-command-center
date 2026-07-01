@@ -4008,24 +4008,49 @@ class TestLinuxCapabilities(unittest.TestCase):
 
 
 class TestRepoContextHelpers(unittest.TestCase):
+    # watchtower.{queue,workers,config} bind their store paths as module-level
+    # constants from Path.home() at import time (only WATCHTOWER_STORE is read
+    # fresh per-call). Setting these env vars alone does nothing unless the
+    # modules are also re-imported after the env vars change — see setUp below.
+    _WATCHTOWER_ENV_FILES = {
+        "WATCHTOWER_STORE": "queues.json",
+        "WATCHTOWER_CONFIG_FILE": "queue-config.json",
+        "WATCHTOWER_WORKERS_FILE": "workers.json",
+        "WATCHTOWER_WORKER_SESSIONS_FILE": "worker-sessions.json",
+    }
+    _WATCHTOWER_MODULES = (
+        "server", "morning", "morning_store", "ux_fixes_queue",
+        "watchtower.queue", "watchtower.workers", "watchtower.config",
+    )
+
     def setUp(self):
         self.tmp_home = tempfile.mkdtemp(prefix="ccc-repo-context-home-")
         self._prev_home = os.environ.get("HOME")
         self._prev_ux_fixes_queue_file = os.environ.get("UX_FIXES_QUEUE_FILE")
-        self._prev_watchtower_store = os.environ.get("WATCHTOWER_STORE")
+        self._prev_watchtower_env = {
+            var: os.environ.get(var) for var in self._WATCHTOWER_ENV_FILES
+        }
+        self._prev_watchtower_stop_signals_dir = os.environ.get(
+            "WATCHTOWER_STOP_SIGNALS_DIR"
+        )
         os.environ["HOME"] = str(pathlib.Path(self.tmp_home).resolve())
         self.ux_fixes_queue_file = pathlib.Path(
             self.tmp_home, ".claude", "command-center", "ux-fixes-queue.json"
         ).resolve()
         os.environ["UX_FIXES_QUEUE_FILE"] = str(self.ux_fixes_queue_file)
-        # server._q prefers watchtower.queue when installed, and that module
-        # resolves its store from $WATCHTOWER_STORE fresh on every call (not
-        # from HOME) — without this, enqueue_annotation_ux_fixes_queue() in
-        # these tests writes real tickets into the live production queue.
-        os.environ["WATCHTOWER_STORE"] = str(
-            pathlib.Path(self.tmp_home, ".watchtower", "queues.json").resolve()
+        # server._q prefers watchtower.queue when installed. Without pointing
+        # ALL of its store/config/workers files at this test's tmp_home,
+        # enqueue_annotation_ux_fixes_queue() writes real tickets into the live
+        # production queue AND dispatch_after_enqueue() nudges real live
+        # workers via the real workers.json (seen live as CCC-1/399..403).
+        for var, filename in self._WATCHTOWER_ENV_FILES.items():
+            os.environ[var] = str(
+                pathlib.Path(self.tmp_home, ".watchtower", filename).resolve()
+            )
+        os.environ["WATCHTOWER_STOP_SIGNALS_DIR"] = str(
+            pathlib.Path(self.tmp_home, ".watchtower", "stop-signals").resolve()
         )
-        for mod in ("server", "morning", "morning_store", "ux_fixes_queue"):
+        for mod in self._WATCHTOWER_MODULES:
             sys.modules.pop(mod, None)
         self.server = importlib.import_module("server")
         self.repo = pathlib.Path(self.tmp_home, "demo-repo").resolve()
@@ -4041,11 +4066,16 @@ class TestRepoContextHelpers(unittest.TestCase):
             os.environ.pop("UX_FIXES_QUEUE_FILE", None)
         else:
             os.environ["UX_FIXES_QUEUE_FILE"] = self._prev_ux_fixes_queue_file
-        if self._prev_watchtower_store is None:
-            os.environ.pop("WATCHTOWER_STORE", None)
+        for var, prev in self._prev_watchtower_env.items():
+            if prev is None:
+                os.environ.pop(var, None)
+            else:
+                os.environ[var] = prev
+        if self._prev_watchtower_stop_signals_dir is None:
+            os.environ.pop("WATCHTOWER_STOP_SIGNALS_DIR", None)
         else:
-            os.environ["WATCHTOWER_STORE"] = self._prev_watchtower_store
-        for mod in ("server", "morning", "morning_store", "ux_fixes_queue"):
+            os.environ["WATCHTOWER_STOP_SIGNALS_DIR"] = self._prev_watchtower_stop_signals_dir
+        for mod in self._WATCHTOWER_MODULES:
             sys.modules.pop(mod, None)
         shutil.rmtree(self.tmp_home, ignore_errors=True)
 
