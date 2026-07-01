@@ -4562,6 +4562,22 @@
     if (!btn) return;
     ev.preventDefault();
     ev.stopPropagation();
+    // Second click on the SAME speaker button toggles pause/resume on the
+    // in-flight utterance instead of restarting the read from the top
+    // (CCC-408). A click on a DIFFERENT message's speaker still cancels
+    // whatever is playing and starts fresh, same as before.
+    if (btn === _ttsDirectBtn && _ttsUtterance) {
+      if (_ttsActive && !_ttsPaused) {
+        try { window.speechSynthesis.pause(); } catch (_) {}
+        _ttsPaused = true;
+        _setTtsDirectBtnState(btn, 'paused');
+      } else if (_ttsPaused) {
+        try { window.speechSynthesis.resume(); } catch (_) {}
+        _ttsPaused = false;
+        _setTtsDirectBtnState(btn, 'speaking');
+      }
+      return;
+    }
     const eventEl = btn.closest('.event.assistant');
     const text = assistantNodeTextForCopy(eventEl);
     if (!text) {
@@ -4572,7 +4588,7 @@
     const paneId = (pane && pane.getAttribute('data-pane-id')) || activePaneId();
     const paneState = paneId && typeof paneByPaneId === 'function' ? paneByPaneId(paneId) : null;
     const convId = (paneState && paneState.conversationId) || currentConversation || '';
-    const ok = speakTextDirect(text, convId, paneId);
+    const ok = speakTextDirect(text, convId, paneId, btn);
     if (!ok) showOpToast('Your browser does not support text-to-speech.', 'error');
   });
 
@@ -6941,6 +6957,22 @@
   let _ttsPaused = false;
   let _ttsBoundUtteranceText = '';
   let _ttsRateRestartTimer = null;
+  // Per-message speaker button (data-read-assistant-message) that started the
+  // active utterance, so a second click on THAT SAME button pauses/resumes
+  // instead of restarting the read from the top (CCC-408).
+  let _ttsDirectBtn = null;
+  function _setTtsDirectBtnState(btn, state) {
+    if (_ttsDirectBtn && _ttsDirectBtn !== btn) {
+      _ttsDirectBtn.classList.remove('speaking', 'paused');
+    }
+    _ttsDirectBtn = state ? btn : null;
+    if (btn) {
+      btn.classList.toggle('speaking', state === 'speaking' || state === 'paused');
+      btn.classList.toggle('paused', state === 'paused');
+      btn.title = state === 'paused' ? 'Resume reading' : (state === 'speaking' ? 'Pause reading' : 'Read assistant message aloud');
+      btn.setAttribute('aria-label', btn.title);
+    }
+  }
   // One-time iOS-Safari engine prime (CCC-31). Must run inside a user gesture.
   let _ttsPrimed = false;
   function _primeTtsEngine() {
@@ -6983,6 +7015,7 @@
     _ttsActiveConvId = null;
     setTtsButtonsBusy(false);
     setTtsButtonsState(false, false);
+    if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, null);
     if (typeof updateTopbarTtsControl === 'function') updateTopbarTtsControl();
   }
 
@@ -7115,7 +7148,7 @@
   // (_ttsUtterance / _ttsActive / _ttsPaused / _ttsActiveConvId) so the
   // floating control and in-bar button stay consistent, and rate changes
   // restart from the current word like the normal path.
-  function speakTextDirect(text, convId, paneId) {
+  function speakTextDirect(text, convId, paneId, sourceBtn) {
     if (!window.speechSynthesis) return false;
     const clean = String(text || '').trim();
     if (!clean) return false;
@@ -7123,6 +7156,7 @@
     if (_ttsActive || _ttsPaused || _ttsUtterance) {
       try { window.speechSynthesis.cancel(); } catch (_) {}
     }
+    _setTtsDirectBtnState(sourceBtn || null, sourceBtn ? 'speaking' : null);
     clearTtsHighlight();
     _ttsTextMapping = [];
     _ttsLastCharIndex = 0;
@@ -7172,6 +7206,7 @@
           btn.setAttribute('aria-label', 'Resume reading');
         }
       });
+      if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'paused');
       updateTtsFloatingControl();
       return;
     }
@@ -7189,6 +7224,7 @@
             btn.setAttribute('aria-label', 'Pause reading');
           }
         });
+        if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'speaking');
         updateTtsFloatingControl();
         return;
       }

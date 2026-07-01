@@ -2163,6 +2163,8 @@
     color: var(--text);
   }
   .conversations-view .event.assistant .assistant-message-action.copied { color: var(--green); }
+  .conversations-view .event.assistant .assistant-message-action.speaking { color: var(--accent); }
+  .conversations-view .event.assistant .assistant-message-action.speaking.paused { color: var(--text-muted); opacity: 0.7; }
   .conversations-view .event.assistant:hover .line-num,
   .conversations-view .event.assistant:hover .msg-ts,
   .conversations-view .event.assistant:hover .assistant-message-actions,
