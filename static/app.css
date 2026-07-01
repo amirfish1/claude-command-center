@@ -6296,6 +6296,24 @@
     .wp-usage-pill .wp-usage-pct { font-size: 11px !important; }
   }
 
+  /* ── Mobile: sidebar-footer poller strip doesn't clip ──────────────────────
+     #pollerWrap (CPU/build/err health + models pill + throughput pill +
+     trigger toggle, app.js _initPollerStrip) is `flex:1 1 auto; min-width:0`
+     inside the nowrap `.sidebar-footer`, so the outer layout can compress its
+     box far below its children's combined intrinsic width. The children are
+     all `flex:0 0 auto` (refuse to shrink) and the wrap has no overflow
+     rule, so on a ~375-390px phone the overflowing pills paint straight past
+     the wrap's right edge and on top of the settings gear button next to it.
+     Scroll instead of overflowing — same fix #pollerStrip already uses for
+     the nested trigger-chip list. */
+  @media (max-width: 950px) {
+    #pollerWrap {
+      overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+      flex-wrap: nowrap;
+    }
+    #pollerWrap::-webkit-scrollbar { display: none; }
+  }
+
   /* ── Mobile: sticky original-ask solid background ─────────────────────────
      .conv-sticky-header is position:sticky; its default semi-transparent
      background lets scrolled message content bleed through on small screens,
