@@ -2002,6 +2002,15 @@
        overflow-x:hidden is the safety net — code blocks have their own
        inner scroll, so clipping the pane doesn't lose any content. */
     min-width: 0;
+    /* min-height:0 is the flex-column counterpart: without it a flex item
+       defaults to min-height:auto and refuses to shrink below its content's
+       intrinsic height, so a very tall transcript makes THIS scroller grow
+       to full content height instead of scrolling internally. The pane then
+       balloons past the viewport and the mobile toolbar (with the Back
+       button) scrolls off the top — content-dependent, so only some
+       sessions hit it. The status-pos-right grid path already sets this
+       (~min-height:0 rule below); this covers the base flex path too. */
+    min-height: 0;
     /* Isolate transcript layout/paint from siblings so streaming
        updates inside it don't force reflow on the composer below.
        Was visible as typing hitches while sessions streamed or the
