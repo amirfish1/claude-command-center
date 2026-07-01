@@ -28095,8 +28095,9 @@
           const queue = String(w.queue || '');
           const ref = w.active_ref ? String(w.active_ref) : '';
           const age = w.active_since_human ? String(w.active_since_human) : '';
-          const tip = queue + (ref ? ' · working ' + ref + (age ? ' for ' + age : '') : ' · idle');
-          return '<span class="fq-wt-worker" title="' + escapeAttr(tip) + '">'
+          const tip = queue + (ref ? ' · working ' + ref + (age ? ' for ' + age : '') : ' · idle') + ' — click to scope queue';
+          return '<span class="fq-wt-worker" data-fq-project="' + escapeAttr(queue) + '"'
+            + ' role="button" tabindex="0" title="' + escapeAttr(tip) + '">'
             + '<span class="fq-wt-worker-queue">' + escapeHtml(queue) + '</span>'
             + '<span class="fq-wt-worker-id">' + escapeHtml(wid) + '</span>'
             + (ref ? '<span class="fq-wt-worker-ref">' + escapeHtml(ref) + (age ? ' <span class="fq-wt-worker-age">' + escapeHtml(age) + '</span>' : '') + '</span>' : '<span class="fq-wt-worker-idle">idle</span>')
@@ -28958,11 +28959,12 @@
       const scopeFromRow = (ev) => {
         const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid], .fq-health-drain-toggle, .fq-health-type-toggle');
         if (badge) return;
-        const row = ev.target && ev.target.closest && ev.target.closest('.fq-health-row[data-fq-project]');
+        const row = ev.target && ev.target.closest && ev.target.closest('.fq-health-row[data-fq-project], .fq-wt-worker[data-fq-project]');
         if (!row) return;
+        const project = row.getAttribute('data-fq-project') || '';
+        if (!project) return;
         ev.preventDefault();
         ev.stopPropagation();
-        const project = row.getAttribute('data-fq-project') || '';
         _uxqSetScopeOverride(project);
         // Reflect in the scope <select> so it matches visually.
         const $sel = document.getElementById('queueScopeSelect');

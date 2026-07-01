@@ -16048,7 +16048,10 @@ body:has(.gc-reader) .pwa-install-banner {
   padding: 2px 7px; border-radius: 999px; font-size: 11px; line-height: 1.4;
   background: rgba(88,166,255,0.10); border: 1px solid rgba(88,166,255,0.18);
   color: var(--text-muted);
-  cursor: default; white-space: nowrap;
+  cursor: pointer; white-space: nowrap;
+}
+.fq-wt-worker:hover {
+  background: rgba(88,166,255,0.18); border-color: rgba(88,166,255,0.32);
 }
 .fq-wt-worker-queue {
   font-weight: 600; color: var(--accent, #58a6ff); font-size: 10.5px;
