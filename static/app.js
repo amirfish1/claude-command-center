@@ -5334,8 +5334,11 @@
       // Esc only makes sense when there's something live to interrupt — and
       // we don't support pkood interrupts. Hide it everywhere else so the
       // button doesn't tease an action that will just error.
+      // Codex app-server sessions signal liveness via codexState='working',
+      // not liveStatus.live (which stays false for pool-model Codex.app runs).
       if ($convEscBtn) {
-        const canEsc = hasSession && !isPkood && !isNewSession && !isBacklogIssue && !!liveStatus.live;
+        const codexWorking = isCodex && liveStatusMatchesOpenConv() && liveStatus.codexState === 'working';
+        const canEsc = hasSession && !isPkood && !isNewSession && !isBacklogIssue && (!!liveStatus.live || codexWorking);
         $convEscBtn.style.display = canEsc ? '' : 'none';
       }
       // Issue action selector: only for backlog issues.
