@@ -15596,6 +15596,10 @@ body:has(.gc-reader) .pwa-install-banner {
   animation: fq-status-glow 1.5s ease-in-out infinite;
   will-change: opacity, box-shadow;
 }
+.fq-age {
+  flex-shrink: 0; font-size: 11px; color: var(--text-muted);
+  min-width: 34px; text-align: right;
+}
 .fq-row.is-closed .fq-status { background: rgba(139,148,158,0.55); }
 .fq-row.is-closed .fq-note { color: var(--text-muted); }
 .fq-row.is-closed .fq-chip { background: rgba(139,148,158,0.10) !important; color: var(--text-muted) !important; opacity: 0.6; }
