@@ -376,11 +376,29 @@ def isolated_archive_cache(monkeypatch, tmp_path):
     server._ARCHIVE_BUILD_LOCKS.clear()
     server._archive_serve_cache.clear()
     server._archive_serve_refreshing.clear()
+    # Short-TTL memos (corpus signature + per-session liveness) are module
+    # globals; reset them so a leaked sig/liveness entry from a prior test can't
+    # make a signature-gated assertion order-dependent.
+    _reset_short_ttl_memos()
     yield
     server._ARCHIVE_RESPONSE_CACHE.clear()
     server._ARCHIVE_RESPONSE_CACHE_LOADED = False
     server._archive_serve_cache.clear()
     server._archive_serve_refreshing.clear()
+    _reset_short_ttl_memos()
+
+
+def _reset_short_ttl_memos():
+    """Clear the corpus-signature and per-session-liveness memos (added for the
+    under-polling perf work) between tests. Tolerant of their absence so the
+    suite still runs if the memos are removed."""
+    sig = getattr(server, "_archive_sig_cache", None)
+    if isinstance(sig, dict):
+        sig["ts"] = 0.0
+        sig["sig"] = None
+    live = getattr(server, "_session_live_cache", None)
+    if isinstance(live, dict):
+        live.clear()
 
 
 _ALL_OPTS = dict(include_prs=False, resolve_pr_states=False,
@@ -430,6 +448,18 @@ def test_archive_build_cache_invalidates_on_change(big_projects, isolated_archiv
     p = tmp_path / ".claude" / "projects" / "-tmp-perf-repo" / f"{sids[0]}.jsonl"
     newer = time.time() - 29 * 86400  # still old enough to stay out of liveness windows
     os.utime(p, (newer, newer))
+
+    # The corpus signature is memoized for _ARCHIVE_SIG_TTL (default 2s) so
+    # concurrent per-key refreshes share one full-corpus walk. That means a real
+    # edit is picked up on the NEXT signature computation once the tiny TTL
+    # lapses — not necessarily within the same 2s window. Expire the memo here to
+    # simulate that lapse deterministically; the invariant under test is
+    # "a real change forces exactly ONE rebuild (never an infinite stale
+    # rehydrate)", which holds regardless of the memo window.
+    sig_cache = getattr(server, "_archive_sig_cache", None)
+    if isinstance(sig_cache, dict):
+        sig_cache["ts"] = 0.0
+        sig_cache["sig"] = None
 
     builds = _count_calls(monkeypatch, "find_all_conversations")
     rows, from_cache = server._archive_compute_rows(_ALL_KEY, _ALL_OPTS)
