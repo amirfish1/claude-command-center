@@ -27641,6 +27641,63 @@
   }
   // Watchtower activity log panel — floating overlay over the conversation area.
   let _wtLogTimer = null;
+
+  function _wtLogVerbClass(verb) {
+    if (['CLAIM','CLOSE','BLOCK','DISCUSS','UNBLOCK'].includes(verb)) return 'wl-worker';
+    if (['DISPATCH','SPAWN','STOP','REAP','RECONC'].includes(verb)) return 'wl-reconciler';
+    if (['ENQUEUE','REOPEN'].includes(verb)) return 'wl-queue-action';
+    return '';
+  }
+
+  function _wtLogQueueColor(q) {
+    let h = 0;
+    for (let i = 0; i < q.length; i++) h = (h * 31 + q.charCodeAt(i)) & 0xffff;
+    return 'hsl(' + (h % 360) + ',45%,58%)';
+  }
+
+  function _renderWtLogLines(lines) {
+    const now = Date.now();
+    const rows = [];
+    let prevMs = null;
+    for (const line of lines) {
+      const m = line.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) UTC\s+(\S+)\s+(\S+)\s*(.*)/);
+      if (!m) {
+        rows.push('<div class="wl-row"><span class="wl-detail">' + escapeHtml(line) + '</span></div>');
+        continue;
+      }
+      const [, date, time, queue, verb, detail] = m;
+      const utcMs = new Date(date + 'T' + time + 'Z').getTime();
+      if (prevMs !== null && utcMs - prevMs >= 3 * 60 * 1000) {
+        const gapMin = Math.round((utcMs - prevMs) / 60000);
+        rows.push('<div class="wl-sep"><span class="wl-sep-label">' + gapMin + 'm gap</span></div>');
+      }
+      prevMs = utcMs;
+      const dt = new Date(utcMs);
+      const hh = dt.getHours().toString().padStart(2,'0');
+      const mm = dt.getMinutes().toString().padStart(2,'0');
+      const ss = dt.getSeconds().toString().padStart(2,'0');
+      const localTime = hh + ':' + mm + ':' + ss;
+      const relSec = Math.round((now - utcMs) / 1000);
+      const rel = relSec < 60 ? 'now'
+        : relSec < 3600 ? Math.floor(relSec/60) + 'm ago'
+        : relSec < 86400 ? Math.floor(relSec/3600) + 'h ago'
+        : Math.floor(relSec/86400) + 'd ago';
+      const tsTip = escapeAttr(date + ' ' + time + ' UTC · ' + rel);
+      const verbClass = _wtLogVerbClass(verb);
+      const qColor = _wtLogQueueColor(queue);
+      const detailHtml = escapeHtml(detail).replace(/\b([A-Z]+-\d+)\b/g, '<span class="wl-ref">$1</span>');
+      rows.push(
+        '<div class="wl-row ' + verbClass + '">'
+        + '<span class="wl-ts" title="' + tsTip + '">' + escapeHtml(localTime) + '</span>'
+        + '<span class="wl-queue" style="color:' + qColor + '">' + escapeHtml(queue) + '</span>'
+        + '<span class="wl-verb">' + escapeHtml(verb) + '</span>'
+        + '<span class="wl-detail">' + detailHtml + '</span>'
+        + '</div>'
+      );
+    }
+    return rows.join('');
+  }
+
   function _openWtLogPanel() {
     let panel = document.getElementById('wtLogPanel');
     if (!panel) {
@@ -27653,7 +27710,7 @@
         + '<span class="wt-log-panel-path" id="wtLogPath"></span>'
         + '<button class="wt-log-panel-close" id="wtLogClose" title="Close" aria-label="Close">&times;</button>'
         + '</div>'
-        + '<pre class="wt-log-panel-pre" id="wtLogPre">Loading…</pre>';
+        + '<div class="wt-log-panel-pre" id="wtLogPre">Loading…</div>';
       const _convView = getConvView() || document.body;
       _convView.appendChild(panel);
       document.getElementById('wtLogClose').addEventListener('click', () => {
@@ -27669,7 +27726,7 @@
         const pathEl = document.getElementById('wtLogPath');
         if (pre) {
           if (data.ok && Array.isArray(data.lines)) {
-            pre.textContent = data.lines.length ? data.lines.join('\n') : '(log is empty)';
+            pre.innerHTML = data.lines.length ? _renderWtLogLines(data.lines) : '<span style="opacity:0.4">(log is empty)</span>';
             pre.scrollTop = pre.scrollHeight;
           } else {
             pre.textContent = data.error || 'Could not load log.';

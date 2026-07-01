@@ -16137,7 +16137,19 @@ details[open] .uxq-edit-summary::before { content: '▾ '; }
   flex: 1; margin: 0; padding: 10px 12px;
   font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
   font-size: 11px; line-height: 1.5;
-  overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  overflow-y: auto;
   color: var(--text-muted);
 }
+.wl-row { display: flex; gap: 10px; align-items: baseline; padding: 1px 0; }
+.wl-ts { flex-shrink: 0; width: 60px; opacity: 0.45; cursor: default; white-space: nowrap; }
+.wl-queue { flex-shrink: 0; width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.wl-verb { flex-shrink: 0; width: 72px; white-space: nowrap; }
+.wl-detail { flex: 1; opacity: 0.82; word-break: break-word; }
+.wl-worker .wl-verb { color: #3fb950; font-weight: 600; }
+.wl-reconciler .wl-verb { color: #d29922; font-weight: 600; }
+.wl-queue-action .wl-verb { color: #58a6ff; }
+.wl-ref { background: rgba(88,166,255,0.12); border-radius: 3px; padding: 0 2px; color: #79c0ff; font-weight: 500; }
+.wl-sep { margin: 5px 0; display: flex; align-items: center; gap: 6px; }
+.wl-sep::before, .wl-sep::after { content: ''; flex: 1; height: 1px; background: rgba(139,148,158,0.18); }
+.wl-sep-label { font-size: 10px; color: var(--text-muted); opacity: 0.35; white-space: nowrap; }
 
