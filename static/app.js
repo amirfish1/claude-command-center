@@ -27711,8 +27711,15 @@
         + '<button class="wt-log-panel-close" id="wtLogClose" title="Close" aria-label="Close">&times;</button>'
         + '</div>'
         + '<div class="wt-log-panel-pre" id="wtLogPre">Loading…</div>';
-      const _convView = getConvView() || document.body;
-      _convView.appendChild(panel);
+      // Append to the .conv-pane FRAME, not the .conversations-view scroll
+      // container. The panel is position:absolute; inset:0 — inside the
+      // scroller that anchors it to the top of the *scrolled content*, so a
+      // scrolled-down conversation pushed the log thousands of px off-screen
+      // (it opened but was invisible). .conv-pane is position:relative and
+      // does not scroll, so inset:0 fills the visible reader area and stays put.
+      const _cv = getConvView();
+      const _frame = (_cv && _cv.closest('.conv-pane')) || _cv || document.body;
+      _frame.appendChild(panel);
       document.getElementById('wtLogClose').addEventListener('click', () => {
         panel.remove();
         if (_wtLogTimer) { clearInterval(_wtLogTimer); _wtLogTimer = null; }
