@@ -20524,6 +20524,7 @@ def compute_queues_health(health=None, wt_workers=None):
     # `open` stays = depth (from health); these add a done/total progress count.
     closed_by_q = {}
     total_by_q = {}
+    claimable_by_q = {}  # queue → open items a worker is ALLOWED to claim (claim_types)
     last_activity_q = {}  # queue → most-recent item-touch epoch (any status)
     try:
         for it in (_q.list_items() or []):
@@ -20533,6 +20534,14 @@ def compute_queues_health(health=None, wt_workers=None):
             total_by_q[qn] = total_by_q.get(qn, 0) + 1
             if it.get("status") == "closed":
                 closed_by_q[qn] = closed_by_q.get(qn, 0) + 1
+            # Claimable depth honors the queue's claim_types filter. A bug-only
+            # queue (claim_types=['bug']) whose open tickets are all features has
+            # zero claimable work — the drainer is idle BY DESIGN, not stuck.
+            if it.get("status") == "open":
+                types = cfg_claim.get(qn, [])
+                ty = str(it.get("type") or it.get("item_type") or "")
+                if not types or ty in types:
+                    claimable_by_q[qn] = claimable_by_q.get(qn, 0) + 1
             # Most recent touch = newest of updated/closed/created — drives the
             # "active in last N days" filter so a drained-but-recent queue still
             # shows while a long-dead queue drops off.
@@ -20560,6 +20569,7 @@ def compute_queues_health(health=None, wt_workers=None):
     for q in names:
         hr = health_by_q.get(q) or {}
         depth = int(hr.get("depth") or 0)
+        claimable = int(claimable_by_q.get(q, 0))
         workers = int(worker_counts.get(q, 0))
         auto = bool(cfg_drain.get(q, False))
         # A queue with a live WatchTower worker is NOT stuck — the worker is
@@ -20568,11 +20578,27 @@ def compute_queues_health(health=None, wt_workers=None):
         # never write their cloud session_id onto the ticket, so it can't resolve
         # a "live fixer". A hung worker is a worker-health concern surfaced on the
         # worker row, not a queue-level stuck. Trust WT ground-truth: workers > 0.
-        stuck = bool(hr.get("stuck")) and depth > 0 and workers == 0
-        state = "stuck" if stuck else ("draining" if auto else "backlog")
+        #
+        # `claimable` (not raw `depth`) gates stuck: a bug-only queue whose open
+        # tickets are all features has open depth but ZERO claimable work, so the
+        # drainer sitting idle is correct, not stuck. Those parked items show as
+        # `backlog` (calm), never `stuck` (alarm).
+        # Only an auto-drain queue can be "stuck": one with auto_drain OFF is a
+        # deliberate parking lot (backlog), not a fire. `claimable` (not raw
+        # `depth`) gates it so a bug-only queue full of features reads backlog.
+        stuck = bool(hr.get("stuck")) and auto and claimable > 0 and workers == 0
+        if stuck:
+            state = "stuck"
+        elif depth > 0 and claimable == 0:
+            state = "backlog"   # open items exist but all filtered out by claim_types
+        elif auto:
+            state = "draining"
+        else:
+            state = "backlog"
         out.append({
             "queue": q,
             "depth": depth,
+            "claimable": claimable,
             "closed": int(closed_by_q.get(q, 0)),
             "total": int(total_by_q.get(q, 0)),
             "oldest_open_age_seconds": hr.get("oldest_open_age_seconds"),
