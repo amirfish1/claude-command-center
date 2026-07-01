@@ -31887,12 +31887,8 @@
     claude: [
       { id: 'fable-5',    label: 'fable-5',    oneM: false },
       { id: 'sonnet-5',   label: 'sonnet-5',   oneM: false },
-      { id: 'sonnet-4-8', label: 'sonnet-4-8', oneM: false },
       { id: 'opus-4-8',   label: 'opus-4-8',   oneM: true },
-      { id: 'opus-4-7',   label: 'opus-4-7',   oneM: true },
-      { id: 'sonnet-4-7', label: 'sonnet-4-7', oneM: false },
       { id: 'sonnet-4-6', label: 'sonnet-4-6', oneM: false },
-      { id: 'haiku-4-8',  label: 'haiku-4-8',  oneM: false },
       { id: 'haiku-4-5',  label: 'haiku-4-5',  oneM: false },
     ],
     codex: [
@@ -32121,13 +32117,11 @@
   // mirror the native keyboard shortcuts (1-7).
   const CLAUDE_MODEL_MENU = [
     { id: 'fable-5',    label: 'Fable 5',    num: '1' },
-    { id: 'opus-4-8',   label: 'Opus 4.8',   num: '2' },
-    { id: 'opus-4-8',   label: 'Opus 4.8',   num: '3', context_1m: true },
-    { id: 'sonnet-4-6', label: 'Sonnet 4.6', num: '4' },
-    { id: 'haiku-4-5',  label: 'Haiku 4.5',  num: '5' },
-    { id: 'opus-4-7',   label: 'Opus 4.7',   num: '6', legacy: true },
-    { id: 'opus-4-7',   label: 'Opus 4.7',   num: '7', legacy: true, context_1m: true },
-    { id: 'opus-4-6',   label: 'Opus 4.6',   num: '8', legacy: true },
+    { id: 'sonnet-5',   label: 'Sonnet 5',   num: '2' },
+    { id: 'opus-4-8',   label: 'Opus 4.8',   num: '3' },
+    { id: 'opus-4-8',   label: 'Opus 4.8',   num: '4', context_1m: true },
+    { id: 'sonnet-4-6', label: 'Sonnet 4.6', num: '5' },
+    { id: 'haiku-4-5',  label: 'Haiku 4.5',  num: '6' },
   ];
   // Claude Code's current shipped default model. Shown in the menu's top
   // "· Default" row.
@@ -32140,6 +32134,8 @@
     if (m) return m[1][0].toUpperCase() + m[1].slice(1) + ' ' + m[2] + '.' + m[3];
     const f = n.match(/^fable-(\d+)$/);
     if (f) return 'Fable ' + f[1];
+    const s = n.match(/^(opus|sonnet|haiku)-(\d+)$/);
+    if (s) return s[1][0].toUpperCase() + s[1].slice(1) + ' ' + s[2];
     const bare = n.match(/^(opus|sonnet|haiku|fable)$/);
     if (bare) return bare[1][0].toUpperCase() + bare[1].slice(1);
     return id || n;
