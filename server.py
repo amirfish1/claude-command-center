@@ -21,6 +21,7 @@ import html
 import hashlib
 import collections
 import http.server
+import ipaddress
 import json
 import os
 import platform
@@ -44189,6 +44190,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_json({"error": "Not found"}, 404)
 
+    @staticmethod
+    def _looks_like_tailscale_origin(origin):
+        """Heuristic only — used to make the 403 body more actionable, never
+        to grant access. True if `origin`'s host is a Tailscale MagicDNS
+        name (`*.ts.net`) or falls in Tailscale's address space: the
+        100.64.0.0/10 CGNAT range (IPv4) or the fd7a:115c:a1e0::/48 ULA
+        prefix Tailscale assigns every node (IPv6)."""
+        m = re.match(r"^https?://\[?([^:/\]]+)\]?(?::\d+)?$", origin)
+        if not m:
+            return False
+        host = m.group(1)
+        if host.endswith(".ts.net"):
+            return True
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        if isinstance(ip, ipaddress.IPv4Address):
+            return ip in ipaddress.ip_network("100.64.0.0/10")
+        return ip in ipaddress.ip_network("fd7a:115c:a1e0::/48")
+
     def _check_same_origin(self):
         """SECURITY: reject cross-origin POSTs (CSRF defence).
 
@@ -44219,7 +44241,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return True
         if origin in ALLOWED_ORIGINS:
             return True
-        self.send_json({"error": "cross-origin POST rejected", "origin": origin}, 403)
+        error = "cross-origin POST rejected"
+        if self._looks_like_tailscale_origin(origin):
+            error += (
+                " — this looks like a Tailscale address; enable 'Trust this "
+                "tailnet' in the sidebar's Network access… settings to allow it"
+            )
+        self.send_json({"error": error, "origin": origin}, 403)
         return False
 
     def do_POST(self):
