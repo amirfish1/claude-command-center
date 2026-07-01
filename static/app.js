@@ -24005,7 +24005,9 @@
         if (!btn) return;
         ev.stopPropagation();
         ev.preventDefault();
-        _openWtLogPanel();
+        // Toggle: a second click on "See log" closes the open panel.
+        if (document.getElementById('wtLogPanel')) _closeWtLogPanel();
+        else _openWtLogPanel();
       });
     }
     // Collapse/expand the Evergreen Agents section. Delegated + wired once;
@@ -28358,12 +28360,18 @@
 
     // Closed / Resolution
     if (item.closed_at) {
-      const resHtml = (item.summary || item.caveat || item.follow_up || item.unresolved)
+      // resolution fields live under item.resolution.{summary,caveat,follow_up,unresolved}
+      const res = (item.resolution && typeof item.resolution === 'object') ? item.resolution : {};
+      const resSummary   = res.summary   || item.summary;
+      const resCaveat    = res.caveat    || item.caveat;
+      const resFollowUp  = res.follow_up || item.follow_up;
+      const resUnresolved= res.unresolved|| item.unresolved;
+      const resHtml = (resSummary || resCaveat || resFollowUp || resUnresolved)
         ? '<div class="uxq-tl-res">'
-          + (item.summary    ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Summary</span><div class="uxq-tl-res-v">' + _fmtRes(item.summary) + '</div></div>' : '')
-          + (item.caveat     ? '<div class="uxq-tl-res-row uxq-tl-res-caveat"><span class="uxq-tl-res-k">Caveat</span><div class="uxq-tl-res-v">' + _fmtRes(item.caveat) + '</div></div>' : '')
-          + (item.follow_up  ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Follow-up</span><div class="uxq-tl-res-v">' + _fmtRes(item.follow_up) + '</div></div>' : '')
-          + (item.unresolved ? '<div class="uxq-tl-res-row uxq-tl-res-unresolved"><span class="uxq-tl-res-k">Unresolved</span><div class="uxq-tl-res-v">' + _fmtRes(item.unresolved) + '</div></div>' : '')
+          + (resSummary    ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Summary</span><div class="uxq-tl-res-v">' + _fmtRes(resSummary) + '</div></div>' : '')
+          + (resCaveat     ? '<div class="uxq-tl-res-row uxq-tl-res-caveat"><span class="uxq-tl-res-k">Caveat</span><div class="uxq-tl-res-v">' + _fmtRes(resCaveat) + '</div></div>' : '')
+          + (resFollowUp   ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Follow-up</span><div class="uxq-tl-res-v">' + _fmtRes(resFollowUp) + '</div></div>' : '')
+          + (resUnresolved ? '<div class="uxq-tl-res-row uxq-tl-res-unresolved"><span class="uxq-tl-res-k">Unresolved</span><div class="uxq-tl-res-v">' + _fmtRes(resUnresolved) + '</div></div>' : '')
           + '</div>'
         : '';
       tlHtml += _tlEvt('uxq-tl-closed',
@@ -28449,6 +28457,7 @@
       +   '</div>'
       +   '<div class="uxq-td-footer-btns">'
       +     '<button type="button" class="ann-btn" data-ux-copy>Copy prompt</button>'
+      +     (item.status === 'closed' ? '<button type="button" class="ann-btn uxq-td-reopen-btn" data-ux-reopen>Reopen</button>' : '')
       +     '<button type="button" class="ann-btn ann-primary" data-ux-close>Close</button>'
       +   '</div>'
       + '</div>'
@@ -28468,6 +28477,55 @@
       copyBtn.addEventListener('click', async () => {
         try { await navigator.clipboard.writeText(promptText); showOpToast('Copied', 'success'); }
         catch (_) {}
+      });
+    }
+
+    // Reopen button (closed tickets only)
+    const reopenBtn = modal.querySelector('[data-ux-reopen]');
+    if (reopenBtn) {
+      reopenBtn.addEventListener('click', () => {
+        // Replace button with inline note input + confirm
+        const wrap = reopenBtn.parentElement;
+        reopenBtn.replaceWith((() => {
+          const frag = document.createElement('span');
+          frag.className = 'uxq-td-reopen-inline';
+          frag.innerHTML =
+            '<input class="uxq-td-reopen-input" type="text" placeholder="Reason for reopening (optional)">'
+            + '<button type="button" class="ann-btn ann-primary uxq-td-reopen-confirm">Reopen</button>'
+            + '<button type="button" class="ann-btn uxq-td-reopen-cancel">Cancel</button>';
+          return frag;
+        })());
+        const noteInput   = modal.querySelector('.uxq-td-reopen-input');
+        const confirmBtn  = modal.querySelector('.uxq-td-reopen-confirm');
+        const cancelBtn   = modal.querySelector('.uxq-td-reopen-cancel');
+        if (noteInput) noteInput.focus();
+        const doReopen = async () => {
+          confirmBtn.disabled = true;
+          try {
+            const res = await fetch('/api/ux-fixes/reopen', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ref, note: (noteInput ? noteInput.value.trim() : '') }),
+            });
+            const d = await res.json().catch(() => ({}));
+            if (res.ok && d.ok) {
+              showOpToast('Ticket reopened', 'success');
+              _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
+              _renderQueuePanel(); close();
+            } else {
+              showOpToast('Reopen failed: ' + (d.error || res.status), 'error');
+              confirmBtn.disabled = false;
+            }
+          } catch (e) {
+            showOpToast('Reopen failed: ' + e, 'error');
+            confirmBtn.disabled = false;
+          }
+        };
+        confirmBtn.addEventListener('click', doReopen);
+        if (noteInput) noteInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doReopen(); } });
+        cancelBtn.addEventListener('click', () => {
+          const inline = modal.querySelector('.uxq-td-reopen-inline');
+          if (inline) inline.remove();
+        });
       });
     }
 
