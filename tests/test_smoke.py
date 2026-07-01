@@ -4012,11 +4012,19 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.tmp_home = tempfile.mkdtemp(prefix="ccc-repo-context-home-")
         self._prev_home = os.environ.get("HOME")
         self._prev_ux_fixes_queue_file = os.environ.get("UX_FIXES_QUEUE_FILE")
+        self._prev_watchtower_store = os.environ.get("WATCHTOWER_STORE")
         os.environ["HOME"] = str(pathlib.Path(self.tmp_home).resolve())
         self.ux_fixes_queue_file = pathlib.Path(
             self.tmp_home, ".claude", "command-center", "ux-fixes-queue.json"
         ).resolve()
         os.environ["UX_FIXES_QUEUE_FILE"] = str(self.ux_fixes_queue_file)
+        # server._q prefers watchtower.queue when installed, and that module
+        # resolves its store from $WATCHTOWER_STORE fresh on every call (not
+        # from HOME) — without this, enqueue_annotation_ux_fixes_queue() in
+        # these tests writes real tickets into the live production queue.
+        os.environ["WATCHTOWER_STORE"] = str(
+            pathlib.Path(self.tmp_home, ".watchtower", "queues.json").resolve()
+        )
         for mod in ("server", "morning", "morning_store", "ux_fixes_queue"):
             sys.modules.pop(mod, None)
         self.server = importlib.import_module("server")
@@ -4033,6 +4041,10 @@ class TestRepoContextHelpers(unittest.TestCase):
             os.environ.pop("UX_FIXES_QUEUE_FILE", None)
         else:
             os.environ["UX_FIXES_QUEUE_FILE"] = self._prev_ux_fixes_queue_file
+        if self._prev_watchtower_store is None:
+            os.environ.pop("WATCHTOWER_STORE", None)
+        else:
+            os.environ["WATCHTOWER_STORE"] = self._prev_watchtower_store
         for mod in ("server", "morning", "morning_store", "ux_fixes_queue"):
             sys.modules.pop(mod, None)
         shutil.rmtree(self.tmp_home, ignore_errors=True)
@@ -4045,9 +4057,20 @@ class TestRepoContextHelpers(unittest.TestCase):
             self.server.ux_fixes_queue.QUEUE_FILE,
             self.ux_fixes_queue_file,
         )
-        result = self.server.enqueue_annotation_ux_fixes_queue("Annotation: isolated")
+        # server._q prefers watchtower.queue when it's installed, and that
+        # engine's store path comes from $WATCHTOWER_STORE, not QUEUE_FILE —
+        # assert against whichever store the active engine actually resolves,
+        # so this test can't silently write into the real production queue.
+        store_path = pathlib.Path(
+            self.server._q.store_path()
+            if hasattr(self.server._q, "store_path")
+            else self.ux_fixes_queue_file
+        )
+        result = self.server.enqueue_annotation_ux_fixes_queue(
+            "Annotation: isolated", meta={"selector": "#demo-anchor"}
+        )
         self.assertTrue(result["ok"])
-        self.assertTrue(self.ux_fixes_queue_file.exists())
+        self.assertTrue(store_path.exists())
 
     def test_bym_production_repo_routes_to_bymprod_queue(self):
         self.assertEqual(
