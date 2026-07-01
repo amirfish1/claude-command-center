@@ -6305,13 +6305,24 @@
      rule, so on a ~375-390px phone the overflowing pills paint straight past
      the wrap's right edge and on top of the settings gear button next to it.
      Scroll instead of overflowing — same fix #pollerStrip already uses for
-     the nested trigger-chip list. */
+     the nested trigger-chip list.
+     DOM order leads with #cccHealth (CPU/build/err — dev diagnostics), which
+     ate the visible width and pushed the models/throughput pills — the ones
+     users actually tap — into the scrolled-off, no-scrollbar-hint tail.
+     Reorder visually (not in the DOM, so desktop keeps health leading) so
+     models + throughput are the pills visible without swiping; health and
+     the trigger toggle become the swipeable overflow instead. */
   @media (max-width: 950px) {
     #pollerWrap {
       overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
       flex-wrap: nowrap;
     }
     #pollerWrap::-webkit-scrollbar { display: none; }
+    #cccAdvisorPill { order: 1; }
+    #cccThroughputPill { order: 2; }
+    #cccHealth { order: 3; }
+    #pollerToggle { order: 4; }
+    #pollerStrip { order: 5; }
   }
 
   /* ── Mobile: sticky original-ask solid background ─────────────────────────
