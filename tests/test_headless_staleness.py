@@ -202,6 +202,50 @@ def test_status_keeps_busy_headless_under_terminal(server_mod, tmp_path):
     assert out["headless_present"] is True
 
 
+def test_live_terminal_snapshot_batches_registry_process_probe(server_mod, tmp_path):
+    """The staleness watcher should not fork ps once per session-registry row."""
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    sid = "11111111-2222-3333-4444-555555555555"
+    other_sid = "22222222-3333-4444-5555-666666666666"
+    for idx, (session_id, pid) in enumerate([
+        (sid, 10101),
+        (sid, 10102),
+        (other_sid, 10103),
+    ]):
+        (sessions / f"{pid}.json").write_text(json.dumps({
+            "sessionId": session_id,
+            "pid": pid,
+            "status": "running",
+        }))
+    server_mod.SESSIONS_REGISTRY = sessions
+
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+
+        class R:
+            returncode = 0
+            stderr = ""
+
+        r = R()
+        assert args[:2] == ["ps", "-o"]
+        pids = str(args[-1]).split(",")
+        r.stdout = "\n".join(
+            f"{pid} ttys001 /usr/local/bin/claude /usr/local/bin/claude -p"
+            for pid in pids
+        )
+        return r
+
+    with mock.patch.object(server_mod.subprocess, "run", side_effect=fake_run):
+        snapshot = server_mod._live_claude_terminal_pids_by_session()
+
+    assert snapshot[sid] == {10101, 10102}
+    assert snapshot[other_sid] == {10103}
+    assert len(calls) == 1
+
+
 def test_inject_no_concurrency_writes_fifo_unchanged(server_mod, tmp_path):
     """No concurrency: a lone idle headless inject must behave exactly as
     before — a single FIFO write, no retire, no respawn."""

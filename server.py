@@ -30232,6 +30232,77 @@ def _session_has_live_terminal(session_id, exclude_pid=None):
     """
     if not session_id:
         return False
+    terminal_pids_by_sid = _live_claude_terminal_pids_by_session()
+    try:
+        exclude_pid = int(exclude_pid) if exclude_pid is not None else None
+    except (TypeError, ValueError):
+        exclude_pid = None
+    return any(
+        pid != exclude_pid
+        for pid in terminal_pids_by_sid.get(session_id, set())
+    )
+
+
+@_ttl_memo(5.0)
+def _live_claude_terminal_pids_by_session():
+    """Map Claude session ids to live TTY pids with one batched ps probe."""
+    out = {}
+    if not SESSIONS_REGISTRY.is_dir():
+        return out
+    try:
+        session_files = list(SESSIONS_REGISTRY.iterdir())
+    except OSError:
+        return out
+    pid_to_sids = {}
+    for f in session_files:
+        if not f.name.endswith(".json") or not f.is_file():
+            continue
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        sid = str(data.get("sessionId") or "").strip()
+        if not sid:
+            continue
+        try:
+            pid = int(data.get("pid"))
+        except (TypeError, ValueError):
+            continue
+        pid_to_sids.setdefault(pid, set()).add(sid)
+    if not pid_to_sids:
+        return out
+    try:
+        ps_out = subprocess.run(
+            ["ps", "-o", "pid=,tty=,comm=,args=", "-p", ",".join(str(pid) for pid in sorted(pid_to_sids))],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return out
+    if ps_out.returncode != 0:
+        return out
+    for line in ps_out.stdout.splitlines():
+        parts = line.strip().split(None, 3)
+        if len(parts) < 3:
+            continue
+        pid_s, tty, comm = parts[:3]
+        command = parts[3] if len(parts) > 3 else comm
+        if not _is_real_tty(tty):
+            continue
+        try:
+            pid = int(pid_s)
+        except ValueError:
+            continue
+        cmd_first = (command.split(None, 1)[0] if command else "")
+        if not (_process_comm_is_claude(comm) or _process_comm_is_claude(cmd_first)):
+            continue
+        for sid in pid_to_sids.get(pid, set()):
+            out.setdefault(sid, set()).add(pid)
+    return out
+
+
+def _session_has_live_terminal_uncached(session_id, exclude_pid=None):
+    if not session_id:
+        return False
     if not SESSIONS_REGISTRY.is_dir():
         return False
     try:
@@ -30315,6 +30386,7 @@ def _start_headless_staleness_watcher() -> None:
                     s for s in list(_spawned_sessions)
                     if isinstance(s, dict) and s.get("engine") == "claude"
                 ]
+                terminal_pids_by_sid = _live_claude_terminal_pids_by_session()
             except Exception:
                 continue
             for entry in entries:
@@ -30334,7 +30406,10 @@ def _start_headless_staleness_watcher() -> None:
                         _retire_idle_headless_for_session(
                             sid, reason="deferred-terminal-takeover")
                         continue
-                    if not _session_has_live_terminal(sid, exclude_pid=entry.get("pid")):
+                    if not any(
+                        pid != entry.get("pid")
+                        for pid in terminal_pids_by_sid.get(sid, set())
+                    ):
                         continue
                     # A terminal is driving this session. Retire the idle
                     # headless (the helper enforces Claude-only + not-busy).
