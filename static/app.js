@@ -77,19 +77,31 @@
     if (_onPollerTick) { try { _onPollerTick(name); } catch (_) {} }
   }
   window._pollerStats = _pollerStats;
+  const _pollerInflight = {};
   function _timePoller(name, run) {
+    if (_pollerInflight[name]) return _pollerInflight[name];
     _pollerTick(name);
     const t0 = (window.performance && performance.now) ? performance.now() : Date.now();
+    let p = null;
     const done = () => {
       const ms = ((window.performance && performance.now) ? performance.now() : Date.now()) - t0;
       const budget = (_POLLER_META[name] || {}).ms || 0;
       if (budget && ms >= budget) {
         _clientLog('[POLLER] ' + name + ' ' + Math.round(ms) + 'ms (>= ' + budget + 'ms interval)');
       }
+      if (_pollerInflight[name] === p) delete _pollerInflight[name];
     };
     let r;
     try { r = run(); } catch (e) { done(); throw e; }
-    if (r && typeof r.then === 'function') r.then(done, done); else done();
+    if (r && typeof r.then === 'function') {
+      p = Promise.resolve(r).then(
+        (value) => { done(); return value; },
+        (err) => { done(); throw err; }
+      );
+      _pollerInflight[name] = p;
+      return p;
+    }
+    done();
     return r;
   }
   window._pollerTickManual = _pollerTick;  // for inline-guarded pollers
@@ -274,12 +286,16 @@
     if (ov) ov.classList.remove('open');
     if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
   }
+  let _sysHealthPollPromise = null;
   function _pollSystemHealth() {
     if (document.hidden) return;
-    fetch('/api/system-health', { cache: 'no-store' })
+    if (_sysHealthPollPromise) return _sysHealthPollPromise;
+    _sysHealthPollPromise = fetch('/api/system-health', { cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) { if (d) _renderSystemHealth(d); })
-      .catch(function () {});
+      .catch(function () {})
+      .finally(function () { _sysHealthPollPromise = null; });
+    return _sysHealthPollPromise;
   }
   function _shBar(used, total, warn, crit) {
     const pct = total ? Math.min(100, used / total * 100) : 0;
@@ -606,9 +622,11 @@
     if (_maTimer) { clearInterval(_maTimer); _maTimer = null; }
   }
   let _maLastScan = 0;
+  let _maPollPromise = null;
   function _pollModelAdvisor() {
     if (document.hidden) return;
-    fetch('/api/model-advisor', { cache: 'no-store' })
+    if (_maPollPromise) return _maPollPromise;
+    _maPollPromise = fetch('/api/model-advisor', { cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
         if (d) {
@@ -618,7 +636,9 @@
           if (lc) lc.textContent = d.scanned_at ? 'scanned at ' + d.scanned_at : 'checked just now';
         }
       })
-      .catch(function () {});
+      .catch(function () {})
+      .finally(function () { _maPollPromise = null; });
+    return _maPollPromise;
   }
   function _maApply(recId, sid, model) {
     fetch('/api/model-advisor/apply', {
@@ -2368,6 +2388,7 @@
     return merged;
   }
 
+  let _liveSessionsActivityPromise = null;
   async function refreshLiveSessionsActivity() {
     // Dashboard-wide overlay: patches WIP/live chips onto conversation-list
     // rows. Reader-only popouts have no such list, so this is pure waste —
@@ -2375,6 +2396,8 @@
     // start the live-status timer that polls /api/sessions/live-activity
     // forever in the group-chat popout.
     if (READER_ONLY_POPOUT) return;
+    if (_liveSessionsActivityPromise) return _liveSessionsActivityPromise;
+    _liveSessionsActivityPromise = (async () => {
     try {
       const res = await fetch('/api/sessions/live-activity?_=' + Date.now());
       if (!res.ok) return;
@@ -2391,6 +2414,9 @@
         _scheduleSidebarRender();
       }
     } catch (_) { /* best-effort */ }
+    finally { _liveSessionsActivityPromise = null; }
+    })();
+    return _liveSessionsActivityPromise;
   }
 
   const $jumpBtnConv = document.getElementById('jumpBtnConv');
@@ -2942,6 +2968,7 @@
   // Wall-clock (ms) of the last successful /api/session-status read. Powers the
   // "checked Xs ago" label on the conversation top-bar process indicator.
   let _lastStatusCheckedAt = 0;
+  let _liveStatusFetchingKey = '';
   async function refreshLiveStatus() {
     if (!currentSession.id) {
       liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
@@ -2949,6 +2976,10 @@
       updateInputBar();
       return;
     }
+    const _statusKey = currentSession.id + '|' + (currentSession.cwd || '');
+    if (_liveStatusFetchingKey === _statusKey) return;
+    _liveStatusFetchingKey = _statusKey;
+    try {
     // Capture the session this fetch is FOR, before the await — currentSession
     // may change underneath us if the user switches while it's in flight.
     const _fetchedFor = currentSession.id;
@@ -3085,6 +3116,9 @@
     // A session that just went from live → ended needs its outcome banner
     // recomputed even when no new transcript events arrived.
     try { updateSessionOutcomeBanner(getConvViewForPane(activePaneId()) || $conversationsView); } catch (_) {}
+    } finally {
+      if (_liveStatusFetchingKey === _statusKey) _liveStatusFetchingKey = '';
+    }
   }
 
   // ── Relayed-question blocking modal ───────────────────────────────
@@ -27530,23 +27564,32 @@
   // Files live under Metadata. Queue is a separate status-rail tab listing
   // tickets for the selected session's project scope.
   let _uxqItemsCache = { ts: 0, items: [] };
+  let _uxqItemsPromise = null;
   let _ffcLastSidebarData = null;
   let _uxqLastResolvedProject = '';
   async function _fetchUxqItems() {
     if (Date.now() - _uxqItemsCache.ts < 15000) return _uxqItemsCache.items;
+    if (_uxqItemsPromise) return _uxqItemsPromise;
+    _uxqItemsPromise = (async () => {
     try {
       const res = await fetch('/api/ux-fixes/list', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       const items = Array.isArray(data && data.items) ? data.items : [];
       _uxqItemsCache = { ts: Date.now(), items };
     } catch (_) { /* keep stale cache */ }
+    finally { _uxqItemsPromise = null; }
     return _uxqItemsCache.items;
+    })();
+    return _uxqItemsPromise;
   }
   // Per-project queue-health snapshot (GET /api/ux-fixes/health). Same cache
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
   let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [], past_workers: [] };
+  let _uxqHealthPromise = null;
   async function _fetchUxqHealth() {
     if (Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache;
+    if (_uxqHealthPromise) return _uxqHealthPromise;
+    _uxqHealthPromise = (async () => {
     try {
       const res = await fetch('/api/ux-fixes/health', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
@@ -27563,22 +27606,31 @@
       const past_workers = Array.isArray(data && data.past_workers) ? data.past_workers : [];
       _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues, worker_session_ids, past_workers };
     } catch (_) { /* keep stale cache */ }
+    finally { _uxqHealthPromise = null; }
     return _uxqHealthCache;
+    })();
+    return _uxqHealthPromise;
   }
   // Live WatchTower workers (GET /api/wt/workers). Sibling cache to the queue
   // snapshot so the Triggered Workers sidebar section can render synchronously
   // and refresh on the same background warm. Each row carries `queue` and the
   // cloud `session_id` used to resolve the worker to its session row.
   let _wtWorkersCache = { ts: 0, workers: [] };
+  let _wtWorkersPromise = null;
   async function _fetchWtWorkers() {
     if (Date.now() - _wtWorkersCache.ts < 15000) return _wtWorkersCache;
+    if (_wtWorkersPromise) return _wtWorkersPromise;
+    _wtWorkersPromise = (async () => {
     try {
       const res = await fetch('/api/wt/workers', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       const workers = Array.isArray(data && data.workers) ? data.workers : [];
       _wtWorkersCache = { ts: Date.now(), workers };
     } catch (_) { /* keep stale cache */ }
+    finally { _wtWorkersPromise = null; }
     return _wtWorkersCache;
+    })();
+    return _wtWorkersPromise;
   }
   // Cross-repo session cards for workers whose session_id isn't in the current
   // repo's conversationsData. Keyed by session_id. Populated by
@@ -41407,6 +41459,23 @@
 
   async function annOpenUxFixesQueue(ann, closeFn, _errEl, textOverride) {
     if (!ann) return;
+    // Require an actionable anchor before sending. A note alone leaves the
+    // fix-worker with nothing to locate, so it blocks the ticket and the queue
+    // silts up (CCC-396..402). An anchor is at least one of: a CSS selector, a
+    // screenshot path, or a URL. Give instant feedback instead of a silent
+    // junk ticket; the server enforces the same rule authoritatively.
+    const _annSelector = (ann.element && ann.element.selector) || ann.selector || '';
+    const _hasAnchor = !!(
+      String(_annSelector || '').trim()
+      || String(ann.screenshot_path || '').trim()
+      || String(ann.url || '').trim()
+    );
+    if (!_hasAnchor) {
+      if (typeof showOpToast === 'function') {
+        showOpToast('Annotation needs an element, screenshot, or URL before it can go to the fix queue', 'warn');
+      }
+      return;
+    }
     // Close the editor up front — the user clicked the button and
     // doesn't need to stare at the modal while the fetch is in flight.
     // The annotation is already persisted (persistAnnotation runs

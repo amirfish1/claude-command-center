@@ -7052,6 +7052,23 @@ def enqueue_annotation_ux_fixes_queue(
     text = _annotation_text(text, 24000)
     if not text:
         return {"ok": False, "error": "missing text", "status": 400}
+
+    # Require an actionable anchor. A note alone gives a fix-worker nothing to
+    # locate, so it blocks the ticket and the queue silts up (CCC-396..402). An
+    # anchor is at least one of: a CSS selector, a screenshot path, or a URL.
+    _meta_for_anchor = meta if isinstance(meta, dict) else {}
+    _has_anchor = bool(
+        str(_meta_for_anchor.get("selector") or "").strip()
+        or str(_meta_for_anchor.get("screenshot_path") or "").strip()
+        or str(_meta_for_anchor.get("url") or "").strip()
+    )
+    if not _has_anchor:
+        return {
+            "ok": False,
+            "error": "Annotation needs an element, screenshot, or URL before it can go to the fix queue",
+            "status": 400,
+        }
+
     repo_path = resolve_repo_path(str(CCC_ROOT))
 
     # Durable record first — this is the source of truth a human refers to by
@@ -20757,6 +20774,69 @@ def compute_queues_health(health=None, wt_workers=None):
     # Stuck first, then deepest, then most workers, then name — most-urgent top.
     out.sort(key=lambda r: (0 if r["stuck"] else 1, -r["depth"], -r["workers"], r["queue"]))
     return out
+
+
+_UX_FIXES_HEALTH_TTL = 5.0
+_ux_fixes_health_snapshot = {"ts": 0.0, "data": None}
+_ux_fixes_health_snapshot_lock = threading.Lock()
+
+
+def _build_ux_fixes_health_payload_uncached():
+    health = compute_ux_fixes_health()
+    # Live WT workers, read straight from workers.json (no watchtower import
+    # dependency). Carries each worker's cloud session UUID so the dashboard can
+    # link a worker row to its conversation.
+    try:
+        wt_workers = _wt_read_workers()
+    except Exception:
+        wt_workers = []
+    # Per-queue rollup (durable) for the dashboard's Evergreen section.
+    try:
+        queues = compute_queues_health(health, wt_workers)
+    except Exception:
+        queues = []
+    # Persistent ledger of every cloud session_id that was ever a WT worker
+    # (survives pruning).
+    try:
+        worker_session_ids = _wt_read_worker_session_ids()
+    except Exception:
+        worker_session_ids = []
+    # Past workers from the last 24h (log files, excluding live).
+    try:
+        past_workers = _wt_past_workers(hours=24)
+    except Exception:
+        past_workers = []
+    return {
+        "ok": True,
+        "projects": health,
+        "count": len(health),
+        "wt_workers": wt_workers,
+        "queues": queues,
+        "worker_session_ids": worker_session_ids,
+        "past_workers": past_workers,
+    }
+
+
+def build_ux_fixes_health_payload(force=False):
+    """Coalesced payload for /api/ux-fixes/health.
+
+    The dashboard, detail rail, and foreground refocus paths can all ask for
+    queue health at once. The uncached build touches WatchTower queue state and
+    recent worker logs, so concurrent polls must share one fresh snapshot
+    instead of each request rebuilding it in its own HTTP thread.
+    """
+    snap = _ux_fixes_health_snapshot
+    now = time.time()
+    if not force and snap["data"] is not None and now - snap["ts"] < _UX_FIXES_HEALTH_TTL:
+        return copy.deepcopy(snap["data"])
+    with _ux_fixes_health_snapshot_lock:
+        now = time.time()
+        if not force and snap["data"] is not None and now - snap["ts"] < _UX_FIXES_HEALTH_TTL:
+            return copy.deepcopy(snap["data"])
+        data = _build_ux_fixes_health_payload_uncached()
+        snap["data"] = data
+        snap["ts"] = time.time()
+        return copy.deepcopy(data)
 
 
 def _queue_codex_resume(session_id, text, pid=None):
@@ -42579,37 +42659,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # reconcile); CCC no longer injects "continue" into queue workers. A
             # stuck project with no resolvable fixer is reported, never spawned.
             try:
-                health = compute_ux_fixes_health()
-                # Live WT workers, read straight from workers.json (no watchtower
-                # import dependency). Carries each worker's cloud session UUID so
-                # the dashboard can link a worker row to its conversation.
-                wt_workers = []
-                try:
-                    wt_workers = _wt_read_workers()
-                except Exception:
-                    wt_workers = []
-                # Per-queue rollup (durable) for the dashboard's Evergreen
-                # section: depth + live worker count + drain state + status.
-                try:
-                    queues = compute_queues_health(health, wt_workers)
-                except Exception:
-                    queues = []
-                # Persistent ledger of every cloud session_id that was ever a WT
-                # worker (survives pruning). The client unions these into the
-                # Current-sessions exclusion set so reaped workers don't linger.
-                try:
-                    worker_session_ids = _wt_read_worker_session_ids()
-                except Exception:
-                    worker_session_ids = []
-                # Past workers from the last 24h (log files, excluding live).
-                try:
-                    past_workers = _wt_past_workers(hours=24)
-                except Exception:
-                    past_workers = []
-                self.send_json({"ok": True, "projects": health, "count": len(health),
-                                "wt_workers": wt_workers, "queues": queues,
-                                "worker_session_ids": worker_session_ids,
-                                "past_workers": past_workers})
+                self.send_json(build_ux_fixes_health_payload())
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/wt/activity-log":

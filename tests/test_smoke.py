@@ -4808,9 +4808,21 @@ class TestRepoContextHelpers(unittest.TestCase):
                 "_inject_text_into_session",
                 return_value={"ok": True, "via": "spawn-fifo"},
             ) as inject, mock.patch.object(self.server, "spawn_session") as spawn:
+                # An annotation with no actionable anchor (no selector, no
+                # screenshot, no URL) is rejected before enqueue so junk
+                # tickets never reach a worker (CCC-396..402).
+                rejected = self.server.enqueue_annotation_ux_fixes_queue(
+                    "Annotation: bad pill",
+                    inject=True,
+                )
+                self.assertFalse(rejected["ok"])
+                self.assertEqual(rejected.get("status"), 400)
+                inject.assert_not_called()
+                # With an anchor present, the inject path runs as before.
                 result = self.server.enqueue_annotation_ux_fixes_queue(
                     "Annotation: bad pill",
                     inject=True,
+                    meta={"selector": ".pill"},
                 )
         finally:
             self.server.CCC_ROOT = old_root
@@ -4952,6 +4964,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 result = self.server.enqueue_annotation_ux_fixes_queue(
                     "Annotation: bad pill",
                     inject=True,
+                    meta={"selector": ".pill"},
                 )
         finally:
             self.server.CCC_ROOT = old_root
