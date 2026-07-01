@@ -10565,7 +10565,16 @@ def session_live_status(session_id, session_cwd):
             result["live"] = True
             return result
 
-    # Fallback: cwd-based matching (for older claude versions or missing registry)
+    # Fallback: cwd-based matching (for older claude versions or missing
+    # registry). This can only ever prove "a claude process is running at
+    # this cwd" — a `claude` process's command line carries no session id,
+    # so cwd is not proof this pid IS `session_id`. In a repo with several
+    # sessions sharing one cwd (the norm here), a single cwd match can
+    # easily be a *different* live sibling. Report the diagnostic pid/tty
+    # for display, but never assert `live: true` from this path — callers
+    # that gate keystroke injection on `live` must fall through to an
+    # identity-verified route (spawn registry / `claude --resume
+    # <session_id>`) instead of guessing (CCC-ask-loopback incident).
     if not session_cwd:
         return result
     procs = find_live_claude_processes()
@@ -10580,8 +10589,6 @@ def session_live_status(session_id, session_cwd):
     result["pid"] = match["pid"]
     result["tty"] = match["tty"]
     result["terminal_app"] = match["terminal_app"]
-    if recent:
-        result["live"] = True
     return result
 
 
