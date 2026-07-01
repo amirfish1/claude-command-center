@@ -22116,12 +22116,16 @@
         const workers = Number(liveWorkers) || 0;
         const drainOn = !!(q && q.auto_drain);
         const stuck = !!(q && q.stuck);
+        // Claimable depth (claim_types-aware). A bug-only queue full of features
+        // has open depth but ZERO claimable work, so it is NOT "Draining" (nothing
+        // to drain) — it's a Backlog. Fall back to raw depth when unknown.
+        const claimable = (q && q.claimable != null) ? Number(q.claimable) : depth;
         // Pill is derived client-side from the row's data fields (depth/auto_drain/
-        // stuck) — no new server states. Idle (0 open) reads "Ready", not DRAINING.
+        // stuck/claimable) — no new server states. Idle (0 open) reads "Ready".
         let stateLabel, stateCls;
         if (stuck) { stateLabel = 'Stuck'; stateCls = 'is-stuck'; }
         else if (depth === 0) { stateLabel = 'Ready'; stateCls = 'is-ready'; }
-        else if (drainOn) { stateLabel = 'Draining'; stateCls = 'is-draining'; }
+        else if (drainOn && claimable > 0) { stateLabel = 'Draining'; stateCls = 'is-draining'; }
         else { stateLabel = 'Backlog'; stateCls = 'is-backlog'; }
         const progress = closed + '/' + total;
         const tip = label + ': ' + progress + ' done · ' + depth + ' open · '
@@ -27859,12 +27863,14 @@
     const _drainByQueue = new Map();
     const _workersByQueue = new Map();
     const _claimTypesByQueue = new Map();
+    const _claimableByQueue = new Map();
     (health.queues || []).forEach(q => {
       if (q && q.queue != null) {
         const key = String(q.queue).toUpperCase();
         _drainByQueue.set(key, !!q.auto_drain);
         _workersByQueue.set(key, Number(q.workers) || 0);
         _claimTypesByQueue.set(key, Array.isArray(q.claim_types) ? q.claim_types.slice() : []);
+        if (q.claimable != null) _claimableByQueue.set(key, Number(q.claimable) || 0);
       }
     });
     // Compact label for the claim-types restriction shown on the toggle.
@@ -27888,22 +27894,34 @@
         // window right after a fresh claim). Without this the badge flashes
         // WAITING between claim and the next reconciler backfill tick.
         const hasLiveWorker = (_workersByQueue.get(project.toUpperCase()) || 0) > 0;
+        // Claimable depth (claim_types-aware, from health.queues). A bug-only
+        // queue whose open tickets are all features has open depth but ZERO
+        // claimable work: the drainer is idle BY DESIGN, so it's parked (calm),
+        // never stuck/waiting/draining. Fall back to raw depth when unknown.
+        const _ckey = project.toUpperCase();
+        const claimable = _claimableByQueue.has(_ckey) ? _claimableByQueue.get(_ckey) : depth;
+        const parked = depth > 0 && claimable === 0;
         // "STUCK" should mean a worker was assigned but stalled — genuinely jammed.
         // A queue with open tickets and NO worker assigned isn't stuck, it is just
         // unattended; the red STUCK alarm reads as stale/wrong there. Split it out
         // into a neutral WAITING state so the alarm is reserved for real stalls.
-        const waiting = stuck && !sid && !hasLiveWorker;
-        const reallyStuck = stuck && !!sid && !hasLiveWorker;
+        const waiting = stuck && !sid && !hasLiveWorker && !parked;
+        const reallyStuck = stuck && !!sid && !hasLiveWorker && !parked;
         const canNudge = reallyStuck && !!sid;
         // A drained queue (0 open) shown only because it was recently active reads
         // as a calm CLEAR, not LIVE — there's no open work and no alarm.
         const drained = depth === 0 && !reallyStuck && !waiting;
-        const badgeText = reallyStuck ? 'STUCK' : (waiting ? 'WAITING' : (drained ? 'CLEAR' : 'LIVE'));
+        const badgeText = reallyStuck ? 'STUCK'
+          : (waiting ? 'WAITING'
+             : (parked ? 'PARKED' : (drained ? 'CLEAR' : 'LIVE')));
         const badgeTip = reallyStuck
           ? (canNudge ? 'stuck — click to nudge the worker' : 'stuck — no reachable worker')
           : (waiting ? 'open tickets — no worker assigned yet'
-             : (drained ? 'drained — recently active, no open tickets' : 'a worker is on it'));
-        const badgeCls = reallyStuck ? 'is-stuck' : (waiting ? 'is-waiting' : (drained ? 'is-clear' : 'is-live'));
+             : (parked ? depth + ' open, none claimable — filtered by claim types'
+                : (drained ? 'drained — recently active, no open tickets' : 'a worker is on it')));
+        const badgeCls = reallyStuck ? 'is-stuck'
+          : (waiting ? 'is-waiting'
+             : (parked ? 'is-clear' : (drained ? 'is-clear' : 'is-live')));
         const badge = '<span class="fq-health-badge ' + badgeCls
           + (canNudge ? ' is-nudgeable' : '') + '"'
           + (canNudge ? ' role="button" tabindex="0" data-nudge-sid="' + escapeAttr(sid) + '"' : '')
