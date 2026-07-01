@@ -20539,7 +20539,12 @@ def compute_queues_health(health=None, wt_workers=None):
             # zero claimable work — the drainer is idle BY DESIGN, not stuck.
             if it.get("status") == "open":
                 types = cfg_claim.get(qn, [])
-                ty = str(it.get("type") or it.get("item_type") or "")
+                # Untyped == bug (matches WatchTower's claim filter): a ticket
+                # filed without a type must not silently vanish from a bugs-only
+                # queue, so it counts as claimable there.
+                ty = str(it.get("type") or it.get("item_type") or "").strip().lower()
+                if ty not in ("bug", "feature"):
+                    ty = "bug"
                 if not types or ty in types:
                     claimable_by_q[qn] = claimable_by_q.get(qn, 0) + 1
             # Most recent touch = newest of updated/closed/created — drives the
