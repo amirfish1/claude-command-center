@@ -31612,6 +31612,7 @@
   const MODEL_OPTIONS_BY_ENGINE = {
     claude: [
       { id: 'fable-5',    label: 'fable-5',    oneM: false },
+      { id: 'sonnet-5',   label: 'sonnet-5',   oneM: false },
       { id: 'sonnet-4-8', label: 'sonnet-4-8', oneM: false },
       { id: 'opus-4-8',   label: 'opus-4-8',   oneM: true },
       { id: 'opus-4-7',   label: 'opus-4-7',   oneM: true },

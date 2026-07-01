@@ -38629,6 +38629,7 @@ def extract_session_timeline(session_id):
 # (input_per_mtok, cache_write, cache_read, output_per_mtok).
 _MODEL_RATES = {
     "claude-fable-5": (10.00, 12.50, 1.00, 50.00),
+    "claude-sonnet-5": (2.00, 2.50, 0.20, 10.00),
     "claude-opus-4-8": (5.00, 6.25, 0.50, 25.00),
     "claude-opus-4-7": (5.00, 6.25, 0.50, 25.00),
     "claude-opus-4-6": (5.00, 6.25, 0.50, 25.00),
