@@ -816,14 +816,14 @@
      Surface a "not acknowledged + re-send" notice instead of silently
      vanishing the user's typed text. */
   .event.user_text.not-acknowledged {
-    background: rgba(248, 81, 73, 0.08);
-    border-left-color: var(--red);
-    opacity: 0.92;
+    background: rgba(210, 153, 34, 0.08);
+    border-left-color: var(--orange, #d29922);
+    opacity: 0.95;
   }
   .event.user_text.not-acknowledged .label::after {
-    content: ' · not acknowledged';
+    content: ' · not detected';
     font-style: normal; font-weight: 400;
-    color: var(--red); text-transform: none; letter-spacing: 0;
+    color: var(--orange, #d29922); text-transform: none; letter-spacing: 0;
     font-size: 10px; margin-left: 4px;
   }
   .event.user_text.not-acknowledged .not-ack-note {
@@ -832,19 +832,19 @@
     font-size: 11px; color: var(--text-muted);
   }
   .event.user_text.not-acknowledged .not-ack-label {
-    color: var(--red);
+    color: var(--orange, #d29922);
   }
   .event.user_text.not-acknowledged .not-ack-retry {
-    border: 1px solid var(--red);
+    border: 1px solid var(--orange, #d29922);
     background: transparent;
-    color: var(--red);
+    color: var(--orange, #d29922);
     padding: 2px 10px;
     border-radius: 4px;
     font: inherit; font-size: 11px;
     cursor: pointer;
   }
   .event.user_text.not-acknowledged .not-ack-retry:hover {
-    background: rgba(248, 81, 73, 0.12);
+    background: rgba(210, 153, 34, 0.12);
   }
   .event.user_text.not-acknowledged .not-ack-dismiss {
     border: none; background: transparent; color: var(--text-muted);
