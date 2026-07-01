@@ -10029,12 +10029,12 @@
     card.sidecar_status = '';
     card.pending_tool = null;
     card.last_event_type = 'result';
-    card.spawn_error = ‘Session did not register within 30s. If it opened successfully in another window, dismiss this placeholder.’;
+    card.spawn_error = 'Session did not register within 30s. If it opened successfully in another window, dismiss this placeholder.';
     delete columnOverrides[id];
-    try { localStorage.setItem(‘ccc-column-overrides’, JSON.stringify(columnOverrides)); } catch (_) {}
+    try { localStorage.setItem('ccc-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
     renderSidebar(filterConversations($convSearch.value));
     if (currentConversation === id) renderPendingSpawnConversation(card, activePaneId());
-    if (typeof showOpToast === ‘function’) showOpToast(‘Session did not register within 30s — placeholder kept. Dismiss if the session opened.’, ‘warn’);
+    if (typeof showOpToast === 'function') showOpToast('Session did not register within 30s — placeholder kept. Dismiss if the session opened.', 'warn');
   }
 
   function insertPendingSpawnCard(pid, subject, sourceOrEngine, logPath, meta) {
