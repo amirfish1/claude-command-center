@@ -12023,6 +12023,72 @@ def _claude_desktop_metadata_files(root=None):
         return []
 
 
+def _claude_desktop_metadata_index(root=None):
+    root = root or _claude_desktop_sessions_root()
+    index = {
+        "by_name": {},
+        "by_cli": {},
+        "data_by_path": {},
+        "workspace_dirs": [],
+        "workspace_by_cwd": {},
+    }
+    if not root.is_dir():
+        return index
+    workspace_rows = []
+    cwd_rows = {}
+    try:
+        org_dirs = [p for p in root.iterdir() if p.is_dir()]
+    except OSError:
+        return index
+    for org_dir in org_dirs:
+        try:
+            workspace_dirs = [p for p in org_dir.iterdir() if p.is_dir()]
+        except OSError:
+            continue
+        for workspace_dir in workspace_dirs:
+            try:
+                newest = workspace_dir.stat().st_mtime
+            except OSError:
+                newest = 0.0
+            try:
+                meta_paths = list(workspace_dir.glob("local_*.json"))
+            except OSError:
+                meta_paths = []
+            for path in meta_paths:
+                try:
+                    st = path.stat()
+                except OSError:
+                    continue
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                newest = max(newest, st.st_mtime)
+                index["by_name"][path.name] = path
+                data = _read_json_object(path)
+                if not data:
+                    continue
+                index["data_by_path"][str(path)] = data
+                cli_sid = str(data.get("cliSessionId") or "").strip()
+                if cli_sid and cli_sid not in index["by_cli"]:
+                    index["by_cli"][cli_sid] = path
+                try:
+                    score = float(data.get("lastActivityAt") or 0) / 1000.0
+                except (TypeError, ValueError):
+                    score = 0.0
+                if not score:
+                    score = st.st_mtime
+                for cwd in (data.get("cwd"), data.get("originCwd")):
+                    cwd = str(cwd or "").strip()
+                    if cwd:
+                        cwd_rows.setdefault(cwd, []).append((score, workspace_dir))
+            workspace_rows.append((newest, workspace_dir))
+    workspace_rows.sort(key=lambda item: item[0], reverse=True)
+    index["workspace_dirs"] = [p for _mtime, p in workspace_rows]
+    for cwd, rows in cwd_rows.items():
+        rows.sort(key=lambda item: item[0], reverse=True)
+        index["workspace_by_cwd"][cwd] = [p for _score, p in rows]
+    return index
+
+
 def _claude_desktop_metadata_cache_key(root=None):
     root = root or _claude_desktop_sessions_root()
     if not root.is_dir():
@@ -12132,11 +12198,18 @@ def _claude_desktop_workspace_dirs(root=None):
     return [p for _mtime, p in dirs]
 
 
-def _claude_desktop_metadata_path_for_cli_session(session_id):
+def _claude_desktop_metadata_path_for_cli_session(session_id, metadata_index=None):
     sid = str(session_id or "").strip()
     if not sid:
         return None
     filename = f"local_{sid}.json"
+    if isinstance(metadata_index, dict):
+        by_cli = metadata_index.get("by_cli") or {}
+        by_name = metadata_index.get("by_name") or {}
+        path = by_cli.get(sid) or by_name.get(filename)
+        if path:
+            return path
+        return None
     fallback = None
     for path in _claude_desktop_metadata_files():
         if path.name == filename:
@@ -12147,7 +12220,7 @@ def _claude_desktop_metadata_path_for_cli_session(session_id):
     return fallback
 
 
-def _claude_desktop_workspace_for_summary(summary, existing_path=None):
+def _claude_desktop_workspace_for_summary(summary, existing_path=None, metadata_index=None):
     if existing_path:
         try:
             parent = Path(existing_path).expanduser().resolve().parent
@@ -12156,33 +12229,41 @@ def _claude_desktop_workspace_for_summary(summary, existing_path=None):
         except (OSError, RuntimeError, ValueError):
             pass
 
-    dirs = _claude_desktop_workspace_dirs()
+    if isinstance(metadata_index, dict):
+        dirs = list(metadata_index.get("workspace_dirs") or [])
+    else:
+        dirs = _claude_desktop_workspace_dirs()
     if not dirs:
         return None
 
     cwd = str((summary or {}).get("cwd") or "").strip()
     if cwd:
-        matches = []
-        for workspace_dir in dirs:
-            for path in workspace_dir.glob("local_*.json"):
-                data = _read_json_object(path)
-                if not data:
-                    continue
-                if cwd not in (data.get("cwd"), data.get("originCwd")):
-                    continue
-                try:
-                    score = float(data.get("lastActivityAt") or 0) / 1000.0
-                except (TypeError, ValueError):
-                    score = 0.0
-                if not score:
+        if isinstance(metadata_index, dict):
+            matches = (metadata_index.get("workspace_by_cwd") or {}).get(cwd) or []
+            if matches:
+                return matches[0]
+        else:
+            matches = []
+            for workspace_dir in dirs:
+                for path in workspace_dir.glob("local_*.json"):
+                    data = _read_json_object(path)
+                    if not data:
+                        continue
+                    if cwd not in (data.get("cwd"), data.get("originCwd")):
+                        continue
                     try:
-                        score = path.stat().st_mtime
-                    except OSError:
+                        score = float(data.get("lastActivityAt") or 0) / 1000.0
+                    except (TypeError, ValueError):
                         score = 0.0
-                matches.append((score, workspace_dir))
-        if matches:
-            matches.sort(key=lambda item: item[0], reverse=True)
-            return matches[0][1]
+                    if not score:
+                        try:
+                            score = path.stat().st_mtime
+                        except OSError:
+                            score = 0.0
+                    matches.append((score, workspace_dir))
+            if matches:
+                matches.sort(key=lambda item: item[0], reverse=True)
+                return matches[0][1]
 
     return dirs[0]
 
@@ -12563,15 +12644,22 @@ def _write_claude_desktop_metadata(path, payload, last_activity_ms):
     return True
 
 
-def _ensure_claude_desktop_session_visible(session_id, spawn_entry=None):
+def _ensure_claude_desktop_session_visible(session_id, spawn_entry=None, metadata_index=None):
     """Create or refresh Claude Desktop's sidebar metadata for a CLI session."""
     sid = str(session_id or "").strip()
     if not sid or not _SESSION_UUID_RE.match(sid):
         return False
 
     summary = _claude_session_desktop_summary(sid, spawn_entry=spawn_entry)
-    existing_path = _claude_desktop_metadata_path_for_cli_session(sid)
-    existing = _read_json_object(existing_path) if existing_path else {}
+    existing_path = _claude_desktop_metadata_path_for_cli_session(
+        sid,
+        metadata_index=metadata_index,
+    )
+    existing = None
+    if existing_path and isinstance(metadata_index, dict):
+        existing = (metadata_index.get("data_by_path") or {}).get(str(existing_path))
+    if existing is None:
+        existing = _read_json_object(existing_path) if existing_path else {}
     existing = existing or {}
     if not summary.get("has_cli_transcript"):
         return False
@@ -12579,7 +12667,11 @@ def _ensure_claude_desktop_session_visible(session_id, spawn_entry=None):
         return False
     if not (summary.get("title") or existing.get("title")):
         return False
-    workspace_dir = _claude_desktop_workspace_for_summary(summary, existing_path)
+    workspace_dir = _claude_desktop_workspace_for_summary(
+        summary,
+        existing_path,
+        metadata_index=metadata_index,
+    )
     if not workspace_dir:
         return False
     path = existing_path or (workspace_dir / f"local_{sid}.json")
@@ -18614,6 +18706,15 @@ def _claude_desktop_backfill_window_days():
     return days if days > 0 else 7.0
 
 
+def _claude_desktop_startup_backfill_max_logs():
+    raw = os.environ.get("CCC_CLAUDE_DESKTOP_STARTUP_BACKFILL_MAX_LOGS", "200")
+    try:
+        max_logs = int(raw)
+    except (TypeError, ValueError):
+        max_logs = 200
+    return max(1, max_logs)
+
+
 def _is_probable_claude_spawn_log(path):
     name = Path(path).name
     blocked_prefixes = (
@@ -18716,7 +18817,13 @@ def _recent_claude_ccc_log_paths(repo_paths=None, days=None, now=None, max_logs=
     return [p for _mtime, p in recent[:max_logs]]
 
 
-def backfill_claude_desktop_visibility(days=None, repo_paths=None, now=None, max_logs=2000):
+def backfill_claude_desktop_visibility(
+    days=None,
+    repo_paths=None,
+    now=None,
+    max_logs=2000,
+    skip_existing=False,
+):
     """Create Claude Desktop sidebar metadata for recent CCC-spawned sessions."""
     if days is None:
         days = _claude_desktop_backfill_window_days()
@@ -18773,14 +18880,24 @@ def backfill_claude_desktop_visibility(days=None, repo_paths=None, now=None, max
         if log_path:
             add_sid(extract_session_id(log_path), entry)
 
+    metadata_index = _claude_desktop_metadata_index()
     updated = 0
     already_visible = 0
     skipped = 0
     for sid in ids:
-        before_path = _claude_desktop_metadata_path_for_cli_session(sid)
-        ok = _ensure_claude_desktop_session_visible(sid, spawn_entry=entries_by_sid.get(sid))
-        after_path = _claude_desktop_metadata_path_for_cli_session(sid)
-        if ok and after_path:
+        before_path = _claude_desktop_metadata_path_for_cli_session(
+            sid,
+            metadata_index=metadata_index,
+        )
+        if skip_existing and before_path:
+            already_visible += 1
+            continue
+        ok = _ensure_claude_desktop_session_visible(
+            sid,
+            spawn_entry=entries_by_sid.get(sid),
+            metadata_index=metadata_index,
+        )
+        if ok:
             if before_path:
                 already_visible += 1
             else:
@@ -18797,12 +18914,16 @@ def backfill_claude_desktop_visibility(days=None, repo_paths=None, now=None, max
         "already_visible": already_visible,
         "skipped": skipped,
         "pruned": pruned,
+        "skip_existing": bool(skip_existing),
     }
 
 
 def _claude_desktop_visibility_backfill_once():
     try:
-        result = backfill_claude_desktop_visibility()
+        result = backfill_claude_desktop_visibility(
+            max_logs=_claude_desktop_startup_backfill_max_logs(),
+            skip_existing=True,
+        )
     except Exception as e:
         print(f"  [claude-desktop] backfill skipped ({e})")
         return
@@ -19808,6 +19929,8 @@ def _parse_codex_conversation(thread_id, after_line=0):
 
 _pending_resume_queue: dict = {}   # session_id → [text, ...]
 _pending_resume_lock = threading.Lock()
+_pending_resume_retry_after: dict = {}
+_PENDING_RESUME_RETRY_DELAY_S = 60.0
 _pending_terminal_input_queue: dict = {}   # session_id → [text, ...]
 _pending_terminal_input_lock = threading.Lock()
 _pending_inputs_lock = threading.Lock()
@@ -20314,6 +20437,17 @@ def _resume_queue_engine_busy(sid):
     return False
 
 
+def _pending_resume_retry_due(sid, now=None):
+    now = time.time() if now is None else float(now)
+    return now >= float(_pending_resume_retry_after.get(sid, 0.0) or 0.0)
+
+
+def _mark_pending_resume_retry(sid, now=None, delay=None):
+    now = time.time() if now is None else float(now)
+    delay = _PENDING_RESUME_RETRY_DELAY_S if delay is None else float(delay)
+    _pending_resume_retry_after[sid] = now + max(0.0, delay)
+
+
 def _start_resume_queue_watcher() -> None:
     """Drain queued prompts once fire-and-watch engines or live terminal sessions go idle."""
     _load_pending_inputs()
@@ -20323,31 +20457,44 @@ def _start_resume_queue_watcher() -> None:
             with _pending_resume_lock:
                 queued_sids = list(_pending_resume_queue.keys())
             for sid in queued_sids:
+                if not _pending_resume_retry_due(sid):
+                    continue
                 if _resume_queue_engine_busy(sid):
                     continue
                 with _pending_resume_lock:
                     queue = _pending_resume_queue.get(sid, [])
                     if not queue:
                         _pending_resume_queue.pop(sid, None)
+                        _pending_resume_retry_after.pop(sid, None)
                         _save_pending_inputs()
                         continue
                     text = queue.pop(0)
                     if not queue:
                         _pending_resume_queue.pop(sid, None)
                 _save_pending_inputs()
+                result = None
                 try:
                     if _is_codex_session(sid):
-                        resume_session_codex(sid, text)
+                        result = resume_session_codex(sid, text)
                     elif _is_gemini_session(sid):
-                        resume_session_gemini(sid, text)
+                        result = resume_session_gemini(sid, text)
                     elif _is_cursor_session(sid):
-                        resume_session_cursor(sid, text)
+                        result = resume_session_cursor(sid, text)
                     elif _is_antigravity_session(sid):
-                        resume_session_antigravity(sid, text)
+                        result = resume_session_antigravity(sid, text)
                     elif _is_hermes_session(sid):
-                        resume_session_hermes(sid, text)
+                        result = resume_session_hermes(sid, text)
                 except Exception:
-                    pass
+                    result = {"ok": False}
+                if not result or not result.get("ok"):
+                    with _pending_resume_lock:
+                        _pending_resume_queue.setdefault(sid, []).insert(0, text)
+                    _save_pending_inputs()
+                    _mark_pending_resume_retry(sid)
+                elif result.get("queued"):
+                    _mark_pending_resume_retry(sid)
+                else:
+                    _pending_resume_retry_after.pop(sid, None)
             with _pending_terminal_input_lock:
                 terminal_sids = list(_pending_terminal_input_queue.keys())
             for sid in terminal_sids:
@@ -44241,16 +44388,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({"error": "Not found"}, 404)
 
     @staticmethod
+    def _origin_host(origin):
+        """Bare host from an Origin header value — strips scheme, optional
+        IPv6 brackets, and :port. Returns "" if unparseable."""
+        m = re.match(r"^https?://\[?([^:/\]]+)\]?(?::\d+)?$", origin)
+        return m.group(1) if m else ""
+
+    @staticmethod
     def _looks_like_tailscale_origin(origin):
         """Heuristic only — used to make the 403 body more actionable, never
         to grant access. True if `origin`'s host is a Tailscale MagicDNS
         name (`*.ts.net`) or falls in Tailscale's address space: the
         100.64.0.0/10 CGNAT range (IPv4) or the fd7a:115c:a1e0::/48 ULA
         prefix Tailscale assigns every node (IPv6)."""
-        m = re.match(r"^https?://\[?([^:/\]]+)\]?(?::\d+)?$", origin)
-        if not m:
+        host = CommandCenterHandler._origin_host(origin)
+        if not host:
             return False
-        host = m.group(1)
         if host.endswith(".ts.net"):
             return True
         try:
@@ -44291,6 +44444,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return True
         if origin in ALLOWED_ORIGINS:
             return True
+        # Tailscale Serve/Funnel fronts CCC on https:443, so the phone's
+        # Origin is `https://<node>.ts.net` (no port) — which never matches
+        # the auto-detected `http://<node>:PORT`. When trust_tailnet is on,
+        # accept any origin whose HOST is this node's own MagicDNS name or a
+        # Tailscale IP, regardless of scheme/port. Host isn't spoofable: a
+        # browser only sends this Origin for a page actually served from that
+        # host, which means the request is on the (opted-into) tailnet.
+        net = RUNTIME_NETWORK_INFO or {}
+        if net.get("trust_tailnet"):
+            tailnet = net.get("tailnet") or {}
+            host = self._origin_host(origin).lower()
+            allowed_hosts = {(tailnet.get("hostname") or "").rstrip(".").lower()}
+            allowed_hosts.update((ip or "").lower() for ip in (tailnet.get("ips") or []))
+            allowed_hosts.discard("")
+            if host and host in allowed_hosts:
+                return True
         error = "cross-origin POST rejected"
         if self._looks_like_tailscale_origin(origin):
             error += (

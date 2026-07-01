@@ -530,6 +530,18 @@ def test_ux_fixes_health_payload_coalesces_concurrent_polls(monkeypatch):
     assert all(r["queues"] == [{"queue": "CCC"}] for r in results)
 
 
+def test_pending_resume_retry_backoff_prevents_hot_loop():
+    """A stuck durable resume item must not fork a retry every watcher tick."""
+    sid = "019f1eb0-e057-7481-a9a2-2ea59a858a24"
+    server._pending_resume_retry_after.clear()
+
+    assert server._pending_resume_retry_due(sid, now=100.0)
+    server._mark_pending_resume_retry(sid, now=100.0, delay=60.0)
+
+    assert not server._pending_resume_retry_due(sid, now=159.0)
+    assert server._pending_resume_retry_due(sid, now=160.1)
+
+
 def test_archive_rows_carry_state_stamp_cache_safe(big_projects, isolated_archive_cache, monkeypatch):
     """state + ended_blocked must be stamped INTO the cached snapshot, so a warm
     serve (no rebuild, no rehydrate) still carries them.

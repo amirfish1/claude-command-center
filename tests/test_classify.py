@@ -793,6 +793,98 @@ class TestClaudeDesktopVisibility(unittest.TestCase):
         self.assertEqual(result["updated"], 1)
         self.assertTrue(meta_path.is_file())
 
+    def test_claude_desktop_backfill_can_skip_existing_metadata(self):
+        self._write_claude_session()
+        log_dir = self.fake_repo / ".claude" / "logs"
+        log_dir.mkdir(parents=True)
+        log_path = log_dir / "spawn-desktop-sidebar-20260502T000000.log"
+        log_path.write_text(json.dumps({
+            "session_id": CLAUDE_DESKTOP_SESSION_ID,
+        }) + "\n", encoding="utf-8")
+        now = 1777680100
+        os.utime(log_path, (now, now))
+        meta_path = self.desktop_workspace / f"local_{CLAUDE_DESKTOP_SESSION_ID}.json"
+        meta_path.write_text(json.dumps({
+            "sessionId": "local_" + CLAUDE_DESKTOP_SESSION_ID,
+            "cliSessionId": CLAUDE_DESKTOP_SESSION_ID,
+            "cwd": str(self.fake_repo),
+            "title": "Already visible",
+        }), encoding="utf-8")
+
+        with mock.patch.object(
+            self.server,
+            "_ensure_claude_desktop_session_visible",
+            return_value=True,
+        ) as ensure_visible:
+            result = self.server.backfill_claude_desktop_visibility(
+                days=7,
+                repo_paths=[str(self.fake_repo)],
+                now=now,
+                skip_existing=True,
+            )
+
+        self.assertEqual(result["found"], 1)
+        self.assertEqual(result["updated"], 0)
+        self.assertEqual(result["already_visible"], 1)
+        ensure_visible.assert_not_called()
+
+    def test_claude_desktop_startup_backfill_uses_low_impact_defaults(self):
+        with mock.patch.dict(
+            os.environ,
+            {"CCC_CLAUDE_DESKTOP_STARTUP_BACKFILL_MAX_LOGS": "17"},
+        ), mock.patch.object(
+            self.server,
+            "backfill_claude_desktop_visibility",
+            return_value={"ok": True, "updated": 0},
+        ) as backfill:
+            self.server._claude_desktop_visibility_backfill_once()
+
+        backfill.assert_called_once_with(max_logs=17, skip_existing=True)
+
+    def test_claude_desktop_backfill_reuses_metadata_index_per_pass(self):
+        sids = [
+            CLAUDE_DESKTOP_SESSION_ID,
+            "66666666-6666-4666-8666-666666666666",
+            "77777777-7777-4777-8777-777777777777",
+        ]
+        log_dir = self.fake_repo / ".claude" / "logs"
+        log_dir.mkdir(parents=True)
+        now = 1777680100
+        for idx, sid in enumerate(sids):
+            self._write_claude_session(sid)
+            log_path = log_dir / f"spawn-desktop-sidebar-{idx}.log"
+            log_path.write_text(json.dumps({"session_id": sid}) + "\n", encoding="utf-8")
+            os.utime(log_path, (now + idx, now + idx))
+        for idx in range(25):
+            sid = f"88888888-8888-4888-8888-{idx:012d}"
+            (self.desktop_workspace / f"local_{sid}.json").write_text(json.dumps({
+                "sessionId": f"local_{sid}",
+                "cliSessionId": sid,
+                "cwd": str(self.fake_repo),
+                "originCwd": str(self.fake_repo),
+                "title": f"Existing {idx}",
+                "createdAt": 1777680000000,
+                "lastActivityAt": 1777680000000 + idx,
+                "completedTurns": 1,
+                "isArchived": False,
+            }), encoding="utf-8")
+
+        original = self.server._claude_desktop_metadata_files
+        with mock.patch.object(
+            self.server,
+            "_claude_desktop_metadata_files",
+            wraps=original,
+        ) as metadata_files:
+            result = self.server.backfill_claude_desktop_visibility(
+                days=7,
+                repo_paths=[str(self.fake_repo)],
+                now=now,
+            )
+
+        self.assertEqual(result["found"], len(sids))
+        self.assertEqual(result["updated"], len(sids))
+        self.assertLessEqual(metadata_files.call_count, 2)
+
 
 class TestCodexConversationAdapter(unittest.TestCase):
     """Codex stores durable threads in ~/.codex/state_*.sqlite plus rollout
