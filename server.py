@@ -3306,7 +3306,7 @@ def _live_activity_entry_for_session(session_id):
 # WIP chips), so serving one ≤TTL-old result to all concurrent callers is fine.
 # The lock makes it single-flight: at most one build runs at a time; everyone
 # else waits briefly and shares its result.
-_LIVE_ACTIVITY_SNAPSHOT_TTL = 1.5
+_LIVE_ACTIVITY_SNAPSHOT_TTL = 10.0
 _live_activity_snapshot = {"ts": 0.0, "data": None}
 _live_activity_snapshot_lock = threading.Lock()
 
@@ -3409,6 +3409,14 @@ def build_ccc_health():
         "uptime_s": round(time.time() - _SERVER_START_TS),
         "pid": os.getpid(),
     }
+
+
+def _env_truthy(name, default="0"):
+    return os.environ.get(name, default).lower() in ("1", "true", "yes")
+
+
+def _should_prewarm_throughput_on_startup():
+    return _env_truthy("CCC_PREWARM_THROUGHPUT_ON_STARTUP")
 
 
 # ---------------------------------------------------------------------------
@@ -51271,7 +51279,7 @@ def main():
     # Cache warming is opt-in. On machines with a large ~/.claude/projects tree,
     # the old always-on warmup could compete with the first foreground request
     # and hold the Python GIL long enough to make the whole app feel stuck.
-    if os.environ.get("CCC_WARM_CACHE_ON_STARTUP", "0").lower() in ("1", "true", "yes"):
+    if _env_truthy("CCC_WARM_CACHE_ON_STARTUP"):
         threading.Thread(target=_warm_cache, daemon=True).start()
     # Idle-session reaper: sweeps every 30 min, SIGTERMs `claude` processes
     # whose JSONL has been quiet for >24h. Catches abandoned-but-not-archived
@@ -51303,7 +51311,8 @@ def main():
     def _prewarm_throughput():
         _throughput_payload("all_7_days")
         _throughput_week_rankings()
-    threading.Thread(target=_prewarm_throughput, daemon=True, name="ccc-throughput-prewarm").start()
+    if _should_prewarm_throughput_on_startup():
+        threading.Thread(target=_prewarm_throughput, daemon=True, name="ccc-throughput-prewarm").start()
     print()
     try:
         server.serve_forever()

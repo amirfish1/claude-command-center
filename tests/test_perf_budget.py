@@ -530,6 +530,44 @@ def test_ux_fixes_health_payload_coalesces_concurrent_polls(monkeypatch):
     assert all(r["queues"] == [{"queue": "CCC"}] for r in results)
 
 
+def test_live_activity_cache_covers_dashboard_poll_interval(monkeypatch):
+    """The live sidebar polls every 5s; that steady-state poll must not force
+    a real live-activity rebuild every time when a recent snapshot exists."""
+    server._live_activity_snapshot["ts"] = 0.0
+    server._live_activity_snapshot["data"] = None
+
+    now = [1000.0]
+    calls = []
+
+    def fake_time():
+        return now[0]
+
+    def build_uncached():
+        calls.append(now[0])
+        return {"sid-1": {"state": "working"}}
+
+    monkeypatch.setattr(server.time, "time", fake_time)
+    monkeypatch.setattr(server, "_record_live_build_ms", lambda ms: None)
+    monkeypatch.setattr(server, "_build_live_sessions_activity_uncached", build_uncached)
+
+    first = server.build_live_sessions_activity()
+    now[0] += 5.0
+    second = server.build_live_sessions_activity()
+
+    assert first == second == {"sid-1": {"state": "working"}}
+    assert calls == [1000.0], "5s dashboard polls should reuse the live snapshot"
+
+
+def test_throughput_startup_prewarm_defaults_off(monkeypatch):
+    """Throughput prewarm parses a large history cache; it must not run during
+    normal daemon startup unless the user explicitly opts in."""
+    monkeypatch.delenv("CCC_PREWARM_THROUGHPUT_ON_STARTUP", raising=False)
+    assert server._should_prewarm_throughput_on_startup() is False
+
+    monkeypatch.setenv("CCC_PREWARM_THROUGHPUT_ON_STARTUP", "1")
+    assert server._should_prewarm_throughput_on_startup() is True
+
+
 def test_pending_resume_retry_backoff_prevents_hot_loop():
     """A stuck durable resume item must not fork a retry every watcher tick."""
     sid = "019f1eb0-e057-7481-a9a2-2ea59a858a24"
