@@ -208,6 +208,15 @@ except ImportError:
 # the watchtower package is importable. Cheap: two small JSON reads.
 _WT_HOME = Path(os.environ.get("WATCHTOWER_HOME") or (Path.home() / ".watchtower"))
 
+# Matches the "{ts} UTC  {queue:<14}  {verb:<9}{detail}" format written by
+# watchtower.queue._log(); group(1) is the queue column (or "reconciler").
+_WT_LOG_LINE_QUEUE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\s+(\S+)")
+
+
+def _wt_log_line_queue(line):
+    m = _WT_LOG_LINE_QUEUE_RE.match(line)
+    return m.group(1).upper() if m else ""
+
 
 def _wt_config_path():
     return Path(os.environ.get("WATCHTOWER_CONFIG_FILE")
@@ -42599,15 +42608,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/wt/activity-log":
             # Last N lines of ~/.watchtower/activity.log for the log panel.
+            # Optional ?queue= filters to one queue's rows (or "reconciler" for
+            # cross-cutting SPAWN/STOP/REAP/DISPATCH rows) before tailing, so a
+            # busy queue can't crowd a quiet one out of the last N lines.
             qs = urllib.parse.parse_qs(parsed.query)
             try:
                 lines_cap = max(1, min(int(qs.get("lines", ["200"])[0]), 2000))
             except (ValueError, IndexError):
                 lines_cap = 200
+            queue_filter = (qs.get("queue", [""])[0] or "").strip()
             log_path = _WT_HOME / "activity.log"
             try:
                 with open(log_path) as f:
                     all_lines = f.readlines()
+                if queue_filter:
+                    all_lines = [l for l in all_lines if _wt_log_line_queue(l) == queue_filter.upper()]
                 tail = all_lines[-lines_cap:] if len(all_lines) > lines_cap else all_lines
                 self.send_json({"ok": True, "lines": [l.rstrip("\n") for l in tail],
                                 "path": str(log_path), "total": len(all_lines)})

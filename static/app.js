@@ -27655,6 +27655,7 @@
   }
   // Watchtower activity log panel — floating overlay over the conversation area.
   let _wtLogTimer = null;
+  let _wtLogQueueFilter = '';
 
   function _wtLogVerbClass(verb) {
     if (['CLAIM','CLOSE','BLOCK','DISCUSS','UNBLOCK'].includes(verb)) return 'wl-worker';
@@ -27748,6 +27749,7 @@
       panel.innerHTML =
         '<div class="wt-log-panel-bar">'
         + '<span class="wt-log-panel-title">Watchtower activity log</span>'
+        + '<select class="wt-log-queue-select" id="wtLogQueueSelect" title="Filter by queue"><option value="">All queues</option></select>'
         + '<span class="wt-log-panel-path" id="wtLogPath"></span>'
         + '<button class="wt-log-panel-close" id="wtLogClose" title="Close" aria-label="Close">&times;</button>'
         + '</div>'
@@ -27780,10 +27782,37 @@
         if (_preEl) _preEl.scrollTop = _preEl.scrollHeight;
         _wtSyncEnd();
       });
+      // Queue filter: options come from the same queues list the health strip
+      // uses, plus the static "reconciler" pseudo-queue for cross-cutting
+      // SPAWN/STOP/REAP/DISPATCH rows. Remembers the last-picked queue across
+      // panel reopens via the module-level _wtLogQueueFilter.
+      const _qSel = document.getElementById('wtLogQueueSelect');
+      if (_qSel) {
+        _qSel.value = _wtLogQueueFilter;
+        _qSel.addEventListener('change', () => {
+          _wtLogQueueFilter = _qSel.value;
+          _refresh();
+        });
+        _fetchUxqHealth().then(h => {
+          const names = Array.from(new Set(((h && h.queues) || [])
+            .map(q => q && q.queue).filter(Boolean).map(String)));
+          names.sort();
+          names.push('reconciler');
+          names.forEach(name => {
+            if (_qSel.querySelector('option[value="' + name.replace(/"/g, '') + '"]')) return;
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name;
+            _qSel.appendChild(opt);
+          });
+          _qSel.value = _wtLogQueueFilter;
+        }).catch(() => {});
+      }
     }
     const _refresh = async () => {
       try {
-        const res = await fetch('/api/wt/activity-log?lines=300', { cache: 'no-store' });
+        const qParam = _wtLogQueueFilter ? ('&queue=' + encodeURIComponent(_wtLogQueueFilter)) : '';
+        const res = await fetch('/api/wt/activity-log?lines=300' + qParam, { cache: 'no-store' });
         const data = await res.json().catch(() => ({}));
         const pre = document.getElementById('wtLogPre');
         const endBtn = document.getElementById('wtLogEndBtn');
