@@ -3082,7 +3082,46 @@ def _stamp_session_state(c):
     return raw
 
 
+# Short-TTL memo for the per-session liveness probe. _archive_session_is_live is
+# called PER ROW by the bulk archive/live endpoints (rehydrate, live-activity,
+# per-session), and each call runs uncached engine predicates
+# (_is_codex/gemini/cursor_session) that hit the filesystem/DB. Under continuous
+# dashboard + COO polling that became a per-row lstat storm across many
+# concurrent request threads, GIL-bound — the dominant CPU cost `sample` caught
+# (os_lstat / take_gil). The same session ids are re-probed every poll cycle by
+# every endpoint, so a tiny TTL memo collapses those redundant probes to one per
+# session per window. Liveness already lags by the serve TTL (2s) and the engine
+# scan TTL (4s), so a ~2s memo introduces no staleness the callers didn't have.
+_session_live_cache = {}  # sid -> (ts, bool)
+_session_live_lock = threading.Lock()
+try:
+    _SESSION_LIVE_TTL = max(0.0, float(os.environ.get("CCC_SESSION_LIVE_TTL_SEC", "2")))
+except ValueError:
+    _SESSION_LIVE_TTL = 2.0
+
+
 def _archive_session_is_live(session_id):
+    """Memoized per-session liveness (see _archive_session_is_live_uncached)."""
+    if not session_id or _SESSION_LIVE_TTL <= 0:
+        return _archive_session_is_live_uncached(session_id)
+    now = time.time()
+    with _session_live_lock:
+        hit = _session_live_cache.get(session_id)
+        if hit is not None and (now - hit[0]) < _SESSION_LIVE_TTL:
+            return hit[1]
+    live = _archive_session_is_live_uncached(session_id)
+    with _session_live_lock:
+        _session_live_cache[session_id] = (time.time(), live)
+        # Bound the cache: drop entries older than a few TTLs so it can't grow
+        # unbounded across the full session history over a long uptime.
+        if len(_session_live_cache) > 4096:
+            cutoff = time.time() - (_SESSION_LIVE_TTL * 4)
+            for k in [k for k, v in _session_live_cache.items() if v[0] < cutoff]:
+                _session_live_cache.pop(k, None)
+    return live
+
+
+def _archive_session_is_live_uncached(session_id):
     """A session is "live" if any sidecar marker exists for it (Claude only),
     OR a non-Claude engine CLI (codex/gemini/cursor/antigravity) is running it.
 
@@ -5041,7 +5080,43 @@ def _archive_build_lock(key):
         return lk
 
 
+# TTL-memoized wrapper around the corpus fingerprint. The fingerprint is a
+# stat-only walk of the WHOLE transcript corpus (thousands of files), but it is
+# GLOBAL — identical for every archive cache key. Without memoization each
+# cache key's background refresh (dashboard + COO board + every filter/sort
+# combo poll distinct keys) re-walked the entire corpus independently, so N
+# concurrently-refreshing keys meant N full-corpus scandir passes every serve
+# TTL. That O(keys × all-files) scandir per window is the sustained CPU burn
+# `sample` caught across the `refresh` threads. Caching the signature for a
+# short window collapses it to ONE walk per window shared by all keys. The TTL
+# stays within the serve cache's existing staleness tolerance, so it introduces
+# no correctness window the serve path didn't already have.
+try:
+    _ARCHIVE_SIG_TTL = max(0.0, float(os.environ.get("CCC_ARCHIVE_SIG_TTL_SEC", "2")))
+except ValueError:
+    _ARCHIVE_SIG_TTL = 2.0
+_archive_sig_cache = {"ts": 0.0, "sig": None}
+_archive_sig_lock = threading.Lock()
+
+
 def _archive_corpus_signature():
+    """Corpus fingerprint, memoized for _ARCHIVE_SIG_TTL so concurrent per-key
+    refreshes share one full-corpus walk instead of each re-scanning it."""
+    if _ARCHIVE_SIG_TTL > 0:
+        now = time.time()
+        with _archive_sig_lock:
+            c = _archive_sig_cache
+            if c["sig"] is not None and (now - c["ts"]) < _ARCHIVE_SIG_TTL:
+                return c["sig"]
+    sig = _archive_corpus_signature_uncached()
+    if _ARCHIVE_SIG_TTL > 0:
+        with _archive_sig_lock:
+            _archive_sig_cache["ts"] = time.time()
+            _archive_sig_cache["sig"] = sig
+    return sig
+
+
+def _archive_corpus_signature_uncached():
     """Cheap stat-only fingerprint of the conversation corpus on disk.
 
     No JSON parse, no subprocess, no per-row liveness probe — just the
