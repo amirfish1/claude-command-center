@@ -27662,6 +27662,7 @@
     const now = Date.now();
     const rows = [];
     let prevMs = null;
+    let prevRef = null;
     for (const line of lines) {
       const m = line.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) UTC\s+(\S+)\s+(\S+)\s*(.*)/);
       if (!m) {
@@ -27670,11 +27671,25 @@
       }
       const [, date, time, queue, verb, detail] = m;
       const utcMs = new Date(date + 'T' + time + 'Z').getTime();
+      // Pull a leading ticket ref (e.g. BYM-33) out of the detail — used both
+      // for the ref column below and to group the stream by issue item.
+      const refM = detail.match(/^([A-Z]+-\d+)\b[ ]*(?:—[ ]*)?/);
+      const ref = refM ? refM[1] : '';
+      let insertedGap = false;
       if (prevMs !== null && utcMs - prevMs >= 3 * 60 * 1000) {
         const gapMin = Math.round((utcMs - prevMs) / 60000);
         rows.push('<div class="wl-sep"><span class="wl-sep-label">' + gapMin + 'm gap</span></div>');
+        insertedGap = true;
+      }
+      // Divider whenever the issue item changes, so the stream reads as grouped
+      // per ticket. Skipped if a time-gap separator already broke here (no double
+      // rule). Reconciler rows carry no ref and don't reset the current item, so
+      // a SPAWN/REAP mid-lifecycle stays grouped with its ticket.
+      if (!insertedGap && ref && prevRef && ref !== prevRef) {
+        rows.push('<div class="wl-item-sep"></div>');
       }
       prevMs = utcMs;
+      if (ref) prevRef = ref;
       const dt = new Date(utcMs);
       const hh = dt.getHours().toString().padStart(2,'0');
       const mm = dt.getMinutes().toString().padStart(2,'0');
@@ -27688,12 +27703,9 @@
       const tsTip = escapeAttr(date + ' ' + time + ' UTC · ' + rel);
       const verbClass = _wtLogVerbClass(verb);
       const qColor = _wtLogQueueColor(queue);
-      // Pull a leading ticket ref (e.g. BYM-33) out of the detail so it renders
-      // in its own column BEFORE the verb — the item ID reads before the action
-      // taken on it. Reconciler rows start with a lowercase worker id
-      // (wt-abc123), which doesn't match, so their ref column stays empty.
-      const refM = detail.match(/^([A-Z]+-\d+)\b[ ]*(?:—[ ]*)?/);
-      const ref = refM ? refM[1] : '';
+      // ref/refM computed above (used for the divider too). The ref renders in
+      // its own column BEFORE the verb; reconciler rows (lowercase worker id)
+      // don't match, so their ref column stays empty.
       const restDetail = refM ? detail.slice(refM[0].length) : detail;
       const refHtml = ref ? '<span class="wl-ref">' + escapeHtml(ref) + '</span>' : '';
       const detailHtml = escapeHtml(restDetail).replace(/\b([A-Z]+-\d+)\b/g, '<span class="wl-ref">$1</span>');

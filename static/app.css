@@ -16249,6 +16249,9 @@ body:has(.gc-reader) .pwa-install-banner {
 .wt-log-end-btn.visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
 .wt-log-end-btn:hover { border-color: var(--accent); background: var(--surface-2); }
 .wt-log-end-btn svg { flex: none; }
+/* Divider between issue items (ticket ref changes). Subtler than the labeled
+   time-gap separator — a single faint rule that just chunks the stream. */
+.wl-item-sep { height: 0; margin: 4px 0; border-top: 1px solid rgba(139,148,158,0.16); }
 .wl-sep { margin: 5px 0; display: flex; align-items: center; gap: 6px; }
 .wl-sep::before, .wl-sep::after { content: ''; flex: 1; height: 1px; background: rgba(139,148,158,0.18); }
 .wl-sep-label { font-size: 10px; color: var(--text-muted); opacity: 0.35; white-space: nowrap; }
