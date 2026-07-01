@@ -28247,7 +28247,9 @@
     const promptText = _uxqItemPrompt(item);
     const detailTitle = _uxqItemTitle(item);
     const status = item.needs_input ? 'blocked' : (item.status || 'open');
-    const progNotes = Array.isArray(item.progress_notes) ? item.progress_notes : [];
+    const allNotes = Array.isArray(item.progress_notes) ? item.progress_notes : [];
+    const progNotes = allNotes.filter(n => (n && n.by) !== 'human-reopen');
+    const reopenNotes = allNotes.filter(n => n && n.by === 'human-reopen');
     const answers  = Array.isArray(item.answers) ? item.answers : [];
     const _noteStr = n => String((n && (n.text || n)) || '');
 
@@ -28377,7 +28379,16 @@
       tlHtml += _tlEvt('uxq-tl-closed',
         '<span class="uxq-tl-verb">Closed</span>' + _tlTime(item.closed_at) + _tlWorker(item.claimed_by),
         resHtml);
-    } else {
+    }
+
+    // Reopened events (from human reopen actions with notes)
+    reopenNotes.forEach(n => {
+      tlHtml += _tlEvt('uxq-tl-reopen',
+        '<span class="uxq-tl-verb">Reopened</span>' + _tlTime(n.at || null),
+        n.text ? '<div class="uxq-tl-block-q">' + escapeHtml(n.text) + '</div>' : '');
+    });
+
+    if (!item.closed_at) {
       const verb = status === 'in_progress' ? 'In progress' : status === 'blocked' ? 'Waiting for answer' : 'Open';
       tlHtml += _tlEvt('uxq-tl-open',
         '<span class="uxq-tl-verb">' + verb + '</span>' + _tlWorker(item.claimed_by), '');

@@ -44827,6 +44827,40 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
+        if path == "/api/ux-fixes/reopen":
+            # Reopen a closed ticket, optionally storing a reopen note.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            ref = str(payload.get("ref") or "").strip()
+            reopen_note = str(payload.get("note") or "").strip()
+            if not ref:
+                self.send_json({"ok": False, "error": "ref required"}, 400)
+                return
+            try:
+                item = _q.update_status(ref, "open")
+                if item and reopen_note and _WT_QUEUE_AVAILABLE:
+                    with _wt_q._FileLock(_wt_q._lock_path()):
+                        data = _wt_q._load_unlocked()
+                        for it in data["items"]:
+                            if _wt_q._matches(it, ref):
+                                notes = it.get("progress_notes") or []
+                                notes.append({
+                                    "at": _wt_q._now_iso(),
+                                    "text": reopen_note,
+                                    "by": "human-reopen",
+                                })
+                                it["progress_notes"] = notes
+                                _wt_q._save_unlocked(data)
+                                item = it
+                                break
+                self.send_json({"ok": bool(item), "item": item})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            return
         if path == "/api/ux-fixes/enqueue":
             # Add a ticket to the queue straight from the UI (CCC-145 — the
             # queue panel's "+ Add" affordance). Same-origin is already enforced
