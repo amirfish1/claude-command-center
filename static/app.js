@@ -8507,16 +8507,21 @@
     if (!btn) return;
     ev.preventDefault();
     const wrap = btn.closest('.cb-wrap');
-    const code = wrap && wrap.querySelector('code') ? wrap.querySelector('code').textContent : '';
-    if (!code) return;
+    const codeEl = wrap && wrap.querySelector('code');
+    const code = codeEl ? codeEl.textContent : '';
     const flash = (ok) => {
       const orig = btn.textContent;
       btn.classList.toggle('copied', ok);
       btn.textContent = ok ? 'Copied' : 'Failed';
       setTimeout(() => { btn.classList.remove('copied'); btn.textContent = orig; }, 1200);
     };
+    if (!code) { flash(false); return; }
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(code).then(() => flash(true)).catch(() => flash(false));
+      try {
+        navigator.clipboard.writeText(code).then(() => flash(true)).catch(() => flash(false));
+      } catch (_) {
+        flash(false);
+      }
     } else {
       // Fallback for older browsers / insecure contexts: temp textarea + execCommand.
       const ta = document.createElement('textarea');
@@ -27830,10 +27835,9 @@
     if (force) _uxqHealthCache.ts = 0;
     const health = await _fetchUxqHealth();
     let rows = (health.rows || []).slice();
-    // Keep recently-active queues visible even when fully drained (0 open) — a
-    // queue that closed a ticket a minute ago is still worth seeing — while
-    // long-dead/bogus queues drop off. Append synthetic rows for configured
-    // queues with activity in the last 7 days that have no open-ticket row.
+    // Keep recently-active queues visible even when fully drained (0 open), and
+    // always keep explicitly configured queues visible even before their first
+    // ticket exists. Long-dead unconfigured queues still drop off.
     const _ACTIVE_WINDOW_S = 7 * 24 * 3600;
     const _haveProject = new Set(rows.map(r => _uxqProjectKey(r && r.project)));
     (health.queues || []).forEach(q => {
@@ -27842,7 +27846,8 @@
       if (!key || key === '?' || _haveProject.has(key)) return;
       if ((Number(q.depth) || 0) > 0) return;  // open-ticket queues already in rows
       const la = q.last_activity_seconds;
-      if (la == null || la > _ACTIVE_WINDOW_S) return;  // stale/never-active → skip
+      const configured = !!q.configured;
+      if (!configured && (la == null || la > _ACTIVE_WINDOW_S)) return;
       rows.push({
         project: q.queue,
         depth: 0,

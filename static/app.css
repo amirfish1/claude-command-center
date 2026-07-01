@@ -1330,7 +1330,14 @@
   .cb-copy:hover { opacity: 1; color: var(--cb-text); border-color: var(--cb-muted); }
   .cb-copy.copied { color: var(--green); border-color: rgba(63,185,80,0.5); opacity: 1; }
   pre.cb {
-    margin: 0; padding: 12px 14px; overflow-x: hidden;
+    margin: 0; padding: 12px 14px;
+    /* overflow-x:clip (not hidden) so we clip without creating a scroll
+       container. overflow-x:hidden implicitly forces overflow-y to auto,
+       making pre.cb a scroll container whose internal coordinate system
+       diverges from the visual layout — this caused text-selection to land
+       one or two rows off from where the user clicked. clip clips identically
+       but does NOT create a scroll container, so hit-testing stays correct. */
+    overflow-x: clip;
     font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
     font-size: 13px; line-height: 1.5; color: var(--cb-text);
     white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
