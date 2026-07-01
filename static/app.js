@@ -28115,10 +28115,45 @@
     }
     return _uxqItemRef(item);
   }
-  function _uxqMetaRow(label, value) {
-    if (value == null || value === '') return '';
-    const text = String(value);
-    return '<dt>' + escapeHtml(label) + '</dt><dd title="' + escapeAttr(text) + '">' + escapeHtml(text) + '</dd>';
+  // Per-field auto-save for the ticket detail modal.
+  async function _uxqSaveField(ref, field, value) {
+    try {
+      const res = await fetch('/api/ux-fixes/edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref, [field]: value }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.ok) {
+        showOpToast('Saved', 'success');
+        _uxqItemsCache.ts = 0;
+        _renderQueuePanel();
+      } else {
+        showOpToast('Save failed: ' + (d.error || res.status), 'error');
+      }
+    } catch (e) {
+      showOpToast('Save failed: ' + e, 'error');
+    }
+  }
+  function _uxqRelTime(iso) {
+    if (!iso) return '';
+    const diff = Date.now() - new Date(iso).getTime();
+    if (diff < 0) return 'just now';
+    const s = Math.floor(diff / 1000);
+    if (s < 60) return s + 's ago';
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + 'm ago';
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + 'h ago';
+    return Math.floor(h / 24) + 'd ago';
+  }
+  function _uxqExtractImages(text) {
+    if (!text) return [];
+    const found = [];
+    const re = /((?:\/[^\s"'<>]+|~\/[^\s"'<>]+)\.(?:png|jpg|jpeg|gif|webp))/gi;
+    let m;
+    while ((m = re.exec(text)) !== null) found.push(m[1]);
+    return [...new Set(found)];
   }
   function _uxqOpenItemModal(item) {
     const existing = document.getElementById('uxqItemModal');
@@ -28130,174 +28165,263 @@
     const ref = _uxqItemRef(item);
     const promptText = _uxqItemPrompt(item);
     const detailTitle = _uxqItemTitle(item);
-    const detailSubtitle = [item.project, item.needs_input ? 'needs input' : (item.status || ''), item.lane]
-      .filter(Boolean).join(' · ');
-    const hasShot = !!item.screenshot_path;
-    const shotSrc = hasShot ? ('/api/pasted-image?path=' + encodeURIComponent(item.screenshot_path)) : '';
-    const metaHtml = [
-      _uxqMetaRow('Ref', ref),
-      _uxqMetaRow('Project', item.project),
-      _uxqMetaRow('Status', item.needs_input ? 'in_progress · needs input' : (item.status || 'open')),
-      _uxqMetaRow('Lane', item.lane),
-      _uxqMetaRow('Source', item.source),
-      _uxqMetaRow('Claimed by', item.claimed_by),
-      _uxqMetaRow('Claimed at', item.claimed_at),
-      _uxqMetaRow('Worker session', item.claimed_session_id),
-      _uxqMetaRow('Closed', item.closed_at),
-      _uxqMetaRow('Created', item.created_at),
-      _uxqMetaRow('Updated', item.updated_at),
-      _uxqMetaRow('URL', item.url),
-      _uxqMetaRow('Selector', item.selector),
-    ].filter(Boolean).join('');
-    const _fmtResField = v => Array.isArray(v)
-      ? v.map(x => escapeHtml(String(x))).join('<br>')
-      : escapeHtml(String(v));
-    const resolutionHtml = (item.summary || item.caveat || item.follow_up || item.unresolved)
-      ? '<div class="uxq-resolution">'
-        + '<div class="uxq-resolution-title">Resolution</div>'
-        + (item.summary ? '<div class="uxq-resolution-row"><span class="uxq-res-label">Summary</span><div class="uxq-res-val">' + _fmtResField(item.summary) + '</div></div>' : '')
-        + (item.caveat ? '<div class="uxq-resolution-row"><span class="uxq-res-label">Caveat</span><div class="uxq-res-val">' + _fmtResField(item.caveat) + '</div></div>' : '')
-        + (item.follow_up ? '<div class="uxq-resolution-row"><span class="uxq-res-label">Follow-up</span><div class="uxq-res-val">' + _fmtResField(item.follow_up) + '</div></div>' : '')
-        + (item.unresolved ? '<div class="uxq-resolution-row"><span class="uxq-res-label">Unresolved</span><div class="uxq-res-val">' + _fmtResField(item.unresolved) + '</div></div>' : '')
+    const status = item.needs_input ? 'blocked' : (item.status || 'open');
+    const progNotes = Array.isArray(item.progress_notes) ? item.progress_notes : [];
+    const answers  = Array.isArray(item.answers) ? item.answers : [];
+    const _noteStr = n => String((n && (n.text || n)) || '');
+
+    // Sidebar property row helpers
+    function _propRow(key, valHtml) {
+      if (!valHtml) return '';
+      return '<div class="uxq-td-pr"><span class="uxq-td-pr-k">' + escapeHtml(key) + '</span>'
+           + '<span class="uxq-td-pr-v">' + valHtml + '</span></div>';
+    }
+    function _propSel(key, field, options, current) {
+      const opts = options.map(([v, label]) =>
+        '<option value="' + escapeAttr(v) + '"' + (v === current ? ' selected' : '') + '>'
+        + escapeHtml(label) + '</option>'
+      ).join('');
+      return '<div class="uxq-td-pr"><span class="uxq-td-pr-k">' + escapeHtml(key) + '</span>'
+           + '<select class="uxq-td-ps" data-field="' + escapeAttr(field) + '">' + opts + '</select></div>';
+    }
+
+    // Status / priority / type badges
+    const statusClass = { open: 'uxq-bs-open', in_progress: 'uxq-bs-wip', blocked: 'uxq-bs-blocked', closed: 'uxq-bs-closed' }[status] || 'uxq-bs-open';
+    const priorityClass = { p0: 'uxq-bp-p0', p1: 'uxq-bp-p1', p2: 'uxq-bp-p2', p3: 'uxq-bp-p3' }[item.priority] || '';
+    const topBadges = '<span class="uxq-td-badge ' + statusClass + '">' + escapeHtml(status) + '</span>'
+      + (item.lane ? '<span class="uxq-td-badge uxq-bs-lane">' + escapeHtml(item.lane) + '</span>' : '')
+      + (item.priority ? '<span class="uxq-td-badge ' + priorityClass + '">' + escapeHtml(item.priority) + '</span>' : '')
+      + (item.type ? '<span class="uxq-td-badge uxq-bs-type">' + escapeHtml(item.type) + '</span>' : '');
+
+    // Images: screenshot_path + PNGs/images extracted from note/text
+    const imagePaths = [];
+    if (item.screenshot_path) imagePaths.push(item.screenshot_path);
+    _uxqExtractImages((item.note || '') + ' ' + (item.text || '')).forEach(p => {
+      if (!imagePaths.includes(p)) imagePaths.push(p);
+    });
+    const imagesHtml = imagePaths.length
+      ? '<div class="uxq-td-sec">'
+        + '<div class="uxq-td-sec-label">Screenshots</div>'
+        + '<div class="uxq-td-images">'
+        + imagePaths.map(p => {
+            const src = '/api/pasted-image?path=' + encodeURIComponent(p);
+            return '<a href="' + src + '" target="_blank" rel="noopener" class="uxq-td-img-wrap">'
+              + '<img class="uxq-td-img" src="' + src + '" alt="screenshot" loading="lazy"></a>';
+          }).join('')
+        + '</div></div>'
+      : '';
+
+    // Full prompt (only if different from note/title)
+    const showPrompt = !!(item.text && item.text.trim() !== (item.note || '').trim());
+    const promptHtml = showPrompt
+      ? '<div class="uxq-td-sec">'
+        + '<div class="uxq-td-sec-label">Full prompt</div>'
+        + '<pre class="uxq-td-prompt">' + escapeHtml(item.text) + '</pre>'
         + '</div>'
       : '';
-    const showPrompt = !!(promptText && promptText.trim() !== (item.note || '').trim());
-    // Blocked-work panel (WT-28): the worker's question + how to respond.
-    const _progNotes = Array.isArray(item.progress_notes) ? item.progress_notes : [];
-    const _answers = Array.isArray(item.answers) ? item.answers : [];
-    const _noteText = n => escapeHtml((n && (n.text || n)) ? String(n.text || n) : '');
-    const blockHtml = item.needs_input
-      ? '<div class="uxq-block">'
-        + '<div class="uxq-block-title">Needs human input</div>'
-        + '<div class="uxq-block-q">' + escapeHtml(item.block_question || '(no question recorded)') + '</div>'
-        + (_progNotes.length ? '<div class="uxq-block-sub">Progress so far</div>'
-            + _progNotes.map(p => '<div class="uxq-block-note">' + _noteText(p) + '</div>').join('') : '')
-        + (_answers.length ? '<div class="uxq-block-sub">Answers</div>'
-            + _answers.map(a => '<div class="uxq-block-note">' + _noteText(a) + '</div>').join('') : '')
-        + '<div class="uxq-block-sub">Answer inline</div>'
+
+    // Timeline event builder
+    function _tlEvt(cls, headHtml, bodyHtml) {
+      return '<div class="uxq-tl-evt ' + cls + '">'
+        + '<div class="uxq-tl-node"><span class="uxq-tl-dot"></span></div>'
+        + '<div class="uxq-tl-body">'
+        + '<div class="uxq-tl-head">' + headHtml + '</div>'
+        + (bodyHtml ? '<div class="uxq-tl-detail">' + bodyHtml + '</div>' : '')
+        + '</div></div>';
+    }
+    function _tlTime(iso) {
+      if (!iso) return '';
+      return ' <span class="uxq-tl-time" title="' + escapeAttr(iso) + '">' + escapeHtml(_uxqRelTime(iso)) + '</span>';
+    }
+    function _tlWorker(w) {
+      return w ? ' <span class="uxq-tl-worker">' + escapeHtml(String(w).slice(0, 16)) + '</span>' : '';
+    }
+    function _fmtRes(v) {
+      const arr = Array.isArray(v) ? v : [v];
+      return arr.filter(Boolean).map(x => escapeHtml(String(x))).join('<br>');
+    }
+    function _sessionBtn(sid, label) {
+      return '<button type="button" class="uxq-tl-session-btn" data-sid="' + escapeAttr(sid) + '">' + escapeHtml(label) + ' ↗</button>';
+    }
+
+    let tlHtml = '';
+
+    // Filed
+    tlHtml += _tlEvt('uxq-tl-filed',
+      '<span class="uxq-tl-verb">Filed</span>' + _tlTime(item.created_at)
+      + (item.source ? ' <span class="uxq-tl-meta">via ' + escapeHtml(item.source) + '</span>' : ''),
+      item.project ? '<span class="uxq-tl-tag">' + escapeHtml(item.project) + '</span>' : '');
+
+    // Claimed
+    if (item.claimed_by || item.claimed_at) {
+      tlHtml += _tlEvt('uxq-tl-claimed',
+        '<span class="uxq-tl-verb">Claimed</span>' + _tlTime(item.claimed_at) + _tlWorker(item.claimed_by),
+        item.claimed_session_id ? _sessionBtn(item.claimed_session_id, 'open session') : '');
+    }
+
+    // Blocked (historical or current)
+    if (item.block_question) {
+      const pNotes = progNotes.length
+        ? '<div class="uxq-tl-sub-label">Progress so far</div>'
+          + progNotes.map(n => '<div class="uxq-tl-sub-note">' + escapeHtml(_noteStr(n)) + '</div>').join('')
+        : '';
+      const aBlock = answers.length
+        ? '<div class="uxq-tl-sub-label">Human answers</div>'
+          + answers.map(a => '<div class="uxq-tl-sub-note uxq-tl-sub-answer">' + escapeHtml(_noteStr(a)) + '</div>').join('')
+        : '';
+      const blockBadge = item.needs_input
+        ? ' <span class="uxq-tl-inline-badge uxq-tl-ib-waiting">awaiting your answer</span>'
+        : ' <span class="uxq-tl-inline-badge uxq-tl-ib-done">unblocked</span>';
+      tlHtml += _tlEvt('uxq-tl-blocked',
+        '<span class="uxq-tl-verb">Blocked</span>' + blockBadge,
+        '<div class="uxq-tl-block-q">' + escapeHtml(item.block_question) + '</div>' + pNotes + aBlock);
+    }
+
+    // Closed / Resolution
+    if (item.closed_at) {
+      const resHtml = (item.summary || item.caveat || item.follow_up || item.unresolved)
+        ? '<div class="uxq-tl-res">'
+          + (item.summary    ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Summary</span><div class="uxq-tl-res-v">' + _fmtRes(item.summary) + '</div></div>' : '')
+          + (item.caveat     ? '<div class="uxq-tl-res-row uxq-tl-res-caveat"><span class="uxq-tl-res-k">Caveat</span><div class="uxq-tl-res-v">' + _fmtRes(item.caveat) + '</div></div>' : '')
+          + (item.follow_up  ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Follow-up</span><div class="uxq-tl-res-v">' + _fmtRes(item.follow_up) + '</div></div>' : '')
+          + (item.unresolved ? '<div class="uxq-tl-res-row uxq-tl-res-unresolved"><span class="uxq-tl-res-k">Unresolved</span><div class="uxq-tl-res-v">' + _fmtRes(item.unresolved) + '</div></div>' : '')
+          + '</div>'
+        : '';
+      tlHtml += _tlEvt('uxq-tl-closed',
+        '<span class="uxq-tl-verb">Closed</span>' + _tlTime(item.closed_at) + _tlWorker(item.claimed_by),
+        resHtml);
+    } else {
+      const verb = status === 'in_progress' ? 'In progress' : status === 'blocked' ? 'Waiting for answer' : 'Open';
+      tlHtml += _tlEvt('uxq-tl-open',
+        '<span class="uxq-tl-verb">' + verb + '</span>' + _tlWorker(item.claimed_by), '');
+    }
+
+    // Sidebar: editable selects + info
+    const sideHtml =
+      '<div class="uxq-td-pg">'
+      + '<div class="uxq-td-pg-label">Properties</div>'
+      + _propSel('Priority', 'priority',   [['','—'],['p0','p0 — urgent'],['p1','p1'],['p2','p2'],['p3','p3']], item.priority || '')
+      + _propSel('Type', 'type',           [['','—'],['feature','feature'],['bug','bug']], item.type || '')
+      + _propSel('Readiness', 'readiness', [['','—'],['shovel-ready','shovel-ready'],['needs-spec','needs-spec'],['needs-shaping','needs-shaping']], item.readiness || '')
+      + _propSel('Value', 'value',         [['','—'],['H','H — High'],['M','M — Med'],['L','L — Low']], item.value || '')
+      + _propSel('Confidence', 'confidence',[['','—'],['H','H — High'],['M','M — Med'],['L','L — Low']], item.confidence || '')
+      + '</div>'
+      + '<div class="uxq-td-pg">'
+      + '<div class="uxq-td-pg-label">Assignment</div>'
+      + (item.claimed_by ? _propRow('Worker', '<span class="uxq-td-worker-id">' + escapeHtml(item.claimed_by) + '</span>') : _propRow('Worker', '<span class="uxq-td-pr-empty">unassigned</span>'))
+      + (item.claimed_session_id
+          ? '<div class="uxq-td-pr"><span class="uxq-td-pr-k">Session</span>'
+            + '<button type="button" class="uxq-td-session-btn" data-sid="' + escapeAttr(item.claimed_session_id) + '">open in CCC ↗</button>'
+            + '</div>'
+          : '')
+      + (item.claimed_at ? _propRow('Claimed', '<span class="uxq-td-pr-time" title="' + escapeAttr(item.claimed_at) + '">' + escapeHtml(_uxqRelTime(item.claimed_at)) + '</span>') : '')
+      + (item.closed_at  ? _propRow('Closed',  '<span class="uxq-td-pr-time" title="' + escapeAttr(item.closed_at)  + '">' + escapeHtml(_uxqRelTime(item.closed_at))  + '</span>') : '')
+      + '</div>'
+      + '<div class="uxq-td-pg">'
+      + '<div class="uxq-td-pg-label">Origin</div>'
+      + (item.project  ? _propRow('Project', escapeHtml(item.project)) : '')
+      + (item.source   ? _propRow('Source',  escapeHtml(item.source)) : '')
+      + (item.lane     ? _propRow('Lane',    escapeHtml(item.lane)) : '')
+      + (item.url      ? _propRow('URL',     '<a href="' + escapeAttr(item.url) + '" target="_blank" rel="noopener" class="uxq-td-link">' + escapeHtml(item.url) + '</a>') : '')
+      + (item.selector ? _propRow('Selector','<span class="uxq-td-mono">' + escapeHtml(item.selector) + '</span>') : '')
+      + '</div>';
+
+    // Answer section (only when currently blocked)
+    const answerSectionHtml = item.needs_input
+      ? '<div class="uxq-td-sec uxq-td-answer-sec">'
+        + '<div class="uxq-td-sec-label">Your Decision</div>'
         + '<div class="uxq-answer-row">'
-          + '<input class="uxq-answer-input" type="text" placeholder="Type your decision…" aria-label="Answer this blocked ticket">'
-          + '<button type="button" class="ann-btn ann-primary uxq-answer-send">Send</button>'
+        + '<input class="uxq-answer-input" type="text" placeholder="Type your decision / answer…" aria-label="Answer this blocked ticket">'
+        + '<button type="button" class="ann-btn ann-primary uxq-answer-send">Send</button>'
         + '</div>'
-        + '<div class="uxq-block-hint">Clears the block; resume the session to continue: '
-          + '<code class="uxq-block-cmd uxq-block-cmd-inline">wt discuss ' + escapeHtml(ref) + '</code></div>'
+        + '<div class="uxq-td-answer-hint">Sends your decision to the worker. CLI: <code>wt discuss ' + escapeHtml(ref) + '</code></div>'
         + '</div>'
       : '';
+
+    // Build modal DOM
     const modal = document.createElement('div');
     modal.id = 'uxqItemModal';
-    modal.className = 'ann-ux-preview-modal uxq-detail-modal';
+    modal.className = 'uxq-td-overlay';
     modal.innerHTML =
-      '<div class="ann-ux-preview-card uxq-detail-card" role="dialog" aria-modal="true" aria-label="Queue item details">' +
-        '<div class="uxq-detail-hero">' +
-          '<div class="uxq-detail-ref">' + escapeHtml(ref) + '</div>' +
-          '<div class="uxq-detail-title-row">' +
-            '<div class="uxq-detail-title" title="' + escapeAttr(detailTitle) + '">' + escapeHtml(detailTitle) + '</div>' +
-            '<button type="button" class="uxq-title-pencil" title="Edit note/title" aria-label="Edit note">✎</button>' +
-          '</div>' +
-          (detailSubtitle ? '<div class="uxq-detail-subtitle">' + escapeHtml(detailSubtitle) + '</div>' : '') +
-        '</div>' +
-        '<dl class="uxq-detail-meta">' + metaHtml + '</dl>' +
-        resolutionHtml +
-        blockHtml +
-        '<div class="ann-ux-preview-shot">' +
-          (hasShot
-            ? '<span class="ann-ux-ok">Screenshot attached</span>'
-              + '<a href="' + shotSrc + '" target="_blank" rel="noopener">'
-              + '<img class="ann-ux-preview-thumb" src="' + shotSrc + '" alt="queue item screenshot"></a>'
-            : '<span class="ann-ux-warn">No screenshot attached.</span>') +
-        '</div>' +
-        (showPrompt ? '<div class="ann-ux-preview-label">Ticket prompt</div><textarea class="ann-ux-preview-text" rows="10" readonly spellcheck="false"></textarea>' : '') +
-        '<details class="uxq-edit-section" open>' +
-          '<summary class="uxq-edit-summary">Edit triage</summary>' +
-          '<div class="uxq-edit-fields">' +
-            '<label class="uxq-edit-row"><span>Note</span><textarea class="uxq-edit-note" rows="3" spellcheck="true" placeholder="Short description…"></textarea></label>' +
-            '<label class="uxq-edit-row"><span>Priority</span><select class="uxq-edit-sel" data-field="priority"><option value="">—</option><option value="p0">p0 (urgent)</option><option value="p1">p1</option><option value="p2">p2</option><option value="p3">p3</option></select></label>' +
-            '<label class="uxq-edit-row"><span>Type</span><select class="uxq-edit-sel" data-field="type"><option value="">—</option><option value="feature">feature</option><option value="bug">bug</option></select></label>' +
-            '<label class="uxq-edit-row"><span>Readiness</span><select class="uxq-edit-sel" data-field="readiness"><option value="">—</option><option value="shovel-ready">shovel-ready</option><option value="needs-spec">needs-spec</option><option value="needs-shaping">needs-shaping</option></select></label>' +
-            '<label class="uxq-edit-row"><span>Value</span><select class="uxq-edit-sel" data-field="value"><option value="">—</option><option value="H">H</option><option value="M">M</option><option value="L">L</option></select></label>' +
-            '<label class="uxq-edit-row"><span>Confidence</span><select class="uxq-edit-sel" data-field="confidence"><option value="">—</option><option value="H">H</option><option value="M">M</option><option value="L">L</option></select></label>' +
-          '</div>' +
-          '<div class="ann-ux-preview-actions uxq-edit-actions">' +
-            '<button type="button" class="ann-btn ann-primary" data-ux-save>Save changes</button>' +
-          '</div>' +
-        '</details>' +
-        '<div class="ann-ux-preview-actions">' +
-          '<button type="button" class="ann-btn" data-ux-copy>Copy</button>' +
-          '<button type="button" class="ann-btn ann-primary" data-ux-close>Close</button>' +
-        '</div>' +
-      '</div>';
+      '<div class="uxq-td-card" role="dialog" aria-modal="true" aria-label="Ticket ' + escapeAttr(ref) + '">'
+      + '<div class="uxq-td-topbar">'
+      +   '<div class="uxq-td-topbar-left"><span class="uxq-td-ref">' + escapeHtml(ref) + '</span>' + topBadges + '</div>'
+      +   '<button type="button" class="uxq-td-x" aria-label="Close" data-ux-close>×</button>'
+      + '</div>'
+      + '<div class="uxq-td-title-wrap">'
+      +   '<div class="uxq-td-title" contenteditable="true" spellcheck="true" data-field="note" role="textbox" aria-label="Ticket title">'
+      +   escapeHtml(detailTitle) + '</div>'
+      + '</div>'
+      + '<div class="uxq-td-cols">'
+      +   '<div class="uxq-td-main">'
+      +     promptHtml
+      +     imagesHtml
+      +     '<div class="uxq-td-sec"><div class="uxq-td-sec-label">Activity</div>'
+      +       '<div class="uxq-timeline">' + tlHtml + '</div>'
+      +     '</div>'
+      +     answerSectionHtml
+      +   '</div>'
+      +   '<aside class="uxq-td-sidebar">' + sideHtml + '</aside>'
+      + '</div>'
+      + '<div class="uxq-td-footer">'
+      +   '<div class="uxq-td-footer-meta">'
+      +     '<span title="' + escapeAttr(item.created_at || '') + '">Filed ' + escapeHtml(_uxqRelTime(item.created_at)) + '</span>'
+      +     (item.updated_at && item.updated_at !== item.created_at ? ' · <span title="' + escapeAttr(item.updated_at) + '">updated ' + escapeHtml(_uxqRelTime(item.updated_at)) + '</span>' : '')
+      +   '</div>'
+      +   '<div class="uxq-td-footer-btns">'
+      +     '<button type="button" class="ann-btn" data-ux-copy>Copy prompt</button>'
+      +     '<button type="button" class="ann-btn ann-primary" data-ux-close>Close</button>'
+      +   '</div>'
+      + '</div>'
+      + '</div>';
+
     document.body.appendChild(modal);
-    const textArea = modal.querySelector('.ann-ux-preview-text');
-    if (textArea) textArea.value = promptText;
-    const pencilBtn = modal.querySelector('.uxq-title-pencil');
-    if (pencilBtn) {
-      pencilBtn.addEventListener('click', () => {
-        const editSection = modal.querySelector('.uxq-edit-section');
-        if (editSection) editSection.open = true;
-        const noteField = modal.querySelector('.uxq-edit-note');
-        if (noteField) { noteField.focus(); noteField.select(); noteField.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
-      });
-    }
+
     const close = () => { modal.remove(); document.removeEventListener('keydown', onKey, true); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
     document.addEventListener('keydown', onKey, true);
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+    modal.querySelectorAll('[data-ux-close]').forEach(btn => btn.addEventListener('click', close));
+
     const copyBtn = modal.querySelector('[data-ux-copy]');
     if (copyBtn) {
       copyBtn.addEventListener('click', async () => {
-        const text = textArea ? textArea.value : promptText;
-        try { await navigator.clipboard.writeText(text); showOpToast('Queue item copied', 'success'); }
-        catch (_) { try { if (textArea) { textArea.select(); document.execCommand('copy'); } } catch (e) {} }
+        try { await navigator.clipboard.writeText(promptText); showOpToast('Copied', 'success'); }
+        catch (_) {}
       });
     }
-    const closeBtn = modal.querySelector('[data-ux-close]');
-    if (closeBtn) closeBtn.addEventListener('click', close);
-    // Pre-fill edit fields with current item values (CCC-338).
-    const editNote = modal.querySelector('.uxq-edit-note');
-    if (editNote) editNote.value = item.note || '';
-    modal.querySelectorAll('.uxq-edit-sel[data-field]').forEach(sel => {
-      const field = sel.getAttribute('data-field');
-      const val = item[field] || '';
-      const opt = sel.querySelector('option[value="' + val + '"]');
-      if (opt) opt.selected = true;
+
+    // Inline title editing via contenteditable
+    const titleEl = modal.querySelector('.uxq-td-title[contenteditable]');
+    if (titleEl) {
+      const origVal = item.note || '';
+      titleEl.addEventListener('blur', () => {
+        const newVal = titleEl.textContent.trim();
+        if (newVal !== origVal) _uxqSaveField(ref, 'note', newVal);
+      });
+      titleEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }
+        if (e.key === 'Escape') { titleEl.textContent = origVal; titleEl.blur(); }
+      });
+    }
+
+    // Sidebar selects: auto-save on change
+    modal.querySelectorAll('.uxq-td-ps[data-field]').forEach(sel => {
+      sel.addEventListener('change', () => _uxqSaveField(ref, sel.getAttribute('data-field'), sel.value));
     });
-    const saveBtn = modal.querySelector('[data-ux-save]');
-    if (saveBtn) {
-      saveBtn.addEventListener('click', async () => {
-        const fields = { ref };
-        if (editNote) fields.note = editNote.value.trim();
-        modal.querySelectorAll('.uxq-edit-sel[data-field]').forEach(sel => {
-          fields[sel.getAttribute('data-field')] = sel.value;
-        });
-        saveBtn.disabled = true;
-        saveBtn.textContent = 'Saving…';
-        try {
-          const res = await fetch('/api/ux-fixes/edit', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(fields),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (res.ok && data.ok) {
-            showOpToast('Saved ' + ref, 'success');
-            _uxqItemsCache.ts = 0;
-            _renderQueuePanel();
-            close();
-          } else {
-            showOpToast('Save failed: ' + (data.error || res.status), 'error');
-            saveBtn.disabled = false;
-            saveBtn.textContent = 'Save changes';
-          }
-        } catch (e) {
-          showOpToast('Save failed: ' + e, 'error');
-          saveBtn.disabled = false;
-          saveBtn.textContent = 'Save changes';
-        }
+
+    // Session links (in both timeline and sidebar)
+    modal.querySelectorAll('[data-sid]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const sid = btn.getAttribute('data-sid');
+        if (sid && typeof selectConversation === 'function') { close(); selectConversation(sid); }
       });
-    }
-    // Inline answer (WT-29): POST the decision, clear the block, refresh.
+    });
+
+    // Inline answer (WT-29)
     const answerInput = modal.querySelector('.uxq-answer-input');
-    const answerSend = modal.querySelector('.uxq-answer-send');
+    const answerSend  = modal.querySelector('.uxq-answer-send');
     if (answerInput && answerSend) {
       const submitAnswer = async () => {
         const text = (answerInput.value || '').trim();
@@ -28307,16 +28431,15 @@
           const res = await fetch('/api/ux-fixes/answer', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ref: ref, text: text }),
+            body: JSON.stringify({ ref, text }),
           });
-          const data = await res.json().catch(() => ({}));
-          if (res.ok && data.ok) {
-            showOpToast('Answered ' + ref + ' — block cleared', 'success');
+          const d = await res.json().catch(() => ({}));
+          if (res.ok && d.ok) {
+            showOpToast('Answered — block cleared', 'success');
             _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
-            _renderQueuePanel();
-            close();
+            _renderQueuePanel(); close();
           } else {
-            showOpToast('Answer failed: ' + (data.error || res.status), 'error');
+            showOpToast('Answer failed: ' + (d.error || res.status), 'error');
             answerSend.disabled = false;
           }
         } catch (e) {
@@ -28325,9 +28448,7 @@
         }
       };
       answerSend.addEventListener('click', submitAnswer);
-      answerInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); submitAnswer(); }
-      });
+      answerInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitAnswer(); } });
     }
   }
   function _renderQueuePanel() {
