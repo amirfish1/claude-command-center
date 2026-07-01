@@ -3182,10 +3182,6 @@
     .conv-input-context.is-new-session .spawn-cwd-quick-chips {
       display: none;
     }
-    .conv-input-context.visible.is-new-session {
-      display: flex;
-      white-space: nowrap;
-    }
   }
   .conv-input-context .wp-path {
     margin-left: auto;
@@ -6269,6 +6265,20 @@
     /* Submit+ is a desktop "phone-style" feature; on an actual phone the
        regular compose flow IS the phone experience — hide it to slim the row. */
     .conv-input-bar .submit-plus-btn { display: none !important; }
+    /* New-session composer carries the engine + model <select> pair in
+       .conv-input-row-bottom (~270px+ of intrinsic width). The row layout
+       above assumes a slim button cluster there and gives it flex:0 0 auto,
+       which on a narrow phone squeezed the textarea (row-top, flex:1 1 0)
+       down to a few px — its placeholder rendered as a single vertical
+       column of characters. Stack the two rows instead for this mode. */
+    .conv-input-bar.is-new-session-launch.visible {
+      flex-direction: column;
+    }
+    .conv-input-bar.is-new-session-launch .conv-input-row-top,
+    .conv-input-bar.is-new-session-launch .conv-input-row-bottom {
+      flex: 1 1 auto;
+      width: 100%;
+    }
   }
 
   /* ── Mobile: status-bar declutter ────────────────────────────────────────────
