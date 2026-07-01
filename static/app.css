@@ -6231,25 +6231,28 @@
     }
   }
 
-  /* ── Mobile composer: row layout + shorter textarea ──────────────────────────
-     Textarea on the left (flex: 1), button cluster on the right (flex: 0).
-     Keeps selectors visible in new-session mode (they stack inside .conv-input-row-bottom).
+  /* ── Mobile composer: stacked layout, full-width textarea ────────────────────
+     Textarea gets its own full-width row; the button cluster (esc/tts/mic/
+     compact/send — 5+ buttons, ~230px+) sits on its own full-width row below.
+     A row layout (textarea left, buttons right) was tried first but on a
+     375-390px phone the button cluster alone ate more than half the bar,
+     leaving the textarea a sliver too narrow to type into (CCC-406). Stacking
+     matches what is-new-session-launch already did for the same reason (its
+     wider engine+model selectors made the row-layout squeeze even worse) —
+     applying it unconditionally means every mobile composer state behaves
+     the same way instead of two divergent layouts.
      TTS returned to inline position — the FAB overlapped the goal strip × (CCC mobile). */
   @media (max-width: 950px) {
     .conv-input-bar { position: relative; }
     .conv-input-bar.visible {
-      flex-direction: row;
-      align-items: flex-end;
+      flex-direction: column;
+      align-items: stretch;
       gap: 6px;
       padding: 8px 10px;
       margin: 4px 8px 6px;
     }
-    .conv-input-row-top { flex: 1 1 0; min-width: 0; width: auto; }
-    /* Base rule sets width:100% for the stacked desktop layout; without
-       overriding it here, flex-basis resolves to 100% of the row and this
-       claims the whole width, squeezing row-top's textarea to a sliver
-       (its placeholder rendered as a single vertical column of letters). */
-    .conv-input-row-bottom { flex: 0 0 auto; width: auto; }
+    .conv-input-row-top,
+    .conv-input-row-bottom { flex: 1 1 auto; min-width: 0; width: 100%; }
     .conv-input-bar textarea { min-height: 44px; max-height: 120px; }
     .conv-announced-from span { display: none; }
     .conv-input-bar .conv-announced-from-input { width: 74px; flex-basis: 74px; }
@@ -6269,20 +6272,6 @@
     /* Submit+ is a desktop "phone-style" feature; on an actual phone the
        regular compose flow IS the phone experience — hide it to slim the row. */
     .conv-input-bar .submit-plus-btn { display: none !important; }
-    /* New-session composer carries the engine + model <select> pair in
-       .conv-input-row-bottom (~270px+ of intrinsic width). The row layout
-       above assumes a slim button cluster there and gives it flex:0 0 auto,
-       which on a narrow phone squeezed the textarea (row-top, flex:1 1 0)
-       down to a few px — its placeholder rendered as a single vertical
-       column of characters. Stack the two rows instead for this mode. */
-    .conv-input-bar.is-new-session-launch.visible {
-      flex-direction: column;
-    }
-    .conv-input-bar.is-new-session-launch .conv-input-row-top,
-    .conv-input-bar.is-new-session-launch .conv-input-row-bottom {
-      flex: 1 1 auto;
-      width: 100%;
-    }
   }
 
   /* ── Mobile: status-bar declutter ────────────────────────────────────────────
