@@ -26989,6 +26989,9 @@
     paneId = paneId || activePaneId();
     const pane = paneByPaneId(paneId);
     if (!pane) return;
+    // The Watchtower log overlay behaves like any other reader: opening another
+    // session dismisses it (no need to hit ×), landing you on that session.
+    try { _closeWtLogPanel(); } catch (_) {}
     const previousConvId = pane.conversationId;
     if (previousConvId && previousConvId !== id) {
       syncPendingSendsMapForConv(pane, previousConvId);
@@ -27685,17 +27688,32 @@
       const tsTip = escapeAttr(date + ' ' + time + ' UTC · ' + rel);
       const verbClass = _wtLogVerbClass(verb);
       const qColor = _wtLogQueueColor(queue);
-      const detailHtml = escapeHtml(detail).replace(/\b([A-Z]+-\d+)\b/g, '<span class="wl-ref">$1</span>');
+      // Pull a leading ticket ref (e.g. BYM-33) out of the detail so it renders
+      // in its own column BEFORE the verb — the item ID reads before the action
+      // taken on it. Reconciler rows start with a lowercase worker id
+      // (wt-abc123), which doesn't match, so their ref column stays empty.
+      const refM = detail.match(/^([A-Z]+-\d+)\b[ ]*(?:—[ ]*)?/);
+      const ref = refM ? refM[1] : '';
+      const restDetail = refM ? detail.slice(refM[0].length) : detail;
+      const refHtml = ref ? '<span class="wl-ref">' + escapeHtml(ref) + '</span>' : '';
+      const detailHtml = escapeHtml(restDetail).replace(/\b([A-Z]+-\d+)\b/g, '<span class="wl-ref">$1</span>');
       rows.push(
         '<div class="wl-row ' + verbClass + '">'
         + '<span class="wl-ts" title="' + tsTip + '">' + escapeHtml(localTime) + '</span>'
         + '<span class="wl-queue" style="color:' + qColor + '">' + escapeHtml(queue) + '</span>'
+        + '<span class="wl-ref-col">' + refHtml + '</span>'
         + '<span class="wl-verb">' + escapeHtml(verb) + '</span>'
         + '<span class="wl-detail">' + detailHtml + '</span>'
         + '</div>'
       );
     }
     return rows.join('');
+  }
+
+  function _closeWtLogPanel() {
+    const p = document.getElementById('wtLogPanel');
+    if (p) p.remove();
+    if (_wtLogTimer) { clearInterval(_wtLogTimer); _wtLogTimer = null; }
   }
 
   function _openWtLogPanel() {
@@ -27710,7 +27728,10 @@
         + '<span class="wt-log-panel-path" id="wtLogPath"></span>'
         + '<button class="wt-log-panel-close" id="wtLogClose" title="Close" aria-label="Close">&times;</button>'
         + '</div>'
-        + '<div class="wt-log-panel-pre" id="wtLogPre">Loading…</div>';
+        + '<div class="wt-log-panel-pre" id="wtLogPre">Loading…</div>'
+        + '<button class="wt-log-end-btn" id="wtLogEndBtn" type="button" title="Jump to end" aria-label="Jump to end">'
+        +   '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg><span>End</span>'
+        + '</button>';
       // Append to the .conv-pane FRAME, not the .conversations-view scroll
       // container. The panel is position:absolute; inset:0 — inside the
       // scroller that anchors it to the top of the *scrolled content*, so a
@@ -27720,9 +27741,21 @@
       const _cv = getConvView();
       const _frame = (_cv && _cv.closest('.conv-pane')) || _cv || document.body;
       _frame.appendChild(panel);
-      document.getElementById('wtLogClose').addEventListener('click', () => {
-        panel.remove();
-        if (_wtLogTimer) { clearInterval(_wtLogTimer); _wtLogTimer = null; }
+      document.getElementById('wtLogClose').addEventListener('click', _closeWtLogPanel);
+      // "Jump to end" pill: visible only when scrolled up; click returns to the
+      // live tail. Scroll listener toggles it as the reader moves.
+      const _preEl = document.getElementById('wtLogPre');
+      const _endBtnEl = document.getElementById('wtLogEndBtn');
+      const _wtSyncEnd = () => {
+        if (_endBtnEl && _preEl) {
+          const away = (_preEl.scrollHeight - _preEl.scrollTop - _preEl.clientHeight) >= 40;
+          _endBtnEl.classList.toggle('visible', away);
+        }
+      };
+      if (_preEl) _preEl.addEventListener('scroll', _wtSyncEnd, { passive: true });
+      if (_endBtnEl) _endBtnEl.addEventListener('click', () => {
+        if (_preEl) _preEl.scrollTop = _preEl.scrollHeight;
+        _wtSyncEnd();
       });
     }
     const _refresh = async () => {
@@ -27730,14 +27763,23 @@
         const res = await fetch('/api/wt/activity-log?lines=300', { cache: 'no-store' });
         const data = await res.json().catch(() => ({}));
         const pre = document.getElementById('wtLogPre');
+        const endBtn = document.getElementById('wtLogEndBtn');
         const pathEl = document.getElementById('wtLogPath');
         if (pre) {
           if (data.ok && Array.isArray(data.lines)) {
+            // Preserve the reader's position: only follow the tail if they were
+            // already at the bottom, so scrolling up to read history isn't
+            // yanked back to the end on the next 3s refresh.
+            const wasAtBottom = (pre.scrollHeight - pre.scrollTop - pre.clientHeight) < 40;
             pre.innerHTML = data.lines.length ? _renderWtLogLines(data.lines) : '<span style="opacity:0.4">(log is empty)</span>';
-            pre.scrollTop = pre.scrollHeight;
+            if (wasAtBottom) pre.scrollTop = pre.scrollHeight;
           } else {
             pre.textContent = data.error || 'Could not load log.';
           }
+        }
+        if (endBtn && pre) {
+          const away = (pre.scrollHeight - pre.scrollTop - pre.clientHeight) >= 40;
+          endBtn.classList.toggle('visible', away);
         }
         if (pathEl && data.path) pathEl.textContent = data.path;
       } catch (e) {

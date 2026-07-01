@@ -16185,6 +16185,12 @@ body:has(.gc-reader) .pwa-install-banner {
 /* Watchtower activity log panel — fills the conversation view */
 .wt-log-panel {
   position: absolute; inset: 0;
+  /* Confine to the pane's "conv" grid area (the reader region) so the panel
+     fills the conversation area like any other session view and leaves the
+     right-hand status rail — a sibling grid item in the "rail" column —
+     visible. The pane is the containing block, so grid-area scopes inset:0 to
+     that cell. Ignored harmlessly on the document.body fallback (not a grid). */
+  grid-area: conv;
   background: var(--bg, #0d1117); color: var(--text);
   display: flex; flex-direction: column;
   z-index: 500;
@@ -16196,10 +16202,10 @@ body:has(.gc-reader) .pwa-install-banner {
   background: rgba(139,148,158,0.06);
 }
 .wt-log-panel-title {
-  font-size: 12px; font-weight: 600; color: var(--text);
+  font-size: 14px; font-weight: 600; color: var(--text);
 }
 .wt-log-panel-path {
-  font-size: 10px; color: var(--text-muted); opacity: 0.6;
+  font-size: 11px; color: var(--text-muted); opacity: 0.6;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
 }
 .wt-log-panel-close {
@@ -16211,19 +16217,38 @@ body:has(.gc-reader) .pwa-install-banner {
 .wt-log-panel-pre {
   flex: 1; margin: 0; padding: 10px 12px;
   font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-  font-size: 11px; line-height: 1.5;
+  font-size: 13px; line-height: 1.6;
   overflow-y: auto;
   color: var(--text-muted);
 }
 .wl-row { display: flex; gap: 10px; align-items: baseline; padding: 1px 0; }
-.wl-ts { flex-shrink: 0; width: 60px; opacity: 0.45; cursor: default; white-space: nowrap; }
-.wl-queue { flex-shrink: 0; width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.wl-verb { flex-shrink: 0; width: 72px; white-space: nowrap; }
+.wl-ts { flex-shrink: 0; width: 66px; opacity: 0.45; cursor: default; white-space: nowrap; }
+.wl-queue { flex-shrink: 0; width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+/* Ticket ref column — pulled to the LEFT of the verb so the item ID reads
+   before the action taken on it. Empty for reconciler rows (worker ids). */
+.wl-ref-col { flex-shrink: 0; width: 84px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wl-verb { flex-shrink: 0; width: 80px; white-space: nowrap; }
 .wl-detail { flex: 1; opacity: 0.82; word-break: break-word; }
 .wl-worker .wl-verb { color: #3fb950; font-weight: 600; }
 .wl-reconciler .wl-verb { color: #d29922; font-weight: 600; }
 .wl-queue-action .wl-verb { color: #58a6ff; }
-.wl-ref { background: rgba(88,166,255,0.12); border-radius: 3px; padding: 0 2px; color: #79c0ff; font-weight: 500; }
+.wl-ref { background: rgba(88,166,255,0.12); border-radius: 3px; padding: 0 3px; color: #79c0ff; font-weight: 500; }
+/* Floating "jump to end" pill — mirrors .conv-scroll-end-btn, scoped to the
+   log panel (which is position:absolute, so it anchors this button). */
+.wt-log-end-btn {
+  position: absolute; right: 20px; bottom: 20px; z-index: 12;
+  height: 32px; padding: 0 12px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid var(--border); border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
+  color: var(--text); box-shadow: 0 8px 24px rgba(0,0,0,0.28);
+  font-size: 12px; font-weight: 600; line-height: 1; cursor: pointer;
+  opacity: 0; pointer-events: none; transform: translateY(6px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.wt-log-end-btn.visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
+.wt-log-end-btn:hover { border-color: var(--accent); background: var(--surface-2); }
+.wt-log-end-btn svg { flex: none; }
 .wl-sep { margin: 5px 0; display: flex; align-items: center; gap: 6px; }
 .wl-sep::before, .wl-sep::after { content: ''; flex: 1; height: 1px; background: rgba(139,148,158,0.18); }
 .wl-sep-label { font-size: 10px; color: var(--text-muted); opacity: 0.35; white-space: nowrap; }
