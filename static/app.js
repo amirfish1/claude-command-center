@@ -25880,10 +25880,17 @@
               + '✍️ UX ' + escapeHtml(lbl) + '</span>';
           }
         } catch (_) {}
+        // Session-ID chip (CCC-412): the breadcrumb had no way to see or
+        // copy the session UUID — reuse the sidebar's copy-on-click chip
+        // (sidebarSessionIdChipHtml / handleSidebarSessionIdCopyClick, both
+        // already delegated globally) instead of a new affordance.
+        const sidChip = (typeof sidebarSessionIdChipHtml === 'function' && row)
+          ? sidebarSessionIdChipHtml(row) : '';
         breadcrumbEl.innerHTML = ''
           + (category ? '<span class="ccc-breadcrumb-category">' + escapeHtml(category) + '</span>' : '')
           + uxBadge
           + procSlot
+          + sidChip
           + (title ? '<span class="ccc-breadcrumb-title">' + escapeHtml(title) + '</span>' : '')
           // Transcript size lives in the pane titlebar (.conv-pane-size) already;
           // duplicating it here just crowded the narrow breadcrumb and forced the

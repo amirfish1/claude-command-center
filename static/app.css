@@ -4831,7 +4831,8 @@
     background: rgba(188,140,255,0.16);
     color: var(--text);
   }
-  .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip {
+  .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip,
+  .ccc-breadcrumb .conv-sidebar-session-id-chip {
     height: 20px;
     padding: 2px 7px;
     display: inline-flex;
@@ -4845,17 +4846,21 @@
     line-height: 1;
     cursor: pointer;
     white-space: nowrap;
+    flex-shrink: 0;
   }
-  .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip code {
+  .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip code,
+  .ccc-breadcrumb .conv-sidebar-session-id-chip code {
     font: inherit;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
-  .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip:hover {
+  .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip:hover,
+  .ccc-breadcrumb .conv-sidebar-session-id-chip:hover {
     border-color: rgba(139,148,158,0.42);
     color: var(--text);
     background: rgba(139,148,158,0.18);
   }
-  .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip.copied {
+  .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip.copied,
+  .ccc-breadcrumb .conv-sidebar-session-id-chip.copied {
     border-color: rgba(63,185,80,0.45);
     color: var(--green);
     background: rgba(63,185,80,0.14);
