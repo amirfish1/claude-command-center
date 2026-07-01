@@ -15491,6 +15491,23 @@ body:has(.gc-reader) .pwa-install-banner {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.fq-run {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid rgba(88,166,255,0.35);
+  background: rgba(88,166,255,0.12);
+  color: var(--accent, #58a6ff);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.fq-run:hover { border-color: var(--accent, #58a6ff); background: rgba(88,166,255,0.18); }
+.fq-run:disabled { opacity: 0.45; cursor: wait; }
 .files-queue-panel.queue-wrap-titles .fq-row {
   align-items: flex-start;
   flex-wrap: wrap;
@@ -16273,4 +16290,3 @@ body:has(.gc-reader) .pwa-install-banner {
 .wl-sep { margin: 5px 0; display: flex; align-items: center; gap: 6px; }
 .wl-sep::before, .wl-sep::after { content: ''; flex: 1; height: 1px; background: rgba(139,148,158,0.18); }
 .wl-sep-label { font-size: 10px; color: var(--text-muted); opacity: 0.35; white-space: nowrap; }
-

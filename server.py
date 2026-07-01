@@ -20666,7 +20666,12 @@ def compute_queues_health(health=None, wt_workers=None):
             # Claimable depth honors the queue's claim_types filter. A bug-only
             # queue (claim_types=['bug']) whose open tickets are all features has
             # zero claimable work — the drainer is idle BY DESIGN, not stuck.
+            # GitHub-backed WatchTower queues expose every open repo issue for
+            # inventory, but only issues with the queue label carry
+            # claimable=True; un-runnable issues must not trigger drain state.
             if it.get("status") == "open":
+                if it.get("claimable") is False:
+                    continue
                 types = cfg_claim.get(qn, [])
                 # Untyped == bug (matches WatchTower's claim filter): a ticket
                 # filed without a type must not silently vanish from a bugs-only
@@ -44940,6 +44945,36 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 item = _q.update(ref, priority=priority)
+                self.send_json({"ok": bool(item), "item": item})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+        if path == "/api/ux-fixes/run":
+            # Mark an existing GitHub issue runnable by adding the queue's
+            # WatchTower label, then dispatch the queue. This is the CCC Queue
+            # panel's play button for visible-but-not-yet-runnable issues.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            ref = str(payload.get("ref") or "").strip()
+            if not ref:
+                self.send_json({"ok": False, "error": "ref required"}, 400)
+                return
+            mark = getattr(_q, "mark_runnable", None)
+            if not callable(mark):
+                self.send_json({"ok": False, "error": "WatchTower run action unavailable"}, 400)
+                return
+            try:
+                item = mark(ref)
+                if _WT_WORKERS_AVAILABLE and _wt_workers is not None and item:
+                    try:
+                        _wt_workers.dispatch_after_enqueue(
+                            str(item.get("project") or ""), str(item.get("ref") or ""))
+                    except Exception:
+                        pass
                 self.send_json({"ok": bool(item), "item": item})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)

@@ -2071,6 +2071,59 @@ class TestServerImports(unittest.TestCase):
         self.assertIsNone(row["last_activity_seconds"])
         self.assertEqual(row["repo_path"], "/Users/amirfish/Apps/BYM+Finie")
 
+    def test_compute_queues_health_respects_watchtower_claimable_flag(self):
+        """GitHub-backed WT queues list all open issues, but only runnable
+        issues should count as claimable/stuck work in CCC."""
+        server = importlib.import_module("server")
+
+        with mock.patch.object(server, "_wt_read_config", return_value={
+            "BYM-GH-FINIE": {
+                "backend": "github",
+                "repo_path": "/Users/amirfish/Apps/BYM+Finie",
+                "auto_drain": True,
+            },
+        }), mock.patch.object(server._q, "list_items", return_value=[{
+            "project": "BYM-GH-FINIE",
+            "ref": "BYM-GH-FINIE-402",
+            "status": "open",
+            "type": "bug",
+            "claimable": False,
+            "watchtower_runnable": False,
+            "created_at": "2026-07-01T12:00:00Z",
+            "updated_at": "2026-07-01T12:00:00Z",
+        }]):
+            rows = {r["queue"]: r for r in server.compute_queues_health([
+                {
+                    "project": "BYM-GH-FINIE",
+                    "depth": 1,
+                    "oldest_open_age_seconds": 60,
+                    "stuck": True,
+                }
+            ], [])}
+
+        row = rows["BYM-GH-FINIE"]
+        self.assertEqual(row["depth"], 1)
+        self.assertEqual(row["claimable"], 0)
+        self.assertFalse(row["stuck"])
+        self.assertEqual(row["state"], "backlog")
+
+    def test_queue_panel_has_run_action_for_unrunnable_github_issues(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn("watchtower_runnable", app_js)
+        self.assertIn("fq-run", app_js)
+        self.assertIn("/api/ux-fixes/run", app_js)
+        self.assertIn('if path == "/api/ux-fixes/run":', server_py)
+        self.assertIn('getattr(_q, "mark_runnable", None)', server_py)
+
+    def test_dashboard_pollers_skip_overlapping_async_ticks(self):
+        """Periodic dashboard pollers must not start a second async fetch while
+        the previous tick is still in flight."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("const _pollerInflight = {};", app_js)
+        self.assertIn("if (_pollerInflight[name]) return _pollerInflight[name];", app_js)
+        self.assertIn("delete _pollerInflight[name];", app_js)
+
     def test_queue_health_strip_keeps_configured_never_active_queues(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         strip = app_js[

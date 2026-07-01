@@ -28657,6 +28657,7 @@
       // claimable (shovel-ready/unset) before unready; then priority; then age.
       const _PR = { p0: 0, p1: 1, p2: 2, p3: 3 };
       const _statusRank = s => (s === 'open' ? 0 : s === 'in_progress' ? 1 : 2);
+      const _notClaimable = it => (it && it.claimable === false ? 1 : 0);
       const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec') ? 1 : 0);
       const _prioRank = it => (it && _PR[it.priority] != null) ? _PR[it.priority] : (it && it.lane === 'express' ? 0 : 2);
       const rows = scoped.slice().sort((a, b) => {
@@ -28664,6 +28665,7 @@
         const bl = (a.needs_input ? 0 : 1) - (b.needs_input ? 0 : 1); if (bl) return bl;
         const st = _statusRank(a.status) - _statusRank(b.status); if (st) return st;
         if (a.status === 'open') {
+          const c = _notClaimable(a) - _notClaimable(b); if (c) return c;
           const u = _unready(a) - _unready(b); if (u) return u;
           const p = _prioRank(a) - _prioRank(b); if (p) return p;
           return (a.number || 0) - (b.number || 0);   // oldest first = engine order
@@ -28695,11 +28697,16 @@
         const np = nextPrio[curPrio] || 'p2';
         const atTop = curPrio === 'p0';
         const bumpTitle = atTop ? 'Already highest priority (p0)' : ('Bump to ' + np);
+        const runnable = it.watchtower_runnable !== false;
+        const runBtn = (!runnable && status === 'open')
+          ? '<button class="fq-run" data-ref="' + escapeAttr(ref) + '" title="Run with WatchTower" aria-label="Run with WatchTower">▶</button>'
+          : '';
         return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref">' + escapeHtml(ref) + '</span>'
           + _uxqChips(it)
           + '<span class="fq-note">' + escapeHtml(noteShown) + '</span>'
+          + runBtn
           + '<button class="fq-prio-bump' + (atTop ? ' is-top' : '') + '" data-ref="' + escapeAttr(ref) + '" data-next-prio="' + escapeAttr(np) + '" title="' + escapeAttr(bumpTitle) + '" aria-label="' + escapeAttr(bumpTitle) + '">↑</button>'
           + '<span class="fq-status" title="' + escapeAttr(blocked ? 'needs input' : status) + '">' + escapeHtml(status) + '</span>'
           + '</div>';
@@ -28740,6 +28747,33 @@
     const $queueList = document.getElementById('sidebarQueueList');
     if ($queueList) {
       $queueList.addEventListener('click', async (ev) => {
+        const runBtn = ev.target && ev.target.closest && ev.target.closest('.fq-run[data-ref]');
+        if (runBtn) {
+          ev.stopPropagation();
+          const ref = runBtn.getAttribute('data-ref');
+          runBtn.disabled = true;
+          try {
+            const res = await fetch('/api/ux-fixes/run', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ref }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.ok) {
+              showOpToast('Running ' + ref);
+              _uxqItemsCache.ts = 0;
+              _uxqHealthCache.ts = 0;
+              _renderQueuePanel();
+            } else {
+              showOpToast('Run failed: ' + (data.error || res.status), 'error');
+              runBtn.disabled = false;
+            }
+          } catch (e) {
+            showOpToast('Run failed: ' + e, 'error');
+            runBtn.disabled = false;
+          }
+          return;
+        }
         // Priority bump button — stop before row click opens the modal.
         const bumpBtn = ev.target && ev.target.closest && ev.target.closest('.fq-prio-bump[data-ref]');
         if (bumpBtn) {
