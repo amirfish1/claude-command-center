@@ -3211,10 +3211,27 @@ def _discover_live_session_ids():
     except Exception:
         pass
     if SIDECAR_STATE_DIR.is_dir():
+        # CANDIDACY GATE: only a sidecar marker FRESH within _SIDECAR_LIVE_WINDOW
+        # can make a session live (_archive_session_is_live_uncached rejects
+        # older ones on the same window). Sidecar files are never cleaned up, so
+        # this dir accumulates one marker per session that ever ran — 300+ stale
+        # markers for a handful of live sessions. Feeding the stale ones as
+        # candidates makes every live-activity build re-stat hundreds of
+        # guaranteed-dead sessions (4 stat()s each, every ~2s). Filter by mtime
+        # HERE so the candidate set scales with ACTIVE sessions, not all-time
+        # history. Correctness-preserving: a marker too old to prove liveness is
+        # dropped from candidacy, never from a genuinely-live result.
+        now = time.time()
         try:
             for f in SIDECAR_STATE_DIR.iterdir():
-                if not f.is_file():
+                try:
+                    st = f.stat()
+                except OSError:
                     continue
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                if (now - st.st_mtime) >= _SIDECAR_LIVE_WINDOW:
+                    continue  # stale marker — cannot indicate a live session
                 name = f.stem
                 if name.endswith("_writes"):
                     sid = name[: -len("_writes")]
@@ -20301,6 +20318,23 @@ def _start_resume_queue_watcher() -> None:
                 terminal_sids = list(_pending_terminal_input_queue.keys())
             for sid in terminal_sids:
                 try:
+                    # CHEAP LIVENESS PRE-GATE (perf + stuck-queue cleanup):
+                    # terminal input can only ever be injected into a LIVE
+                    # session (tty / bg agent / live spawn). If the session
+                    # isn't even a live candidate — no fresh sidecar, no live
+                    # engine process — it is dead and its queued input is
+                    # undeliverable forever. Without this gate the watcher ran
+                    # the EXPENSIVE session_live_status() probe (~0.5s each) on
+                    # every such dead sid every 5s, pinning a core on a session
+                    # that closed weeks ago (observed: a 26-day-dead sid with 13
+                    # stuck items). Drop the queue and skip the probe entirely.
+                    # The memoized _archive_session_is_live is ~free and is a
+                    # strict superset of "injectable", so no live session is lost.
+                    if not _archive_session_is_live(sid):
+                        with _pending_terminal_input_lock:
+                            if _pending_terminal_input_queue.pop(sid, None) is not None:
+                                _save_pending_inputs()
+                        continue
                     # CRITICAL guard — never flush queued input while an
                     # AskUserQuestion is in-flight. The watcher previously
                     # only checked _session_status_is_busy() (status =
