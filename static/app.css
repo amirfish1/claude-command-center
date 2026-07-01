@@ -6245,7 +6245,11 @@
       margin: 4px 8px 6px;
     }
     .conv-input-row-top { flex: 1 1 0; min-width: 0; width: auto; }
-    .conv-input-row-bottom { flex: 0 0 auto; }
+    /* Base rule sets width:100% for the stacked desktop layout; without
+       overriding it here, flex-basis resolves to 100% of the row and this
+       claims the whole width, squeezing row-top's textarea to a sliver
+       (its placeholder rendered as a single vertical column of letters). */
+    .conv-input-row-bottom { flex: 0 0 auto; width: auto; }
     .conv-input-bar textarea { min-height: 44px; max-height: 120px; }
     .conv-announced-from span { display: none; }
     .conv-input-bar .conv-announced-from-input { width: 74px; flex-basis: 74px; }
