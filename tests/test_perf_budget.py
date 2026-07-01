@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 import uuid
+import warnings
 
 import pytest
 
@@ -566,6 +567,66 @@ def test_throughput_startup_prewarm_defaults_off(monkeypatch):
 
     monkeypatch.setenv("CCC_PREWARM_THROUGHPUT_ON_STARTUP", "1")
     assert server._should_prewarm_throughput_on_startup() is True
+
+
+def test_throughput_aggregate_cache_covers_footer_poll_interval(monkeypatch):
+    """The dashboard throughput pill polls /api/throughput/history every 90s;
+    the aggregate cache must span that cadence or idle dashboards rebuild 56d
+    history on every refresh."""
+    server._THROUGHPUT_AGG_CACHE.clear()
+    now = [1000.0]
+    calls = []
+
+    monkeypatch.setattr(server.time, "time", lambda: now[0])
+
+    def fake_find_all_conversations(*args, **kwargs):
+        calls.append(now[0])
+        return []
+
+    monkeypatch.setattr(server, "find_all_conversations", fake_find_all_conversations)
+
+    first, first_status = server._throughput_payload("all_56_days")
+    now[0] += 90.0
+    second, second_status = server._throughput_payload("all_56_days")
+
+    assert first_status == second_status == 200
+    assert first == second
+    assert calls == [1000.0], "90s footer poll should reuse aggregate throughput history"
+
+
+def test_throughput_history_cache_only_does_not_compute(monkeypatch):
+    """The main dashboard footer may ask for today's throughput badge, but it
+    must not compute the expensive 56-day history when no cache exists."""
+    server._THROUGHPUT_AGG_CACHE.clear()
+
+    def fail_compute(*args, **kwargs):
+        raise AssertionError("cache-only history must not compute throughput")
+
+    monkeypatch.setattr(server, "_throughput_payload", fail_compute)
+
+    payload, status = server._throughput_history_payload(cache_only=True)
+
+    assert status == 200
+    assert payload == {"ok": True, "daily": [], "cached": False}
+
+
+def test_wt_past_workers_uses_warning_free_utc_timestamp(monkeypatch, tmp_path):
+    """The queue-health poll scans past WT worker logs; timestamp formatting
+    must not emit Python 3.14 deprecation warnings on every row."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    worker_log = logs / "CCC-abcdef12.log"
+    worker_log.write_text(json.dumps({"session_id": "sid-1"}) + "\n")
+    os.utime(worker_log, (time.time(), time.time()))
+
+    monkeypatch.setattr(server, "_WT_HOME", tmp_path)
+    monkeypatch.setattr(server, "_wt_read_workers", lambda: [])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        rows = server._wt_past_workers(hours=1)
+
+    assert rows and rows[0]["ended_at_iso"].endswith("Z")
 
 
 def test_pending_resume_retry_backoff_prevents_hot_loop():

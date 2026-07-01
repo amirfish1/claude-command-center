@@ -1047,7 +1047,7 @@
     if (!window.__tputPillTimer) {
       var _tputBg = function () {
         if (document.hidden) return;
-        fetch('/api/throughput/history', { cache: 'no-store' })
+        fetch('/api/throughput/history?cache_only=1', { cache: 'no-store' })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             if (!d || !d.daily) return;

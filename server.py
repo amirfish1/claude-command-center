@@ -365,7 +365,7 @@ def _wt_past_workers(hours=24, max_per_queue=3):
                     continue
                 per_queue[queue] = per_queue.get(queue, 0) + 1
             ended_ago = int(now - st.st_mtime)
-            ended_iso = datetime.utcfromtimestamp(st.st_mtime).strftime('%Y-%m-%dT%H:%M:%SZ')
+            ended_iso = datetime.fromtimestamp(st.st_mtime, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             # Extract session_id from first matching line in log so chips can be clickable.
             session_id = ""
             try:
@@ -41304,7 +41304,7 @@ def _throughput_session_hints(session_id):
 _THROUGHPUT_TURN_CACHE = {}        # str(path) -> {"mtime", "size", "turns"}
 _THROUGHPUT_CACHE_LOCK = threading.Lock()
 _THROUGHPUT_AGG_CACHE = {}         # session_id -> {"ts": float, "payload": dict, "status": int}
-_THROUGHPUT_AGG_CACHE_TTL = 60     # seconds
+_THROUGHPUT_AGG_CACHE_TTL = 300    # seconds
 _THROUGHPUT_RANKINGS_CACHE = {}    # "week" -> {"ts": float, "rankings": list}
 _THROUGHPUT_RANKINGS_CACHE_TTL = 60
 
@@ -41910,6 +41910,29 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
             "status": _status,
         }
     return _payload, _status
+
+
+def _throughput_history_payload(cache_only=False):
+    """56-day daily throughput history.
+
+    cache_only=True is for lightweight dashboard badges: return an existing
+    aggregate snapshot if one is fresh, but never compute the expensive 56-day
+    aggregate just to paint a footer pill.
+    """
+    cached = _THROUGHPUT_AGG_CACHE.get("all_56_days")
+    if cached and (time.time() - cached.get("ts", 0.0) < _THROUGHPUT_AGG_CACHE_TTL):
+        payload = cached.get("payload") or {}
+        if cached.get("status") == 200:
+            daily = (payload.get("summary") or {}).get("daily") or []
+            return {"ok": True, "daily": daily, "cached": True}, 200
+    if cache_only:
+        return {"ok": True, "daily": [], "cached": False}, 200
+
+    payload, status = _throughput_payload("all_56_days")
+    if status != 200:
+        return payload, status
+    daily = (payload.get("summary") or {}).get("daily") or []
+    return {"ok": True, "daily": daily, "cached": False}, 200
 
 
 _MORNING_BRAINDUMP_PROMPT = """You are analyzing the user's morning brain-dump.
@@ -43148,12 +43171,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Returns just the daily buckets (no hourly, no per-session list)
             # so the response is lighter even on cold start.
             try:
-                payload, status = _throughput_payload("all_56_days")
-                if status != 200:
-                    self.send_json(payload, status)
-                    return
-                daily = (payload.get("summary") or {}).get("daily") or []
-                self.send_json({"ok": True, "daily": daily}, 200)
+                qs = urllib.parse.parse_qs(parsed.query)
+                cache_only = qs.get("cache_only", ["0"])[0] in ("1", "true", "yes")
+                payload, status = _throughput_history_payload(cache_only=cache_only)
+                self.send_json(payload, status)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e), "daily": []}, 200)
             return
