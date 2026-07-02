@@ -16060,36 +16060,6 @@ body:has(.gc-reader) .pwa-install-banner {
   .fq-health-row { font-size: 12px; }
   .fq-health-badge { margin-left: 0; }
 }
-/* Real WT worker chips — shown below the per-project health rows when
-   watchtower.workers reports live workers. */
-.fq-wt-workers {
-  display: flex; flex-wrap: wrap; gap: 4px;
-  padding: 5px 10px 6px;
-  border-top: 1px solid rgba(139,148,158,0.10);
-}
-.fq-wt-worker {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 2px 7px; border-radius: 999px; font-size: 11px; line-height: 1.4;
-  background: rgba(88,166,255,0.10); border: 1px solid rgba(88,166,255,0.18);
-  color: var(--text-muted);
-  cursor: pointer; white-space: nowrap;
-}
-.fq-wt-worker:hover {
-  background: rgba(88,166,255,0.18); border-color: rgba(88,166,255,0.32);
-}
-.fq-wt-worker-queue {
-  font-weight: 600; color: var(--accent, #58a6ff); font-size: 10.5px;
-  text-transform: uppercase; letter-spacing: 0.03em;
-}
-.fq-wt-worker-id {
-  color: var(--text-muted); opacity: 0.65;
-  max-width: 80px; overflow: hidden; text-overflow: ellipsis;
-}
-.fq-wt-worker-ref {
-  color: var(--text); font-weight: 500;
-}
-.fq-wt-worker-age { color: var(--text-muted); opacity: 0.75; }
-.fq-wt-worker-idle { color: var(--text-muted); opacity: 0.5; font-style: italic; }
 /* Past workers (last 24h) — compact chip strip below live worker rows */
 .conv-evergreen-past-workers {
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px;

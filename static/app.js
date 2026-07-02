@@ -28022,7 +28022,6 @@
         _drained: true,
       });
     });
-    const wtWorkers = health.wt_workers || [];
     const proj = scopeProject !== undefined ? _uxqProjectKey(scopeProject) : _uxqWorkerProject();
     if (proj) {
       const mine = rows.filter(r => _uxqInScope(r && r.project, proj));
@@ -28133,24 +28132,6 @@
           + typeToggle
           + '</div>';
       }).join('');
-    }
-    // Real WT workers strip — only shown when watchtower reports live workers.
-    if (wtWorkers.length) {
-      html += '<div class="fq-wt-workers">'
-        + wtWorkers.map(w => {
-          const wid = String(w.worker_id || '').slice(0, 20);
-          const queue = String(w.queue || '');
-          const ref = w.active_ref ? String(w.active_ref) : '';
-          const age = w.active_since_human ? String(w.active_since_human) : '';
-          const tip = queue + (ref ? ' · working ' + ref + (age ? ' for ' + age : '') : ' · idle') + ' — click to scope queue';
-          return '<span class="fq-wt-worker" data-fq-project="' + escapeAttr(queue) + '"'
-            + ' role="button" tabindex="0" title="' + escapeAttr(tip) + '">'
-            + '<span class="fq-wt-worker-queue">' + escapeHtml(queue) + '</span>'
-            + '<span class="fq-wt-worker-id">' + escapeHtml(wid) + '</span>'
-            + (ref ? '<span class="fq-wt-worker-ref">' + escapeHtml(ref) + (age ? ' <span class="fq-wt-worker-age">' + escapeHtml(age) + '</span>' : '') + '</span>' : '<span class="fq-wt-worker-idle">idle</span>')
-            + '</span>';
-        }).join('')
-        + '</div>';
     }
     $strip.innerHTML = html;
   }
@@ -29071,7 +29052,7 @@
       const scopeFromRow = (ev) => {
         const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid], .fq-health-drain-toggle, .fq-health-type-toggle');
         if (badge) return;
-        const row = ev.target && ev.target.closest && ev.target.closest('.fq-health-row[data-fq-project], .fq-wt-worker[data-fq-project]');
+        const row = ev.target && ev.target.closest && ev.target.closest('.fq-health-row[data-fq-project]');
         if (!row) return;
         const project = row.getAttribute('data-fq-project') || '';
         if (!project) return;
