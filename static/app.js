@@ -10684,33 +10684,38 @@
     }
   })();
 
-  // Resize handle for the Queue panel (CCC-426) — mirrors the Files panel
-  // handle above so the ticket list below the health strip can be grown or
-  // shrunk instead of being stuck at a fixed max-height.
+  // Resize handle between the Queue tab's per-project health rows and the
+  // ticket list below (CCC-426). The health list has no cap of its own and
+  // grows with every configured queue, which can starve the ticket list of
+  // room when many queues exist. Dragging shrinks/grows the health list
+  // (scrollable once capped); the ticket list gets whatever's left.
   (function () {
-    const $panel = document.getElementById('queuePanel');
-    const $handle = document.getElementById('queueResizeHandle');
-    if (!$panel || !$handle) return;
-    const QUEUE_HEIGHT_KEY = 'ccc-queue-height';
-    const QUEUE_MIN_PX = 120;
+    const $health = document.getElementById('queueHealthStrip');
+    const $handle = document.getElementById('queueHealthResizeHandle');
+    if (!$health || !$handle) return;
+    const HEALTH_MAX_KEY = 'ccc-queue-health-max';
+    const HEALTH_MIN_PX = 30;
 
-    function queueMaxPx() {
-      const parent = $panel.parentElement;
-      if (!parent) return 9999;
-      return Math.max(QUEUE_MIN_PX, Math.floor(parent.clientHeight * 0.85));
+    function healthCeilingPx() {
+      // Never let the cap exceed the list's natural (unclamped) height.
+      const prevMax = $health.style.maxHeight;
+      $health.style.maxHeight = 'none';
+      const natural = $health.scrollHeight;
+      $health.style.maxHeight = prevMax;
+      return Math.max(HEALTH_MIN_PX, natural);
     }
-    function applyQueueHeight(h) {
-      const clamped = Math.max(QUEUE_MIN_PX, Math.min(queueMaxPx(), h));
-      $panel.style.height = clamped + 'px';
+    function applyHealthMax(h) {
+      const clamped = Math.max(HEALTH_MIN_PX, Math.min(healthCeilingPx(), h));
+      $health.style.maxHeight = clamped + 'px';
     }
-    function resetQueueHeight() {
-      $panel.style.height = '';
-      try { localStorage.removeItem(QUEUE_HEIGHT_KEY); } catch (_) {}
+    function resetHealthMax() {
+      $health.style.maxHeight = '';
+      try { localStorage.removeItem(HEALTH_MAX_KEY); } catch (_) {}
     }
     try {
-      const stored = parseInt(localStorage.getItem(QUEUE_HEIGHT_KEY) || '', 10);
+      const stored = parseInt(localStorage.getItem(HEALTH_MAX_KEY) || '', 10);
       if (!isNaN(stored) && stored > 0) {
-        requestAnimationFrame(() => applyQueueHeight(stored));
+        requestAnimationFrame(() => applyHealthMax(stored));
       }
     } catch (_) {}
 
@@ -10722,29 +10727,29 @@
       e.stopPropagation();
       activePointerId = e.pointerId;
       startY = e.clientY;
-      startH = $panel.getBoundingClientRect().height;
+      startH = $health.getBoundingClientRect().height;
       $handle.classList.add('is-dragging');
       try { $handle.setPointerCapture(e.pointerId); } catch (_) {}
     });
     $handle.addEventListener('pointermove', (e) => {
       if (activePointerId !== e.pointerId) return;
       const dy = e.clientY - startY;
-      applyQueueHeight(startH - dy);
+      applyHealthMax(startH + dy);
     });
     const endDrag = (e) => {
       if (activePointerId !== e.pointerId) return;
       $handle.classList.remove('is-dragging');
       try { $handle.releasePointerCapture(e.pointerId); } catch (_) {}
       activePointerId = null;
-      const finalH = $panel.getBoundingClientRect().height;
-      try { localStorage.setItem(QUEUE_HEIGHT_KEY, String(Math.round(finalH))); } catch (_) {}
+      const finalH = $health.getBoundingClientRect().height;
+      try { localStorage.setItem(HEALTH_MAX_KEY, String(Math.round(finalH))); } catch (_) {}
     };
     $handle.addEventListener('pointerup', endDrag);
     $handle.addEventListener('pointercancel', endDrag);
     $handle.addEventListener('dblclick', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      resetQueueHeight();
+      resetHealthMax();
     });
   })();
 
