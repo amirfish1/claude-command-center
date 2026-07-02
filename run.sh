@@ -13,6 +13,21 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# Optional machine-local env file — not part of the repo, never committed.
+# launchctl/systemd `setenv`-style overrides (e.g. soak flags like
+# CCC_CHAT_ORCHESTRATOR/CCC_MESSAGING_BACKEND) don't survive a reboot; this
+# file does. Sourced before --install-service snapshots CCC_* into the
+# plist/unit, so vars set here are baked in the same way a real env var
+# would be.
+CONFIG_LOCAL_ENV="$HOME/.claude/command-center/config.local.env"
+if [ -f "$CONFIG_LOCAL_ENV" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$CONFIG_LOCAL_ENV"
+  set +a
+fi
+
 PLIST_LABEL="com.github.claude-command-center"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 SERVICE_LOG_DIR="$HOME/.claude/command-center/logs"
