@@ -28999,6 +28999,13 @@
       // execution claim would grab next. open<in_progress<closed; within open,
       // claimable (shovel-ready/unset) before unready; then priority; then age.
       const _PR = { p0: 0, p1: 1, p2: 2, p3: 3 };
+      const _effectiveStatus = it => {
+        const rawStatus = (it && it.status) || 'open';
+        if (rawStatus === 'open' && it && (it.claimed_by || it.claimed_at || it.claimed_session_id)) {
+          return 'in_progress';
+        }
+        return rawStatus;
+      };
       const _statusRank = s => (s === 'open' ? 0 : s === 'in_progress' ? 1 : 2);
       const _notClaimable = it => (it && it.claimable === false ? 1 : 0);
       const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec') ? 1 : 0);
@@ -29006,8 +29013,10 @@
       const rows = scoped.slice().sort((a, b) => {
         // Blocked tickets (needs_input) jump to the very top — they want a human.
         const bl = (a.needs_input ? 0 : 1) - (b.needs_input ? 0 : 1); if (bl) return bl;
-        const st = _statusRank(a.status) - _statusRank(b.status); if (st) return st;
-        if (a.status === 'open') {
+        const aStatus = _effectiveStatus(a);
+        const bStatus = _effectiveStatus(b);
+        const st = _statusRank(aStatus) - _statusRank(bStatus); if (st) return st;
+        if (aStatus === 'open') {
           const c = _notClaimable(a) - _notClaimable(b); if (c) return c;
           const u = _unready(a) - _unready(b); if (u) return u;
           const p = _prioRank(a) - _prioRank(b); if (p) return p;
@@ -29040,12 +29049,13 @@
       };
       $queue.innerHTML = rows.map(it => {
         const noteFull = String(it.note || '');
-        const status = it.status || 'open';
+        const rawStatus = it.status || 'open';
+        const status = _effectiveStatus(it);
         const ref = _uxqItemRef(it);
         // When blocked, the worker's question is the most useful line to show.
         const blocked = !!it.needs_input;
         const unresolvedNotes = _uxqUnresolvedNotes(it);
-        const hasUnresolved = status === 'closed' && unresolvedNotes.length > 0;
+        const hasUnresolved = rawStatus === 'closed' && unresolvedNotes.length > 0;
         const noteShown = blocked && it.block_question ? String(it.block_question) : noteFull;
         const tip = (blocked && it.block_question ? ('Needs input: ' + it.block_question + '\n\n') : '')
           + (hasUnresolved ? ('Closed with unresolved follow-up:\n' + unresolvedNotes.join('\n\n') + '\n\n') : '')
