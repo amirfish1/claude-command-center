@@ -1492,13 +1492,19 @@ def _get_session_override(session_id):
     return entry
 
 
-def _set_session_override(session_id, model, context_1m, engine):
+# Codex's `-c model_reasoning_effort=<value>` config override (confirmed via
+# `codex --help` / the user's own ~/.codex/config.toml) accepts these values.
+CODEX_REASONING_EFFORTS = {"", "low", "medium", "high", "xhigh"}
+
+
+def _set_session_override(session_id, model, context_1m, engine, reasoning_effort=""):
     overrides = _load_session_overrides()
     engine = str(engine or "claude")
     overrides[session_id] = {
         "model": str(model),
         "context_1m": _model_context_1m_allowed(model, context_1m, engine),
         "engine": engine,
+        "reasoning_effort": str(reasoning_effort or ""),
         "set_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     _save_session_overrides(overrides)
@@ -17215,7 +17221,7 @@ def _codex_app_server_thread_is_active(session_id):
     return status == "active" or bool(_codex_latest_active_turn(thread))
 
 
-def _codex_turn_params(thread_id, text, cwd=None, model=None, image_paths=None):
+def _codex_turn_params(thread_id, text, cwd=None, model=None, image_paths=None, effort=None):
     params = {
         "threadId": thread_id,
         "input": _codex_user_input(text, image_paths=image_paths),
@@ -17225,6 +17231,8 @@ def _codex_turn_params(thread_id, text, cwd=None, model=None, image_paths=None):
         params["runtimeWorkspaceRoots"] = [cwd]
     if model:
         params["model"] = model
+    if effort:
+        params["effort"] = effort
     # Match the existing `codex exec --dangerously-bypass-approvals-and-sandbox`
     # behavior used by CCC-spawned Codex runs.
     params["approvalPolicy"] = "never"
@@ -17239,6 +17247,7 @@ def _codex_resume_or_steer_via_app_server(
     model=None,
     image_paths=None,
     allow_start=True,
+    reasoning_effort=None,
 ):
     if os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() in ("0", "false", "no"):
         return {"ok": False, "fallback": "exec", "error": "Codex app-server disabled"}
@@ -17250,6 +17259,8 @@ def _codex_resume_or_steer_via_app_server(
         resume_params["cwd"] = cwd
     if model:
         resume_params["model"] = model
+    if reasoning_effort:
+        resume_params["effort"] = reasoning_effort
     resumed = _codex_app_server_request("thread/resume", resume_params, timeout=20)
     if resumed.get("error"):
         return {"ok": False, "fallback": "exec", "error": _codex_error_text(resumed)}
@@ -17277,7 +17288,7 @@ def _codex_resume_or_steer_via_app_server(
 
     started = _codex_app_server_request(
         "turn/start",
-        _codex_turn_params(session_id, text, cwd=cwd, model=model, image_paths=image_paths),
+        _codex_turn_params(session_id, text, cwd=cwd, model=model, image_paths=image_paths, effort=reasoning_effort),
         timeout=20,
     )
     if _codex_response_succeeded(started):
@@ -21176,6 +21187,7 @@ def resume_session_codex(session_id, text, *, steer=False):
     # the env-var default and the previous run's recorded model.
     override = _get_session_override(session_id)
     override_model = (override or {}).get("model") if override else None
+    reasoning_effort = (override or {}).get("reasoning_effort") or ""
     model = override_model or os.environ.get("CCC_CODEX_MODEL") or row.get("model") or _spawn_fallback_model_for_engine("codex")
     if steer:
         return _codex_steer_via_app_server(
@@ -21192,6 +21204,7 @@ def resume_session_codex(session_id, text, *, steer=False):
         model=model,
         image_paths=image_paths,
         allow_start=active_resume_entry is None,
+        reasoning_effort=reasoning_effort,
     )
     if app_result.get("ok"):
         return app_result
@@ -21218,6 +21231,8 @@ def resume_session_codex(session_id, text, *, steer=False):
         "--dangerously-bypass-approvals-and-sandbox",
         "--model", model,
     ]
+    if reasoning_effort:
+        cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
     for image_path in image_paths:
         cmd.extend(["--image", image_path])
     cmd.extend([session_id, text])
@@ -34026,7 +34041,7 @@ def _maybe_queue_on_invalid_cwd(session_id, text, status, result):
     return queued
 
 
-def _set_session_model(session_id, model, context_1m):
+def _set_session_model(session_id, model, context_1m, reasoning_effort=None):
     """Apply a model+context choice to a session.
 
     Live Claude (TTY or spawned) gets a real `/model <alias>[1m]` slash
@@ -34038,19 +34053,26 @@ def _set_session_model(session_id, model, context_1m):
     new value even when the inject succeeded, and the next resume picks
     it up if the live session ends before the user asks again.
 
+    `reasoning_effort` (Codex only — `model_reasoning_effort` config value)
+    defaults to None, which preserves whatever was previously set rather
+    than clearing it when the caller is only changing the model.
+
     Returns:
         {"ok": True, "applied": "live"|"queued", "model": ..., "context_1m": ...,
-         "engine": ...}
+         "engine": ..., "reasoning_effort": ...}
     """
     if not session_id or not model:
         return {"ok": False, "error": "missing session_id or model"}
     engine = _detect_session_engine(session_id)
-    _set_session_override(session_id, model, context_1m, engine)
+    if reasoning_effort is None:
+        reasoning_effort = (_get_session_override(session_id) or {}).get("reasoning_effort") or ""
+    _set_session_override(session_id, model, context_1m, engine, reasoning_effort)
     payload = {
         "ok": True,
         "model": model,
         "context_1m": bool(context_1m),
         "engine": engine,
+        "reasoning_effort": reasoning_effort,
     }
     if engine != "claude":
         # Non-Claude engines have no live-inject path. The next
@@ -48493,11 +48515,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = {}
             model = (payload.get("model") or "").strip()
             context_1m = bool(payload.get("context_1m", False))
+            reasoning_effort = payload.get("reasoning_effort")
+            if reasoning_effort is not None:
+                reasoning_effort = str(reasoning_effort).strip().lower()
+                if reasoning_effort not in CODEX_REASONING_EFFORTS:
+                    reasoning_effort = ""
             if not model:
                 self.send_json({"ok": False, "error": "model is required"}, 400)
             else:
                 _record_interaction(sid)
-                self.send_json(_set_session_model(sid, model, context_1m))
+                self.send_json(_set_session_model(sid, model, context_1m, reasoning_effort))
         elif path == "/api/inject-esc":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

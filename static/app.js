@@ -32208,6 +32208,7 @@
           + ' data-engine="' + escapeHtml(engine) + '"'
           + ' data-current="' + escapeHtml(displayModel) + '"'
           + ' data-1m="' + (isOneM ? '1' : '0') + '"'
+          + ' data-reasoning="' + escapeHtml((ovr && ovr.reasoning_effort) || '') + '"'
           + ' title="' + escapeHtml(modelTip) + '">'
           + modelInner
           + '</button>';
@@ -32416,6 +32417,16 @@
       { id: 'kilo/openai/gpt-5.5',              label: 'gpt-5.5' },
     ],
   };
+
+  // Codex's own switcher pairs a Model choice with a separate Reasoning
+  // effort choice (`model_reasoning_effort` config value: low/medium/high/
+  // xhigh) — mirror that as a second section in our Codex model picker.
+  const CODEX_REASONING_LEVELS = [
+    { id: 'low',    label: 'Light' },
+    { id: 'medium', label: 'Medium' },
+    { id: 'high',   label: 'High' },
+    { id: 'xhigh',  label: 'Extra High' },
+  ];
 
   function _normalizeModelId(s) {
     return (s || '').replace(/^claude-/, '').replace(/\[1m\]/i, '').trim().toLowerCase();
@@ -32709,6 +32720,18 @@
         html += '</button>';
       });
       html += '<div class="mp-divider"></div>';
+      if (engine === 'codex') {
+        const currentReasoning = btn.dataset.reasoning || '';
+        html += '<div class="mp-section">Reasoning effort</div>';
+        CODEX_REASONING_LEVELS.forEach((lvl) => {
+          const isActive = lvl.id === currentReasoning;
+          html += '<button type="button" class="mp-row mp-reasoning-row' + (isActive ? ' active' : '') + '" data-reasoning="' + escapeHtml(lvl.id) + '">'
+            + escapeHtml(lvl.label)
+            + '<span class="mp-check">' + (isActive ? '✓' : '') + '</span>'
+            + '</button>';
+        });
+        html += '<div class="mp-divider"></div>';
+      }
       html += '<div class="mp-other">'
         + '<input type="text" placeholder="Other model…" data-mp-other-input>'
         + '<button type="button" data-mp-other-apply>Apply</button>'
@@ -32750,14 +32773,16 @@
       statusEl.className = 'mp-status' + (kind ? ' ' + kind : '');
     };
 
-    async function applyModel(model, context_1m) {
+    async function applyModel(model, context_1m, reasoning_effort) {
       if (!model) return;
       setStatus('Applying…');
       try {
+        const body = { model, context_1m: !!context_1m };
+        if (reasoning_effort !== undefined) body.reasoning_effort = reasoning_effort;
         const r2 = await fetch('/api/session/' + encodeURIComponent(sid) + '/model', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model, context_1m: !!context_1m }),
+          body: JSON.stringify(body),
         });
         const data = await r2.json();
         if (!data.ok) {
@@ -32770,6 +32795,7 @@
           model,
           context_1m: !!context_1m,
           engine: data.engine || engine,
+          reasoning_effort: data.reasoning_effort || '',
           applied: data.applied || 'queued',
         };
         renderSessionUsageIntoStrip();
@@ -32837,6 +32863,11 @@
         });
       }
     }
+    pop.querySelectorAll('.mp-reasoning-row[data-reasoning]').forEach((row) => {
+      row.addEventListener('click', () => {
+        applyModel(currentModel, currentIs1M, row.dataset.reasoning);
+      });
+    });
     const otherInput = pop.querySelector('[data-mp-other-input]');
     const otherApply = pop.querySelector('[data-mp-other-apply]');
     if (otherApply && otherInput) {
