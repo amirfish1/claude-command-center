@@ -26392,6 +26392,11 @@
     view.addEventListener('scroll', () => {
       view._pinnedToBottom = isConversationAtBottom(view);
       updateConversationEndAffordance(view);
+      // Cache the topmost-visible message on every scroll so a later window
+      // resize (which fires the 'resize' event only after the browser has
+      // already reflowed the pane) can restore against a genuinely
+      // pre-resize position instead of whatever scrollTop happens to land on.
+      view._lastTopAnchor = _topVisibleAnchor(view);
     }, { passive: true });
     // Auto-advance: any content mutation (SSE event append, streaming
     // bubble grow, re-render, etc.) re-scrolls to the bottom if the user
@@ -26912,6 +26917,15 @@
   }
   window.addEventListener('resize', handleViewportResize);
   window.addEventListener('resize', () => {
+    // The browser has already reflowed the pane by the time 'resize' fires,
+    // so scrollTop is stale relative to the new line-wrap. Restore against
+    // each view's last-known-good top anchor (cached on scroll, so it
+    // reflects the position from before this resize) instead of leaving
+    // scrollTop untouched, which visually jumps the transcript (CCC-440).
+    for (const view of document.querySelectorAll('.conversations-view')) {
+      if (view._pinnedToBottom) scrollConversationToEnd(view);
+      else if (view._lastTopAnchor) _restoreAnchor(view, view._lastTopAnchor);
+    }
     restoreConversationBottomAnchors(captureConversationBottomAnchors());
   });
 
@@ -39298,6 +39312,14 @@
     setInterval(_gated('uxFixesQueueMeta', () => {
       if (document.hidden) return;
       refreshUxFixesQueueMeta({ force: true }).catch(() => {});
+      // Queue tab (status rail) only refetches when you switch to it —
+      // parked there, it never sees tickets filed after that point (CCC-441).
+      // Piggyback on this existing 15s poll to keep it live while visible.
+      const queuePane = document.getElementById('statusRailQueuePane');
+      if (queuePane && queuePane.classList.contains('is-active') && typeof _renderQueuePanel === 'function') {
+        _uxqItemsCache.ts = 0;
+        _renderQueuePanel();
+      }
     }), 15 * 1000);
   })();
 
