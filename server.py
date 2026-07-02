@@ -2504,6 +2504,17 @@ def _resolve_cwd_context(value):
         raise RepoContextError("invalid_cwd", f"could not resolve cwd: {e}", path=raw)
     if not cwd.is_dir():
         raise RepoContextError("invalid_cwd", f"cwd is not a directory: {cwd}", path=str(cwd))
+    if cwd.parent == cwd:
+        # Filesystem root. Some sessions end up anchored here when whatever
+        # spawned `claude` omitted an explicit cwd (Python/subprocess then
+        # inherits the parent's cwd — "/" for a launchd daemon). Treating "/"
+        # as a repo means every downstream repo_log_dir() write attempts
+        # mkdir('/.claude/logs'), which always fails on macOS's read-only
+        # system volume (Errno 30) — surfacing as an opaque "Launch Terminal"
+        # failure instead of a clear one. Reject up front instead.
+        raise RepoContextError(
+            "invalid_cwd", "cwd resolved to the filesystem root", path=str(cwd)
+        )
     # If `cwd` is inside a git worktree, repo_path = the toplevel (the canonical
     # repo). If `cwd` is in a non-git directory, repo_path falls back to cwd
     # itself — that's the documented edge case where repo_path == cwd. Most
