@@ -6652,27 +6652,44 @@ tell application "System Events"
   end tell
 end tell
 '''
-    try:
-        proc = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=4,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    parts = (proc.stdout or "").strip().split(",")
-    if len(parts) != 4:
-        return None
-    try:
-        x, y, width, height = (float(p) for p in parts)
-    except ValueError:
-        return None
-    if width <= 0 or height <= 0:
-        return None
-    return {"x": x, "y": y, "width": width, "height": height}
+    # The System Events query races the Window Server around annotate time
+    # (the user just clicked something) and can transiently return a stale
+    # frontmost app or empty output -- OPS-63 follow-up. A couple of quick
+    # retries clears most of these without needing a user-visible fallback.
+    last_err = None
+    for attempt in range(3):
+        if attempt:
+            time.sleep(0.15)
+        try:
+            proc = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=4,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            last_err = f"osascript failed: {e}"
+            continue
+        if proc.returncode != 0:
+            last_err = (proc.stderr or "").strip()[:200] or f"osascript exited {proc.returncode}"
+            continue
+        out = (proc.stdout or "").strip()
+        parts = out.split(",")
+        if len(parts) != 4:
+            last_err = f"unexpected osascript output: {out[:100]!r}"
+            continue
+        try:
+            x, y, width, height = (float(p) for p in parts)
+        except ValueError:
+            last_err = f"non-numeric osascript output: {out[:100]!r}"
+            continue
+        if width <= 0 or height <= 0:
+            last_err = f"zero-size window ({width}x{height})"
+            continue
+        return {"x": x, "y": y, "width": width, "height": height}
+    if last_err:
+        print(f"[annotation-capture] frontmost window bounds failed after retries: {last_err}", file=sys.stderr, flush=True)
+    return None
 
 
 def _capture_annotation_window_crop(screen, viewport_crop, annotation_id):
