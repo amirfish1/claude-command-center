@@ -220,6 +220,81 @@ class TestServerImports(unittest.TestCase):
                 server._RESET_EVENTS_FILE = old_events
                 server._WEEK_START_OVERRIDE_FILE = old_override
 
+    def test_codex_usage_reads_rollout_rate_limits_and_persists_snapshot(self):
+        """Codex rate-limit usage comes from recent rollout token_count events
+        and is stored additively in native usage snapshots."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / ".codex" / "sessions"
+            rollout_dir = root / "2026" / "07" / "02"
+            rollout_dir.mkdir(parents=True)
+            rollout = rollout_dir / "rollout-test.jsonl"
+            rollout.write_text("\n".join([
+                json.dumps({
+                    "timestamp": "2026-07-02T16:00:00Z",
+                    "payload": {
+                        "type": "token_count",
+                        "rate_limits": {
+                            "plan_type": "pro",
+                            "primary": {
+                                "used_percent": 21,
+                                "resets_at": 1_783_020_000,
+                                "window_minutes": 300,
+                            },
+                            "secondary": {
+                                "used_percent": 34,
+                                "resets_at": 1_783_620_000,
+                                "window_minutes": 10080,
+                            },
+                        },
+                    },
+                }),
+            ]) + "\n", encoding="utf-8")
+
+            old_root = server.CODEX_SESSIONS_ROOT
+            old_snapshot_file = server._USAGE_SNAPSHOTS_FILE
+            try:
+                server.CODEX_SESSIONS_ROOT = root
+                server._codex_usage_file_cache.clear()
+                server._USAGE_SNAPSHOTS_FILE = pathlib.Path(tmp) / "usage-snapshots.jsonl"
+
+                codex = server._read_codex_usage(now_epoch=1_783_011_600)
+                self.assertEqual(codex["plan_type"], "pro")
+                self.assertEqual(codex["session"]["pct"], 21.0)
+                self.assertEqual(codex["weekly"]["pct"], 34.0)
+                self.assertEqual(codex["weekly"]["window_minutes"], 10080)
+
+                snap = server._native_usage_snapshot_from_plan_usage(
+                    {"ok": True, "usage": {"five_hour": {}, "seven_day": {}, "seven_day_sonnet": {}}},
+                    codex=codex,
+                    now_epoch=1_783_011_600,
+                )
+                self.assertEqual(snap["codex"]["weekly"]["pct"], 34.0)
+                self.assertTrue(server._append_native_usage_snapshot(snap, now_epoch=1_783_011_600))
+                pace = server.codex_usage_pace_payload(codex=codex, now_epoch=1_783_011_600)
+                self.assertTrue(pace["ok"])
+                self.assertEqual(pace["weekly_pct"], 34.0)
+                prev = {"ts": "2026-07-02T15:55:00Z", "codex": {
+                    "session": {"pct": 30.0, "resets_at": "2026-07-02T20:00:00Z"},
+                    "weekly": {"pct": 40.0, "resets_at": "2026-07-09T07:00:00Z"},
+                }}
+                curr = {"ts": "2026-07-02T16:00:00Z", "codex": {
+                    "session": {"pct": 2.0, "resets_at": "2026-07-02T20:00:00Z"},
+                    "weekly": {"pct": 39.0, "resets_at": "2026-07-10T07:00:00Z"},
+                }}
+                events = server._detect_usage_reset_events(prev, curr, now_epoch=1_783_008_000)
+                self.assertIn(("codex_five_hour", "unscheduled"), {(e["window"], e["kind"]) for e in events})
+                self.assertIn(("codex_weekly", "scheduled"), {(e["window"], e["kind"]) for e in events})
+                self.assertIn("codex", pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8"))
+                self.assertIn("'<div class=\"pu-header\">Codex</div>'", pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8"))
+            finally:
+                server.CODEX_SESSIONS_ROOT = old_root
+                server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
+                server._codex_usage_file_cache.clear()
+
     def test_open_session_in_claude_desktop_rejects_bad_input(self):
         """The helper exists and rejects empty / non-UUID session IDs
         without trying to spawn `open(1)`."""

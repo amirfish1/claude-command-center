@@ -40578,8 +40578,11 @@ _PLAN_USAGE_POLL_SECS = 5 * 60
 _RESET_EVENTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "reset-events.jsonl"
 _RESET_DETECT_JITTER_SECS = 5 * 60
 _RESET_DETECT_MAX_PREV_AGE_SECS = 30 * 60
+_CODEX_USAGE_SCAN_DAYS = 9
 _usage_snapshots_lock = threading.Lock()
 _reset_events_lock = threading.Lock()
+_codex_usage_file_cache_lock = threading.Lock()
+_codex_usage_file_cache = {}
 _plan_usage_poller_lock = threading.Lock()
 _plan_usage_poller_started = False
 
@@ -40693,16 +40696,24 @@ def _fetch_plan_usage():
         return {"ok": False, "error": f"Failed to fetch from Anthropic: {str(e)}"}
 
 
+def _plan_usage_with_codex(res):
+    if not isinstance(res, dict):
+        return res
+    out = dict(res)
+    out["codex"] = _latest_codex_usage_from_snapshots()
+    return out
+
+
 def get_cached_plan_usage():
     global _plan_usage_cache, _plan_usage_cache_time
     now = time.time()
     with _plan_usage_cache_lock:
         if _plan_usage_cache is not None and now - _plan_usage_cache_time < 30:
-            return _plan_usage_cache
+            return _plan_usage_with_codex(_plan_usage_cache)
         res = _fetch_plan_usage()
         _plan_usage_cache = res
         _plan_usage_cache_time = now
-        return res
+        return _plan_usage_with_codex(res)
 
 
 def _usage_snapshot_iso(now_epoch=None):
@@ -40711,7 +40722,7 @@ def _usage_snapshot_iso(now_epoch=None):
     return datetime.fromtimestamp(now_epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _native_usage_snapshot_from_plan_usage(plan_usage, now_epoch=None):
+def _native_usage_snapshot_from_plan_usage(plan_usage, now_epoch=None, codex=None):
     """Compact the direct Claude usage response into the persisted JSONL shape."""
     if not isinstance(plan_usage, dict) or not plan_usage.get("ok"):
         return None
@@ -40728,7 +40739,115 @@ def _native_usage_snapshot_from_plan_usage(plan_usage, now_epoch=None):
             }
         else:
             snap[key] = {"utilization": None, "resets_at": None}
+    snap["codex"] = codex
     return snap
+
+
+def _codex_usage_iso_from_epoch(epoch):
+    try:
+        return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _codex_usage_window(rate_limits, key):
+    block = (rate_limits or {}).get(key) or {}
+    pct = block.get("used_percent")
+    resets_at = block.get("resets_at")
+    if pct is None or resets_at is None:
+        return None
+    try:
+        pct = float(pct)
+    except (TypeError, ValueError):
+        return None
+    resets_iso = _codex_usage_iso_from_epoch(resets_at)
+    if not resets_iso:
+        return None
+    window_minutes = block.get("window_minutes")
+    try:
+        window_minutes = int(window_minutes) if window_minutes is not None else None
+    except (TypeError, ValueError):
+        window_minutes = None
+    return {"pct": pct, "resets_at": resets_iso, "window_minutes": window_minutes}
+
+
+def _iter_recent_codex_rollouts(now_epoch=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    cutoff = now_epoch - _CODEX_USAGE_SCAN_DAYS * 86400
+    root = CODEX_SESSIONS_ROOT
+    if not root.is_dir():
+        return []
+    out = []
+    try:
+        for path in root.glob("*/*/*/rollout-*.jsonl"):
+            try:
+                if path.stat().st_mtime >= cutoff:
+                    out.append(path)
+            except OSError:
+                continue
+    except OSError:
+        return []
+    return out
+
+
+def _codex_file_latest_rate_limits(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = str(path)
+    sig = (st.st_mtime, st.st_size)
+    with _codex_usage_file_cache_lock:
+        cached = _codex_usage_file_cache.get(key)
+        if cached and cached.get("sig") == sig:
+            return cached.get("snapshot")
+    best = None
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if '"rate_limits"' not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                payload = rec.get("payload") or {}
+                rate_limits = payload.get("rate_limits")
+                ts = rec.get("timestamp")
+                if not isinstance(rate_limits, dict) or not ts:
+                    continue
+                if best is None or str(ts) > str(best.get("timestamp")):
+                    best = {"timestamp": ts, "rate_limits": rate_limits}
+    except OSError:
+        return None
+    with _codex_usage_file_cache_lock:
+        _codex_usage_file_cache[key] = {"sig": sig, "snapshot": best}
+    return best
+
+
+def _read_codex_usage(now_epoch=None):
+    best = None
+    for path in _iter_recent_codex_rollouts(now_epoch=now_epoch):
+        snap = _codex_file_latest_rate_limits(path)
+        if not snap:
+            continue
+        if best is None or str(snap.get("timestamp")) > str(best.get("timestamp")):
+            best = snap
+    if not best:
+        return None
+    rate_limits = best.get("rate_limits") or {}
+    weekly = _codex_usage_window(rate_limits, "secondary")
+    if weekly is None:
+        return None
+    return {
+        "weekly": weekly,
+        "session": _codex_usage_window(rate_limits, "primary"),
+        "plan_type": rate_limits.get("plan_type"),
+        "snapshot_ts": best.get("timestamp"),
+        "fetched_at": _usage_snapshot_iso(now_epoch),
+        "from_cache": False,
+    }
 
 
 def _usage_snapshot_epoch(snapshot):
@@ -40800,6 +40919,19 @@ def _usage_reset_detected_at(curr, now_epoch=None):
 
 
 def _usage_snapshot_block(snapshot, window):
+    codex = (snapshot or {}).get("codex") or {}
+    if window == "codex_five_hour":
+        block = codex.get("session") if isinstance(codex, dict) else None
+        return {
+            "utilization": (block or {}).get("pct"),
+            "resets_at": (block or {}).get("resets_at"),
+        }
+    if window == "codex_weekly":
+        block = codex.get("weekly") if isinstance(codex, dict) else None
+        return {
+            "utilization": (block or {}).get("pct"),
+            "resets_at": (block or {}).get("resets_at"),
+        }
     block = (snapshot or {}).get(window)
     return block if isinstance(block, dict) else {}
 
@@ -40827,7 +40959,7 @@ def _detect_usage_reset_events(prev, curr, now_epoch=None):
     prev_epoch = _usage_snapshot_epoch(prev)
     prev_age = None if prev_epoch is None else max(0, now_epoch - prev_epoch)
     events = []
-    for window in ("five_hour", "seven_day"):
+    for window in ("five_hour", "seven_day", "codex_five_hour", "codex_weekly"):
         prev_block = _usage_snapshot_block(prev, window)
         curr_block = _usage_snapshot_block(curr, window)
         old_reset = _stats_parse_ts(prev_block.get("resets_at"))
@@ -41021,9 +41153,16 @@ def usage_snapshots_payload(hours=24, now_epoch=None):
 def _poll_plan_usage_once():
     global _plan_usage_cache, _plan_usage_cache_time
     res = _fetch_plan_usage()
+    codex = _read_codex_usage()
     if not isinstance(res, dict) or not res.get("ok"):
+        if codex:
+            snap = {"ts": _usage_snapshot_iso(), "source": "native", "codex": codex}
+            prev = _latest_native_usage_snapshot()
+            _append_native_usage_snapshot(snap)
+            for event in _detect_usage_reset_events(prev, snap):
+                _append_usage_reset_event(event)
         return False
-    snap = _native_usage_snapshot_from_plan_usage(res)
+    snap = _native_usage_snapshot_from_plan_usage(res, codex=codex)
     if snap:
         prev = _latest_native_usage_snapshot()
         _append_native_usage_snapshot(snap)
@@ -42618,6 +42757,64 @@ def usage_pace_payload(live=None, now_epoch=None):
         "work_start_hour": h_start,
         "work_end_hour": h_end,
         "source": (live or {}).get("source"),
+        "codex": codex_usage_pace_payload(now_epoch=now_epoch),
+    }
+
+
+def _latest_codex_usage_from_snapshots(now_epoch=None, max_age_secs=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    newest = None
+    newest_epoch = None
+    with _usage_snapshots_lock:
+        snapshots = _read_native_usage_snapshots_unlocked()
+    for item in snapshots:
+        codex = item.get("codex") if isinstance(item, dict) else None
+        if not isinstance(codex, dict):
+            continue
+        ts_epoch = _usage_snapshot_epoch(item)
+        if ts_epoch is None:
+            continue
+        if newest_epoch is None or ts_epoch > newest_epoch:
+            newest = codex
+            newest_epoch = ts_epoch
+    if newest is None:
+        return None
+    if max_age_secs is not None and now_epoch - newest_epoch > max_age_secs:
+        return None
+    return newest
+
+
+def codex_usage_pace_payload(codex=None, now_epoch=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    if codex is None:
+        codex = _latest_codex_usage_from_snapshots(now_epoch=now_epoch)
+    weekly = (codex or {}).get("weekly") or {}
+    weekly_pct = weekly.get("pct")
+    resets_at_iso = weekly.get("resets_at")
+    window_minutes = weekly.get("window_minutes") or 10080
+    resets_at = _stats_parse_ts(resets_at_iso)
+    if not isinstance(weekly_pct, (int, float)) or resets_at is None:
+        return {"ok": False, "weekly_pct": weekly_pct, "projected_pct": None}
+    week_start = resets_at.astimezone() - timedelta(minutes=window_minutes)
+    now_local = datetime.fromtimestamp(now_epoch, tz=timezone.utc).astimezone(week_start.tzinfo)
+    h_start, h_end = _usage_work_window()
+    total_h = _elapsed_work_hours(week_start, resets_at.astimezone(week_start.tzinfo), h_start, h_end)
+    elapsed_h = _elapsed_work_hours(week_start, now_local, h_start, h_end)
+    projected_pct = (weekly_pct / elapsed_h) * total_h if elapsed_h > 0 else None
+    return {
+        "ok": True,
+        "weekly_pct": weekly_pct,
+        "projected_pct": projected_pct,
+        "week_start": week_start.isoformat(),
+        "weekly_resets_at": resets_at_iso,
+        "elapsed_h": elapsed_h,
+        "total_h": total_h,
+        "hours_left": max(0.0, total_h - elapsed_h),
+        "window_minutes": window_minutes,
+        "session": (codex or {}).get("session"),
+        "plan_type": (codex or {}).get("plan_type"),
     }
 
 
@@ -42756,6 +42953,7 @@ def _weekly_usage_block():
     if isinstance(real_pct, (int, float)):
         display_pct = max(est_pct, real_pct)
     pace = usage_pace_payload(live=live)
+    codex_pace = codex_usage_pace_payload()
     return {
         "available": True,
         "est_pct": est_pct,
@@ -42777,6 +42975,7 @@ def _weekly_usage_block():
         "hours_left": pace.get("hours_left"),
         "expected_pct": pace.get("expected_pct"),
         "delta_pp": pace.get("delta_pp"),
+        "codex": codex_pace,
     }
 
 

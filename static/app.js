@@ -32663,6 +32663,36 @@
           + '<div class="pu-progress-bg"><div class="pu-progress-fill" style="width:' + sPct + '%;"></div></div>'
           + '</div>';
 
+        const codex = data.codex || {};
+        if (codex.session || codex.weekly) {
+          html += '<div class="pu-divider"></div>';
+          html += '<div class="pu-header">Codex</div>';
+          const codexSession = codex.session || {};
+          if (codex.session) {
+            const cSessionPct = Math.round(codexSession.pct || 0);
+            const cSessionReset = formatResetTime(codexSession.resets_at);
+            html += '<div class="pu-limit-row">'
+              + '<div class="pu-limit-label-row">'
+              + '<span class="pu-limit-label">5-hour limit</span>'
+              + '<span class="pu-limit-val">' + cSessionPct + '% · ' + cSessionReset + '</span>'
+              + '</div>'
+              + '<div class="pu-progress-bg"><div class="pu-progress-fill" style="width:' + Math.min(cSessionPct, 100) + '%;"></div></div>'
+              + '</div>';
+          }
+          const codexWeekly = codex.weekly || {};
+          if (codex.weekly) {
+            const cWeeklyPct = Math.round(codexWeekly.pct || 0);
+            const cWeeklyReset = formatResetTime(codexWeekly.resets_at);
+            html += '<div class="pu-limit-row">'
+              + '<div class="pu-limit-label-row">'
+              + '<span class="pu-limit-label">Weekly</span>'
+              + '<span class="pu-limit-val">' + cWeeklyPct + '% · ' + cWeeklyReset + '</span>'
+              + '</div>'
+              + '<div class="pu-progress-bg"><div class="pu-progress-fill" style="width:' + Math.min(cWeeklyPct, 100) + '%;"></div></div>'
+              + '</div>';
+          }
+        }
+
         const extra = usage.extra_usage || {};
         if (extra.is_enabled) {
           const limitCents = extra.monthly_limit || 0;

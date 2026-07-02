@@ -2805,6 +2805,10 @@
         if (d.week_start && (d.week_start_source === 'event' || d.week_start_source === 'override')) {
           bits.push(`week started ${fmtResetStarted(d.week_start)} (reset detected)`);
         }
+        if (d.codex && d.codex.ok && d.codex.weekly_pct != null) {
+          const cProj = d.codex.projected_pct != null ? ` · projected ${Math.round(d.codex.projected_pct)}%` : '';
+          bits.push(`Codex ${Math.round(d.codex.weekly_pct)}%${cProj}`);
+        }
         const reset = fmtResetCountdown(d.weekly_resets_at);
         if (reset) bits.push(reset);
         document.getElementById('weekly-sub').innerHTML = bits.join('<br>');
