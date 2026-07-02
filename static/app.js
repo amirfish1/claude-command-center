@@ -20627,6 +20627,10 @@
       // glyph; the .user-renamed CSS class gives them a quiet dotted underline
       // instead so the row doesn't shout.
       if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;
+      // A session the auto-unarchive sweep just pulled back out of Archived
+      // (CCC-443) — flag it so the user notices it reappeared rather than
+      // wondering why an "archived" session is back in Current sessions.
+      if (c.recently_unarchived) title = '[unarchived] ' + title;
       let titleClass = '';
       if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';
       else if (!c.display_name && !c.ai_title && !c.first_message) titleClass = 'untitled';
@@ -22521,9 +22525,31 @@
       if (_currentSessions.length) {
         const _currentSessionsLabel = _ipSearchActive ? 'Search results' : 'Current sessions';
         const _currentSessionsSub = _ipSearchActive ? '' : '<span class="conv-objects-section-sub">' + _currentSessionsWindowLabel + '</span>';
+        // Same first-gap-only separator as the flat/All-repos views (CCC-443)
+        // — Current sessions is sorted newest-first same as those, so a real
+        // (>=6h) jump between consecutive rows gets the same divider back.
+        const _currentSessionsFlatRowsWithSeparators = (items) => {
+          let _gapShown = false;
+          return items.map((item, i, arr) => {
+            let separator = '';
+            if (i > 0 && !_gapShown) {
+              const newer = (arr[i - 1] && arr[i - 1].card && arr[i - 1].card.modified) || 0;
+              const older = (item.card && item.card.modified) || 0;
+              if (newer && older && (newer - older) >= GAP_SEPARATOR_S) {
+                separator = '<div class="conv-gap-separator">'
+                  + '<span class="conv-gap-line"></span>'
+                  + '<span class="conv-gap-label">' + escapeHtml(_gapLabel(newer, older)) + '</span>'
+                  + '<span class="conv-gap-line"></span>'
+                  + '</div>';
+                _gapShown = true;
+              }
+            }
+            return separator + _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth });
+          }).join('');
+        };
         const _currentSessionsRowsHtml = _currentSessionsByObjects
           ? _currentSessionsByObjectGroupsHtml(_curShown)
-          : _curShown.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join('');
+          : _currentSessionsFlatRowsWithSeparators(_curShown);
         const _currentSessionsChevron = _currentSessionsCollapsed ? '&#9656;' : '&#9662;';
         _currentSessionsHeaderHtml = '<div class="conv-objects-section-label conv-current-sessions-header'
           + (_currentSessionsCollapsed ? ' is-collapsed' : '')
