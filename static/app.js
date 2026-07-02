@@ -28562,8 +28562,9 @@
     const detailTitle = _uxqItemTitle(item);
     const status = item.needs_input ? 'blocked' : (item.status || 'open');
     const allNotes = Array.isArray(item.progress_notes) ? item.progress_notes : [];
-    const progNotes = allNotes.filter(n => (n && n.by) !== 'human-reopen');
+    const progNotes = allNotes.filter(n => (n && n.by) !== 'human-reopen' && (n && n.by) !== 'human-comment');
     const reopenNotes = allNotes.filter(n => n && n.by === 'human-reopen');
+    const commentNotes = allNotes.filter(n => n && n.by === 'human-comment');
     const answers  = Array.isArray(item.answers) ? item.answers : [];
     const _noteStr = n => String((n && (n.text || n)) || '');
 
@@ -28674,6 +28675,14 @@
         '<div class="uxq-tl-block-q">' + escapeHtml(item.block_question) + '</div>' + pNotes + aBlock);
     }
 
+    // Comments — plain status-update notes a human left from the CCC UI
+    // (CCC-436), not tied to a block or a close. Own timeline event per note.
+    commentNotes.forEach(n => {
+      tlHtml += _tlEvt('uxq-tl-comment',
+        '<span class="uxq-tl-verb">Comment</span>' + _tlTime(n.at || null),
+        n.text ? '<div class="uxq-tl-block-q">' + escapeHtml(_noteStr(n)) + '</div>' : '');
+    });
+
     // Closed / Resolution — a reopen clears item.closed_at (and reassigns
     // item.claimed_by to whoever re-claims it) but keeps closed_by/resolution
     // around, so gate on those too or a prior close silently vanishes from
@@ -28768,6 +28777,18 @@
         + '</div>'
       : '';
 
+    // Comment section — always available (open, in_progress, blocked, or
+    // closed): a plain status update, not a resolution (CCC-436). Same
+    // textarea treatment as Reopen/Mark-as-Closed above.
+    const commentSectionHtml =
+      '<div class="uxq-td-sec uxq-td-comment-sec">'
+      + '<div class="uxq-td-sec-label">Add comment</div>'
+      + '<textarea class="uxq-td-comment-input" rows="2" placeholder="Log an update — not a resolution" aria-label="Add a comment"></textarea>'
+      + '<div class="uxq-reopen-row">'
+      + '<button type="button" class="ann-btn uxq-td-comment-confirm">Add comment</button>'
+      + '</div>'
+      + '</div>';
+
     // Mark-as-closed section (only when NOT closed, CCC-423): a human
     // resolving a ticket by hand from the CCC UI had no way to leave a
     // resolution summary the way a worker's `wt close --summary` does —
@@ -28805,6 +28826,7 @@
       +       '<div class="uxq-timeline">' + tlHtml + '</div>'
       +     '</div>'
       +     answerSectionHtml
+      +     commentSectionHtml
       +     reopenSectionHtml
       +     closeSectionHtml
       +   '</div>'
@@ -28817,7 +28839,6 @@
       +   '</div>'
       +   '<div class="uxq-td-footer-btns">'
       +     '<button type="button" class="ann-btn" data-ux-copy>Copy prompt</button>'
-      +     '<button type="button" class="ann-btn ann-primary" data-ux-close>Close</button>'
       +   '</div>'
       + '</div>'
       + '</div>';
@@ -28904,6 +28925,43 @@
       if (markClosedInput) {
         markClosedInput.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doMarkClosed(); }
+        });
+      }
+    }
+
+    // Add comment (any status) — logs a timestamped status update to the
+    // Activity timeline via progress_notes, without touching item.status.
+    const commentInput = modal.querySelector('.uxq-td-comment-input');
+    const commentBtn = modal.querySelector('.uxq-td-comment-confirm');
+    if (commentBtn) {
+      const doComment = async () => {
+        const text = commentInput ? commentInput.value.trim() : '';
+        if (!text) return;
+        commentBtn.disabled = true;
+        try {
+          const res = await fetch('/api/ux-fixes/comment', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ref, text }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (res.ok && d.ok) {
+            showOpToast('Comment added', 'success');
+            _uxqItemsCache.ts = 0;
+            _renderQueuePanel();
+            _uxqOpenItemModal(d.item || item);
+          } else {
+            showOpToast('Comment failed: ' + (d.error || res.status), 'error');
+            commentBtn.disabled = false;
+          }
+        } catch (e) {
+          showOpToast('Comment failed: ' + e, 'error');
+          commentBtn.disabled = false;
+        }
+      };
+      commentBtn.addEventListener('click', doComment);
+      if (commentInput) {
+        commentInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doComment(); }
         });
       }
     }

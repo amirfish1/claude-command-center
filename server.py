@@ -45818,6 +45818,47 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
+        if path == "/api/ux-fixes/comment":
+            # Log a plain status-update comment to the chronological Activity
+            # feed (CCC-436) — distinct from Reopen/Mark-as-Closed: doesn't
+            # touch ticket status, just appends a timestamped note a human
+            # can leave from the CCC UI. Stored in the same progress_notes
+            # array `wt block --progress` and reopen notes use, so it shows
+            # up via `wt find`/the raw ticket JSON too.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            ref = str(payload.get("ref") or "").strip()
+            text = str(payload.get("text") or payload.get("note") or "").strip()
+            if not ref or not text:
+                self.send_json({"ok": False, "error": "ref and text required"}, 400)
+                return
+            if not _WT_QUEUE_AVAILABLE:
+                self.send_json({"ok": False, "error": "WatchTower queue unavailable"}, 400)
+                return
+            try:
+                item = None
+                with _wt_q._FileLock(_wt_q._lock_path()):
+                    data = _wt_q._load_unlocked()
+                    for it in data["items"]:
+                        if _wt_q._matches(it, ref):
+                            notes = it.get("progress_notes") or []
+                            notes.append({
+                                "at": _wt_q._now_iso(),
+                                "text": text,
+                                "by": "human-comment",
+                            })
+                            it["progress_notes"] = notes
+                            _wt_q._save_unlocked(data)
+                            item = it
+                            break
+                self.send_json({"ok": bool(item), "item": item})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            return
         if path == "/api/ux-fixes/close":
             # Mark an open/in_progress ticket closed straight from the CCC UI
             # (CCC-423), with an optional resolution note — a human doing this
