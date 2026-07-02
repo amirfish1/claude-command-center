@@ -4457,6 +4457,7 @@ def _live_registry_conversation_row(
         "spawn_named": spawn_named,
         "name_overridden": bool(overrides.get(sid)),
         "archived": sid in (archived_set or set()),
+        "recently_unarchived": _is_recently_unarchived(sid),
         "verified": False,
         "pinned": sid in (pinned_rank or {}),
         "pin_rank": (pinned_rank or {}).get(sid),
@@ -4899,6 +4900,7 @@ def find_all_conversations(
                 "spawn_named": spawn_named,
                 "name_overridden": bool(name_overrides.get(session_id)),
                 "archived": session_id in archived_set,
+                "recently_unarchived": _is_recently_unarchived(session_id),
                 "pinned": session_id in pinned_rank,
                 "pin_rank": pinned_rank.get(session_id),
                 # State pills + PR# + live flag — sourced from _extract_tail_meta
@@ -5651,6 +5653,7 @@ def _rehydrate_archive_cached_rows(rows):
                 row["name_overridden"] = False
 
             row["archived"] = sid in archived_set
+            row["recently_unarchived"] = _is_recently_unarchived(sid, _now_rehydrate)
             row["verified"] = sid in verified_set
             row["pinned"] = sid in pinned_rank
             row["pin_rank"] = pinned_rank.get(sid)
@@ -9114,6 +9117,18 @@ def _codex_pool_candidate_sids(now=None):
     return sids
 
 
+_recently_auto_unarchived: dict = {}  # sid -> epoch dropped from Archived; drives the "[unarchived]" row prefix
+_RECENTLY_UNARCHIVED_WINDOW_S = 600  # 10 min — long enough to notice across a few polls, short enough to not become permanent chrome
+
+
+def _is_recently_unarchived(sid, now=None) -> bool:
+    ts = _recently_auto_unarchived.get(sid)
+    if ts is None:
+        return False
+    now = now if now is not None else time.time()
+    return (now - ts) < _RECENTLY_UNARCHIVED_WINDOW_S
+
+
 def _auto_unarchive_live_sessions(archived):
     """Drop archived sids showing fresh activity (CCC-117).
 
@@ -9162,9 +9177,13 @@ def _auto_unarchive_live_sessions(archived):
                     fresh = False
         if fresh:
             changed = True
+            _recently_auto_unarchived[sid] = now
             continue
         keep.append(sid)
     if changed:
+        for stale_sid, ts in list(_recently_auto_unarchived.items()):
+            if now - ts >= _RECENTLY_UNARCHIVED_WINDOW_S:
+                del _recently_auto_unarchived[stale_sid]
         try:
             _save_archived_conversations(keep)
         except Exception:
@@ -40556,7 +40575,11 @@ _USAGE_SNAPSHOT_MAX_LINES = 50_000
 _USAGE_SNAPSHOT_MAX_AGE_DAYS = 90
 _USAGE_NATIVE_FRESH_SECS = 15 * 60
 _PLAN_USAGE_POLL_SECS = 5 * 60
+_RESET_EVENTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "reset-events.jsonl"
+_RESET_DETECT_JITTER_SECS = 5 * 60
+_RESET_DETECT_MAX_PREV_AGE_SECS = 30 * 60
 _usage_snapshots_lock = threading.Lock()
+_reset_events_lock = threading.Lock()
 _plan_usage_poller_lock = threading.Lock()
 _plan_usage_poller_started = False
 
@@ -40768,6 +40791,172 @@ def _append_native_usage_snapshot(snapshot, now_epoch=None):
     return True
 
 
+def _usage_reset_detected_at(curr, now_epoch=None):
+    if isinstance(curr, dict):
+        ts = curr.get("ts")
+        if ts:
+            return ts
+    return _usage_snapshot_iso(now_epoch)
+
+
+def _usage_snapshot_block(snapshot, window):
+    block = (snapshot or {}).get(window)
+    return block if isinstance(block, dict) else {}
+
+
+def _usage_reset_event(window, kind, prev, curr, now_epoch=None):
+    prev_block = _usage_snapshot_block(prev, window)
+    curr_block = _usage_snapshot_block(curr, window)
+    return {
+        "detected_at": _usage_reset_detected_at(curr, now_epoch=now_epoch),
+        "window": window,
+        "kind": kind,
+        "prev_pct": prev_block.get("utilization"),
+        "new_pct": curr_block.get("utilization"),
+        "old_resets_at": prev_block.get("resets_at"),
+        "new_resets_at": curr_block.get("resets_at"),
+        "source": "auto",
+    }
+
+
+def _detect_usage_reset_events(prev, curr, now_epoch=None):
+    if not isinstance(prev, dict) or not isinstance(curr, dict):
+        return []
+    if now_epoch is None:
+        now_epoch = time.time()
+    prev_epoch = _usage_snapshot_epoch(prev)
+    prev_age = None if prev_epoch is None else max(0, now_epoch - prev_epoch)
+    events = []
+    for window in ("five_hour", "seven_day"):
+        prev_block = _usage_snapshot_block(prev, window)
+        curr_block = _usage_snapshot_block(curr, window)
+        old_reset = _stats_parse_ts(prev_block.get("resets_at"))
+        new_reset = _stats_parse_ts(curr_block.get("resets_at"))
+        if old_reset and new_reset:
+            delta = abs((new_reset - old_reset).total_seconds())
+            if delta > _RESET_DETECT_JITTER_SECS:
+                events.append(_usage_reset_event(window, "scheduled", prev, curr, now_epoch=now_epoch))
+        prev_pct = prev_block.get("utilization")
+        new_pct = curr_block.get("utilization")
+        if not isinstance(prev_pct, (int, float)) or not isinstance(new_pct, (int, float)):
+            continue
+        if prev_age is None or prev_age > _RESET_DETECT_MAX_PREV_AGE_SECS:
+            continue
+        if not old_reset:
+            continue
+        early = now_epoch < (old_reset.timestamp() - _RESET_DETECT_JITTER_SECS)
+        if prev_pct >= 15 and (prev_pct - new_pct) >= 15 and new_pct < 5 and early:
+            events.append(_usage_reset_event(window, "unscheduled", prev, curr, now_epoch=now_epoch))
+    return events
+
+
+def _read_usage_reset_events_unlocked():
+    try:
+        lines = _RESET_EVENTS_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    events = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(item, dict):
+            events.append(item)
+    return events
+
+
+def _write_week_start_override(week_start, resets_at_iso):
+    if week_start is None or not resets_at_iso:
+        return False
+    try:
+        _WEEK_START_OVERRIDE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        body = {
+            "week_start": week_start.isoformat(),
+            "applies_to_resets_week": _usage_resets_week_key(resets_at_iso),
+            "set_at": time.time(),
+        }
+        tmp = _WEEK_START_OVERRIDE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(body, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(_WEEK_START_OVERRIDE_FILE)
+        return True
+    except OSError:
+        return False
+
+
+def _refresh_week_start_override_from_event(event):
+    if not isinstance(event, dict):
+        return False
+    if event.get("window") != "seven_day" or event.get("kind") not in ("unscheduled", "manual"):
+        return False
+    detected = _stats_parse_ts(event.get("detected_at"))
+    if detected is None:
+        return False
+    resets_at = event.get("new_resets_at") or event.get("old_resets_at")
+    if not resets_at:
+        live = _live_weekly_usage()
+        resets_at = (live or {}).get("weekly_resets_at")
+    return _write_week_start_override(detected.astimezone(), resets_at)
+
+
+def _append_usage_reset_event(event):
+    if not isinstance(event, dict):
+        return False
+    try:
+        _RESET_EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(event, separators=(",", ":")) + "\n"
+        with _reset_events_lock:
+            with _RESET_EVENTS_FILE.open("a", encoding="utf-8") as f:
+                f.write(line)
+        _refresh_week_start_override_from_event(event)
+        return True
+    except OSError:
+        return False
+
+
+def record_usage_reset_event(window, reset_at=None, source="user"):
+    if window not in ("five_hour", "seven_day"):
+        return {"ok": False, "error": "window must be five_hour or seven_day"}
+    detected_at = reset_at or _usage_snapshot_iso()
+    event = {
+        "detected_at": detected_at,
+        "window": window,
+        "kind": "manual",
+        "prev_pct": None,
+        "new_pct": None,
+        "old_resets_at": None,
+        "new_resets_at": None,
+        "source": source or "user",
+    }
+    ok = _append_usage_reset_event(event)
+    return {"ok": ok, "event": event}
+
+
+def usage_reset_events_payload(days=30, now_epoch=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    try:
+        days = float(days)
+    except (TypeError, ValueError):
+        days = 30
+    if not math.isfinite(days) or days <= 0:
+        days = 30
+    cutoff = now_epoch - days * 86400
+    with _reset_events_lock:
+        events = _read_usage_reset_events_unlocked()
+    out = []
+    for event in events:
+        dt = _stats_parse_ts(event.get("detected_at"))
+        if dt is None or dt.timestamp() < cutoff:
+            continue
+        out.append(event)
+    out.sort(key=lambda event: (_stats_parse_ts(event.get("detected_at")) or datetime.min.replace(tzinfo=timezone.utc)).timestamp())
+    return {"ok": True, "days": days, "events": out}
+
+
 def _latest_native_usage_snapshot(now_epoch=None, max_age_secs=None):
     if now_epoch is None:
         now_epoch = time.time()
@@ -40836,7 +41025,10 @@ def _poll_plan_usage_once():
         return False
     snap = _native_usage_snapshot_from_plan_usage(res)
     if snap:
+        prev = _latest_native_usage_snapshot()
         _append_native_usage_snapshot(snap)
+        for event in _detect_usage_reset_events(prev, snap):
+            _append_usage_reset_event(event)
     with _plan_usage_cache_lock:
         _plan_usage_cache = res
         _plan_usage_cache_time = time.time()
@@ -42297,12 +42489,44 @@ def _active_week_start_override(resets_at_iso):
         return None
 
 
+def _latest_week_start_reset_event(resets_at_iso):
+    resets_at = _stats_parse_ts(resets_at_iso)
+    if resets_at is None:
+        return None
+    min_epoch = resets_at.timestamp() - 7 * 86400
+    max_epoch = resets_at.timestamp() + _RESET_DETECT_JITTER_SECS
+    with _reset_events_lock:
+        events = _read_usage_reset_events_unlocked()
+    newest = None
+    newest_epoch = None
+    for event in events:
+        if event.get("window") != "seven_day" or event.get("kind") not in ("unscheduled", "manual"):
+            continue
+        detected = _stats_parse_ts(event.get("detected_at"))
+        if detected is None:
+            continue
+        ts_epoch = detected.timestamp()
+        if ts_epoch < min_epoch or ts_epoch > max_epoch:
+            continue
+        if newest_epoch is None or ts_epoch > newest_epoch:
+            newest = event
+            newest_epoch = ts_epoch
+    return newest
+
+
 def _usage_week_start(resets_at_iso):
     if not resets_at_iso:
         return None
     resets_at = _stats_parse_ts(resets_at_iso)
     if resets_at is None:
         return None
+    event = _latest_week_start_reset_event(resets_at_iso)
+    if event:
+        detected = _stats_parse_ts(event.get("detected_at"))
+        if detected is not None:
+            week_start = detected.astimezone()
+            _write_week_start_override(week_start, resets_at_iso)
+            return week_start
     override = _active_week_start_override(resets_at_iso)
     if override is not None:
         return override
@@ -42354,6 +42578,11 @@ def usage_pace_payload(live=None, now_epoch=None):
         live = _live_weekly_usage(now_epoch=now_epoch)
     weekly_pct = (live or {}).get("weekly_pct")
     resets_at_iso = (live or {}).get("weekly_resets_at")
+    week_start_source = "reset"
+    if _latest_week_start_reset_event(resets_at_iso):
+        week_start_source = "event"
+    elif _active_week_start_override(resets_at_iso):
+        week_start_source = "override"
     week_start = _usage_week_start(resets_at_iso)
     resets_at = _stats_parse_ts(resets_at_iso)
     if not isinstance(weekly_pct, (int, float)) or week_start is None or resets_at is None:
@@ -42362,6 +42591,7 @@ def usage_pace_payload(live=None, now_epoch=None):
             "weekly_pct": weekly_pct,
             "projected_pct": None,
             "week_start": week_start.isoformat() if week_start else None,
+            "week_start_source": week_start_source,
             "elapsed_h": 0.0,
             "total_h": 0.0,
             "source": (live or {}).get("source"),
@@ -42378,6 +42608,7 @@ def usage_pace_payload(live=None, now_epoch=None):
         "weekly_pct": weekly_pct,
         "projected_pct": projected_pct,
         "week_start": week_start.isoformat(),
+        "week_start_source": week_start_source,
         "weekly_resets_at": resets_at_iso,
         "elapsed_h": elapsed_h,
         "total_h": total_h,
@@ -42540,6 +42771,7 @@ def _weekly_usage_block():
         "fetched_at": (live or {}).get("fetched_at"),
         "projected_pct": pace.get("projected_pct"),
         "week_start": pace.get("week_start"),
+        "week_start_source": pace.get("week_start_source"),
         "elapsed_h": pace.get("elapsed_h"),
         "total_h": pace.get("total_h"),
         "hours_left": pace.get("hours_left"),
@@ -43951,6 +44183,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(usage_snapshots_payload(hours=raw_hours))
         elif path == "/api/usage/pace":
             self.send_json(usage_pace_payload())
+        elif path == "/api/usage/reset-events":
+            qs = urllib.parse.parse_qs(parsed.query)
+            raw_days = qs.get("days", ["30"])[0]
+            self.send_json(usage_reset_events_payload(days=raw_days))
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)
             rows = list_spawned_sessions()
@@ -45535,6 +45771,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 400)
+            return
+
+        if path == "/api/usage/reset-events":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                if not isinstance(data, dict):
+                    self.send_json({"error": "expected JSON object"}, 400)
+                    return
+                window = (data.get("window") or "seven_day").strip()
+                reset_at = (data.get("reset_at") or data.get("detected_at") or "").strip() or None
+                result = record_usage_reset_event(window, reset_at=reset_at, source="user")
+                self.send_json(result, 200 if result.get("ok") else 400)
+            except (ValueError, OSError) as e:
+                self.send_json({"ok": False, "error": f"invalid JSON: {e}"}, 400)
             return
 
         if path == "/api/coo/tracked":

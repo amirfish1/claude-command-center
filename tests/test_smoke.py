@@ -159,6 +159,67 @@ class TestServerImports(unittest.TestCase):
                 server._weekly_cal_memo.clear()
                 server._weekly_cal_memo.update(old_memo)
 
+    def test_usage_reset_events_detect_log_and_override_week_start(self):
+        """Reset detection produces durable events and teaches week-start
+        resolution about unscheduled/manual weekly resets."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            usage_dir = pathlib.Path(tmp) / "usage"
+            old_events = server._RESET_EVENTS_FILE
+            old_override = server._WEEK_START_OVERRIDE_FILE
+            try:
+                server._RESET_EVENTS_FILE = usage_dir / "reset-events.jsonl"
+                server._WEEK_START_OVERRIDE_FILE = usage_dir / "week-start-override.json"
+
+                prev = {
+                    "ts": "2026-07-02T16:55:00Z",
+                    "source": "native",
+                    "five_hour": {"utilization": 40.0, "resets_at": "2026-07-02T20:00:00Z"},
+                    "seven_day": {"utilization": 33.0, "resets_at": "2026-07-09T07:00:00Z"},
+                }
+                curr = {
+                    "ts": "2026-07-02T17:00:00Z",
+                    "source": "native",
+                    "five_hour": {"utilization": 2.0, "resets_at": "2026-07-02T20:00:00Z"},
+                    "seven_day": {"utilization": 32.0, "resets_at": "2026-07-10T07:00:00Z"},
+                }
+
+                events = server._detect_usage_reset_events(prev, curr, now_epoch=1_783_011_600)
+                kinds = {(e["window"], e["kind"]) for e in events}
+                self.assertIn(("five_hour", "unscheduled"), kinds)
+                self.assertIn(("seven_day", "scheduled"), kinds)
+
+                for event in events:
+                    self.assertTrue(server._append_usage_reset_event(event))
+                manual = server.record_usage_reset_event(
+                    "seven_day",
+                    reset_at="2026-07-02T17:05:00Z",
+                    source="user",
+                )
+                self.assertTrue(manual["ok"])
+
+                payload = server.usage_reset_events_payload(days=2, now_epoch=1_783_012_000)
+                self.assertTrue(payload["ok"])
+                self.assertGreaterEqual(len(payload["events"]), 3)
+                resolved = server._usage_week_start("2026-07-09T07:00:00Z")
+                self.assertTrue(server._WEEK_START_OVERRIDE_FILE.exists())
+                self.assertEqual(
+                    resolved.timestamp(),
+                    datetime.fromisoformat("2026-07-02T17:05:00+00:00").timestamp(),
+                )
+
+                server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+                throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+                self.assertIn("/api/usage/reset-events", server_py)
+                self.assertIn("Record limit reset", throughput_html)
+                self.assertIn("reset-marker", throughput_html)
+            finally:
+                server._RESET_EVENTS_FILE = old_events
+                server._WEEK_START_OVERRIDE_FILE = old_override
+
     def test_open_session_in_claude_desktop_rejects_bad_input(self):
         """The helper exists and rejects empty / non-UUID session IDs
         without trying to spawn `open(1)`."""
@@ -1427,7 +1488,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)", app_js)
         self.assertIn("const _currentSessionRows = _ipSearchActive", app_js)
         self.assertIn("const _curShown = _currentSessionRows;", app_js)
-        self.assertIn("_curShown.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join('')", app_js)
+        self.assertIn("return separator + _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth });", app_js)
+        self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
+        self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown);", app_js)
         self.assertIn("const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';", app_js)
         self.assertIn("const currentChildStyle = currentChildDepth > 0", app_js)
         self.assertIn(".conv-current-sessions-scroll .conv-item.is-current-child-row {", app_css)
@@ -1755,7 +1818,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const quietTitleChrome = !!opts.quietTitleChrome;", app_js)
         self.assertIn("if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;", app_js)
         self.assertIn("if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';", app_js)
-        self.assertIn("_curShown.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join('')", app_js)
+        self.assertIn("return separator + _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth });", app_js)
+        self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
+        self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown);", app_js)
 
     def test_repo_pin_marker_is_not_duplicate_pin_glyph(self):
         """Repo override rows should use a distinct repo chip, not a second pin."""

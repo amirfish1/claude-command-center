@@ -431,6 +431,32 @@
     text-align: right;
     line-height: 1.5;
   }
+  .weekly-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .weekly-actions input {
+    background: rgba(255,255,255,0.06);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-family: var(--font-ui);
+    font-size: 12px;
+  }
+  .weekly-actions button {
+    background: rgba(255,255,255,0.06);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .weekly-actions button:hover { border-color: var(--accent); color: var(--accent); }
 
   /* Dashboard Grid */
   .dashboard-header {
@@ -905,6 +931,10 @@
           <div class="weekly-label">of Claude weekly limit</div>
         </div>
         <div class="weekly-sub" id="weekly-sub"></div>
+        <div class="weekly-actions">
+          <input type="datetime-local" id="reset-event-input">
+          <button type="button" id="record-reset-btn" onclick="recordLimitReset()">Record limit reset…</button>
+        </div>
       </div>
 
       <!-- Default Empty State (hidden by default; aggregate auto-loads on boot) -->
@@ -1027,6 +1057,7 @@
     let activeSessionId = null;
     let lastRender = null;   // {turns, summary, isAggregate, bucketMode} for resize redraws
     let weeklyData = null;   // populated by loadWeeklyUsage(); used by drawChart() overlay
+    let resetEvents = [];    // populated by loadResetEvents(); rendered as chart markers
     let chartWeekOffset = 0; // 0=current billing period, -1=previous, etc.
     let weekRankings = {};   // sessionId → rank (1-indexed); populated by fetchWeekRankings()
     const aggregateSessions = [
@@ -1718,6 +1749,47 @@
       `;
     }
 
+    function _resetMarkerRowDate(row) {
+      if (!row) return null;
+      if (row.hour) return new Date(String(row.hour).endsWith('Z') ? row.hour : row.hour + 'Z');
+      if (row.day) return new Date(row.day + 'T00:00:00Z');
+      return null;
+    }
+
+    function renderResetMarkers(svg, sourceRows, xScale, padding, height) {
+      if (!svg || !Array.isArray(resetEvents) || !resetEvents.length || !Array.isArray(sourceRows) || !sourceRows.length) return;
+      const rows = sourceRows
+        .map((row, i) => ({ i, d: _resetMarkerRowDate(row) }))
+        .filter(x => x.d && !Number.isNaN(x.d.getTime()));
+      if (!rows.length) return;
+      const first = rows[0].d.getTime();
+      const last = rows[rows.length - 1].d.getTime();
+      resetEvents.forEach(event => {
+        const d = new Date(event.detected_at || '');
+        const ts = d.getTime();
+        if (Number.isNaN(ts) || ts < first || ts > last + 86400000) return;
+        const nearest = rows.find(row => row.d.getTime() >= ts) || rows[rows.length - 1];
+        const x = xScale(nearest.i + 1);
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('class', 'reset-marker');
+        line.setAttribute('x1', x); line.setAttribute('x2', x);
+        line.setAttribute('y1', padding.top);
+        line.setAttribute('y2', height - padding.bottom + 6);
+        line.setAttribute('stroke', event.kind === 'manual' ? 'var(--accent)' : 'var(--orange)');
+        line.setAttribute('stroke-width', '1.5');
+        line.setAttribute('stroke-dasharray', '4 4');
+        svg.appendChild(line);
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('x', Math.min(x + 4, (svg.clientWidth || 800) - 80));
+        label.setAttribute('y', padding.top + 12);
+        label.setAttribute('fill', event.kind === 'manual' ? 'var(--accent)' : 'var(--orange)');
+        label.setAttribute('font-size', '10px');
+        label.setAttribute('font-family', 'var(--font-mono)');
+        label.textContent = event.kind === 'manual' ? 'manual reset' : 'reset detected';
+        svg.appendChild(label);
+      });
+    }
+
     // Dynamic SVG Line chart drawer
     function hourLabel(hour, index, total) {
       if (!hour) return `H${index}`;
@@ -2155,6 +2227,8 @@
           svg.appendChild(t);
         });
       }
+
+      renderResetMarkers(svg, sourceRows, xScale, padding, height);
 
       // ── Weekly % overlay: 3-hour view (projection + prev period overlay) ──────
       if (showWeeklyOverlay && sixhourly) {
@@ -2646,8 +2720,52 @@
       return days >= 1 ? `resets in ${days}d ${hrs}h` : `resets in ${hrs}h`;
     }
 
+    function fmtResetStarted(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return '';
+      return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+
+    function resetEventInputDefault() {
+      const input = document.getElementById('reset-event-input');
+      if (!input || input.value) return;
+      const now = new Date();
+      now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+      input.value = now.toISOString().slice(0, 16);
+    }
+
+    async function loadResetEvents() {
+      try {
+        const res = await fetch('/api/usage/reset-events?days=30');
+        if (!res.ok) return;
+        const d = await res.json();
+        resetEvents = (d && Array.isArray(d.events)) ? d.events : [];
+        if (lastRender) {
+          drawChart(lastRender.turns, lastRender.summary, lastRender.isAggregate, lastRender.bucketMode, lastRender.showCumulative);
+        }
+      } catch (_) { /* best effort */ }
+    }
+
+    async function recordLimitReset() {
+      const input = document.getElementById('reset-event-input');
+      const localVal = input && input.value ? input.value : '';
+      const resetAt = localVal ? new Date(localVal).toISOString() : new Date().toISOString();
+      try {
+        const res = await fetch('/api/usage/reset-events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ window: 'seven_day', reset_at: resetAt })
+        });
+        if (!res.ok) return;
+        await loadResetEvents();
+        await loadWeeklyUsage();
+      } catch (_) { /* best effort */ }
+    }
+
     async function loadWeeklyUsage() {
       try {
+        resetEventInputDefault();
         const res = await fetch('/api/weekly_usage');
         if (!res.ok) return;
         const d = await res.json();
@@ -2684,6 +2802,9 @@
         if (d.real_pct != null) bits.push(`${Math.round(d.real_pct)}% last synced from claude.ai`);
         if (d.est_pct != null) bits.push(`~${d.est_pct.toFixed(0)}% live estimate`);
         if (d.projected_pct != null) bits.push(`projected ${Math.round(d.projected_pct)}% at reset`);
+        if (d.week_start && (d.week_start_source === 'event' || d.week_start_source === 'override')) {
+          bits.push(`week started ${fmtResetStarted(d.week_start)} (reset detected)`);
+        }
         const reset = fmtResetCountdown(d.weekly_resets_at);
         if (reset) bits.push(reset);
         document.getElementById('weekly-sub').innerHTML = bits.join('<br>');
@@ -2902,8 +3023,10 @@
     loadInitialAggregate(_aggDefault);
     toggleSidebar(localStorage.getItem('ccc-throughput-sidebar-collapsed') !== '0');
     loadSessions();
+    loadResetEvents();
     loadWeeklyUsage();
     setInterval(loadWeeklyUsage, 120000);
+    setInterval(loadResetEvents, 120000);
   </script>
 </body>
 </html>
