@@ -1113,25 +1113,17 @@
       }
     }
 
-    async function loadSessions(prefetchPromise) {
+    async function loadSessions() {
       setStatus('Loading sessions...', true);
       try {
-        // Conversations fetch runs in parallel with the prefetch kicked off in Boot.
-        const [convRes, prefetchData] = await Promise.all([
-          fetch('/api/conversations?all=1'),
-          prefetchPromise || Promise.resolve(null),
-        ]);
+        const convRes = await fetch('/api/conversations?all=1');
         if (!convRes.ok) throw new Error('API failed');
         const data = await convRes.json();
         allSessions = data.conversations || data.sessions || [];
         renderSessionList();
         fetchWeekRankings(); // non-blocking: re-sorts when rankings arrive
-        // If the prefetch already rendered the default session, skip the redundant fetch.
-        const prefetchedId = prefetchData && prefetchData.ok ? prefetchData.session_id : null;
-        const defaultSession = activeSessionId
-          ? findSessionById(activeSessionId)
-          : aggregateSessions.find(a => a.session_id === 'all_7_days') || aggregateSessions[0];
-        if (defaultSession && defaultSession.session_id !== prefetchedId) {
+        const defaultSession = aggregateSessions.find(a => a.session_id === 'all_7_days') || aggregateSessions[0];
+        if (!activeSessionId && defaultSession) {
           await selectSession(defaultSession);
         } else if (!defaultSession) {
           setStatus('Idle');
@@ -2864,24 +2856,51 @@
       }
     });
 
-    // Boot — prefetch the default all_7_days payload immediately (parallel with
-    // /api/conversations so the chart shows before the sidebar is ready).
+    async function refreshAggregateInBackground(_aggDefault) {
+      if (!_aggDefault) return null;
+      setStatus('Refreshing throughput data...', true);
+      try {
+        const res = await fetch(`/api/throughput?session_id=${encodeURIComponent(_aggDefault.session_id)}`);
+        if (!res.ok) throw new Error('API failed');
+        const data = await res.json();
+        if (data && data.ok && activeSessionId === _aggDefault.session_id) {
+          renderDashboard(_aggDefault, data);
+          setStatus('Idle');
+        }
+        return data;
+      } catch (err) {
+        console.error(err);
+        setStatus('Refresh failed; showing cached throughput');
+        return null;
+      }
+    }
+
+    async function loadInitialAggregate(_aggDefault) {
+      if (!_aggDefault) return null;
+      activeSessionId = _aggDefault.session_id;
+      try {
+        const res = await fetch(`/api/throughput/initial?session_id=${encodeURIComponent(_aggDefault.session_id)}`);
+        if (!res.ok) throw new Error('API failed');
+        const data = await res.json();
+        if (data && data.ok && activeSessionId === _aggDefault.session_id) {
+          renderDashboard(_aggDefault, data);
+          setStatus(data.snapshot && data.snapshot.cached ? 'Showing cached throughput' : 'Showing initial throughput');
+        }
+        refreshAggregateInBackground(_aggDefault);
+        return data;
+      } catch (err) {
+        console.error(err);
+        refreshAggregateInBackground(_aggDefault);
+        return null;
+      }
+    }
+
+    // Boot — render a cache-only default aggregate first, then refresh the
+    // expensive all_7_days aggregate without blocking the initial UI.
     const _aggDefault = aggregateSessions.find(a => a.session_id === 'all_7_days') || aggregateSessions[0];
-    const _prefetch7d = _aggDefault
-      ? fetch(`/api/throughput?session_id=${encodeURIComponent(_aggDefault.session_id)}`)
-          .then(r => r.json())
-          .then(data => {
-            if (data && data.ok && !activeSessionId) {
-              activeSessionId = _aggDefault.session_id;
-              renderDashboard(_aggDefault, data);
-              setStatus('Idle');
-            }
-            return data;
-          })
-          .catch(() => null)
-      : Promise.resolve(null);
+    loadInitialAggregate(_aggDefault);
     toggleSidebar(localStorage.getItem('ccc-throughput-sidebar-collapsed') !== '0');
-    loadSessions(_prefetch7d);
+    loadSessions();
     loadWeeklyUsage();
     setInterval(loadWeeklyUsage, 120000);
   </script>
