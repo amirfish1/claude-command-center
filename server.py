@@ -48152,7 +48152,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # whether the keystroke injection itself ends up succeeding.
                 _record_interaction(sid)
                 text = _wrap_injected_text_with_announced_from(text, announced_from)
-                self.send_json(_inject_text_into_session(sid, text, mode=mode))
+                try:
+                    result = _inject_text_into_session(sid, text, mode=mode)
+                except Exception as e:
+                    # An uncaught exception anywhere in this deep, subprocess-
+                    # heavy routing chain (AppleScript, `wt send`, headless
+                    # resume, ...) used to propagate past handle_one_request
+                    # and close the connection with no HTTP response at all —
+                    # the browser surfaces that as an opaque "Load failed" /
+                    # "Failed to fetch" with no way to tell what went wrong.
+                    # Turn it into a readable error instead.
+                    result = {"ok": False, "error": str(e) or "internal error"}
+                self.send_json(result)
         elif path == "/api/session/compact":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
