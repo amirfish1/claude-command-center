@@ -4262,10 +4262,12 @@
     height: 3px;
     background: var(--accent);
   }
-  /* No drag handle when there's nothing to resize on either side of it
-     (CCC-397 follow-up): a collapsed section has no height to redistribute. */
-  .conv-current-sessions-scroll.is-collapsed + .conv-objects-splitter,
-  .conv-objects-splitter:has(+ .conv-project-tree-header.is-collapsed) {
+  /* No drag handle when the section above has nothing to give up (CCC-397
+     follow-up): a collapsed Current Sessions has no height to redistribute.
+     A collapsed Project Tree below does NOT hide it (CCC-438) — Current
+     Sessions still resizes against whatever expanded section is further
+     down (e.g. Triggered Workers), so the handle stays live/connecting. */
+  .conv-current-sessions-scroll.is-collapsed + .conv-objects-splitter {
     display: none;
   }
   body.objects-splitter-resizing {
@@ -4387,10 +4389,11 @@
     height: 3px;
     background: var(--accent);
   }
-  /* No drag handle when there's nothing to resize on either side (CCC-397
-     follow-up) — mirrors the objects-splitter rule above. */
-  .conv-project-tree-scroll.is-collapsed + .conv-evergreen-agents-splitter,
-  .conv-evergreen-agents-splitter:has(+ .conv-evergreen-agents-header.is-collapsed) {
+  /* No drag handle when the section above has nothing to give up (CCC-397
+     follow-up) — mirrors the objects-splitter rule above. A collapsed
+     Evergreen Agents header below does NOT hide it (CCC-438): Project Tree
+     still resizes against space further down. */
+  .conv-project-tree-scroll.is-collapsed + .conv-evergreen-agents-splitter {
     display: none;
   }
   body.evergreen-splitter-resizing {
