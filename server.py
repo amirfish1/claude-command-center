@@ -4544,7 +4544,7 @@ def find_all_conversations(
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations())
+        archived_set = set(_load_archived_conversations(sweep=False))
     except Exception:
         archived_set = set()
     try:
@@ -5599,7 +5599,7 @@ def _rehydrate_archive_cached_rows(rows):
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations())
+        archived_set = set(_load_archived_conversations(sweep=False))
     except Exception:
         archived_set = set()
     try:
@@ -9129,12 +9129,13 @@ def _auto_unarchive_live_sessions(archived):
     return keep
 
 
-def _load_archived_conversations():
+def _load_archived_conversations(*, sweep=True):
     """Load list of archived session_ids from the side-car file."""
     try:
         data = json.loads(ARCHIVED_CONVERSATIONS_FILE.read_text())
         if isinstance(data, list):
-            return _auto_unarchive_live_sessions([s for s in data if isinstance(s, str)])
+            archived = [s for s in data if isinstance(s, str)]
+            return _auto_unarchive_live_sessions(archived) if sweep else archived
     except (OSError, json.JSONDecodeError):
         pass
     return []
@@ -19694,7 +19695,7 @@ def find_codex_conversations(
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations())
+        archived_set = set(_load_archived_conversations(sweep=False))
     except Exception:
         archived_set = set()
     try:
@@ -22482,7 +22483,7 @@ def find_gemini_conversations(
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations())
+        archived_set = set(_load_archived_conversations(sweep=False))
     except Exception:
         archived_set = set()
     try:
@@ -24036,7 +24037,7 @@ def find_cursor_conversations(
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations())
+        archived_set = set(_load_archived_conversations(sweep=False))
     except Exception:
         archived_set = set()
     try:
@@ -25369,7 +25370,7 @@ def find_hermes_conversations(
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations())
+        archived_set = set(_load_archived_conversations(sweep=False))
     except Exception:
         archived_set = set()
     try:
@@ -26146,7 +26147,7 @@ def find_kilo_conversations(
         except Exception:
             name_overrides = {}
         try:
-            archived_set = set(_load_archived_conversations())
+            archived_set = set(_load_archived_conversations(sweep=False))
         except Exception:
             archived_set = set()
         try:
@@ -27345,7 +27346,7 @@ def find_antigravity_conversations(
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations())
+        archived_set = set(_load_archived_conversations(sweep=False))
     except Exception:
         archived_set = set()
     try:
