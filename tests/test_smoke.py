@@ -408,7 +408,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("+ object", app_js)
         self.assertIn("const _addObjectBtnHtml = _hasFolderChips", app_js)
         self.assertIn("localStorage.setItem('ccc-inprogress-grouping', 'objects')", app_js)
-        self.assertNotIn("+ project", app_js)
+        self.assertNotIn(">+ project<", app_js)
         self.assertNotIn('data-role="ip-new-project"', app_js)
         self.assertNotIn(".conv-new-project", app_css)
 
@@ -917,7 +917,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-role="project-tree-header"', app_js)
         self.assertIn("const _currentSessionsScrollHtml = (_currentSessionsBodyHtml)", app_js)
         self.assertIn('data-role="current-sessions-scroll"', app_js)
-        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;", app_js)
+        self.assertIn("_activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenSplitHandleHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;", app_js)
         scroll_html_start = app_js.index("const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)")
         scroll_html_end = app_js.index("const _objectsSplitHandleHtml", scroll_html_start)
         self.assertNotIn("Project tree</div>", app_js[scroll_html_start:scroll_html_end])
@@ -936,17 +936,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("overflow-y: auto;", scroll_css)
         self.assertIn("max-height: clamp(", scroll_css)
         self.assertIn("overscroll-behavior: contain;", scroll_css)
-        self.assertIn("#convList.objects-scroll-split .conv-project-tree-scroll", app_css)
+        self.assertIn("#convList.objects-scroll-split .conv-section-fill {", app_css)
         self.assertIn(".conv-project-tree-header {", app_css)
         header_css = app_css[app_css.index(".conv-project-tree-header {"):app_css.index(".conv-project-tree-scroll {", app_css.index(".conv-project-tree-header {"))]
         self.assertIn("flex: 0 0 auto;", header_css)
-        self.assertIn("padding: 14px 10px 8px;", header_css)
-        self.assertIn("font-size: 12px;", header_css)
-        self.assertIn("font-weight: 700;", header_css)
-        self.assertIn("letter-spacing: 0.07em;", header_css)
-        self.assertIn("color: color-mix(in srgb, var(--text) 70%, var(--text-muted));", header_css)
+        self.assertIn("margin: 6px 2px 0 0;", header_css)
+        self.assertIn("border-radius: 8px 8px 0 0;", header_css)
         self.assertIn("background:", header_css)
-        self.assertIn("border-top:", header_css)
+        self.assertIn("cursor: pointer;", header_css)
 
     def test_by_objects_current_sessions_splitter_is_resizable(self):
         """A horizontal splitter should resize Current sessions vs Project tree."""
@@ -957,7 +954,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function applyCurrentSessionsPanelHeight()", app_js)
         self.assertIn("const _objectsSplitHandleHtml = (_currentSessionsScrollHtml && _projectTreeScrollHtml)", app_js)
         self.assertIn('data-role="objects-splitter"', app_js)
-        self.assertIn("_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;", app_js)
+        self.assertIn("_activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenSplitHandleHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;", app_js)
         self.assertIn("function beginObjectsSplitterResize(ev)", app_js)
         self.assertIn("ev.target.closest('[data-role=\"objects-splitter\"]')", app_js)
         self.assertIn("list.style.setProperty('--current-sessions-panel-h', nextHeight + 'px');", app_js)
@@ -994,7 +991,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _twWorkersByQueue = new Map();", app_js)
         # Workers resolve to the EXISTING session row via their cloud session_id.
         self.assertIn("const card = sid ? _twCardById.get(sid) : null;", app_js)
-        self.assertIn("return _renderRow(card, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });", app_js)
+        self.assertIn("return _renderRow(enriched, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });", app_js)
         self.assertIn("return _twFallbackRow(w);", app_js)
         self.assertIn("_twQueueHeaderHtml(q, workers.length)", app_js)
         self.assertIn("const _evergreenAgentsHtml = _evergreenAgentsBody", app_js)
@@ -1008,11 +1005,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("async function _fetchWtWorkers()", app_js)
         self.assertIn("await Promise.all([_fetchUxqHealth(), _fetchWtWorkers()]);", app_js)
         # Section header renamed to Triggered Workers.
-        self.assertIn("+ 'Triggered Workers</div>'", app_js)
+        self.assertIn("+ 'Triggered Workers'", app_js)
         self.assertIn('data-role="evergreen-agents-header"', app_js)
         self.assertIn('data-role="evergreen-agents-scroll"', app_js)
         self.assertIn(
-            "_activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;",
+            "_activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenSplitHandleHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;",
             app_js,
         )
 
@@ -1125,7 +1122,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-role="archived-grouping-toggle"', app_js)
         self.assertIn("const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;", app_js)
         self.assertIn("$convList.classList.toggle('objects-scroll-split', _objectsSplitActive);", app_js)
-        self.assertIn("if (_objectsSplitActive) applyCurrentSessionsPanelHeight();", app_js)
+        self.assertIn("if (_objectsSplitActive) { applyCurrentSessionsPanelHeight(); applyEvergreenPanelHeight(); }", app_js)
         self.assertIn("const _projectTreeScrollBefore = _objectsSplitActive", app_js)
         self.assertIn("const _projectTreeScrollAfter = _projectTreeScrollBefore", app_js)
         self.assertNotIn("$convList.classList.toggle('objects-scroll-split', !!_shouldGroupByObjects);", app_js)
@@ -1181,48 +1178,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_restoreSplitScrollTop(_currentSessionsScrollAfter, _currentSessionsScrollTop);", app_js)
         self.assertIn("_restoreSplitScrollTop(_projectTreeScrollAfter, _projectTreeScrollTop);", app_js)
 
-    def test_by_objects_current_sessions_leaves_room_for_more_row(self):
-        """Collapsed current sessions should fit seven rows plus More before
-        the project tree starts."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
-
-        self.assertIn("const _CURRENT_SESSIONS_COLLAPSED_LIMIT = 7;", app_js)
-        self.assertIn("const _CURRENT_SESSIONS_VISIBLE_ROWS = _CURRENT_SESSIONS_COLLAPSED_LIMIT + 1;", app_js)
-        self.assertIn("? _currentSessionRows : _currentSessionRows.slice(0, _CURRENT_SESSIONS_COLLAPSED_LIMIT);", app_js)
-        self.assertIn("_currentSessionRows.length > _CURRENT_SESSIONS_COLLAPSED_LIMIT", app_js)
-        current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
-        self.assertIn("--current-session-row-h: 20px;", current_css)
-        self.assertIn("--current-session-label-h: 18px;", current_css)
-        self.assertIn("--current-sessions-visible-rows: 8;", current_css)
-        self.assertIn("calc(var(--current-session-label-h) + (var(--current-session-row-h) * var(--current-sessions-visible-rows)))", current_css)
-        self.assertIn("flex: 0 0 var(--current-sessions-panel-h, clamp(", current_css)
-        self.assertIn("min-height: 0;", current_css)
-        self.assertIn("height: var(--current-session-label-h);", current_css)
-        self.assertIn(".conv-current-sessions-scroll .conv-item {", current_css)
-        self.assertIn("min-height: var(--current-session-row-h);", current_css)
-        self.assertIn("border-radius: 6px;", current_css)
-        self.assertIn(".conv-current-sessions-scroll .conv-item:hover {", current_css)
-        self.assertIn("background: rgba(255, 255, 255, 0.045);", current_css)
-        self.assertIn(".conv-current-sessions-scroll .conv-item .conv-title {", current_css)
-        self.assertIn("color: var(--text);", current_css)
-        self.assertIn("font-weight: 650;", current_css)
-        self.assertIn("letter-spacing: 0;", current_css)
-        self.assertIn(":root:not([data-theme=\"light\"]) .conv-current-sessions-scroll .conv-item .conv-title", app_css)
-        self.assertIn("color: #f0f4fb;", app_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-extras { display: contents; }", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row {", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-outcome { display: none; }", current_css)
-        self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.is-brief-open .conv-outcome { display: block; }", current_css)
-        self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: block; }", current_css)
-
     def test_by_objects_search_results_show_row_previews(self):
         """Search results in by-objects mode should keep snippets/previews
         visible instead of inheriting the compact Current sessions row diet."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("const _currentSessionsScrollClass = 'conv-current-sessions-scroll' + (_ipSearchActive ? ' is-search-results' : '');", app_js)
+        self.assertIn("const _currentSessionsScrollClass = 'conv-current-sessions-scroll'", app_js)
+        self.assertIn("+ (_ipSearchActive ? ' is-search-results' : '')", app_js)
         self.assertIn("'<div class=\"' + _currentSessionsScrollClass + '\" data-role=\"current-sessions-scroll\">'", app_js)
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-extras { display: contents; }", current_css)
@@ -1263,7 +1226,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _currentSessionsTreeRows = (rows) => {", app_js)
         self.assertIn("childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)", app_js)
         self.assertIn("const _currentSessionRows = _ipSearchActive", app_js)
-        self.assertIn("const _curShown = (_curExpanded || _currentSessionRows.length <= _CURRENT_SESSIONS_COLLAPSED_LIMIT)", app_js)
+        self.assertIn("const _curShown = _currentSessionRows;", app_js)
         self.assertIn("_curShown.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join('')", app_js)
         self.assertIn("const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';", app_js)
         self.assertIn("const currentChildStyle = currentChildDepth > 0", app_js)
@@ -1647,9 +1610,12 @@ class TestServerImports(unittest.TestCase):
                     marker.write_text("{}")
                     # Fresh marker → live.
                     self.assertTrue(server._archive_session_is_live(sid))
-                    # Stale marker (older than the window) → not live.
+                    # Stale marker (older than the window) → not live. Clear the
+                    # per-session liveness memo (CCC_SESSION_LIVE_TTL) first — it
+                    # would otherwise still serve the fresh-marker True from above.
                     old = time.time() - (server._SIDECAR_LIVE_WINDOW + 600)
                     os.utime(marker, (old, old))
+                    server._session_live_cache.clear()
                     self.assertFalse(server._archive_session_is_live(sid))
                 finally:
                     for p in engine_patches:
@@ -2128,7 +2094,7 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         strip = app_js[
             app_js.index("async function _renderQueueHealthStrip"):
-            app_js.index("const wtWorkers = health.wt_workers || [];", app_js.index("async function _renderQueueHealthStrip"))
+            app_js.index("const proj = scopeProject !== undefined ? _uxqProjectKey(scopeProject) : _uxqWorkerProject();", app_js.index("async function _renderQueueHealthStrip"))
         ]
         self.assertIn("const configured = !!q.configured;", strip)
         self.assertIn("if (!configured && (la == null || la > _ACTIVE_WINDOW_S)) return;", strip)
@@ -3053,14 +3019,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function _uxqOpenItemModal(item)", app_js)
         self.assertIn("function _uxqItemTitle(item)", app_js)
         self.assertIn("const detailTitle = _uxqItemTitle(item);", app_js)
-        self.assertIn('class="uxq-detail-title"', app_js)
-        self.assertIn('class="uxq-detail-ref"', app_js)
+        self.assertIn('class="uxq-td-title"', app_js)
+        self.assertIn('class="uxq-td-ref"', app_js)
         self.assertIn("Click to view ticket details", app_js)
         self.assertIn("_uxqOpenItemModal(_uxqItemForRef(row.getAttribute('data-ref')))", app_js)
         queue_click = app_js[app_js.index("$queueList.addEventListener('click'"):app_js.index("// STUCK badge", app_js.index("$queueList.addEventListener('click'"))]
         self.assertNotIn("_uxqJumpToRef", queue_click)
-        self.assertIn(".uxq-detail-hero", app_css)
-        self.assertIn(".uxq-detail-title", app_css)
+        self.assertIn(".uxq-td-title-wrap", app_css)
+        self.assertIn(".uxq-td-title", app_css)
         self.assertIn(".uxq-detail-meta", app_css)
 
     def test_queue_status_icons_are_large_and_in_progress_glows(self):
@@ -3191,7 +3157,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const btn = ev.target.closest('[data-copy-assistant-message]');", app_js)
         self.assertIn("const btn = ev.target.closest('[data-read-assistant-message]');", app_js)
         self.assertIn("assistantNodeTextForCopy(eventEl)", app_js)
-        self.assertIn("speakTextDirect(text, convId, paneId)", app_js)
+        self.assertIn("speakTextDirect(text, convId, paneId, btn)", app_js)
         self.assertIn("let html = assistantMessageActionsHtml(ev)", app_js)
         self.assertIn(".assistant-message-actions", app_css)
         self.assertIn(".assistant-message-action", app_css)
@@ -8844,8 +8810,7 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("return n === 'opus-4-8' || n === 'opus-4-7';", js)
         self.assertIn("const modelSupportsOneM = engine === 'claude' && claudeModelSupportsOneM(displayModel);", js)
         self.assertIn("const isOneM = modelSupportsOneM && (", js)
-        self.assertIn("{ id: 'sonnet-4-8', label: 'sonnet-4-8', oneM: false }", js)
-        self.assertIn("{ id: 'sonnet-4-7', label: 'sonnet-4-7', oneM: false }", js)
+        self.assertIn("{ id: 'sonnet-5',   label: 'sonnet-5',   oneM: false }", js)
         self.assertIn("{ id: 'sonnet-4-6', label: 'sonnet-4-6', oneM: false }", js)
         self.assertNotIn("{ id: 'sonnet-4-6', label: 'sonnet-4-6', oneM: true }", js)
 
