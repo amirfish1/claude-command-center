@@ -21656,7 +21656,7 @@
         +   '<span class="conv-repo-search-hint">' + _idSearchConvs.length + ' — click to open</span>'
         + '</div>'
         + '<div class="conv-repo-search-list">'
-        + _idSearchConvs.map(c => _renderRow(c)).join('')
+        + _idSearchConvs.map(c => _renderRow(c, { elevateToObject: true })).join('')
         + '</div>'
         + '</div>'
       : '';
