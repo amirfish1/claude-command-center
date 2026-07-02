@@ -5994,6 +5994,63 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(ctx["repo_path"], str(self.repo))
         self.assertEqual(ctx["cwd"], str(self.repo))
 
+    def test_session_root_cwd_resolves_from_effective_repo_evidence(self):
+        sid = "00000000-0000-4000-8000-000000000109"
+        subprocess.run(["git", "init"], cwd=self.repo, check=True,
+                       capture_output=True, text=True)
+        touched = self.repo / "server.py"
+        touched.write_text("print('ok')\n", encoding="utf-8")
+
+        transcript = self.server._canonical_conversation_path("/", sid)
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(
+            json.dumps({
+                "type": "user",
+                "timestamp": "2026-05-04T00:00:00.000Z",
+                "cwd": "/",
+                "sessionId": sid,
+                "gitBranch": "HEAD",
+                "message": {"role": "user", "content": "work on the repo"},
+            }) + "\n" +
+            json.dumps({
+                "type": "assistant",
+                "timestamp": "2026-05-04T00:00:01.000Z",
+                "sessionId": sid,
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "name": "Read",
+                        "input": {"file_path": str(touched)},
+                    }],
+                },
+            }) + "\n" +
+            json.dumps({
+                "type": "assistant",
+                "timestamp": "2026-05-04T00:00:02.000Z",
+                "sessionId": sid,
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "name": "Bash",
+                        "input": {"command": f"git -C {self.repo} status"},
+                    }],
+                },
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        try:
+            ctx = self.server.repo_from_session(sid)
+        except self.server.RepoContextError as exc:
+            self.fail(
+                "repo_from_session rejected root cwd instead of using "
+                f"effective repo evidence: {exc.code}"
+            )
+        self.assertEqual(ctx["repo_path"], str(self.repo))
+        self.assertEqual(ctx["cwd"], str(self.repo))
+
     def test_find_conversations_carries_spawn_parent_session_id(self):
         parent = "10000000-0000-4000-8000-000000000001"
         child = "10000000-0000-4000-8000-000000000002"

@@ -2557,7 +2557,19 @@ def repo_from_session(session_id):
             cwd = None
     if not cwd:
         raise RepoContextError("repo_required", f"could not derive repo context for session {sid}")
-    return _resolve_cwd_context(cwd)
+    try:
+        return _resolve_cwd_context(cwd)
+    except RepoContextError as exc:
+        if exc.code != "invalid_cwd":
+            raise
+        try:
+            eff = _infer_effective_repo(sid, literal_cwd=cwd)
+        except Exception:
+            eff = None
+        top = eff.get("top") if isinstance(eff, dict) else None
+        if top:
+            return _resolve_cwd_context(top)
+        raise
 
 
 def require_repo_context(payload=None, query=None, *, allow_session=True):
