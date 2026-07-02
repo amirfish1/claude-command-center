@@ -4101,24 +4101,6 @@
     font-weight: 600;
     color: var(--faint, var(--text-muted));
   }
-  .conv-current-more {
-    display: block;
-    width: calc(100% - 16px);
-    margin: 2px 8px 4px;
-    padding: 4px 8px;
-    background: transparent;
-    border: 1px dashed var(--border);
-    border-radius: 6px;
-    color: var(--text-muted);
-    font-size: 11px;
-    text-align: center;
-    cursor: pointer;
-  }
-  .conv-current-more:hover {
-    color: var(--text);
-    border-color: var(--accent);
-    background: var(--surface-2);
-  }
   #convList.objects-scroll-split {
     overflow-y: hidden !important;
     display: flex;
@@ -4138,6 +4120,22 @@
   #convList.objects-scroll-split .conv-openask-section {
     flex: 0 0 auto;
   }
+  /* Accordion header (CCC-397): mirrors Triggered Workers below — a
+     clickable pill above the scroll box, collapsing it away in place. */
+  .conv-current-sessions-header {
+    margin: 0 2px 0 0;
+    border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+    border-bottom: 0;
+    border-radius: 8px 8px 0 0;
+    background: rgba(139, 148, 158, 0.08);
+    cursor: pointer;
+    user-select: none;
+  }
+  .conv-current-sessions-header.is-collapsed {
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+    border-radius: 8px;
+  }
+  .conv-current-sessions-scroll.is-collapsed { display: none; }
   .conv-current-sessions-scroll {
     --current-session-row-h: 20px;
     --current-session-label-h: 18px;
@@ -4158,7 +4156,8 @@
     padding-right: 2px;
     box-sizing: border-box;
     border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
-    border-radius: 8px;
+    border-top: 0;
+    border-radius: 0 0 8px 8px;
     background: rgba(139, 148, 158, 0.07);
   }
   .conv-current-sessions-scroll .conv-objects-section-label {
@@ -4240,13 +4239,6 @@
     min-height: 0;
     padding: 8px 10px;
   }
-  .conv-current-sessions-scroll .conv-current-more {
-    min-height: var(--current-session-row-h);
-    margin-top: 0;
-    margin-bottom: 0;
-    padding-top: 0;
-    padding-bottom: 0;
-  }
   .conv-objects-splitter {
     flex: 0 0 10px;
     min-height: 10px;
@@ -4289,7 +4281,12 @@
     background: color-mix(in srgb, var(--surface-2) 54%, var(--bg));
     border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
     border-bottom: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+    cursor: pointer;
+    user-select: none;
   }
+  /* Accordion collapse (CCC-397): same fold-away behavior as Current
+     sessions / Triggered Workers, applied to the Project tree section. */
+  .conv-project-tree-scroll.is-collapsed { display: none; }
   /* ============================================================
      Project tree — pixel-match to Codex's .tree / .tree-item mock.
      Exact values lifted from the reference HTML: 30px rows, padding
@@ -4321,7 +4318,10 @@
     user-select: none;
   }
   /* Collapsed: fold the agent list away and close off the header's bottom edge
-     so it reads as a self-contained pill (CCC-282). */
+     so it reads as a self-contained pill (CCC-282). Shared chevron styling
+     across all three accordion headers (CCC-397). */
+  .conv-current-sessions-header .conv-section-collapse-chevron,
+  .conv-project-tree-header .conv-section-collapse-chevron,
   .conv-evergreen-agents-header .conv-section-collapse-chevron {
     font-size: 9px;
     line-height: 1;

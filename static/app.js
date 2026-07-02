@@ -22397,16 +22397,14 @@
             + '</div>';
         }).join('');
       }
-      // Show ~7 at rest, then a "More" affordance — the live triage list
-      // shouldn't push the Project tree way down. Expanded state persists so a
-      // poll re-render doesn't collapse it back.
-      const _CURRENT_SESSIONS_COLLAPSED_LIMIT = 7;
-      const _CURRENT_SESSIONS_VISIBLE_ROWS = _CURRENT_SESSIONS_COLLAPSED_LIMIT + 1;
-      let _curExpanded = false;
-      try { _curExpanded = localStorage.getItem('ccc-current-sessions-expanded') === '1'; } catch (_) {}
-      const _curShown = (_curExpanded || _currentSessionRows.length <= _CURRENT_SESSIONS_COLLAPSED_LIMIT)
-        ? _currentSessionRows : _currentSessionRows.slice(0, _CURRENT_SESSIONS_COLLAPSED_LIMIT);
-      const _curHidden = _currentSessionRows.length - _curShown.length;
+      // Whole-section accordion collapse (CCC-397) replaced the old "More /
+      // Show less" row-count cap — the user found per-row truncation not
+      // useful; a fold-away header matching Triggered Workers is. All rows
+      // always render; only the section's visibility is toggled.
+      const _curShown = _currentSessionRows;
+      let _currentSessionsCollapsed = false;
+      try { _currentSessionsCollapsed = localStorage.getItem('ccc-current-sessions-collapsed') === '1'; } catch (_) {}
+      let _currentSessionsHeaderHtml = '';
       let _currentSessionsHtml = '';
       if (_currentSessions.length) {
         const _currentSessionsLabel = _ipSearchActive ? 'Search results' : 'Current sessions';
@@ -22414,16 +22412,15 @@
         const _currentSessionsRowsHtml = _currentSessionsByObjects
           ? _currentSessionsByObjectGroupsHtml(_curShown)
           : _curShown.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join('');
-        _currentSessionsHtml = '<div class="conv-objects-section-label">' + _currentSessionsLabel
-          + _currentSessionsSub + '</div>'
-          + _currentSessionsRowsHtml;
-        if (_curHidden > 0) {
-          _currentSessionsHtml += '<button type="button" class="conv-current-more"'
-            + ' data-role="current-sessions-more" data-expand="1">More (' + _curHidden + ')</button>';
-        } else if (_curExpanded && _currentSessionRows.length > _CURRENT_SESSIONS_COLLAPSED_LIMIT) {
-          _currentSessionsHtml += '<button type="button" class="conv-current-more"'
-            + ' data-role="current-sessions-more" data-expand="0">Show less</button>';
-        }
+        const _currentSessionsChevron = _currentSessionsCollapsed ? '&#9656;' : '&#9662;';
+        _currentSessionsHeaderHtml = '<div class="conv-objects-section-label conv-current-sessions-header'
+          + (_currentSessionsCollapsed ? ' is-collapsed' : '')
+          + '" data-role="current-sessions-header" role="button" tabindex="0"'
+          + ' title="Collapse / expand Current sessions">'
+          + '<span class="conv-section-collapse-chevron" data-role="current-sessions-collapse" aria-hidden="true">' + _currentSessionsChevron + '</span>'
+          + _currentSessionsLabel + _currentSessionsSub
+          + '</div>';
+        _currentSessionsHtml = _currentSessionsRowsHtml;
       }
       const _projectTreeHtml = _objGroupsHtml
         ? '<div class="conv-project-tree">' + _objGroupsHtml + '</div>'
@@ -22434,8 +22431,20 @@
           + '<span class="grouping-opt">+ object</span>'
           + '</span>'
         : '';
+      // Collapse/expand for Project tree, matching Triggered Workers below
+      // and Current sessions above — all three sidebar sections now use the
+      // same accordion header instead of mixed more/less + per-section ad
+      // hoc controls (CCC-397).
+      let _projectTreeCollapsed = false;
+      try { _projectTreeCollapsed = localStorage.getItem('ccc-project-tree-collapsed') === '1'; } catch (_) {}
+      const _projectTreeChevron = _projectTreeCollapsed ? '&#9656;' : '&#9662;';
       const _projectTreeHeaderHtml = _projectTreeHtml
-        ? '<div class="conv-objects-section-label conv-project-tree-header" data-role="project-tree-header">Project tree'
+        ? '<div class="conv-objects-section-label conv-project-tree-header'
+          + (_projectTreeCollapsed ? ' is-collapsed' : '')
+          + '" data-role="project-tree-header" role="button" tabindex="0"'
+          + ' title="Collapse / expand Project tree">'
+          + '<span class="conv-section-collapse-chevron" data-role="project-tree-collapse" aria-hidden="true">' + _projectTreeChevron + '</span>'
+          + 'Project tree'
           + _addObjectBtnHtml
           + '</div>'
         : '';
@@ -22468,12 +22477,15 @@
         : '';
       const _currentSessionsExtraHtml = _gcSectionLabel + (_gcItems || []).map(it => it.html).join('');
       const _currentSessionsBodyHtml = _currentSessionsHtml + _currentSessionsExtraHtml;
-      const _currentSessionsScrollClass = 'conv-current-sessions-scroll' + (_ipSearchActive ? ' is-search-results' : '');
+      const _currentSessionsScrollClass = 'conv-current-sessions-scroll'
+        + (_ipSearchActive ? ' is-search-results' : '')
+        + (_currentSessionsCollapsed ? ' is-collapsed' : '');
       const _currentSessionsScrollHtml = (_currentSessionsBodyHtml)
         ? '<div class="' + _currentSessionsScrollClass + '" data-role="current-sessions-scroll">' + _currentSessionsBodyHtml + '</div>'
         : '';
+      const _projectTreeScrollClass = 'conv-project-tree-scroll' + (_projectTreeCollapsed ? ' is-collapsed' : '');
       const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)
-        ? '<div class="conv-project-tree-scroll" data-role="project-tree-scroll">' + _projectTreeHtml + _looseHtml + '</div>'
+        ? '<div class="' + _projectTreeScrollClass + '" data-role="project-tree-scroll">' + _projectTreeHtml + _looseHtml + '</div>'
         : '';
       const _objectsSplitHandleHtml = (_currentSessionsScrollHtml && _projectTreeScrollHtml)
         ? '<div class="conv-objects-splitter" data-role="objects-splitter" role="separator" aria-orientation="horizontal" title="Drag to resize Current sessions"></div>'
@@ -22481,7 +22493,7 @@
       const _evergreenSplitHandleHtml = _evergreenAgentsScrollHtml
         ? '<div class="conv-evergreen-agents-splitter" data-role="evergreen-agents-splitter" role="separator" aria-orientation="horizontal" title="Drag to resize Triggered Workers"></div>'
         : '';
-      _activeRowsHtml = _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenSplitHandleHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;
+      _activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenSplitHandleHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;
     } else if (_shouldGroupByFolder) {
       // Group cards by folder; preserve folder order by the most
       // recent card in each group (freshest folder appears first).
@@ -24088,41 +24100,36 @@
         else _openWtLogPanel();
       });
     }
-    // Collapse/expand the Evergreen Agents section. Delegated + wired once;
-    // toggles a persisted flag and folds the scroll in place (CCC-282).
-    if (!$convList._evergreenCollapseWired) {
-      $convList._evergreenCollapseWired = true;
+    // Collapse/expand accordion headers for the three stacked sidebar
+    // sections (Current sessions / Project tree / Triggered Workers). All
+    // three share one delegated handler + storage-key convention so they
+    // behave identically (CCC-397) — click folds the section's scroll
+    // sibling in place, no re-render, no scroll jump.
+    const _SECTION_ACCORDIONS = [
+      { role: 'current-sessions-header', chevron: 'current-sessions-collapse', key: 'ccc-current-sessions-collapsed', ignore: [] },
+      { role: 'project-tree-header', chevron: 'project-tree-collapse', key: 'ccc-project-tree-collapsed', ignore: ['ip-add-object'] },
+      { role: 'evergreen-agents-header', chevron: 'evergreen-agents-collapse', key: 'ccc-evergreen-agents-collapsed', ignore: ['evergreen-log-btn'] },
+    ];
+    if (!$convList._sectionAccordionWired) {
+      $convList._sectionAccordionWired = true;
       $convList.addEventListener('click', (ev) => {
-        const hdr = ev.target.closest('[data-role="evergreen-agents-header"]');
-        if (!hdr) return;
-        if (ev.target.closest('[data-role="evergreen-log-btn"]')) return;
-        ev.stopPropagation();
-        ev.preventDefault();
-        let collapsed = false;
-        try { collapsed = localStorage.getItem('ccc-evergreen-agents-collapsed') === '1'; } catch (_) {}
-        const nowCollapsed = !collapsed;
-        try { localStorage.setItem('ccc-evergreen-agents-collapsed', nowCollapsed ? '1' : '0'); } catch (_) {}
-        hdr.classList.toggle('is-collapsed', nowCollapsed);
-        const chev = hdr.querySelector('[data-role="evergreen-agents-collapse"]');
-        if (chev) chev.innerHTML = nowCollapsed ? '&#9656;' : '&#9662;';
-        const scroll = hdr.nextElementSibling;
-        if (scroll && scroll.classList.contains('conv-evergreen-agents-scroll')) {
-          scroll.classList.toggle('is-collapsed', nowCollapsed);
+        for (const cfg of _SECTION_ACCORDIONS) {
+          const hdr = ev.target.closest('[data-role="' + cfg.role + '"]');
+          if (!hdr) continue;
+          if (cfg.ignore.some(role => ev.target.closest('[data-role="' + role + '"]'))) return;
+          ev.stopPropagation();
+          ev.preventDefault();
+          let collapsed = false;
+          try { collapsed = localStorage.getItem(cfg.key) === '1'; } catch (_) {}
+          const nowCollapsed = !collapsed;
+          try { localStorage.setItem(cfg.key, nowCollapsed ? '1' : '0'); } catch (_) {}
+          hdr.classList.toggle('is-collapsed', nowCollapsed);
+          const chev = hdr.querySelector('[data-role="' + cfg.chevron + '"]');
+          if (chev) chev.innerHTML = nowCollapsed ? '&#9656;' : '&#9662;';
+          const scroll = hdr.nextElementSibling;
+          if (scroll) scroll.classList.toggle('is-collapsed', nowCollapsed);
+          return;
         }
-      });
-    }
-    // "More / Show less" for the Current sessions region. Delegated + wired
-    // once so it survives re-renders; toggles a persisted flag and repaints.
-    if (!$convList._currentMoreWired) {
-      $convList._currentMoreWired = true;
-      $convList.addEventListener('click', (ev) => {
-        const btn = ev.target.closest('[data-role="current-sessions-more"]');
-        if (!btn) return;
-        ev.stopPropagation();
-        ev.preventDefault();
-        const expand = btn.getAttribute('data-expand') === '1';
-        try { localStorage.setItem('ccc-current-sessions-expanded', expand ? '1' : '0'); } catch (_) {}
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
     if (!$convList._objectsSplitterWired) {
