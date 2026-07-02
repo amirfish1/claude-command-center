@@ -28608,14 +28608,18 @@
         '<div class="uxq-tl-block-q">' + escapeHtml(item.block_question) + '</div>' + pNotes + aBlock);
     }
 
-    // Closed / Resolution
-    if (item.closed_at) {
-      // resolution fields live under item.resolution.{summary,caveat,follow_up,unresolved}
-      const res = (item.resolution && typeof item.resolution === 'object') ? item.resolution : {};
-      const resSummary   = res.summary   || item.summary;
-      const resCaveat    = res.caveat    || item.caveat;
-      const resFollowUp  = res.follow_up || item.follow_up;
-      const resUnresolved= res.unresolved|| item.unresolved;
+    // Closed / Resolution — a reopen clears item.closed_at (and reassigns
+    // item.claimed_by to whoever re-claims it) but keeps closed_by/resolution
+    // around, so gate on those too or a prior close silently vanishes from
+    // Activity on reopen. Attribute to closed_by (who actually closed it),
+    // not claimed_by (the current claimant, which may be a different worker
+    // after reopen + re-claim).
+    const res = (item.resolution && typeof item.resolution === 'object') ? item.resolution : {};
+    const resSummary   = res.summary   || item.summary;
+    const resCaveat    = res.caveat    || item.caveat;
+    const resFollowUp  = res.follow_up || item.follow_up;
+    const resUnresolved= res.unresolved|| item.unresolved;
+    if (item.closed_at || item.closed_by || resSummary || resCaveat || resFollowUp || resUnresolved) {
       const resHtml = (resSummary || resCaveat || resFollowUp || resUnresolved)
         ? '<div class="uxq-tl-res">'
           + (resSummary    ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Summary</span><div class="uxq-tl-res-v">' + _fmtRes(resSummary) + '</div></div>' : '')
@@ -28625,7 +28629,7 @@
           + '</div>'
         : '';
       tlHtml += _tlEvt('uxq-tl-closed',
-        '<span class="uxq-tl-verb">Closed</span>' + _tlTime(item.closed_at) + _tlWorker(item.claimed_by),
+        '<span class="uxq-tl-verb">Closed</span>' + _tlTime(item.closed_at) + _tlWorker(item.closed_by || item.claimed_by),
         resHtml);
     }
 
