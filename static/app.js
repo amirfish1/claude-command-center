@@ -28603,6 +28603,20 @@
         + '</div>'
       : '';
 
+    // Reopen section (only when closed) — a real textarea in the main
+    // column next to Activity instead of a single-line input squeezed into
+    // the footer button row (CCC-422: "need more space... why not as part
+    // of the chronological view?"). Mirrors the Answer section's placement.
+    const reopenSectionHtml = item.status === 'closed'
+      ? '<div class="uxq-td-sec uxq-td-reopen-sec">'
+        + '<div class="uxq-td-sec-label">Reopen</div>'
+        + '<textarea class="uxq-td-reopen-input" rows="3" placeholder="Reason for reopening (optional)" aria-label="Reason for reopening"></textarea>'
+        + '<div class="uxq-reopen-row">'
+        + '<button type="button" class="ann-btn ann-primary uxq-td-reopen-confirm">Reopen ticket</button>'
+        + '</div>'
+        + '</div>'
+      : '';
+
     // Build modal DOM
     const modal = document.createElement('div');
     modal.id = 'uxqItemModal';
@@ -28625,6 +28639,7 @@
       +       '<div class="uxq-timeline">' + tlHtml + '</div>'
       +     '</div>'
       +     answerSectionHtml
+      +     reopenSectionHtml
       +   '</div>'
       +   '<aside class="uxq-td-sidebar">' + sideHtml + '</aside>'
       + '</div>'
@@ -28635,7 +28650,6 @@
       +   '</div>'
       +   '<div class="uxq-td-footer-btns">'
       +     '<button type="button" class="ann-btn" data-ux-copy>Copy prompt</button>'
-      +     (item.status === 'closed' ? '<button type="button" class="ann-btn uxq-td-reopen-btn" data-ux-reopen>Reopen</button>' : '')
       +     '<button type="button" class="ann-btn ann-primary" data-ux-close>Close</button>'
       +   '</div>'
       + '</div>'
@@ -28658,53 +28672,38 @@
       });
     }
 
-    // Reopen button (closed tickets only)
-    const reopenBtn = modal.querySelector('[data-ux-reopen]');
-    if (reopenBtn) {
-      reopenBtn.addEventListener('click', () => {
-        // Replace button with inline note input + confirm
-        const wrap = reopenBtn.parentElement;
-        reopenBtn.replaceWith((() => {
-          const frag = document.createElement('span');
-          frag.className = 'uxq-td-reopen-inline';
-          frag.innerHTML =
-            '<input class="uxq-td-reopen-input" type="text" placeholder="Reason for reopening (optional)">'
-            + '<button type="button" class="ann-btn ann-primary uxq-td-reopen-confirm">Reopen</button>'
-            + '<button type="button" class="ann-btn uxq-td-reopen-cancel">Cancel</button>';
-          return frag;
-        })());
-        const noteInput   = modal.querySelector('.uxq-td-reopen-input');
-        const confirmBtn  = modal.querySelector('.uxq-td-reopen-confirm');
-        const cancelBtn   = modal.querySelector('.uxq-td-reopen-cancel');
-        if (noteInput) noteInput.focus();
-        const doReopen = async () => {
-          confirmBtn.disabled = true;
-          try {
-            const res = await fetch('/api/ux-fixes/reopen', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ ref, note: (noteInput ? noteInput.value.trim() : '') }),
-            });
-            const d = await res.json().catch(() => ({}));
-            if (res.ok && d.ok) {
-              showOpToast('Ticket reopened', 'success');
-              _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
-              _renderQueuePanel(); close();
-            } else {
-              showOpToast('Reopen failed: ' + (d.error || res.status), 'error');
-              confirmBtn.disabled = false;
-            }
-          } catch (e) {
-            showOpToast('Reopen failed: ' + e, 'error');
-            confirmBtn.disabled = false;
+    // Reopen (closed tickets only) — full-width textarea section next to
+    // Activity, always visible when closed (no extra reveal click needed).
+    const reopenNoteInput = modal.querySelector('.uxq-td-reopen-input');
+    const reopenConfirmBtn = modal.querySelector('.uxq-td-reopen-confirm');
+    if (reopenConfirmBtn) {
+      const doReopen = async () => {
+        reopenConfirmBtn.disabled = true;
+        try {
+          const res = await fetch('/api/ux-fixes/reopen', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ref, note: (reopenNoteInput ? reopenNoteInput.value.trim() : '') }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (res.ok && d.ok) {
+            showOpToast('Ticket reopened', 'success');
+            _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
+            _renderQueuePanel(); close();
+          } else {
+            showOpToast('Reopen failed: ' + (d.error || res.status), 'error');
+            reopenConfirmBtn.disabled = false;
           }
-        };
-        confirmBtn.addEventListener('click', doReopen);
-        if (noteInput) noteInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doReopen(); } });
-        cancelBtn.addEventListener('click', () => {
-          const inline = modal.querySelector('.uxq-td-reopen-inline');
-          if (inline) inline.remove();
+        } catch (e) {
+          showOpToast('Reopen failed: ' + e, 'error');
+          reopenConfirmBtn.disabled = false;
+        }
+      };
+      reopenConfirmBtn.addEventListener('click', doReopen);
+      if (reopenNoteInput) {
+        reopenNoteInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doReopen(); }
         });
-      });
+      }
     }
 
     // Inline title editing via contenteditable
