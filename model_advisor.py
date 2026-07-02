@@ -447,6 +447,10 @@ def log_recommendation(path, session_id, name, rec, baseline_out_tokens):
                 and e.get("to_model") == rec["to_model"]
                 and e.get("status") in ("pending", "applied", "dismissed")
             ):
+                # A dismissal is the user saying "not for this session" — sticky
+                # for the session's lifetime, not just the cooldown window.
+                if e.get("status") == "dismissed":
+                    return e
                 try:
                     age = now - datetime.strptime(
                         e["ts"], "%Y-%m-%dT%H:%M:%SZ"

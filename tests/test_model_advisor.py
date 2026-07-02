@@ -143,6 +143,16 @@ class LogTest(unittest.TestCase):
         data = ma._load_log(self.path)
         self.assertEqual(len(data["recommendations"]), 1)
 
+    def test_dismissed_rec_stays_sticky_past_cooldown(self):
+        e = ma.log_recommendation(self.path, "sid1", "worker", self._rec(), 1000)
+        ma.mark(self.path, e["id"], "dismissed")
+        data = ma._load_log(self.path)
+        data["recommendations"][0]["ts"] = "2000-01-01T00:00:00Z"  # ancient
+        ma._save_log(self.path, data)
+        again = ma.log_recommendation(self.path, "sid1", "worker", self._rec(), 1500)
+        self.assertEqual(again["id"], e["id"])
+        self.assertEqual(again["status"], "dismissed")
+
     def test_applied_downgrade_accrues_realized_savings(self):
         e = ma.log_recommendation(self.path, "sid1", "worker", self._rec(), 0)
         ma.mark(self.path, e["id"], "applied")
