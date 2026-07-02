@@ -11049,5 +11049,11 @@ class TestWTMessagingBackendStage2(unittest.TestCase):
             run.assert_not_called()
 
 
+def test_throughput_initial_route_is_registered():
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert 'elif path == "/api/throughput/initial":' in server_py
+    assert "_throughput_initial_payload(" in server_py
+
+
 if __name__ == "__main__":
     unittest.main()

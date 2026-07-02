@@ -43606,6 +43606,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # doesn't re-walk every JSONL. Atomic; only writes when dirty.
             _save_conv_meta_cache()
             self.send_json(convs)
+        elif path == "/api/throughput/initial":
+            qs = urllib.parse.parse_qs(parsed.query)
+            session_id = (qs.get("session_id", [""])[0] or "").strip()
+            if not session_id:
+                self.send_json({"error": "Missing session_id"}, 400)
+                return
+            repo_path = (qs.get("repo_path", [""])[0] or "").strip() or None
+            range_key = (qs.get("range", [""])[0] or "").strip() or None
+            payload, status = _throughput_initial_payload(
+                session_id,
+                repo_path=repo_path,
+                range_key=range_key,
+            )
+            self.send_json(payload, status)
+            return
         elif path == "/api/throughput":
             qs = urllib.parse.parse_qs(parsed.query)
             session_id = (qs.get("session_id", [""])[0] or "").strip()
