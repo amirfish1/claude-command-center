@@ -145,8 +145,53 @@
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
+    transition: width 0.2s ease;
   }
-  
+
+  /* Collapsed by default (see boot code) — most visits are to the
+     aggregate 7d view, not a specific session, so the 340px rail was
+     dead space until explicitly expanded. */
+  .sidebar.collapsed {
+    width: 44px;
+  }
+  .sidebar.collapsed .search-container,
+  .sidebar.collapsed .session-list {
+    display: none;
+  }
+
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 8px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .sidebar.collapsed .sidebar-header {
+    justify-content: center;
+    border-bottom: none;
+  }
+  .sidebar-toggle-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 6px;
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  .sidebar-toggle-btn:hover {
+    color: var(--text);
+    border-color: var(--border-active);
+  }
+
   .search-container {
     padding: 16px;
     border-bottom: 1px solid var(--border);
@@ -248,6 +293,10 @@
       max-height: 22vh;
       border-right: none;
       border-bottom: 1px solid var(--border);
+    }
+    .sidebar.collapsed {
+      width: 100%;
+      max-height: 44px;
     }
     .weekly-banner { margin-bottom: 12px; }
     .session-title { max-width: none; }
@@ -828,7 +877,10 @@
   <div class="layout-container">
     
     <!-- Sidebar: list of sessions -->
-    <div class="sidebar">
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <button class="sidebar-toggle-btn" id="sidebar-toggle-btn" onclick="toggleSidebar()" title="Expand session list">»</button>
+      </div>
       <div class="search-container">
         <input type="text" class="search-input" id="search-input" placeholder="Search sessions..." oninput="filterSessions()">
       </div>
@@ -1003,6 +1055,18 @@
       const n = Number(value || 0);
       if (!n) return '$0.00';
       return n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`;
+    }
+
+    // Sidebar collapse — defaults to collapsed (see boot code below); state
+    // persists per-browser so an explicit expand survives a reload.
+    function toggleSidebar(forceCollapsed) {
+      const sidebar = document.getElementById('sidebar');
+      const btn = document.getElementById('sidebar-toggle-btn');
+      const collapsed = typeof forceCollapsed === 'boolean' ? forceCollapsed : !sidebar.classList.contains('collapsed');
+      sidebar.classList.toggle('collapsed', collapsed);
+      btn.textContent = collapsed ? '»' : '«';
+      btn.title = collapsed ? 'Expand session list' : 'Collapse session list';
+      localStorage.setItem('ccc-throughput-sidebar-collapsed', collapsed ? '1' : '0');
     }
 
     // Refresh status indicator helper
@@ -2816,6 +2880,7 @@
           })
           .catch(() => null)
       : Promise.resolve(null);
+    toggleSidebar(localStorage.getItem('ccc-throughput-sidebar-collapsed') !== '0');
     loadSessions(_prefetch7d);
     loadWeeklyUsage();
     setInterval(loadWeeklyUsage, 120000);
