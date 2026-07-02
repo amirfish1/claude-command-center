@@ -103,7 +103,16 @@ async function resolveBaseUrl() {
     console.log(`[snapshot] seeded ${Object.keys(entries).length} localStorage keys from ${lsPath}`);
   }
 
-  await page.goto(url, { waitUntil: 'networkidle2' });
+  // CCC is a live-polling dashboard (health/attention/wt-workers polls fire
+  // every few seconds forever) — 'networkidle2' waits for network to go
+  // quiet and never resolves, hanging until Puppeteer's nav timeout. This
+  // is worse with a seeded, data-heavy profile: more in-flight requests at
+  // once, so the connection count rarely dips to the networkidle2
+  // threshold before the next poll tick refills it (OPS-71). Wait for
+  // 'load' (DOM + initial script execution) instead, then give in-flight
+  // fetches a bounded window to settle before capturing.
+  await page.goto(url, { waitUntil: 'load' });
+  await page.waitForNetworkIdle({ idleTime: 750, timeout: 4000 }).catch(() => {});
   await page.screenshot({ path: out });
   await browser.close();
   console.log(`[snapshot] wrote ${out} (${url})`);
