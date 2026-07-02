@@ -5,6 +5,7 @@ gitignored alongside the Morning plugin itself; CI never sees it.
 """
 import importlib
 import inspect
+import ast
 import fcntl
 import json
 import os
@@ -240,6 +241,78 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Total Recall", app_js)
         self.assertIn("is-recall", app_js)
         self.assertIn(".conv-history-badge.is-recall", app_css)
+
+    def test_ttl_memo_serves_stale_value_while_refreshing(self):
+        """Slow liveness probes must not convoy request threads behind one lock."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        calls = 0
+        refresh_entered = threading.Event()
+        release_refresh = threading.Event()
+
+        @server._ttl_memo(0.01)
+        def slow_probe():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return "warm"
+            refresh_entered.set()
+            release_refresh.wait(timeout=2)
+            return "fresh"
+
+        self.assertEqual(slow_probe(), "warm")
+        time.sleep(0.03)
+
+        refresh_thread = threading.Thread(target=slow_probe)
+        refresh_thread.start()
+        self.assertTrue(refresh_entered.wait(timeout=1))
+
+        result = {}
+        waiter = threading.Thread(target=lambda: result.setdefault("value", slow_probe()))
+        waiter.start()
+        waiter.join(timeout=0.1)
+
+        try:
+            self.assertFalse(waiter.is_alive(), "stale memo caller blocked behind refresh")
+            self.assertEqual(result.get("value"), "warm")
+        finally:
+            release_refresh.set()
+            refresh_thread.join(timeout=1)
+            waiter.join(timeout=1)
+
+    def test_pending_input_saves_do_not_run_inside_queue_locks(self):
+        """The queue watcher must not self-deadlock while persisting queues."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        source = inspect.getsource(server)
+        tree = compile(source, server.__file__, "exec", flags=ast.PyCF_ONLY_AST)
+        lock_names = {"_pending_resume_lock", "_pending_terminal_input_lock"}
+        violations = []
+
+        def calls_save(node):
+            for child in ast.walk(node):
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+                    if child.func.id == "_save_pending_inputs":
+                        return True
+            return False
+
+        class SaveUnderQueueLockVisitor(ast.NodeVisitor):
+            def visit_With(self, node):
+                locked = []
+                for item in node.items:
+                    expr = item.context_expr
+                    if isinstance(expr, ast.Name) and expr.id in lock_names:
+                        locked.append(expr.id)
+                if locked and calls_save(node):
+                    violations.append((node.lineno, ", ".join(locked)))
+                self.generic_visit(node)
+
+        SaveUnderQueueLockVisitor().visit(tree)
+        self.assertEqual([], violations)
 
     def test_conversation_search_remembers_last_ten_queries(self):
         """Search should offer the last ten committed conversation queries."""

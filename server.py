@@ -10036,25 +10036,52 @@ def _ttl_memo(ttl_seconds):
     group-chat opens and per-session on status polls, so without this each
     caller re-shells `ps` (plus per-process cwd/tty/terminal lookups). Callers
     iterate the result read-only, and ~3s of staleness is already the accepted
-    contract for liveness here (see _ENGINE_LIVE_TTL)."""
+    contract for liveness here (see _ENGINE_LIVE_TTL).
+
+    If a cached value exists but has expired, only one caller refreshes it;
+    concurrent callers get the stale value immediately. That keeps a slow ps
+    probe from convoying request threads behind this lock.
+    """
     def decorate(fn):
-        state = {"ts": 0.0, "val": None}
+        state = {"ts": 0.0, "val": None, "refreshing": False}
         _ttl_memo_caches.append(state)
-        lock = threading.Lock()
+        cond = threading.Condition()
 
         def wrapper():
             now = time.time()
             if state["val"] is not None and now - state["ts"] < ttl_seconds:
                 return state["val"]
-            with lock:
+            with cond:
                 now = time.time()
                 if state["val"] is not None and now - state["ts"] < ttl_seconds:
                     return state["val"]
+                if state["refreshing"]:
+                    if state["val"] is not None:
+                        return state["val"]
+                    while state["refreshing"]:
+                        cond.wait()
+                    if state["val"] is not None:
+                        return state["val"]
+                state["refreshing"] = True
+            try:
                 val = fn()
+            except Exception:
+                with cond:
+                    state["refreshing"] = False
+                    cond.notify_all()
+                raise
+            with cond:
                 state["val"] = val
-                state["ts"] = now
+                state["ts"] = time.time()
+                state["refreshing"] = False
+                cond.notify_all()
                 return val
-        wrapper.cache_clear = lambda: state.update(ts=0.0, val=None)
+
+        def cache_clear():
+            with cond:
+                state.update(ts=0.0, val=None, refreshing=False)
+                cond.notify_all()
+        wrapper.cache_clear = cache_clear
         return wrapper
     return decorate
 
@@ -20554,12 +20581,14 @@ def _start_resume_queue_watcher() -> None:
                     if not queue:
                         _pending_resume_queue.pop(sid, None)
                         _pending_resume_retry_after.pop(sid, None)
-                        _save_pending_inputs()
-                        continue
-                    text = queue.pop(0)
-                    if not queue:
-                        _pending_resume_queue.pop(sid, None)
+                        text = None
+                    else:
+                        text = queue.pop(0)
+                        if not queue:
+                            _pending_resume_queue.pop(sid, None)
                 _save_pending_inputs()
+                if text is None:
+                    continue
                 result = None
                 try:
                     if _is_codex_session(sid):
@@ -20600,9 +20629,11 @@ def _start_resume_queue_watcher() -> None:
                     # The memoized _archive_session_is_live is ~free and is a
                     # strict superset of "injectable", so no live session is lost.
                     if not _archive_session_is_live(sid):
+                        removed = False
                         with _pending_terminal_input_lock:
-                            if _pending_terminal_input_queue.pop(sid, None) is not None:
-                                _save_pending_inputs()
+                            removed = _pending_terminal_input_queue.pop(sid, None) is not None
+                        if removed:
+                            _save_pending_inputs()
                         continue
                     # CRITICAL guard — never flush queued input while an
                     # AskUserQuestion is in-flight. The watcher previously
@@ -20645,13 +20676,17 @@ def _start_resume_queue_watcher() -> None:
                     with _pending_terminal_input_lock:
                         queue = _pending_terminal_input_queue.get(sid, [])
                         if not queue:
-                            _pending_terminal_input_queue.pop(sid, None)
-                            _save_pending_inputs()
-                            continue
-                        text = queue.pop(0)
-                        if not queue:
-                            _pending_terminal_input_queue.pop(sid, None)
-                    _save_pending_inputs()
+                            removed = _pending_terminal_input_queue.pop(sid, None) is not None
+                            text = None
+                        else:
+                            text = queue.pop(0)
+                            removed = True
+                            if not queue:
+                                _pending_terminal_input_queue.pop(sid, None)
+                    if removed:
+                        _save_pending_inputs()
+                    if text is None:
+                        continue
                     _inject_text_into_session(sid, text, _from_terminal_queue=True)
                 except Exception:
                     pass
