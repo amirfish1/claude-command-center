@@ -41665,6 +41665,80 @@ _throughput_disk_conn_lock = threading.Lock()
 _throughput_disk_available = None  # True/False/None (None = not yet tried)
 
 
+def _throughput_snapshot_path(session_id):
+    safe = "".join(
+        ch if ch.isalnum() or ch in ("-", "_") else "_"
+        for ch in str(session_id or "")
+    )
+    return _THROUGHPUT_DISK_CACHE_DIR / f"aggregate-{safe or 'unknown'}.json"
+
+
+def _throughput_empty_initial_payload(session_id, range_key=None):
+    is_aggregate, cutoff_epoch, label = _throughput_scope(session_id, range_key)
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "scope": {
+            "aggregate": is_aggregate,
+            "range": label,
+            "cutoff_epoch": cutoff_epoch,
+            "total_turns": 0,
+        },
+        "summary": _throughput_summary(
+            [],
+            stat_cutoff_epoch=cutoff_epoch if session_id == "all_7_days" else None,
+        ),
+        "turns": [],
+        "snapshot": {
+            "state": "empty",
+            "cached": False,
+            "stale": True,
+            "generated_at": None,
+        },
+    }
+
+
+def _throughput_persist_aggregate_snapshot(session_id, payload, status):
+    if status != 200 or not isinstance(payload, dict) or not payload.get("ok"):
+        return
+    try:
+        _THROUGHPUT_DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        body = {
+            "generated_at": time.time(),
+            "payload": payload,
+            "status": status,
+        }
+        path = _throughput_snapshot_path(session_id)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(body, separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _throughput_initial_payload(session_id, repo_path=None, range_key=None):
+    is_aggregate, _cutoff_epoch, _label = _throughput_scope(session_id, range_key)
+    if not is_aggregate or repo_path:
+        return _throughput_empty_initial_payload(session_id, range_key), 200
+    try:
+        raw = _throughput_snapshot_path(session_id).read_text(encoding="utf-8")
+        stored = json.loads(raw)
+        payload = stored.get("payload") or {}
+        status = int(stored.get("status") or 200)
+        if status == 200 and payload.get("ok"):
+            payload = dict(payload)
+            payload["snapshot"] = {
+                "state": "cached",
+                "cached": True,
+                "stale": True,
+                "generated_at": stored.get("generated_at"),
+            }
+            return payload, 200
+    except Exception:
+        pass
+    return _throughput_empty_initial_payload(session_id, range_key), 200
+
+
 def _throughput_disk_connection():
     """Return a sqlite3 connection (shared across threads via check_same_thread=False),
     creating the DB and schema on first call. Returns None if SQLite is unavailable
@@ -42259,6 +42333,7 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
             "payload": _payload,
             "status": _status,
         }
+        _throughput_persist_aggregate_snapshot(session_id, _payload, _status)
     return _payload, _status
 
 

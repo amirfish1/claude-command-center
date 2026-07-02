@@ -610,6 +610,47 @@ def test_throughput_history_cache_only_does_not_compute(monkeypatch):
     assert payload == {"ok": True, "daily": [], "cached": False}
 
 
+def test_throughput_initial_payload_never_computes(monkeypatch, tmp_path):
+    """The throughput page's first paint must use only cheap snapshot data."""
+    server._THROUGHPUT_AGG_CACHE.clear()
+    monkeypatch.setattr(server, "_THROUGHPUT_DISK_CACHE_DIR", tmp_path)
+
+    def fail_find(*args, **kwargs):
+        raise AssertionError("initial throughput payload must not discover conversations")
+
+    monkeypatch.setattr(server, "find_all_conversations", fail_find)
+
+    payload, status = server._throughput_initial_payload("all_7_days")
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["session_id"] == "all_7_days"
+    assert payload["scope"]["aggregate"] is True
+    assert payload["summary"]["total_turns"] == 0
+    assert payload["summary"]["hourly"] == []
+    assert payload["turns"] == []
+    assert payload["snapshot"]["state"] == "empty"
+    assert payload["snapshot"]["cached"] is False
+
+
+def test_throughput_full_aggregate_persists_initial_snapshot(monkeypatch, tmp_path):
+    """A completed aggregate refresh should seed the next cold initial paint."""
+    server._THROUGHPUT_AGG_CACHE.clear()
+    monkeypatch.setattr(server, "_THROUGHPUT_DISK_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(server, "find_all_conversations", lambda *a, **k: [])
+
+    full_payload, full_status = server._throughput_payload("all_7_days")
+    server._THROUGHPUT_AGG_CACHE.clear()
+    initial_payload, initial_status = server._throughput_initial_payload("all_7_days")
+
+    assert full_status == initial_status == 200
+    assert initial_payload["ok"] is True
+    assert initial_payload["session_id"] == "all_7_days"
+    assert initial_payload["snapshot"]["state"] == "cached"
+    assert initial_payload["snapshot"]["cached"] is True
+    assert initial_payload["summary"] == full_payload["summary"]
+
+
 def test_wt_past_workers_uses_warning_free_utc_timestamp(monkeypatch, tmp_path):
     """The queue-health poll scans past WT worker logs; timestamp formatting
     must not emit Python 3.14 deprecation warnings on every row."""
