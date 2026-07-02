@@ -22226,9 +22226,33 @@
       };
       // Worker sessions live here, not twice — the flat "Current sessions" list
       // below suppresses them via _evergreenSessionIds (populated up front).
-      // Stable order: alphabetical by queue name (depth churns every poll).
-      const _twQueuesSorted = _twQueues.slice().sort((a, b) =>
-        String((a && a.queue) || '').localeCompare(String((b && b.queue) || '')));
+      // Reverse-chronological: the queue that most recently got worked (lowest
+      // last_activity_seconds, from compute_queues_health's ticket-touch scan)
+      // sorts first. Mirrors the Current-sessions 5-min hysteresis + remembered
+      // order (below) so a queue doesn't jump position on every 5s poll just
+      // because its age ticks past another queue's by a few seconds.
+      const _TW_HYST_S = 5 * 60;
+      const _TW_ORDER_KEY = 'ccc-triggered-workers-order';
+      const _twQueueKey = (q) => String((q && q.queue) || '').trim().toUpperCase();
+      const _twActivityAge = (q) => {
+        const s = q && q.last_activity_seconds;
+        return (typeof s === 'number' && isFinite(s)) ? s : 1e12; // never touched -> sorts last
+      };
+      let _twPrevOrder = {};
+      try { _twPrevOrder = JSON.parse(localStorage.getItem(_TW_ORDER_KEY) || '{}'); } catch (_) {}
+      const _twQueuesSorted = _twQueues.slice().sort((a, b) => {
+        const ageA = _twActivityAge(a), ageB = _twActivityAge(b);
+        if (Math.abs(ageA - ageB) < _TW_HYST_S) {
+          const ia = _twPrevOrder[_twQueueKey(a)], ib = _twPrevOrder[_twQueueKey(b)];
+          if (ia !== undefined && ib !== undefined && ia !== ib) return ia - ib;
+        }
+        return ageA - ageB || _twQueueKey(a).localeCompare(_twQueueKey(b));
+      });
+      try {
+        const _o = {};
+        _twQueuesSorted.forEach((q, i) => { _o[_twQueueKey(q)] = i; });
+        localStorage.setItem(_TW_ORDER_KEY, JSON.stringify(_o));
+      } catch (_) {}
       const _evergreenAgentsBody = _twQueuesSorted.map((q) => {
         const key = String((q && q.queue) || '').trim().toUpperCase();
         const workers = _twWorkersByQueue.get(key) || [];
@@ -28780,9 +28804,21 @@
       });
       const _readyShort = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'shovel-ready': 'ready' };
       const _typeShort = { 'feature': 'feat', 'bug': 'bug' };
+      // A closed ticket can still carry resolution.unresolved (CCC-420): the
+      // worker closed it but flagged something it couldn't finish. That read
+      // identically to a clean close before — same grey dot — so give it its
+      // own amber marker instead of a new backend status (closed/unresolved
+      // is a property of the resolution, not a distinct queue state the
+      // engine needs to reason about).
+      const _uxqUnresolvedNotes = it => (it && it.resolution && Array.isArray(it.resolution.unresolved))
+        ? it.resolution.unresolved.filter(Boolean) : [];
       const _uxqChips = it => {
         const c = [];
         if (it.needs_input) c.push('<span class="fq-chip fq-blocked" title="' + escapeAttr(it.block_question || 'needs human input') + '">needs input</span>');
+        const unresolvedNotes = _uxqUnresolvedNotes(it);
+        if (it.status === 'closed' && unresolvedNotes.length) {
+          c.push('<span class="fq-chip fq-unresolved" title="' + escapeAttr(unresolvedNotes.join('\n\n')) + '">unresolved</span>');
+        }
         if (it.type) c.push('<span class="fq-chip fq-type-' + escapeAttr(it.type) + '" title="' + escapeAttr(it.type) + '">' + escapeHtml(_typeShort[it.type] || it.type) + '</span>');
         if (it.priority) c.push('<span class="fq-chip fq-prio-' + escapeAttr(it.priority) + '">' + escapeHtml(it.priority) + '</span>');
         if (it.readiness) c.push('<span class="fq-chip fq-ready-' + escapeAttr(it.readiness) + '">' + escapeHtml(_readyShort[it.readiness] || it.readiness) + '</span>');
@@ -28795,8 +28831,11 @@
         const ref = _uxqItemRef(it);
         // When blocked, the worker's question is the most useful line to show.
         const blocked = !!it.needs_input;
+        const unresolvedNotes = _uxqUnresolvedNotes(it);
+        const hasUnresolved = status === 'closed' && unresolvedNotes.length > 0;
         const noteShown = blocked && it.block_question ? String(it.block_question) : noteFull;
         const tip = (blocked && it.block_question ? ('Needs input: ' + it.block_question + '\n\n') : '')
+          + (hasUnresolved ? ('Closed with unresolved follow-up:\n' + unresolvedNotes.join('\n\n') + '\n\n') : '')
           + noteFull + '\n\nClick to view ticket details.';
         const nextPrio = { '': 'p2', p3: 'p2', p2: 'p1', p1: 'p0', p0: 'p0' };
         const curPrio = it.priority || '';
