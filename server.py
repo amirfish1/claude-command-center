@@ -8365,6 +8365,17 @@ SESSION_NAME_MAX_CHARS = 120
 CONVERSATION_ORDER_FILE = COMMAND_CENTER_STATE_DIR / "conversation-order.json"  # [session_id,...]
 ARCHIVED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "archived-conversations.json"  # [session_id,...]
 ARCHIVE_GRACE_FILE = COMMAND_CENTER_STATE_DIR / "archive-sticky.json"  # {session_id: archived_at_epoch} — manual archives, sticky vs auto-unarchive
+ARCHIVE_EVENTS_LOG = COMMAND_CENTER_STATE_DIR / "archive-events.log"  # append-only: every archive/unarchive state change, so "why did X get unarchived" is answerable without re-deriving candidacy internals after the fact (CCC-445)
+
+
+def _log_archive_event(action, sid, reason=""):
+    try:
+        COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        line = f"{datetime.now(timezone.utc).isoformat()} {action} {sid} {reason}".rstrip()
+        with ARCHIVE_EVENTS_LOG.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
 PINNED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "pinned-conversations.json"  # [session_id,...]
 VERIFIED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "verified-conversations.json"  # [session_id,...]
 # {session_id: epoch_seconds} — last time the user interacted with this card
@@ -9300,6 +9311,10 @@ def _auto_unarchive_live_sessions(archived):
         if fresh:
             changed = True
             _recently_auto_unarchived[sid] = now
+            _log_archive_event(
+                "auto-unarchive", sid,
+                f"live+fresh transcript (mtime age {now - path.stat().st_mtime:.0f}s)",
+            )
             continue
         keep.append(sid)
     if changed:
@@ -48662,11 +48677,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # which read as "archive refuses to work" (CCC-149 follow-up).
                     _archive_grace[sid] = time.time()
                     _save_archive_grace()
+                    _log_archive_event("archive", sid, "manual")
                 elif (not want) and is_arch:
                     archived.remove(sid)
                     now_archived = False
                     _archive_grace.pop(sid, None)
                     _save_archive_grace()
+                    _log_archive_event("unarchive", sid, "manual")
                 else:
                     # Already in the desired state — no-op, report it truthfully.
                     now_archived = is_arch
@@ -48765,6 +48782,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     now = time.time()
                     for sid in to_add:
                         _archive_grace[sid] = now
+                        _log_archive_event("archive", sid, "bulk")
                         # Retire any stale Notification-hook marker so the row
                         # doesn't bounce back to "Waiting" / In progress.
                         try:
@@ -48773,6 +48791,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             pass
                     for sid in to_remove:
                         _archive_grace.pop(sid, None)
+                        _log_archive_event("unarchive", sid, "bulk")
                     _save_archived_conversations(new_list)
                     _save_archive_grace()
                 self.send_json({

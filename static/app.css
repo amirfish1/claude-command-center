@@ -4195,6 +4195,14 @@
   :root:not([data-theme="light"]) .conv-current-sessions-scroll .conv-item .conv-title {
     color: #f0f4fb;
   }
+  .conv-current-sessions-scroll .conv-item.is-current-child-row .conv-title {
+    font-weight: 450;
+    font-style: italic;
+    color: var(--text-secondary);
+  }
+  :root:not([data-theme="light"]) .conv-current-sessions-scroll .conv-item.is-current-child-row .conv-title {
+    color: color-mix(in srgb, #f0f4fb 65%, transparent);
+  }
   /* Current-sessions panel: meta row is the always-visible "second row".
      The brief (.conv-outcome) is hidden until the disclosure chevron opens it.
      ask/summary/history stay hidden in this panel (they belong to the reader). */
