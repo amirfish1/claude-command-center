@@ -25935,6 +25935,59 @@
     return bits.join(' · ');
   }
 
+  // The conv row currently mirrored into the status-rail title (CCC-433) —
+  // kept in sync by updatePaneHeader so the rail's pencil button knows which
+  // conversation to rename without re-deriving "the active session".
+  let _statusRailActiveRow = null;
+  function startStatusRailTitleRename() {
+    const row = _statusRailActiveRow;
+    if (!row || !row.id) return;
+    const titleEl = document.getElementById('statusRailTitle');
+    if (!titleEl || titleEl.querySelector('input')) return;
+    const currentText = titleEl.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'status-rail-title-input';
+    input.value = row.display_name || currentText;
+    titleEl.textContent = '';
+    titleEl.appendChild(input);
+    input.focus();
+    input.select();
+    let done = false;
+    async function commit(save) {
+      if (done) return;
+      done = true;
+      let finalText = currentText;
+      if (save) {
+        const newName = input.value.trim();
+        if (newName !== currentText) {
+          try {
+            await fetch('/api/conversations/' + row.id + '/rename', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ session_id: row.session_id, name: newName }),
+            });
+            row.display_name = newName || null;
+            row.name_overridden = !!newName;
+            const c = conversationsData.find(x => x.id === row.id);
+            if (c) { c.display_name = newName || null; c.name_overridden = !!newName; }
+            finalText = newName || currentText;
+          } catch (_) {
+            showOpToast('Rename failed', 'error');
+          }
+        }
+      }
+      titleEl.textContent = finalText;
+      renderSidebar(filterConversations($convSearch.value));
+    }
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+    });
+    input.addEventListener('blur', () => commit(true));
+    input.addEventListener('click', (e) => e.stopPropagation());
+  }
+
   function updatePaneHeader(paneId, row, opts = {}) {
     const targetPaneId = paneId || activePaneId();
     const pane = document.querySelector(`.conv-pane[data-pane-id="${targetPaneId}"]`);
@@ -26032,11 +26085,17 @@
         // only the active pane drives it.
         const railTitleEl = document.getElementById('statusRailTitle');
         if (railTitleEl) railTitleEl.textContent = title || category || 'Session';
+        _statusRailActiveRow = row || null;
+        const railRenameBtn = document.getElementById('statusRailTitleRenameBtn');
+        if (railRenameBtn) railRenameBtn.style.display = (_statusRailActiveRow && _statusRailActiveRow.id) ? '' : 'none';
       } else if (isActive) {
         breadcrumbEl.innerHTML = '';
         breadcrumbEl.hidden = true;
         const railTitleEl = document.getElementById('statusRailTitle');
         if (railTitleEl) railTitleEl.textContent = 'Session Utilities';
+        _statusRailActiveRow = null;
+        const railRenameBtn = document.getElementById('statusRailTitleRenameBtn');
+        if (railRenameBtn) railRenameBtn.style.display = 'none';
       }
     }
     // Conversation size badge — surfaces how big the JSONL is so the
@@ -42430,6 +42489,11 @@
 
   const $statusRailAnnotateBtn = document.getElementById('statusRailAnnotateBtn');
   if ($statusRailAnnotateBtn) $statusRailAnnotateBtn.addEventListener('click', annStart);
+  const $statusRailTitleRenameBtn = document.getElementById('statusRailTitleRenameBtn');
+  if ($statusRailTitleRenameBtn) $statusRailTitleRenameBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    startStatusRailTitleRename();
+  });
   if ($annotationStartBtn) $annotationStartBtn.addEventListener('click', annStart);
   if ($annotationScreenBtn) $annotationScreenBtn.addEventListener('click', annCaptureScreen);
   if ($annotationNotesBtn) $annotationNotesBtn.addEventListener('click', annOpenNotes);

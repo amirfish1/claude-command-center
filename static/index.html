@@ -755,7 +755,12 @@
               <div>
                 <!-- Shows the active session's name (set by updatePaneHeader);
                      falls back to "Session Utilities" when nothing is selected. -->
-                <div class="status-rail-title" id="statusRailTitle">Session Utilities</div>
+                <div class="status-rail-title-row">
+                  <div class="status-rail-title" id="statusRailTitle">Session Utilities</div>
+                  <button type="button" id="statusRailTitleRenameBtn" class="status-rail-title-rename-btn" title="Rename session" aria-label="Rename session" style="display:none;">
+                    <svg class="status-rail-title-rename-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
+                  </button>
+                </div>
                 <div class="status-rail-context">Context: Active</div>
               </div>
             </div>
