@@ -3282,7 +3282,8 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("function settleStaleOptimisticAgentIndicator($view)", app_js)
         self.assertIn("No active agent process", app_js)
-        self.assertIn("Use the composer to wake it.", app_js)
+        self.assertIn("Last send did not find a running agent.", app_js)
+        self.assertIn("Type below to resume headlessly, or use Launch if typing is unavailable.", app_js)
         self.assertIn("!liveStatus.live && !liveStatus.headlessPresent && !liveStatus.terminalPresent && !liveStatus.bgPresent", app_js)
         self.assertIn("settleStaleOptimisticAgentIndicator($view);", app_js)
         self.assertIn(".conv-live-tool-inline.is-stale-no-process", app_css)
