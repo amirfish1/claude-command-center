@@ -46,7 +46,7 @@ import urllib.parse
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time as datetime_time
 from pathlib import Path
 
 # Model-drift advisor (stdlib-only, no back-reference to this module). Lives
@@ -42195,30 +42195,27 @@ def _throughput_file_turns(path, extract_fn):
     return turns
 
 
-# Weekly-usage calibration written by the menu-bar usage meter
-# (~/dev/usage_on_mac/claude-usage.5m.py). It pairs this week's locally-counted
-# tokens with the real Anthropic weekly-limit % scraped from claude.ai, giving a
-# tokens -> "% of weekly limit" multiplier. We reuse it so the throughput
-# dashboard can express burn in the same %-of-weekly unit the user already
-# reads in their top bar, instead of only abstract token counts.
+# Weekly-usage calibration pairs this week's locally-counted tokens with the
+# real Anthropic weekly-limit %, giving a tokens -> "% of weekly limit"
+# multiplier for the throughput dashboard.
+_CCC_WEEKLY_CAL_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "calibration.json"
+_WEEK_START_OVERRIDE_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "week-start-override.json"
 _WEEKLY_CAL_FILE = Path.home() / ".cache" / "claude-usage-cal.json"
 _WEEKLY_PCT_FILE = Path.home() / ".cache" / "claude-usage-pct.json"
-_weekly_cal_memo = {"mtime": None, "value": None}
+_weekly_cal_memo = {"path": None, "mtime": None, "value": None}
 
 
-def _weekly_pct_calibration():
-    """Return {pct_per_token, real_pct, tokens, week_start, calibrated_at} from
-    the menu-bar usage calibration, or None if it's absent/unusable. Memoised on
-    file mtime so we don't re-read on every hit."""
+def _read_weekly_calibration_file(path):
     try:
-        st = os.stat(_WEEKLY_CAL_FILE)
+        st = os.stat(path)
     except OSError:
         return None
-    if _weekly_cal_memo["mtime"] == st.st_mtime:
+    path_str = str(path)
+    if _weekly_cal_memo["path"] == path_str and _weekly_cal_memo["mtime"] == st.st_mtime:
         return _weekly_cal_memo["value"]
     value = None
     try:
-        with _WEEKLY_CAL_FILE.open("r") as f:
+        with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
         tokens = data.get("tokens")
         real_pct = data.get("real_pct")
@@ -42232,9 +42229,165 @@ def _weekly_pct_calibration():
             }
     except (OSError, json.JSONDecodeError, ValueError):
         value = None
+    _weekly_cal_memo["path"] = path_str
     _weekly_cal_memo["mtime"] = st.st_mtime
     _weekly_cal_memo["value"] = value
     return value
+
+
+def _weekly_pct_calibration():
+    """Return {pct_per_token, real_pct, tokens, week_start, calibrated_at}.
+    Prefer CCC-owned calibration; the legacy cache is read-only fallback."""
+    for path in (_CCC_WEEKLY_CAL_FILE, _WEEKLY_CAL_FILE):
+        value = _read_weekly_calibration_file(path)
+        if value:
+            return value
+    return None
+
+
+def _save_weekly_calibration(week_start, tokens, real_pct, now_epoch=None):
+    if not week_start or not isinstance(tokens, (int, float)) or tokens <= 0:
+        return False
+    if not isinstance(real_pct, (int, float)) or real_pct <= 0:
+        return False
+    if now_epoch is None:
+        now_epoch = time.time()
+    try:
+        _CCC_WEEKLY_CAL_FILE.parent.mkdir(parents=True, exist_ok=True)
+        body = {
+            "week_start": week_start.isoformat(),
+            "tokens": tokens,
+            "real_pct": real_pct,
+            "calibrated_at": now_epoch,
+        }
+        tmp = _CCC_WEEKLY_CAL_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(body, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(_CCC_WEEKLY_CAL_FILE)
+        _weekly_cal_memo["path"] = None
+        _weekly_cal_memo["mtime"] = None
+        _weekly_cal_memo["value"] = None
+        return True
+    except OSError:
+        return False
+
+
+def _usage_resets_week_key(resets_at_iso):
+    dt = _stats_parse_ts(resets_at_iso)
+    if dt is None:
+        return ""
+    return dt.astimezone(timezone.utc).date().isoformat()
+
+
+def _active_week_start_override(resets_at_iso):
+    if not resets_at_iso:
+        return None
+    try:
+        raw = _WEEK_START_OVERRIDE_FILE.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        if data.get("applies_to_resets_week") != _usage_resets_week_key(resets_at_iso):
+            return None
+        week_start = _stats_parse_ts(data.get("week_start"))
+        return week_start.astimezone() if week_start else None
+    except Exception:
+        return None
+
+
+def _usage_week_start(resets_at_iso):
+    if not resets_at_iso:
+        return None
+    resets_at = _stats_parse_ts(resets_at_iso)
+    if resets_at is None:
+        return None
+    override = _active_week_start_override(resets_at_iso)
+    if override is not None:
+        return override
+    return resets_at.astimezone() - timedelta(days=7)
+
+
+def _usage_work_window():
+    def _hour_from_env(name, default):
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        try:
+            val = int(raw)
+        except (TypeError, ValueError):
+            return default
+        if val < 0 or val > 24:
+            return default
+        return val
+
+    start = _hour_from_env("CCC_WORK_START", 7)
+    end = _hour_from_env("CCC_WORK_END", 20)
+    if end <= start:
+        start, end = 7, 20
+    return start, end
+
+
+def _elapsed_work_hours(start_local, end_local, h_start, h_end):
+    if start_local is None or end_local is None or end_local <= start_local:
+        return 0.0
+    total = 0.0
+    cur = start_local.date()
+    end = end_local.date()
+    tz = start_local.tzinfo
+    while cur <= end:
+        ws = datetime.combine(cur, datetime_time(h_start, 0), tzinfo=tz)
+        we = datetime.combine(cur, datetime_time(h_end, 0), tzinfo=tz)
+        s = max(ws, start_local)
+        e = min(we, end_local)
+        if e > s:
+            total += (e - s).total_seconds() / 3600.0
+        cur += timedelta(days=1)
+    return total
+
+
+def usage_pace_payload(live=None, now_epoch=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    if live is None:
+        live = _live_weekly_usage(now_epoch=now_epoch)
+    weekly_pct = (live or {}).get("weekly_pct")
+    resets_at_iso = (live or {}).get("weekly_resets_at")
+    week_start = _usage_week_start(resets_at_iso)
+    resets_at = _stats_parse_ts(resets_at_iso)
+    if not isinstance(weekly_pct, (int, float)) or week_start is None or resets_at is None:
+        return {
+            "ok": False,
+            "weekly_pct": weekly_pct,
+            "projected_pct": None,
+            "week_start": week_start.isoformat() if week_start else None,
+            "elapsed_h": 0.0,
+            "total_h": 0.0,
+            "source": (live or {}).get("source"),
+        }
+    now_local = datetime.fromtimestamp(now_epoch, tz=timezone.utc).astimezone(week_start.tzinfo)
+    resets_local = resets_at.astimezone(week_start.tzinfo)
+    h_start, h_end = _usage_work_window()
+    total_h = _elapsed_work_hours(week_start, resets_local, h_start, h_end)
+    elapsed_h = _elapsed_work_hours(week_start, now_local, h_start, h_end)
+    expected_pct = (elapsed_h / total_h) * 100 if total_h else 0.0
+    projected_pct = (weekly_pct / elapsed_h) * total_h if elapsed_h > 0 else None
+    return {
+        "ok": True,
+        "weekly_pct": weekly_pct,
+        "projected_pct": projected_pct,
+        "week_start": week_start.isoformat(),
+        "weekly_resets_at": resets_at_iso,
+        "elapsed_h": elapsed_h,
+        "total_h": total_h,
+        "hours_left": max(0.0, total_h - elapsed_h),
+        "expected_pct": expected_pct,
+        "delta_pp": weekly_pct - expected_pct,
+        "work_start_hour": h_start,
+        "work_end_hour": h_end,
+        "source": (live or {}).get("source"),
+    }
 
 
 def _live_weekly_usage(now_epoch=None):
@@ -42276,29 +42429,23 @@ def _weekly_usage_block():
     macOS top bar (same scope: Claude only, same window: since reset).
 
     Returns a dict with available=False when calibration is missing."""
-    cal = _weekly_pct_calibration()
     live = _live_weekly_usage()
-    if not cal:
-        return {"available": False, "live": live}
-
-    rate = cal["pct_per_token"]
-    # Prefer the live reset instant (authoritative) to derive the week start;
-    # fall back to the calibration's own week_start string.
+    cal = _weekly_pct_calibration()
     week_start_epoch = None
+    week_start_dt = None
     if live and live.get("weekly_resets_at"):
+        week_start_dt = _usage_week_start(live["weekly_resets_at"])
+        if week_start_dt is not None:
+            week_start_epoch = week_start_dt.timestamp()
+    if week_start_epoch is None and cal and cal.get("week_start"):
         try:
-            week_start_epoch = (
-                _stats_parse_ts(live["weekly_resets_at"]).timestamp() - 7 * 86400
-            )
-        except Exception:
-            week_start_epoch = None
-    if week_start_epoch is None and cal.get("week_start"):
-        try:
-            week_start_epoch = datetime.fromisoformat(cal["week_start"]).timestamp()
+            week_start_dt = datetime.fromisoformat(cal["week_start"])
+            week_start_epoch = week_start_dt.timestamp()
         except (ValueError, TypeError):
             week_start_epoch = None
     if week_start_epoch is None:
         week_start_epoch = time.time() - 7 * 86400
+        week_start_dt = datetime.fromtimestamp(week_start_epoch).astimezone()
 
     # Claude-only token burn since reset, summed the same way the calibration
     # counted (raw context incl. cache + output). Uses the per-file turn cache.
@@ -42358,12 +42505,26 @@ def _weekly_usage_block():
         (t.get("raw_context_tokens") or 0) + (t.get("tokens_out") or 0)
         for t in deduped
     )
-    est_pct = round(claude_tokens * rate, 1)
     real_pct = (live or {}).get("weekly_pct")
+    if isinstance(real_pct, (int, float)) and real_pct > 0 and claude_tokens > 0 and week_start_dt:
+        if _save_weekly_calibration(week_start_dt, claude_tokens, real_pct):
+            cal = _weekly_pct_calibration()
+    if not cal:
+        return {
+            "available": False,
+            "live": live,
+            "claude_tokens": claude_tokens,
+            "week_start_epoch": week_start_epoch,
+            **usage_pace_payload(live=live),
+        }
+
+    rate = cal["pct_per_token"]
+    est_pct = round(claude_tokens * rate, 1)
     # Never show below the last real scrape — the local count lags the server.
     display_pct = est_pct
     if isinstance(real_pct, (int, float)):
         display_pct = max(est_pct, real_pct)
+    pace = usage_pace_payload(live=live)
     return {
         "available": True,
         "est_pct": est_pct,
@@ -42377,6 +42538,13 @@ def _weekly_usage_block():
         "source": (live or {}).get("source"),
         "calibrated_at": cal.get("calibrated_at"),
         "fetched_at": (live or {}).get("fetched_at"),
+        "projected_pct": pace.get("projected_pct"),
+        "week_start": pace.get("week_start"),
+        "elapsed_h": pace.get("elapsed_h"),
+        "total_h": pace.get("total_h"),
+        "hours_left": pace.get("hours_left"),
+        "expected_pct": pace.get("expected_pct"),
+        "delta_pp": pace.get("delta_pp"),
     }
 
 
@@ -43781,6 +43949,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             raw_hours = qs.get("hours", ["24"])[0]
             self.send_json(usage_snapshots_payload(hours=raw_hours))
+        elif path == "/api/usage/pace":
+            self.send_json(usage_pace_payload())
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)
             rows = list_spawned_sessions()

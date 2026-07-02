@@ -2683,6 +2683,7 @@
         const bits = [];
         if (d.real_pct != null) bits.push(`${Math.round(d.real_pct)}% last synced from claude.ai`);
         if (d.est_pct != null) bits.push(`~${d.est_pct.toFixed(0)}% live estimate`);
+        if (d.projected_pct != null) bits.push(`projected ${Math.round(d.projected_pct)}% at reset`);
         const reset = fmtResetCountdown(d.weekly_resets_at);
         if (reset) bits.push(reset);
         document.getElementById('weekly-sub').innerHTML = bits.join('<br>');

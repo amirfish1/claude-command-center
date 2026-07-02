@@ -23,6 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import unittest
+from datetime import datetime, timezone
 from unittest import mock
 
 
@@ -93,6 +94,70 @@ class TestServerImports(unittest.TestCase):
             finally:
                 server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
                 server._WEEKLY_PCT_FILE = old_legacy_file
+
+    def test_usage_pace_uses_ccc_calibration_and_week_override(self):
+        """CCC owns weekly calibration/pace state without relying on legacy
+        cache files, and the throughput UI exposes the projection."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            usage_dir = pathlib.Path(tmp) / "usage"
+            old_cal = server._CCC_WEEKLY_CAL_FILE
+            old_legacy_cal = server._WEEKLY_CAL_FILE
+            old_override = server._WEEK_START_OVERRIDE_FILE
+            old_memo = dict(server._weekly_cal_memo)
+            try:
+                server._CCC_WEEKLY_CAL_FILE = usage_dir / "calibration.json"
+                server._WEEKLY_CAL_FILE = usage_dir / "legacy-calibration.json"
+                server._WEEK_START_OVERRIDE_FILE = usage_dir / "week-start-override.json"
+                server._weekly_cal_memo.clear()
+                server._weekly_cal_memo.update({"path": None, "mtime": None, "value": None})
+
+                week_start = datetime(2026, 7, 1, 7, tzinfo=timezone.utc)
+                self.assertTrue(server._save_weekly_calibration(week_start, 1000, 25.0))
+                cal = server._weekly_pct_calibration()
+                self.assertEqual(cal["week_start"], week_start.isoformat())
+                self.assertEqual(cal["tokens"], 1000)
+                self.assertAlmostEqual(cal["pct_per_token"], 0.025)
+
+                reset_at = "2026-07-09T07:00:00+00:00"
+                override_start = "2026-07-02T11:00:00+00:00"
+                server._WEEK_START_OVERRIDE_FILE.write_text(json.dumps({
+                    "week_start": override_start,
+                    "applies_to_resets_week": server._usage_resets_week_key(reset_at),
+                    "set_at": 1_783_000_000,
+                }), encoding="utf-8")
+                resolved = server._usage_week_start(reset_at)
+                self.assertEqual(
+                    resolved.timestamp(),
+                    datetime.fromisoformat(override_start).timestamp(),
+                )
+
+                pace = server.usage_pace_payload(
+                    live={"weekly_pct": 25.0, "weekly_resets_at": reset_at},
+                    now_epoch=week_start.timestamp() + 24 * 3600,
+                )
+                self.assertTrue(pace["ok"])
+                self.assertEqual(pace["weekly_pct"], 25.0)
+                self.assertEqual(
+                    datetime.fromisoformat(pace["week_start"]).timestamp(),
+                    datetime.fromisoformat(override_start).timestamp(),
+                )
+                self.assertGreater(pace["total_h"], 0)
+                self.assertIn("projected_pct", pace)
+
+                server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+                throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+                self.assertIn("/api/usage/pace", server_py)
+                self.assertIn("projected", throughput_html)
+            finally:
+                server._CCC_WEEKLY_CAL_FILE = old_cal
+                server._WEEKLY_CAL_FILE = old_legacy_cal
+                server._WEEK_START_OVERRIDE_FILE = old_override
+                server._weekly_cal_memo.clear()
+                server._weekly_cal_memo.update(old_memo)
 
     def test_open_session_in_claude_desktop_rejects_bad_input(self):
         """The helper exists and rejects empty / non-UUID session IDs
