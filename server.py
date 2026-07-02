@@ -240,6 +240,24 @@ def _wt_read_config():
         return {}
 
 
+def _wt_queue_deletions_path():
+    return _WT_HOME / "queue-deletions.json"
+
+
+def _wt_read_queue_deletions():
+    """{QUEUE_NAME: deleted_at_epoch} tombstones written by /api/queue/delete.
+
+    A deleted queue must not resurrect in the health strip just because it
+    still has old closed-ticket history (CCC-425 reopen) — it only reappears
+    once it gets NEW activity (a ticket filed after the deletion)."""
+    try:
+        with open(_wt_queue_deletions_path()) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def _wt_read_workers():
     """Live WatchTower worker records read straight from workers.json.
 
@@ -20844,6 +20862,21 @@ def compute_queues_health(health=None, wt_workers=None):
     names.update(total_by_q.keys())
     names.discard("")
     names.discard("?")
+
+    # Drop explicitly-deleted queues (CCC-425 reopen) unless they've had NEW
+    # activity since the deletion — a re-filed ticket legitimately resurrects
+    # the queue, but stale closed-ticket history from before the delete must
+    # not keep it pinned in the health strip forever.
+    try:
+        deletions = _wt_read_queue_deletions()
+    except Exception:
+        deletions = {}
+    for qn, deleted_at in deletions.items():
+        qn = _norm(qn)
+        if qn in cfg_names:
+            continue  # re-added to config since deletion — always show
+        if last_activity_q.get(qn, 0) <= float(deleted_at or 0):
+            names.discard(qn)
 
     out = []
     for q in names:
@@ -45616,6 +45649,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     with open(tmp, "w") as f:
                         json.dump(cfg, f, indent=2)
                     tmp.replace(cfg_path)
+                # Tombstone the deletion so the health strip's recently-active
+                # fallback doesn't resurrect this queue from old closed-ticket
+                # history (CCC-425 reopen: "doesn't clear the list, still
+                # there even after refresh").
+                deletions_path = _wt_queue_deletions_path()
+                deletions = _wt_read_queue_deletions()
+                deletions[queue_name] = time.time()
+                tmp2 = deletions_path.with_suffix(".json.tmp")
+                with open(tmp2, "w") as f:
+                    json.dump(deletions, f, indent=2)
+                tmp2.replace(deletions_path)
                 self.send_json({"ok": True, "queue": matched or queue_name})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
