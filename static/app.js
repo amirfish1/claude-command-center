@@ -3802,7 +3802,10 @@
     if (name === 'WebSearch') return 'Searching web';
     if (name === 'TodoWrite') return 'Updating todos';
     if (name === 'AskUserQuestion') return 'Question';
-    return name || 'Tool';
+    // Fall back to the short display name (strips mcp__<namespace>__ prefix)
+    // so long MCP tool names like "mcp__plugin_chrome-devtools-mcp_chrome-devtools__evaluate_script"
+    // don't blow out the row and crowd out the session name next to it.
+    return toolDisplayName(name) || 'Tool';
   }
 
   function liveActivityCompactToolLabel(tool) {

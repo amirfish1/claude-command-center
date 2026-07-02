@@ -4908,7 +4908,7 @@
   .conv-item .conv-status-slot:empty,
   .conv-item .conv-branch-slot:empty,
   .conv-item .conv-engine-slot:empty { display: none; }
-  .conv-item .conv-status-slot .conv-live-tool { max-width: none; }
+  .conv-item .conv-status-slot .conv-live-tool { max-width: 160px; }
   .conv-item .conv-meta-inline,
   .conv-item .conv-branch-slot,
   .conv-item .conv-object-chip,
@@ -4957,8 +4957,8 @@
      for "last completed", blue for "currently in flight". */
   .conv-item .conv-live-tool {
     display: inline-flex; align-items: center; gap: 4px;
-    flex: 0 0 auto; min-width: max-content;
-    max-width: none;
+    flex: 0 1 auto; min-width: 0;
+    max-width: 160px;
     font-size: 10px;
     color: #FBCA04;
     background: rgba(251,202,4,0.10);
@@ -4967,7 +4967,10 @@
     white-space: nowrap;
     animation: pulse 2s infinite;
   }
-  .conv-item .conv-live-tool .conv-live-name { font-weight: 600; }
+  .conv-item .conv-live-tool .conv-live-name {
+    font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; min-width: 0;
+  }
   .conv-item .conv-live-tool .conv-live-file { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; }
   .conv-item .conv-live-tool .conv-live-file.is-command {
     color: var(--text);
