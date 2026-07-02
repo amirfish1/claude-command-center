@@ -28431,16 +28431,23 @@
     return String(item.text || item.note || '');
   }
   function _uxqItemTitle(item) {
+    // Returns the full note/text (boilerplate stripped, no line/char cap) so
+    // the editable modal field never displays or re-saves a truncated copy
+    // of the ticket note. See WT-67: the old 220-char/first-line cap meant
+    // clicking into the title and clicking away without editing could
+    // silently overwrite the stored note with the truncated version.
     if (!item) return '';
     const candidates = [item.note, item.text, item.title];
     for (const raw of candidates) {
       const lines = String(raw || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      const kept = [];
       for (let line of lines) {
         if (line === 'Fix the following UX issue based on this annotation:') continue;
         if (line.indexOf('Annotation:') === 0) line = line.slice('Annotation:'.length).trim();
         if (!line) continue;
-        return line.length > 220 ? line.slice(0, 217) + '...' : line;
+        kept.push(line);
       }
+      if (kept.length) return kept.join('\n');
     }
     return _uxqItemRef(item);
   }
@@ -28845,7 +28852,10 @@
     // Inline title editing via contenteditable
     const titleEl = modal.querySelector('.uxq-td-title[contenteditable]');
     if (titleEl) {
-      const origVal = item.note || '';
+      // Compare against detailTitle (what's actually displayed/editable), not
+      // raw item.note — they can differ (boilerplate stripping), and
+      // comparing against the wrong baseline caused spurious saves on blur.
+      const origVal = detailTitle;
       titleEl.addEventListener('blur', () => {
         const newVal = titleEl.textContent.trim();
         if (newVal !== origVal) _uxqSaveField(ref, 'note', newVal);
