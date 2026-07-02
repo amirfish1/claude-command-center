@@ -10681,6 +10681,17 @@
   }
   .fq-wrap-toggle:hover { color: var(--text); border-color: var(--accent); }
   .fq-wrap-toggle.is-active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .fq-search-row { padding: 2px 0 4px; }
+  .fq-search-input {
+    width: 100%; box-sizing: border-box;
+    background: transparent; color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 3px 8px; font-size: 11px;
+  }
+  .fq-search-input:focus {
+    border-color: var(--accent); outline: none;
+    background: var(--surface-hover);
+  }
   .files-search-input {
     background: transparent; color: var(--text);
     border: 1px solid var(--border); border-radius: 4px;

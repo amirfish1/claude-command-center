@@ -28926,7 +28926,16 @@
       _renderQueueHealthStrip(false, null); // always show all queues regardless of scope/dropdown
       const inScope = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
       // Status filter: 'open' hides closed (shows open + in_progress).
-      const scoped = _uxqGetFilter() === 'all' ? inScope : inScope.filter(it => (it && it.status) !== 'closed');
+      const statusScoped = _uxqGetFilter() === 'all' ? inScope : inScope.filter(it => (it && it.status) !== 'closed');
+      // Free-text search over ref/note/text (CCC-432).
+      const $qSearch = document.getElementById('queueSearchInput');
+      const qTerm = $qSearch ? $qSearch.value.trim().toLowerCase() : '';
+      const scoped = qTerm
+        ? statusScoped.filter(it => {
+            const hay = (_uxqItemRef(it) + ' ' + (it && it.note || '') + ' ' + (it && it.text || '')).toLowerCase();
+            return hay.includes(qTerm);
+          })
+        : statusScoped;
       // Claim-order sort (mirrors claim_next): the TOP row is what a default
       // execution claim would grab next. open<in_progress<closed; within open,
       // claimable (shovel-ready/unset) before unready; then priority; then age.
@@ -29258,6 +29267,11 @@
         _uxqSetWrapTitles(!_uxqGetWrapTitles());
         _renderQueuePanel();
       });
+    }
+    const $queueSearch = document.getElementById('queueSearchInput');
+    if ($queueSearch) {
+      $queueSearch.addEventListener('input', () => { _renderQueuePanel(); });
+      $queueSearch.addEventListener('click', (e) => e.stopPropagation());
     }
   }
 
