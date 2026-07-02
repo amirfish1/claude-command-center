@@ -28,8 +28,13 @@ class TestSearchUiStatic(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         self.assertIn(
-            "const _currentSessions = _ipSearchActive\n"
+            "const _currentSessionSource = _ipSearchActive\n"
             "        ? (_visibleSessionConvs || []).slice()",
+            app_js,
+        )
+        self.assertIn(
+            "const _currentSessions = _ipSearchActive\n"
+            "        ? _currentSessionSource",
             app_js,
         )
         self.assertIn(
@@ -37,7 +42,7 @@ class TestSearchUiStatic(unittest.TestCase):
             app_js,
         )
         self.assertIn(
-            "const _currentSessionsSub = _ipSearchActive ? '' : '<span class=\"conv-objects-section-sub\">last 5h</span>';",
+            "const _currentSessionsSub = _ipSearchActive ? '' : '<span class=\"conv-objects-section-sub\">' + _currentSessionsWindowLabel + '</span>';",
             app_js,
         )
 
