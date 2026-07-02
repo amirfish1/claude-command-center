@@ -9017,21 +9017,17 @@ def _auto_unarchive_live_sessions(archived):
     """Drop archived sids showing fresh activity (CCC-117).
 
     A session that's actively writing its transcript doesn't belong in the
-    Archived bucket — auto-unarchive it. Perf gates: runs at most every 30s,
-    and only stats transcripts for archived sids that intersect the cheap
-    live-candidate set (never the whole archive). The grace map keeps a
-    just-archived-by-the-user session from bouncing straight back (its
-    transcript mtime is fresh from the kill/final writes).
+    Archived bucket — auto-unarchive it. Perf gate: runs at most every 30s
+    (the archived bucket is user-curated and small, so a per-sid liveness
+    probe here is cheap — and each probe is itself memoized). The grace map
+    keeps a just-archived-by-the-user session from bouncing straight back
+    (its transcript mtime is fresh from the kill/final writes).
     """
     global _archive_auto_sweep_last
     now = time.time()
     if not archived or now - _archive_auto_sweep_last < 30:
         return archived
     _archive_auto_sweep_last = now
-    try:
-        live = _discover_live_session_ids()
-    except Exception:
-        return archived
     keep = []
     changed = False
     for sid in archived:
@@ -9040,12 +9036,24 @@ def _auto_unarchive_live_sessions(archived):
         # archived stays archived even while it streams (CCC-149 follow-up).
         # Only sessions that entered the archive WITHOUT a manual marker (none
         # today, but kept for CCC-117's resume-brings-back intent) can bounce.
-        if sid in live and sid not in _archive_grace:
+        #
+        # _archive_session_is_live (not the cheap _discover_live_session_ids
+        # resume-arg scan) so pool-model Codex threads — driven by Codex.app's
+        # `codex app-server`, which puts no per-session id on any command
+        # line — are correctly seen as live too (CCC-435: a Codex.app session
+        # with fresh transcript activity stayed stuck in Archived forever
+        # because the resume-arg scan can never match it).
+        if sid not in _archive_grace:
             try:
-                path, _parser = _resolve_conversation_reader(sid)
-                fresh = path and path.is_file() and now - path.stat().st_mtime < 300
-            except (OSError, Exception):
-                fresh = False
+                live = _archive_session_is_live(sid)
+            except Exception:
+                live = False
+            if live:
+                try:
+                    path, _parser = _resolve_conversation_reader(sid)
+                    fresh = path and path.is_file() and now - path.stat().st_mtime < 300
+                except (OSError, Exception):
+                    fresh = False
         if fresh:
             changed = True
             continue
