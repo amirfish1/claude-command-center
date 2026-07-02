@@ -32200,7 +32200,19 @@ def _start_coordination_watcher() -> None:
     chat started orchestrating just because I reloaded the server" behaviour.
     A human post clears closed_at and re-registers, so genuinely-active chats
     (closed_at is None) still resume normally.
+
+    CCC_CHAT_ORCHESTRATOR=wt hands auto-nudging to the WatchTower daemon
+    (wt's chats.nudge_tick runs against the same ~/.claude/group-chats files
+    with the same last_reminder_key dedup), so this watcher must not start:
+    two orchestrators on one chat means racing nudges and double token spend.
+    Everything else about group chats in CCC (create/post/read UI, manual
+    Nudge button, the synchronous check-in on create/add) stays active; only
+    the background auto-nudge loop is delegated.
     """
+    if os.environ.get("CCC_CHAT_ORCHESTRATOR", "").strip().lower() == "wt":
+        print("[coord] CCC_CHAT_ORCHESTRATOR=wt: auto-nudging delegated to WatchTower daemon; coordination watcher not started")
+        return
+
     group_chats_dir = os.path.expanduser("~/.claude/group-chats")
     cutoff = time.time() - _COORD_DEATH_TIMEOUT
     try:
