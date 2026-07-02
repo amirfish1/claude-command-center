@@ -10,11 +10,12 @@
 //   SNAPSHOT_LOCALSTORAGE=state.json node snapshot.js
 //
 // Env (all optional):
-//   SNAPSHOT_URL          default: port.txt-resolved URL, else http://127.0.0.1:8091
+//   SNAPSHOT_URL          default: port.txt-resolved URL, else http://127.0.0.1:8090
 //   SNAPSHOT_OUT          default snapshot.png
 //   SNAPSHOT_LOCALSTORAGE path to a JSON file of {"key": "value", ...} (strings)
 //   SNAPSHOT_CHROME       explicit Chrome/Chromium executable path (overrides auto-detect)
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 const puppeteer = require('puppeteer');
@@ -35,22 +36,45 @@ function findChromePath() {
   return undefined; // puppeteer default (Chrome for Testing)
 }
 
+const DEFAULT_URL = 'http://127.0.0.1:8090';
+
+// port.txt is written whenever any non-ephemeral server starts (including a
+// stray one-off launched on a custom PORT without CCC_EPHEMERAL=1) and is
+// never cleaned up on exit, so it can point at a port nothing is listening on
+// anymore (OPS-69). Probe before trusting it.
+function urlResponds(url, timeoutMs = 500) {
+  return new Promise((resolve) => {
+    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+      res.resume();
+      resolve(true);
+    });
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+  });
+}
+
 // Resolve the live dashboard URL from the command-center port file, written by
-// the server on startup. Falls back to the conventional local port.
-function resolveBaseUrl() {
+// the server on startup. Falls back to the conventional local port if the
+// file is missing or the port it names is dead.
+async function resolveBaseUrl() {
   const portFile = path.join(os.homedir(), '.claude', 'command-center', 'port.txt');
+  let fromFile;
   try {
     const raw = fs.readFileSync(portFile, 'utf8').trim();
-    if (/^https?:\/\//.test(raw)) return raw;          // full URL form
-    if (/^\d+$/.test(raw)) return `http://127.0.0.1:${raw}`; // bare port form
+    if (/^https?:\/\//.test(raw)) fromFile = raw;          // full URL form
+    else if (/^\d+$/.test(raw)) fromFile = `http://127.0.0.1:${raw}`; // bare port form
   } catch (_) {
     // fall through to default
   }
-  return 'http://127.0.0.1:8091';
+  if (fromFile) {
+    if (await urlResponds(fromFile)) return fromFile;
+    console.log(`[snapshot] port.txt points at ${fromFile}, which isn't responding; falling back to ${DEFAULT_URL}`);
+  }
+  return DEFAULT_URL;
 }
 
 (async () => {
-  const url = process.env.SNAPSHOT_URL || resolveBaseUrl();
+  const url = process.env.SNAPSHOT_URL || await resolveBaseUrl();
   const out = process.env.SNAPSHOT_OUT || 'snapshot.png';
   const lsPath = process.env.SNAPSHOT_LOCALSTORAGE || '';
 
