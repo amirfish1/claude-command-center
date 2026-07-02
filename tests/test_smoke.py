@@ -43,6 +43,57 @@ class TestServerImports(unittest.TestCase):
         self.assertIsInstance(server.__version__, str)
         self.assertRegex(server.__version__, r"^\d+\.\d+\.\d+")
 
+    def test_native_usage_snapshots_feed_weekly_usage(self):
+        """Native plan-usage snapshots persist compact history and replace the
+        legacy scraper cache for fresh weekly usage reads."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshots_file = pathlib.Path(tmp) / "usage-snapshots.jsonl"
+            legacy_file = pathlib.Path(tmp) / "claude-usage-pct.json"
+            old_snapshot_file = server._USAGE_SNAPSHOTS_FILE
+            old_legacy_file = server._WEEKLY_PCT_FILE
+            try:
+                server._USAGE_SNAPSHOTS_FILE = snapshots_file
+                server._WEEKLY_PCT_FILE = legacy_file
+                snapshot = server._native_usage_snapshot_from_plan_usage(
+                    {
+                        "ok": True,
+                        "usage": {
+                            "five_hour": {
+                                "utilization": 12.5,
+                                "resets_at": "2026-07-02T20:00:00Z",
+                            },
+                            "seven_day": {
+                                "utilization": 42.0,
+                                "resets_at": "2026-07-09T17:00:00Z",
+                            },
+                            "seven_day_sonnet": {
+                                "utilization": 8.0,
+                                "resets_at": "2026-07-09T17:00:00Z",
+                            },
+                        },
+                    },
+                    now_epoch=1_783_014_000,
+                )
+                server._append_native_usage_snapshot(snapshot, now_epoch=1_783_014_000)
+
+                live = server._live_weekly_usage(now_epoch=1_783_014_300)
+                self.assertEqual(live["weekly_pct"], 42.0)
+                self.assertEqual(live["session_pct"], 12.5)
+                self.assertEqual(live["sonnet_pct"], 8.0)
+                self.assertEqual(live["source"], "native")
+
+                payload = server.usage_snapshots_payload(hours=24, now_epoch=1_783_014_300)
+                self.assertTrue(payload["ok"])
+                self.assertEqual(payload["snapshots"][0]["source"], "native")
+                self.assertIn("/api/usage/snapshots", pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8"))
+            finally:
+                server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
+                server._WEEKLY_PCT_FILE = old_legacy_file
+
     def test_open_session_in_claude_desktop_rejects_bad_input(self):
         """The helper exists and rejects empty / non-UUID session IDs
         without trying to spawn `open(1)`."""

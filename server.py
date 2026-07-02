@@ -40551,6 +40551,14 @@ def search_total_recall_sessions(query, limit=20, cwd_like=None):
 _plan_usage_cache = None
 _plan_usage_cache_time = 0
 _plan_usage_cache_lock = threading.Lock()
+_USAGE_SNAPSHOTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "usage-snapshots.jsonl"
+_USAGE_SNAPSHOT_MAX_LINES = 50_000
+_USAGE_SNAPSHOT_MAX_AGE_DAYS = 90
+_USAGE_NATIVE_FRESH_SECS = 15 * 60
+_PLAN_USAGE_POLL_SECS = 5 * 60
+_usage_snapshots_lock = threading.Lock()
+_plan_usage_poller_lock = threading.Lock()
+_plan_usage_poller_started = False
 
 
 def _get_claude_credentials():
@@ -40672,6 +40680,193 @@ def get_cached_plan_usage():
         _plan_usage_cache = res
         _plan_usage_cache_time = now
         return res
+
+
+def _usage_snapshot_iso(now_epoch=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    return datetime.fromtimestamp(now_epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _native_usage_snapshot_from_plan_usage(plan_usage, now_epoch=None):
+    """Compact the direct Claude usage response into the persisted JSONL shape."""
+    if not isinstance(plan_usage, dict) or not plan_usage.get("ok"):
+        return None
+    usage = plan_usage.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    snap = {"ts": _usage_snapshot_iso(now_epoch), "source": "native"}
+    for key in ("five_hour", "seven_day", "seven_day_sonnet"):
+        block = usage.get(key)
+        if isinstance(block, dict):
+            snap[key] = {
+                "utilization": block.get("utilization"),
+                "resets_at": block.get("resets_at"),
+            }
+        else:
+            snap[key] = {"utilization": None, "resets_at": None}
+    return snap
+
+
+def _usage_snapshot_epoch(snapshot):
+    if not isinstance(snapshot, dict):
+        return None
+    dt = _stats_parse_ts(snapshot.get("ts"))
+    if dt is None:
+        return None
+    return dt.timestamp()
+
+
+def _read_native_usage_snapshots_unlocked():
+    try:
+        with _USAGE_SNAPSHOTS_FILE.open("r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    snapshots = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(item, dict):
+            snapshots.append(item)
+    return snapshots
+
+
+def _write_native_usage_snapshots_unlocked(snapshots):
+    _USAGE_SNAPSHOTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _USAGE_SNAPSHOTS_FILE.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        for item in snapshots:
+            f.write(json.dumps(item, separators=(",", ":")) + "\n")
+    tmp.replace(_USAGE_SNAPSHOTS_FILE)
+
+
+def _append_native_usage_snapshot(snapshot, now_epoch=None):
+    if not isinstance(snapshot, dict):
+        return False
+    if now_epoch is None:
+        now_epoch = time.time()
+    cutoff_epoch = now_epoch - (_USAGE_SNAPSHOT_MAX_AGE_DAYS * 86400)
+    with _usage_snapshots_lock:
+        snapshots = []
+        for item in _read_native_usage_snapshots_unlocked():
+            ts_epoch = _usage_snapshot_epoch(item)
+            if ts_epoch is None or ts_epoch >= cutoff_epoch:
+                snapshots.append(item)
+        snapshots.append(snapshot)
+        if len(snapshots) > _USAGE_SNAPSHOT_MAX_LINES:
+            snapshots = snapshots[-_USAGE_SNAPSHOT_MAX_LINES:]
+        try:
+            _write_native_usage_snapshots_unlocked(snapshots)
+        except OSError:
+            return False
+    return True
+
+
+def _latest_native_usage_snapshot(now_epoch=None, max_age_secs=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    newest = None
+    newest_epoch = None
+    with _usage_snapshots_lock:
+        snapshots = _read_native_usage_snapshots_unlocked()
+    for item in snapshots:
+        ts_epoch = _usage_snapshot_epoch(item)
+        if ts_epoch is None:
+            continue
+        if newest_epoch is None or ts_epoch > newest_epoch:
+            newest = item
+            newest_epoch = ts_epoch
+    if newest is None:
+        return None
+    age_secs = max(0, now_epoch - newest_epoch)
+    if max_age_secs is not None and age_secs > max_age_secs:
+        return None
+    out = dict(newest)
+    out["_age_secs"] = age_secs
+    return out
+
+
+def _live_usage_from_snapshot(snapshot):
+    sd = snapshot.get("seven_day") or {}
+    fh = snapshot.get("five_hour") or {}
+    sonnet = snapshot.get("seven_day_sonnet") or {}
+    return {
+        "weekly_pct": sd.get("utilization"),
+        "weekly_resets_at": sd.get("resets_at"),
+        "session_pct": fh.get("utilization"),
+        "session_resets_at": fh.get("resets_at"),
+        "sonnet_pct": sonnet.get("utilization"),
+        "fetched_at": snapshot.get("ts"),
+        "source": snapshot.get("source") or "native",
+    }
+
+
+def usage_snapshots_payload(hours=24, now_epoch=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    try:
+        hours = float(hours)
+    except (TypeError, ValueError):
+        hours = 24
+    if not math.isfinite(hours) or hours <= 0:
+        hours = 24
+    cutoff_epoch = now_epoch - (hours * 3600)
+    with _usage_snapshots_lock:
+        snapshots = _read_native_usage_snapshots_unlocked()
+    recent = []
+    for item in snapshots:
+        ts_epoch = _usage_snapshot_epoch(item)
+        if ts_epoch is None or ts_epoch < cutoff_epoch:
+            continue
+        recent.append(item)
+    recent.sort(key=lambda item: _usage_snapshot_epoch(item) or 0)
+    return {"ok": True, "hours": hours, "snapshots": recent}
+
+
+def _poll_plan_usage_once():
+    global _plan_usage_cache, _plan_usage_cache_time
+    res = _fetch_plan_usage()
+    if not isinstance(res, dict) or not res.get("ok"):
+        return False
+    snap = _native_usage_snapshot_from_plan_usage(res)
+    if snap:
+        _append_native_usage_snapshot(snap)
+    with _plan_usage_cache_lock:
+        _plan_usage_cache = res
+        _plan_usage_cache_time = time.time()
+    return True
+
+
+def _plan_usage_poller_loop():
+    while True:
+        try:
+            _poll_plan_usage_once()
+        except Exception:
+            pass
+        try:
+            time.sleep(_PLAN_USAGE_POLL_SECS)
+        except Exception:
+            return
+
+
+def _start_plan_usage_poller():
+    global _plan_usage_poller_started
+    with _plan_usage_poller_lock:
+        if _plan_usage_poller_started:
+            return False
+        _plan_usage_poller_started = True
+    threading.Thread(
+        target=_plan_usage_poller_loop,
+        daemon=True,
+        name="ccc-plan-usage-poller",
+    ).start()
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -42042,10 +42237,18 @@ def _weekly_pct_calibration():
     return value
 
 
-def _live_weekly_usage():
-    """Read the last scraped real usage from the menu-bar cache. Returns
+def _live_weekly_usage(now_epoch=None):
+    """Read the last real usage value. Prefer fresh native snapshots, falling
+    back to the legacy menu-bar cache only when native data is absent or stale.
+    Returns
     {weekly_pct, weekly_resets_at, session_pct, sonnet_pct} (any may be None),
     or None if the cache is missing/unreadable."""
+    native = _latest_native_usage_snapshot(
+        now_epoch=now_epoch,
+        max_age_secs=_USAGE_NATIVE_FRESH_SECS,
+    )
+    if native:
+        return _live_usage_from_snapshot(native)
     try:
         with _WEEKLY_PCT_FILE.open("r") as f:
             data = json.load(f)
@@ -42062,6 +42265,7 @@ def _live_weekly_usage():
         "session_resets_at": fh.get("resets_at"),
         "sonnet_pct": sonnet.get("utilization"),
         "fetched_at": data.get("fetched_at") if isinstance(data, dict) else None,
+        "source": "legacy",
     }
 
 
@@ -42170,6 +42374,7 @@ def _weekly_usage_block():
         "week_start_epoch": week_start_epoch,
         "weekly_resets_at": (live or {}).get("weekly_resets_at"),
         "session_pct": (live or {}).get("session_pct"),
+        "source": (live or {}).get("source"),
         "calibrated_at": cal.get("calibrated_at"),
         "fetched_at": (live or {}).get("fetched_at"),
     }
@@ -43572,6 +43777,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(result)
         elif path == "/api/plan-usage":
             self.send_json(get_cached_plan_usage())
+        elif path == "/api/usage/snapshots":
+            qs = urllib.parse.parse_qs(parsed.query)
+            raw_hours = qs.get("hours", ["24"])[0]
+            self.send_json(usage_snapshots_payload(hours=raw_hours))
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)
             rows = list_spawned_sessions()
@@ -52072,6 +52281,7 @@ def main():
     # thread here is unconditional but no bytes leave the host unless the
     # user clicks "Enable" on the dashboard bar. See _telemetry_loop docs.
     threading.Thread(target=_telemetry_loop, daemon=True, name="ccc-telemetry").start()
+    _start_plan_usage_poller()
     # Anonymous open beacon — fires ONCE per boot. NOT opt-in, but carries
     # no install_id and no identity (3 fields: schema, version, platform).
     # The CCC_TELEMETRY_DISABLED env var kills it; that single switch is
