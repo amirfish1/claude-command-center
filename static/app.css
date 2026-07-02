@@ -4262,6 +4262,12 @@
     height: 3px;
     background: var(--accent);
   }
+  /* No drag handle when there's nothing to resize on either side of it
+     (CCC-397 follow-up): a collapsed section has no height to redistribute. */
+  .conv-current-sessions-scroll.is-collapsed + .conv-objects-splitter,
+  .conv-objects-splitter:has(+ .conv-project-tree-header.is-collapsed) {
+    display: none;
+  }
   body.objects-splitter-resizing {
     cursor: row-resize;
     user-select: none;
@@ -4270,19 +4276,22 @@
     cursor: row-resize !important;
     user-select: none !important;
   }
+  /* Same pill treatment as Current sessions / Triggered Workers (CCC-397
+     follow-up) — this header used to be its own bigger/bolder flush-divider
+     style, which read as a different UI pattern from its two siblings. */
   .conv-project-tree-header {
     flex: 0 0 auto;
-    margin: 0 2px 0 0;
-    padding: 14px 10px 8px;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.07em;
-    color: color-mix(in srgb, var(--text) 70%, var(--text-muted));
-    background: color-mix(in srgb, var(--surface-2) 54%, var(--bg));
-    border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-    border-bottom: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+    margin: 6px 2px 0 0;
+    border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+    border-bottom: 0;
+    border-radius: 8px 8px 0 0;
+    background: rgba(139, 148, 158, 0.08);
     cursor: pointer;
     user-select: none;
+  }
+  .conv-project-tree-header.is-collapsed {
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+    border-radius: 8px;
   }
   /* Accordion collapse (CCC-397): same fold-away behavior as Current
      sessions / Triggered Workers, applied to the Project tree section. */
@@ -4301,10 +4310,21 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     padding-right: 2px;
+    box-sizing: border-box;
+    border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+    border-top: 0;
+    border-radius: 0 0 8px 8px;
+    background: rgba(139, 148, 158, 0.05);
   }
-  #convList.objects-scroll-split .conv-project-tree-scroll {
-    flex: 1 1 auto;
-    max-height: none;
+  /* Whichever of the 3 stacked sections is the LAST one currently expanded
+     stretches to claim any leftover vertical space (CCC-397 follow-up) —
+     JS-toggled (_updateSidebarFillSection) since it depends on which of the
+     three sections is collapsed, not a fixed "Project tree always grows"
+     rule (that left a dead gap below Triggered Workers whenever Project
+     tree was the one collapsed). */
+  #convList.objects-scroll-split .conv-section-fill {
+    flex: 1 1 auto !important;
+    max-height: none !important;
   }
   .conv-evergreen-agents-header {
     flex: 0 0 auto;
@@ -4366,6 +4386,12 @@
   .conv-evergreen-agents-splitter.is-dragging::before {
     height: 3px;
     background: var(--accent);
+  }
+  /* No drag handle when there's nothing to resize on either side (CCC-397
+     follow-up) — mirrors the objects-splitter rule above. */
+  .conv-project-tree-scroll.is-collapsed + .conv-evergreen-agents-splitter,
+  .conv-evergreen-agents-splitter:has(+ .conv-evergreen-agents-header.is-collapsed) {
+    display: none;
   }
   body.evergreen-splitter-resizing {
     cursor: row-resize;
@@ -15977,9 +16003,37 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-health {
   flex: 0 0 auto;
   display: flex; flex-direction: column;
+  overflow-y: auto;
   border-bottom: 1px solid rgba(139,148,158,0.14);
 }
 .fq-health:empty { display: none; }
+.fq-health:empty + .fq-health-resize-handle { display: none; }
+/* Drag bar between the per-project health rows and the ticket list below
+   (CCC-426) — the health list can otherwise grow to fill the whole panel
+   when many queues are configured, starving the ticket list of room. */
+.fq-health-resize-handle {
+  flex: 0 0 auto;
+  height: 9px; margin: -1px 0; cursor: ns-resize;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: none; user-select: none;
+  background: transparent;
+  transition: background 0.12s;
+}
+.fq-health-resize-handle::before {
+  content: ''; display: block;
+  width: 40px; height: 3px; border-radius: 2px;
+  background: rgba(139,148,158,0.45);
+  transition: background 0.12s, width 0.12s;
+}
+.fq-health-resize-handle:hover::before,
+.fq-health-resize-handle.is-dragging::before {
+  background: var(--accent);
+  width: 60px;
+}
+.fq-health-resize-handle:hover,
+.fq-health-resize-handle.is-dragging {
+  background: rgba(88,166,255,0.08);
+}
 .fq-health-row {
   display: flex; align-items: center; flex-wrap: nowrap; gap: 5px;
   padding: 5px 10px; font-size: 12.5px; line-height: 1.3;
@@ -15988,6 +16042,17 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-health-row:hover { background: rgba(139,148,158,0.06); }
 .fq-health-row:last-child { border-bottom: none; }
+.fq-health-del {
+  flex: 0 0 auto; width: 14px; height: 14px; margin-right: 1px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--text-muted);
+  font-size: 13px; line-height: 1; padding: 0; border-radius: 3px;
+  cursor: pointer; opacity: 0; transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.fq-health-row:hover .fq-health-del { opacity: 0.6; }
+.fq-health-del:hover { opacity: 1 !important; background: rgba(248,81,73,0.18); color: var(--red, #f85149); }
+.fq-health-del.is-disabled { cursor: not-allowed; }
+.fq-health-del.is-disabled:hover { background: transparent; color: var(--text-muted); opacity: 0.6 !important; }
 .fq-health-proj {
   font-weight: 600; color: var(--text);
   flex: 0 1 auto; min-width: 0; max-width: 28%;

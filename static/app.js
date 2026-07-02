@@ -10684,6 +10684,70 @@
     }
   })();
 
+  // Resize handle for the Queue panel (CCC-426) — mirrors the Files panel
+  // handle above so the ticket list below the health strip can be grown or
+  // shrunk instead of being stuck at a fixed max-height.
+  (function () {
+    const $panel = document.getElementById('queuePanel');
+    const $handle = document.getElementById('queueResizeHandle');
+    if (!$panel || !$handle) return;
+    const QUEUE_HEIGHT_KEY = 'ccc-queue-height';
+    const QUEUE_MIN_PX = 120;
+
+    function queueMaxPx() {
+      const parent = $panel.parentElement;
+      if (!parent) return 9999;
+      return Math.max(QUEUE_MIN_PX, Math.floor(parent.clientHeight * 0.85));
+    }
+    function applyQueueHeight(h) {
+      const clamped = Math.max(QUEUE_MIN_PX, Math.min(queueMaxPx(), h));
+      $panel.style.height = clamped + 'px';
+    }
+    function resetQueueHeight() {
+      $panel.style.height = '';
+      try { localStorage.removeItem(QUEUE_HEIGHT_KEY); } catch (_) {}
+    }
+    try {
+      const stored = parseInt(localStorage.getItem(QUEUE_HEIGHT_KEY) || '', 10);
+      if (!isNaN(stored) && stored > 0) {
+        requestAnimationFrame(() => applyQueueHeight(stored));
+      }
+    } catch (_) {}
+
+    let startY = 0;
+    let startH = 0;
+    let activePointerId = null;
+    $handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      activePointerId = e.pointerId;
+      startY = e.clientY;
+      startH = $panel.getBoundingClientRect().height;
+      $handle.classList.add('is-dragging');
+      try { $handle.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    $handle.addEventListener('pointermove', (e) => {
+      if (activePointerId !== e.pointerId) return;
+      const dy = e.clientY - startY;
+      applyQueueHeight(startH - dy);
+    });
+    const endDrag = (e) => {
+      if (activePointerId !== e.pointerId) return;
+      $handle.classList.remove('is-dragging');
+      try { $handle.releasePointerCapture(e.pointerId); } catch (_) {}
+      activePointerId = null;
+      const finalH = $panel.getBoundingClientRect().height;
+      try { localStorage.setItem(QUEUE_HEIGHT_KEY, String(Math.round(finalH))); } catch (_) {}
+    };
+    $handle.addEventListener('pointerup', endDrag);
+    $handle.addEventListener('pointercancel', endDrag);
+    $handle.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      resetQueueHeight();
+    });
+  })();
+
   function relativeTime(ts) {
     // Compact format à la Omnara: just the number + unit, no "ago" word.
     // Saves ~30% of the row's right-side real estate which lets the time
@@ -10857,6 +10921,24 @@
     if (h == null) { list.style.removeProperty('--evergreen-agents-panel-h'); return; }
     const clamped = Math.round(Math.max(60, Math.min(h, list.getBoundingClientRect().height || 800)));
     list.style.setProperty('--evergreen-agents-panel-h', clamped + 'px');
+  }
+  // Whichever of the 3 stacked sidebar sections (Current sessions / Project
+  // tree / Triggered Workers) is the LAST one currently expanded should
+  // stretch to use any leftover vertical space (CCC-397 follow-up) — instead
+  // of always being Project Tree, which left a dead gap below a collapsed
+  // Project Tree when only Triggered Workers was open. Call after any render
+  // AND after any accordion toggle (no full re-render needed for the latter).
+  function _updateSidebarFillSection(list) {
+    list = list || document.getElementById('convList');
+    if (!list) return;
+    const candidates = ['current-sessions-scroll', 'project-tree-scroll', 'evergreen-agents-scroll']
+      .map(role => list.querySelector('[data-role="' + role + '"]'))
+      .filter(Boolean);
+    let fillEl = null;
+    for (const el of candidates) {
+      if (!el.classList.contains('is-collapsed')) fillEl = el;
+    }
+    for (const el of candidates) el.classList.toggle('conv-section-fill', el === fillEl);
   }
   function beginEvergreenSplitterResize(ev) {
     const handle = ev.target && ev.target.closest && ev.target.closest('[data-role="evergreen-agents-splitter"]');
@@ -23168,6 +23250,7 @@
     const _currentSessionsScrollTop = _currentSessionsScrollBefore ? _currentSessionsScrollBefore.scrollTop : 0;
     const _projectTreeScrollTop = _projectTreeScrollBefore ? _projectTreeScrollBefore.scrollTop : 0;
     $convList.innerHTML = _convListHtml;
+    if (_objectsSplitActive) _updateSidebarFillSection($convList);
     const _currentSessionsScrollAfter = _currentSessionsScrollBefore
       ? $convList.querySelector('[data-role="current-sessions-scroll"]')
       : null;
@@ -24158,6 +24241,7 @@
           if (chev) chev.innerHTML = nowCollapsed ? '&#9656;' : '&#9662;';
           const scroll = hdr.nextElementSibling;
           if (scroll) scroll.classList.toggle('is-collapsed', nowCollapsed);
+          _updateSidebarFillSection($convList);
           return;
         }
       });
@@ -28119,9 +28203,14 @@
           + ' title="Claim filter — click to cycle all / bug / feature">'
           + '<span class="fq-health-type-val">' + escapeHtml(_claimLabel(claimTypes)) + '</span>'
           + '</span>';
+        const delTitle = depth > 0 ? ('Delete queue — drain ' + depth + ' open item(s) first') : ('Delete queue ' + project);
+        const delBtn = '<button class="fq-health-del' + (depth > 0 ? ' is-disabled' : '') + '"'
+          + ' data-del-queue="' + escapeAttr(project) + '" data-depth="' + depth + '"'
+          + ' title="' + escapeAttr(delTitle) + '" aria-label="' + escapeAttr(delTitle) + '">×</button>';
         return '<div class="fq-health-row" data-fq-project="' + escapeAttr(project) + '"'
           + ' role="button" tabindex="0"'
           + ' title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age + ' — click to scope queue') + '">'
+          + delBtn
           + '<span class="fq-health-proj">' + escapeHtml(project) + '</span>'
           + '<span class="fq-health-sep">·</span>'
           + '<span class="fq-health-depth">' + depth + ' open</span>'
@@ -29049,8 +29138,40 @@
         _uxqHealthCache.ts = 0;
         _renderQueueHealthStrip(true, null);
       };
+      const deleteQueue = async (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('.fq-health-del[data-del-queue]');
+        if (!btn) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const queue = btn.getAttribute('data-del-queue');
+        const depth = Number(btn.getAttribute('data-depth')) || 0;
+        if (depth > 0) {
+          showOpToast('Cannot delete ' + queue + ' — ' + depth + ' open item(s), drain it first', 'error');
+          return;
+        }
+        if (!confirm('Delete queue ' + queue + '? This removes it from the queue panel.')) return;
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/queue/delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({queue}),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            _uxqHealthCache.ts = 0;
+            _renderQueueHealthStrip(true, null);
+          } else {
+            showOpToast('Delete failed: ' + (data.error || res.status), 'error');
+            btn.disabled = false;
+          }
+        } catch (e) {
+          showOpToast('Delete failed: ' + e, 'error');
+          btn.disabled = false;
+        }
+      };
       const scopeFromRow = (ev) => {
-        const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid], .fq-health-drain-toggle, .fq-health-type-toggle');
+        const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid], .fq-health-drain-toggle, .fq-health-type-toggle, .fq-health-del');
         if (badge) return;
         const row = ev.target && ev.target.closest && ev.target.closest('.fq-health-row[data-fq-project]');
         if (!row) return;
@@ -29068,9 +29189,10 @@
       $health.addEventListener('click', nudgeFromBadge);
       $health.addEventListener('click', toggleDrain);
       $health.addEventListener('click', cycleClaimTypes);
+      $health.addEventListener('click', deleteQueue);
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); scopeFromRow(ev); }
+        if (ev.key === 'Enter' || ev.key === ' ') { nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); deleteQueue(ev); scopeFromRow(ev); }
       });
     }
   }
