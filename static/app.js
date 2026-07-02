@@ -24085,18 +24085,24 @@
         ev.stopPropagation();
         ev.preventDefault();
         const queueName = hdr.getAttribute('data-queue-name') || '';
-        // Switch status rail to queue tab and scope it.
+        // Switch status rail to queue tab.
         if (typeof setStatusRailTab === 'function') setStatusRailTab('queue');
-        if (typeof _uxqSetScopeOverride === 'function') _uxqSetScopeOverride(queueName);
-        if (typeof _uxqItemsCache !== 'undefined') _uxqItemsCache.ts = 0;
-        if (typeof _renderQueuePanel === 'function') _renderQueuePanel();
-        // Open latest worker session for this queue in the conversation pane.
+        // Open latest worker session for this queue FIRST (CCC-417): the scope
+        // override is keyed by the currently-open session, so setting it
+        // before the switch pins it to the session being LEFT — clobbering
+        // whatever that session had pinned — while the newly-opened session
+        // gets no override and silently falls back to Auto. selectConversation
+        // updates the active session synchronously up front (before its first
+        // await), so the override set right after already targets the right key.
         const workers = (_wtWorkersCache && _wtWorkersCache.workers) || [];
         const queueWorkers = workers.filter(w => String(w.queue || '').toUpperCase() === queueName.toUpperCase());
         const latest = queueWorkers.find(w => w.session_id) || null;
         if (latest && latest.session_id && typeof selectConversation === 'function') {
           selectConversation(latest.session_id);
         }
+        if (typeof _uxqSetScopeOverride === 'function') _uxqSetScopeOverride(queueName);
+        if (typeof _uxqItemsCache !== 'undefined') _uxqItemsCache.ts = 0;
+        if (typeof _renderQueuePanel === 'function') _renderQueuePanel();
       });
     }
     // Past-worker chip click — opens the worker's session in the conv pane.
@@ -28617,6 +28623,21 @@
         + '</div>'
       : '';
 
+    // Mark-as-closed section (only when NOT closed, CCC-423): a human
+    // resolving a ticket by hand from the CCC UI had no way to leave a
+    // resolution summary the way a worker's `wt close --summary` does —
+    // "Close" in the footer only closed the modal. Same textarea treatment
+    // as Reopen above.
+    const closeSectionHtml = item.status !== 'closed'
+      ? '<div class="uxq-td-sec uxq-td-close-sec">'
+        + '<div class="uxq-td-sec-label">Mark as Closed</div>'
+        + '<textarea class="uxq-td-mark-closed-input" rows="3" placeholder="Resolution summary (optional)" aria-label="Resolution summary"></textarea>'
+        + '<div class="uxq-reopen-row">'
+        + '<button type="button" class="ann-btn ann-primary uxq-td-mark-closed-confirm">Mark as closed</button>'
+        + '</div>'
+        + '</div>'
+      : '';
+
     // Build modal DOM
     const modal = document.createElement('div');
     modal.id = 'uxqItemModal';
@@ -28640,6 +28661,7 @@
       +     '</div>'
       +     answerSectionHtml
       +     reopenSectionHtml
+      +     closeSectionHtml
       +   '</div>'
       +   '<aside class="uxq-td-sidebar">' + sideHtml + '</aside>'
       + '</div>'
@@ -28702,6 +28724,41 @@
       if (reopenNoteInput) {
         reopenNoteInput.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doReopen(); }
+        });
+      }
+    }
+
+    // Mark as closed (open/in_progress tickets only) — same textarea
+    // treatment as Reopen above, POSTs a resolution summary a human can
+    // leave the way `wt close --summary` does for a worker.
+    const markClosedInput = modal.querySelector('.uxq-td-mark-closed-input');
+    const markClosedBtn = modal.querySelector('.uxq-td-mark-closed-confirm');
+    if (markClosedBtn) {
+      const doMarkClosed = async () => {
+        markClosedBtn.disabled = true;
+        try {
+          const res = await fetch('/api/ux-fixes/close', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ref, note: (markClosedInput ? markClosedInput.value.trim() : '') }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (res.ok && d.ok) {
+            showOpToast('Ticket closed', 'success');
+            _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
+            _renderQueuePanel(); close();
+          } else {
+            showOpToast('Close failed: ' + (d.error || res.status), 'error');
+            markClosedBtn.disabled = false;
+          }
+        } catch (e) {
+          showOpToast('Close failed: ' + e, 'error');
+          markClosedBtn.disabled = false;
+        }
+      };
+      markClosedBtn.addEventListener('click', doMarkClosed);
+      if (markClosedInput) {
+        markClosedInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doMarkClosed(); }
         });
       }
     }

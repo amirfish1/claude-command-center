@@ -15899,17 +15899,18 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .uxq-td-footer-meta { font: 11px var(--font-ui); color: var(--text-muted); }
 .uxq-td-footer-btns { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-/* Reopen section (CCC-422): a real textarea in the main column next to
-   Activity — the old version squeezed a single-line input into the footer
-   button row, which had almost no width to work with. Mirrors the Answer
-   section's box treatment so a closed ticket reads as "still actionable". */
-.uxq-td-reopen-sec { border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: rgba(139,148,158,0.05); }
-.uxq-td-reopen-input {
+/* Reopen / Mark-as-closed sections (CCC-422/423): real textareas in the main
+   column next to Activity — the old Reopen control squeezed a single-line
+   input into the footer button row, which had almost no width to work with,
+   and there was no "mark as closed with a note" affordance at all. Mirrors
+   the Answer section's box treatment so both read as "still actionable". */
+.uxq-td-reopen-sec, .uxq-td-close-sec { border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: rgba(139,148,158,0.05); }
+.uxq-td-reopen-input, .uxq-td-mark-closed-input {
   width: 100%; min-height: 60px; padding: 8px 10px; font: 13px var(--font-ui);
   border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text);
   resize: vertical; box-sizing: border-box;
 }
-.uxq-td-reopen-input:focus { outline: none; border-color: var(--accent); }
+.uxq-td-reopen-input:focus, .uxq-td-mark-closed-input:focus { outline: none; border-color: var(--accent); }
 .uxq-reopen-row { display: flex; justify-content: flex-end; margin-top: 8px; }
 
 .fq-empty { padding: 12px 10px; font-size: 13px; color: var(--text-muted); }
