@@ -10013,22 +10013,35 @@ def _ttl_memo(ttl_seconds):
 
 
 @_ttl_memo(3.0)
-def find_live_codex_processes():
-    """Return running Codex CLI processes with pid, tty, cwd, terminal app, command."""
-    procs = []
+def _scan_engine_processes():
+    """Single `ps -A` scan shared by find_live_{codex,gemini,cursor,antigravity}_processes.
+
+    Each of those used to run its own identical `ps -A -o pid=,tty=,comm=,args=`
+    fork, so a single poll cycle that checks all four engines forked `ps` four
+    times. TTL-memoised here so they share one fork per window instead (CCC-414)."""
     try:
         ps_out = subprocess.run(
             ["ps", "-A", "-o", "pid=,tty=,comm=,args="],
             capture_output=True, text=True, timeout=2,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return procs
+        return []
+    rows = []
     for line in ps_out.stdout.splitlines():
         parts = line.strip().split(None, 3)
         if len(parts) < 3:
             continue
         pid_s, tty, comm = parts[:3]
         args = parts[3] if len(parts) > 3 else ""
+        rows.append((pid_s, tty, comm, args))
+    return rows
+
+
+@_ttl_memo(3.0)
+def find_live_codex_processes():
+    """Return running Codex CLI processes with pid, tty, cwd, terminal app, command."""
+    procs = []
+    for pid_s, tty, comm, args in _scan_engine_processes():
         arg_parts = args.split()
         basenames = {comm.rsplit("/", 1)[-1]}
         if arg_parts:
@@ -10055,19 +10068,7 @@ def find_live_codex_processes():
 def find_live_gemini_processes():
     """Return running Gemini CLI processes with pid, tty, cwd, terminal app, command."""
     procs = []
-    try:
-        ps_out = subprocess.run(
-            ["ps", "-A", "-o", "pid=,tty=,comm=,args="],
-            capture_output=True, text=True, timeout=2,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return procs
-    for line in ps_out.stdout.splitlines():
-        parts = line.strip().split(None, 3)
-        if len(parts) < 3:
-            continue
-        pid_s, tty, comm = parts[:3]
-        args = parts[3] if len(parts) > 3 else ""
+    for pid_s, tty, comm, args in _scan_engine_processes():
         arg_parts = args.split()
         basenames = {comm.rsplit("/", 1)[-1]}
         basenames.update(p.rsplit("/", 1)[-1] for p in arg_parts[:4])
@@ -10093,19 +10094,7 @@ def find_live_gemini_processes():
 def find_live_cursor_processes():
     """Return running Cursor Agent processes with pid, tty, cwd, terminal app, command."""
     procs = []
-    try:
-        ps_out = subprocess.run(
-            ["ps", "-A", "-o", "pid=,tty=,comm=,args="],
-            capture_output=True, text=True, timeout=2,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return procs
-    for line in ps_out.stdout.splitlines():
-        parts = line.strip().split(None, 3)
-        if len(parts) < 3:
-            continue
-        pid_s, tty, comm = parts[:3]
-        args = parts[3] if len(parts) > 3 else ""
+    for pid_s, tty, comm, args in _scan_engine_processes():
         arg_parts = args.split()
         basenames = {comm.rsplit("/", 1)[-1]}
         basenames.update(p.rsplit("/", 1)[-1] for p in arg_parts[:4])
@@ -10131,19 +10120,7 @@ def find_live_cursor_processes():
 def find_live_antigravity_processes():
     """Return running Antigravity CLI processes with pid, tty, cwd, terminal app, command."""
     procs = []
-    try:
-        ps_out = subprocess.run(
-            ["ps", "-A", "-o", "pid=,tty=,comm=,args="],
-            capture_output=True, text=True, timeout=2,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return procs
-    for line in ps_out.stdout.splitlines():
-        parts = line.strip().split(None, 3)
-        if len(parts) < 3:
-            continue
-        pid_s, tty, comm = parts[:3]
-        args = parts[3] if len(parts) > 3 else ""
+    for pid_s, tty, comm, args in _scan_engine_processes():
         arg_parts = args.split()
         basenames = {comm.rsplit("/", 1)[-1]}
         basenames.update(p.rsplit("/", 1)[-1] for p in arg_parts[:4])
