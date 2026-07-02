@@ -28851,14 +28851,14 @@
           : (it.updated_at || it.created_at);
         const ageMs = ageSrc ? Date.parse(ageSrc) : NaN;
         const ageStr = !isNaN(ageMs) ? timeAgo(ageMs) : '';
-        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + '" data-ref="' + escapeAttr(ref)
+        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (hasUnresolved ? ' has-unresolved' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref">' + escapeHtml(ref) + '</span>'
           + _uxqChips(it)
           + '<span class="fq-note">' + escapeHtml(noteShown) + '</span>'
           + runBtn
           + '<button class="fq-prio-bump' + (atTop ? ' is-top' : '') + '" data-ref="' + escapeAttr(ref) + '" data-next-prio="' + escapeAttr(np) + '" title="' + escapeAttr(bumpTitle) + '" aria-label="' + escapeAttr(bumpTitle) + '">↑</button>'
-          + '<span class="fq-status" title="' + escapeAttr(blocked ? 'needs input' : status) + '">' + escapeHtml(status) + '</span>'
+          + '<span class="fq-status" title="' + escapeAttr(blocked ? 'needs input' : hasUnresolved ? 'closed — unresolved follow-up' : status) + '">' + escapeHtml(status) + '</span>'
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
           + '</div>';
       }).join('') || _uxqEmptyHtml(proj, items.length);
