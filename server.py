@@ -6629,15 +6629,26 @@ def _write_annotations(items):
     os.replace(tmp, ANNOTATIONS_FILE)
 
 
-def _frontmost_window_id_for_capture():
-    """Return the macOS window id for the frontmost app, or None."""
+def _frontmost_window_bounds_for_capture():
+    """Return the frontmost macOS window's on-screen bounds (points), or None.
+
+    `id of window` (needed for `screencapture -l <id>`) stopped resolving
+    reliably on recent macOS versions for many apps -- not just Electron/
+    WebView ones. It fails the same way (AppleEvent -1728) even for a plain
+    Terminal.app window that is definitely open and frontmost (OPS-63).
+    `position`/`size` of the window remain readable via System Events, so
+    capture by absolute screen rect instead of by window id.
+    """
     if platform.system() != "Darwin":
         return None
     script = r'''
 tell application "System Events"
   tell (first application process whose frontmost is true)
     if (count of windows) is 0 then return ""
-    return id of window 1
+    set w to window 1
+    set {px, py} to position of w
+    set {sw, sh} to size of w
+    return (px as string) & "," & (py as string) & "," & (sw as string) & "," & (sh as string)
   end tell
 end tell
 '''
@@ -6652,72 +6663,51 @@ end tell
         return None
     if proc.returncode != 0:
         return None
-    wid = (proc.stdout or "").strip()
-    return wid if wid.isdigit() else None
-
-
-def _sips_crop_png(src_path, out_path, offset_x, offset_y, width, height):
-    """Crop a PNG using the built-in macOS sips tool."""
-    if width < 1 or height < 1:
-        return False
+    parts = (proc.stdout or "").strip().split(",")
+    if len(parts) != 4:
+        return None
     try:
-        proc = subprocess.run(
-            [
-                "sips",
-                "-c",
-                str(int(height)),
-                str(int(width)),
-                "--cropOffset",
-                str(int(offset_y)),
-                str(int(offset_x)),
-                str(src_path),
-                "--out",
-                str(out_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=8,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    if proc.returncode != 0:
-        return False
-    try:
-        return out_path.is_file() and out_path.stat().st_size > 0
-    except OSError:
-        return False
+        x, y, width, height = (float(p) for p in parts)
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return {"x": x, "y": y, "width": width, "height": height}
 
 
 def _capture_annotation_window_crop(screen, viewport_crop, annotation_id):
-    """Capture the front window and crop to the viewport-relative region.
+    """Capture the front window's real on-screen bounds and crop directly to
+    the viewport-relative region via `screencapture -R`.
 
-    More reliable than guessing global screen coordinates from the browser.
+    More reliable than guessing global screen coordinates from the browser
+    (the browser's own screen-position estimate can be off enough to
+    produce a rect that doesn't intersect any display -- OPS-63).
     """
     if platform.system() != "Darwin":
         return None, "window capture is macOS-only"
     screencapture_bin = _resolve_screencapture_bin()
     if not screencapture_bin:
         return None, "screencapture not found"
-    wid = _frontmost_window_id_for_capture()
-    if not wid:
+    bounds = _frontmost_window_bounds_for_capture()
+    if not bounds:
         return None, "could not resolve front window"
     crop = _annotation_rect(viewport_crop)
     if crop["width"] < 3 or crop["height"] < 3:
         return None, "crop region too small"
     screen = screen if isinstance(screen, dict) else {}
-    dpr = max(1.0, min(4.0, _annotation_number(screen.get("device_pixel_ratio"), 1.0)))
     border_x = max(0.0, _annotation_number(screen.get("chrome_border_x")))
     chrome_y = max(0.0, _annotation_number(screen.get("chrome_offset_y")))
-    offset_x = int(round((crop["x"] + border_x) * dpr))
-    offset_y = int(round((crop["y"] + chrome_y) * dpr))
-    width = int(round(crop["width"] * dpr))
-    height = int(round(crop["height"] * dpr))
+    x = int(round(bounds["x"] + crop["x"] + border_x))
+    y = int(round(bounds["y"] + crop["y"] + chrome_y))
+    width = int(round(crop["width"]))
+    height = int(round(crop["height"]))
+    if width < 3 or height < 3:
+        return None, "crop region too small"
     ANNOTATION_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    tmp_full = ANNOTATION_SCREENSHOT_DIR / f"{annotation_id}-window.png"
     out = ANNOTATION_SCREENSHOT_DIR / f"{annotation_id}.png"
     try:
         proc = subprocess.run(
-            [screencapture_bin, "-x", "-l", wid, str(tmp_full)],
+            [screencapture_bin, "-x", "-R", f"{x},{y},{width},{height}", str(out)],
             capture_output=True,
             text=True,
             timeout=8,
@@ -6726,6 +6716,10 @@ def _capture_annotation_window_crop(screen, viewport_crop, annotation_id):
         return None, f"window screencapture failed: {e}"
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()[:300]
+        try:
+            out.unlink(missing_ok=True)
+        except OSError:
+            pass
         hint = err or f"window screencapture exited {proc.returncode}"
         low = hint.lower()
         if "intersect" in low or "display" in low or "could not create" in low:
@@ -6739,30 +6733,10 @@ def _capture_annotation_window_crop(screen, viewport_crop, annotation_id):
             )
         return None, hint
     try:
-        if not tmp_full.is_file() or tmp_full.stat().st_size <= 0:
+        if not out.is_file() or out.stat().st_size <= 0:
             return None, "window screencapture produced no image"
     except OSError:
         return None, "window screencapture file missing"
-    if not _sips_crop_png(tmp_full, out, offset_x, offset_y, width, height):
-        # Cropping failed (chrome estimate off, Retina mismatch, etc.) — keep
-        # the full-window capture so the agent still has visual context.
-        try:
-            shutil.copyfile(tmp_full, out)
-        except OSError:
-            try:
-                out.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return None, "window crop failed"
-        try:
-            tmp_full.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return str(out), None
-    try:
-        tmp_full.unlink(missing_ok=True)
-    except OSError:
-        pass
     return str(out), None
 
 
