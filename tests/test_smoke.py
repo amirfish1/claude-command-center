@@ -890,6 +890,17 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("renderArchiveList(document.getElementById('convSearch')?.value || '');", app_js)
         self.assertIn("if (_isFolderGroupCollapsed('inprogress', nodeId)) return html;", app_js)
 
+    def test_window_resize_restores_conversation_reading_position(self):
+        """A window resize reflows the transcript (word-wrap changes with pane
+        width), which used to leave scrollTop untouched and visually jump the
+        reader. It should restore against the last-known top-visible message
+        instead (CCC-440)."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("view._lastTopAnchor = _topVisibleAnchor(view);", app_js)
+        self.assertIn("if (view._pinnedToBottom) scrollConversationToEnd(view);", app_js)
+        self.assertIn("else if (view._lastTopAnchor) _restoreAnchor(view, view._lastTopAnchor);", app_js)
+
     def test_object_task_draft_survives_sidebar_refresh(self):
         """Typing in an object task should persist before periodic list refresh
         replaces the row DOM."""
