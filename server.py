@@ -45574,6 +45574,52 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return
+        if path == "/api/queue/delete":
+            # Remove a queue's entry from queue-config.json (CCC-425). Refuses
+            # while the queue still has non-closed tickets — deletion is meant
+            # for drained/unused queues, not a way to nuke in-flight work.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            queue_name = str(payload.get("queue") or "").strip().upper()
+            if not queue_name:
+                self.send_json({"ok": False, "error": "queue required"}, 400)
+                return
+            try:
+                items = _q.list_items()
+            except Exception:
+                items = []
+            open_count = sum(
+                1 for it in items
+                if str(it.get("project") or "").strip().upper() == queue_name
+                and it.get("status") != "closed"
+            )
+            if open_count > 0:
+                self.send_json({
+                    "ok": False,
+                    "error": f"{open_count} open item(s) in {queue_name} — drain it before deleting",
+                }, 400)
+                return
+            cfg_path = _wt_config_path()
+            try:
+                cfg = _wt_read_config() or {}
+                matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
+                if matched:
+                    del cfg[matched]
+                    tmp = cfg_path.with_suffix(".json.tmp")
+                    with open(tmp, "w") as f:
+                        json.dump(cfg, f, indent=2)
+                    tmp.replace(cfg_path)
+                self.send_json({"ok": True, "queue": matched or queue_name})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
         if path == "/api/bug-report":
             # Submit a bug report as a GitHub issue against the CCC repo.
             # Returns {ok:true,url,number} on success; on failure returns
