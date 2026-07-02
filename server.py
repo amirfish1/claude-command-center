@@ -2241,6 +2241,57 @@ def _canonical_conversation_path(repo_path, conversation_id):
     return PROJECTS_ROOT / slug / name
 
 
+def _find_session_jsonl_any_project(session_id):
+    sid = str(session_id or "").strip()
+    if not sid or not PROJECTS_ROOT.is_dir():
+        return None
+    name = sid + ".jsonl"
+    try:
+        project_dirs = list(PROJECTS_ROOT.iterdir())
+    except OSError:
+        return None
+    for project_dir in project_dirs:
+        try:
+            cand = project_dir / name
+            if cand.is_file():
+                return cand
+        except OSError:
+            continue
+    return None
+
+
+def _ensure_session_jsonl_for_cwd(session_id, cwd):
+    """Move a Claude JSONL into the project bucket used by `cwd`.
+
+    `claude --resume` looks up sessions from the process cwd's project slug.
+    Sessions accidentally launched from "/" can be displayed under an inferred
+    repo, but resume still fails until the JSONL is rebucketed.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing_session_id"}
+    try:
+        dest = _canonical_conversation_path(cwd, sid)
+    except (OSError, ValueError, RuntimeError) as exc:
+        return {"ok": False, "error": "invalid_cwd", "message": str(exc)}
+    try:
+        if dest.is_file():
+            return {"ok": True, "moved": False, "path": str(dest)}
+    except OSError:
+        return {"ok": False, "error": "stat_failed", "path": str(dest)}
+    src = _find_session_jsonl_any_project(sid)
+    if not src:
+        return {"ok": False, "error": "session_jsonl_not_found"}
+    try:
+        if dest.exists():
+            return {"ok": False, "error": "destination_exists", "path": str(dest)}
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(src, dest)
+    except OSError as exc:
+        return {"ok": False, "error": "rename_failed", "message": str(exc)}
+    return {"ok": True, "moved": True, "from": str(src), "to": str(dest)}
+
+
 def _discover_repo_paths_from_projects():
     """Best-effort repo paths inferred from Claude project-folder slugs."""
     out = []
@@ -30616,6 +30667,13 @@ def resume_session_headless(session_id, text):
     except RepoContextError as e:
         return e.as_payload()
     cwd = ctx["cwd"]
+    rebucket = _ensure_session_jsonl_for_cwd(session_id, cwd)
+    if not rebucket.get("ok"):
+        return {
+            "ok": False,
+            "error": rebucket.get("message") or rebucket.get("error") or "session jsonl unavailable",
+            "code": rebucket.get("error") or "session_jsonl_unavailable",
+        }
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"resume-{session_id[:8]}-{timestamp}.log"
     log_dir = repo_log_dir(ctx["repo_path"])

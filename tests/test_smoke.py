@@ -6051,6 +6051,43 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(ctx["repo_path"], str(self.repo))
         self.assertEqual(ctx["cwd"], str(self.repo))
 
+    def test_root_bucket_session_jsonl_moves_to_resume_cwd_bucket(self):
+        sid = "00000000-0000-4000-8000-000000000110"
+        src = self.server._canonical_conversation_path("/", sid)
+        dest = self.server._canonical_conversation_path(str(self.repo), sid)
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text(
+            json.dumps({
+                "type": "user",
+                "timestamp": "2026-05-04T00:00:00.000Z",
+                "cwd": "/",
+                "sessionId": sid,
+                "message": {"role": "user", "content": "hello"},
+            }) + "\n",
+            encoding="utf-8",
+        )
+        self.assertTrue(src.is_file())
+        self.assertFalse(dest.exists())
+        self.assertTrue(
+            hasattr(self.server, "_ensure_session_jsonl_for_cwd"),
+            "resume should have a JSONL rebucket repair helper",
+        )
+
+        result = self.server._ensure_session_jsonl_for_cwd(sid, str(self.repo))
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["moved"])
+        self.assertFalse(src.exists())
+        self.assertTrue(dest.is_file())
+        self.assertEqual(dest.read_text(encoding="utf-8").splitlines()[0],
+                         json.dumps({
+                             "type": "user",
+                             "timestamp": "2026-05-04T00:00:00.000Z",
+                             "cwd": "/",
+                             "sessionId": sid,
+                             "message": {"role": "user", "content": "hello"},
+                         }))
+
     def test_find_conversations_carries_spawn_parent_session_id(self):
         parent = "10000000-0000-4000-8000-000000000001"
         child = "10000000-0000-4000-8000-000000000002"
