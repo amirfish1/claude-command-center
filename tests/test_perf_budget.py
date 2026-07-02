@@ -107,6 +107,97 @@ def test_archive_build_skips_liveness_for_old_sessions(big_projects, monkeypatch
     )
 
 
+# ── Auto-unarchive sweep candidacy gate (CCC-435 follow-up) ──────────────────
+# _auto_unarchive_live_sessions used to gate the (heavy, engine-classifying)
+# _archive_session_is_live probe by `sid in _discover_live_session_ids()`.
+# CCC-435 swapped that for an ungated per-sid probe so pool-model Codex.app
+# threads (invisible to the resume-arg scan) could still be caught — but that
+# turned the sweep into O(all archived) heavy probes every 30s. The fix
+# restores a candidacy gate that unions the cheap discovery set with a
+# cached, bulk Codex-pool candidate set, so the probe count stays bounded by
+# candidates, not by archive size.
+
+def test_auto_unarchive_sweep_gates_by_candidacy(monkeypatch):
+    """N old archived sids with zero liveness candidates → zero probes."""
+    monkeypatch.setattr(server, "_archive_auto_sweep_last", 0.0)
+    monkeypatch.setattr(server, "_archive_grace", {})
+    monkeypatch.setattr(server, "_discover_live_session_ids", lambda: set())
+    monkeypatch.setattr(server, "_codex_pool_candidate_sids", lambda now=None: frozenset())
+    calls = _count_calls(monkeypatch, "_archive_session_is_live", passthrough_return=False)
+
+    archived = [str(uuid.uuid4()) for _ in range(300)]
+    kept = server._auto_unarchive_live_sessions(list(archived))
+
+    assert kept == archived, "no candidates were live — nothing should be dropped"
+    assert len(calls) == 0, (
+        f"_archive_session_is_live called {len(calls)}x for 300 archived sids with "
+        "zero liveness candidates — the auto-unarchive sweep's candidacy gate regressed"
+    )
+
+
+def test_auto_unarchive_sweep_reaches_pool_codex_candidate(monkeypatch, tmp_path):
+    """A pool-model Codex thread with a fresh rollout is still auto-unarchived.
+
+    CCC-435: Codex.app's `codex app-server` puts no session id on any command
+    line, so the resume-arg scan (_discover_live_session_ids) never sees it.
+    The candidacy gate must still reach it via _codex_pool_candidate_sids —
+    a single cached bulk query, gated behind _codex_pool_alive() — not by
+    ungating the probe for every archived sid.
+    """
+    monkeypatch.setattr(server, "_archive_auto_sweep_last", 0.0)
+    monkeypatch.setattr(server, "_archive_grace", {})
+    monkeypatch.setattr(server, "_session_live_cache", {})
+    monkeypatch.setattr(server, "_codex_pool_candidates_cache", {"ts": 0.0, "sids": frozenset()})
+
+    sid = str(uuid.uuid4())
+    other_sid = str(uuid.uuid4())  # not a codex thread — must stay archived
+    now = time.time()
+
+    # Mock the codex index: pool is alive, and the bulk fetch returns one
+    # thread row for `sid`, updated seconds ago (candidacy signal).
+    monkeypatch.setattr(server, "_codex_pool_alive", lambda now=None: True)
+    monkeypatch.setattr(
+        server, "_codex_fetch_threads",
+        lambda where="", params=(), limit=None: (
+            [{"id": sid, "updated_at_ms": int(now * 1000) - 5000}] if not where else []
+        ),
+    )
+    monkeypatch.setattr(server, "_discover_live_session_ids", lambda: set())
+
+    # Mock the actual-liveness resolution path so it doesn't touch real
+    # filesystem/sqlite state: fresh rollout for `sid`, nothing for the other.
+    rollout = tmp_path / f"{sid}.jsonl"
+    rollout.write_text("{}\n")
+
+    def _fake_state_fields(target_sid, now=None):
+        if target_sid == sid:
+            return {"codex_state": "working", "codex_fresh": True}
+        return {"codex_state": None, "codex_fresh": False}
+
+    monkeypatch.setattr(server, "_codex_state_fields", _fake_state_fields)
+    monkeypatch.setattr(server, "_is_codex_session", lambda s: s == sid)
+
+    def _fake_reader(target_sid, repo_path=None):
+        if target_sid == sid:
+            return rollout, None
+        return None, None
+
+    monkeypatch.setattr(server, "_resolve_conversation_reader", _fake_reader)
+
+    calls = _count_calls(monkeypatch, "_archive_session_is_live")
+    kept = server._auto_unarchive_live_sessions([sid, other_sid])
+
+    assert sid not in kept, "fresh pool-codex candidate was not auto-unarchived"
+    assert other_sid in kept, "non-candidate sid must stay archived"
+    # Probed the true candidate (sid); may or may not probe other_sid depending
+    # on _discover_live_session_ids/_codex_pool_candidate_sids overlap, but must
+    # not blow past a tiny bound (never O(all archived)).
+    assert len(calls) <= 2, (
+        f"_archive_session_is_live called {len(calls)}x for 2 archived sids — "
+        "candidacy gate did not bound the probe count"
+    )
+
+
 # ── UX-fixes queue health (candidacy gate) ───────────────────────────────────
 # compute_ux_fixes_health must read the queue ONCE and probe liveness only for
 # the single candidate fixer of a project that has open tickets — never an

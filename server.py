@@ -9076,21 +9076,71 @@ def _save_archive_grace() -> None:
 _archive_grace: dict = _load_archive_grace()  # sid → epoch; manual archives, sticky vs auto-unarchive
 
 
+_codex_pool_candidates_cache = {"ts": 0.0, "sids": frozenset()}
+_CODEX_POOL_CANDIDATES_TTL = 15.0
+
+
+def _codex_pool_candidate_sids(now=None):
+    """Thread ids Codex's sqlite index has touched inside the archive
+    freshness window — a candidacy set for pool-model Codex.app threads
+    (CCC-435), which never appear in _discover_live_session_ids()'s
+    resume-arg scan because `codex app-server` puts no per-session id on
+    any command line.
+
+    Cost model: ONE cached, bulk `_codex_fetch_threads()` SQL query (already
+    ordered newest-first, LIMIT-bounded) — never a per-sid sqlite connect and
+    never a filesystem glob across CODEX_SESSIONS_ROOT. Also gated behind the
+    already-cached _codex_pool_alive(), so a machine with no Codex.app pool
+    process running pays nothing at all.
+    """
+    now = now if now is not None else time.time()
+    cached = _codex_pool_candidates_cache
+    if now - cached["ts"] < _CODEX_POOL_CANDIDATES_TTL:
+        return cached["sids"]
+    sids = set()
+    if _codex_pool_alive(now):
+        try:
+            for row in _codex_fetch_threads(limit=100):
+                ts = _codex_ts_seconds(row, prefix="updated") or _codex_ts_seconds(row, prefix="created")
+                if ts and (now - ts) < 300:
+                    tid = row.get("id")
+                    if tid:
+                        sids.add(tid)
+        except Exception:
+            sids = set()
+    sids = frozenset(sids)
+    _codex_pool_candidates_cache["ts"] = now
+    _codex_pool_candidates_cache["sids"] = sids
+    return sids
+
+
 def _auto_unarchive_live_sessions(archived):
     """Drop archived sids showing fresh activity (CCC-117).
 
     A session that's actively writing its transcript doesn't belong in the
-    Archived bucket — auto-unarchive it. Perf gate: runs at most every 30s
-    (the archived bucket is user-curated and small, so a per-sid liveness
-    probe here is cheap — and each probe is itself memoized). The grace map
-    keeps a just-archived-by-the-user session from bouncing straight back
-    (its transcript mtime is fresh from the kill/final writes).
+    Archived bucket — auto-unarchive it. Perf gate: runs at most every 30s,
+    AND only probes the (heavier, engine-classifying) _archive_session_is_live
+    for sids that are plausible liveness candidates — never for the whole
+    archived list. A per-sid _archive_session_is_live probe for every
+    archived sid regressed this sweep to hundreds of sqlite connects/globs on
+    a real archive (CCC-435 follow-up); the candidacy set below keeps the
+    sweep O(candidates), not O(all archived), while still catching pool-model
+    Codex.app threads. The grace map keeps a just-archived-by-the-user
+    session from bouncing straight back (its transcript mtime is fresh from
+    the kill/final writes).
     """
     global _archive_auto_sweep_last
     now = time.time()
     if not archived or now - _archive_auto_sweep_last < 30:
         return archived
     _archive_auto_sweep_last = now
+    # Candidacy gate, two cheap membership sources unioned:
+    #   - _discover_live_session_ids(): Claude registry + engine resume-arg
+    #     scan + fresh sidecar markers — the original CCC-117 gate, and
+    #     already used the same way by _rehydrate_archive_cached_rows.
+    #   - _codex_pool_candidate_sids(): pool-model Codex.app threads the
+    #     resume-arg scan can never see (CCC-435), via one cached bulk query.
+    candidates = _discover_live_session_ids() | _codex_pool_candidate_sids(now)
     keep = []
     changed = False
     for sid in archived:
@@ -9099,14 +9149,7 @@ def _auto_unarchive_live_sessions(archived):
         # archived stays archived even while it streams (CCC-149 follow-up).
         # Only sessions that entered the archive WITHOUT a manual marker (none
         # today, but kept for CCC-117's resume-brings-back intent) can bounce.
-        #
-        # _archive_session_is_live (not the cheap _discover_live_session_ids
-        # resume-arg scan) so pool-model Codex threads — driven by Codex.app's
-        # `codex app-server`, which puts no per-session id on any command
-        # line — are correctly seen as live too (CCC-435: a Codex.app session
-        # with fresh transcript activity stayed stuck in Archived forever
-        # because the resume-arg scan can never match it).
-        if sid not in _archive_grace:
+        if sid not in _archive_grace and sid in candidates:
             try:
                 live = _archive_session_is_live(sid)
             except Exception:
