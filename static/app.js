@@ -27942,7 +27942,7 @@
 
   function _wtLogVerbClass(verb) {
     if (['CLAIM','CLOSE','BLOCK','DISCUSS','UNBLOCK'].includes(verb)) return 'wl-worker';
-    if (['DISPATCH','SPAWN','STOP','REAP','RECONC'].includes(verb)) return 'wl-reconciler';
+    if (['DISPATCH','NUDGE','SPAWN','STOP','REAP','RECONC'].includes(verb)) return 'wl-reconciler';
     if (['ENQUEUE','REOPEN'].includes(verb)) return 'wl-queue-action';
     return '';
   }
