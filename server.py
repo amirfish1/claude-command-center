@@ -15235,6 +15235,9 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         if parsed:
             events.append(parsed)
 
+    if is_codex:
+        events = _enrich_codex_no_agent_output_events(conversation_id, events)
+
     first_line = events[0]["line"] if events else (buf[0][0] if buf else total)
     result = {
         "events": events,
@@ -15398,6 +15401,9 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
             for k, idx in enumerate(missing_idx):
                 frac = k / (m - 1)
                 events[idx]["ts"] = _cursor_ts_iso(cursor_ts_start + span * frac)
+
+    if is_codex:
+        events = _enrich_codex_no_agent_output_events(conversation_id, events)
 
     result = {"events": events, "last_line": line_num}
     _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
@@ -18301,6 +18307,82 @@ def _extract_codex_thread_id_from_log(log_path):
     except OSError:
         return None
     return None
+
+
+def _codex_turn_failed_error_from_log(log_path):
+    """Last `turn.failed` error message in a codex spawn/resume .log, or None.
+
+    codex's own resumable rollout.jsonl never records turn.failed (only
+    task_complete with last_agent_message:null) — the real reason a turn
+    produced no visible text lives only in CCC's raw process capture. One
+    spawn/resume invocation is one turn, so at most one turn.failed exists
+    per log (CCC-424).
+    """
+    if not log_path:
+        return None
+    last_error = None
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line or not line.startswith("{"):
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") == "turn.failed":
+                    err = ev.get("error")
+                    msg = err.get("message") if isinstance(err, dict) else None
+                    if msg:
+                        last_error = str(msg).strip()
+    except OSError:
+        return None
+    return last_error
+
+
+def _codex_logs_for_session(session_id):
+    """Every CCC spawn/resume .log whose thread_id matches session_id, as
+    (mtime, path) pairs sorted oldest-first.
+
+    Sourced from _recent_codex_ccc_log_paths (spawn registry + a glob of
+    every known repo's log dir) rather than just the live spawn registry —
+    the registry prunes an entry the moment its process exits, and a
+    turn.failed IS the process exiting, so by the time anyone investigates
+    a silent turn the registry entry is already gone (CCC-424).
+    """
+    if not session_id:
+        return []
+    out = []
+    for log in _recent_codex_ccc_log_paths():
+        if _extract_codex_thread_id_from_log(log) != session_id:
+            continue
+        try:
+            mtime = Path(log).stat().st_mtime
+        except OSError:
+            continue
+        out.append((mtime, str(log)))
+    out.sort(key=lambda item: item[0])
+    return out
+
+
+def _enrich_codex_no_agent_output_events(conversation_id, events):
+    """Attach the real turn.failed error to codex 'no visible response'
+    result events by correlating with CCC's raw spawn/resume .log capture
+    (CCC-424). No-op, and cheap, when nothing in `events` is silent."""
+    silent = [e for e in events if e.get("type") == "result" and e.get("no_agent_output")]
+    if not silent:
+        return events
+    logs = _codex_logs_for_session(conversation_id)
+    if not logs:
+        return events
+    for ev in silent:
+        target_epoch = _iso_to_epoch(ev.get("ts")) or 0.0
+        best_log = min(logs, key=lambda item: abs(item[0] - target_epoch))[1] if target_epoch else logs[-1][1]
+        error = _codex_turn_failed_error_from_log(best_log)
+        if error:
+            ev["turn_failed_error"] = error[:400]
+    return events
 
 
 def _codex_sidebar_backfill_window_days():

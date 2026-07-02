@@ -33622,6 +33622,18 @@
   function _resultOutcomeInfo(ev) {
     if (!ev) return null;
     if (ev.no_agent_output) {
+      // CCC-424: the resumable rollout.jsonl never records *why* a turn
+      // produced no text — the server correlates CCC's raw process capture
+      // to find the actual turn.failed error (network blip, dropped stream,
+      // etc). When it finds one, show that instead of the generic message.
+      if (ev.turn_failed_error) {
+        return {
+          kind: 'error',
+          label: 'Stopped — turn failed',
+          detail: String(ev.turn_failed_error).trim()
+            + ' The turn did not complete; use the wake/follow-up box below to retry.',
+        };
+      }
       return {
         kind: 'silent',
         label: 'No visible response',
