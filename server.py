@@ -333,6 +333,128 @@ def _wt_read_worker_session_ids():
     return [str(s) for s in ids if isinstance(s, str)]
 
 
+def _wt_clip_title(text, limit=60):
+    text = " ".join(str(text or "").split()).strip()
+    if limit and len(text) > limit:
+        return text[:limit].rstrip() + "..."
+    return text
+
+
+def _wt_ticket_context(item):
+    res = item.get("resolution") if isinstance(item, dict) else {}
+    summary = ""
+    if isinstance(res, str):
+        summary = res
+    elif isinstance(res, dict):
+        summary = str(res.get("summary") or "")
+    for value in (summary, item.get("title"), item.get("note"), item.get("text")):
+        text = _wt_clip_title(value)
+        if text:
+            return text
+    return ""
+
+
+def _wt_display_name(queue, ref, context=""):
+    queue = str(queue or "WT").strip() or "WT"
+    ref = str(ref or "").strip()
+    context = _wt_clip_title(context)
+    if not ref:
+        return f"{queue} worker"
+    if context:
+        return f"{queue} worker: {ref} - {context}"
+    return f"{queue} worker: {ref}"
+
+
+def _wt_row_name_is_generic(row, queue):
+    raw = str((row or {}).get("display_name") or "").strip()
+    if not raw:
+        return True
+    q = str(queue or "").strip()
+    low = raw.lower()
+    qlow = q.lower()
+    if qlow and low == f"{qlow} queue worker":
+        return True
+    if qlow and low.startswith(f"drain the {qlow} watchtower queue"):
+        return True
+    return False
+
+
+def _wt_item_ts(item):
+    for key in ("claimed_at", "closed_at", "updated_at", "created_at"):
+        try:
+            ts = datetime.fromisoformat(str(item.get(key) or "").replace("Z", "+00:00"))
+            return ts.timestamp()
+        except (ValueError, TypeError):
+            continue
+    return 0
+
+
+def _apply_watchtower_worker_display_names(rows):
+    """Layer WT ticket names onto live WT worker session rows.
+
+    Claude workers usually carry this through transcript custom-title events.
+    Non-Claude engines, especially Codex exec, do not expose that same title
+    primitive, and old pre-fix Claude workers may still overwrite themselves
+    with a generic spawn name. This display-only overlay keeps CCC's row title
+    tied to the WT ticket while preserving user-renamed sessions.
+    """
+    if not rows:
+        return rows
+    try:
+        workers = _wt_read_workers()
+    except Exception:
+        workers = []
+    sid_to_worker = {}
+    worker_ids = {}
+    for w in workers or []:
+        sid = str(w.get("session_id") or "").strip()
+        wid = str(w.get("worker_id") or "").strip()
+        if sid:
+            sid_to_worker[sid] = w
+        if wid and sid:
+            worker_ids[wid] = sid
+    if not sid_to_worker:
+        return rows
+    try:
+        items = _q.list_items() or []
+    except Exception:
+        items = []
+    titles_by_sid = {}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        status = str(it.get("status") or "")
+        if status not in ("in_progress", "closed"):
+            continue
+        sid = str(it.get("claimed_session_id") or "").strip()
+        if not sid:
+            sid = worker_ids.get(str(it.get("claimed_by") or "").strip(), "")
+        if not sid or sid not in sid_to_worker:
+            continue
+        rank = 1 if status == "in_progress" else 0
+        score = (rank, _wt_item_ts(it))
+        prev = titles_by_sid.get(sid)
+        if prev and prev[0] >= score:
+            continue
+        titles_by_sid[sid] = (
+            score,
+            _wt_display_name(it.get("project"), it.get("ref"), _wt_ticket_context(it)),
+        )
+    if not titles_by_sid:
+        return rows
+    for row in rows:
+        if not isinstance(row, dict) or row.get("name_overridden"):
+            continue
+        sid = str(row.get("session_id") or row.get("id") or "").strip()
+        if sid not in titles_by_sid:
+            continue
+        worker = sid_to_worker.get(sid) or {}
+        if not _wt_row_name_is_generic(row, worker.get("queue")):
+            continue
+        row["display_name"] = titles_by_sid[sid][1]
+    return rows
+
+
 _HEX_SFX_RE = re.compile(r'^(.+)-([0-9a-f]{8})$')
 
 
@@ -15019,6 +15141,8 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
         ]
     for agent in pkood_agents:
         conversations.append(agent)
+
+    _apply_watchtower_worker_display_names(conversations)
 
     # Add backlog items (GitHub issues + TODO.md), skipping those with active sessions
     _issue_pattern = re.compile(r"(?:issue|fix)[/-](\d+)")
@@ -41150,6 +41274,49 @@ def usage_snapshots_payload(hours=24, now_epoch=None):
     return {"ok": True, "hours": hours, "snapshots": recent}
 
 
+def usage_current_payload(now_epoch=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    snap = _latest_native_usage_snapshot(now_epoch=now_epoch)
+    live = _live_weekly_usage(now_epoch=now_epoch)
+    five_hour = (snap or {}).get("five_hour") or {}
+    seven_day = (snap or {}).get("seven_day") or {}
+    sonnet = (snap or {}).get("seven_day_sonnet") or {}
+    codex = _latest_codex_usage_from_snapshots(now_epoch=now_epoch)
+    cal = _weekly_pct_calibration()
+    reset_events = usage_reset_events_payload(days=30, now_epoch=now_epoch).get("events", [])
+    return {
+        "ok": True,
+        "claude": {
+            "five_hour": {
+                "pct": five_hour.get("utilization"),
+                "resets_at": five_hour.get("resets_at"),
+            },
+            "seven_day": {
+                "pct": seven_day.get("utilization") if seven_day else (live or {}).get("weekly_pct"),
+                "resets_at": seven_day.get("resets_at") if seven_day else (live or {}).get("weekly_resets_at"),
+            },
+            "seven_day_sonnet": {
+                "pct": sonnet.get("utilization"),
+                "resets_at": sonnet.get("resets_at"),
+            },
+            "pace": usage_pace_payload(live=live, now_epoch=now_epoch),
+        },
+        "codex": {
+            "session": (codex or {}).get("session"),
+            "weekly": (codex or {}).get("weekly"),
+            "pace": codex_usage_pace_payload(codex=codex, now_epoch=now_epoch),
+            "plan_type": (codex or {}).get("plan_type"),
+        },
+        "calibration": {
+            "pct_per_token": (cal or {}).get("pct_per_token"),
+            "calibrated_at": (cal or {}).get("calibrated_at"),
+        },
+        "last_reset_events": reset_events[-5:],
+        "fetched_at": (snap or {}).get("ts") or _usage_snapshot_iso(now_epoch),
+    }
+
+
 def _poll_plan_usage_once():
     global _plan_usage_cache, _plan_usage_cache_time
     res = _fetch_plan_usage()
@@ -44386,6 +44553,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             raw_days = qs.get("days", ["30"])[0]
             self.send_json(usage_reset_events_payload(days=raw_days))
+        elif path == "/api/usage/current":
+            self.send_json(usage_current_payload())
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)
             rows = list_spawned_sessions()

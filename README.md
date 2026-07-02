@@ -313,6 +313,12 @@ babysitter) that should survive past the current turn and show up on the
 kanban, not for one-shot internal subtasks (the built-in `Task` tool is
 better for those).
 
+Read-only usage integrations can poll `GET /api/usage/current` for CCC's
+consolidated local usage state: Claude plan windows, Codex rate-limit windows,
+pace projections, calibration metadata, recent reset events, and `fetched_at`.
+Fields are nullable so external tools can gracefully degrade when a provider
+has not emitted usage yet.
+
 ## Cookbook
 
 Recipes for wiring **your own app** into CCC — each with a copy-paste prompt

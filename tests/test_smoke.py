@@ -95,6 +95,45 @@ class TestServerImports(unittest.TestCase):
                 server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
                 server._WEEKLY_PCT_FILE = old_legacy_file
 
+    def test_watchtower_worker_titles_replace_raw_codex_drain_prompt(self):
+        """Live WT worker rows should show the active ticket, not the drain prompt."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        sid = "019f23e3-ba0e-7ec1-949d-d72d3f590ad2"
+        rows = [{
+            "session_id": sid,
+            "source": "codex",
+            "display_name": (
+                "Drain the THROUGHPUT WatchTower queue and keep it empty. "
+                "Work in the git repo."
+            ),
+            "name_overridden": False,
+        }]
+        items = [{
+            "project": "THROUGHPUT",
+            "ref": "THROUGHPUT-16",
+            "status": "in_progress",
+            "claimed_by": "throughput-eb3f49da",
+            "claimed_session_id": sid,
+            "title": "Publish usage state for external consumers",
+            "note": "fallback",
+            "claimed_at": "2026-07-02T18:04:36Z",
+        }]
+
+        with mock.patch.object(server, "_wt_read_workers", return_value=[{
+            "worker_id": "throughput-eb3f49da",
+            "queue": "THROUGHPUT",
+            "session_id": sid,
+            "alive": True,
+        }]), mock.patch.object(server._q, "list_items", return_value=items):
+            server._apply_watchtower_worker_display_names(rows)
+
+        self.assertEqual(
+            rows[0]["display_name"],
+            "THROUGHPUT worker: THROUGHPUT-16 - Publish usage state for external consumers",
+        )
+
     def test_usage_pace_uses_ccc_calibration_and_week_override(self):
         """CCC owns weekly calibration/pace state without relying on legacy
         cache files, and the throughput UI exposes the projection."""
@@ -274,6 +313,11 @@ class TestServerImports(unittest.TestCase):
                 )
                 self.assertEqual(snap["codex"]["weekly"]["pct"], 34.0)
                 self.assertTrue(server._append_native_usage_snapshot(snap, now_epoch=1_783_011_600))
+                current = server.usage_current_payload(now_epoch=1_783_011_600)
+                self.assertTrue(current["ok"])
+                self.assertIn("claude", current)
+                self.assertEqual(current["codex"]["weekly"]["pct"], 34.0)
+                self.assertIn("last_reset_events", current)
                 pace = server.codex_usage_pace_payload(codex=codex, now_epoch=1_783_011_600)
                 self.assertTrue(pace["ok"])
                 self.assertEqual(pace["weekly_pct"], 34.0)
@@ -290,6 +334,7 @@ class TestServerImports(unittest.TestCase):
                 self.assertIn(("codex_weekly", "scheduled"), {(e["window"], e["kind"]) for e in events})
                 self.assertIn("codex", pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8"))
                 self.assertIn("'<div class=\"pu-header\">Codex</div>'", pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8"))
+                self.assertIn("/api/usage/current", pathlib.Path(PROJECT_ROOT, "README.md").read_text(encoding="utf-8"))
             finally:
                 server.CODEX_SESSIONS_ROOT = old_root
                 server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
