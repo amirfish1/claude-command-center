@@ -42511,6 +42511,34 @@ def _kill_session_by_id(session_id):
     return result
 
 
+def _session_repo_has_live_dev_server(cwd):
+    """True when `cwd` (or a matching workspace) has a dev server running —
+    either CCC-tracked (started from the localhost pill) or discovered by
+    hand (`npm run dev` left running in a Bash tool). Guards the idle-session
+    reaper: SIGTERM only targets the `claude` pid, not its process group, but
+    the CLI's own shutdown path tears down any background tasks it's still
+    tracking — including a dev server the session started — so an idle-but-
+    still-serving session shouldn't be reaped out from under a live preview
+    (OPS-65)."""
+    if not cwd:
+        return False
+    try:
+        target_path = Path(cwd).resolve()
+    except OSError:
+        return False
+    if not target_path.is_dir():
+        return False
+    repo_key = str(target_path)
+    with _NEXTJS_LOCK:
+        entry = _NEXTJS_PROCS.get(repo_key)
+    if entry and _nextjs_proc_alive(entry):
+        return True
+    try:
+        return bool(_detect_nextjs(target_path) and _find_external_nextjs_process(target_path))
+    except Exception:
+        return False
+
+
 def _reap_idle_sessions(now=None):
     """Sweep registered `claude` sessions and SIGTERM the ones whose JSONL
     has had no meaningful event in `_IDLE_REAPER_AGE_HOURS`.
@@ -42568,6 +42596,8 @@ def _reap_idle_sessions(now=None):
                 except OSError:
                     continue
         if last_active >= cutoff:
+            continue
+        if _session_repo_has_live_dev_server(data.get("cwd")):
             continue
         try:
             os.kill(int(pid), _signal.SIGTERM)
