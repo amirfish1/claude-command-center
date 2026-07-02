@@ -10895,5 +10895,121 @@ class TestWTQueueIntegration(unittest.TestCase):
         )
 
 
+class TestWTMessagingBackendStage2(unittest.TestCase):
+    """WT-56: CCC_MESSAGING_BACKEND=wt stage-2 handover — flag/availability
+    gating plus the pure wt-ask JSON -> CCC result mapping. Delivery itself
+    (subprocess calls to `wt send` / `wt ask`) is intentionally not exercised
+    here; these are the parts that can be tested without shelling out."""
+
+    def setUp(self):
+        import server
+        self.server = server
+        # Reset the cached availability check between tests so one test's
+        # monkeypatch of shutil.which doesn't leak into the next.
+        server._WT_CLI_PATH_CACHE = None
+        self.addCleanup(setattr, server, "_WT_CLI_PATH_CACHE", None)
+
+    def test_messaging_disabled_by_default(self):
+        """Flag unset -> _wt_messaging_enabled() is False (byte-identical
+        default behaviour requirement)."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CCC_MESSAGING_BACKEND", None)
+            self.assertFalse(self.server._wt_messaging_enabled())
+
+    def test_messaging_enabled_requires_exact_value(self):
+        """Only CCC_MESSAGING_BACKEND=wt (case/whitespace-insensitive) opts in;
+        any other value leaves the flag off."""
+        with mock.patch.dict(os.environ, {"CCC_MESSAGING_BACKEND": "wt"}):
+            self.assertTrue(self.server._wt_messaging_enabled())
+        with mock.patch.dict(os.environ, {"CCC_MESSAGING_BACKEND": " WT "}):
+            self.assertTrue(self.server._wt_messaging_enabled())
+        with mock.patch.dict(os.environ, {"CCC_MESSAGING_BACKEND": "true"}):
+            self.assertFalse(self.server._wt_messaging_enabled())
+
+    def test_wt_cli_unavailable_reports_disabled(self):
+        """Flag on but `wt` missing from PATH -> _wt_cli_available() is False,
+        so the hooks fall through to the native path."""
+        with mock.patch("shutil.which", return_value=None):
+            self.server._WT_CLI_PATH_CACHE = None
+            self.assertFalse(self.server._wt_cli_available())
+
+    def test_wt_cli_available_and_cached(self):
+        """When `wt` is found, availability is True and the lookup is cached
+        (shutil.which only called once across repeated checks)."""
+        with mock.patch("shutil.which", return_value="/usr/local/bin/wt") as which:
+            self.server._WT_CLI_PATH_CACHE = None
+            self.assertTrue(self.server._wt_cli_available())
+            self.assertTrue(self.server._wt_cli_available())
+            which.assert_called_once()
+
+    def test_wt_ask_mapping_success(self):
+        """A successful wt-ask payload maps answer -> CCC's `text` field with
+        source tagged wt-ask."""
+        result = self.server._map_wt_ask_json_to_ccc_result(
+            {"ok": True, "answer": "42", "source": "resume"}
+        )
+        self.assertEqual(result, {
+            "ok": True,
+            "text": "42",
+            "cost_usd": None,
+            "duration_ms": None,
+            "num_turns": None,
+            "source": "wt-ask",
+        })
+
+    def test_wt_ask_mapping_timeout_keeps_partial(self):
+        """A wt-mediated timeout is a real (parseable) answer, not a
+        transport failure — it must map through with partial text intact,
+        not fall through to a native retry that would double-deliver."""
+        result = self.server._map_wt_ask_json_to_ccc_result(
+            {"ok": False, "error": "timeout", "partial": "still thinking", "source": "resume"}
+        )
+        self.assertEqual(result, {
+            "ok": False,
+            "error": "timeout",
+            "partial": "still thinking",
+            "source": "wt-ask",
+        })
+
+    def test_wt_ask_mapping_failure_without_partial(self):
+        result = self.server._map_wt_ask_json_to_ccc_result(
+            {"ok": False, "error": "no such session"}
+        )
+        self.assertEqual(result, {
+            "ok": False,
+            "error": "no such session",
+            "source": "wt-ask",
+        })
+
+    def test_wt_ask_mapping_rejects_non_dict(self):
+        """Unparseable/unexpected shapes return None so the caller falls
+        through to the native resume path instead of trusting garbage."""
+        self.assertIsNone(self.server._map_wt_ask_json_to_ccc_result(None))
+        self.assertIsNone(self.server._map_wt_ask_json_to_ccc_result("not json"))
+        self.assertIsNone(self.server._map_wt_ask_json_to_ccc_result([1, 2, 3]))
+
+    def test_send_hook_noop_when_flag_off(self):
+        """_try_wt_send_for_headless_delivery must return None (native
+        fall-through) with the flag off, without even checking wt
+        availability — verifies via a subprocess spy that it never shells out."""
+        with mock.patch.dict(os.environ, {}, clear=False), \
+             mock.patch("subprocess.run") as run:
+            os.environ.pop("CCC_MESSAGING_BACKEND", None)
+            result = self.server._try_wt_send_for_headless_delivery("sid-123", "hi")
+            self.assertIsNone(result)
+            run.assert_not_called()
+
+    def test_ask_hook_noop_when_wt_missing(self):
+        """Flag on but wt not on PATH -> _try_wt_ask_for_headless_delivery
+        returns None without shelling out."""
+        with mock.patch.dict(os.environ, {"CCC_MESSAGING_BACKEND": "wt"}), \
+             mock.patch("shutil.which", return_value=None), \
+             mock.patch("subprocess.run") as run:
+            self.server._WT_CLI_PATH_CACHE = None
+            result = self.server._try_wt_ask_for_headless_delivery("sid-123", "hi", 5000)
+            self.assertIsNone(result)
+            run.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23,6 +23,7 @@ import collections
 import http.server
 import ipaddress
 import json
+import math
 import os
 import platform
 import re
@@ -33474,6 +33475,123 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
     }, backup_path)
 
 
+# ---------------------------------------------------------------------------
+# Stage 2 of the WatchTower messaging handover (docs/messaging-design.md in
+# the watchtower repo, "CCC as client (staged, behind flags)"). Stage 1
+# (CCC_CHAT_ORCHESTRATOR=wt, see _start_coordination_watcher) delegated
+# group-chat auto-nudging. Stage 2 is narrower: for a session that CCC would
+# already deliver to *headlessly* (dormant claude, no TTY, no CCC-owned FIFO
+# spawn to reuse), optionally hand delivery to `wt send` / `wt ask` instead of
+# CCC spawning its own `claude --resume`. Both sides of the swap are
+# headless-only, so this never touches the live-TTY keystroke path, the
+# bg-agent PTY socket path, FIFO spawns CCC already owns, or any non-claude
+# engine — those keep their native CCC transport unconditionally. Default
+# off; flag flip is opt-in and every failure mode falls through to the
+# pre-existing native path unchanged.
+CCC_MESSAGING_BACKEND_ENV = "CCC_MESSAGING_BACKEND"
+_WT_CLI_PATH_CACHE = None  # None = not checked yet; "" = checked, not found
+
+
+def _wt_messaging_enabled():
+    """True when CCC_MESSAGING_BACKEND=wt opts into stage-2 delegation."""
+    return os.environ.get(CCC_MESSAGING_BACKEND_ENV, "").strip().lower() == "wt"
+
+
+def _wt_cli_available():
+    """Cached `shutil.which("wt")` check — a single stat-ish lookup per
+    process rather than a PATH search on every inject/ask call."""
+    global _WT_CLI_PATH_CACHE
+    if _WT_CLI_PATH_CACHE is None:
+        _WT_CLI_PATH_CACHE = shutil.which("wt") or ""
+    return bool(_WT_CLI_PATH_CACHE)
+
+
+def _try_wt_send_for_headless_delivery(session_id, text):
+    """Stage-2 hook for `_inject_text_into_session`'s dormant-claude branch.
+
+    Called ONLY at the exact point the router has already decided delivery
+    would be `resume_session_headless` (session not live, or live with
+    neither a tty nor a pid CCC can drive) — i.e. the one case where "run our
+    own claude --resume" and "ask wt to deliver" are genuinely interchangeable.
+    Returns a CCC-shaped success dict on `wt send` rc==0, or None to signal
+    "fall through to the native resume_session_headless path unchanged"
+    (flag off, wt missing, or wt itself failed/timed out).
+    """
+    if not _wt_messaging_enabled() or not _wt_cli_available():
+        return None
+    try:
+        proc = subprocess.run(
+            ["wt", "send", session_id, text],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return {"ok": True, "source": "wt-send", "via": "wt-send", "resumed": True}
+
+
+def _map_wt_ask_json_to_ccc_result(payload):
+    """Pure mapping: parsed `wt ask --json` output -> ask_session_and_wait's
+    return shape. No subprocess here on purpose, so this is unit-testable on
+    synthetic payloads (see tests/test_smoke.py). Returns None if `payload`
+    isn't a recognizable wt-ask response, signalling the caller to fall
+    through to the native path.
+
+    wt-ask shapes (watchtower/messages.py `ask()`):
+      {"ok": true, "answer": "...", "source": "fifo"|"resume"|"delegate"}
+      {"ok": false, "error": "timeout", "partial": "...", "source": ...}
+      {"ok": false, "error": "<message>", "source": ...}
+    """
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("ok"):
+        return {
+            "ok": True,
+            "text": payload.get("answer") or "",
+            "cost_usd": None,
+            "duration_ms": None,
+            "num_turns": None,
+            "source": "wt-ask",
+        }
+    result = {
+        "ok": False,
+        "error": payload.get("error") or "wt ask failed",
+        "source": "wt-ask",
+    }
+    if payload.get("partial"):
+        result["partial"] = payload["partial"]
+    return result
+
+
+def _try_wt_ask_for_headless_delivery(session_id, text, timeout_ms):
+    """Stage-2 hook for `ask_session_and_wait`'s dormant-claude branch (no
+    live resumed subprocess to reuse — the same "would spawn a fresh
+    claude --resume" moment `_try_wt_send_for_headless_delivery` guards on
+    the fire-and-forget side). Runs `wt ask ... --json`, parses it through
+    `_map_wt_ask_json_to_ccc_result`, and returns that mapped result whenever
+    wt produced a real (parseable) answer — including a wt-mediated timeout,
+    since falling through there would spawn a second, duplicate resume for
+    the same question. Returns None (fall through to native) only when wt
+    itself could not be run or produced no parseable JSON at all.
+    """
+    if not _wt_messaging_enabled() or not _wt_cli_available():
+        return None
+    timeout_s = max(1, math.ceil(timeout_ms / 1000.0))
+    try:
+        proc = subprocess.run(
+            ["wt", "ask", session_id, text, "--timeout", str(timeout_s), "--json"],
+            capture_output=True, text=True, timeout=timeout_s + 15,
+        )
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    try:
+        payload = json.loads(proc.stdout or "")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return _map_wt_ask_json_to_ccc_result(payload)
+
+
 def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, mode="send"):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
@@ -33741,6 +33859,12 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
                 "fork the conversation history)."
             )
             return queued
+        # Stage 2 WatchTower messaging handover: this is the dormant-claude
+        # fallback, the sole place this function decides delivery would be
+        # a headless resume. See _try_wt_send_for_headless_delivery above.
+        wt_result = _try_wt_send_for_headless_delivery(session_id, text)
+        if wt_result is not None:
+            return wt_result
         return _maybe_queue_on_invalid_cwd(
             session_id, text, status, resume_session_headless(session_id, text),
         )
@@ -34418,6 +34542,16 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000):
             break
 
     if entry is None:
+        # Stage 2 WatchTower messaging handover: this is the same "would
+        # spawn a fresh claude --resume" decision point
+        # _try_wt_send_for_headless_delivery guards on the fire-and-forget
+        # side. `engine` narrowed to codex/gemini/antigravity above, but
+        # cursor/hermes/kilo sessions can still reach this branch — gate
+        # explicitly on "claude" rather than assume by elimination.
+        if engine == "claude":
+            wt_result = _try_wt_ask_for_headless_delivery(session_id, text, timeout_ms)
+            if wt_result is not None:
+                return wt_result
         # No live subprocess — spawn one. resume_session_headless writes
         # the user message itself and appends the entry to _spawned_sessions.
         spawn_result = resume_session_headless(session_id, text)
