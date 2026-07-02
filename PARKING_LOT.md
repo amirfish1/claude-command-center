@@ -47,3 +47,31 @@ Forensic timeline (reconstructed from reflog + commit graph):
 - Reflog evidence: commits `f04bfa6` (the bundled commit, reset out of history but still in reflog), `7766ef8` (the clean recommit), `dc0a427` (my eventual deploy-swap recommit)
 
 **Status:** Parked
+
+---
+
+## Slim down `/api/conversations/all` payload
+
+**Parked:** 2026-07-01
+
+**Context:** Surfaced while debugging a phone-over-Tailscale report of the mobile session view getting stuck on "Loading…". That specific bug turned out to be unrelated — the session/transcript view (`app.js:27199`), not the sidebar conversation list — so this is a real but separate perf issue, not an urgent fix. Decided explicitly *not* to bundle this optimization into the mobile bug fix: one change, one concern, and optimizing a path that isn't the actual failure risks a false "fixed it."
+
+**Details:**
+Measured directly against the local server (loopback, so this is a *floor*, not the worst case):
+- `GET /api/conversations/all` returns **4.6MB raw / ~0.8MB gzipped**, **1543 rows**, and takes **2.3s even on loopback**.
+- The sidebar (`#convList`) only renders ~234 rows from that payload — the other ~1300 rows are fetched but unused by the view that's waiting on them.
+- This fires at boot alongside a herd of other slow endpoints seen in the server log: `ux-fixes/health` (1.5s), `group-chats/active` (1.9s), plus `session-status`, `sessions/live-activity`, `repo/worktrees`, `model-advisor` — all `[SLOW]`-logged.
+- Over LTE (the phone-via-Tailscale-Serve path), this payload size turns a sub-second local load into a multi-second stall on the sidebar's "Loading…" placeholder — a real UX cost even though it isn't the bug that triggered the investigation.
+
+This is exactly the class of issue `CLAUDE.md`'s "Performance gates" section warns about: an O(all-conversations) payload shipped whole and polled, invisible at test-fixture scale, real in production with 1000+ transcripts.
+
+**Approach discussed (ranked):**
+1. **Slim the list payload** — sidebar needs name/status/timestamp/repo, not full per-row data. Cut ~1543×3KB rows down to only the fields the list view renders.
+   - Value: H. Risk: M — touches `/api/conversations/all`, which is a stable `/api/*` contract (`CLAUDE.md` treats field removal/shape change as breaking → major version bump), and touches the perf-budget call-count test (`tests/test_perf_budget.py`) that must be updated, not relaxed.
+   - Confidence: H that this is the right lever (it's the literal envelope size problem).
+2. **Scope the initial fetch to the current repo / paginate**, lazy-load the rest.
+   - Value: H. Risk: M. Confidence: M.
+3. **Paint from cache first** (localStorage/disk cache of the last-known list), reconcile once the live fetch lands.
+   - Value: M. Risk: L — additive, no contract change. Good low-risk stopgap ahead of #1.
+
+**Status:** Parked — do as its own deliberate slice with the perf-budget test updated in step, not "in case" bundled into an unrelated bug fix.
