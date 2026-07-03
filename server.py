@@ -41430,8 +41430,58 @@ def _read_usage_reset_events_unlocked():
         except (TypeError, ValueError):
             continue
         if isinstance(item, dict):
-            events.append(item)
+            events.append(_usage_reset_event_with_id(item))
     return events
+
+
+def _usage_reset_event_id(event):
+    explicit = str((event or {}).get("id") or "").strip()
+    if explicit:
+        return explicit
+    stable = {
+        "detected_at": (event or {}).get("detected_at"),
+        "window": (event or {}).get("window"),
+        "kind": (event or {}).get("kind"),
+        "old_resets_at": (event or {}).get("old_resets_at"),
+        "new_resets_at": (event or {}).get("new_resets_at"),
+        "source": (event or {}).get("source"),
+    }
+    digest = hashlib.sha1(json.dumps(stable, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
+    return f"reset-{digest}"
+
+
+def _usage_reset_event_with_id(event):
+    out = dict(event or {})
+    out["id"] = _usage_reset_event_id(out)
+    return out
+
+
+def _write_usage_reset_events_unlocked(events):
+    _RESET_EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _RESET_EVENTS_FILE.with_suffix(".tmp")
+    body = "".join(json.dumps(_usage_reset_event_with_id(event), separators=(",", ":")) + "\n" for event in events)
+    tmp.write_text(body, encoding="utf-8")
+    tmp.replace(_RESET_EVENTS_FILE)
+
+
+def _rebuild_week_start_override_from_events(events):
+    candidates = [
+        _usage_reset_event_with_id(event)
+        for event in (events or [])
+        if event.get("window") == "seven_day" and event.get("kind") in ("unscheduled", "manual")
+    ]
+    candidates.sort(
+        key=lambda event: (_stats_parse_ts(event.get("detected_at")) or datetime.min.replace(tzinfo=timezone.utc)).timestamp()
+    )
+    if candidates:
+        return _refresh_week_start_override_from_event(candidates[-1])
+    try:
+        _WEEK_START_OVERRIDE_FILE.unlink()
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
 
 
 def _write_week_start_override(week_start, resets_at_iso):
@@ -41487,6 +41537,7 @@ def record_usage_reset_event(window, reset_at=None, source="user"):
         return {"ok": False, "error": "window must be five_hour or seven_day"}
     detected_at = reset_at or _usage_snapshot_iso()
     event = {
+        "id": f"reset-{uuid.uuid4().hex}",
         "detected_at": detected_at,
         "window": window,
         "kind": "manual",
@@ -41498,6 +41549,70 @@ def record_usage_reset_event(window, reset_at=None, source="user"):
     }
     ok = _append_usage_reset_event(event)
     return {"ok": ok, "event": event}
+
+
+def update_usage_reset_event(event_id, reset_at=None, window=None):
+    event_id = str(event_id or "").strip()
+    if not event_id:
+        return {"ok": False, "error": "event id is required"}
+    if window is not None and window not in ("five_hour", "seven_day"):
+        return {"ok": False, "error": "window must be five_hour or seven_day"}
+    if reset_at is not None:
+        parsed = _stats_parse_ts(reset_at)
+        if parsed is None:
+            return {"ok": False, "error": "reset_at must be an ISO timestamp"}
+        reset_at = parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    try:
+        with _reset_events_lock:
+            events = _read_usage_reset_events_unlocked()
+            updated = None
+            for idx, event in enumerate(events):
+                event = _usage_reset_event_with_id(event)
+                if event.get("id") != event_id:
+                    events[idx] = event
+                    continue
+                if event.get("kind") != "manual":
+                    return {"ok": False, "error": "only manual reset events can be edited"}
+                if reset_at is not None:
+                    event["detected_at"] = reset_at
+                if window is not None:
+                    event["window"] = window
+                event["source"] = event.get("source") or "user"
+                events[idx] = event
+                updated = event
+            if updated is None:
+                return {"ok": False, "error": "reset event not found"}
+            _write_usage_reset_events_unlocked(events)
+        _rebuild_week_start_override_from_events(events)
+        return {"ok": True, "event": updated}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def delete_usage_reset_event(event_id):
+    event_id = str(event_id or "").strip()
+    if not event_id:
+        return {"ok": False, "error": "event id is required"}
+    try:
+        with _reset_events_lock:
+            events = _read_usage_reset_events_unlocked()
+            remaining = []
+            deleted = None
+            for event in events:
+                event = _usage_reset_event_with_id(event)
+                if event.get("id") == event_id:
+                    if event.get("kind") != "manual":
+                        return {"ok": False, "error": "only manual reset events can be deleted"}
+                    deleted = event
+                    continue
+                remaining.append(event)
+            if deleted is None:
+                return {"ok": False, "error": "reset event not found"}
+            _write_usage_reset_events_unlocked(remaining)
+        _rebuild_week_start_override_from_events(remaining)
+        return {"ok": True, "event": deleted}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
 
 
 def usage_reset_events_payload(days=30, now_epoch=None):
@@ -46489,6 +46604,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 400)
+            return
+
+        if path in ("/api/usage/reset-events/update", "/api/usage/reset-events/delete"):
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                if not isinstance(data, dict):
+                    self.send_json({"error": "expected JSON object"}, 400)
+                    return
+                event_id = str(data.get("id") or data.get("event_id") or "").strip()
+                if path.endswith("/delete"):
+                    result = delete_usage_reset_event(event_id)
+                else:
+                    reset_at = str(data.get("reset_at") or data.get("detected_at") or "").strip() or None
+                    window = str(data.get("window") or "").strip() or None
+                    result = update_usage_reset_event(event_id, reset_at=reset_at, window=window)
+                self.send_json(result, 200 if result.get("ok") else 400)
+            except (ValueError, OSError) as e:
+                self.send_json({"ok": False, "error": f"invalid JSON: {e}"}, 400)
             return
 
         if path == "/api/usage/reset-events":

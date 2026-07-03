@@ -663,6 +663,129 @@
     line-height: 1.4;
   }
 
+  .reset-event-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 9200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(0, 0, 0, 0.58);
+  }
+
+  .reset-event-modal[hidden] {
+    display: none;
+  }
+
+  .reset-event-dialog {
+    width: min(420px, 92vw);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+    padding: 16px;
+  }
+
+  .reset-event-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .reset-event-title {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .reset-event-close {
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+  }
+
+  .reset-event-close:hover {
+    color: var(--text);
+    border-color: var(--border-active);
+  }
+
+  .reset-event-details {
+    display: grid;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-bottom: 14px;
+  }
+
+  .reset-event-details strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .reset-event-field {
+    display: grid;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-bottom: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+
+  .reset-event-field input {
+    padding: 9px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.22);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+  }
+
+  .reset-event-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .reset-event-actions button {
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 12px;
+  }
+
+  .reset-event-actions button:hover {
+    border-color: var(--border-active);
+  }
+
+  .reset-event-actions .danger {
+    color: var(--red);
+    border-color: rgba(248, 81, 73, 0.35);
+  }
+
+  .reset-marker,
+  .reset-marker-hit {
+    cursor: pointer;
+  }
+
   /* Turn List Section */
   .section-title {
     font-family: var(--font-display);
@@ -937,6 +1060,24 @@
   <!-- Highlight box drawn over hovered element during picker mode -->
   <div id="annotate-picker-highlight" style="display:none;position:fixed;pointer-events:none;z-index:9000;border:2px solid #4f8ef7;background:rgba(79,142,247,0.12);border-radius:3px;transition:none;"></div>
 
+  <div class="reset-event-modal" id="reset-event-modal" hidden role="dialog" aria-modal="true" aria-labelledby="reset-event-title">
+    <div class="reset-event-dialog">
+      <div class="reset-event-header">
+        <div class="reset-event-title" id="reset-event-title">Limit reset</div>
+        <button type="button" class="reset-event-close" onclick="closeResetEventModal()" aria-label="Close reset details">×</button>
+      </div>
+      <div class="reset-event-details" id="reset-event-details"></div>
+      <label class="reset-event-field">
+        Reset time
+        <input type="datetime-local" id="reset-event-edit-input">
+      </label>
+      <div class="reset-event-actions">
+        <button type="button" class="danger" id="reset-event-delete-btn" onclick="deleteResetEvent()">Delete</button>
+        <button type="button" id="reset-event-save-btn" onclick="saveResetEventEdit()">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Main Grid Layout -->
   <div class="layout-container">
     
@@ -1100,6 +1241,7 @@
     let chartWeekOffset = 0; // 0=current billing period, -1=previous, etc.
     const CHART_ZOOM_HOURS = 48;
     let chartZoomLastHours = false;
+    let activeResetEvent = null;
     let weekRankings = {};   // sessionId → rank (1-indexed); populated by fetchWeekRankings()
     const aggregateSessions = [
       { session_id: 'all_7_days', display_name: 'Total (Last 7 Days)', engine: 'aggregated', meta: '7d window' },
@@ -1812,6 +1954,16 @@
         if (Number.isNaN(ts) || ts < first || ts > last + 86400000) return;
         const nearest = rows.find(row => row.d.getTime() >= ts) || rows[rows.length - 1];
         const x = xScale(nearest.i + 1);
+        const hit = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        hit.setAttribute('class', 'reset-marker-hit');
+        hit.setAttribute('x1', x); hit.setAttribute('x2', x);
+        hit.setAttribute('y1', padding.top);
+        hit.setAttribute('y2', height - padding.bottom + 6);
+        hit.setAttribute('stroke', 'transparent');
+        hit.setAttribute('stroke-width', '14');
+        hit.setAttribute('pointer-events', 'stroke');
+        hit.addEventListener('click', () => openResetEventModal(event));
+        svg.appendChild(hit);
         const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
         line.setAttribute('class', 'reset-marker');
         line.setAttribute('x1', x); line.setAttribute('x2', x);
@@ -1820,6 +1972,7 @@
         line.setAttribute('stroke', event.kind === 'manual' ? 'var(--accent)' : 'var(--orange)');
         line.setAttribute('stroke-width', '1.5');
         line.setAttribute('stroke-dasharray', '4 4');
+        line.addEventListener('click', () => openResetEventModal(event));
         svg.appendChild(line);
         const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         label.setAttribute('x', Math.min(x + 4, (svg.clientWidth || 800) - 80));
@@ -1828,6 +1981,7 @@
         label.setAttribute('font-size', '10px');
         label.setAttribute('font-family', 'var(--font-mono)');
         label.textContent = event.kind === 'manual' ? 'manual reset' : 'reset detected';
+        label.addEventListener('click', () => openResetEventModal(event));
         svg.appendChild(label);
       });
     }
@@ -2850,6 +3004,97 @@
       const now = new Date();
       now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
       input.value = now.toISOString().slice(0, 16);
+    }
+
+    function resetEventLocalValue(iso) {
+      const d = new Date(iso || Date.now());
+      if (Number.isNaN(d.getTime())) return '';
+      d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+      return d.toISOString().slice(0, 16);
+    }
+
+    function resetEventDisplayTime(iso) {
+      const d = new Date(iso || '');
+      if (Number.isNaN(d.getTime())) return 'unknown';
+      return d.toLocaleString();
+    }
+
+    function resetEventWindowLabel(value) {
+      if (value === 'five_hour') return '5-hour session';
+      if (value === 'seven_day') return 'Weekly';
+      return value || 'unknown';
+    }
+
+    function openResetEventModal(event) {
+      activeResetEvent = event || null;
+      const modal = document.getElementById('reset-event-modal');
+      if (!modal || !activeResetEvent) return;
+      const manual = activeResetEvent.kind === 'manual';
+      const title = document.getElementById('reset-event-title');
+      const details = document.getElementById('reset-event-details');
+      const input = document.getElementById('reset-event-edit-input');
+      const saveBtn = document.getElementById('reset-event-save-btn');
+      const deleteBtn = document.getElementById('reset-event-delete-btn');
+      if (title) title.textContent = manual ? 'Manual limit reset' : 'Detected limit reset';
+      if (details) {
+        const pctLine = activeResetEvent.prev_pct != null || activeResetEvent.new_pct != null
+          ? `<div><strong>Usage:</strong> ${activeResetEvent.prev_pct ?? '—'}% → ${activeResetEvent.new_pct ?? '—'}%</div>`
+          : '';
+        details.innerHTML = `
+          <div><strong>Window:</strong> ${resetEventWindowLabel(activeResetEvent.window)}</div>
+          <div><strong>Time:</strong> ${resetEventDisplayTime(activeResetEvent.detected_at)}</div>
+          <div><strong>Source:</strong> ${activeResetEvent.source || (manual ? 'user' : 'auto')}</div>
+          ${pctLine}
+        `;
+      }
+      if (input) {
+        input.value = resetEventLocalValue(activeResetEvent.detected_at);
+        input.disabled = !manual;
+      }
+      if (saveBtn) saveBtn.hidden = !manual;
+      if (deleteBtn) deleteBtn.hidden = !manual;
+      modal.hidden = false;
+    }
+
+    function closeResetEventModal() {
+      activeResetEvent = null;
+      const modal = document.getElementById('reset-event-modal');
+      if (modal) modal.hidden = true;
+    }
+
+    async function saveResetEventEdit() {
+      if (!activeResetEvent || activeResetEvent.kind !== 'manual') return;
+      const input = document.getElementById('reset-event-edit-input');
+      const localVal = input && input.value ? input.value : '';
+      if (!localVal) return;
+      const resetAt = new Date(localVal).toISOString();
+      try {
+        const res = await fetch('/api/usage/reset-events/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: activeResetEvent.id, window: activeResetEvent.window || 'seven_day', reset_at: resetAt })
+        });
+        if (!res.ok) return;
+        closeResetEventModal();
+        await loadResetEvents();
+        await loadWeeklyUsage();
+      } catch (_) { /* best effort */ }
+    }
+
+    async function deleteResetEvent() {
+      if (!activeResetEvent || activeResetEvent.kind !== 'manual') return;
+      if (!confirm('Delete this manual reset marker?')) return;
+      try {
+        const res = await fetch('/api/usage/reset-events/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: activeResetEvent.id })
+        });
+        if (!res.ok) return;
+        closeResetEventModal();
+        await loadResetEvents();
+        await loadWeeklyUsage();
+      } catch (_) { /* best effort */ }
     }
 
     async function loadResetEvents() {
