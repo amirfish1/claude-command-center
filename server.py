@@ -53530,6 +53530,8 @@ def main():
         print(f"⚠️  Same-origin allowlist extended: {', '.join(ALLOWED_ORIGINS)}")
     if network_info["trust_tailnet"] and not network_info["tailnet"]["available"]:
         print("   trust_tailnet is on but `tailscale` CLI is not on PATH — install it or unset to silence.")
+    if _wt_messaging_enabled() and not _wt_cli_available():
+        print("⚠️  CCC_MESSAGING_BACKEND=wt is set but `wt` is not on PATH — headless delivery falls back to native `claude --resume`. Install WatchTower or unset to silence.")
     write_port_file(bind_host)
     _register_self(PORT, bind_host)
     # SIGTERM (systemd / `kill <pid>`) needs explicit cleanup; SIGINT (Ctrl+C)
