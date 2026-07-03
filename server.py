@@ -11370,17 +11370,21 @@ def inject_input_via_keystroke(tty, terminal_app, text, submit_key="return"):
       1. Native terminal input API (`do script` for Terminal.app,
          `write text` for iTerm2) types the text into the TTY without
          needing System Events keystroke permissions for the body.
-      2. Activate the terminal app and emit a real keypress via System
-         Events so the TUI sees submission. Return submits normal input;
-         Tab queues Codex slash commands while a turn is running.
-
-    Stage 2 briefly steals focus; we capture the previously-frontmost
-    process id and restore it at the end so the user's browser doesn't
-    stay buried.
+      2. Submit. For Return (the normal case) this is a second native
+         write of an empty string after a short delay: the TUIs treat a
+         CR glued to the body as a literal newline inside a paste burst,
+         but a lone CR in its own burst as a real Enter keypress. Writing
+         to the tab object needs no focus and no Accessibility grant, and
+         cannot land in the wrong window. For Tab (queueing Codex slash
+         commands while a turn is running) there is no native tty write
+         that reads as a Tab keypress, so that path still activates the
+         terminal and emits a System Events keystroke (briefly stealing
+         focus; the previously-frontmost process is restored after).
     """
     submit_key = str(submit_key or "return").strip().lower()
     submit_key_code = 48 if submit_key == "tab" else 36
     submit_label = "Tab" if submit_key_code == 48 else "Return"
+    native_submit = submit_key_code != 48
     tty_short = tty.replace("/dev/", "")
     tty_full = "/dev/" + tty_short
 
@@ -11439,7 +11443,49 @@ def inject_input_via_keystroke(tty, terminal_app, text, submit_key="return"):
             })
         return payload
 
-    if terminal_app == "iTerm2":
+    if terminal_app == "iTerm2" and native_submit:
+        # iTerm2: find the session by tty, write the body via the native
+        # session API, then after a beat write a lone empty line — the
+        # TUI reads that isolated CR as an Enter keypress. No focus, no
+        # System Events.
+        script = f'''
+        tell application "iTerm2"
+          set foundSession to missing value
+          set winCount to count of windows
+          repeat with i from 1 to winCount
+            try
+              set w to window i
+              repeat with j from 1 to (count of tabs of w)
+                try
+                  set t to tab j of w
+                  repeat with s in sessions of t
+                    try
+                      if tty of s is "{tty_full}" then
+                        set foundSession to s
+                        exit repeat
+                      end if
+                    end try
+                  end repeat
+                  if foundSession is not missing value then exit repeat
+                end try
+              end repeat
+              if foundSession is not missing value then exit repeat
+            end try
+          end repeat
+          if foundSession is missing value then return "notfound"
+          tell foundSession to write text "{text_lit}"
+          delay 0.3
+          set submitErr to ""
+          try
+            tell foundSession to write text ""
+          on error errMsg
+            set submitErr to errMsg
+          end try
+        end tell
+        if submitErr is not "" then return "ok-no-submit:" & submitErr
+        return "ok"
+        '''
+    elif terminal_app == "iTerm2":
         # iTerm2: find the session by tty, write the body via the
         # native session API (no focus needed), then activate iTerm and
         # emit a real submit keystroke so the TUI accepts it.
@@ -11495,6 +11541,44 @@ def inject_input_via_keystroke(tty, terminal_app, text, submit_key="return"):
             tell application "System Events" to set frontmost of first application process whose unix id is prevPid to true
           end if
         end try
+        if submitErr is not "" then return "ok-no-submit:" & submitErr
+        return "ok"
+        '''
+    elif native_submit:
+        # Terminal.app: find the tab by tty, send text through Terminal's
+        # native `do script ... in tab` API, then after a beat send a lone
+        # empty `do script` — its bare CR arrives in its own input burst,
+        # which the TUI reads as an Enter keypress. No focus, no System
+        # Events.
+        script = f'''
+        tell application "Terminal"
+          set foundTab to missing value
+          set winCount to count of windows
+          repeat with i from 1 to winCount
+            try
+              set w to window i
+              repeat with j from 1 to (count of tabs of w)
+                try
+                  set t to tab j of w
+                  if tty of t is "{tty_full}" then
+                    set foundTab to t
+                    exit repeat
+                  end if
+                end try
+              end repeat
+              if foundTab is not missing value then exit repeat
+            end try
+          end repeat
+          if foundTab is missing value then return "notfound"
+          do script "{text_lit}" in foundTab
+          delay 0.3
+          set submitErr to ""
+          try
+            do script "" in foundTab
+          on error errMsg
+            set submitErr to errMsg
+          end try
+        end tell
         if submitErr is not "" then return "ok-no-submit:" & submitErr
         return "ok"
         '''
@@ -11590,27 +11674,34 @@ def inject_input_via_keystroke(tty, terminal_app, text, submit_key="return"):
     if out.returncode != 0:
         return failure_payload((out.stderr or "").strip() or "AppleScript failed")
     if result_str.startswith("ok-no-submit:"):
-        # Body was typed via `do script` / `write text` but the System
-        # Events Return keystroke was rejected — typically because
-        # macOS Accessibility hasn't been granted to osascript. The
-        # text sits in Claude's TUI input buffer; the user has to
-        # press Enter (or grant the permission and retry will start
-        # auto-submitting).
+        # Body was typed but the submit step failed. On the native path
+        # that means the follow-up empty write to the tab errored; on the
+        # Tab-keystroke path it typically means macOS Accessibility hasn't
+        # been granted to osascript. Either way the text sits in the TUI
+        # input buffer and the user has to press Enter.
         detail = result_str.split(":", 1)[1].strip()
-        return {
+        payload = {
             "ok": True,
             "via": "terminal-control",
             "tty": tty,
             "terminal_app": terminal_app,
             "submitted": False,
-            "warning": (
+            "detail": detail,
+        }
+        if native_submit:
+            payload["warning"] = (
+                "Text typed but the follow-up Enter write to the terminal "
+                "tab failed; press Enter in the session to send it."
+            )
+            payload["code"] = "native_submit_failed"
+        else:
+            payload["warning"] = (
                 f"Text typed but auto-submit with {submit_label} was blocked. Grant "
                 "Accessibility to osascript in System Settings > "
                 "Privacy & Security > Accessibility, then retry."
-            ),
-            "code": "macos_keystroke_permission",
-            "detail": detail,
-        }
+            )
+            payload["code"] = "macos_keystroke_permission"
+        return payload
     if result_str == "notfound":
         return {
             "ok": False,

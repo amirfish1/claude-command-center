@@ -1,0 +1,1 @@
+- Terminal-control inject now submits with a native tty newline write instead of a System Events Return keystroke — injected text no longer sits unsent in the Codex/Claude composer when window activation silently fails, and injecting no longer steals focus (Tab-queue submits still use the keystroke path).

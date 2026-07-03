@@ -5889,7 +5889,10 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("app_node", result["error"])
         self.assertNotIn("secret", result["error"])
 
-    def test_terminal_inject_restores_focus_by_process_id(self):
+    def test_terminal_inject_return_submits_natively_without_focus(self):
+        # Return submits via a second empty `do script` write to the tab —
+        # no System Events keystroke, no focus steal (the keystroke path
+        # silently landed in the wrong window when activation failed).
         seen = {}
 
         def fake_run(args, **kwargs):
@@ -5898,6 +5901,26 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         with mock.patch.object(self.server.subprocess, "run", side_effect=fake_run):
             result = self.server.inject_input_via_keystroke("/dev/ttys001", "Terminal", "hello")
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["submitted"])
+        script = seen["script"]
+        self.assertIn('do script "hello" in foundTab', script)
+        self.assertIn('do script "" in foundTab', script)
+        self.assertNotIn("System Events", script)
+        self.assertNotIn("activate", script)
+
+    def test_terminal_inject_tab_still_restores_focus_by_process_id(self):
+        seen = {}
+
+        def fake_run(args, **kwargs):
+            seen["script"] = args[2]
+            return subprocess.CompletedProcess(args, 0, stdout="ok\n", stderr="")
+
+        with mock.patch.object(self.server.subprocess, "run", side_effect=fake_run):
+            result = self.server.inject_input_via_keystroke(
+                "/dev/ttys001", "Terminal", "hello", submit_key="tab"
+            )
 
         self.assertTrue(result["ok"])
         script = seen["script"]
