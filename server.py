@@ -34046,14 +34046,28 @@ def _try_wt_send_for_headless_delivery(session_id, text):
     env["WATCHTOWER_DELEGATE_URL"] = "off"
     try:
         proc = subprocess.run(
-            ["wt", "send", session_id, text, "--no-queue"],
+            ["wt", "send", session_id, text, "--no-queue", "--json"],
             capture_output=True, text=True, timeout=30, env=env,
         )
     except (OSError, subprocess.TimeoutExpired, ValueError):
         return None
     if proc.returncode != 0:
         return None
-    return {"ok": True, "source": "wt-send", "via": "wt-send", "resumed": True}
+    result = {"ok": True, "source": "wt-send", "via": "wt-send", "resumed": True}
+    # CCC-452: surface wt's delivery pipeline to the UI. `wt send --json`
+    # reports the transport it used (fifo/tty/resume/codex/delegate) and, when
+    # the transport records one, a receipt_id the client can poll via
+    # /api/wt/receipt/<id> until the message is verified against the target
+    # transcript (landed) or declared lost (native-resume fallback).
+    try:
+        payload = json.loads(proc.stdout or "")
+    except (json.JSONDecodeError, TypeError):
+        payload = None
+    if isinstance(payload, dict):
+        for key in ("transport", "receipt_id", "log"):
+            if payload.get(key):
+                result[key] = str(payload[key])
+    return result
 
 
 def _map_wt_ask_json_to_ccc_result(payload):
@@ -34117,7 +34131,7 @@ def _try_wt_ask_for_headless_delivery(session_id, text, timeout_ms):
     return _map_wt_ask_json_to_ccc_result(payload)
 
 
-def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, mode="send", wt_origin=False):
+def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, mode="send", wt_origin=False, skip_wt=False):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
     else `claude --resume` headless. Returns a dict with at least
@@ -34390,8 +34404,10 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
         # wt_origin=True means this request arrived FROM wt's delegate
         # adapter (WT-78 origin marker) — calling back into `wt send` here
         # would recurse CCC -> wt -> CCC, so wt-originated requests go
-        # straight to the native resume.
-        if not wt_origin:
+        # straight to the native resume. skip_wt=True is the client's
+        # receipt-lost fallback (CCC-452): wt already accepted this text once
+        # and the receipt verified it never landed, so retry natively.
+        if not wt_origin and not skip_wt:
             wt_result = _try_wt_send_for_headless_delivery(session_id, text)
             if wt_result is not None:
                 return wt_result
@@ -44556,6 +44572,47 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "lines": [], "path": str(log_path), "total": 0})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path.startswith("/api/wt/receipt/"):
+            # Thin proxy to `wt receipts get <id>` (CCC-452): the client polls
+            # this (~3s, one in-flight message at a time) to upgrade a
+            # WT-routed send's pending echo from "accepted" to "landed in
+            # transcript" / "lost". `wt receipts get` sweeps pending receipts
+            # against transcript ground truth before answering, which is the
+            # verification step — so shell out rather than reading
+            # receipts.json directly. Bounded: one subprocess per poll of one
+            # receipt, never per-row of any list.
+            rid = path[len("/api/wt/receipt/"):]
+            if not re.fullmatch(r"rcpt-[0-9a-f]{4,32}", rid or ""):
+                self.send_json({"ok": False, "error": "invalid receipt id"}, 400)
+            elif not _wt_cli_available():
+                self.send_json({"ok": False, "error": "wt CLI not available"}, 503)
+            else:
+                try:
+                    proc = subprocess.run(
+                        ["wt", "receipts", "get", rid],
+                        capture_output=True, text=True, timeout=15,
+                    )
+                except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+                    self.send_json({"ok": False, "error": f"wt receipts failed: {e}"}, 502)
+                else:
+                    rec = None
+                    if proc.returncode == 0:
+                        try:
+                            rec = json.loads(proc.stdout or "")
+                        except json.JSONDecodeError:
+                            rec = None
+                    if not isinstance(rec, dict):
+                        self.send_json({"ok": False, "error": "receipt not found",
+                                        "code": "not_found"}, 404)
+                    else:
+                        self.send_json({"ok": True, "receipt": {
+                            "id": rec.get("id"),
+                            "status": rec.get("status"),
+                            "transport": rec.get("transport"),
+                            "sid": rec.get("sid"),
+                            "sent_at": rec.get("sent_at"),
+                            "verified_at": rec.get("verified_at"),
+                        }})
         elif path == "/api/wt/workers":
             # Live worker list read straight from workers.json (no watchtower
             # import dependency). Each row carries queue + cloud session_id.
@@ -49714,6 +49771,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     result = _inject_text_into_session(
                         sid, text, mode=mode,
                         wt_origin=(str(payload.get("origin") or "").lower() == "wt"),
+                        skip_wt=bool(payload.get("skip_wt")),
                     )
                 except Exception as e:
                     # An uncaught exception anywhere in this deep, subprocess-

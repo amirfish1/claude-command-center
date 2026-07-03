@@ -5283,6 +5283,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 "Announced from: Gerry\n\nSTATUS: done",
                 mode="send",
                 wt_origin=False,
+                skip_wt=False,
             )
         finally:
             httpd.shutdown()
@@ -5323,6 +5324,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 "Use the selected scope",
                 mode="answer",
                 wt_origin=False,
+                skip_wt=False,
             )
         finally:
             httpd.shutdown()
@@ -5365,6 +5367,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 "delivered by wt delegate",
                 mode="send",
                 wt_origin=True,
+                skip_wt=False,
             )
         finally:
             httpd.shutdown()
@@ -11581,7 +11584,24 @@ def test_inject_input_honors_wt_origin_marker():
     or a failed delivery recurses CCC -> wt -> CCC."""
     server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
     assert 'wt_origin=(str(payload.get("origin") or "").lower() == "wt")' in server_py
-    assert "if not wt_origin:" in server_py
+    assert "if not wt_origin and not skip_wt:" in server_py
+
+
+def test_wt_receipt_route_and_staged_send_feedback():
+    """CCC-452: WT-routed sends surface their pipeline stage. The server
+    parses `wt send --json` (transport/receipt_id), proxies `wt receipts get`
+    at /api/wt/receipt/<id>, and honors skip_wt for the client's receipt-lost
+    native fallback; the client stages the pending echo and polls."""
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert '"--no-queue", "--json"' in server_py
+    assert 'elif path.startswith("/api/wt/receipt/"):' in server_py
+    assert '["wt", "receipts", "get", rid]' in server_py
+    assert 'skip_wt=bool(payload.get("skip_wt"))' in server_py
+    app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+    assert "function beginWtReceiptTracking(" in app_js
+    assert "'/api/wt/receipt/'" in app_js
+    assert "skip_wt: true" in app_js
+    assert "data.via === 'wt-send'" in app_js
 
 
 def test_throughput_initial_route_is_registered():

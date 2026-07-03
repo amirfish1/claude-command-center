@@ -5941,6 +5941,125 @@
     if (convId && pane) syncPendingSendsMapForConv(pane, convId);
   }
 
+  // ── WT-routed send receipts (CCC-452) ─────────────────────────────────
+  // When a dormant-session send routes through WatchTower (via 'wt-send'),
+  // the response carries the transport wt picked (fifo/tty/resume/codex/
+  // delegate) and usually a delivery receipt id (WT-77). Poll
+  // /api/wt/receipt/<id> until the receipt verifies against the target
+  // transcript: landed → confirm on the echo and let the JSONL dedupe swap
+  // in the durable event; lost → re-send natively (skip_wt) so the text is
+  // never silently dropped. Auto only — no manual refresh affordance.
+  const _wtReceiptPolls = {};   // receipt_id -> true while a poll loop is live
+  function wtTransportStageLabel(transport) {
+    if (transport === 'tty') return 'Accepted — typing into the live terminal…';
+    if (transport === 'fifo') return "Accepted — queued to the worker's stdin…";
+    if (transport === 'resume') return 'Accepted — waking a headless resume…';
+    if (transport === 'codex') return 'Accepted — delivering to the Codex thread…';
+    if (transport === 'delegate') return 'Accepted — handed to the delegate…';
+    return 'Accepted by WatchTower — delivering…';
+  }
+  function _wtFindLivePendingEcho(sid, displayText) {
+    // Resolve the CURRENT entry/element for this send. A re-render replaces
+    // the echo's DOM node (restorePendingSendEchoes builds a fresh entry with
+    // the same text), and the JSONL dedupe removes the entry entirely once
+    // the durable event renders — so never cache the element across ticks.
+    const normed = _normSend(displayText);
+    for (const entry of _pendingSends) {
+      if (entry && entry.sid === sid && _normSend(entry.text) === normed) return entry;
+    }
+    return null;
+  }
+  function _wtSetEchoNote(entry, text) {
+    const div = entry && entry.element;
+    if (!div || !div.isConnected) return;
+    let note = div.querySelector('.send-delivered-note');
+    if (!note) {
+      note = document.createElement('div');
+      note.className = 'send-delivered-note';
+      div.appendChild(note);
+    }
+    note.textContent = text;
+  }
+  function beginWtReceiptTracking(pending, data, ctx) {
+    // Stage 1: accepted. Same confirmed-delivery lifecycle as a native inject
+    // (cancels the not-acknowledged timer, echo survives re-renders) but with
+    // transport-specific copy so the exact pipeline stage stays visible.
+    markPendingSendDelivered(pending, data);
+    const displayText = (pending && pending.entry && pending.entry.text) || ctx.rawText;
+    const stageLabel = '📡 ' + wtTransportStageLabel(data.transport);
+    if (pending && pending.entry) _wtSetEchoNote(pending.entry, stageLabel);
+    const rid = data.receipt_id;
+    if (!rid || _wtReceiptPolls[rid]) return;
+    _wtReceiptPolls[rid] = true;
+    let ticks = 0;
+    const MAX_TICKS = 100; // ~5 min at 3s; receipts self-resolve to lost well before
+    const stop = () => { delete _wtReceiptPolls[rid]; };
+    const tick = async () => {
+      const entry = _wtFindLivePendingEcho(ctx.sid, displayText);
+      // Entry gone = the durable JSONL event already rendered and deduped the
+      // echo (delivery proven by the transcript itself) — nothing to track.
+      if (!entry) { stop(); return; }
+      if (++ticks > MAX_TICKS) { stop(); return; }
+      let receipt = null, missing = false;
+      try {
+        const r = await fetch('/api/wt/receipt/' + encodeURIComponent(rid), { cache: 'no-store' });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.ok && d.receipt) receipt = d.receipt;
+        else if (r.status === 404) missing = true;
+      } catch (_) {}
+      if (missing) { stop(); return; } // receipt pruned server-side; nothing to verify against
+      const status = receipt && receipt.status;
+      if (status === 'landed') {
+        // Stage 3: verified against the transcript. The dedupe swaps the echo
+        // for the real message on the refreshes scheduled here.
+        _wtSetEchoNote(entry, '✓ Landed in the transcript.');
+        scheduleFireAndWatchRefresh(ctx.paneId);
+        stop();
+        return;
+      }
+      if (status === 'lost') {
+        _wtSetEchoNote(entry, '⚠ WatchTower lost the message — retrying with a native resume…');
+        stop();
+        _wtNativeFallbackResend(entry, ctx);
+        return;
+      }
+      // pending / advanced: keep the stage note current and keep verifying.
+      _wtSetEchoNote(entry, status === 'advanced'
+        ? stageLabel + ' Transcript is moving — verifying…'
+        : stageLabel);
+      setTimeout(tick, 3000);
+    };
+    setTimeout(tick, 3000);
+  }
+  async function _wtNativeFallbackResend(entry, ctx) {
+    // The receipt says wt's delivery never reached the transcript. Re-send
+    // through /api/inject-input with skip_wt so the server's dormant-claude
+    // branch goes straight to its own `claude --resume` instead of handing
+    // back to wt (which just failed for this message).
+    let data = {}, httpStatus = 0;
+    try {
+      const payload = { session_id: ctx.sid, text: ctx.rawText, mode: ctx.mode || 'send', skip_wt: true };
+      if (ctx.announcedFrom) payload.announced_from = ctx.announcedFrom;
+      const r = await fetch('/api/inject-input', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      httpStatus = r.status;
+      try { data = await r.json(); } catch (_) {}
+    } catch (err) {
+      data = { ok: false, error: (err && err.message) || 'network error' };
+    }
+    const live = _wtFindLivePendingEcho(ctx.sid, entry.text) || entry;
+    if (data && data.ok) {
+      _wtSetEchoNote(live, '⏻ Native fallback accepted — waking the headless agent…');
+      scheduleFireAndWatchRefresh(ctx.paneId);
+    } else {
+      const reason = (data && data.error) || ('HTTP ' + httpStatus);
+      _wtSetEchoNote(live, '⚠ Not delivered — WatchTower lost it and the native fallback failed: ' + reason);
+      showOpToast('Send lost — native fallback failed: ' + reason, 'error');
+    }
+  }
+
   function scheduleFireAndWatchRefresh(paneId) {
     const convId = currentConversation;
     const targetPaneId = paneId || (typeof activePaneId === 'function' ? activePaneId() : 'p1');
@@ -6430,6 +6549,15 @@
           markPendingSendDelivered(pendingSend, data);
           showOpToast('Hermes follow-up started.');
           scheduleFireAndWatchRefresh(paneId || activePaneId());
+        } else if (data.via === 'wt-send' && !compactCommand) {
+          // Routed through WatchTower (dormant session). Stage the echo copy
+          // by transport and track the delivery receipt to landed/lost.
+          beginWtReceiptTracking(pendingSend, data, {
+            sid, rawText: text, announcedFrom,
+            mode: injectMode || 'send',
+            paneId: paneId || activePaneId(),
+          });
+          showOpToast('Accepted by WatchTower' + (data.transport ? ' — ' + data.transport + ' transport.' : '.'));
         } else if (compactCommand) {
           showOpToast(compactRequestSuccessMessage(data, currentSession.source));
           if (currentSession.source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
@@ -40740,6 +40868,15 @@
             markPendingSendDelivered(pendingSend, data);
             showOpToast('Hermes follow-up started.');
             scheduleFireAndWatchRefresh(activePaneId());
+          } else if (data.via === 'wt-send') {
+            // Routed through WatchTower (dormant session). Stage the echo
+            // copy by transport and track the delivery receipt to landed/lost.
+            beginWtReceiptTracking(pendingSend, data, {
+              sid, rawText: text, announcedFrom,
+              mode: 'send',
+              paneId: activePaneId(),
+            });
+            showOpToast('Accepted by WatchTower' + (data.transport ? ' — ' + data.transport + ' transport.' : '.'));
           }
         } else {
           const reason = formatInjectFailure(data, res.status);
