@@ -8641,6 +8641,7 @@
     background: var(--surface); border: 1px solid var(--border);
     box-shadow: 0 18px 48px rgba(0,0,0,0.5);
     cursor: default;
+    max-height: calc(100vh - 24px); overflow-y: auto;
   }
   .ann-editor-title {
     font-size: 13px; font-weight: 700; color: var(--text);

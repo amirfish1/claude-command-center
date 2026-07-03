@@ -909,7 +909,7 @@
         // Outer wrap holds the condensed health metrics + the collapsible
         // trigger strip. The trigger chips now live behind a toggle so the
         // footer leads with CCC's own health (CPU / build latency / errors).
-        '#pollerWrap{display:flex;gap:8px;align-items:center;flex:1 1 auto;min-width:0;padding:0 6px;}' +
+        '#pollerWrap{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;flex:1 1 auto;min-width:0;padding:0 6px;}' +
         '#cccHealth{display:flex;gap:7px;align-items:center;flex:0 0 auto;' +
         'font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;}' +
         '.ccchealth-metric{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;' +
