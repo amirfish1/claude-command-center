@@ -134,6 +134,38 @@ class TestServerImports(unittest.TestCase):
             "THROUGHPUT worker: THROUGHPUT-16 - Publish usage state for external consumers",
         )
 
+    def test_watchtower_worker_titles_survive_worker_record_prune(self):
+        """Closed WT tickets with claimed_session_id can still title old sessions."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        sid = "019f23e3-ba0e-7ec1-949d-d72d3f590ad2"
+        rows = [{
+            "session_id": sid,
+            "source": "codex",
+            "display_name": "Drain the THROUGHPUT WatchTower queue and keep it empty.",
+            "name_overridden": False,
+        }]
+        items = [{
+            "project": "THROUGHPUT",
+            "ref": "THROUGHPUT-16",
+            "status": "closed",
+            "claimed_by": "throughput-eb3f49da",
+            "claimed_session_id": sid,
+            "title": "Publish usage state for external consumers",
+            "closed_at": "2026-07-02T18:14:36Z",
+            "resolution": {"summary": "Published usage state API"},
+        }]
+
+        with mock.patch.object(server, "_wt_read_workers", return_value=[]), \
+                mock.patch.object(server._q, "list_items", return_value=items):
+            server._apply_watchtower_worker_display_names(rows)
+
+        self.assertEqual(
+            rows[0]["display_name"],
+            "THROUGHPUT worker: THROUGHPUT-16 - Published usage state API",
+        )
+
     def test_usage_pace_uses_ccc_calibration_and_week_override(self):
         """CCC owns weekly calibration/pace state without relying on legacy
         cache files, and the throughput UI exposes the projection."""

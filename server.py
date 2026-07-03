@@ -413,8 +413,6 @@ def _apply_watchtower_worker_display_names(rows):
             sid_to_worker[sid] = w
         if wid and sid:
             worker_ids[wid] = sid
-    if not sid_to_worker:
-        return rows
     try:
         items = _q.list_items() or []
     except Exception:
@@ -429,7 +427,7 @@ def _apply_watchtower_worker_display_names(rows):
         sid = str(it.get("claimed_session_id") or "").strip()
         if not sid:
             sid = worker_ids.get(str(it.get("claimed_by") or "").strip(), "")
-        if not sid or sid not in sid_to_worker:
+        if not sid:
             continue
         rank = 1 if status == "in_progress" else 0
         score = (rank, _wt_item_ts(it))
@@ -438,6 +436,7 @@ def _apply_watchtower_worker_display_names(rows):
             continue
         titles_by_sid[sid] = (
             score,
+            str(it.get("project") or ""),
             _wt_display_name(it.get("project"), it.get("ref"), _wt_ticket_context(it)),
         )
     if not titles_by_sid:
@@ -449,9 +448,10 @@ def _apply_watchtower_worker_display_names(rows):
         if sid not in titles_by_sid:
             continue
         worker = sid_to_worker.get(sid) or {}
-        if not _wt_row_name_is_generic(row, worker.get("queue")):
+        queue = worker.get("queue") or titles_by_sid[sid][1]
+        if not _wt_row_name_is_generic(row, queue):
             continue
-        row["display_name"] = titles_by_sid[sid][1]
+        row["display_name"] = titles_by_sid[sid][2]
     return rows
 
 
