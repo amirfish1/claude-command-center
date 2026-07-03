@@ -23221,8 +23221,14 @@
     // below. A small "expand/collapse all" control lets the user blast
     // through everything at once — useful because archived can get long.
     let _archivedHtml = '';
-    const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _archivedConvs);
-    const _arcHasFolderChips = _allTabConvs.some(c => c.folder_label_chip);
+    // CCC-468: archived rows no longer interleave with the live rows in the
+    // All tab — "archive" hid nothing there. They render in a collapsed
+    // "Trash" section pinned to the very bottom instead. Pinned archived
+    // rows are exempt (a pin is an explicit ask to keep it visible).
+    const _trashConvs = _archivedConvs.filter(c => !c.pinned);
+    const _pinnedArchived = _archivedConvs.filter(c => c.pinned);
+    const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _pinnedArchived);
+    const _arcHasFolderChips = _allTabConvs.concat(_trashConvs).some(c => c.folder_label_chip);
     const _archivedGroupChatsForRender = _hideGroupChatsForSearch
       ? []
       : (Array.isArray(_archivedGroupChats) ? _archivedGroupChats : []);
@@ -23284,17 +23290,10 @@
           + cards.map(c => _renderRow(c, { suppressFolderChip: true })).join('')
           + '</div>';
       }).join('');
-      const _gcUnarchivedRowsFlat = (_gcItems || []).map(it => it.html).join('');
-      const _gcRowsFlat = (_archivedGroupChatsForRender.length || _gcUnarchivedRowsFlat)
-        ? _archivedGroupChatsForRender
-            .slice()
-            .sort((a, b) => ((b.archived_at || b.closed_at || b.last_mtime || 0) - (a.archived_at || a.closed_at || a.last_mtime || 0)))
-            .map(_renderArchivedGcRow)
-            .join('')
-            + _gcUnarchivedRowsFlat
-        : '';
-      _arcRows = _folderRowsHtml + _gcRowsFlat;
-      _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + (_gcItems || []).length;
+      // Archived group chats live in the Trash section (CCC-468), so the
+      // flat tail below the folder groups carries only unarchived chats.
+      _arcRows = _folderRowsHtml + (_gcItems || []).map(it => it.html).join('');
+      _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + (_gcItems || []).length + _trashConvs.length;
     } else {
       // Flat chronological list — original behavior.
       const _archivedItems = [];
@@ -23305,15 +23304,9 @@
           html: _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter }),
         });
       }
-      if (_archivedGroupChatsForRender.length) {
-        for (const gc of _archivedGroupChatsForRender) {
-          const ago = (gc.archived_at || gc.closed_at || gc.last_mtime) || 0;
-          _archivedItems.push({ pinRank: Infinity, mtime: ago, html: _renderArchivedGcRow(gc) });
-        }
-      }
-      // Also include active/paused/closed (unarchived) group chats so they
-      // appear in the All view, not just in Current Sessions. Mirrors how
-      // in-progress sessions appear in both sections.
+      // Archived group chats live in the Trash section (CCC-468).
+      // Active/paused/closed (unarchived) group chats still interleave here
+      // so they appear in the All view, not just in Current Sessions.
       for (const gci of (_gcItems || [])) {
         _archivedItems.push({ pinRank: Infinity, mtime: gci.mtime || 0, html: gci.html });
       }
@@ -23322,7 +23315,45 @@
         return (b.mtime || 0) - (a.mtime || 0);
       });
       _arcRows = _archivedItems.map(it => it.html).join('');
-      _arcCount = _archivedItems.length;
+      _arcCount = _archivedItems.length + _archivedGroupChatsForRender.length + _trashConvs.length;
+    }
+
+    // Trash section (CCC-468): archived sessions + archived group chats,
+    // flat and recency-sorted, in a collapsed-by-default section at the very
+    // bottom of the All tab. An active sidebar search force-expands it so
+    // matching archived rows aren't invisibly folded away.
+    let _trashHtml = '';
+    {
+      const _trashItems = [];
+      for (const c of _trashConvs) {
+        _trashItems.push({
+          mtime: c.modified || c.last_interacted || 0,
+          html: _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter }),
+        });
+      }
+      for (const gc of _archivedGroupChatsForRender) {
+        _trashItems.push({
+          mtime: (gc.archived_at || gc.closed_at || gc.last_mtime) || 0,
+          html: _renderArchivedGcRow(gc),
+        });
+      }
+      if (_trashItems.length) {
+        _trashItems.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+        const _trashStoredCollapsed = (() => {
+          try { return localStorage.getItem('ccc-all-trash-collapsed') !== '0'; }
+          catch (_) { return true; }
+        })();
+        const _trashCollapsed = _hideGroupChatsForSearch ? false : _trashStoredCollapsed;
+        _trashHtml =
+          '<div class="conv-trash-section' + (_trashCollapsed ? ' collapsed' : '') + '" data-role="trash-section">'
+          + '<button type="button" class="conv-trash-header" data-role="trash-toggle" aria-expanded="' + (!_trashCollapsed) + '">'
+          +   '<span class="conv-trash-arrow">' + (_trashCollapsed ? '▸' : '▾') + '</span>'
+          +   '<span class="conv-trash-label">Trash</span>'
+          +   '<span class="conv-trash-count">' + _trashItems.length + '</span>'
+          + '</button>'
+          + '<div class="conv-trash-list">' + _trashItems.map(it => it.html).join('') + '</div>'
+          + '</div>';
+      }
     }
 
     if (_arcCount > 0) {
@@ -23367,6 +23398,7 @@
         '<div class="conv-archived-section" data-role="archived-section">'
         + _arcTools
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
+        + _trashHtml
         + '</div>';
     }
     // Tabs (CCC-85): Active / All / GH Issues / Ready to merge
@@ -23396,9 +23428,15 @@
     // onto a collapsed (zero-height) section reads as broken. Only the
     // top-level section wrapper is forced open; folder groups inside
     // keep their own collapse state.
-    const _forceOpen = (html, cls) => html
-      .replace(cls + ' collapsed', cls)
-      .replace('aria-expanded="false"', 'aria-expanded="true"');
+    const _forceOpen = (html, cls) => (html.indexOf(cls + ' collapsed') === -1
+      // Wrapper already open — leave the html alone. The aria flip below
+      // pairs with the class strip; running it unconditionally would hit
+      // the first INNER collapsible instead (e.g. the All tab's Trash
+      // section header, CCC-468) and desync its aria from its state.
+      ? html
+      : html
+        .replace(cls + ' collapsed', cls)
+        .replace('aria-expanded="false"', 'aria-expanded="true"'));
     const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
       : _sidebarTab === 'merge' ? (_forceOpen(_readyToMergeHtml, 'conv-readytomerge-section') || _tabEmpty('PRs waiting to merge'))
       : _sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
@@ -23579,6 +23617,20 @@
         const arrowEl = $archivedToggle.querySelector('.conv-archived-arrow');
         if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         $archivedToggle.setAttribute('aria-expanded', String(!wasCollapsed));
+      });
+    }
+    // Toggle handler for the All tab's Trash section header (CCC-468).
+    const $trashToggle = $convList.querySelector('[data-role="trash-toggle"]');
+    if ($trashToggle) {
+      $trashToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const section = $trashToggle.closest('[data-role="trash-section"]');
+        if (!section) return;
+        const wasCollapsed = section.classList.toggle('collapsed');
+        try { localStorage.setItem('ccc-all-trash-collapsed', wasCollapsed ? '1' : '0'); } catch (_) {}
+        const arrowEl = $trashToggle.querySelector('.conv-trash-arrow');
+        if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
+        $trashToggle.setAttribute('aria-expanded', String(!wasCollapsed));
       });
     }
     const $archivedGroupingToggle = $convList.querySelector('[data-role="archived-grouping-toggle"]');

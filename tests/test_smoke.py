@@ -850,11 +850,17 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         self.assertIn("const _allTabConvs = ", app_js)
+        # CCC-468: archived rows still replay in the All tab, but demoted to a
+        # collapsed "Trash" section at the bottom instead of interleaving with
+        # live rows (pinned archived rows stay in the main flow).
         all_start = app_js.index("const _allTabConvs = ")
         all_block = app_js[all_start:app_js.index("const _arcHasFolderChips", all_start)]
-        self.assertIn("_sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _archivedConvs)", all_block)
-        self.assertIn("const _arcHasFolderChips = _allTabConvs.some(c => c.folder_label_chip);", app_js)
+        self.assertIn("_sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _pinnedArchived)", all_block)
+        self.assertIn("const _trashConvs = _archivedConvs.filter(c => !c.pinned);", app_js)
+        self.assertIn("const _arcHasFolderChips = _allTabConvs.concat(_trashConvs).some(c => c.folder_label_chip);", app_js)
         self.assertIn("for (const c of _allTabConvs)", app_js)
+        self.assertIn('data-role="trash-section"', app_js)
+        self.assertIn('data-role="trash-toggle"', app_js)
         archived_markup = app_js[app_js.index("_archivedHtml ="):app_js.index("// Tabs", app_js.index("_archivedHtml ="))]
         self.assertNotIn('data-role="archived-toggle"', archived_markup)
         self.assertNotIn("conv-archived-arrow", archived_markup)
