@@ -12969,12 +12969,10 @@ body.status-pos-right .conv-pane > .status-rail {
   background: var(--accent);
   opacity: 0.95;
 }
-  /* Quick-close X — top-right inside the rail, in normal flow so it never
-     overlays the conversation or the rail's own content. */
+  /* Quick-close X — lives in the topbar next to the Annotate button, so it
+     gets the same visible button chrome (CCC-450: the borderless half-opacity
+     glyph read as missing once Annotate moved in beside it). */
   .status-rail-close {
-    position: sticky;
-    top: 0;
-    align-self: flex-end;
     flex: 0 0 auto;
     margin: 0;
     width: 22px; height: 22px;
@@ -12982,13 +12980,11 @@ body.status-pos-right .conv-pane > .status-rail {
     align-items: center; justify-content: center;
     padding: 0;
     background: transparent;
-    border: 1px solid transparent;
-    border-radius: 4px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
     color: var(--text-muted);
     font-size: 15px; line-height: 1;
     cursor: pointer;
-    z-index: 5;
-    opacity: 0.55;
     transition: color 0.12s, background 0.12s, border-color 0.12s;
 }
 body.status-pos-right:not(.status-rail-collapsed) .status-rail-close {
