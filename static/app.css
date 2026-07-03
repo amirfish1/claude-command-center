@@ -1869,7 +1869,8 @@
   }
 
   .conv-scroll-end-btn,
-  .conv-scroll-last-btn {
+  .conv-scroll-last-btn,
+  .conv-scroll-next-btn {
     position: absolute;
     right: 20px;
     bottom: 96px;
@@ -1892,20 +1893,24 @@
     transition: opacity 0.14s ease, transform 0.14s ease, border-color 0.14s ease, background 0.14s ease;
   }
   .conv-scroll-end-btn.visible,
-  .conv-scroll-last-btn.visible {
+  .conv-scroll-last-btn.visible,
+  .conv-scroll-next-btn.visible {
     opacity: 1;
     pointer-events: auto;
     transform: translateY(0);
   }
   .conv-scroll-end-btn:hover,
-  .conv-scroll-last-btn:hover {
+  .conv-scroll-last-btn:hover,
+  .conv-scroll-next-btn:hover {
     border-color: var(--accent);
     background: var(--surface-2);
   }
   .conv-scroll-end-btn svg,
-  .conv-scroll-last-btn svg { flex: none; }
+  .conv-scroll-last-btn svg,
+  .conv-scroll-next-btn svg { flex: none; }
   .conv-scroll-end-btn span,
-  .conv-scroll-last-btn span {
+  .conv-scroll-last-btn span,
+  .conv-scroll-next-btn span {
     font-size: 12px;
     font-weight: 600;
     line-height: 1;

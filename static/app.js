@@ -26390,6 +26390,21 @@
     return null;
   }
 
+  function _nextUserMessageTarget(view) {
+    if (!view) return null;
+    const list = view.querySelectorAll('.event.user_text:not(.task-notification-event)');
+    if (!list.length) return null;
+    // Forward counterpart of _prevUserMessageTarget: the earliest user message
+    // whose start sits below the pane top. The dead zone between the two
+    // thresholds (-8..+20; jumps pin a message at +12) keeps the message
+    // currently at the top from being its own previous/next target.
+    const viewTop = view.getBoundingClientRect().top;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].getBoundingClientRect().top > viewTop + 20) return list[i];
+    }
+    return null;
+  }
+
   function positionConversationEndAffordance(view) {
     const btn = view && view._convEndButton;
     const host = btn && btn.parentElement;
@@ -26401,11 +26416,19 @@
     const right = Math.max(14, Math.round(hostRect.right - viewRect.right + 20));
     btn.style.bottom = endBottom + 'px';
     btn.style.right = right + 'px';
-    // Stack the "Last" button above the End button so the two never overlap.
+    // Stack Next (when visible) and Last/Previous above the End button so
+    // they never overlap; a hidden Next doesn't reserve a slot.
+    let above = endBottom + 42;
+    const nextBtn = view._convNextButton;
+    if (nextBtn) {
+      nextBtn.style.right = right + 'px';
+      nextBtn.style.bottom = above + 'px';
+      if (nextBtn.classList.contains('visible')) above += 42;
+    }
     const lastBtn = view._convLastButton;
     if (lastBtn) {
       lastBtn.style.right = right + 'px';
-      lastBtn.style.bottom = (endBottom + 42) + 'px';
+      lastBtn.style.bottom = above + 'px';
     }
   }
 
@@ -26443,6 +26466,18 @@
       lastBtn.classList.toggle('visible', showLast);
       lastBtn.setAttribute('aria-hidden', showLast ? 'false' : 'true');
       lastBtn.tabIndex = showLast ? 0 : -1;
+    }
+    // "Next" is the forward counterpart: shown while a user message starts
+    // below the pane top and we're not already at the bottom, so a
+    // Previous-stepped reader can step back down message by message
+    // (End still jumps straight to the bottom).
+    const nextBtn = view._convNextButton;
+    if (nextBtn) {
+      const showNext = !!(scrollable && !isConversationAtBottom(view)
+        && _nextUserMessageTarget(view));
+      nextBtn.classList.toggle('visible', showNext);
+      nextBtn.setAttribute('aria-hidden', showNext ? 'false' : 'true');
+      nextBtn.tabIndex = showNext ? 0 : -1;
     }
     positionConversationEndAffordance(view);
   }
@@ -26611,6 +26646,32 @@
       updateConversationEndAffordance(v);
     });
     view._convLastButton = lastBtn;
+    // "Next" steps back down to the following user message after Previous has
+    // walked up — the down-arrow counterpart of the Last/Previous stepper.
+    let nextBtn = host.querySelector(':scope > .conv-scroll-next-btn');
+    if (!nextBtn) {
+      nextBtn = document.createElement('button');
+      nextBtn.type = 'button';
+      nextBtn.className = 'conv-scroll-next-btn';
+      nextBtn.title = 'Jump to the start of the next message';
+      nextBtn.setAttribute('aria-label', 'Jump to the start of the next message');
+      nextBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg><span>Next</span>';
+      host.appendChild(nextBtn);
+    }
+    nextBtn._convTargetView = view;
+    nextBtn.addEventListener('click', () => {
+      const v = nextBtn._convTargetView || view;
+      const el = _nextUserMessageTarget(v);
+      if (!el) return;
+      v._pinnedToBottom = false;
+      const viewRect = v.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const top = Math.max(0, v.scrollTop + (elRect.top - viewRect.top) - 12);
+      if (typeof v.scrollTo === 'function') v.scrollTo({ top, behavior: 'smooth' });
+      else v.scrollTop = top;
+      updateConversationEndAffordance(v);
+    });
+    view._convNextButton = nextBtn;
     view._convEndAffordanceAttached = true;
     // Pin-to-bottom: true means the user wants to follow new content.
     // Initialized true so a brand-new pane auto-scrolls; user scrolling
