@@ -1990,7 +1990,9 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("display: flex; align-items: center; gap: 10px; flex-wrap: nowrap;", app_css)
         self.assertIn("overflow: hidden;", app_css)
-        self.assertIn(".status-rail-close {\n    position: sticky;", app_css)
+        # CCC-450 moved the quick-close x into the topbar as an in-flow flex
+        # button; the invariant is still "no absolute overlay".
+        self.assertIn(".status-rail-close {\n    flex: 0 0 auto;", app_css)
         self.assertNotIn(".status-rail-close {\n    position: absolute;", app_css)
 
     def test_coo_status_pill_names_its_source(self):
