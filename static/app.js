@@ -2145,7 +2145,6 @@
   function _briefSaveExpandedSet(s) {
     try { localStorage.setItem(BRIEF_EXPANDED_KEY, JSON.stringify([...s])); } catch (_) {}
   }
-  const $convFolderFilter = document.getElementById('convFolderFilter');
   let repoListState = { repos: [], current: '', recent: [] };
   // Folder filtering removed: the conversation list always shows everything.
   // Popout mode still scopes to its one repo. Normal mode is always ALL — a
@@ -2245,11 +2244,6 @@
     const repoPath = selectedRepoPath();
     if (repoPath) return repoPath;
     showOpToast((actionLabel || 'This action') + ' needs a concrete repo. Pick one from the repo dropdown first.', 'error');
-    if ($convFolderFilter) {
-      try { $convFolderFilter.focus(); } catch (_) {}
-      $convFolderFilter.classList.add('needs-repo-attention');
-      setTimeout(() => { $convFolderFilter.classList.remove('needs-repo-attention'); }, 1600);
-    }
     return '';
   }
 
@@ -13909,9 +13903,6 @@
         targetRepo = '';
       } else {
         showOpToast('Pick a repo, or use + on a repo/object node.', 'error');
-        if ($convFolderFilter) {
-          try { $convFolderFilter.focus(); } catch (_) {}
-        }
         return;
       }
     }
@@ -20536,11 +20527,11 @@
       _convDedupIdx.set(_k, _dedupedConvs.length);
       _dedupedConvs.push(c);
     }
-    // CCC-52: the folder picker (#convFolderFilter, titled "Filter
-    // conversations by folder") now actually filters the active list, not just
-    // groups it. When a specific folder is selected, drop cards whose repo path
-    // is outside that folder tree. Cards with no resolvable path are kept — we
-    // can't place them, so we don't hide them.
+    // CCC-52: when archiveFolderFilter is scoped to one repo (popout mode
+    // only — the main window's folder-picker dropdown was removed and it's
+    // always ALL there), drop cards whose repo path is outside that folder
+    // tree instead of just grouping them. Cards with no resolvable path are
+    // kept — we can't place them, so we don't hide them.
     const _folderFilterPath = (archiveFolderFilter && archiveFolderFilter !== ARCHIVE_FOLDER_ALL)
       ? String(archiveFolderFilter).replace(/\/+$/, '')
       : '';
@@ -21634,7 +21625,6 @@
     // scan active work by project without hopping repos. The window selector
     // chooses which active rows are shown; the project view groups every row
     // in that selected window.
-    const _folderFilterEl = document.getElementById('convFolderFilter');
     // CCC-52: a specific folder selection now filters the list to that folder
     // (see _folderFilterPath above), so the cross-repo chips are redundant and
     // grouping collapses to the single folder. "All" keeps the multi-repo
@@ -37692,42 +37682,6 @@
     return options;
   }
 
-  function renderArchiveFolderFilter() {
-    if (!$convFolderFilter) return;
-    let options = _archiveFolderOptions();
-    let hasCurrent = archiveFolderFilter === ARCHIVE_FOLDER_ALL
-      || options.some(opt => opt.value === archiveFolderFilter);
-    if (!hasCurrent && CONV_POPOUT_MODE && CONV_POPOUT_REPO_PATH && archiveFolderFilter === CONV_POPOUT_REPO_PATH) {
-      options = [{
-        value: CONV_POPOUT_REPO_PATH,
-        path: CONV_POPOUT_REPO_PATH,
-        baseLabel: _pathLeaf(CONV_POPOUT_REPO_PATH) || CONV_POPOUT_REPO_PATH,
-        label: _pathLeaf(CONV_POPOUT_REPO_PATH) || CONV_POPOUT_REPO_PATH,
-      }].concat(options);
-      hasCurrent = true;
-    }
-    if (!hasCurrent) {
-      archiveFolderFilter = ARCHIVE_FOLDER_ALL;
-      try { localStorage.setItem(ARCHIVE_FOLDER_FILTER_KEY, archiveFolderFilter); } catch (_) {}
-    }
-
-    $convFolderFilter.innerHTML = '';
-    const all = document.createElement('option');
-    all.value = ARCHIVE_FOLDER_ALL;
-    all.textContent = 'All';
-    all.title = 'Show conversations from every folder';
-    $convFolderFilter.appendChild(all);
-
-    for (const optData of options) {
-      const opt = document.createElement('option');
-      opt.value = optData.value;
-      opt.textContent = optData.label;
-      opt.title = optData.path;
-      $convFolderFilter.appendChild(opt);
-    }
-    $convFolderFilter.value = archiveFolderFilter;
-  }
-
   function setArchiveFolderFilter(value, opts = {}) {
     // Folder filtering was removed: the conversation list always shows every
     // conversation, and per-conversation repo context comes from the OPEN
@@ -38958,7 +38912,6 @@
   }
   function _renderArchiveIfLoaded() {
     if (!archiveLoaded) return;
-    renderArchiveFolderFilter();
     renderArchiveList(_archiveQuery());
   }
   let _archiveStuckRenderRecoveryPromise = null;
@@ -38969,7 +38922,6 @@
   function _recoverArchiveRenderIfStuck() {
     if (!_archiveListStillShowsLoader()) return Promise.resolve();
     if (archiveLoaded && Array.isArray(archiveData) && archiveData.length) {
-      renderArchiveFolderFilter();
       renderArchiveList(_archiveQuery());
       return Promise.resolve();
     }
@@ -38978,7 +38930,6 @@
       if (!Array.isArray(convs) || !convs.length || !_archiveListStillShowsLoader()) return;
       archiveData = _mergeArchivePrSnapshot(convs, archiveData);
       archiveLoaded = true;
-      renderArchiveFolderFilter();
       renderArchiveList(_archiveQuery());
     }).finally(() => {
       _archiveStuckRenderRecoveryPromise = null;
@@ -39066,7 +39017,6 @@
         // Re-poll COO escalated markers on each data refresh so newly-bounced
         // sessions surface their badge without a manual reload.
         loadCooEscalated({ force: true });
-        renderArchiveFolderFilter();
         setTimeout(() => {
           _hydrateArchiveSideData();
           _hydrateArchivePrData();
@@ -39591,12 +39541,6 @@
   (function wireArchiveMode() {
     if (READER_ONLY_POPOUT) return;
     updateRepoPickerVisibility();
-    renderArchiveFolderFilter();
-    if ($convFolderFilter) {
-      $convFolderFilter.addEventListener('change', () => {
-        setArchiveFolderFilter($convFolderFilter.value || ARCHIVE_FOLDER_ALL);
-      });
-    }
     const $search = document.getElementById('convSearch');
     if ($search) {
       $search.addEventListener('input', () => {
