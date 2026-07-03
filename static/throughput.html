@@ -600,6 +600,44 @@
     height: 320px;
     position: relative;
   }
+
+  .chart-zoom-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 5;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--border-active);
+    background: rgba(13, 17, 23, 0.88);
+    color: var(--accent);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s, background 0.15s, border-color 0.15s;
+  }
+
+  .chart-container:hover .chart-zoom-btn,
+  .chart-zoom-btn:focus-visible,
+  .chart-zoom-btn.is-active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .chart-zoom-btn:hover,
+  .chart-zoom-btn:focus-visible {
+    background: rgba(57, 210, 192, 0.12);
+    outline: none;
+  }
+
+  .chart-zoom-btn[hidden] {
+    display: none;
+  }
   
   /* SVG Chart styles */
   svg.throughput-svg {
@@ -1011,6 +1049,7 @@
           </div>
           <div class="chart-container">
             <svg class="throughput-svg" id="throughput-chart"></svg>
+            <button type="button" class="chart-zoom-btn" id="chart-zoom-btn" aria-label="Zoom chart to last 48 hours" title="Zoom to last 48 hours">+</button>
             <div class="chart-tooltip" id="chart-tooltip"></div>
           </div>
         </div>
@@ -1059,6 +1098,8 @@
     let weeklyData = null;   // populated by loadWeeklyUsage(); used by drawChart() overlay
     let resetEvents = [];    // populated by loadResetEvents(); rendered as chart markers
     let chartWeekOffset = 0; // 0=current billing period, -1=previous, etc.
+    const CHART_ZOOM_HOURS = 48;
+    let chartZoomLastHours = false;
     let weekRankings = {};   // sessionId → rank (1-indexed); populated by fetchWeekRankings()
     const aggregateSessions = [
       { session_id: 'all_7_days', display_name: 'Total (Last 7 Days)', engine: 'aggregated', meta: '7d window' },
@@ -1347,6 +1388,7 @@
     // Populate dashboard details
     function renderDashboard(session, data) {
       chartWeekOffset = 0; // reset week navigation on session switch
+      chartZoomLastHours = false;
       document.getElementById('empty-state').style.display = 'none';
       document.getElementById('dashboard-content').style.display = 'block';
       
@@ -1807,6 +1849,77 @@
       return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
     }
 
+    function chartRowTimeMs(row) {
+      if (!row) return null;
+      if (row.hour) {
+        const hour = String(row.hour).trim();
+        const normalized = hour.includes('T') ? hour : hour.replace(' ', 'T');
+        const withZone = /(?:Z|[+-]\d\d:?\d\d)$/.test(normalized) ? normalized : `${normalized}Z`;
+        const ms = new Date(withZone).getTime();
+        return Number.isNaN(ms) ? null : ms;
+      }
+      if (row.day) {
+        const ms = new Date(`${row.day}T23:59:59Z`).getTime();
+        return Number.isNaN(ms) ? null : ms;
+      }
+      const turnEnd = row.t_end || row.end_time || row.timestamp;
+      if (turnEnd) {
+        const ms = new Date(turnEnd).getTime();
+        return Number.isNaN(ms) ? null : ms;
+      }
+      return null;
+    }
+
+    function updateChartZoomButton(zoomable) {
+      const btn = document.getElementById('chart-zoom-btn');
+      if (!btn) return;
+      btn.hidden = !zoomable;
+      btn.classList.toggle('is-active', chartZoomLastHours);
+      btn.textContent = chartZoomLastHours ? '−' : '+';
+      const label = chartZoomLastHours ? 'Restore full chart range' : 'Zoom chart to last 48 hours';
+      btn.setAttribute('aria-label', label);
+      btn.title = label;
+    }
+
+    function applyChartZoomRows(sourceRows, alignedRows) {
+      const rows = Array.isArray(sourceRows) ? sourceRows : [];
+      const aligned = Array.isArray(alignedRows) ? alignedRows : null;
+      const timedRows = rows
+        .map((row, index) => ({ row, index, ms: row && row._projected ? null : chartRowTimeMs(row) }))
+        .filter(item => item.ms != null);
+      if (timedRows.length < 2) {
+        if (chartZoomLastHours) chartZoomLastHours = false;
+        return { rows, alignedRows: aligned, zoomable: false };
+      }
+      const minMs = Math.min(...timedRows.map(item => item.ms));
+      const maxMs = Math.max(...timedRows.map(item => item.ms));
+      const cutoff = maxMs - CHART_ZOOM_HOURS * 3600000;
+      const zoomIndexes = timedRows
+        .filter(item => item.ms >= cutoff)
+        .map(item => item.index);
+      const zoomable = maxMs - minMs > CHART_ZOOM_HOURS * 3600000 && zoomIndexes.length >= 2 && zoomIndexes.length < rows.length;
+      if (!zoomable) {
+        if (chartZoomLastHours) chartZoomLastHours = false;
+        return { rows, alignedRows: aligned, zoomable: false };
+      }
+      if (!chartZoomLastHours) return { rows, alignedRows: aligned, zoomable: true };
+      return {
+        rows: zoomIndexes.map(index => rows[index]).filter(Boolean),
+        alignedRows: aligned ? zoomIndexes.map(index => aligned[index] || null) : aligned,
+        zoomable: true,
+      };
+    }
+
+    const chartZoomBtn = document.getElementById('chart-zoom-btn');
+    if (chartZoomBtn) {
+      chartZoomBtn.addEventListener('click', () => {
+        chartZoomLastHours = !chartZoomLastHours;
+        if (lastRender) {
+          drawChart(lastRender.turns, lastRender.summary, lastRender.isAggregate, lastRender.bucketMode, lastRender.showCumulative);
+        }
+      });
+    }
+
     function drawChart(turns, summary, isAggregate = false, bucketMode = 'hourly', showCumulative = false) {
       const svg = document.getElementById('throughput-chart');
       if (!svg) return;
@@ -1977,7 +2090,11 @@
       } else {
         buckets = turns;
       }
-      const sourceRows = buckets;
+      let sourceRows = buckets;
+      const zoomState = applyChartZoomRows(sourceRows, prevPeriodRows);
+      sourceRows = zoomState.rows;
+      if (Array.isArray(zoomState.alignedRows)) prevPeriodRows = zoomState.alignedRows;
+      updateChartZoomButton(zoomState.zoomable);
 
       // Label helper for 6h slots: show day name at midnight, "HH:00" otherwise.
       const sixhourLabel = (hourStr) => {
