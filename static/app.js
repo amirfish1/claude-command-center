@@ -28523,6 +28523,17 @@
       const mine = rows.filter(r => _uxqInScope(r && r.project, proj));
       if (mine.length) rows = mine;  // scope when this project has open work
     }
+    // CCC-464: one reverse-chronological order for the WHOLE strip. The server
+    // already sorts open-ticket queues by last activity (CCC-458), but the
+    // drained/configured queues appended above landed at the tail regardless
+    // of recency — a queue drained minutes ago rendered below week-stale ones.
+    // No-activity queues sort last, ties break by name for a stable order.
+    rows.sort((a, b) => {
+      const la = (a && a.last_activity_seconds != null) ? a.last_activity_seconds : Infinity;
+      const lb = (b && b.last_activity_seconds != null) ? b.last_activity_seconds : Infinity;
+      if (la !== lb) return la - lb;
+      return String((a && a.project) || '').localeCompare(String((b && b.project) || ''));
+    });
     // auto_drain lives on the `queues` array (compute_queues_health), NOT on
     // `rows` (compute_ux_fixes_health). Build a project→auto_drain map so the
     // strip's Auto-drain toggle reflects real config instead of defaulting off.
