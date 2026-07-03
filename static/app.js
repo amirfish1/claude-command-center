@@ -10295,14 +10295,52 @@
     if (typeof selectConversation === 'function') {
       selectConversation(id);
     }
-    // Auto-cleanup after 30s for Claude placeholders. Fire-and-watch placeholders
+    // Registration watch for Claude placeholders. Fire-and-watch placeholders
     // stick around until the durable thread row appears, with the spawn log
     // as a fallback if the CLI exits before creating a thread.
     if (source !== 'codex' && source !== 'gemini' && source !== 'cursor' && source !== 'antigravity' && source !== 'kilo') {
-      setTimeout(() => {
-        markPendingSpawnNotAcknowledged(pid, id);
-      }, 30000);
+      _watchPendingSpawnRegistration(pid, id);
     }
+  }
+
+  // True while the spawn placeholder is still awaiting its real row. Looked
+  // up by map key AND card id: adoptPendingSpawnPid rekeys the map from the
+  // tmp pid to the real pid but the card id keeps the tmp pid.
+  function _pendingSpawnStillWaiting(pid, fallbackId) {
+    if (pendingSpawns.has(pid)) return true;
+    return Array.from(pendingSpawns.values()).some(c => c && c.id === fallbackId);
+  }
+
+  // The sidebar's own cadence can't confirm a spawn: the 90s archive poll
+  // asks stale_ok and the server serves a 5-min-fresh cache, so a brand-new
+  // session's row routinely arrives minutes after the CLI registered — long
+  // past a fixed 30s deadline. That made every healthy spawn end in the
+  // "did not register within 30s" placeholder. Instead, poll FORCED archive
+  // refreshes while the placeholder is pending (renderArchiveList runs the
+  // placeholder→real reconcile), and only declare failure once a fresh
+  // fetch past the deadline still has no matching row.
+  function _watchPendingSpawnRegistration(pid, fallbackId) {
+    const deadline = Date.now() + 30000;
+    const tick = async () => {
+      if (!_pendingSpawnStillWaiting(pid, fallbackId)) return;
+      // Mid-drag renders clash with the pointer; try again next tick.
+      if (typeof deferSidebarRenderIfDragging === 'function' && deferSidebarRenderIfDragging()) {
+        setTimeout(tick, 6000);
+        return;
+      }
+      const overdue = Date.now() >= deadline;
+      try {
+        await refreshArchiveData({ force: true });
+        renderArchiveList($convSearch ? $convSearch.value : '');
+      } catch (_) {}
+      if (!_pendingSpawnStillWaiting(pid, fallbackId)) return;
+      if (overdue) {
+        markPendingSpawnNotAcknowledged(pid, fallbackId);
+        return;
+      }
+      setTimeout(tick, 6000);
+    };
+    setTimeout(tick, 5000);
   }
 
   // Hide the loading overlay once we've actually rendered a sessions response.

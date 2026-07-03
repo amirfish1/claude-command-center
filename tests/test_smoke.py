@@ -4196,7 +4196,13 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("function markPendingSpawnNotAcknowledged", app_js)
         self.assertIn("Spawn was not acknowledged within 30s", app_js)
-        self.assertIn("markPendingSpawnNotAcknowledged(pid, id)", app_js)
+        # CCC-462: the fixed 30s timer was replaced by a registration watch
+        # that forces fresh archive fetches (the stale_ok poll cadence could
+        # never confirm a spawn inside 30s) and only marks failure after a
+        # fresh fetch past the deadline still has no matching row.
+        self.assertIn("_watchPendingSpawnRegistration(pid, id)", app_js)
+        self.assertIn("markPendingSpawnNotAcknowledged(pid, fallbackId)", app_js)
+        self.assertIn("refreshArchiveData({ force: true })", app_js)
         self.assertIn("c.pending_spawn || c.spawn_failed", app_js)
         self.assertIn("data-pending-spawn-retry", app_js)
         self.assertIn("data-pending-spawn-dismiss", app_js)
