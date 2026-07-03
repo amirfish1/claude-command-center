@@ -44749,6 +44749,12 @@
           btnHide.style.display = '';
         }
       }
+      const splashCheck = $settingsPopover.querySelector('[data-check-splash]');
+      if (splashCheck) {
+        let on = true;
+        try { on = localStorage.getItem('ccc-hero-on-boot') !== '0'; } catch (_) {}
+        splashCheck.textContent = on ? '✓' : '';
+      }
     }
   }
   // Live-update when the user has 'system' selected and OS theme flips.
@@ -44804,6 +44810,14 @@
         const v = viewGhBtn.getAttribute('data-view-gh');
         localStorage.setItem('ccc-view-gh', v);
         applyViewGh(v);
+        refreshAppearanceChecks();
+        return;
+      }
+      const splashBtn = e.target.closest('[data-splash-toggle]');
+      if (splashBtn) {
+        let on = true;
+        try { on = localStorage.getItem('ccc-hero-on-boot') !== '0'; } catch (_) {}
+        try { localStorage.setItem('ccc-hero-on-boot', on ? '0' : '1'); } catch (_) {}
         refreshAppearanceChecks();
       }
     });
@@ -46141,7 +46155,7 @@
     renderBars(root, makeHourSlots());
     return root;
   }
-  function openHero(instant) {
+  function openHero(instant, autoMs) {
     try {
       var existing = document.getElementById(HERO_ID);
       if (existing) existing.remove();
@@ -46157,10 +46171,13 @@
       var armedAt = performance.now() + 400;
       var dismissed = false;
       function dismiss(evt) {
-        if (performance.now() < armedAt) return;
+        // The 400ms arm guard only applies to user gestures, not the
+        // auto-timeout (evt is undefined when the timer fires).
+        if (evt && performance.now() < armedAt) return;
         if (evt && evt.type === 'keydown') evt.preventDefault();
         if (dismissed) return;
         dismissed = true;
+        if (root.__heroAutoTimer) clearTimeout(root.__heroAutoTimer);
         root.classList.add('is-exiting');
         root.classList.remove('is-visible');
         document.removeEventListener('keydown', dismiss, true);
@@ -46175,6 +46192,11 @@
       }
       root.addEventListener('click', dismiss);
       document.addEventListener('keydown', dismiss, true);
+      // Auto-dismiss on normal boot so the splash never lingers; demo mode
+      // (?hero=1) and pill-reopen pass no autoMs and stay until dismissed.
+      if (autoMs && autoMs > 0) {
+        root.__heroAutoTimer = setTimeout(function () { dismiss(); }, autoMs);
+      }
       var tasks = [
         loadLive().then(function (live) {
           state.liveIds = live.ids || [];
@@ -46232,7 +46254,10 @@
   // app.js) so it covers the app before any loading state can flash. The
   // pill waits for the footer to exist, hence ready().
   try {
-    if (shouldShowOnBoot() && document.body) openHero(true);
+    var forced = false;
+    try { forced = new URLSearchParams(window.location.search || '').get('hero') === '1'; } catch (_) {}
+    // Normal boot auto-dismisses after 2s; ?hero=1 (demo recording) stays.
+    if (shouldShowOnBoot() && document.body) openHero(true, forced ? 0 : 2000);
   } catch (err) {
     var boot = document.getElementById(HERO_ID);
     if (boot) boot.remove();
