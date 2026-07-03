@@ -14825,6 +14825,26 @@ def _read_notification_state(session_id):
     return None
 
 
+def _notification_is_blocking(notif):
+    """True only when a Notification-hook marker is a real input-blocking
+    PICKER (a permission/approval prompt), not the idle "Claude is waiting
+    for your input" notice Claude Code also fires through the same hook once
+    a turn ends and the CLI sits at the prompt.
+
+    Every `needs_approval` consumer (row chip, kanban card, `state` label)
+    must apply this filter, not just `bool(notif)` — otherwise a session that
+    finished its turn and is intentionally idle (e.g. a WatchTower worker
+    between tickets) reads as blocked-on-human forever, when it has in fact
+    simply ended and is ready for the next input.
+    """
+    if not notif:
+        return False
+    msg = str(notif.get("message") or "").lower()
+    if "waiting for your input" in msg or "waiting for input" in msg:
+        return False
+    return True
+
+
 def _notification_blocks_inject(session_id):
     """True only when the Notification marker is a real input-blocking PICKER
     (a permission/approval prompt) we must not type past.
@@ -14837,13 +14857,7 @@ def _notification_blocks_inject(session_id):
     when the session finishes its current step" while the session is in fact
     idle and waiting. Only genuine prompts (permission/approval) should queue.
     """
-    notif = _read_notification_state(session_id)
-    if not notif:
-        return False
-    msg = str(notif.get("message") or "").lower()
-    if "waiting for your input" in msg or "waiting for input" in msg:
-        return False
-    return True
+    return _notification_is_blocking(_read_notification_state(session_id))
 
 
 def _cleanup_stale_sidecars(live_session_ids):
@@ -15051,7 +15065,10 @@ def _add_sidecar_fields(entry):
             entry["question_option_details"] = ask_payload.get("option_details") or []
     # Notification hook signal — precise "Claude is asking for permission"
     # marker, replaces the brittle pending_tool/age heuristic on the UI side.
-    entry["needs_approval"] = bool(notif)
+    # CCC-459: exclude the idle "waiting for your input" notice — that fires
+    # once a turn ends and isn't a block on the human (see
+    # _notification_is_blocking).
+    entry["needs_approval"] = _notification_is_blocking(notif)
     entry["needs_approval_message"] = notif.get("message", "") if notif else ""
 
 
@@ -32994,7 +33011,7 @@ def _group_chat_participant_meta(session_id: str) -> dict:
             sc and sc.get("status") == "active"
             and (inflight or sc.get("tool"))
         )
-        meta["needs_approval"] = bool(notif)
+        meta["needs_approval"] = _notification_is_blocking(notif)
     return meta
 
 
@@ -45437,7 +45454,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     status["question_preamble"] = ""
                     status["question_options"] = []
                     status["question_option_details"] = []
-            status["needs_approval"] = bool(notif)
+            status["needs_approval"] = _notification_is_blocking(notif)
             status["needs_approval_message"] = notif.get("message", "") if notif else ""
             # Surface a count of CCC-initiated spawns so the client can
             # detect "a new session was just spawned (by an agent via
