@@ -744,6 +744,9 @@
         <aside class="status-rail" id="statusRail" aria-label="Session status rail">
           <div class="status-rail-resizer" id="statusRailResizer" role="separator" aria-orientation="vertical" aria-label="Resize status rail" aria-controls="statusRail" tabindex="0" title="Drag to resize the status rail; drag to the right edge to hide it"></div>
           <div class="status-rail-topbar" id="statusRailTopbar">
+            <!-- CCC-454: Verbose transcript toggle — keeps tool calls, command
+                 details, and thinking expanded in conversation views. -->
+            <button type="button" id="verboseToggleBtn" class="status-rail-annotate verbose-toggle-btn" title="Verbose transcript: keep tool calls, command details, and thinking expanded in conversation views." aria-label="Toggle verbose transcript" aria-pressed="false">&#8801; Verbose</button>
             <button type="button" id="statusRailAnnotateBtn" class="status-rail-annotate" title="Annotate the visible page and save a local note for agent context." aria-label="Annotate">&#9998; Annotate</button>
             <!-- Quick-close X — collapses the rail without having to drag
                  the resizer or find the topbar toggle. Wired below in

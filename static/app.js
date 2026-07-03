@@ -33486,6 +33486,23 @@
     return { display: full, full, className: '' };
   }
 
+  // CCC-454: Verbose transcript mode. When on, tool-call groups, command/edit
+  // disclosures, and thinking bodies render expanded instead of collapsed.
+  // Persisted so it survives reloads; the topbar toggle (left of Annotate)
+  // flips it and re-applies to already-rendered conversation DOM.
+  function convVerboseOn() {
+    try { return localStorage.getItem('ccc-conv-verbose') === '1'; } catch (_) { return false; }
+  }
+  function applyConvVerbose(on) {
+    document.querySelectorAll('.tool-call-group').forEach(g => {
+      // Never re-collapse a group holding an AskUserQuestion (CCC-46).
+      if (!on && g.querySelector('.tool-call.ask-user-question')) return;
+      g.classList.toggle('collapsed', !on);
+    });
+    document.querySelectorAll('details.tool-command-disclosure').forEach(d => { d.open = on; });
+    document.querySelectorAll('.thinking-block .t-body').forEach(b => { b.style.display = on ? 'block' : 'none'; });
+  }
+
   function renderToolCommandDisclosure(block, detail) {
     const command = String((block && block.command) || '').trim();
     if (!command) return '';
@@ -33500,7 +33517,7 @@
     const kindHtml = kind
       ? '<span class="tool-command-kind">' + escapeHtml(kind) + '</span>'
       : '';
-    return '<details class="tool-command-disclosure">'
+    return '<details class="tool-command-disclosure"' + (convVerboseOn() ? ' open' : '') + '>'
       + '<summary><span>' + escapeHtml(label) + '</span>' + kindHtml + '</summary>'
       + '<pre>' + escapeHtml(command) + '</pre>'
       + '</details>';
@@ -33528,7 +33545,7 @@
     const truncNote = editInput.truncated
       ? '<div class="tool-edit-truncated">… content truncated</div>'
       : '';
-    return '<details class="tool-command-disclosure tool-edit-disclosure">'
+    return '<details class="tool-command-disclosure tool-edit-disclosure"' + (convVerboseOn() ? ' open' : '') + '>'
       + '<summary><span>View edit</span></summary>'
       + '<div class="tool-edit-body">' + body + truncNote + '</div>'
       + '</details>';
@@ -34707,13 +34724,16 @@
           } else if (b.kind === 'thinking') {
             if (b.signature_only || !b.text) {
               // Signature-only: reasoning text not persisted (only signature survived
-              // a resume). Show a compact non-expandable marker so the turn stays
-              // visible as a record that thinking occurred.
-              blockParts.push('<div class="thinking-block thinking-block-silent"><span class="thinking-toggle">💭 thought</span></div>');
+              // a resume, or the model emitted encrypted thinking). Show a compact
+              // non-expandable marker so the turn stays visible as a record that
+              // thinking occurred — with a hint explaining why there's no body
+              // (CCC-454: a bare "thought" read as a rendering bug).
+              blockParts.push('<div class="thinking-block thinking-block-silent" title="The model thought here, but the reasoning text was not saved to the transcript (only an encrypted signature) — there are no details to show."><span class="thinking-toggle">💭 thought</span> <span class="thinking-silent-note">(reasoning not saved to transcript)</span></div>');
               hasNonTool = true;
             } else {
-              // Text present: visible block with a collapsed, expandable body.
-              blockParts.push('<div class="thinking-block"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">💭 Thinking</span><div class="t-body" style="display:none">' + escapeHtml(b.text) + '</div></div>');
+              // Text present: visible block with an expandable body (collapsed
+              // unless Verbose transcript mode is on — CCC-454).
+              blockParts.push('<div class="thinking-block"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">💭 Thinking</span><div class="t-body" style="display:' + (convVerboseOn() ? 'block' : 'none') + '">' + escapeHtml(b.text) + '</div></div>');
               hasNonTool = true;
             }
           }
@@ -34885,7 +34905,7 @@
         if (!_currentToolGroup || _currentToolGroup !== $view.lastElementChild) {
           // No open group, or another event closed it — start a new one.
           const grp = document.createElement('div');
-          grp.className = 'tool-call-group collapsed';
+          grp.className = 'tool-call-group' + (convVerboseOn() ? '' : ' collapsed');
           const _grpTs = eventStamp(ev.ts) || nowStamp();
           grp.dataset.renderTs = _grpTs;
           grp.innerHTML =
@@ -42880,6 +42900,20 @@
   // window — it does not depend on the main dashboard window being open.
   const $annotationFabBtn = document.getElementById('annotationFabBtn');
   if ($annotationFabBtn) $annotationFabBtn.addEventListener('click', annStart);
+
+  // CCC-454: Verbose transcript toggle (topbar, left of Annotate). Flips the
+  // persisted mode, restyles the button, and re-applies expansion state to the
+  // conversation DOM already on screen (future renders honor convVerboseOn()).
+  const $verboseToggleBtn = document.getElementById('verboseToggleBtn');
+  if ($verboseToggleBtn) {
+    $verboseToggleBtn.setAttribute('aria-pressed', convVerboseOn() ? 'true' : 'false');
+    $verboseToggleBtn.addEventListener('click', () => {
+      const on = !convVerboseOn();
+      try { localStorage.setItem('ccc-conv-verbose', on ? '1' : '0'); } catch (_) {}
+      $verboseToggleBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      applyConvVerbose(on);
+    });
+  }
 
   // ── In-app bug reporting ────────────────────────────────────────
   // Topbar link → modal → POST /api/bug-report → server shells out
