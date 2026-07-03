@@ -20938,6 +20938,93 @@ def _mark_pending_resume_retry(sid, now=None, delay=None):
     _pending_resume_retry_after[sid] = now + max(0.0, delay)
 
 
+# ── Terminal-queue drain safety (CCC-455) ───────────────────────────────────
+# A terminal-queue entry must NEVER be silently consumed: the 2026-07-02
+# incident (dd6f2efe) popped an entry while a foreign `claude --resume` still
+# owned the session, handed it to `wt send` (rc 0, transport=resume), and wt's
+# then-broken resume adapter lost the text — queue empty, transcript never
+# advanced. Three defenses below, all used by the watcher drain loop:
+#   1. failed deliveries re-queue at the FRONT with a retry backoff;
+#   2. wt-send deliveries are only PROVISIONALLY consumed — the receipt
+#      (WT-77) is polled until the transcript proves `landed`, and a verified
+#      `lost` re-queues the text and forces the retry to bypass wt;
+#   3. undeliverable-forever drops (dead session) log loudly instead of
+#      vanishing.
+_pending_terminal_retry_after = {}
+_TERMINAL_QUEUE_RETRY_DELAY_S = 60.0
+_terminal_drain_receipts = []          # [{sid, text, receipt_id, deadline, last_check}]
+_TERMINAL_DRAIN_RECEIPT_DEADLINE_S = 600.0
+_TERMINAL_DRAIN_RECEIPT_POLL_S = 15.0
+_terminal_drain_skip_wt = set()        # sids whose next drain attempt bypasses wt
+
+
+def _terminal_queue_retry_due(sid, now=None):
+    now = time.time() if now is None else float(now)
+    return now >= float(_pending_terminal_retry_after.get(sid, 0.0) or 0.0)
+
+
+def _mark_terminal_queue_retry(sid, now=None, delay=None):
+    now = time.time() if now is None else float(now)
+    delay = _TERMINAL_QUEUE_RETRY_DELAY_S if delay is None else float(delay)
+    _pending_terminal_retry_after[sid] = now + max(0.0, delay)
+
+
+def _requeue_terminal_input_front(sid, text):
+    """Put a popped-but-undelivered entry back where it came from (front,
+    preserving order relative to anything queued behind it)."""
+    with _pending_terminal_input_lock:
+        _pending_terminal_input_queue.setdefault(sid, []).insert(0, text)
+    _save_pending_inputs()
+
+
+def _verify_terminal_drain_receipts(now=None):
+    """Poll in-flight wt-send receipts for drained terminal-queue entries.
+
+    Bounded work: only entries this watcher actually handed to wt are tracked
+    (normally zero), each polled at most every _TERMINAL_DRAIN_RECEIPT_POLL_S.
+    `landed` = delivery proven against the transcript, done. `lost` = wt
+    verified the text never arrived — re-queue it and make the retry skip wt.
+    Deadline expiry with the receipt still unverified does NOT re-send (the
+    transcript may have absorbed the text in a form the needle can't match;
+    re-sending would double-deliver) — but it logs instead of vanishing."""
+    now = time.time() if now is None else float(now)
+    for item in list(_terminal_drain_receipts):
+        if now - float(item.get("last_check") or 0.0) < _TERMINAL_DRAIN_RECEIPT_POLL_S:
+            continue
+        item["last_check"] = now
+        rec = None
+        try:
+            proc = subprocess.run(
+                ["wt", "receipts", "get", item["receipt_id"]],
+                capture_output=True, text=True, timeout=10,
+            )
+            if proc.returncode == 0:
+                rec = json.loads(proc.stdout or "")
+        except (OSError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError):
+            rec = None
+        rec_status = (rec or {}).get("status") if isinstance(rec, dict) else None
+        if rec_status == "landed":
+            _terminal_drain_receipts.remove(item)
+        elif rec_status == "lost":
+            _terminal_drain_receipts.remove(item)
+            _terminal_drain_skip_wt.add(item["sid"])
+            _requeue_terminal_input_front(item["sid"], item["text"])
+            _mark_terminal_queue_retry(item["sid"], delay=5.0)
+            print(
+                f"[terminal-queue] wt-send receipt {item['receipt_id']} LOST — "
+                f"re-queued input for {item['sid']} (next attempt bypasses wt)",
+                flush=True,
+            )
+        elif now > float(item.get("deadline") or 0.0):
+            _terminal_drain_receipts.remove(item)
+            print(
+                f"[terminal-queue] wt-send receipt {item['receipt_id']} still "
+                f"unverified after {int(_TERMINAL_DRAIN_RECEIPT_DEADLINE_S)}s — "
+                f"treating as delivered for {item['sid']}",
+                flush=True,
+            )
+
+
 def _start_resume_queue_watcher() -> None:
     """Drain queued prompts once fire-and-watch engines or live terminal sessions go idle."""
     _load_pending_inputs()
@@ -21004,11 +21091,24 @@ def _start_resume_queue_watcher() -> None:
                     # The memoized _archive_session_is_live is ~free and is a
                     # strict superset of "injectable", so no live session is lost.
                     if not _archive_session_is_live(sid):
-                        removed = False
+                        dropped = None
                         with _pending_terminal_input_lock:
-                            removed = _pending_terminal_input_queue.pop(sid, None) is not None
-                        if removed:
+                            dropped = _pending_terminal_input_queue.pop(sid, None)
+                        if dropped:
+                            # Loud, not silent (CCC-455): this is the one place
+                            # queued user text is deliberately discarded.
+                            print(
+                                f"[terminal-queue] dropping {len(dropped)} queued "
+                                f"input(s) for dead session {sid}: "
+                                + "; ".join(repr(t[:80]) for t in dropped),
+                                flush=True,
+                            )
                             _save_pending_inputs()
+                        continue
+                    # Backoff gate (CCC-455): a sid whose last drain attempt
+                    # failed or re-parked waits out its retry window before we
+                    # spend another live-status probe on it.
+                    if not _terminal_queue_retry_due(sid):
                         continue
                     # CRITICAL guard — never flush queued input while an
                     # AskUserQuestion is in-flight. The watcher previously
@@ -21062,9 +21162,45 @@ def _start_resume_queue_watcher() -> None:
                         _save_pending_inputs()
                     if text is None:
                         continue
-                    _inject_text_into_session(sid, text, _from_terminal_queue=True)
+                    # CCC-455: a popped entry is only consumed by a PROVEN
+                    # delivery. Failure re-queues at the front (with backoff);
+                    # a wt-send handoff is tracked by receipt until the
+                    # transcript confirms it landed.
+                    result = None
+                    try:
+                        result = _inject_text_into_session(
+                            sid, text, _from_terminal_queue=True,
+                            skip_wt=(sid in _terminal_drain_skip_wt),
+                        )
+                    except Exception:
+                        result = None
+                    _terminal_drain_skip_wt.discard(sid)
+                    if not isinstance(result, dict):
+                        result = {"ok": False}
+                    if result.get("queued"):
+                        # The inject re-parked it itself (foreign live writer,
+                        # bg-undeliverable, invalid cwd) — entry is safe; back
+                        # off so a held session isn't re-driven every 5s tick.
+                        _mark_terminal_queue_retry(sid)
+                    elif not result.get("ok"):
+                        _requeue_terminal_input_front(sid, text)
+                        _mark_terminal_queue_retry(sid)
+                    elif result.get("via") == "wt-send" and result.get("receipt_id"):
+                        _terminal_drain_receipts.append({
+                            "sid": sid,
+                            "text": text,
+                            "receipt_id": result["receipt_id"],
+                            "deadline": time.time() + _TERMINAL_DRAIN_RECEIPT_DEADLINE_S,
+                            "last_check": 0.0,
+                        })
+                    else:
+                        _pending_terminal_retry_after.pop(sid, None)
                 except Exception:
                     pass
+            try:
+                _verify_terminal_drain_receipts()
+            except Exception:
+                pass
     threading.Thread(target=_watcher, daemon=True, name="resume-queue-watcher").start()
 
 

@@ -11578,6 +11578,86 @@ class TestWTMessagingBackendStage2(unittest.TestCase):
             run.assert_not_called()
 
 
+class TestTerminalQueueDrainSafety(unittest.TestCase):
+    """CCC-455: the terminal-queue drain must never silently consume an
+    entry. A wt-send handoff is provisional until its receipt verifies
+    `landed`; a verified `lost` re-queues the text (front) and forces the
+    retry to bypass wt."""
+
+    SID = "00000000-0000-4000-8000-00000000c455"
+
+    def setUp(self):
+        import server
+        self.server = server
+        self._cleanup_state()
+        self.addCleanup(self._cleanup_state)
+
+    def _cleanup_state(self):
+        self.server._terminal_drain_receipts.clear()
+        self.server._terminal_drain_skip_wt.discard(self.SID)
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue.pop(self.SID, None)
+        self.server._pending_terminal_retry_after.pop(self.SID, None)
+
+    def _receipt_item(self, **over):
+        item = {
+            "sid": self.SID,
+            "text": "hello from the queue",
+            "receipt_id": "rcpt-feedc0dec455",
+            "deadline": time.time() + 600,
+            "last_check": 0.0,
+        }
+        item.update(over)
+        return item
+
+    def _run_verify(self, wt_stdout, returncode=0):
+        self.server._terminal_drain_receipts.append(self._receipt_item())
+        fake = mock.Mock(returncode=returncode, stdout=wt_stdout)
+        with mock.patch.object(self.server.subprocess, "run", return_value=fake), \
+             mock.patch.object(self.server, "_save_pending_inputs"):
+            self.server._verify_terminal_drain_receipts()
+
+    def test_lost_receipt_requeues_front_and_skips_wt(self):
+        self._run_verify(json.dumps({"status": "lost"}))
+        self.assertEqual(self.server._terminal_drain_receipts, [])
+        self.assertIn(self.SID, self.server._terminal_drain_skip_wt)
+        with self.server._pending_terminal_input_lock:
+            self.assertEqual(
+                self.server._pending_terminal_input_queue.get(self.SID),
+                ["hello from the queue"],
+            )
+
+    def test_landed_receipt_is_consumed(self):
+        self._run_verify(json.dumps({"status": "landed"}))
+        self.assertEqual(self.server._terminal_drain_receipts, [])
+        self.assertNotIn(self.SID, self.server._terminal_drain_skip_wt)
+        with self.server._pending_terminal_input_lock:
+            self.assertNotIn(self.SID, self.server._pending_terminal_input_queue)
+
+    def test_pending_receipt_keeps_tracking_until_deadline(self):
+        self._run_verify(json.dumps({"status": "pending"}))
+        self.assertEqual(len(self.server._terminal_drain_receipts), 1)
+        # Past the deadline it is dropped WITHOUT re-sending (double-delivery
+        # guard) — the loud log is the trail.
+        self.server._terminal_drain_receipts[0]["deadline"] = time.time() - 1
+        self.server._terminal_drain_receipts[0]["last_check"] = 0.0
+        fake = mock.Mock(returncode=0, stdout=json.dumps({"status": "pending"}))
+        with mock.patch.object(self.server.subprocess, "run", return_value=fake), \
+             mock.patch.object(self.server, "_save_pending_inputs"):
+            self.server._verify_terminal_drain_receipts()
+        self.assertEqual(self.server._terminal_drain_receipts, [])
+        with self.server._pending_terminal_input_lock:
+            self.assertNotIn(self.SID, self.server._pending_terminal_input_queue)
+
+    def test_drain_loop_requeues_on_failed_delivery(self):
+        """Source pin: the watcher checks the inject result and re-queues at
+        the front on failure instead of fire-and-forget."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn("_requeue_terminal_input_front(sid, text)", server_py)
+        self.assertIn('skip_wt=(sid in _terminal_drain_skip_wt)', server_py)
+        self.assertIn("_verify_terminal_drain_receipts()", server_py)
+
+
 def test_inject_input_honors_wt_origin_marker():
     """WT-78: a delegate POST from wt carries origin=wt; the inject route must
     thread that into _inject_text_into_session and skip the wt-send hook there,
