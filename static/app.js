@@ -2080,10 +2080,6 @@
 
   // ── Repo selection state ──
   // The repo dropdown is a local archive filter, not a server-side switch.
-  // Keep this block early: worktrees, Vercel, terminal, and issue actions
-  // can all run during startup and need a concrete selected repo when scoped.
-  const ARCHIVE_FOLDER_ALL = '__all__';
-  const ARCHIVE_FOLDER_FILTER_KEY = 'ccc-archive-folder-filter';
   const _ARCHIVE_MODE_KEY = 'ccc-archive-mode';
   // Time-window filter for the Archived view (1d | 7d | all). Mirrors the In
   // Progress list's `_ipWindow`/`ccc-inprogress-window` pattern, but archived
@@ -2146,23 +2142,20 @@
     try { localStorage.setItem(BRIEF_EXPANDED_KEY, JSON.stringify([...s])); } catch (_) {}
   }
   let repoListState = { repos: [], current: '', recent: [] };
-  // Folder filtering removed: the conversation list always shows everything.
-  // Popout mode still scopes to its one repo. Normal mode is always ALL — a
-  // stale saved filter must not silently hide conversations now the dropdown
-  // is gone.
-  let archiveFolderFilter = (CONV_POPOUT_MODE && CONV_POPOUT_REPO_PATH)
-    ? CONV_POPOUT_REPO_PATH
-    : ARCHIVE_FOLDER_ALL;
 
   function _pathLeaf(path) {
     const parts = String(path || '').split('/').filter(Boolean);
     return parts[parts.length - 1] || String(path || '');
   }
 
-  function selectedRepoPath() {
-    return archiveFolderFilter && archiveFolderFilter !== ARCHIVE_FOLDER_ALL
-      ? archiveFolderFilter
-      : '';
+  // The conversation list has exactly ONE mode: all repos. There is no
+  // selectable "current repo" — that concept (repo dropdown / folder filter)
+  // was removed. The ONLY repo scoping left is the conversation popout, which
+  // is pinned to one repo via its boot URL (?repo_path=...). Anything that
+  // needs a repo in the main window derives it from the OPEN conversation
+  // (activeConvRepoPath) or an explicit control (spawn Folder picker).
+  function popoutRepoPath() {
+    return (CONV_POPOUT_MODE && CONV_POPOUT_REPO_PATH) ? CONV_POPOUT_REPO_PATH : '';
   }
 
   // The repo of the OPEN conversation — the correct source for topbar/session
@@ -2233,22 +2226,25 @@
     return (conversationsData || []).find(x => x && x.id === cid) || null;
   }
 
-  function selectedRepoLabel() {
-    const repoPath = selectedRepoPath();
+  function popoutRepoLabel() {
+    const repoPath = popoutRepoPath();
     if (!repoPath) return '';
     const match = (repoListState.repos || []).find(repo => repo.path === repoPath);
     return (match && (match.label || match.path)) || _pathLeaf(repoPath) || repoPath;
   }
 
-  function requireSelectedRepo(actionLabel) {
-    const repoPath = selectedRepoPath();
+  // Repo gate for actions that need a concrete repo (worktrees, terminal,
+  // quick-run spawn). The repo comes from the OPEN conversation — there is no
+  // global repo selection to fall back to.
+  function requireConvRepo(actionLabel) {
+    const repoPath = activeConvRepoPath() || popoutRepoPath();
     if (repoPath) return repoPath;
-    showOpToast((actionLabel || 'This action') + ' needs a concrete repo. Pick one from the repo dropdown first.', 'error');
+    showOpToast((actionLabel || 'This action') + ' needs a repo — open a conversation in that repo first.', 'error');
     return '';
   }
 
   function repoUrl(path, repoPath, extraParams) {
-    const concrete = repoPath || selectedRepoPath();
+    const concrete = repoPath || popoutRepoPath();
     if (!concrete) return '';
     const u = new URL(path, window.location.href);
     u.searchParams.set('repo_path', concrete);
@@ -2261,7 +2257,7 @@
   }
 
   function withRepoPath(body, repoPath) {
-    const concrete = repoPath || selectedRepoPath();
+    const concrete = repoPath || popoutRepoPath();
     const out = Object.assign({}, body || {});
     if (concrete) out.repo_path = concrete;
     return out;
@@ -2301,7 +2297,7 @@
     const row = (conversationsData || []).find(c =>
       c && c.source === 'backlog' && String(c.issue_number || '') === num
     );
-    return rowRepoPath(row) || selectedRepoPath();
+    return rowRepoPath(row) || popoutRepoPath();
   }
 
   function _pathParentLeaf(path) {
@@ -2310,9 +2306,9 @@
   }
 
   Object.assign(window, {
-    selectedRepoPath,
-    selectedRepoLabel,
-    requireSelectedRepo,
+    popoutRepoPath,
+    activeConvRepoPath,
+    requireConvRepo,
     repoUrl,
     withRepoPath,
     rowRepoPath,
@@ -4934,7 +4930,7 @@
       const row = (Array.isArray(conversationsData) ? conversationsData : [])
         .find(c => c && c.id === id);
       if ((row && row.source === 'backlog') || id.startsWith('backlog-issue-')) {
-        key = 'repo:' + (rowRepoPath(row) || selectedRepoPath() || 'unknown') + ':conv:' + id;
+        key = 'repo:' + (rowRepoPath(row) || popoutRepoPath() || 'unknown') + ':conv:' + id;
       } else {
         key = 'conv:' + id;
       }
@@ -9534,7 +9530,7 @@
   };
 
   function getLastConvKey() {
-    return 'ccc-last-conv:' + (selectedRepoPath() || 'all');
+    return 'ccc-last-conv:' + (popoutRepoPath() || 'all');
   }
 
   function getLastConvId() {
@@ -9546,7 +9542,7 @@
   }
 
   function getSplitStateKey() {
-    return 'ccc-split-state:' + (selectedRepoPath() || 'all');
+    return 'ccc-split-state:' + (popoutRepoPath() || 'all');
   }
 
   function saveSplitState() {
@@ -10208,7 +10204,7 @@
       real.session_cwd,
       real.session_cwd_exists,
       real.spawn_pid,
-      rowRepoPath(real) || selectedRepoPath()
+      rowRepoPath(real) || popoutRepoPath()
     );
     convLastLine = 0;
     _firstUserMsgRendered = false;
@@ -10337,7 +10333,7 @@
 
   async function loadConversationList() {
     try {
-      const repoPath = selectedRepoPath();
+      const repoPath = popoutRepoPath();
       if (!repoPath) {
         currentRepoBacklogData = [];
         conversationsLoaded = true;
@@ -10445,7 +10441,7 @@
           real.session_cwd,
           real.session_cwd_exists,
           real.spawn_pid,
-          rowRepoPath(real) || selectedRepoPath()
+          rowRepoPath(real) || popoutRepoPath()
         );
         // Reset the per-conv tail cursor so fetchConversationEvents pulls the
         // real JSONL from the start. Tool-grouping state must reset too —
@@ -10490,7 +10486,7 @@
     // feed and refresh the inline cache (_nyaItemsBySid). The Push-all
     // ship-log feed borrows the same DOM container, so skip while it owns it.
     if (_shipLogActive) return;
-    const repoPath = selectedRepoPath();
+    const repoPath = popoutRepoPath();
     // No repo selected → drive NYA off the cross-repo attention feed. The repo
     // dropdown was removed from the UI, so requiring a selection left NYA
     // permanently empty. The all-repos feed needs no selection (Attention API).
@@ -11542,7 +11538,7 @@
   function startFlowOrganizeRecord(targetEl) {
     flowOrganizeRecordSession = {
       started_at: Date.now(),
-      repo_path: selectedRepoPath() || '',
+      repo_path: popoutRepoPath() || '',
       before: flowSnapshotNodePositions(targetEl),
     };
     updateFlowOrganizeRecordState(targetEl);
@@ -11556,7 +11552,7 @@
     const changed = flowChangedPositionCount(before, after);
     const example = {
       id: 'flow-record-' + Date.now().toString(36),
-      repo_path: flowOrganizeRecordSession.repo_path || selectedRepoPath() || '',
+      repo_path: flowOrganizeRecordSession.repo_path || popoutRepoPath() || '',
       started_at: flowOrganizeRecordSession.started_at || Date.now(),
       stopped_at: Date.now(),
       before,
@@ -11701,7 +11697,7 @@
   }
 
   function newSessionObjectScopeKey() {
-    const cwd = (typeof getSpawnCwd === 'function' && getSpawnCwd()) || selectedRepoPath() || '';
+    const cwd = (typeof getSpawnCwd === 'function' && getSpawnCwd()) || popoutRepoPath() || '';
     return normalizeSpawnCwdPath(cwd) || '__default__';
   }
 
@@ -13084,7 +13080,7 @@
 
   function flowRepoLabel(path, rows) {
     const first = (rows || []).find(Boolean) || {};
-    return first.folder_label_chip || first.folder_label || selectedRepoLabel()
+    return first.folder_label_chip || first.folder_label || popoutRepoLabel()
       || (path === '__repo__' ? '' : _pathLeaf(path)) || 'Repo';
   }
 
@@ -13268,7 +13264,7 @@
 
   function flowCurrentRepoForDraft() {
     const selectedRow = openConvRow();
-    return rowRepoPath(selectedRow) || selectedRepoPath();
+    return rowRepoPath(selectedRow) || popoutRepoPath();
   }
 
   function focusFlowDraftInput(id) {
@@ -14494,7 +14490,7 @@
   function flowInspectorRepoItems(repoPath) {
     const items = [];
     (conversationsData || [])
-      .filter(row => row && flowIsVisibleSession(row) && (rowRepoPath(row) || row.folder_path || selectedRepoPath() || '__repo__') === repoPath)
+      .filter(row => row && flowIsVisibleSession(row) && (rowRepoPath(row) || row.folder_path || popoutRepoPath() || '__repo__') === repoPath)
       .sort((a, b) => flowRowTime(b) - flowRowTime(a))
       .forEach(row => items.push(flowInspectorSessionItemFromRow(row)));
     (flowDraftSessions || [])
@@ -14897,7 +14893,7 @@
 
     const groupsByRepo = new Map();
     const ensureRepoGroup = repoPath => {
-      const path = repoPath || selectedRepoPath() || '__repo__';
+      const path = repoPath || popoutRepoPath() || '__repo__';
       if (!groupsByRepo.has(path)) {
         groupsByRepo.set(path, {
           sessions: [],
@@ -14912,7 +14908,7 @@
       return group;
     };
     for (const row of rows) {
-      const repoPath = rowRepoPath(row) || row.folder_path || selectedRepoPath() || '__repo__';
+      const repoPath = rowRepoPath(row) || row.folder_path || popoutRepoPath() || '__repo__';
       ensureRepoGroup(repoPath).sessions.push(row);
     }
     for (const draft of draftSessions) {
@@ -20527,14 +20523,12 @@
       _convDedupIdx.set(_k, _dedupedConvs.length);
       _dedupedConvs.push(c);
     }
-    // CCC-52: when archiveFolderFilter is scoped to one repo (popout mode
-    // only — the main window's folder-picker dropdown was removed and it's
-    // always ALL there), drop cards whose repo path is outside that folder
-    // tree instead of just grouping them. Cards with no resolvable path are
-    // kept — we can't place them, so we don't hide them.
-    const _folderFilterPath = (archiveFolderFilter && archiveFolderFilter !== ARCHIVE_FOLDER_ALL)
-      ? String(archiveFolderFilter).replace(/\/+$/, '')
-      : '';
+    // CCC-52: the conversation popout is pinned to one repo — drop cards
+    // whose repo path is outside that folder tree. The main window has no
+    // folder filter (always all-repos), so this is popout-only. Cards with
+    // no resolvable path are kept — we can't place them, so we don't hide
+    // them.
+    const _folderFilterPath = String(popoutRepoPath() || '').replace(/\/+$/, '');
     const _cardInFolder = (c) => {
       if (!_folderFilterPath) return true;
       const rp = (typeof rowRepoPath === 'function' ? rowRepoPath(c) : '') || '';
@@ -23063,7 +23057,7 @@
     // and any id already present, to avoid duplicates. Pure read of
     // already-loaded state — no network/subprocess here.
     if (Array.isArray(crossRepoIssuesData) && crossRepoIssuesData.length) {
-      const _curRepo = (typeof selectedRepoPath === 'function' && selectedRepoPath()) || '';
+      const _curRepo = (typeof popoutRepoPath === 'function' && popoutRepoPath()) || '';
       const _seenIssueIds = new Set(_ghIssueConvs.map(c => c && c.id).filter(Boolean));
       const _otherRepoIssues = _crossRepoIssueArchiveRows().filter(r =>
         r && (r.issue_state || 'OPEN') === 'OPEN'
@@ -23143,7 +23137,7 @@
       } else {
         const _ghFlatIsSingleProject = _isSpecificFolderFilter || !_ghHasFolderChips;
         if (_ghFlatIsSingleProject) {
-          const _flatProjectKey = selectedRepoPath() || 'single-repo-gh-issues';
+          const _flatProjectKey = popoutRepoPath() || 'single-repo-gh-issues';
           _ghRows = _ghIssueProjectRowsHtml(
             _ghIssueConvs,
             _flatProjectKey,
@@ -25039,13 +25033,13 @@
 
   function repoPathForConversationPopout(convId, explicitRepoPath) {
     const row = rowForConversationId(convId);
-    return explicitRepoPath || rowRepoPath(row) || selectedRepoPath() || '';
+    return explicitRepoPath || rowRepoPath(row) || popoutRepoPath() || '';
   }
 
   function conversationPopoutUrl(convId, repoPath) {
     const u = new URL(window.location.pathname || '/', window.location.href);
     const row = rowForConversationId(convId);
-    const rowRepo = rowRepoPath(row) || repoPath || selectedRepoPath() || '';
+    const rowRepo = rowRepoPath(row) || repoPath || popoutRepoPath() || '';
     const addParam = (key, value, maxLen) => {
       if (value === undefined || value === null || value === '') return;
       const s = String(value);
@@ -25973,7 +25967,7 @@
     conversationsLoaded = false;
     await refreshArchiveData({ force: true });
     renderArchiveList($convSearch ? $convSearch.value : '');
-    if (selectedRepoPath()) await loadConversationList();
+    if (popoutRepoPath()) await loadConversationList();
     setTimeout(() => {
       if ($convRefreshBtn) $convRefreshBtn.classList.remove('spinning');
     }, 400);
@@ -27601,6 +27595,9 @@
     }
     mobileShowForCurrentMode();
     currentConversation = id;
+    // The terminal panel (index.html) keys its cwd off the open
+    // conversation's repo — tell it the repo may have changed.
+    try { window.dispatchEvent(new Event('ccc-repo-changed')); } catch (_) {}
     // Track recently-opened conversations for the mobile swipe-rotate gesture
     // (see _swipeRecent / wireConvSwipeRotate). Most-recent-first, de-duped,
     // capped at 4. Real conversation ids only — skip the new-session sentinel.
@@ -27720,7 +27717,7 @@
         sessionCwdByConv[id] || selectedConv.spawn_cwd || selectedConv.cwd,
         sessionCwdExistsByConv[id],
         sessionSpawnPidByConv[id],
-        rowRepoPath(selectedConv) || selectedConv.spawn_cwd || selectedRepoPath()
+        rowRepoPath(selectedConv) || selectedConv.spawn_cwd || popoutRepoPath()
       );
     } else {
       setCurrentSession(
@@ -27729,7 +27726,7 @@
         sessionCwdByConv[id] || (selectedRow && selectedRow.cwd) || null,
         sessionCwdExistsByConv[id],
         sessionSpawnPidByConv[id],
-        rowRepoPath(selectedConv) || selectedRepoPath()
+        rowRepoPath(selectedConv) || popoutRepoPath()
       );
     }
     // Update split panel input bar visibility
@@ -32061,7 +32058,7 @@
   // state is fresh; the per-worktree `git status` calls there have a 2s
   // timeout each so a hung worktree can't block the modal.
   async function openRepoWorktreesModal() {
-    const repoPath = requireSelectedRepo('Worktrees');
+    const repoPath = requireConvRepo('Worktrees');
     if (!repoPath) return;
     _renderWorktreesModal({
       worktrees: [],
@@ -36379,7 +36376,7 @@
     // exists as a visible UI element. Issues now surface as kanban cards
     // with an inline "Fix" button instead of a dedicated panel.
     if (!$issuesView) return;
-    const repoPath = selectedRepoPath();
+    const repoPath = popoutRepoPath();
     if (!repoPath) {
       issuesData = [];
       renderIssues(issuesData);
@@ -36446,7 +36443,7 @@
     });
     $issuesView.querySelectorAll('.issue-num').forEach(el => {
       el.addEventListener('click', () => {
-        renderIssueInConvPane(el.dataset.num, selectedRepoPath());
+        renderIssueInConvPane(el.dataset.num, popoutRepoPath());
       });
     });
     $issuesView.querySelectorAll('.summary-toggle').forEach(btn => {
@@ -37030,7 +37027,7 @@
     const sessRepo = sess ? (sess.repoPath || sess.cwd || '') : '';
     // The sidebar repo filter describes the LIST, not the open conversation —
     // only use it when no conversation is open.
-    const selectedRepo = sessionId ? '' : selectedRepoPath();
+    const selectedRepo = sessionId ? '' : popoutRepoPath();
     let repoPath = (_isAbsoluteLocalPath(rowRepo) ? rowRepo : '')
                 || (_isAbsoluteLocalPath(sessRepo) ? sessRepo : '')
                 || (_isAbsoluteLocalPath(selectedRepo) ? selectedRepo : '');
@@ -37528,7 +37525,7 @@
   }
 
   function _currentRepoArchiveFolder() {
-    const current = selectedRepoPath();
+    const current = popoutRepoPath();
     if (current) {
       const match = (repoListState.repos || []).find(repo => repo.path === current);
       return {
@@ -37680,22 +37677,6 @@
     });
     options.sort((a, b) => a.label.localeCompare(b.label));
     return options;
-  }
-
-  function setArchiveFolderFilter(value, opts = {}) {
-    // Folder filtering was removed: the conversation list always shows every
-    // conversation, and per-conversation repo context comes from the OPEN
-    // session (see activeConvRepoPath), never a global list filter — that
-    // global was the source of the localhost/Vercel "wrong repo" poisoning.
-    // Kept as a no-op so any orphaned caller (e.g. the repo-picker modal) is
-    // harmless. Force ALL so a stray call can never re-engage filtering.
-    if (archiveFolderFilter !== ARCHIVE_FOLDER_ALL) {
-      archiveFolderFilter = ARCHIVE_FOLDER_ALL;
-      try { localStorage.removeItem(ARCHIVE_FOLDER_FILTER_KEY); } catch (_) {}
-    }
-    if (opts.render !== false) {
-      try { renderArchiveList(document.getElementById('convSearch')?.value || ''); } catch (_) {}
-    }
   }
 
   const $gcActiveBtn = document.getElementById('gcActiveBtn');
@@ -38190,20 +38171,16 @@
     }
   }
 
-  // Per-repo archived group chats. Keyed by the canonical archive folder
-  // value: '__all__' for the All view, an absolute path otherwise.
+  // Archived group chats. All-repos in the main window; the conversation
+  // popout passes its pinned repo so the list stays scoped.
   // Refreshed alongside the regular archive (refreshArchiveData / poll).
   let _archivedGroupChats = [];
   async function refreshArchivedGroupChats() {
     try {
       let url = '/api/group-chats/archived';
-      // archiveFolderFilter holds either ARCHIVE_FOLDER_ALL or an absolute
-      // path. Pass the path through as repo_path; for "All folders" we
-      // intentionally omit it so the server returns every archived chat.
-      if (typeof archiveFolderFilter === 'string'
-          && archiveFolderFilter
-          && archiveFolderFilter !== ARCHIVE_FOLDER_ALL) {
-        url += '?repo_path=' + encodeURIComponent(archiveFolderFilter);
+      const _popoutRepo = popoutRepoPath();
+      if (_popoutRepo) {
+        url += '?repo_path=' + encodeURIComponent(_popoutRepo);
       }
       const data = await fetch(url).then(r => r.json());
       _archivedGroupChats = Array.isArray(data && data.chats) ? data.chats : [];
@@ -38212,105 +38189,10 @@
     }
   }
 
-  // ── Sidebar repo picker ──
-  // Legacy switcher code is intentionally dormant in the archive-filter UI.
-  // It stays for Phase C cleanup, but no control is rendered for it now.
-  const ALL_REPOS_SENTINEL = '__all_repos__';
-  const PICKER_SENTINEL = '__pick__';
-  const $sbRepoPicker = document.getElementById('sbRepoPicker');
-
-  // ── Multi-repo: peer registry ────────────────────────────────────────────
-  // The dropdown is a local filter: All or one concrete repo path. The peer
-  // registry still powers discoverability elsewhere, but selecting a repo no
-  // longer mutates server state or navigates away.
-  let peerState = { peers: [], identity: null };
-
-  async function loadPeerRegistry() {
-    let peers = [];
-    let identity = null;
-    try {
-      const [r1, r2] = await Promise.all([
-        fetch('/api/registry'),
-        fetch('/api/identity'),
-      ]);
-      if (r1.ok) {
-        const d1 = await r1.json();
-        peers = Array.isArray(d1.peers) ? d1.peers : [];
-      }
-      if (r2.ok) identity = await r2.json();
-    } catch (_) { /* best-effort — picker is decorative on failure */ }
-    peerState = { peers, identity };
-    return peerState;
-  }
-
-  function _appendAllReposPickerOption() {
-    if (!$sbRepoPicker) return;
-    const opt = document.createElement('option');
-    opt.value = ALL_REPOS_SENTINEL;
-    opt.textContent = 'All';
-    opt.title = "Browse conversations from every folder you've used with Claude Code.";
-    opt.selected = true;
-    $sbRepoPicker.appendChild(opt);
-  }
-
-  function _syncRepoPickerSelection() {
-    if (!$sbRepoPicker) return;
-    $sbRepoPicker.setAttribute('aria-hidden', 'false');
-    const desired = selectedRepoPath() || ALL_REPOS_SENTINEL;
-    if (desired && Array.from($sbRepoPicker.options).some(opt => opt.value === desired)) {
-      $sbRepoPicker.value = desired;
-    }
-    $sbRepoPicker.dataset.prev = $sbRepoPicker.value;
-  }
-
-  function _withArchiveModeOverride(url, on) {
-    try {
-      const u = new URL(url, window.location.href);
-      u.searchParams.set('ccc_archive', on ? '1' : '0');
-      return u.toString();
-    } catch (_) {
-      return url;
-    }
-  }
-
-  function renderPeerPickerSelect() {
-    if (!$sbRepoPicker) return;
-    $sbRepoPicker.innerHTML = '';
-    _appendAllReposPickerOption();
-
-    const knownRepos = (repoListState && repoListState.repos) ? repoListState.repos : [];
-    if (knownRepos.length) {
-      const grpRepos = document.createElement('optgroup');
-      grpRepos.label = 'Repos';
-      for (const repo of knownRepos) {
-        const opt = document.createElement('option');
-        opt.value = repo.path;
-        opt.textContent = repo.label || repo.path;
-        opt.title = repo.path;
-        grpRepos.appendChild(opt);
-      }
-      $sbRepoPicker.appendChild(grpRepos);
-    }
-
-    if (!knownRepos.length) {
-      const opt = document.createElement('option');
-      opt.value = '';
-      opt.textContent = 'No repos found';
-      opt.disabled = true;
-      $sbRepoPicker.appendChild(opt);
-    }
-
-    _syncRepoPickerSelection();
-  }
-
-  function updateRepoPickerVisibility() {
-    _syncRepoPickerSelection();
-  }
-
   // ── All-repos archive ───────────────────────────────────────────────────
   // Read-only browse of every conversation across every folder under
-  // ~/.claude/projects/. The sidebar always renders this view; the folder
-  // dropdown narrows the archive locally instead of switching repos.
+  // ~/.claude/projects/. The sidebar always renders this view — it is the
+  // ONLY mode; there is no repo picker / folder filter.
   let archiveData = [];
   let archiveLoaded = false;
   let _lastArchiveRenderFilter = null;
@@ -39510,7 +39392,6 @@
 
   async function setArchiveMode() {
     try { localStorage.setItem(_ARCHIVE_MODE_KEY, '1'); } catch (_) {}
-    updateRepoPickerVisibility();
     const $list = document.getElementById('convList');
     const $kanban = document.getElementById('kanbanBoard');
     const $flow = document.getElementById('flowBoard');
@@ -39540,7 +39421,6 @@
 
   (function wireArchiveMode() {
     if (READER_ONLY_POPOUT) return;
-    updateRepoPickerVisibility();
     const $search = document.getElementById('convSearch');
     if ($search) {
       $search.addEventListener('input', () => {
@@ -39623,21 +39503,19 @@
     }), 15 * 1000);
   })();
 
-  // Set up the In Group Chat polling exactly once at boot. Used to be
-  // inside setArchiveFolderFilter, which (a) leaked a fresh 15s timer
-  // on every folder-filter change and (b) meant a clean reload with
-  // archive_mode already on never registered the interval at all — so
-  // the In Group Chat section silently never appeared until the user
-  // touched the folder picker. Wire-once here is the right home.
+  // Set up the In Group Chat polling exactly once at boot. Used to live
+  // inside the (since-removed) folder-filter setter, which leaked a fresh
+  // 15s timer on every change and never registered at all on a clean
+  // reload. Wire-once here is the right home.
   (function wireGroupChatPolling() {
     if (READER_ONLY_POPOUT) return;
     try { pollGcActive(); } catch (_) {}
     setInterval(_gated('gcActive', () => { try { pollGcActive(); } catch (_) {} }), 15000);
   })();
 
-  // ── Legacy repo-list (used by the modal + custom-repos browser) ─────────
-  // Shared state so the modal can reuse what the dropdown already fetched
-  // and the dropdown can refresh itself after an add-via-modal.
+  // ── Known-repos list ─────────────────────────────────────────────────────
+  // repoListState powers repo labels, the spawn-cwd suggestions, and
+  // rowBelongsToKnownRepo. Loaded lazily by _hydrateArchiveSideData.
   async function loadRepoList() {
     const r = await fetch('/api/repo/list');
     const d = await r.json();
@@ -39650,327 +39528,6 @@
       if (currentConversation === '__new__') populateSpawnCwdPicker();
     } catch (_) {}
     return repoListState;
-  }
-
-  function renderPickerSelect() {
-    if (!$sbRepoPicker) return;
-    const { repos } = repoListState;
-    $sbRepoPicker.innerHTML = '';
-    _appendAllReposPickerOption();
-    for (const repo of repos) {
-      const opt = document.createElement('option');
-      opt.value = repo.path;
-      opt.textContent = repo.label || repo.path;
-      opt.title = repo.path;
-      $sbRepoPicker.appendChild(opt);
-    }
-    // Sentinel option — selecting it opens the modal instead of switching.
-    const sep = document.createElement('option');
-    sep.disabled = true;
-    sep.textContent = '──────────';
-    $sbRepoPicker.appendChild(sep);
-    const pick = document.createElement('option');
-    pick.value = PICKER_SENTINEL;
-    pick.textContent = 'Pick a repo…';
-    $sbRepoPicker.appendChild(pick);
-    // Remember current selection so we can restore on failure / cancel.
-    _syncRepoPickerSelection();
-  }
-
-  // Shared repo-picker handler used by both the dropdown and the modal.
-  // It only changes local UI filter state; the server has no active repo.
-  async function switchToRepo(targetPath, targetLabel) {
-    if (!targetPath) return;
-    setArchiveFolderFilter(targetPath);
-    showOpToast('Filtered to ' + (targetLabel || _pathLeaf(targetPath) || targetPath));
-  }
-
-  if ($sbRepoPicker && !CONV_POPOUT_MODE) {
-    // Initial: load both the peer registry (running CCC servers) and the
-    // legacy repo list (all known repos, including not-running ones for the
-    // "switch this server to…" group). Render once both are in.
-    (async () => {
-      try {
-        await Promise.all([loadPeerRegistry(), loadRepoList()]);
-        renderPeerPickerSelect();
-      } catch (e) { /* picker is best-effort — failure shouldn't break the page */ }
-    })();
-
-    // Poll the registry every 10s so a sibling server starting after page
-    // load shows up without a manual refresh. Pause when the tab is hidden.
-    // The repo list is comparatively static — we only refresh it on visibility
-    // change, not on every 10s tick.
-    let _peerPollId = null;
-    const _peerStartPoll = () => {
-      if (_peerPollId) return;
-      _peerPollId = setInterval(async () => { if (_pollerOff('peer')) return;
-        _pollerTick('peer');
-        await loadPeerRegistry();
-        renderPeerPickerSelect();
-      }, 10000);
-    };
-    const _peerStopPoll = () => {
-      if (!_peerPollId) return;
-      clearInterval(_peerPollId);
-      _peerPollId = null;
-    };
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
-        Promise.all([loadPeerRegistry(), loadRepoList()]).then(() => {
-          renderPeerPickerSelect();
-        });
-        _peerStartPoll();
-      } else {
-        _peerStopPoll();
-      }
-    });
-    if (document.visibilityState === 'visible') _peerStartPoll();
-
-    $sbRepoPicker.addEventListener('change', async () => {
-      const target = $sbRepoPicker.value;
-      const selectedLabel = $sbRepoPicker.options[$sbRepoPicker.selectedIndex]?.textContent || target;
-      if (!target) return;
-      if (target === ALL_REPOS_SENTINEL) {
-        await setArchiveMode();
-        return;
-      }
-      if (target === PICKER_SENTINEL) {
-        await openRepoPickerModal();
-        _syncRepoPickerSelection();
-        return;
-      }
-      setArchiveFolderFilter(target);
-    });
-
-    // Stash the current value so we can restore on failure.
-    $sbRepoPicker.addEventListener('focus', () => {
-      $sbRepoPicker.dataset.prev = $sbRepoPicker.value;
-    });
-  }
-
-  // ── Repo picker modal ──
-  const $rpm = document.getElementById('repoPickerModal');
-  const $rpmBackdrop = document.getElementById('rpmBackdrop');
-  const $rpmCancelBtn = document.getElementById('rpmCancelBtn');
-  const $rpmBrowseBtn = document.getElementById('rpmBrowseBtn');
-  const $rpmRecentLabel = document.getElementById('rpmRecentLabel');
-  const $rpmRecentList = document.getElementById('rpmRecentList');
-  const $rpmOtherLabel = document.getElementById('rpmOtherLabel');
-  const $rpmOtherList = document.getElementById('rpmOtherList');
-  const $rpmError = document.getElementById('rpmError');
-
-  function rpmShowError(msg) {
-    if (!$rpmError) return;
-    $rpmError.textContent = msg;
-    $rpmError.classList.add('visible');
-  }
-  function rpmClearError() {
-    if (!$rpmError) return;
-    $rpmError.textContent = '';
-    $rpmError.classList.remove('visible');
-  }
-  function renderRpmList($el, repos, current, opts) {
-    $el.innerHTML = '';
-    if (!repos.length) {
-      const empty = document.createElement('div');
-      empty.className = 'rpm-empty';
-      empty.textContent = 'No repos here yet.';
-      $el.appendChild(empty);
-      return;
-    }
-    const reorderable = !!(opts && opts.reorderable);
-    repos.forEach((repo, idx) => {
-      const row = document.createElement('div');
-      row.className = 'rpm-row';
-      // Move-up control (CCC-136): persists a manual order that wins over the
-      // recency/alphabetical default sort. Only the reorderable list (Recent)
-      // shows it; the top row's button is disabled.
-      if (reorderable) {
-        const up = document.createElement('button');
-        up.type = 'button';
-        up.className = 'rpm-move-up';
-        up.textContent = '↑';
-        up.title = 'Move this repo up';
-        up.setAttribute('aria-label', 'Move ' + (repo.label || repo.path) + ' up');
-        up.disabled = idx === 0;
-        up.addEventListener('click', (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          moveRepoUp(repo.path);
-        });
-        row.appendChild(up);
-      }
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'rpm-item';
-      if (repo.path === current) btn.classList.add('active');
-      const label = document.createElement('div');
-      label.className = 'rpm-item-label';
-      label.textContent = repo.label || repo.path;
-      if (repo.path === current) {
-        const badge = document.createElement('span');
-        badge.className = 'rpm-item-current';
-        badge.textContent = 'selected';
-        label.appendChild(badge);
-      }
-      const path = document.createElement('div');
-      path.className = 'rpm-item-path';
-      path.textContent = repo.path;
-      btn.appendChild(label);
-      btn.appendChild(path);
-      btn.addEventListener('click', () => {
-        if (repo.path === current) { closeRepoPickerModal(); return; }
-        closeRepoPickerModal();
-        switchToRepo(repo.path, repo.label || repo.path);
-      });
-      row.appendChild(btn);
-      $el.appendChild(row);
-    });
-  }
-
-  // CCC-136: a client-side manual repo order that the user sets with the ↑
-  // button in the picker. localStorage-backed (path -> rank), same pattern as
-  // flowNodePositions. Lower rank floats higher. Paths the user never moved
-  // have no entry and fall back to the server recency order — manual wins only
-  // for repos the user explicitly ordered.
-  const REPO_MANUAL_ORDER_KEY = 'ccc-repo-manual-order';
-  function loadRepoManualOrder() {
-    try {
-      const v = JSON.parse(localStorage.getItem(REPO_MANUAL_ORDER_KEY) || '{}');
-      return (v && typeof v === 'object') ? v : {};
-    } catch (_) { return {}; }
-  }
-  function saveRepoManualOrder(order) {
-    try { localStorage.setItem(REPO_MANUAL_ORDER_KEY, JSON.stringify(order)); } catch (_) {}
-  }
-  // Stable sort: manually-ranked repos first (by their rank), then the rest in
-  // their incoming (recency) order. Returns a new array; never mutates input.
-  function applyRepoManualOrder(list) {
-    const order = loadRepoManualOrder();
-    return list
-      .map((repo, i) => ({ repo, i }))
-      .sort((a, b) => {
-        const ra = order[a.repo.path];
-        const rb = order[b.repo.path];
-        const ha = ra !== undefined;
-        const hb = rb !== undefined;
-        if (ha && hb) return ra - rb || a.i - b.i;
-        if (ha) return -1;     // ranked repos float above unranked
-        if (hb) return 1;
-        return a.i - b.i;      // both unranked: keep recency order
-      })
-      .map(x => x.repo);
-  }
-  // Move a repo one slot up in the Recent list and persist the new order so it
-  // survives re-render (which previously re-applied the recency sort and undid
-  // any move — the reason "move up" appeared to do nothing).
-  function moveRepoUp(path) {
-    const current = _rpmRecentOrdered();
-    const idx = current.findIndex(r => r.path === path);
-    if (idx <= 0) return;  // already top or not in the recent list
-    const reordered = current.slice();
-    const [moved] = reordered.splice(idx, 1);
-    reordered.splice(idx - 1, 0, moved);
-    const order = {};
-    reordered.forEach((r, i) => { order[r.path] = i; });
-    saveRepoManualOrder(order);
-    renderRpmLists();
-  }
-
-  // The Recent list as currently ordered (recency from server, then the user's
-  // manual overrides). Shared by render + move so both agree on positions.
-  function _rpmRecentOrdered() {
-    const { repos, recent } = repoListState;
-    const byPath = {};
-    for (const r of repos) byPath[r.path] = r;
-    const recentRepos = [];
-    for (const p of (recent || [])) {
-      if (byPath[p]) recentRepos.push(byPath[p]);
-    }
-    return applyRepoManualOrder(recentRepos);
-  }
-
-  function renderRpmLists() {
-    const { repos, recent } = repoListState;
-    const current = selectedRepoPath();
-    const recentSet = new Set(recent || []);
-    // Recent: intersection of recent[] and repos[], in recency order, then the
-    // user's manual ↑ overrides applied on top (CCC-136).
-    const recentRepos = _rpmRecentOrdered();
-    // Other: everything else, alphabetical by label (load_known_repos already
-    // returns them alphabetical but recency-sort may have reordered).
-    const other = repos.filter(r => !recentSet.has(r.path))
-      .slice()
-      .sort((a, b) => (a.label || a.path).localeCompare(b.label || b.path));
-    if (recentRepos.length) {
-      $rpmRecentLabel.style.display = '';
-      $rpmRecentList.style.display = '';
-      renderRpmList($rpmRecentList, recentRepos, current, { reorderable: true });
-    } else {
-      $rpmRecentLabel.style.display = 'none';
-      $rpmRecentList.style.display = 'none';
-    }
-    renderRpmList($rpmOtherList, other, current);
-  }
-
-  async function openRepoPickerModal() {
-    if (!$rpm) return;
-    rpmClearError();
-    // Refresh from server so the modal reflects any repos added elsewhere.
-    try { await loadRepoList(); } catch (_) { /* use stale state */ }
-    renderRpmLists();
-    $rpm.classList.add('open');
-  }
-  // Exposed for inline <script> blocks that live outside this IIFE
-  // (e.g. the terminal panel in index.html). Without this, those
-  // blocks have no way to open the repo picker — the "Pick a repo"
-  // label in the terminal header was unclickable noise.
-  try { window.cccOpenRepoPicker = openRepoPickerModal; } catch (_) {}
-  function closeRepoPickerModal() {
-    if (!$rpm) return;
-    $rpm.classList.remove('open');
-  }
-
-  if ($rpmBackdrop) $rpmBackdrop.addEventListener('click', closeRepoPickerModal);
-  if ($rpmCancelBtn) $rpmCancelBtn.addEventListener('click', closeRepoPickerModal);
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && $rpm && $rpm.classList.contains('open')) {
-      closeRepoPickerModal();
-    }
-  });
-
-  if ($rpmBrowseBtn) {
-    $rpmBrowseBtn.addEventListener('click', async () => {
-      rpmClearError();
-      $rpmBrowseBtn.disabled = true;
-      const prevText = $rpmBrowseBtn.textContent;
-      $rpmBrowseBtn.textContent = 'Waiting for folder selection…';
-      try {
-        // Native macOS folder chooser via osascript, server-side. Blocks
-        // until the user picks or cancels — that's fine because the server
-        // is threaded.
-        const r = await fetch('/api/fs/pick-folder', { method: 'POST' });
-        const d = await r.json();
-        if (d.cancelled) return;  // user clicked Cancel — no-op
-        if (!d.ok) { rpmShowError(d.error || 'Could not open folder picker.'); return; }
-        // Persist the new path so it appears in the picker, then filter to it.
-        const addRes = await fetch('/api/repo/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: d.path }),
-        });
-        const addD = await addRes.json();
-        if (!addD.ok) { rpmShowError(addD.error || 'Could not register the picked folder.'); return; }
-        closeRepoPickerModal();
-        const picked = (addD.repos || []).find(r => r.path === addD.path);
-        switchToRepo(addD.path, picked ? (picked.label || picked.path) : addD.path);
-      } catch (e) {
-        rpmShowError(String(e.message || e));
-      } finally {
-        $rpmBrowseBtn.disabled = false;
-        $rpmBrowseBtn.textContent = prevText;
-      }
-    });
   }
 
   // View menu — open/close popover containing the secondary toggles.
@@ -40541,7 +40098,10 @@
       if (!prompt) return;
       const isPkoodPrefix = prompt.startsWith('pkood:');
       const engine = isPkoodPrefix ? 'pkood' : getSpawnEngine();
-      const repoPath = requireSelectedRepo('New session');
+      // Spawn folder: the composer's Folder picker (persisted last choice)
+      // wins; otherwise fall back to the open conversation's repo.
+      const repoPath = (typeof getSpawnCwd === 'function' && getSpawnCwd())
+        || requireConvRepo('New session');
       if (!repoPath) return;
       const $kptWorktreeToggle = document.getElementById('kptWorktreeToggle');
       const useWorktree = !!($kptWorktreeToggle && $kptWorktreeToggle.checked);
@@ -42116,7 +41676,7 @@
       url: window.location.href,
       title: document.title || '',
       session_id: (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '',
-      repo_path: (typeof selectedRepoPath === 'function' && selectedRepoPath()) || '',
+      repo_path: (typeof popoutRepoPath === 'function' && popoutRepoPath()) || '',
       rect,
       viewport_crop: contextRect,
       device_pixel_ratio: screen.device_pixel_ratio || (window.devicePixelRatio || 1),
@@ -42710,7 +42270,7 @@
         url: '',
         title: 'Screen capture',
         session_id: (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '',
-        repo_path: (typeof selectedRepoPath === 'function' && selectedRepoPath()) || '',
+        repo_path: (typeof popoutRepoPath === 'function' && popoutRepoPath()) || '',
         screenshot_b64: capture.image_b64,
       };
       try {
@@ -43767,14 +43327,12 @@
 
     // Default selection priority:
     //   1. User's last spawn cwd (localStorage)
-    //   2. Active folder filter, if it's a specific folder (not "All")
+    //   2. The popout's pinned repo (conversation popout only)
     //   3. First known repo option
     let saved = '';
     try { saved = normalizeSpawnCwdPath(localStorage.getItem(SPAWN_CWD_KEY) || ''); } catch (_) {}
-    const filterVal = (typeof archiveFolderFilter !== 'undefined' && typeof ARCHIVE_FOLDER_ALL !== 'undefined' && archiveFolderFilter !== ARCHIVE_FOLDER_ALL)
-      ? archiveFolderFilter : '';
     const defaultPath = saved
-      || filterVal
+      || popoutRepoPath()
       || (options[0] && (options[0].value || options[0].path))
       || '';
 
@@ -44598,9 +44156,9 @@
     const prompt = body;
     const engine = getSpawnEngine();
     const spawnCwd = (typeof getSpawnCwd === 'function') ? getSpawnCwd() : '';
-    const launchCwd = spawnCwd || selectedRepoPath();
+    const launchCwd = spawnCwd || popoutRepoPath();
     const knownRepo = findSpawnCwdRepo(launchCwd);
-    const repoPath = knownRepo ? knownRepo.path : (spawnCwd ? '' : selectedRepoPath());
+    const repoPath = knownRepo ? knownRepo.path : (spawnCwd ? '' : popoutRepoPath());
     const displayPath = repoPath || launchCwd;
     if (!launchCwd) {
       showOpToast('New session needs a folder. Pick one from the cwd field first.', 'error');

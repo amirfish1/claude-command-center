@@ -1065,28 +1065,6 @@
 
 
 
-  <!-- Repo picker modal — opens when the user selects "Pick a repo…" from
-       the topbar dropdown. Shows a Recent section, the full known list,
-       and a Browse button that triggers the OS-native folder chooser. -->
-  <div id="repoPickerModal" class="rpm-overlay" role="dialog" aria-modal="true" aria-labelledby="rpmTitle">
-    <div class="rpm-backdrop" id="rpmBackdrop"></div>
-    <div class="rpm-dialog">
-      <div class="rpm-header">
-        <span class="rpm-header-title" id="rpmTitle">Pick a repo</span>
-        <span class="rpm-header-hint">Esc to cancel</span>
-      </div>
-      <div class="rpm-section-label" id="rpmRecentLabel" style="display:none;">Recent</div>
-      <div class="rpm-list" id="rpmRecentList" style="display:none;"></div>
-      <div class="rpm-section-label" id="rpmOtherLabel">All known</div>
-      <div class="rpm-list" id="rpmOtherList"></div>
-      <div class="rpm-error" id="rpmError"></div>
-      <div class="rpm-actions">
-        <button type="button" class="rpm-browse-btn" id="rpmBrowseBtn" title="Open the native macOS folder chooser">Browse&hellip;</button>
-        <button type="button" class="rpm-cancel-btn" id="rpmCancelBtn">Cancel</button>
-      </div>
-    </div>
-  </div>
-
   <!-- In-app update modal. Opened from #updPill when the local install is
        behind the latest GitHub release. Runs `git reset --hard origin/main`
        in the install dir and restarts the server in-place. -->
@@ -1786,34 +1764,28 @@
     let label = shown.split('/').filter(Boolean).pop() || 'repo';
     if (label.length > 24) label = '…' + label.slice(-23);
     $prompt.textContent = label;
-    // When the label is the "Pick a repo" placeholder (set from
-    // refreshCwd when no repo is selected), make it clickable so the
-    // user actually has a way out — previously the label just sat
-    // there with no affordance.
-    const isPlaceholder = (rel === 'Pick a repo');
-    $cwdLabel.classList.toggle('is-pickable', isPlaceholder);
-    $cwdLabel.style.cursor = isPlaceholder ? 'pointer' : '';
+    const isPlaceholder = (rel === 'No conversation open');
     $cwdLabel.title = isPlaceholder
-      ? 'No repo selected — click to pick one'
+      ? 'The terminal runs in the open conversation’s repo — open a conversation first'
       : (cwd || shown);
   }
-  $cwdLabel.addEventListener('click', () => {
-    if (!$cwdLabel.classList.contains('is-pickable')) return;
-    if (typeof window.cccOpenRepoPicker === 'function') {
-      try { window.cccOpenRepoPicker(); } catch (_) {}
-    }
-  });
-  // Re-poll cwd when the user picks a repo elsewhere (sidebar dropdown,
-  // repo-picker modal). Avoids the stale "Pick a repo" label sticking
+  // Re-poll cwd when the open conversation changes (app.js dispatches
+  // ccc-repo-changed on conversation switch). Avoids a stale cwd sticking
   // around until the user closes + reopens the terminal panel.
   window.addEventListener('ccc-repo-changed', () => {
     if ($panel.classList.contains('open')) refreshCwd();
   });
 
+  // The terminal runs in the OPEN conversation's repo — there is no global
+  // repo selection (the conversation list is always all-repos).
+  function terminalRepoPath() {
+    return (typeof window.activeConvRepoPath === 'function' && window.activeConvRepoPath()) || '';
+  }
+
   async function refreshCwd() {
-    const repoPath = selectedRepoPath();
+    const repoPath = terminalRepoPath();
     if (!repoPath) {
-      setCwdDisplay('', 'Pick a repo');
+      setCwdDisplay('', 'No conversation open');
       return;
     }
     try {
@@ -1902,8 +1874,11 @@
   async function runCommand(cmd) {
     if (!cmd.trim()) return;
     if (running) return;  // ignore Enter while running (per design)
-    const repoPath = requireSelectedRepo('Terminal');
-    if (!repoPath) return;
+    const repoPath = terminalRepoPath();
+    if (!repoPath) {
+      appendOutput('[no repo — the terminal runs in the open conversation\'s repo; open a conversation first]\n', 'err');
+      return;
+    }
     appendOutput((($prompt.textContent || 'repo')) + ' $ ' + cmd + '\n', 'cmd');
     pushHistory(cmd);
     setRunning(true);
@@ -2002,7 +1977,7 @@
 
   async function cancelRunning() {
     if (!running) return;
-    const repoPath = selectedRepoPath();
+    const repoPath = terminalRepoPath();
     try {
       await fetch('/api/term/cancel', {
         method: 'POST',
@@ -2095,20 +2070,11 @@
   let _debounceT = null;
   let _selectedUuid = null;
 
-  // Resolve the current repo for the "this repo only" filter. Prefer the
-  // global repoListState the rest of the UI maintains; fall back to a
-  // one-off fetch if it hasn't loaded yet.
+  // Resolve the repo for the "this repo only" filter: the OPEN conversation's
+  // repo (there is no global repo selection — the list is always all-repos).
   async function currentRepoCwd() {
     try {
-      if (typeof selectedRepoPath === 'function' && selectedRepoPath()) {
-        return selectedRepoPath();
-      }
-    } catch (e) { /* fall through */ }
-    try {
-      const r = await fetch('/api/repo/list');
-      if (!r.ok) return '';
-      const j = await r.json();
-      return '';
+      return (typeof window.activeConvRepoPath === 'function' && window.activeConvRepoPath()) || '';
     } catch (e) { return ''; }
   }
 

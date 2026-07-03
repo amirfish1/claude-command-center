@@ -2294,19 +2294,26 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("#cccBreadcrumb .ccc-proc-checked { display: none; }", app_css)
         self.assertNotIn("(stale ? 'headless ⚠' : 'headless') + (streaming ? ' · stream-json' : '')", app_js)
 
-    def test_terminal_pick_a_repo_label_is_clickable(self):
-        """The terminal panel's "Pick a repo" placeholder used to be
-        passive text — user had no way to actually pick a repo from
-        there. The placeholder now opens window.cccOpenRepoPicker
-        (the existing repo-picker modal exposed for non-IIFE
-        callers)."""
+    def test_terminal_repo_comes_from_open_conversation(self):
+        """The repo picker (dropdown + modal) is gone: the conversation
+        list has exactly one mode (all repos), and anything needing a
+        concrete repo derives it from the OPEN conversation. The
+        terminal panel must resolve its repo via activeConvRepoPath
+        and refresh when the open conversation changes — no picker."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        # App.js exposes the picker for inline callers outside the IIFE.
-        self.assertIn("window.cccOpenRepoPicker = openRepoPickerModal", app_js)
-        # Terminal panel wires the click to the exposed picker.
-        self.assertIn("cccOpenRepoPicker", index_html)
-        self.assertIn("is-pickable", index_html)
+        # The picker machinery must not come back.
+        for gone in ("cccOpenRepoPicker", "repoPickerModal", "sbRepoPicker",
+                     "archiveFolderFilter", "selectedRepoPath", "requireSelectedRepo"):
+            self.assertNotIn(gone, app_js, gone)
+            self.assertNotIn(gone, index_html, gone)
+        # App.js exposes the open-conversation repo for inline scripts.
+        self.assertIn("activeConvRepoPath,", app_js)
+        # Terminal panel keys its repo off the open conversation and
+        # re-resolves cwd when the conversation switches.
+        self.assertIn("window.activeConvRepoPath", index_html)
+        self.assertIn("ccc-repo-changed", index_html)
+        self.assertIn("ccc-repo-changed", app_js)
 
     def test_annotation_text_strips_lone_surrogates(self):
         """An unpaired UTF-16 surrogate code point (U+D800..U+DFFF)

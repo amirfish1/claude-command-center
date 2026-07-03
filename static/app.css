@@ -330,7 +330,6 @@
   body.flow-popout .conv-search-bar,
   body.flow-popout #convSearchWrap,
   body.flow-popout #convSearch,
-  body.flow-popout #convFolderFilter,
   body.flow-popout #convList,
   body.flow-popout #kanbanBoard,
   body.flow-popout .coord-toolbar,
@@ -8364,64 +8363,6 @@
     color: var(--text-muted, #8b949e); padding: 16px; text-align: center;
   }
 
-  /* ── Repo picker modal ─────────────────────────────────────────────
-     Opened when the user selects "Pick a repo…" from the dropdown.
-     Shares the nsm-* overlay pattern for visual consistency. */
-  .rpm-overlay { position: fixed; inset: 0; z-index: 9999;
-    display: none; align-items: center; justify-content: center; }
-  .rpm-overlay.open { display: flex; }
-  .rpm-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.65);
-    backdrop-filter: blur(4px); }
-  .rpm-dialog { position: relative; width: min(620px, 92vw);
-    max-height: 80vh; background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 12px;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
-  .rpm-header { display: flex; justify-content: space-between; align-items: baseline; }
-  .rpm-header-title { font-size: 16px; font-weight: 600; color: var(--text); }
-  .rpm-header-hint { font-size: 11px; color: var(--text-muted); }
-  .rpm-section-label { font-size: 10px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted);
-    margin-top: 4px; }
-  .rpm-list { display: flex; flex-direction: column; gap: 2px;
-    max-height: 220px; overflow-y: auto; border: 1px solid var(--border);
-    border-radius: 6px; padding: 4px; background: var(--bg); }
-  .rpm-row { display: flex; align-items: stretch; gap: 2px; }
-  .rpm-row .rpm-item { flex: 1 1 auto; min-width: 0; }
-  /* Move-up control (CCC-136): nudge a repo higher in the Recent list. */
-  .rpm-move-up { flex: 0 0 auto; align-self: stretch; width: 28px;
-    border: none; border-radius: 4px; background: transparent;
-    color: var(--text-muted); cursor: pointer; font-size: 13px; line-height: 1; }
-  .rpm-move-up:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
-  .rpm-move-up:disabled { opacity: 0.3; cursor: default; }
-  .rpm-item { display: flex; flex-direction: column; gap: 2px;
-    padding: 8px 10px; border-radius: 4px; cursor: pointer;
-    background: transparent; border: none; color: var(--text); text-align: left; }
-  .rpm-item:hover { background: var(--surface-2); }
-  .rpm-item.active { background: rgba(88,166,255,0.12); }
-  .rpm-item .rpm-item-label { font-size: 13px; font-weight: 500; }
-  .rpm-item .rpm-item-path { font-size: 11px; color: var(--text-muted);
-    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rpm-item .rpm-item-current { font-size: 10px; color: var(--accent); font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.05em; margin-left: 6px; }
-  .rpm-empty { padding: 12px; color: var(--text-muted); font-size: 12px;
-    font-style: italic; text-align: center; }
-  .rpm-divider { height: 1px; background: var(--border); margin: 2px 0; }
-  .rpm-actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
-  .rpm-browse-btn { padding: 8px 14px; font-size: 13px; border-radius: 6px;
-    border: 1px solid var(--accent); background: transparent; color: var(--accent);
-    cursor: pointer; font-weight: 500; }
-  .rpm-browse-btn:hover { background: rgba(88,166,255,0.1); }
-  .rpm-browse-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .rpm-cancel-btn { padding: 8px 14px; font-size: 13px; border-radius: 6px;
-    border: 1px solid var(--border); background: var(--bg); color: var(--text);
-    cursor: pointer; margin-left: auto; }
-  .rpm-cancel-btn:hover { background: var(--surface-2); }
-  .rpm-error { font-size: 12px; color: var(--red);
-    background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3);
-    border-radius: 6px; padding: 8px 10px; display: none; }
-  .rpm-error.visible { display: block; }
-
   /* ── In-app update pill + modal ──────────────────────────────────
      Subtle "Update available" pill that appears in the topbar when
      the local __version__ is behind GitHub's latest release tag.
@@ -10423,15 +10364,6 @@
     align-self: center;
     color: var(--text-muted); text-transform: uppercase;
     letter-spacing: 0.5px; font-weight: 600;
-  }
-  .conv-list-header #convFolderFilter {
-    flex: 0 1 190px; padding: 6px 24px 6px 8px; border-radius: 6px;
-    border: 1px solid var(--border); background: var(--bg); color: var(--text);
-    font-size: 12px; outline: none; min-width: 86px; max-width: 240px;
-  }
-  .conv-list-header #convFolderFilter.needs-repo-attention {
-    border-color: var(--red);
-    box-shadow: 0 0 0 2px rgba(248,81,73,0.18);
   }
   /* Generic action button in the layout-agnostic topbar (Titles, View …).
      Matches the size of the repo picker so the row reads as one strip. */
