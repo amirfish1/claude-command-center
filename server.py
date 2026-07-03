@@ -34117,7 +34117,7 @@ def _try_wt_ask_for_headless_delivery(session_id, text, timeout_ms):
     return _map_wt_ask_json_to_ccc_result(payload)
 
 
-def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, mode="send"):
+def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, mode="send", wt_origin=False):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
     else `claude --resume` headless. Returns a dict with at least
@@ -34387,9 +34387,14 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
         # Stage 2 WatchTower messaging handover: this is the dormant-claude
         # fallback, the sole place this function decides delivery would be
         # a headless resume. See _try_wt_send_for_headless_delivery above.
-        wt_result = _try_wt_send_for_headless_delivery(session_id, text)
-        if wt_result is not None:
-            return wt_result
+        # wt_origin=True means this request arrived FROM wt's delegate
+        # adapter (WT-78 origin marker) — calling back into `wt send` here
+        # would recurse CCC -> wt -> CCC, so wt-originated requests go
+        # straight to the native resume.
+        if not wt_origin:
+            wt_result = _try_wt_send_for_headless_delivery(session_id, text)
+            if wt_result is not None:
+                return wt_result
         return _maybe_queue_on_invalid_cwd(
             session_id, text, status, resume_session_headless(session_id, text),
         )
@@ -49706,7 +49711,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 _record_interaction(sid)
                 text = _wrap_injected_text_with_announced_from(text, announced_from)
                 try:
-                    result = _inject_text_into_session(sid, text, mode=mode)
+                    result = _inject_text_into_session(
+                        sid, text, mode=mode,
+                        wt_origin=(str(payload.get("origin") or "").lower() == "wt"),
+                    )
                 except Exception as e:
                     # An uncaught exception anywhere in this deep, subprocess-
                     # heavy routing chain (AppleScript, `wt send`, headless

@@ -5282,6 +5282,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "Announced from: Gerry\n\nSTATUS: done",
                 mode="send",
+                wt_origin=False,
             )
         finally:
             httpd.shutdown()
@@ -5321,6 +5322,49 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "Use the selected scope",
                 mode="answer",
+                wt_origin=False,
+            )
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_inject_input_threads_wt_origin_marker(self):
+        """WT-78: a delegate POST from wt carries origin=wt; the route must
+        pass wt_origin=True so the wt-send hook is skipped (loop guard)."""
+        sid = "00000000-0000-4000-8000-000000000023"
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            with mock.patch.object(
+                self.server,
+                "_inject_text_into_session",
+                return_value={"ok": True, "via": "mock"},
+            ) as inject:
+                req = urllib.request.Request(
+                    base + "/api/inject-input",
+                    data=json.dumps({
+                        "session_id": sid,
+                        "text": "delivered by wt delegate",
+                        "origin": "wt",
+                    }).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5) as res:
+                    body = json.loads(res.read().decode("utf-8"))
+
+            self.assertTrue(body["ok"])
+            inject.assert_called_once_with(
+                sid,
+                "delivered by wt delegate",
+                mode="send",
+                wt_origin=True,
             )
         finally:
             httpd.shutdown()
@@ -11529,6 +11573,15 @@ class TestWTMessagingBackendStage2(unittest.TestCase):
             result = self.server._try_wt_ask_for_headless_delivery("sid-123", "hi", 5000)
             self.assertIsNone(result)
             run.assert_not_called()
+
+
+def test_inject_input_honors_wt_origin_marker():
+    """WT-78: a delegate POST from wt carries origin=wt; the inject route must
+    thread that into _inject_text_into_session and skip the wt-send hook there,
+    or a failed delivery recurses CCC -> wt -> CCC."""
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert 'wt_origin=(str(payload.get("origin") or "").lower() == "wt")' in server_py
+    assert "if not wt_origin:" in server_py
 
 
 def test_throughput_initial_route_is_registered():
