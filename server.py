@@ -34033,10 +34033,21 @@ def _try_wt_send_for_headless_delivery(session_id, text):
     """
     if not _wt_messaging_enabled() or not _wt_cli_available():
         return None
+    # --no-queue: a delivery wt can't complete NOW must fail (rc!=0) so we
+    # fall through to the native resume path, which owns queueing/retry.
+    # Without it wt parks the text in its outbox and exits 0 — CCC then
+    # tells the UI "delivered" for a message that may never drain (the
+    # 2026-07-02 silent text-loss incident: every dormant-session inject
+    # died in wt's resume adapter while the UI showed "Waking up headless").
+    # WATCHTOWER_DELEGATE_URL=off: CCC *is* wt's delegate — without this,
+    # wt's delegate adapter POSTs back to /api/inject-input, which calls
+    # `wt send` again, recursing until timeout.
+    env = dict(os.environ)
+    env["WATCHTOWER_DELEGATE_URL"] = "off"
     try:
         proc = subprocess.run(
-            ["wt", "send", session_id, text],
-            capture_output=True, text=True, timeout=30,
+            ["wt", "send", session_id, text, "--no-queue"],
+            capture_output=True, text=True, timeout=30, env=env,
         )
     except (OSError, subprocess.TimeoutExpired, ValueError):
         return None

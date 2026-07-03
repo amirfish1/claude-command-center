@@ -11467,6 +11467,24 @@ class TestWTMessagingBackendStage2(unittest.TestCase):
             self.assertIsNone(result)
             run.assert_not_called()
 
+    def test_send_hook_uses_no_queue_and_disables_delegate(self):
+        """wt send must run with --no-queue (a parked message exits 0 and CCC
+        would falsely report "delivered") and with WATCHTOWER_DELEGATE_URL=off
+        (CCC is wt's delegate; without it a failed resume recurses CCC->wt->CCC).
+        A nonzero rc falls through (None) to the native resume path."""
+        done = mock.Mock()
+        done.returncode = 1
+        with mock.patch.dict(os.environ, {"CCC_MESSAGING_BACKEND": "wt"}), \
+             mock.patch("shutil.which", return_value="/usr/local/bin/wt"), \
+             mock.patch.object(self.server.subprocess, "run", return_value=done) as run:
+            self.server._WT_CLI_PATH_CACHE = None
+            result = self.server._try_wt_send_for_headless_delivery("sid-123", "hi")
+        self.assertIsNone(result)
+        argv = run.call_args[0][0]
+        self.assertIn("--no-queue", argv)
+        env = run.call_args[1].get("env") or {}
+        self.assertEqual(env.get("WATCHTOWER_DELEGATE_URL"), "off")
+
     def test_ask_hook_noop_when_wt_missing(self):
         """Flag on but wt not on PATH -> _try_wt_ask_for_headless_delivery
         returns None without shelling out."""
