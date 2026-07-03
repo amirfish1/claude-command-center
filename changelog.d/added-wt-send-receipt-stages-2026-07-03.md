@@ -1,0 +1,1 @@
+- Sends routed through WatchTower now show the exact delivery stage on the pending message: transport-specific "Accepted" copy (live terminal / worker stdin / headless resume), receipt-backed verification polling, "Landed in transcript" confirmation, and an automatic native-resume fallback when a delivery is verified lost.
