@@ -8399,6 +8399,12 @@ SPAWN_DEFAULTS_FILE = COMMAND_CENTER_STATE_DIR / "spawn-defaults.json"
 # {pid, session_id, parent_session_id, cwd, spawned_at, name, log,
 # command_summary, model}.
 SPAWNED_PIDS_FILE = COMMAND_CENTER_STATE_DIR / "spawned-pids.json"
+# Persistent mapping from Codex thread_id -> parent Claude session_id. Written
+# when a CCC-spawned Codex session's thread_id is first discovered (the
+# thread_id isn't known at spawn time, so we can't write it to the spawn
+# registry entry before launch). Survives spawn-registry pruning so
+# parent-child nesting works even after the Codex session exits. (CCC-465)
+CODEX_PARENT_LINKS_FILE = COMMAND_CENTER_STATE_DIR / "codex-parent-links.json"
 
 # Per-session model + context override. Set by the click-to-switch picker
 # in the session card (see /api/session/<sid>/model). Schema:
@@ -19472,6 +19478,12 @@ def _codex_spawn_pid_by_thread_id():
             if not s.get("session_id"):
                 s["session_id"] = sid
                 _update_spawn_session_id_in_registry(s.get("pid"), sid)
+            parent_sid = s.get("parent_session_id") or ""
+            if parent_sid:
+                # Persist the link so it survives spawn-registry pruning.
+                # First-time only (idempotent); cheap dict check skips the
+                # file write on subsequent polls. (CCC-465)
+                _persist_codex_parent_link(sid, parent_sid)
             if sid not in out:
                 out[sid] = {
                     "pid": s.get("pid"),
@@ -19482,7 +19494,7 @@ def _codex_spawn_pid_by_thread_id():
                     "spawned_at": s.get("started") or "",
                     "prompt": s.get("prompt") or "",
                     "model": s.get("model") or "",
-                    "parent_session_id": s.get("parent_session_id") or "",
+                    "parent_session_id": parent_sid,
                 }
     return out
 
@@ -20023,6 +20035,9 @@ def find_codex_conversations(
     # O(1) dict hits (perf gate: no per-row DB work). Lets a spawned agent nest
     # under its parent in the Current-sessions tree. (CCC-298)
     codex_parent_by_child = _codex_spawn_parent_by_child()
+    # Durable CCC-spawn parent links (survive spawn-registry pruning). One
+    # read per scan; O(1) dict hits per row. (CCC-465)
+    codex_durable_parents = _load_codex_parent_links()
     # One batched, cached read of the codex goals sqlite for the whole scan —
     # per-row lookups are O(1) dict hits (perf gate: no per-row DB work).
     goals_by_sid = _codex_goals_snapshot()
@@ -20182,9 +20197,11 @@ def find_codex_conversations(
             "spawn_pid": spawn_pid,
             # Prefer the Codex spawn-edge parent so a spawned sub-agent nests
             # under the thread that spawned it in the Current-sessions tree;
-            # fall back to the CCC spawn-registry parent. (CCC-298)
+            # fall back to the durable CCC-spawn parent link (survives
+            # registry pruning), then the live spawn-registry parent. (CCC-298, CCC-465)
             "parent_session_id": (
                 codex_parent_by_child.get(sid)
+                or codex_durable_parents.get(sid)
                 or spawn_info.get("parent_session_id")
                 or ""
             ),
@@ -31336,6 +31353,58 @@ def _load_spawn_registry():
         print(f"  [spawn-registry] ignoring registry with unexpected shape (not a list)")
         return []
     return data
+
+
+_codex_parent_links_cache = {"data": None}
+_codex_parent_links_lock = threading.Lock()
+
+
+def _load_codex_parent_links():
+    """Return {codex_thread_id: parent_session_id} from the durable link file.
+
+    In-memory cache; refreshed when the file changes. Tolerant of missing or
+    malformed files — both yield an empty dict. (CCC-465)
+    """
+    with _codex_parent_links_lock:
+        cached = _codex_parent_links_cache["data"]
+        if cached is not None:
+            return cached
+    try:
+        data = json.loads(CODEX_PARENT_LINKS_FILE.read_text()) if CODEX_PARENT_LINKS_FILE.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    with _codex_parent_links_lock:
+        _codex_parent_links_cache["data"] = data
+    return data
+
+
+def _persist_codex_parent_link(thread_id, parent_session_id):
+    """Write thread_id -> parent_session_id to the durable link file.
+
+    Idempotent; first write wins. Called when the Codex thread_id is first
+    discovered for a CCC-spawned session that has a parent_session_id. (CCC-465)
+    """
+    if not thread_id or not parent_session_id:
+        return
+    with _codex_parent_links_lock:
+        try:
+            existing = json.loads(CODEX_PARENT_LINKS_FILE.read_text()) if CODEX_PARENT_LINKS_FILE.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+        if not isinstance(existing, dict):
+            existing = {}
+        if thread_id in existing:
+            return
+        existing[thread_id] = parent_session_id
+        try:
+            tmp = CODEX_PARENT_LINKS_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(existing, indent=2))
+            os.replace(tmp, CODEX_PARENT_LINKS_FILE)
+            _codex_parent_links_cache["data"] = existing
+        except OSError:
+            pass
 
 
 def _pid_process_state(pid):
@@ -47355,6 +47424,41 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except Exception:
                         pass
                 self.send_json({"ok": bool(item), "item": item})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+        if path == "/api/ux-fixes/run-once":
+            # Per-ticket "drain once" play button (CCC-437): spawn exactly one
+            # worker scoped to a single ref. Deliberately bypasses the queue's
+            # auto_drain policy — a one-click action on a non-auto-drain queue
+            # is the whole point (an auto-drain queue already has, or will
+            # get, a worker for any open ticket, so the frontend only shows
+            # this button on non-auto-drain rows).
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            ref = str(payload.get("ref") or "").strip()
+            if not ref:
+                self.send_json({"ok": False, "error": "ref required"}, 400)
+                return
+            spawn_once = getattr(_wt_workers, "spawn_run_once_worker", None) if _WT_WORKERS_AVAILABLE else None
+            if not callable(spawn_once):
+                self.send_json({"ok": False, "error": "WatchTower run-once action unavailable"}, 400)
+                return
+            item = _q.get(ref) if _q is not None else None
+            if not item:
+                self.send_json({"ok": False, "error": f"{ref} not found"}, 400)
+                return
+            queue = str(item.get("project") or "").strip()
+            if not queue:
+                self.send_json({"ok": False, "error": "ticket has no project/queue"}, 400)
+                return
+            try:
+                rec = spawn_once(queue, ref)
+                self.send_json({"ok": True, "worker_id": rec.get("worker_id"), "queue": queue})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
