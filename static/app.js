@@ -5792,9 +5792,11 @@
     const $view = getConvViewForPane(paneId) || getConvView();
     if ($view) {
       const pendingDiv = document.createElement('div');
-      pendingDiv.className = 'event user_text pending';
+      const pendingSteerHtml = userMessageSteerHtml(text, null, null);
+      pendingDiv.className = 'event user_text pending' + (pendingSteerHtml ? ' has-user-steer' : '');
       pendingDiv.innerHTML = '<span class="label">User</span>'
-        + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>';
+        + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>'
+        + pendingSteerHtml;
       $view.appendChild(pendingDiv);
       showOptimisticAgentIndicator($view);
       scrollConversationToEnd($view);
