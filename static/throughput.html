@@ -2038,18 +2038,20 @@
     function applyChartZoomRows(sourceRows, alignedRows) {
       const rows = Array.isArray(sourceRows) ? sourceRows : [];
       const aligned = Array.isArray(alignedRows) ? alignedRows : null;
-      const timedRows = rows
-        .map((row, index) => ({ row, index, ms: row && row._projected ? null : chartRowTimeMs(row) }))
+      const displayTimedRows = rows
+        .map((row, index) => ({ row, index, ms: chartRowTimeMs(row) }))
         .filter(item => item.ms != null);
-      if (timedRows.length < 2) {
+      const focusTimedRows = displayTimedRows.filter(item => !(item.row && item.row._projected));
+      if (displayTimedRows.length < 2 || focusTimedRows.length < 2) {
         if (chartZoomLastHours) chartZoomLastHours = false;
         return { rows, alignedRows: aligned, zoomable: false };
       }
-      const minMs = Math.min(...timedRows.map(item => item.ms));
-      const maxMs = Math.max(...timedRows.map(item => item.ms));
-      const cutoff = maxMs - CHART_ZOOM_HOURS * 3600000;
-      const zoomIndexes = timedRows
-        .filter(item => item.ms >= cutoff)
+      const minMs = Math.min(...displayTimedRows.map(item => item.ms));
+      const maxMs = Math.max(...displayTimedRows.map(item => item.ms));
+      const focusMaxMs = Math.max(...focusTimedRows.map(item => item.ms));
+      const cutoff = focusMaxMs - CHART_ZOOM_HOURS * 3600000;
+      const zoomIndexes = focusTimedRows
+        .filter(item => item.ms >= cutoff && item.ms <= focusMaxMs)
         .map(item => item.index);
       const zoomable = maxMs - minMs > CHART_ZOOM_HOURS * 3600000 && zoomIndexes.length >= 2 && zoomIndexes.length < rows.length;
       if (!zoomable) {

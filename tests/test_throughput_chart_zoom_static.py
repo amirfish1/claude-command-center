@@ -11,4 +11,6 @@ def test_throughput_chart_has_hover_zoom_control():
     assert ".chart-container:hover .chart-zoom-btn" in throughput_html
     assert "CHART_ZOOM_HOURS = 48" in throughput_html
     assert "applyChartZoomRows(" in throughput_html
+    assert "displayTimedRows" in throughput_html
+    assert "focusMaxMs" in throughput_html
     assert "chartZoomLastHours = !chartZoomLastHours" in throughput_html
