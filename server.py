@@ -44012,7 +44012,16 @@ def _morning_session_ids():
     for every strategy across all goal.md files that has a claude_session_id.
     Used to route sessions to the Morning Kanban vs. the Dev Kanban.
     """
-    import morning_store as _store
+    # Morning is a gitignored opt-in plugin (morning_store.py). In a fresh
+    # clone/worktree without it, this import would raise ModuleNotFoundError.
+    # This function is called on the default /api/conversations (per-repo) path
+    # to filter morning-routed sessions out of the Dev Kanban — so an unguarded
+    # import here 500s that request and breaks the conversation list load
+    # (OPS-75). Absent the plugin, no session is morning-routed → return {}.
+    try:
+        import morning_store as _store
+    except ModuleNotFoundError:
+        return {}
     out = {}
     try:
         goals = _store.load_all_goals()
