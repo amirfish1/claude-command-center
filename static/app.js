@@ -21322,11 +21322,10 @@
       } else {
         archiveBtn = '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>';
       }
-      const rowSizeHtml = (isBacklogRow || isGithubPrRow)
-        ? ''
-        : '<span class="conv-meta-inline">'
-          + '<span>' + formatSize(c.size) + '</span>'
-          + '</span>';
+      // CCC-467 follow-up: the transcript-size badge ("3MB") was dropped from
+      // the meta row — it wrapped onto a second line and is redundant with the
+      // size shown in the pane titlebar (.conv-pane-size, see CCC-280).
+      const rowSizeHtml = '';
       // Suppressed when the row sits under a folder
       // group header that already labels the folder — chip would be noise.
       const folderChipHtml = (c.folder_label_chip && !opts.suppressFolderChip)

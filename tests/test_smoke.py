@@ -1861,12 +1861,11 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const folderChipHtml = (c.folder_label_chip && !opts.suppressFolderChip)", app_js)
-        row_size_js = app_js[
-            app_js.index("const rowSizeHtml = (isBacklogRow || isGithubPrRow)"):
-            app_js.index("// Suppressed when the row sits under a folder", app_js.index("const rowSizeHtml = (isBacklogRow || isGithubPrRow)"))
-        ]
-        self.assertIn("+ '<span>' + formatSize(c.size) + '</span>'", row_size_js)
-        self.assertNotIn("sourceBadge", row_size_js)
+        # CCC-467 follow-up: the transcript-size badge ("3MB") was dropped from
+        # the meta row — it wrapped onto a second line and is redundant with the
+        # size in the pane titlebar. rowSizeHtml is now a constant empty string.
+        self.assertIn("const rowSizeHtml = '';", app_js)
+        self.assertNotIn("+ '<span>' + formatSize(c.size) + '</span>'", app_js)
         self.assertIn("const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;", app_js)
         self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);", app_js)
         self.assertIn("const hoverMetaRowHtml = _hasMetaContent", app_js)
