@@ -21333,6 +21333,7 @@ def compute_ux_fixes_health():
             "fixer_session_id": None,
             "fixer_last_ts": 0.0,
             "fixer_progress_ts": 0.0,
+            "last_activity_ts": 0.0,
         })
         status = it.get("status")
         if status == "open":
@@ -21340,6 +21341,16 @@ def compute_ux_fixes_health():
             created = _uxq_parse_ts(it.get("created_at"))
             if created and (b["oldest_open_ts"] is None or created < b["oldest_open_ts"]):
                 b["oldest_open_ts"] = created
+        # Most recent touch across ANY ticket in the project (open or closed) —
+        # drives the health-strip's reverse-chronological order (CCC-458), same
+        # "newest activity first" convention as Current Sessions (CCC-421).
+        touch_ts = max(
+            _uxq_parse_ts(it.get("updated_at")),
+            _uxq_parse_ts(it.get("closed_at")),
+            _uxq_parse_ts(it.get("created_at")),
+        )
+        if touch_ts and touch_ts > b["last_activity_ts"]:
+            b["last_activity_ts"] = touch_ts
         # Only resolve a fixer for projects that have open tickets (candidacy
         # gate). Prefer the additive real-session field, then a UUID label, then
         # a registry name match — see _uxq_resolve_fixer_sid.
@@ -21373,16 +21384,23 @@ def compute_ux_fixes_health():
         idle_or_stale = (not last_progress) or ((now - last_progress) > _UXQ_STUCK_NO_PROGRESS_S)
         stuck = (not fixer_live) or idle_or_stale
         oldest_ts = b["oldest_open_ts"]
+        last_activity_ts = b["last_activity_ts"]
         out.append({
             "project": proj,
             "depth": b["depth"],
             "oldest_open_age_seconds": int(now - oldest_ts) if oldest_ts else None,
+            "last_activity_seconds": int(now - last_activity_ts) if last_activity_ts else None,
             "fixer_session_id": fixer,
             "fixer_live": fixer_live,
             "fixer_idle_or_stale": idle_or_stale,
             "stuck": stuck,
         })
-    out.sort(key=lambda r: (-r["depth"], r["project"]))
+    # Reverse-chronological (CCC-458): most-recently-touched queue first. A
+    # queue with no resolvable activity timestamp sorts last, not first.
+    out.sort(key=lambda r: (
+        r["last_activity_seconds"] if r["last_activity_seconds"] is not None else float("inf"),
+        r["project"],
+    ))
     return out
 
 
