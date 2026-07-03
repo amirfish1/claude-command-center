@@ -21213,16 +21213,24 @@
 
       const ctxPct = _convRowContextPct(c);
       let pctBadgeHtml = '';
+      let pctBadgeRowActionHtml = '';
       if (ctxPct) {
         const tip = ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens — click to run /compact';
         const pctLevel = ctxPct.pct > 60 ? ' is-danger' : (ctxPct.pct > 30 ? ' is-warn' : '');
         // Tagged as an action target so the delegated click handler can
         // offer /compact without scooping the surrounding row click.
-        pctBadgeHtml = '<span class="conv-pct-badge is-actionable' + pctLevel + '"'
-          + ' role="button" tabindex="0"'
+        const _pctBadge = tabIndex => '<span class="conv-pct-badge is-actionable' + pctLevel + '"'
+          + ' role="button" tabindex="' + tabIndex + '"'
           + ' data-role="conv-pct-compact"'
           + ' data-pct="' + ctxPct.pct + '"'
           + ' title="' + escapeAttr(tip) + '">' + ctxPct.pct + '%</span>';
+        pctBadgeHtml = _pctBadge(0);
+        // Second copy, rendered as the first item INSIDE the hover action
+        // bar (CCC-449): the absolutely-positioned bar extends left over the
+        // main-row badge on wide button sets, so CSS fades the main-row copy
+        // on hover and this one keeps click-to-/compact reachable (CCC-295).
+        // tabindex -1 so rows don't grow a duplicate tab stop.
+        pctBadgeRowActionHtml = _pctBadge(-1);
       }
       const qcBadgeHtml = pctBadgeHtml ? _convRowQualityBadge(c) : '';
       // Context-utilized % is rendered in the always-visible main row, just left
@@ -21453,7 +21461,7 @@
             // states (CSS uses `position: absolute` for one of them).
             + '<span class="conv-row-end">'
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
-            +   '<span class="conv-row-actions">' + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + archiveBtn + elevateObjectBtn + '</span>'
+            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + archiveBtn + elevateObjectBtn + '</span>'
             + '</span>'
           + '</div>'
           + evergreenMetaRowHtml

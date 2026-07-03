@@ -3986,6 +3986,21 @@
   .conv-item:focus-within .conv-row-end > .conv-rel {
     opacity: 0;
   }
+  /* CCC-449: with several buttons the hover action bar extends left past the
+     36px row-end slot and lands on the context-% badge, which punches through
+     the bar (z-index 6, CCC-295) — archive icon and % chip rendered on top of
+     each other. On hover the main-row badge now fades out like the time chip;
+     a duplicate % badge rendered as the first item inside the action bar keeps
+     click-to-/compact reachable while hovered (that copy is nested inside
+     .conv-row-actions, so the direct-child selectors below don't touch it). */
+  .conv-item:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-pct-badge,
+  .conv-item:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-qc-badge,
+  .conv-item:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-pct-badge,
+  .conv-item:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-qc-badge {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .conv-item .conv-qc-badge { transition: opacity 0.06s ease; }
   .conv-item .conv-row-meta { transition: opacity 0.06s ease; }
   .conv-item .conv-row-end > .conv-rel {
     flex: 0 0 auto;            /* override the column-width flex from the base rule */
