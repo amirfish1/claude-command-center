@@ -15674,12 +15674,13 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-row.is-closed .fq-chip { background: rgba(139,148,158,0.10) !important; color: var(--text-muted) !important; opacity: 0.6; }
 /* Closed-but-not-fully-resolved (CCC-420): resolution.unresolved means the
    worker closed the ticket but flagged something it couldn't finish. That
-   read identically to a clean close before (same grey dot) — mark it amber
-   like the blocked state so it doesn't disappear into "done and forgotten". */
-.fq-row.is-closed.has-unresolved .fq-status { background: var(--orange, #d29922); }
-.fq-row.is-closed.has-unresolved .fq-note { color: #e3b341; }
-.fq-chip.fq-unresolved { background: rgba(210,153,34,0.22); color: #e3b341; }
-.fq-row.is-closed.has-unresolved .fq-chip.fq-unresolved { opacity: 1 !important; background: rgba(210,153,34,0.22) !important; color: #e3b341 !important; }
+   read identically to a clean close before (same grey dot). Red, not amber
+   (CCC-465): a closed ticket with an open problem is a "needs attention"
+   signal, not a passive "working" one — amber was reserved for in_progress. */
+.fq-row.is-closed.has-unresolved .fq-status { background: var(--red, #f85149); }
+.fq-row.is-closed.has-unresolved .fq-note { color: #ff7b72; }
+.fq-chip.fq-unresolved { background: rgba(248,81,73,0.20); color: #ff7b72; }
+.fq-row.is-closed.has-unresolved .fq-chip.fq-unresolved { opacity: 1 !important; background: rgba(248,81,73,0.20) !important; color: #ff7b72 !important; }
 /* Triage chips (WT-FEATURES-23): type / priority / readiness + value/confidence,
    inline on the row so the queue view shows what the engine sees and picks first. */
 .fq-chips { display: inline-flex; flex-wrap: nowrap; flex-shrink: 0; gap: 2px; }
@@ -15717,11 +15718,12 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-prio-bump.is-top { opacity: 0 !important; pointer-events: none; }
 
-/* Blocked-work (WT-28): a ticket waiting on a human. Amber, sorted to the top. */
-.fq-chip.fq-blocked { background: rgba(210,153,34,0.22); color: #e3b341; }
-.fq-row.is-blocked { background: rgba(210,153,34,0.06); }
-.fq-row.is-blocked .fq-status { background: var(--orange, #d29922); }
-.fq-row.is-blocked .fq-note { color: #e3b341; }
+/* Blocked-work (WT-28): a ticket waiting on a human. Red (CCC-465) — it needs
+   you, so it "means business"; amber is reserved for in_progress. Sorted top. */
+.fq-chip.fq-blocked { background: rgba(248,81,73,0.20); color: #ff7b72; }
+.fq-row.is-blocked { background: rgba(248,81,73,0.06); }
+.fq-row.is-blocked .fq-status { background: var(--red, #f85149); }
+.fq-row.is-blocked .fq-note { color: #ff7b72; }
 /* Blocked panel inside the ticket detail modal. */
 /* ── Ticket Detail Modal (world-class redesign CCC-387/388) ── */
 .uxq-td-overlay {
