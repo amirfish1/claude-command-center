@@ -4876,19 +4876,8 @@
     font: inherit;
     cursor: pointer;
   }
-  .conv-item .conv-hover-meta-row .conv-object-chip.is-empty {
-    width: 20px;
-    min-width: 20px;
-    padding: 0;
-    justify-content: center;
-    border-color: rgba(188,140,255,0.42);
-    background: rgba(188,140,255,0.08);
-    font-weight: 700;
-  }
-  .conv-item .conv-hover-meta-row .conv-object-chip.is-empty:hover {
-    background: rgba(188,140,255,0.16);
-    color: var(--text);
-  }
+  /* CCC-467: the per-row empty "+" object chip was removed; assigning an
+     object now happens from the RHS rail (#statusRailAddObjectBtn). */
   .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip,
   .ccc-breadcrumb .conv-sidebar-session-id-chip {
     height: 20px;
@@ -5503,6 +5492,31 @@
     border-color: color-mix(in srgb, var(--orange) 35%, transparent);
     color: var(--orange);
   }
+  /* CCC-468: Trash — archived rows demoted out of the All tab's main flow
+   * into a collapsed section at the very bottom. Mirrors the sibling section
+   * header treatment; rows render dimmed so an expanded Trash still reads
+   * as "the discard pile", not more inbox. */
+  #convList .conv-trash-section {
+    margin-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  #convList .conv-trash-header {
+    width: 100%; display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px; background: transparent; border: 0; cursor: pointer;
+    color: var(--text-muted); font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.5px; font-weight: 600;
+  }
+  #convList .conv-trash-header:hover { color: var(--text); }
+  #convList .conv-trash-arrow { font-size: 11px; opacity: 0.7; }
+  #convList .conv-trash-count {
+    margin-left: auto;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1px 8px; font-size: 11px;
+    color: var(--text-muted); font-weight: 600;
+  }
+  #convList .conv-trash-section.collapsed .conv-trash-list { display: none; }
+  #convList .conv-trash-list .conv-item { opacity: 0.72; }
+  #convList .conv-trash-list .conv-item:hover { opacity: 1; }
   /* CCC-182: blinking in-row "needs you" marker. The "Needs you" SECTION was
    * removed (waiting rows kept jumping in/out of it); a waiting session now
    * stays put in its project group and blinks this orange dot instead. */
@@ -9594,6 +9608,24 @@
   body.chips-muted .conv-folder-group-header {
     border-left-color: var(--border) !important;
   }
+  /* CCC-467: in muted ("no colors") mode the meta-row chips lose their frame
+     entirely — no border, no fill — and shrink a touch, so the folder / object
+     / session-id chips read as quiet inline metadata rather than boxed pills. */
+  body.chips-muted .conv-item .conv-hover-meta-row .conv-folder-chip,
+  body.chips-muted .conv-item .conv-hover-meta-row .conv-object-chip,
+  body.chips-muted .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip {
+    border-color: transparent !important;
+    background: transparent !important;
+    color: var(--text-muted) !important;
+    font-size: 10px !important;
+    padding-left: 2px !important;
+    padding-right: 2px !important;
+  }
+  body.chips-muted .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip:hover,
+  body.chips-muted .conv-item .conv-hover-meta-row .conv-object-chip:hover {
+    background: rgba(139,148,158,0.10) !important;
+    color: var(--text) !important;
+  }
   body.chips-level .conv-folder-group[data-object-drop-zone] > .conv-folder-group-header {
     --chip-hue: var(--level-chip-hue, 190) !important;
   }
@@ -12713,6 +12745,29 @@ body.status-pos-right .conv-pane > .status-rail {
   display: block;
   width: 12px;
   height: 12px;
+}
+/* CCC-467: "+ Object" affordance in the rail head — assign the selected
+   session to an object, replacing the per-row "+" chip. */
+.status-rail-add-object-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--purple, #bc8cff);
+  background: rgba(188,140,255,0.10);
+  border: 1px solid rgba(188,140,255,0.32);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.status-rail-add-object-btn:hover,
+.status-rail-add-object-btn:focus-visible {
+  background: rgba(188,140,255,0.18);
+  color: var(--text);
+  outline: none;
 }
 .status-rail-title-input {
   width: 100%;

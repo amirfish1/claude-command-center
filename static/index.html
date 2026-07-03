@@ -542,6 +542,7 @@
               <div class="pop-submenu-panel">
                 <button class="pop-item" id="btnShowGhIssues" type="button" data-view-gh="show" role="menuitem"><span>Show GH issues</span></button>
                 <button class="pop-item" id="btnHideGhIssues" type="button" data-view-gh="hide" role="menuitem"><span>Hide GH issues</span></button>
+                <button class="pop-item" id="btnToggleSplash" type="button" data-splash-toggle role="menuitemcheckbox"><span class="pop-check" data-check-splash></span><span>Show splash on startup</span></button>
               </div>
             </details>
           </div>
@@ -763,6 +764,9 @@
                   <button type="button" id="statusRailTitleRenameBtn" class="status-rail-title-rename-btn" title="Rename session" aria-label="Rename session" style="display:none;">
                     <svg class="status-rail-title-rename-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
                   </button>
+                  <!-- CCC-467: assign-to-object moved off the per-row "+" chip
+                       to here — the RHS, for the selected session. -->
+                  <button type="button" id="statusRailAddObjectBtn" class="status-rail-add-object-btn" title="Add to object" aria-label="Add session to object" style="display:none;">+&#8202;Object</button>
                 </div>
                 <div class="status-rail-context">Context: Active</div>
               </div>

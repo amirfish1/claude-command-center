@@ -1935,19 +1935,23 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-object-chip,", app_css)
         self.assertIn(".conv-item.active .conv-hover-meta-row .conv-object-chip,", app_css)
 
-    def test_sidebar_hover_metadata_empty_object_chip_opens_picker(self):
-        """Rows with no object should show a small + chip that assigns an
-        existing object from a list."""
+    def test_sidebar_add_to_object_lives_in_rail_not_per_row_chip(self):
+        """CCC-467: the per-row "+" add-to-object chip is gone; assigning an
+        object now happens from the RHS status rail for the selected session,
+        via #statusRailAddObjectBtn. The underlying picker + assignment logic
+        is unchanged."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
 
-        self.assertIn('class="conv-object-chip is-empty"', app_js)
-        self.assertIn('data-role="assign-object-chip"', app_js)
+        # Per-row empty "+" chip is dropped.
+        self.assertNotIn('class="conv-object-chip is-empty"', app_js)
+        # Assign affordance moved to the rail head, wired to the same picker.
+        self.assertIn('id="statusRailAddObjectBtn"', index_html)
+        self.assertIn("const $statusRailAddObjectBtn = document.getElementById('statusRailAddObjectBtn');", app_js)
+        self.assertIn("_flowOpenObjectAssignPicker(sid, title);", app_js)
+        # Picker + assignment logic still present.
         self.assertIn("function _flowOpenObjectAssignPicker(sessionId, sessionTitle)", app_js)
         self.assertIn("flowNodeParents[flowNodeKey('session', sessionId)] = flowNodeKey('object', objectId);", app_js)
-        self.assertIn("$convList.querySelectorAll('[data-role=\"assign-object-chip\"]')", app_js)
-        self.assertIn(".conv-item .conv-hover-meta-row .conv-object-chip.is-empty", app_css)
-        self.assertIn("width: 20px;", app_css)
 
     def test_sidebar_titles_strip_leading_pasted_image_paths(self):
         """Current-session rows should show the human task, not the leading
