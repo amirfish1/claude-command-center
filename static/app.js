@@ -28576,15 +28576,29 @@
       const mine = rows.filter(r => _uxqInScope(r && r.project, proj));
       if (mine.length) rows = mine;  // scope when this project has open work
     }
-    // CCC-464: one reverse-chronological order for the WHOLE strip. The server
-    // already sorts open-ticket queues by last activity (CCC-458), but the
-    // drained/configured queues appended above landed at the tail regardless
-    // of recency — a queue drained minutes ago rendered below week-stale ones.
-    // No-activity queues sort last, ties break by name for a stable order.
+    // CCC-464 (revised): sort by what's displayed. Rows with open tickets sort
+    // by oldest_open_age_seconds descending (most backlogged = highest urgency
+    // first). Drained/CLEAR rows (depth=0) sort after open-ticket rows, within
+    // that group by last_activity_seconds ascending (most recently cleared first).
+    // Ties and no-data rows break by name for a stable order.
     rows.sort((a, b) => {
-      const la = (a && a.last_activity_seconds != null) ? a.last_activity_seconds : Infinity;
-      const lb = (b && b.last_activity_seconds != null) ? b.last_activity_seconds : Infinity;
-      if (la !== lb) return la - lb;
+      const aDepth = Number((a && a.depth) || 0);
+      const bDepth = Number((b && b.depth) || 0);
+      const aOpen = aDepth > 0;
+      const bOpen = bDepth > 0;
+      // Open-ticket rows before drained rows
+      if (aOpen !== bOpen) return aOpen ? -1 : 1;
+      if (aOpen && bOpen) {
+        // Both open: most backlogged (oldest) first
+        const aa = (a && a.oldest_open_age_seconds != null) ? Number(a.oldest_open_age_seconds) : -1;
+        const ba = (b && b.oldest_open_age_seconds != null) ? Number(b.oldest_open_age_seconds) : -1;
+        if (aa !== ba) return ba - aa;  // descending
+      } else {
+        // Both drained: most recently cleared first
+        const la = (a && a.last_activity_seconds != null) ? Number(a.last_activity_seconds) : Infinity;
+        const lb = (b && b.last_activity_seconds != null) ? Number(b.last_activity_seconds) : Infinity;
+        if (la !== lb) return la - lb;  // ascending (lower = more recent)
+      }
       return String((a && a.project) || '').localeCompare(String((b && b.project) || ''));
     });
     // auto_drain lives on the `queues` array (compute_queues_health), NOT on
