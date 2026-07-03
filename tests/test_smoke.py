@@ -3341,10 +3341,13 @@ class TestServerImports(unittest.TestCase):
         """The right-rail Original ask must not depend on the first user_text
         in an incremental render batch. A later status-summary user event can
         be first in that batch; the canonical row first_message is the stable
-        source of truth."""
+        anchor. But first_message is server-truncated (~200 chars), so when
+        the rendered event IS that message, the full event text wins (CCC-456)."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("function originalAskTextForEvent(ev, paneId)", app_js)
-        self.assertIn("const source = (conv && conv.first_message) || ev.text || '';", app_js)
+        self.assertIn("const canonical = (conv && conv.first_message) || '';", app_js)
+        self.assertIn("if (canonPrefix && norm(evText).startsWith(canonPrefix)) return evText;", app_js)
+        self.assertIn("return canonical || evText;", app_js)
         self.assertIn("const cleaned = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));", app_js)
 
     def test_right_rail_uses_metadata_files_and_queue_tabs(self):

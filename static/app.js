@@ -1898,8 +1898,20 @@
 
   function originalAskTextForEvent(ev, paneId) {
     const conv = convRowForPane(paneId) || {};
-    const source = (conv && conv.first_message) || ev.text || '';
-    return source;
+    const canonical = (conv && conv.first_message) || '';
+    const evText = ev.text || '';
+    // The row's first_message is server-truncated (~200 chars, sometimes
+    // whitespace-collapsed with a trailing "..."). It stays the anchor for
+    // WHICH message is the original ask — an incremental render batch can
+    // start mid-conversation — but when the event being rendered is that
+    // same message (its text extends the canonical prefix), show the full
+    // event text instead of the truncated stub (CCC-456).
+    if (canonical && evText.length > canonical.length) {
+      const norm = s => String(s).replace(/\s+/g, ' ').trim();
+      const canonPrefix = norm(canonical).replace(/(?:\.\.\.|…)$/, '').slice(0, 120);
+      if (canonPrefix && norm(evText).startsWith(canonPrefix)) return evText;
+    }
+    return canonical || evText;
   }
 
   // Tiny inline-markdown renderer for card descriptions. Handles bold, code,
