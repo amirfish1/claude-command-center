@@ -15601,6 +15601,23 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-run:hover { border-color: var(--accent, #58a6ff); background: rgba(88,166,255,0.18); }
 .fq-run:disabled { opacity: 0.45; cursor: wait; }
+.fq-run-once {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--warn, #d29922) 35%, transparent);
+  background: color-mix(in srgb, var(--warn, #d29922) 12%, transparent);
+  color: var(--warn, #d29922);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.fq-run-once:hover { border-color: var(--warn, #d29922); background: color-mix(in srgb, var(--warn, #d29922) 18%, transparent); }
+.fq-run-once:disabled { opacity: 0.45; cursor: wait; }
 .files-queue-panel.queue-wrap-titles .fq-row {
   align-items: flex-start;
   flex-wrap: wrap;

@@ -29464,6 +29464,14 @@
         if (it.value || it.confidence) c.push('<span class="fq-chip fq-vc" title="value / confidence">' + escapeHtml(it.value || '–') + '/' + escapeHtml(it.confidence || '–') + '</span>');
         return c.length ? '<div class="fq-chips">' + c.join('') + '</div>' : '';
       };
+      // Per-row "drain once" button (CCC-437): only on non-auto-drain queues
+      // — an auto-drain queue already has/gets a worker for any open ticket,
+      // so the button would be redundant there. Mirrors the health strip's
+      // project→auto_drain lookup (app.js ~28540) off the same cache.
+      const _drainByQueueRow = new Map();
+      (((_uxqHealthCache || {}).queues) || []).forEach(q => {
+        if (q && q.queue != null) _drainByQueueRow.set(String(q.queue).toUpperCase(), !!q.auto_drain);
+      });
       $queue.innerHTML = rows.map(it => {
         const noteFull = String(it.note || '');
         const rawStatus = it.status || 'open';
@@ -29486,6 +29494,10 @@
         const runBtn = (!runnable && status === 'open')
           ? '<button class="fq-run" data-ref="' + escapeAttr(ref) + '" title="Run with WatchTower" aria-label="Run with WatchTower">▶</button>'
           : '';
+        const autoDrainQueue = !!_drainByQueueRow.get(String(it.project || proj || '').toUpperCase());
+        const runOnceBtn = (!autoDrainQueue && status === 'open')
+          ? '<button class="fq-run-once" data-ref="' + escapeAttr(ref) + '" title="Drain once — spawn a one-off worker for just this ticket" aria-label="Drain once">▶</button>'
+          : '';
         const ageSrc = status === 'closed'
           ? (it.closed_at || it.updated_at || it.created_at)
           : (it.updated_at || it.created_at);
@@ -29497,6 +29509,7 @@
           + _uxqChips(it)
           + '<span class="fq-note">' + escapeHtml(noteShown) + '</span>'
           + runBtn
+          + runOnceBtn
           + '<button class="fq-prio-bump' + (atTop ? ' is-top' : '') + '" data-ref="' + escapeAttr(ref) + '" data-next-prio="' + escapeAttr(np) + '" title="' + escapeAttr(bumpTitle) + '" aria-label="' + escapeAttr(bumpTitle) + '">↑</button>'
           + '<span class="fq-status" title="' + escapeAttr(blocked ? 'needs input' : hasUnresolved ? 'closed — unresolved follow-up' : status) + '">' + escapeHtml(status) + '</span>'
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
@@ -29562,6 +29575,35 @@
           } catch (e) {
             showOpToast('Run failed: ' + e, 'error');
             runBtn.disabled = false;
+          }
+          return;
+        }
+        // "Drain once" button (CCC-437) — spawns a single worker scoped to
+        // just this ref on a non-auto-drain queue.
+        const runOnceBtn = ev.target && ev.target.closest && ev.target.closest('.fq-run-once[data-ref]');
+        if (runOnceBtn) {
+          ev.stopPropagation();
+          const ref = runOnceBtn.getAttribute('data-ref');
+          runOnceBtn.disabled = true;
+          try {
+            const res = await fetch('/api/ux-fixes/run-once', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ref }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.ok) {
+              showOpToast('Spawned a one-off worker for ' + ref);
+              _uxqItemsCache.ts = 0;
+              _uxqHealthCache.ts = 0;
+              _renderQueuePanel();
+            } else {
+              showOpToast('Drain-once failed: ' + (data.error || res.status), 'error');
+              runOnceBtn.disabled = false;
+            }
+          } catch (e) {
+            showOpToast('Drain-once failed: ' + e, 'error');
+            runOnceBtn.disabled = false;
           }
           return;
         }
