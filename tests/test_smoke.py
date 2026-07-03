@@ -1608,9 +1608,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)", app_js)
         self.assertIn("const _currentSessionRows = _ipSearchActive", app_js)
         self.assertIn("const _curShown = _currentSessionRows;", app_js)
-        self.assertIn("return separator + _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth });", app_js)
+        self.assertIn("html: cl.rows.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),", app_js)
         self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
-        self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown);", app_js)
+        self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown, _gcItems);", app_js)
         self.assertIn("const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';", app_js)
         self.assertIn("const currentChildStyle = currentChildDepth > 0", app_js)
         self.assertIn(".conv-current-sessions-scroll .conv-item.is-current-child-row {", app_css)
@@ -1938,9 +1938,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const quietTitleChrome = !!opts.quietTitleChrome;", app_js)
         self.assertIn("if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;", app_js)
         self.assertIn("if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';", app_js)
-        self.assertIn("return separator + _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth });", app_js)
+        self.assertIn("html: cl.rows.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),", app_js)
         self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
-        self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown);", app_js)
+        self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown, _gcItems);", app_js)
 
     def test_repo_pin_marker_is_not_duplicate_pin_glyph(self):
         """Repo override rows should use a distinct repo chip, not a second pin."""

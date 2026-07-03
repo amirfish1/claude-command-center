@@ -22522,19 +22522,48 @@
       try { _currentSessionsCollapsed = localStorage.getItem('ccc-current-sessions-collapsed') === '1'; } catch (_) {}
       let _currentSessionsHeaderHtml = '';
       let _currentSessionsHtml = '';
-      if (_currentSessions.length) {
+      if (_currentSessions.length || (_gcItems && _gcItems.length)) {
         const _currentSessionsLabel = _ipSearchActive ? 'Search results' : 'Current sessions';
         const _currentSessionsSub = _ipSearchActive ? '' : '<span class="conv-objects-section-sub">' + _currentSessionsWindowLabel + '</span>';
         // Same first-gap-only separator as the flat/All-repos views (CCC-443)
         // — Current sessions is sorted newest-first same as those, so a real
         // (>=6h) jump between consecutive rows gets the same divider back.
-        const _currentSessionsFlatRowsWithSeparators = (items) => {
+        // Group chats blend into the same reverse-chronological stream
+        // (CCC-448) instead of a trailing "Group chats" category. Tree
+        // clusters (a parent plus its nested children) move as one unit
+        // keyed by the root row's mtime so a chat row can't split a parent
+        // from its children, and the sessions' hysteresis-stable order is
+        // preserved by merging rather than re-sorting.
+        const _currentSessionsFlatRowsWithSeparators = (items, gcItems) => {
+          const clusters = [];
+          for (const item of items) {
+            if (!clusters.length || !(item.depth > 0)) {
+              clusters.push({ mtime: (item.card && item.card.modified) || 0, rows: [item] });
+            } else {
+              clusters[clusters.length - 1].rows.push(item);
+            }
+          }
+          const entries = clusters.map(cl => ({
+            mtime: cl.mtime,
+            html: cl.rows.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),
+          }));
+          const gcs = (gcItems || []).slice().sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+          const merged = [];
+          let gi = 0;
+          for (const entry of entries) {
+            while (gi < gcs.length && (gcs[gi].mtime || 0) > (entry.mtime || 0)) {
+              merged.push({ mtime: gcs[gi].mtime || 0, html: gcs[gi].html });
+              gi++;
+            }
+            merged.push(entry);
+          }
+          for (; gi < gcs.length; gi++) merged.push({ mtime: gcs[gi].mtime || 0, html: gcs[gi].html });
           let _gapShown = false;
-          return items.map((item, i, arr) => {
+          return merged.map((it, i, arr) => {
             let separator = '';
             if (i > 0 && !_gapShown) {
-              const newer = (arr[i - 1] && arr[i - 1].card && arr[i - 1].card.modified) || 0;
-              const older = (item.card && item.card.modified) || 0;
+              const newer = (arr[i - 1] && arr[i - 1].mtime) || 0;
+              const older = it.mtime || 0;
               if (newer && older && (newer - older) >= GAP_SEPARATOR_S) {
                 separator = '<div class="conv-gap-separator">'
                   + '<span class="conv-gap-line"></span>'
@@ -22544,12 +22573,17 @@
                 _gapShown = true;
               }
             }
-            return separator + _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth });
+            return separator + it.html;
           }).join('');
         };
+        // By-objects view has no chronological stream to blend into — group
+        // chats stay a trailing labelled group there.
+        const _gcTrailingHtml = (_currentSessionsByObjects && _gcItems && _gcItems.length)
+          ? '<div class="conv-objects-section-label">Group chats</div>' + _gcItems.map(it => it.html).join('')
+          : '';
         const _currentSessionsRowsHtml = _currentSessionsByObjects
-          ? _currentSessionsByObjectGroupsHtml(_curShown)
-          : _currentSessionsFlatRowsWithSeparators(_curShown);
+          ? _currentSessionsByObjectGroupsHtml(_curShown) + _gcTrailingHtml
+          : _currentSessionsFlatRowsWithSeparators(_curShown, _gcItems);
         const _currentSessionsChevron = _currentSessionsCollapsed ? '&#9656;' : '&#9662;';
         _currentSessionsHeaderHtml = '<div class="conv-objects-section-label conv-current-sessions-header'
           + (_currentSessionsCollapsed ? ' is-collapsed' : '')
@@ -22610,11 +22644,10 @@
       const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));
       const _looseHtml = _looseRest.length
         ? _renderObjGroup('unclassified', 'Unclassified', sortedObjectCardsForRender('unclassified', _looseRest)) : '';
-      const _gcSectionLabel = (_gcItems && _gcItems.length > 0)
-        ? '<div class="conv-objects-section-label">Group chats</div>'
-        : '';
-      const _currentSessionsExtraHtml = _gcSectionLabel + (_gcItems || []).map(it => it.html).join('');
-      const _currentSessionsBodyHtml = _currentSessionsHtml + _currentSessionsExtraHtml;
+      // Group chats are blended into _currentSessionsHtml above (CCC-448) —
+      // interleaved by mtime in the by-time view, a trailing labelled group
+      // in the by-objects view.
+      const _currentSessionsBodyHtml = _currentSessionsHtml;
       const _currentSessionsScrollClass = 'conv-current-sessions-scroll'
         + (_ipSearchActive ? ' is-search-results' : '')
         + (_currentSessionsCollapsed ? ' is-collapsed' : '');
