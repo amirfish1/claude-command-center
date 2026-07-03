@@ -16456,6 +16456,8 @@ body:has(.gc-reader) .pwa-install-banner {
    before the action taken on it. Empty for reconciler rows (worker ids). */
 .wl-ref-col { flex-shrink: 0; width: 84px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wl-verb { flex-shrink: 0; width: 80px; white-space: nowrap; }
+.wl-worker-col { flex-shrink: 0; width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-worker-id { opacity: 0.6; font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; }
 .wl-detail { flex: 1; opacity: 0.82; word-break: break-word; }
 .wl-worker .wl-verb { color: #3fb950; font-weight: 600; }
 .wl-reconciler .wl-verb { color: #d29922; font-weight: 600; }

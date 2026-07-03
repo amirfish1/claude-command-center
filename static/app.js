@@ -28256,6 +28256,21 @@
     return 'hsl(' + (h % 360) + ',45%,58%)';
   }
 
+  // Pulls the worker/session id out of a log line's detail text and returns
+  // the remainder with that token removed, so it isn't duplicated once it
+  // renders in its own column. Two shapes cover every verb that carries one:
+  // "<ref> by <worker> — ..." (CLAIM) and a bare leading "<worker>" token
+  // (SPAWN/STOP/REAP — these never carry a ref, so restDetail is untouched).
+  function _wtLogExtractWorker(verb, restDetail) {
+    const byM = restDetail.match(/^by\s+(\S+)\s*/);
+    if (byM) return { worker: byM[1], rest: restDetail.slice(byM[0].length) };
+    if (verb === 'SPAWN' || verb === 'STOP' || verb === 'REAP') {
+      const leadM = restDetail.match(/^(\S+)\s*/);
+      if (leadM) return { worker: leadM[1], rest: restDetail.slice(leadM[0].length) };
+    }
+    return { worker: '', rest: restDetail };
+  }
+
   function _renderWtLogLines(lines) {
     const now = Date.now();
     const rows = [];
@@ -28304,8 +28319,10 @@
       // ref/refM computed above (used for the divider too). The ref renders in
       // its own column BEFORE the verb; reconciler rows (lowercase worker id)
       // don't match, so their ref column stays empty.
-      const restDetail = refM ? detail.slice(refM[0].length) : detail;
+      const restDetailWithRef = refM ? detail.slice(refM[0].length) : detail;
+      const { worker, rest: restDetail } = _wtLogExtractWorker(verb, restDetailWithRef);
       const refHtml = ref ? '<span class="wl-ref">' + escapeHtml(ref) + '</span>' : '';
+      const workerHtml = worker ? '<span class="wl-worker-id" title="' + escapeAttr(worker) + '">' + escapeHtml(worker) + '</span>' : '';
       const detailHtml = escapeHtml(restDetail).replace(/\b([A-Z]+-\d+)\b/g, '<span class="wl-ref">$1</span>');
       rows.push(
         '<div class="wl-row ' + verbClass + '">'
@@ -28313,6 +28330,7 @@
         + '<span class="wl-queue" style="color:' + qColor + '">' + escapeHtml(queue) + '</span>'
         + '<span class="wl-ref-col">' + refHtml + '</span>'
         + '<span class="wl-verb">' + escapeHtml(verb) + '</span>'
+        + '<span class="wl-worker-col">' + workerHtml + '</span>'
         + '<span class="wl-detail">' + detailHtml + '</span>'
         + '</div>'
       );
