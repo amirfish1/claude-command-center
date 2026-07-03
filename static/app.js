@@ -26232,10 +26232,22 @@
   // The most recent user message in a conversation view — the anchor the "Last"
   // affordance jumps to (CCC-292). Excludes task-notification events, which are
   // rendered as user_text but aren't something the user wrote.
-  function _lastUserMessageEl(view) {
+  function _prevUserMessageTarget(view) {
     if (!view) return null;
     const list = view.querySelectorAll('.event.user_text:not(.task-notification-event)');
-    return list.length ? list[list.length - 1] : null;
+    if (!list.length) return null;
+    // The next stop when stepping up through the conversation: the latest
+    // user message whose start is scrolled above the top of the pane.
+    // isLast drives the button label ("Last" vs "Previous") — after jumping
+    // to the last message its start sits at the pane top, so the target
+    // naturally becomes the message before it (CCC-451).
+    const viewTop = view.getBoundingClientRect().top;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].getBoundingClientRect().top < viewTop - 8) {
+        return { el: list[i], isLast: i === list.length - 1 };
+      }
+    }
+    return null;
   }
 
   function positionConversationEndAffordance(view) {
@@ -26269,16 +26281,23 @@
     btn.tabIndex = show ? 0 : -1;
     // "Last" shows when the start of the latest user message is scrolled above
     // the top of the pane — i.e. you'd have to scroll up to read the reply from
-    // its beginning. Hidden once that message's start is already in view.
+    // its beginning. Once that message is reached, the button relabels to
+    // "Previous" and keeps stepping up through earlier user messages
+    // (CCC-451). Hidden only when nothing starts above the pane top.
     const lastBtn = view._convLastButton;
     if (lastBtn) {
-      let showLast = false;
-      if (scrollable) {
-        const el = _lastUserMessageEl(view);
-        if (el) {
-          const viewRect = view.getBoundingClientRect();
-          const elRect = el.getBoundingClientRect();
-          showLast = elRect.top < viewRect.top - 8;
+      const target = scrollable ? _prevUserMessageTarget(view) : null;
+      const showLast = !!target;
+      if (target) {
+        const label = target.isLast ? 'Last' : 'Previous';
+        const span = lastBtn.querySelector('span');
+        if (span && span.textContent !== label) span.textContent = label;
+        const title = target.isLast
+          ? 'Jump to the start of your last message'
+          : 'Jump to the start of the previous message';
+        if (lastBtn.title !== title) {
+          lastBtn.title = title;
+          lastBtn.setAttribute('aria-label', title);
         }
       }
       lastBtn.classList.toggle('visible', showLast);
@@ -26426,7 +26445,8 @@
     // "Jump to my last message" (CCC-292): reading a fresh reply means scrolling
     // up to your own message and reading down. This 1-click affordance pins the
     // start of the latest user message to the top of the pane. Stacked above the
-    // End button; shown only when that message's start is scrolled out of view.
+    // End button. Once the last message is reached it relabels to "Previous"
+    // and each click steps up to the next-earlier user message (CCC-451).
     let lastBtn = host.querySelector(':scope > .conv-scroll-last-btn');
     if (!lastBtn) {
       lastBtn = document.createElement('button');
@@ -26440,11 +26460,11 @@
     lastBtn._convTargetView = view;
     lastBtn.addEventListener('click', () => {
       const v = lastBtn._convTargetView || view;
-      const el = _lastUserMessageEl(v);
-      if (!el) return;
+      const target = _prevUserMessageTarget(v);
+      if (!target) return;
       v._pinnedToBottom = false;
       const viewRect = v.getBoundingClientRect();
-      const elRect = el.getBoundingClientRect();
+      const elRect = target.el.getBoundingClientRect();
       const top = Math.max(0, v.scrollTop + (elRect.top - viewRect.top) - 12);
       if (typeof v.scrollTo === 'function') v.scrollTo({ top, behavior: 'smooth' });
       else v.scrollTop = top;
