@@ -27766,6 +27766,13 @@
     pane.firstLine = 0;
     pane.loadBeforeLine = 0;
     pane.wantFull = false;
+    // Drop any visual "Clear" watermark (CCC-474) — a fresh (re)select of a
+    // conversation always shows full history.
+    const _selClearView = getConvViewForPane(paneId);
+    if (_selClearView) {
+      delete _selClearView.dataset.videoClearLine;
+      _selClearView.classList.remove('is-video-cleared');
+    }
     _firstUserMsgRendered = false;
     _dynamicAskState = null;  // sticky-header scroll tracker — repopulated when the new sticky is built
     _currentToolGroup = null;
@@ -34468,6 +34475,11 @@
     // newly-streamed events don't yank them back down. 80px tolerance is
     // generous enough to absorb typical line-height jitter.
     const wasAtBottom = isConversationAtBottom($view);
+    // Visual "Clear" watermark (CCC-474): events at or below this jsonl line
+    // were wiped from the screen for recording — keep them hidden if a poll
+    // or load-earlier re-renders them. Purely cosmetic; see
+    // clearPaneScreenForVideo.
+    const _videoClearLine = parseInt($view.dataset.videoClearLine || '0', 10) || 0;
     // Detect a NEW assistant turn arriving (one whose JSONL line isn't
     // already rendered). If found, reset TTS so the play/pause button
     // re-arms to read the new message on next click instead of resuming
@@ -34499,6 +34511,9 @@
       const div = document.createElement('div');
       div.className = 'event ' + ev.type + (ev.pending ? ' pending' : '');
       if (ev.line != null) div.dataset.jsonlLine = String(ev.line);
+      if (_videoClearLine && ev.line != null && Number(ev.line) <= _videoClearLine) {
+        div.classList.add('ccc-video-cleared');
+      }
 
       // Use the event's own JSONL timestamp (when it was actually written)
       // rather than render time; fall back to render time only when the
@@ -35279,6 +35294,16 @@
         g.remove();
       }
     });
+    // Visual "Clear" watermark (CCC-474): a group whose events are ALL below
+    // the watermark must hide as a whole — its header is not an .event and
+    // would otherwise survive a re-render as an orphan "Ran N commands" row.
+    if (_videoClearLine) {
+      $view.querySelectorAll('.tool-call-group').forEach(g => {
+        const evs = g.querySelectorAll('.tool-call-group-body .event');
+        const hidden = g.querySelectorAll('.tool-call-group-body .event.ccc-video-cleared');
+        g.classList.toggle('ccc-video-cleared', evs.length > 0 && evs.length === hidden.length);
+      });
+    }
     // Surface a tab per task-notification rendered from the JSONL — these
     // subagents never pass through the spawn stream that normally seeds tabs.
     try { _convPaneSyncJsonlTaskTabs($view); } catch (_) {}
@@ -42749,6 +42774,38 @@
   // window — it does not depend on the main dashboard window being open.
   const $annotationFabBtn = document.getElementById('annotationFabBtn');
   if ($annotationFabBtn) $annotationFabBtn.addEventListener('click', annStart);
+
+  // Per-pane header actions (CCC-474): Annotate + Clear in the split-mode
+  // pane titlebar. Clear is VISUAL ONLY — for screen recording a "clean
+  // terminal". It stamps a jsonl-line watermark on the pane's view and
+  // display:none's everything rendered at or below it; the transcript on
+  // disk and the server are never touched. Watermark resets on the next
+  // conversation (re)select, so reopening the session shows full history.
+  function clearPaneScreenForVideo(paneId) {
+    const $view = getConvViewForPane(paneId) || $conversationsView;
+    if (!$view) return;
+    let maxLine = parseInt($view.dataset.videoClearLine || '0', 10) || 0;
+    $view.querySelectorAll('.event[data-jsonl-line]').forEach((el) => {
+      const n = parseInt(el.dataset.jsonlLine, 10);
+      if (!isNaN(n) && n > maxLine) maxLine = n;
+    });
+    $view.dataset.videoClearLine = String(maxLine);
+    // .tool-call-group too: tool events nest inside group wrappers whose
+    // "Ran N commands" header is not itself an .event and would stay visible.
+    $view.querySelectorAll('.event, .stream-bubble, .conv-load-earlier, .tool-call-group')
+      .forEach((el) => el.classList.add('ccc-video-cleared'));
+    $view.classList.add('is-video-cleared');
+  }
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target && ev.target.closest
+      ? ev.target.closest('[data-role="pane-annotate"], [data-role="pane-clear"]') : null;
+    if (!btn) return;
+    ev.stopPropagation();
+    const pane = btn.closest('.conv-pane[data-pane-id]');
+    const paneId = (pane && pane.dataset.paneId) || activePaneId();
+    if (btn.dataset.role === 'pane-annotate') { annStart(); return; }
+    clearPaneScreenForVideo(paneId);
+  });
 
   // CCC-454: Verbose transcript toggle (topbar, left of Annotate). Flips the
   // persisted mode, restyles the button, and re-applies expansion state to the

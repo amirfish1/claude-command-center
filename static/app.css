@@ -1814,6 +1814,31 @@
     border-radius: 3px;
   }
   .conv-pane-close:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
+  /* Per-pane header actions — Annotate + Clear (CCC-474). Ride the header's
+     visibility gate, so they only appear in split mode / popouts. */
+  .conv-pane-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+  }
+  .conv-pane-action {
+    background: transparent;
+    border: 1px solid var(--border, #2a2a2a);
+    border-radius: 4px;
+    color: var(--text-muted, #999);
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1.2;
+    padding: 3px 7px;
+    white-space: nowrap;
+  }
+  .conv-pane-action:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
+  /* Visual-only "Clear" (CCC-474): everything rendered at or below the
+     watermark is hidden for a clean recording surface; the transcript on
+     disk is untouched and full history returns on the next (re)select. */
+  .conversations-view .ccc-video-cleared { display: none !important; }
+  .conversations-view.is-video-cleared .conv-sticky-header { display: none !important; }
 
   .conv-split-divider {
     flex: 0 0 4px;

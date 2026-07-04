@@ -699,6 +699,14 @@
             <span class="conv-pane-proc ccc-breadcrumb-proc" data-role="pane-proc"></span>
             <span class="conv-pane-title" data-role="pane-title"></span>
           </div>
+          <!-- Per-pane header actions (CCC-474). The header is only visible in
+               split mode / popouts, so these ride that same gate. Annotate
+               reuses the global annStart flow; Clear visually wipes this
+               pane's rendered transcript (watermark, no history mutation). -->
+          <span class="conv-pane-actions" data-role="pane-actions">
+            <button type="button" class="conv-pane-action" data-role="pane-annotate" title="Annotate the visible page and save a local note for agent context">&#9998; Annotate</button>
+            <button type="button" class="conv-pane-action" data-role="pane-clear" title="Clear the screen visually (transcript history is untouched)">Clear</button>
+          </span>
           <button class="conv-pane-close" data-role="pane-close" title="Close pane" aria-label="Close pane" style="display:none;">&times;</button>
         </div>
         <div class="conversations-view" id="conversationsView">
