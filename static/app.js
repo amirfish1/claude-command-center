@@ -653,7 +653,9 @@
         // instead of waiting for the next poll. The switch is queued server-side
         // (the /model inject lands on the session's next turn), so the chip is
         // the honest live state.
-        if (sid && sid === _usageSessionId && typeof fetchSessionUsage === 'function') {
+        if (sid && typeof _usageSessionIdByPane !== 'undefined'
+            && Object.values(_usageSessionIdByPane).includes(sid)
+            && typeof fetchSessionUsage === 'function') {
           fetchSessionUsage(sid);
         }
         _pollModelAdvisor();
@@ -851,7 +853,9 @@
   function _renderInlineAdvisorNudge() {
     const bar = document.getElementById('convInputBar');
     let nudge = document.getElementById('maInlineNudge');
-    const sid = (typeof _usageSessionId !== 'undefined') ? _usageSessionId : null;
+    // The nudge sits above the ACTIVE pane's composer — use that pane's session.
+    const sid = (typeof _usageSessionIdByPane !== 'undefined' && typeof activePaneId === 'function')
+      ? (_usageSessionIdByPane[activePaneId()] || null) : null;
     const rec = sid && window.__advisorBySid ? window.__advisorBySid[sid] : null;
     if (!bar || !rec) { if (nudge) nudge.remove(); return; }
     if (!document.getElementById('__maNudgeStyle')) {
@@ -27718,13 +27722,17 @@
   let conversationPaneLoading = false;
   let conversationPaneLoadToken = 0;
 
-  function scheduleSessionMetadataFetches(convId, sid) {
+  function scheduleSessionMetadataFetches(convId, sid, paneId) {
     if (!sid) return;
     setTimeout(() => {
-      if (currentConversation !== convId) return;
+      // Guard against the pane having moved on to another conversation
+      // during the delay — per-pane in split mode (CCC-477).
+      const pid = paneId || ((typeof activePaneId === 'function') ? activePaneId() : 'p1');
+      const pane = (typeof paneByPaneId === 'function') ? paneByPaneId(pid) : null;
+      if (pane ? pane.conversationId !== convId : currentConversation !== convId) return;
       fetchSessionTimeline(sid);
-      fetchSessionWorkspace(sid);
-      fetchSessionUsage(sid);
+      fetchSessionWorkspace(sid, pid);
+      fetchSessionUsage(sid, pid);
     }, 150);
   }
 
@@ -27965,7 +27973,7 @@
       finishConversationPaneLoad();
       if (source !== 'backlog') {
         const timelineSid = (selectedRow || selectedConv || {}).session_id || id;
-        scheduleSessionMetadataFetches(id, timelineSid);
+        scheduleSessionMetadataFetches(id, timelineSid, paneId);
       }
     }
   }
@@ -32082,12 +32090,29 @@
   // the third column of the sticky header. Tells you whether the session
   // is editing in the shared clone or a worktree, what branch, ahead/
   // behind counts, and whether other sessions are sharing the same cwd.
-  let _workspaceSessionId = null;
-  let _workspaceData = null;
-  function getInputContextSlot() {
+  let _workspaceSessionIdByPane = {};  // paneId -> sid whose workspace that pane's strip shows
+  let _workspaceDataByPane = {};       // paneId -> latest /workspace payload for that sid
+  function getInputContextSlot(paneId) {
     // Conversation transcripts can contain literal CCC HTML snippets with
     // ids like `convInputContext`; scope to pane chrome, not message content.
-    return document.querySelector('#convSplit > .conv-pane[data-pane-id="p1"] > .conv-input-context[data-role="input-context"]');
+    const pid = paneId || ((typeof activePaneId === 'function') ? activePaneId() : 'p1');
+    return document.querySelector('#convSplit > .conv-pane[data-pane-id="' + pid + '"] > .conv-input-context[data-role="input-context"]');
+  }
+  // Split mode: the usage/workspace strip is per-pane chrome. Resolve which
+  // pane is showing a given session so a fetch triggered for the right pane
+  // never paints the left pane's strip (CCC-477).
+  function paneIdForSessionId(sid) {
+    if (sid && typeof splitState !== 'undefined') {
+      for (const p of (splitState.panes || [])) {
+        const cid = p && p.conversationId;
+        if (!cid) continue;
+        const rowSid = (typeof sessionIdByConv !== 'undefined' && sessionIdByConv[cid])
+          || (((conversationsData || []).find(x => x && x.id === cid) || {}).session_id)
+          || cid;
+        if (cid === sid || rowSid === sid) return p.id;
+      }
+    }
+    return (typeof activePaneId === 'function') ? activePaneId() : 'p1';
   }
   function syncInputContextVisibility(slot) {
     slot = slot || getInputContextSlot();
@@ -32105,28 +32130,31 @@
   let _inputContextFitRaf = 0;
   function _fitInputContextStrip() {
     _inputContextFitRaf = 0;
-    const slot = getInputContextSlot();
-    if (!slot) return;
-    slot.classList.remove('hide-cotenants');
-    const co = slot.querySelector('.wp-cotenants');
-    if (!co || !slot.classList.contains('visible')) return;
-    const path = slot.querySelector('.wp-path');
-    const rowOverflow = slot.scrollWidth > slot.clientWidth + 1;
-    const pathTruncated = !!(path && path.scrollWidth > path.clientWidth + 1);
-    if (rowOverflow || pathTruncated) {
-      slot.classList.add('hide-cotenants');
-    }
+    // Every pane has its own strip in split mode — fit them all.
+    const slots = document.querySelectorAll('#convSplit > .conv-pane > .conv-input-context[data-role="input-context"]');
+    slots.forEach((slot) => {
+      slot.classList.remove('hide-cotenants');
+      const co = slot.querySelector('.wp-cotenants');
+      if (!co || !slot.classList.contains('visible')) return;
+      const path = slot.querySelector('.wp-path');
+      const rowOverflow = slot.scrollWidth > slot.clientWidth + 1;
+      const pathTruncated = !!(path && path.scrollWidth > path.clientWidth + 1);
+      if (rowOverflow || pathTruncated) {
+        slot.classList.add('hide-cotenants');
+      }
+    });
   }
   function scheduleInputContextFit() {
     if (_inputContextFitRaf) return;
     _inputContextFitRaf = requestAnimationFrame(_fitInputContextStrip);
   }
-  async function fetchSessionWorkspace(sid) {
-    _workspaceSessionId = sid;
-    _workspaceData = null;
+  async function fetchSessionWorkspace(sid, paneId) {
+    const pid = paneId || paneIdForSessionId(sid);
+    _workspaceSessionIdByPane[pid] = sid;
+    _workspaceDataByPane[pid] = null;
     // Clear the strip immediately so a stale workspace from the previous
     // session doesn't flash before the new fetch lands.
-    const slot = getInputContextSlot();
+    const slot = getInputContextSlot(pid);
     const wsSlot = slot && slot.querySelector('[data-workspace]');
     if (wsSlot) wsSlot.innerHTML = '';
     if (slot) {
@@ -32140,20 +32168,27 @@
     try {
       const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/workspace');
       const data = await res.json();
-      if (_workspaceSessionId !== sid) return;
-      _workspaceData = data;
-      renderSessionWorkspaceIntoSticky();
+      if (_workspaceSessionIdByPane[pid] !== sid) return;
+      _workspaceDataByPane[pid] = data;
+      renderSessionWorkspaceIntoSticky(pid);
     } catch (_) {}
   }
 
-  function renderSessionWorkspaceIntoSticky() {
+  function renderSessionWorkspaceIntoSticky(paneId) {
     // Target the input-context strip above the conv input bar; matches
     // Claude Desktop's pattern of "branch · base · diff · PR" right where
-    // you type. Single row, no third column.
-    const slot = getInputContextSlot();
+    // you type. Single row, no third column. No paneId → repaint every
+    // pane that has workspace data (split mode).
+    if (!paneId) {
+      Object.keys(_workspaceDataByPane).forEach((pid) => {
+        if (_workspaceDataByPane[pid]) renderSessionWorkspaceIntoSticky(pid);
+      });
+      return;
+    }
+    const slot = getInputContextSlot(paneId);
     const wsSlot = slot && slot.querySelector('[data-workspace]');
-    if (!slot || !wsSlot || !_workspaceData) return;
-    const w = _workspaceData;
+    if (!slot || !wsSlot || !_workspaceDataByPane[paneId]) return;
+    const w = _workspaceDataByPane[paneId];
     if (!w.cwd) {
       wsSlot.innerHTML = '';
       syncInputContextVisibility(slot);
@@ -32200,7 +32235,7 @@
     } else {
       kindCls = 'wp-kind-other'; kindLabel = '📁 cwd missing — set folder';
       kindTitle = "cwd does not exist on disk — click to point this session at the right folder";
-      setCwdSid = _workspaceSessionId || '';
+      setCwdSid = _workspaceSessionIdByPane[paneId] || '';
     }
     if (setCwdSid) {
       parts.push('<button type="button" class="wp-kind ' + kindCls + ' wp-set-cwd" data-action="set-cwd" data-sid="' + escapeAttr(setCwdSid) + '" title="' + escapeHtml(kindTitle) + '">' + escapeHtml(kindLabel) + '</button>');
@@ -32319,10 +32354,9 @@
   }
 
   // Per-session worktrees modal — opened by clicking the 🌿 pill. Reads
-  // from _workspaceData (already fetched for the current session) so we
-  // don't refetch on click.
-  function openWorktreesModal() {
-    const w = _workspaceData;
+  // from the pane's fetched workspace data so we don't refetch on click.
+  function openWorktreesModal(paneId) {
+    const w = _workspaceDataByPane[paneId || ((typeof activePaneId === 'function') ? activePaneId() : 'p1')];
     if (!w) return;
     const wts = w.worktrees || [];
     const agentN = w.worktrees_agent_count || 0;
@@ -32384,17 +32418,15 @@
     if ($modal) $modal.classList.remove('open');
   }
   // Delegated click on the input-context strip — survives re-renders
-  // of [data-workspace] without rebinding.
-  (function () {
-    const slot = getInputContextSlot();
-    if (!slot) return;
-    slot.addEventListener('click', function (ev) {
-      const btn = ev.target && ev.target.closest && ev.target.closest('[data-action="open-worktrees"]');
-      if (!btn) return;
-      ev.preventDefault();
-      openWorktreesModal();
-    });
-  })();
+  // of [data-workspace] without rebinding. Document-level so cloned
+  // split-pane strips work too; the pane resolves from the click target.
+  document.addEventListener('click', function (ev) {
+    const btn = ev.target && ev.target.closest && ev.target.closest('.conv-input-context[data-role="input-context"] [data-action="open-worktrees"]');
+    if (!btn) return;
+    ev.preventDefault();
+    const paneEl = btn.closest('.conv-pane[data-pane-id]');
+    openWorktreesModal(paneEl ? paneEl.getAttribute('data-pane-id') : '');
+  });
   document.addEventListener('keydown', function (e) {
     const $modal = document.getElementById('worktreesModal');
     if (e.key === 'Escape' && $modal && $modal.classList.contains('open')) {
@@ -32608,10 +32640,11 @@
   // Token-usage pill — sibling of the workspace info in the same input-
   // context row. Shows latest input tokens out of the model's context
   // limit, with a peak indicator if it's higher than the latest.
-  let _usageSessionId = null;
-  let _usageData = null;
+  let _usageSessionIdByPane = {};  // paneId -> sid whose usage that pane's strip shows
+  let _usageDataByPane = {};       // paneId -> latest /usage payload for that sid
   const _deferredStreamBatches = [];
   let _deferredUsageSid = null;
+  let _deferredUsagePaneId = '';
 
   function _isComposerElement(el) {
     if (!el) return false;
@@ -32630,19 +32663,23 @@
     }
     if (_deferredUsageSid) {
       const sid = _deferredUsageSid;
+      const pid = _deferredUsagePaneId;
       _deferredUsageSid = null;
-      fetchSessionUsage(sid);
+      _deferredUsagePaneId = '';
+      fetchSessionUsage(sid, pid || undefined);
     }
   }
 
-  async function fetchSessionUsage(sid) {
+  async function fetchSessionUsage(sid, paneId) {
     if (_isComposerFocused()) {
       _deferredUsageSid = sid;
+      _deferredUsagePaneId = paneId || '';
       return;
     }
-    _usageSessionId = sid;
-    _usageData = null;
-    const slot = getInputContextSlot();
+    const pid = paneId || paneIdForSessionId(sid);
+    _usageSessionIdByPane[pid] = sid;
+    _usageDataByPane[pid] = null;
+    const slot = getInputContextSlot(pid);
     const uSlot = slot && slot.querySelector('[data-usage]');
     if (uSlot) uSlot.innerHTML = '';
     syncInputContextVisibility(slot);
@@ -32655,9 +32692,9 @@
       // computation is fast and uses no cache.
       const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/usage?_t=' + Date.now(), { cache: 'no-store' });
       const data = await res.json();
-      if (_usageSessionId !== sid) return;
-      _usageData = data;
-      renderSessionUsageIntoStrip();
+      if (_usageSessionIdByPane[pid] !== sid) return;
+      _usageDataByPane[pid] = data;
+      renderSessionUsageIntoStrip(pid);
     } catch (_) {}
   }
 
@@ -32790,11 +32827,18 @@
       + '</span>';
   }
 
-  function renderSessionUsageIntoStrip() {
-    const slot = getInputContextSlot();
+  function renderSessionUsageIntoStrip(paneId) {
+    // No paneId → repaint every pane that has usage data (split mode).
+    if (!paneId) {
+      Object.keys(_usageSessionIdByPane).forEach((pid) => {
+        if (_usageDataByPane[pid]) renderSessionUsageIntoStrip(pid);
+      });
+      return;
+    }
+    const slot = getInputContextSlot(paneId);
     const uSlot = slot && slot.querySelector('[data-usage]');
     if (!slot || !uSlot) return;
-    const u = _usageData || {};
+    const u = _usageDataByPane[paneId] || {};
     const transcriptLatest = u.latest_input_tokens || 0;
     const peak = u.peak_input_tokens || 0;
     // Model pill — shown when we know the model. Strips the "claude-"
@@ -33003,11 +33047,11 @@
         openModelPicker(modelBtn);
       });
     }
-    // Mirror rendered HTML into any non-p1 pane that shows the same session.
-    const _mirrorSid = _usageSessionId;
+    // Mirror rendered HTML into any OTHER pane that shows the same session.
+    const _mirrorSid = _usageSessionIdByPane[paneId];
     if (_mirrorSid && typeof splitState !== 'undefined') {
       splitState.panes.forEach(pane => {
-        if (pane.id === 'p1') return;
+        if (pane.id === paneId) return;
         const paneSid = sessionIdByConv[pane.conversationId] || pane.conversationId;
         if (paneSid !== _mirrorSid) return;
         const paneEl = document.querySelector('.conv-pane[data-pane-id="' + pane.id + '"]');
@@ -33173,7 +33217,10 @@
           }
         }
 
-        const u = _usageData || {};
+        const _puPaneEl = btn.closest && btn.closest('.conv-pane[data-pane-id]');
+        const _puPid = (_puPaneEl && _puPaneEl.getAttribute('data-pane-id'))
+          || ((typeof activePaneId === 'function') ? activePaneId() : 'p1');
+        const u = _usageDataByPane[_puPid] || {};
         const transcriptLatest = u.latest_input_tokens || 0;
         const peak = u.peak_input_tokens || 0;
         const liveContextTokens = Number(u.live_context_tokens || 0);
@@ -33390,7 +33437,10 @@
 
   function openModelPicker(btn) {
     closeModelPicker();
-    const sid = _usageSessionId || '';
+    const _mpPaneEl = btn.closest && btn.closest('.conv-pane[data-pane-id]');
+    const _mpPid = (_mpPaneEl && _mpPaneEl.getAttribute('data-pane-id'))
+      || ((typeof activePaneId === 'function') ? activePaneId() : 'p1');
+    const sid = _usageSessionIdByPane[_mpPid] || '';
     if (!sid) return;
     const engine = btn.dataset.engine || 'claude';
     const currentModel = btn.dataset.current || '';
@@ -33487,15 +33537,15 @@
           return;
         }
         // Optimistic local update so the pill rerenders immediately.
-        _usageData = _usageData || {};
-        _usageData.override = {
+        _usageDataByPane[_mpPid] = _usageDataByPane[_mpPid] || {};
+        _usageDataByPane[_mpPid].override = {
           model,
           context_1m: !!context_1m,
           engine: data.engine || engine,
           reasoning_effort: data.reasoning_effort || '',
           applied: data.applied || 'queued',
         };
-        renderSessionUsageIntoStrip();
+        renderSessionUsageIntoStrip(_mpPid);
         setStatus(data.applied === 'live' ? 'Switched live ✓' : 'Queued for next ask', 'ok');
         setTimeout(closeModelPicker, 800);
       } catch (err) {
@@ -33594,9 +33644,9 @@
             setStatus(data.error || 'Failed', 'err');
             return;
           }
-          _usageData = _usageData || {};
-          _usageData.override = null;
-          renderSessionUsageIntoStrip();
+          _usageDataByPane[_mpPid] = _usageDataByPane[_mpPid] || {};
+          _usageDataByPane[_mpPid].override = null;
+          renderSessionUsageIntoStrip(_mpPid);
           setStatus('Cleared ✓', 'ok');
           setTimeout(closeModelPicker, 600);
         } catch (err) {
