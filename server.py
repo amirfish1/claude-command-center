@@ -535,6 +535,23 @@ def _wt_past_workers(hours=24, max_per_queue=3):
 
 
 _queue_answer = _q.answer
+
+
+def _uxq_item_payload(item):
+    if not item:
+        return item
+    out = dict(item)
+    timeline_fn = getattr(_q, "timeline", None)
+    if callable(timeline_fn):
+        try:
+            out["timeline"] = timeline_fn(item)
+        except Exception:
+            out["timeline"] = []
+    else:
+        out["timeline"] = []
+    return out
+
+
 import objects_store  # durable server-side Flow object/parent/order state (GOAL-3/4)
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 # User-picked repos that live outside the $HOME scan (e.g. ~/dev/foo, /workspaces/bar).
@@ -44893,6 +44910,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "items": items, "count": len(items)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/ux-fixes/item":
+            qs = urllib.parse.parse_qs(parsed.query)
+            ref = (qs.get("ref", [""])[0] or "").strip()
+            if not ref:
+                self.send_json({"ok": False, "error": "ref required"}, 400)
+                return
+            try:
+                item = _q.get(ref)
+                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/ux-fixes/health":
             # Candidacy-gated per-project queue-health: depth, oldest-open age,
             # the fixer's liveness, and whether the project is STUCK. Reporting
@@ -47345,7 +47373,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     session_id=str(payload.get("session_id") or ""),
                     session_uuid=str(payload.get("session_uuid") or ""),
                 )
-                self.send_json({"ok": bool(item), "item": item})
+                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
@@ -47374,7 +47402,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 item = _queue_answer(
                     ref, text, session_id=str(payload.get("session_id") or "ccc"),
                 )
-                self.send_json({"ok": bool(item), "item": item})
+                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
@@ -47393,7 +47421,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 item = _q.update(ref, priority=priority)
-                self.send_json({"ok": bool(item), "item": item})
+                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
@@ -47423,7 +47451,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             str(item.get("project") or ""), str(item.get("ref") or ""))
                     except Exception:
                         pass
-                self.send_json({"ok": bool(item), "item": item})
+                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
@@ -47482,7 +47510,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             fields = {k: payload[k] for k in editable if k in payload}
             try:
                 item = _q.update(ref, **fields)
-                self.send_json({"ok": bool(item), "item": item})
+                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
@@ -47500,23 +47528,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "ref required"}, 400)
                 return
             try:
-                item = _q.update_status(ref, "open")
-                if item and reopen_note and _WT_QUEUE_AVAILABLE:
-                    with _wt_q._FileLock(_wt_q._lock_path()):
-                        data = _wt_q._load_unlocked()
-                        for it in data["items"]:
-                            if _wt_q._matches(it, ref):
-                                notes = it.get("progress_notes") or []
-                                notes.append({
-                                    "at": _wt_q._now_iso(),
-                                    "text": reopen_note,
-                                    "by": "human-reopen",
-                                })
-                                it["progress_notes"] = notes
-                                _wt_q._save_unlocked(data)
-                                item = it
-                                break
-                self.send_json({"ok": bool(item), "item": item})
+                item = _q.update_status(ref, "open", reason=reopen_note)
+                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
@@ -47524,9 +47537,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Log a plain status-update comment to the chronological Activity
             # feed (CCC-436) — distinct from Reopen/Mark-as-Closed: doesn't
             # touch ticket status, just appends a timestamped note a human
-            # can leave from the CCC UI. Stored in the same progress_notes
-            # array `wt block --progress` and reopen notes use, so it shows
-            # up via `wt find`/the raw ticket JSON too.
+            # can leave from the CCC UI. WatchTower records it in canonical
+            # ticket history so it shows up via `wt find`/the raw ticket JSON too.
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
@@ -47538,26 +47550,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not ref or not text:
                 self.send_json({"ok": False, "error": "ref and text required"}, 400)
                 return
-            if not _WT_QUEUE_AVAILABLE:
-                self.send_json({"ok": False, "error": "WatchTower queue unavailable"}, 400)
+            comment_fn = getattr(_q, "comment", None)
+            if not callable(comment_fn):
+                self.send_json({"ok": False, "error": "WatchTower comments unavailable"}, 400)
                 return
             try:
-                item = None
-                with _wt_q._FileLock(_wt_q._lock_path()):
-                    data = _wt_q._load_unlocked()
-                    for it in data["items"]:
-                        if _wt_q._matches(it, ref):
-                            notes = it.get("progress_notes") or []
-                            notes.append({
-                                "at": _wt_q._now_iso(),
-                                "text": text,
-                                "by": "human-comment",
-                            })
-                            it["progress_notes"] = notes
-                            _wt_q._save_unlocked(data)
-                            item = it
-                            break
-                self.send_json({"ok": bool(item), "item": item})
+                item = comment_fn(ref, text, by="human", session_id="ccc")
+                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
@@ -47582,7 +47581,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     item = _q.close(ref, resolution=(note or None))
                 else:
                     item = _q.update_status(ref, "closed")
-                self.send_json({"ok": bool(item), "item": item})
+                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
