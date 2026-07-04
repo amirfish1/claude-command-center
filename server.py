@@ -42476,6 +42476,11 @@ def _throughput_scope(session_id, range_key=None):
     return False, None, "Session"
 
 
+def _throughput_engine_filter(value):
+    v = str(value or "claude").strip().lower()
+    return "codex" if v == "codex" else "claude"
+
+
 def _throughput_trigger_preview(tev):
     text = tev.get("text") or ""
     if tev.get("type") == "tool_result":
@@ -43194,7 +43199,7 @@ def _throughput_session_hints(session_id):
 # prior flat-file approach had. SQLite is stdlib; no extra deps.
 _THROUGHPUT_TURN_CACHE = {}        # str(path) -> {"mtime", "size", "turns"}
 _THROUGHPUT_CACHE_LOCK = threading.Lock()
-_THROUGHPUT_AGG_CACHE = {}         # session_id -> {"ts": float, "payload": dict, "status": int}
+_THROUGHPUT_AGG_CACHE = {}         # cache_key -> {"ts": float, "payload": dict, "status": int}
 _THROUGHPUT_AGG_CACHE_TTL = 300    # seconds
 _THROUGHPUT_RANKINGS_CACHE = {}    # "week" -> {"ts": float, "rankings": list}
 _THROUGHPUT_RANKINGS_CACHE_TTL = 60
@@ -43206,15 +43211,22 @@ _throughput_disk_conn_lock = threading.Lock()
 _throughput_disk_available = None  # True/False/None (None = not yet tried)
 
 
-def _throughput_snapshot_path(session_id):
+def _throughput_aggregate_cache_key(session_id, engine_filter=None):
+    return f"{session_id}:{engine_filter or 'claude'}"
+
+
+def _throughput_snapshot_path(session_id, engine_filter=None):
     safe = "".join(
         ch if ch.isalnum() or ch in ("-", "_") else "_"
         for ch in str(session_id or "")
     )
-    return _THROUGHPUT_DISK_CACHE_DIR / f"aggregate-{safe or 'unknown'}.json"
+    engine = _throughput_engine_filter(engine_filter)
+    suffix = "" if engine == "claude" else f"-{engine}"
+    return _THROUGHPUT_DISK_CACHE_DIR / f"aggregate-{safe or 'unknown'}{suffix}.json"
 
 
-def _throughput_empty_initial_payload(session_id, range_key=None):
+def _throughput_empty_initial_payload(session_id, range_key=None, engine_filter=None):
+    engine_filter = _throughput_engine_filter(engine_filter)
     is_aggregate, cutoff_epoch, label = _throughput_scope(session_id, range_key)
     return {
         "ok": True,
@@ -43224,6 +43236,7 @@ def _throughput_empty_initial_payload(session_id, range_key=None):
             "range": label,
             "cutoff_epoch": cutoff_epoch,
             "total_turns": 0,
+            "engine": engine_filter or "claude",
         },
         "summary": _throughput_summary(
             [],
@@ -43239,7 +43252,7 @@ def _throughput_empty_initial_payload(session_id, range_key=None):
     }
 
 
-def _throughput_persist_aggregate_snapshot(session_id, payload, status):
+def _throughput_persist_aggregate_snapshot(session_id, payload, status, engine_filter=None):
     if status != 200 or not isinstance(payload, dict) or not payload.get("ok"):
         return
     try:
@@ -43249,7 +43262,7 @@ def _throughput_persist_aggregate_snapshot(session_id, payload, status):
             "payload": payload,
             "status": status,
         }
-        path = _throughput_snapshot_path(session_id)
+        path = _throughput_snapshot_path(session_id, engine_filter)
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(body, separators=(",", ":")), encoding="utf-8")
         os.replace(tmp, path)
@@ -43257,12 +43270,13 @@ def _throughput_persist_aggregate_snapshot(session_id, payload, status):
         pass
 
 
-def _throughput_initial_payload(session_id, repo_path=None, range_key=None):
+def _throughput_initial_payload(session_id, repo_path=None, range_key=None, engine_filter=None):
+    engine_filter = _throughput_engine_filter(engine_filter)
     is_aggregate, _cutoff_epoch, _label = _throughput_scope(session_id, range_key)
     if not is_aggregate or repo_path:
-        return _throughput_empty_initial_payload(session_id, range_key), 200
+        return _throughput_empty_initial_payload(session_id, range_key, engine_filter), 200
     try:
-        raw = _throughput_snapshot_path(session_id).read_text(encoding="utf-8")
+        raw = _throughput_snapshot_path(session_id, engine_filter).read_text(encoding="utf-8")
         stored = json.loads(raw)
         payload = stored.get("payload") or {}
         status = int(stored.get("status") or 200)
@@ -43277,7 +43291,7 @@ def _throughput_initial_payload(session_id, repo_path=None, range_key=None):
             return payload, 200
     except Exception:
         pass
-    return _throughput_empty_initial_payload(session_id, range_key), 200
+    return _throughput_empty_initial_payload(session_id, range_key, engine_filter), 200
 
 
 def _throughput_disk_connection():
@@ -43973,10 +43987,12 @@ def _throughput_week_rankings():
     return rankings
 
 
-def _throughput_payload(session_id, repo_path=None, range_key=None):
+def _throughput_payload(session_id, repo_path=None, range_key=None, engine_filter=None):
+    engine_filter = _throughput_engine_filter(engine_filter)
     is_aggregate, cutoff_epoch, label = _throughput_scope(session_id, range_key)
     if is_aggregate:
-        _cache_key = session_id  # cutoff_epoch shifts every call (float); key on name
+        # cutoff_epoch shifts every call (float); key on stable scope + engine.
+        _cache_key = _throughput_aggregate_cache_key(session_id, engine_filter)
         _cached = _THROUGHPUT_AGG_CACHE.get(_cache_key)
         if _cached and (time.time() - _cached["ts"] < _THROUGHPUT_AGG_CACHE_TTL):
             return _cached["payload"], _cached["status"]
@@ -44032,9 +44048,10 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
                 is_codex = engine == "codex" or _is_codex_session(sid)
             except Exception:
                 continue
-            # Codex usage does not count against Claude's weekly quota.
-            # Skip here; a future parallel Codex view can aggregate separately.
-            if is_codex:
+            if engine_filter == "codex":
+                if not is_codex:
+                    continue
+            elif is_codex:
                 continue
 
             # Resolve the transcript path so we can (mtime,size)-cache its full
@@ -44138,6 +44155,7 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
             "range": label,
             "cutoff_epoch": cutoff_epoch,
             "total_turns": len(turns),
+            "engine": engine_filter or "claude",
         },
         "summary": _throughput_summary(
             turns,
@@ -44147,12 +44165,13 @@ def _throughput_payload(session_id, repo_path=None, range_key=None):
     }
     _status = 200
     if is_aggregate:
-        _THROUGHPUT_AGG_CACHE[session_id] = {
+        _cache_key = _throughput_aggregate_cache_key(session_id, engine_filter)
+        _THROUGHPUT_AGG_CACHE[_cache_key] = {
             "ts": time.time(),
             "payload": _payload,
             "status": _status,
         }
-        _throughput_persist_aggregate_snapshot(session_id, _payload, _status)
+        _throughput_persist_aggregate_snapshot(session_id, _payload, _status, engine_filter)
     return _payload, _status
 
 
@@ -45497,10 +45516,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             repo_path = (qs.get("repo_path", [""])[0] or "").strip() or None
             range_key = (qs.get("range", [""])[0] or "").strip() or None
+            engine_filter = (qs.get("engine", [""])[0] or "").strip() or None
             payload, status = _throughput_initial_payload(
                 session_id,
                 repo_path=repo_path,
                 range_key=range_key,
+                engine_filter=engine_filter,
             )
             self.send_json(payload, status)
             return
@@ -45512,10 +45533,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             repo_path = (qs.get("repo_path", [""])[0] or "").strip() or None
             range_key = (qs.get("range", [""])[0] or "").strip() or None
+            engine_filter = (qs.get("engine", [""])[0] or "").strip() or None
             payload, status = _throughput_payload(
                 session_id,
                 repo_path=repo_path,
                 range_key=range_key,
+                engine_filter=engine_filter,
             )
             self.send_json(payload, status)
             return

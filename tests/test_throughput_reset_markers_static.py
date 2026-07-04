@@ -19,7 +19,11 @@ def test_weekly_chart_filters_reset_markers_and_humanizes_codex_windows():
     throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
 
     assert "shouldRenderResetMarker(event, resetMarkerWindow)" in throughput_html
-    assert "const resetMarkerWindow = (showWeeklyOverlay || showCumulative) ? 'seven_day' : null" in throughput_html
+    assert "const resetMarkerWindow = activeThroughputEngine === 'codex'" in throughput_html
+    assert "? 'codex'" in throughput_html
+    assert "String(event.window || '').startsWith('codex_')" in throughput_html
+    assert "let markerLabelCount = 0" in throughput_html
+    assert "markerLabelCount % 3" in throughput_html
     assert "Codex 5-hour session" in throughput_html
     assert "Codex weekly" in throughput_html
     assert ".reset-event-field input:disabled" in throughput_html
