@@ -12477,6 +12477,17 @@
   background: transparent; color: var(--text-muted);
   flex-shrink: 0;
 }
+#convList .conv-archived-gc-unarchive-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 13px; padding: 2px 4px; opacity: 0;
+  color: var(--text-muted); flex-shrink: 0;
+  border-radius: 3px;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+#convList .conv-item-archived-gc:hover .conv-archived-gc-unarchive-btn { opacity: 0.7; }
+#convList .conv-archived-gc-unarchive-btn:hover {
+  opacity: 1; color: var(--accent); background: rgba(88,166,255,0.12);
+}
 
 /* ---------------------------------------------------------------------------
    Standalone-mode polish (PWA "Add to Dock" / "Install app")

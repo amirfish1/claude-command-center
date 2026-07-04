@@ -23267,6 +23267,11 @@
         +   '<span class="archive-row-gc-icon" title="Group chat">💬</span>'
         +   '<span class="archive-row-gc-topic">' + topic + '</span>'
         +   partLabel
+        +   '<button type="button" class="conv-archived-gc-unarchive-btn"'
+        +     ' data-role="archived-gc-unarchive"'
+        +     ' data-gc-id="' + escapeHtml(gcId) + '"'
+        +     ' data-gc-path="' + escapeHtml(gc.path_tilde) + '"'
+        +     ' title="Restore from trash">&#8617;</button>'
         + '</div>';
     };
 
@@ -23702,6 +23707,7 @@
     // Click handler for archived group chat rows — open the reader.
     $convList.querySelectorAll('[data-role="archived-gc-row"]').forEach(row => {
       row.addEventListener('click', (ev) => {
+        if (ev.target.closest('[data-role="archived-gc-unarchive"]')) return;
         ev.preventDefault();
         ev.stopImmediatePropagation();
         ev.stopPropagation();
@@ -23710,6 +23716,15 @@
         const topic = row.dataset.gcTopic || '';
         const mode = row.dataset.gcMode || 'topic';
         if (path || chatId) openGroupChatReader(path, topic, mode, true, chatId);
+      });
+    });
+    $convList.querySelectorAll('[data-role="archived-gc-unarchive"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const path = btn.dataset.gcPath;
+        const chatId = btn.dataset.gcId || null;
+        if (path || chatId) unarchiveGroupChat(path, chatId);
       });
     });
     // Click handlers for In Group Chat rows. Row click → open the reader
@@ -38409,6 +38424,29 @@
       showOpToast?.('Group chat archived');
     } catch (err) {
       showOpToast?.('Could not archive group chat: ' + ((err && err.message) || 'network error'), 'error');
+    }
+  }
+
+  async function unarchiveGroupChat(chatPath, chatId) {
+    if (!chatPath && !chatId) return;
+    try {
+      const res = await fetch('/api/group-chats/unarchive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: chatPath || '', id: chatId || '' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data || !data.ok) {
+        showOpToast?.('Could not restore group chat: ' + ((data && data.error) || 'unknown'), 'error');
+        return;
+      }
+      try { await pollGcActive(); } catch (_) {}
+      try { await refreshArchivedGroupChats(); } catch (_) {}
+      const $s = document.getElementById('convSearch');
+      renderArchiveList($s ? $s.value : '');
+      showOpToast?.('Group chat restored');
+    } catch (err) {
+      showOpToast?.('Could not restore group chat: ' + ((err && err.message) || 'network error'), 'error');
     }
   }
 
