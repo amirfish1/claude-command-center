@@ -1185,6 +1185,10 @@
                   <span class="legend-color" style="height:2px;border-radius:0;border-top:2px solid #f59e0b;background:transparent;"></span>
                   <span style="color:#f59e0b;">Cumulative weekly %</span>
                 </div>
+                <div class="legend-item" id="previous-week-legend" style="display:none;">
+                  <span class="legend-color" style="height:2px;border-radius:0;border-top:2px dashed #94a3b8;background:transparent;"></span>
+                  <span style="color:#94a3b8;">Last week</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1237,6 +1241,7 @@
     let activeSessionId = null;
     let lastRender = null;   // {turns, summary, isAggregate, bucketMode} for resize redraws
     let weeklyData = null;   // populated by loadWeeklyUsage(); used by drawChart() overlay
+    let weeklyDataLoaded = false;
     let resetEvents = [];    // populated by loadResetEvents(); rendered as chart markers
     let chartWeekOffset = 0; // 0=current billing period, -1=previous, etc.
     const CHART_ZOOM_HOURS = 48;
@@ -1654,7 +1659,11 @@
       // Cache the rendered state so a window resize can redraw the chart from
       // memory instead of re-fetching + re-parsing the whole range.
       lastRender = { turns: data.turns, summary, isAggregate: chartIsAggregate, bucketMode, showCumulative: hasHourly, session, data };
-      drawChart(data.turns, summary, chartIsAggregate, bucketMode, hasHourly);
+      if (shouldDeferAggregateChart(chartIsAggregate, bucketMode)) {
+        renderChartWaitingForWeeklyContext();
+      } else {
+        drawChart(data.turns, summary, chartIsAggregate, bucketMode, hasHourly);
+      }
 
       // Model comparison table
       renderModelBreakdown(summary.per_model || []);
@@ -2076,6 +2085,28 @@
       });
     }
 
+    function shouldDeferAggregateChart(isAggregate, bucketMode) {
+      return isAggregate && bucketMode === 'sixhourly' && !weeklyDataLoaded;
+    }
+
+    function renderChartWaitingForWeeklyContext() {
+      const svg = document.getElementById('throughput-chart');
+      if (!svg) return;
+      svg.innerHTML = '';
+      document.getElementById('chart-title-label').textContent = '3-Hour Cache-Adjusted Burn';
+      document.getElementById('chart-legend-label').textContent = 'Cache-adj tokens / 3h';
+      const nav = document.getElementById('chart-week-nav');
+      if (nav) nav.style.display = 'none';
+      const overlayLegend = document.getElementById('weekly-overlay-legend');
+      if (overlayLegend) overlayLegend.style.display = 'none';
+      const previousWeekLegend = document.getElementById('previous-week-legend');
+      if (previousWeekLegend) previousWeekLegend.style.display = 'none';
+      updateChartZoomButton(false);
+      const width = svg.clientWidth || 800;
+      const height = svg.clientHeight || 300;
+      svg.innerHTML = `<text x="${width/2}" y="${height/2}" fill="var(--text-muted)" text-anchor="middle" font-size="13px">waiting for weekly context…</text>`;
+    }
+
     function drawChart(turns, summary, isAggregate = false, bucketMode = 'hourly', showCumulative = false) {
       const svg = document.getElementById('throughput-chart');
       if (!svg) return;
@@ -2093,6 +2124,8 @@
       const showWeeklyOverlay = (daily || sixhourly) && weeklyData && weeklyData.pct_per_token != null;
       const overlayLegend = document.getElementById('weekly-overlay-legend');
       if (overlayLegend) overlayLegend.style.display = showWeeklyOverlay ? 'flex' : 'none';
+      const previousWeekLegend = document.getElementById('previous-week-legend');
+      if (previousWeekLegend) previousWeekLegend.style.display = 'none';
       // Hide week nav when not in sixhourly aggregate mode
       if (!sixhourly) {
         const _nav = document.getElementById('chart-week-nav');
@@ -2250,6 +2283,9 @@
       const zoomState = applyChartZoomRows(sourceRows, prevPeriodRows);
       sourceRows = zoomState.rows;
       if (Array.isArray(zoomState.alignedRows)) prevPeriodRows = zoomState.alignedRows;
+      if (previousWeekLegend) {
+        previousWeekLegend.style.display = showWeeklyOverlay && sixhourly && prevPeriodRows.some(r => r != null) ? 'flex' : 'none';
+      }
       updateChartZoomButton(zoomState.zoomable);
 
       // Label helper for 6h slots: show day name at midnight, "HH:00" otherwise.
@@ -2616,24 +2652,25 @@
           projLine.setAttribute('stroke-dasharray', '7,4'); projLine.setAttribute('opacity', '0.7');
           svg.appendChild(projLine);
           // End-of-period projected label — big number + subtitle
-          const plx = width - padding.right + 6, plyBase = padding.top + 14;
+          const projectedLabelAnchor = width - 4;
+          const plyBase = padding.top + 14;
           const bigNum = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          bigNum.setAttribute('x', plx); bigNum.setAttribute('y', plyBase);
+          bigNum.setAttribute('x', projectedLabelAnchor); bigNum.setAttribute('y', plyBase);
           bigNum.setAttribute('fill', '#f59e0b'); bigNum.setAttribute('font-size', '20px');
-          bigNum.setAttribute('font-weight', 'bold'); bigNum.setAttribute('text-anchor', 'start');
+          bigNum.setAttribute('font-weight', 'bold'); bigNum.setAttribute('text-anchor', 'end');
           bigNum.setAttribute('font-family', 'var(--font-mono)'); bigNum.setAttribute('opacity', '0.95');
           bigNum.textContent = `${projectedEnd.toFixed(1)}%`;
           svg.appendChild(bigNum);
           const projWord = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          projWord.setAttribute('x', plx); projWord.setAttribute('y', plyBase + 15);
+          projWord.setAttribute('x', projectedLabelAnchor); projWord.setAttribute('y', plyBase + 15);
           projWord.setAttribute('fill', '#f59e0b'); projWord.setAttribute('font-size', '11px');
-          projWord.setAttribute('font-weight', 'bold'); projWord.setAttribute('text-anchor', 'start');
+          projWord.setAttribute('font-weight', 'bold'); projWord.setAttribute('text-anchor', 'end');
           projWord.setAttribute('font-family', 'var(--font-mono)'); projWord.setAttribute('opacity', '0.75');
           projWord.textContent = 'projected'; svg.appendChild(projWord);
           const rateNote = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          rateNote.setAttribute('x', plx); rateNote.setAttribute('y', plyBase + 27);
+          rateNote.setAttribute('x', projectedLabelAnchor); rateNote.setAttribute('y', plyBase + 27);
           rateNote.setAttribute('fill', '#f59e0b'); rateNote.setAttribute('font-size', '9px');
-          rateNote.setAttribute('text-anchor', 'start'); rateNote.setAttribute('opacity', '0.45');
+          rateNote.setAttribute('text-anchor', 'end'); rateNote.setAttribute('opacity', '0.45');
           rateNote.setAttribute('font-family', 'var(--font-mono)');
           rateNote.textContent = "at current week's rate"; svg.appendChild(rateNote);
         }
@@ -3131,16 +3168,25 @@
       try {
         resetEventInputDefault();
         const res = await fetch('/api/weekly_usage');
-        if (!res.ok) return;
+        if (!res.ok) {
+          weeklyDataLoaded = true;
+          if (lastRender && lastRender.session && lastRender.data) {
+            renderDashboard(lastRender.session, lastRender.data);
+          }
+          return;
+        }
         const d = await res.json();
         // Stash for use by drawChart() — weekly % overlay on daily chart.
         const hadWeeklyData = !!weeklyData;
         weeklyData = (d && d.available && d.pct_per_token != null) ? d : null;
-        // If the chart rendered before weeklyData arrived, redraw now so the
-        // cumulative % line and card values reflect the correct pct_per_token.
-        if (!hadWeeklyData && weeklyData && lastRender) {
-          drawChart(lastRender.turns, lastRender.summary, lastRender.isAggregate, lastRender.bucketMode, lastRender.showCumulative);
+        const shouldRefreshChart = !weeklyDataLoaded || (!hadWeeklyData && weeklyData);
+        weeklyDataLoaded = true;
+        // If the aggregate chart was waiting for weekly context, render the
+        // stable billing-period view once instead of flashing the fallback
+        // all-hours chart first.
+        if (shouldRefreshChart && lastRender) {
           if (lastRender.session && lastRender.data) renderDashboard(lastRender.session, lastRender.data);
+          else drawChart(lastRender.turns, lastRender.summary, lastRender.isAggregate, lastRender.bucketMode, lastRender.showCumulative);
         }
         const banner = document.getElementById('weekly-banner');
         if (!d || !d.available || d.display_pct == null) {
@@ -3177,7 +3223,12 @@
         if (reset) bits.push(reset);
         document.getElementById('weekly-sub').innerHTML = bits.join('<br>');
         banner.style.display = 'flex';
-      } catch (e) { /* best effort — banner just stays hidden */ }
+      } catch (e) {
+        weeklyDataLoaded = true;
+        if (lastRender && lastRender.session && lastRender.data) {
+          renderDashboard(lastRender.session, lastRender.data);
+        }
+      }
     }
 
     // Annotate — DOM picker state
