@@ -22356,6 +22356,38 @@ def _antigravity_has_arg(words, *names):
     return False
 
 
+_ANTIGRAVITY_PRINT_TIMEOUT_DEFAULT = "2h"
+
+
+def _antigravity_print_timeout():
+    """Go-duration timeout passed to every `agy -p` run via --print-timeout.
+
+    The AGY CLI's print mode gives up after --print-timeout (CLI default 5m)
+    and exits with "Error: timeout waiting for response", killing healthy
+    spawns mid-task (OPS-84). Override with $CCC_ANTIGRAVITY_PRINT_TIMEOUT;
+    values that don't parse as a Go duration fall back to the default.
+    """
+    value = (os.environ.get("CCC_ANTIGRAVITY_PRINT_TIMEOUT") or "").strip()
+    if value and _parse_go_duration_seconds(value) is not None:
+        return value
+    return _ANTIGRAVITY_PRINT_TIMEOUT_DEFAULT
+
+
+def _parse_go_duration_seconds(text):
+    """Parse a Go duration string ("2h", "5m0s", "90s") to seconds, else None."""
+    text = str(text or "").strip()
+    if not text or not re.fullmatch(r"(\d+(?:\.\d+)?(?:ms|h|m|s))+", text):
+        return None
+    total = 0.0
+    for amount, unit in re.findall(r"(\d+(?:\.\d+)?)(ms|h|m|s)", text):
+        total += float(amount) * {"h": 3600, "m": 60, "s": 1, "ms": 0.001}[unit]
+    return total
+
+
+def _antigravity_print_timeout_seconds():
+    return _parse_go_duration_seconds(_antigravity_print_timeout()) or 2 * 3600
+
+
 def _antigravity_arg_values(words, name):
     values = []
     words = list(words or [])
@@ -29251,7 +29283,9 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     cli_log_path = Path(str(log_path) + ".agy.log")
     if not _antigravity_has_arg(user_args, "--log-file"):
         cmd.extend(["--log-file", str(cli_log_path)])
-    
+    if not _antigravity_has_arg(user_args, "--print-timeout"):
+        cmd.extend(["--print-timeout", _antigravity_print_timeout()])
+
     cmd.extend(["--conversation", session_id])
     cmd.extend(["-p", prompt])
 
@@ -29390,8 +29424,11 @@ def _resume_session_antigravity_app(session_id, text):
 
 # A headless Antigravity resume that's still "alive" past this window is treated
 # as a lingering/hung process rather than a real in-flight turn, so new input
-# resumes fresh instead of queuing behind it forever (CCC-42/43).
-_ANTIGRAVITY_RESUME_STALE_S = 5 * 60
+# resumes fresh instead of queuing behind it forever (CCC-42/43). Must exceed
+# the --print-timeout we pass to agy, else a legit long turn gets a second agy
+# process racing it on the same conversation.
+def _antigravity_resume_stale_seconds():
+    return _antigravity_print_timeout_seconds() + 60
 
 
 def _spawn_entry_started_epoch(entry):
@@ -29441,7 +29478,7 @@ def resume_session_antigravity(session_id, text):
                     # "thinking"/"Queued" (CCC-42/43). Past the threshold, treat
                     # it as done and fall through to a fresh resume instead.
                     started = _spawn_entry_started_epoch(s)
-                    if started and (time.time() - started) > _ANTIGRAVITY_RESUME_STALE_S:
+                    if started and (time.time() - started) > _antigravity_resume_stale_seconds():
                         continue
                     with _pending_resume_lock:
                         _pending_resume_queue.setdefault(session_id, []).append(text)
@@ -29498,6 +29535,8 @@ def resume_session_antigravity(session_id, text):
     cli_log_path = Path(str(log_path) + ".agy.log")
     if not _antigravity_has_arg(user_args, "--log-file"):
         cmd.extend(["--log-file", str(cli_log_path)])
+    if not _antigravity_has_arg(user_args, "--print-timeout"):
+        cmd.extend(["--print-timeout", _antigravity_print_timeout()])
     cmd.extend(["--conversation", session_id, "-p", text])
 
     log_fh = open(log_path, "w")
