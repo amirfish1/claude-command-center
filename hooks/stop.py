@@ -48,6 +48,17 @@ def main():
             json.dump(state, f)
         os.replace(tmp_path, state_path)
 
+        # Clear any stale needs-approval marker left over from the just-ended
+        # turn. Extended thinking (and other non-tool Notification events) write
+        # this marker but are never cleared by post-tool-use.py. Without this,
+        # the next inject sees _notification_blocks_inject → True and queues
+        # the message even though the session is now idle.
+        needs_approval_path = os.path.join(LIVE_STATE_DIR, f"{session_id}_needs_approval.json")
+        try:
+            os.unlink(needs_approval_path)
+        except FileNotFoundError:
+            pass
+
         # Subtitle = short session id so the user can match the banner to a
         # card in the kanban without us having to open the JSONL to fetch
         # the prompt. Trade-off: less context, but stays fast.
