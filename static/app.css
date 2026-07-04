@@ -2486,6 +2486,13 @@
     text-overflow: ellipsis;
     max-width: 100%;
   }
+  .conv-input-context .wp-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 1 auto;
+    min-width: 0;
+  }
   /* The path is the longest item — let it shrink and ellipsis.
      inline-block is required for text-overflow:ellipsis to apply; the
      parent's white-space:nowrap and overflow:hidden are inherited. */
@@ -2519,6 +2526,15 @@
     .conv-input-context .wp-kind,
     .conv-input-context .wp-sync { display: none; }
   }
+  @container conv-ctx (max-width: 750px) {
+    .conv-input-context .wp-antigravity-tokens { display: none; }
+  }
+  @container conv-ctx (max-width: 650px) {
+    .conv-input-context .wp-cost-pill { display: none; }
+  }
+  @container conv-ctx (max-width: 550px) {
+    .conv-input-context .wp-usage-pill { display: none; }
+  }
   /* And cap the path so it actively ellipsifies in narrow panes
      instead of waiting for the layout to overflow. ch units scale
      with the font so this holds across font-size changes. */
@@ -2535,6 +2551,12 @@
     font-size: 13px; color: var(--accent);
     background: rgba(88,166,255,0.10); padding: 2px 7px; border-radius: 3px;
     word-break: break-all; overflow-wrap: anywhere;
+    max-width: 25ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
+    vertical-align: middle;
   }
   .conv-input-context .wp-base { color: var(--text-muted); }
   .conv-input-context .wp-arrow { opacity: 0.4; }

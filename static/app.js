@@ -32119,7 +32119,7 @@
     // Sibling-worktrees pill removed — topbar Worktrees button is the
     // single entry point. Per-session repetition was just noise.
 
-    wsSlot.innerHTML = parts.join(' ');
+    wsSlot.innerHTML = parts.join('');
     syncInputContextVisibility(slot);
     scheduleInputContextFit();
   }
