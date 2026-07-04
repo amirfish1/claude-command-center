@@ -46,6 +46,18 @@ All operations (except List) use `curl -s -X POST "$CCC_URL<endpoint>" -H "Conte
   *Returns the version of CCC. Use this to quickly verify CCC is up and running.*
 - **List Current Repo (GET):** `/api/sessions?repo_path=<URL-encoded abs path>`
   *Returns the unified session list for one repo. Always check if a session for your topic exists before spawning!*
+
+  **Resolving a session by name:** rows have **no `name` or `title` field** — matching those silently misses every session. The canonical name is **`display_name`** (the server already resolves custom title → spawn-time name → AI title → first message into it); fall back to substring-matching `first_message` if needed. Use the matched row's `session_id` for Inject/Ask.
+  ```bash
+  curl -s --max-time 30 "$CCC_URL/api/sessions?repo_path=$ENC_REPO" | python3 -c '
+  import json,sys
+  q=sys.argv[1].lower()
+  for r in json.load(sys.stdin):
+      hay=((r.get("display_name") or "")+" "+(r.get("first_message") or "")).lower()
+      if q in hay:
+          print(r["session_id"], "|", r.get("display_name")); break
+  ' "marketing assistant"
+  ```
 - **List Spawned Runs (GET):** `/api/sessions/spawned`
   *Returns recent CCC-owned spawns with `spawn_id`, `session_id`, `parent_session_id`, `engine`, `repo_path`, `cwd`, and `spawned_at`. Use this if a spawn response has `session_id_pending: true`.*
 - **List All (GET):** `/api/sessions?all=1` (optional `&engine=codex|antigravity|claude`)
