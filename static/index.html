@@ -704,6 +704,11 @@
                reuses the global annStart flow; Clear visually wipes this
                pane's rendered transcript (watermark, no history mutation). -->
           <span class="conv-pane-actions" data-role="pane-actions">
+            <!-- Verbose rides here too (CCC-475): its rail-topbar home
+                 disappears whenever the status rail is collapsed (e.g. Flow
+                 session-click auto-collapses it), so split mode gets its own
+                 always-reachable toggle. Same global mode as #verboseToggleBtn. -->
+            <button type="button" class="conv-pane-action" data-role="pane-verbose" aria-pressed="false" title="Verbose transcript: keep tool calls, command details, and thinking expanded in conversation views.">&#8801; Verbose</button>
             <button type="button" class="conv-pane-action" data-role="pane-annotate" title="Annotate the visible page and save a local note for agent context">&#9998; Annotate</button>
             <button type="button" class="conv-pane-action" data-role="pane-clear" title="Clear the screen visually (transcript history is untouched)">Clear</button>
           </span>
@@ -777,6 +782,9 @@
                   <button type="button" id="statusRailAddObjectBtn" class="status-rail-add-object-btn" title="Add to object" aria-label="Add session to object" style="display:none;">+&#8202;Object</button>
                 </div>
                 <div class="status-rail-context">Context: Active</div>
+                <!-- Transcript size (CCC-475) — moved out of the pane
+                     titlebar; filled by updatePaneHeader for the active pane. -->
+                <div class="status-rail-size" id="statusRailSize" hidden></div>
               </div>
             </div>
             <div class="status-rail-tabs" role="tablist" aria-label="Session utility panes">

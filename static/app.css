@@ -1751,6 +1751,23 @@
     font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
   }
   .conv-pane-category:empty { display: none; }
+  /* Engine icon inside the category chip (CCC-475) — replaces the engine
+     word in split-mode titlebars. Colors ride the shared engine selectors
+     next to .conv-session-icon. Inline-block (not flex on the chip) so
+     text-only chips keep their ellipsis behavior. */
+  .conv-pane-cat-icon {
+    position: relative;
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    vertical-align: -2px;
+  }
+  .conv-pane-cat-icon svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .conv-pane-cat-label { margin-left: 5px; }
   .conv-pane-title {
     min-width: 0;
     overflow: hidden;
@@ -1834,6 +1851,13 @@
     white-space: nowrap;
   }
   .conv-pane-action:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
+  /* Per-pane Verbose toggle (CCC-475) — same pressed treatment as the rail
+     topbar's .verbose-toggle-btn. */
+  .conv-pane-action[aria-pressed="true"] {
+    background: rgba(88,166,255,0.18);
+    color: var(--text);
+    border-color: rgba(88,166,255,0.45);
+  }
   /* Visual-only "Clear" (CCC-474): everything rendered at or below the
      watermark is hidden for a clean recording surface; the transcript on
      disk is untouched and full history returns on the next (re)select. */
@@ -5627,15 +5651,18 @@
     50% { transform: translateY(-50%) scale(1.08); }
     100% { transform: translateY(-50%) scale(1); }
   }
-  .conv-session-icon.claude {
+  .conv-session-icon.claude,
+  .conv-pane-cat-icon.claude {
     color: #e28767;
     --icon-shadow-color: rgba(226, 135, 103, 0.45);
   }
-  .conv-session-icon.claude.is-fable5 {
+  .conv-session-icon.claude.is-fable5,
+  .conv-pane-cat-icon.claude.is-fable5 {
     color: #f5c842;
     --icon-shadow-color: rgba(245, 200, 66, 0.55);
   }
-  .conv-session-icon.claude.is-fable5::after {
+  .conv-session-icon.claude.is-fable5::after,
+  .conv-pane-cat-icon.claude.is-fable5::after {
     content: '$';
     position: absolute;
     bottom: -3px;
@@ -5646,23 +5673,28 @@
     line-height: 1;
     font-family: monospace;
   }
-  .conv-session-icon.codex {
+  .conv-session-icon.codex,
+  .conv-pane-cat-icon.codex {
     color: #3dd68c;
     --icon-shadow-color: rgba(61, 214, 140, 0.45);
   }
-  .conv-session-icon.gemini {
+  .conv-session-icon.gemini,
+  .conv-pane-cat-icon.gemini {
     color: #c084fc;
     --icon-shadow-color: rgba(192, 132, 252, 0.45);
   }
-  .conv-session-icon.cursor {
+  .conv-session-icon.cursor,
+  .conv-pane-cat-icon.cursor {
     color: #f08a6b;
     --icon-shadow-color: rgba(226, 104, 64, 0.45);
   }
-  .conv-session-icon.antigravity {
+  .conv-session-icon.antigravity,
+  .conv-pane-cat-icon.antigravity {
     color: #f2cc60;
     --icon-shadow-color: rgba(242, 204, 96, 0.42);
   }
-  .conv-session-icon.hermes {
+  .conv-session-icon.hermes,
+  .conv-pane-cat-icon.hermes {
     color: #2dd4bf;
     --icon-shadow-color: rgba(45, 212, 191, 0.42);
   }
@@ -12849,6 +12881,15 @@ body.status-pos-right .conv-pane > .status-rail {
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.3;
+}
+/* Transcript size (CCC-475) — session metadata, moved here from the pane
+   titlebar. Filled by updatePaneHeader for the active pane. */
+.status-rail-size {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+  font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
 }
 .status-rail-tabs {
   display: grid;
