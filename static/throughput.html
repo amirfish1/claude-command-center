@@ -1360,6 +1360,22 @@
       return n.toLocaleString(undefined, { maximumFractionDigits });
     }
 
+    function formatCompactTokens(value) {
+      const n = Number(value || 0);
+      const abs = Math.abs(n);
+      if (abs >= 1e9) return `${(n / 1e9).toFixed(abs >= 10e9 ? 0 : 1)}B`;
+      if (abs >= 1e6) return `${(n / 1e6).toFixed(abs >= 10e6 ? 0 : 1)}M`;
+      if (abs >= 1e3) return `${(n / 1e3).toFixed(abs >= 10e3 ? 0 : 1)}K`;
+      return fmtNum(n);
+    }
+
+    function formatTokenAxisLabel(value, pctPerToken) {
+      if (!pctPerToken) return Math.round(value).toLocaleString();
+      const pct = value * pctPerToken;
+      const pctLabel = pct < 10 ? pct.toFixed(1) : Math.round(pct).toString();
+      return `${formatCompactTokens(value)} (${pctLabel}%)`;
+    }
+
     function fmtCost(value) {
       const n = Number(value || 0);
       if (!n) return '$0.00';
@@ -2464,6 +2480,7 @@
         const rawY = height - padding.bottom - (tpm / (maxTpm * 1.1)) * (height - padding.top - padding.bottom);
         return Math.max(padding.top - 8, Math.min(height - padding.bottom, rawY));
       };
+      const tokenAxisPctPerToken = showWeeklyOverlay ? weeklyData.pct_per_token : null;
       
       // Draw grid lines
       const gridSteps = 5;
@@ -2489,7 +2506,7 @@
         text.setAttribute('font-size', '10px');
         text.setAttribute('text-anchor', 'end');
         text.setAttribute('font-family', 'var(--font-mono)');
-        text.textContent = Math.round(val).toLocaleString();
+        text.textContent = formatTokenAxisLabel(val, tokenAxisPctPerToken);
         svg.appendChild(text);
       }
       
