@@ -79,16 +79,22 @@ ticks (or a tick racing a manual caller) can't both fire for the same post.
 ### Who gets pinged on an automatic nudge — `_group_chat_nudge` targeting
 
 When the watcher fires `_group_chat_nudge(path)` with no `target_sid`, the
-function reads the chat tail and decides *which* participants to ping based on
-who authored last:
+function reads the latest real chat post and pings all participants except the
+author. The only narrowing rule is an explicit Human `@mention`.
 
 | Last author | Who gets pinged |
 |---|---|
 | **An agent** | Everyone **except** that agent (no self-nudge). |
-| **Human**, message **@mentions** names or 8-hex short-ids | **Only** the addressed participants. |
-| **Human**, no mentions, a prior agent exists | **Only** the agent who wrote immediately before the human (their reply is almost always for that agent). |
-| **Human**, no mentions, no prior agent (fresh thread) | **Everyone.** |
-| **An agent**, message @mentions specific participants | **Only** the addressed ones (writer always excluded). |
+| **Human**, message explicitly **@mentions** participant names or 8-hex short-ids | **Only** the addressed participants. |
+| **Human**, no explicit `@mention` | **Everyone.** |
+
+Important details:
+
+- Agent-authored mentions do **not** narrow delivery. An agent post wakes all
+  other participants so the room keeps moving.
+- Human narrowing requires the `@` prefix, such as `@Agent-2` or `@e4fc617e`.
+  Plain text names without `@` do not narrow delivery.
+- The author is never self-nudged.
 
 Guards that suppress the ping even when the above would select targets:
 
@@ -100,9 +106,27 @@ Guards that suppress the ping even when the above would select targets:
   `skipped: "already reminded"`. So a ping fires **once per new post**, not
   every tick.
 
-After a successful ping it writes a system `pinged <labels>` line and bumps the
-cached baseline mtime so that admin write isn't mistaken for new activity on the
-next tick.
+After a successful ping it writes a system `pinged <labels>` line using readable
+participant names, and bumps the cached baseline mtime so that admin write isn't
+mistaken for new activity on the next tick.
+
+CCC also records structured nudge attempts in the chat sidecar under
+`nudge_log`. `/api/group-chat/read` exposes the last ~200 entries grouped by
+message key as:
+
+```
+{
+  "<message_key>": [
+    {"sid": "...", "name": "Agent-2", "ok": true, "at": "2026-07-04T..."}
+  ]
+}
+```
+
+Best-effort read state is sidecar-backed too: when a participant posts through
+CCC, `read_state[sid]` is updated to that post time and exposed by
+`/api/group-chat/read`. Successful nudges update `nudged_at` internally, not
+`read_state`, because a ping only proves delivery was attempted, not that the
+participant read the chat.
 
 ---
 
@@ -136,5 +160,6 @@ to life the moment someone actually says something.
 
 > CCC pings a participant the instant you put them in a chat or nudge them, and
 > otherwise only when the chat file *changes* — at most once per 60s per chat,
-> only to the participants the last message is actually addressed to, and never
-> when the chat is paused, idle 45 min, done, or archived.
+> to all participants except the author unless a Human explicitly `@mentions`
+> specific participants, and never when the chat is paused, idle 45 min, done,
+> or archived.

@@ -31941,6 +31941,247 @@ def _shorten_display_name(raw, session_id=""):
     return (out or s[:28]).strip() or hash8
 
 
+def _group_chat_hex_label(raw, session_id=""):
+    """True when a label is just a session id / UUID prefix, not a name."""
+    s = re.sub(r"\s+", " ", str(raw or "")).strip().strip("`")
+    if not s:
+        return False
+    sid = str(session_id or "").strip()
+    low = s.lower()
+    if sid and low in (sid.lower(), sid[:8].lower()):
+        return True
+    compact = low.replace("-", "")
+    return bool(len(compact) >= 8 and re.fullmatch(r"[0-9a-f]+", compact))
+
+
+def _group_chat_storeable_display_name(raw, session_id=""):
+    """Return a sidecar-safe participant name, or "" when unresolved.
+
+    Group chat clients assign Agent-N fallbacks. The sidecar should contain
+    only actual display names, never raw UUID prefixes that look like names.
+    """
+    if _group_chat_hex_label(raw, session_id):
+        return ""
+    name = _shorten_display_name(raw, session_id)
+    if _group_chat_hex_label(name, session_id):
+        return ""
+    return name
+
+
+def _group_chat_resolve_session_display_name(session_id):
+    """Best-effort lookup mirroring /api/sessions display-name precedence.
+
+    This is used only to backfill legacy group-chat sidecars. It checks the
+    same durable/live sources the session builders use, but targets one sid so
+    the 3s /read poll does not have to rebuild the whole sessions payload.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return ""
+    try:
+        overrides = _load_session_name_overrides()
+    except Exception:
+        overrides = {}
+    name = _group_chat_storeable_display_name(overrides.get(sid), sid)
+    if name:
+        return name
+
+    try:
+        registry_meta = (_load_session_registry() or {}).get(sid) or {}
+    except Exception:
+        registry_meta = {}
+    try:
+        spawn_entry = _spawn_registry_entry_for_session(sid) or {}
+    except Exception:
+        spawn_entry = {}
+    for raw in (registry_meta.get("name"), spawn_entry.get("name")):
+        name = _group_chat_storeable_display_name(raw, sid)
+        if name:
+            return name
+
+    try:
+        jsonl = _find_session_jsonl_any_project(sid)
+    except Exception:
+        jsonl = None
+    if jsonl:
+        try:
+            tail_meta = _extract_tail_meta(jsonl) or {}
+        except Exception:
+            tail_meta = {}
+        for raw in (
+            tail_meta.get("custom_title"),
+            tail_meta.get("agent_name"),
+            tail_meta.get("ai_title"),
+        ):
+            name = _group_chat_storeable_display_name(raw, sid)
+            if name:
+                return name
+
+    try:
+        codex_row = _codex_thread_row(sid)
+    except Exception:
+        codex_row = None
+    if codex_row:
+        title = _strip_ccc_session_state_instruction(
+            (codex_row.get("title") or "").strip()
+        ).strip()
+        first_message = _strip_ccc_session_state_instruction(
+            (codex_row.get("first_user_message") or "").strip()
+        ).strip()
+        for raw in (title, first_message, codex_row.get("agent_nickname")):
+            name = _group_chat_storeable_display_name(raw, sid)
+            if name:
+                return name
+
+    return ""
+
+
+def _group_chat_enrich_name_map(chat_path, meta):
+    """Fill real display-name gaps in a chat sidecar and return the map."""
+    session_ids = list((meta or {}).get("session_ids") or [])
+    current = dict((meta or {}).get("name_map") or {})
+    enriched = {}
+    changed = False
+
+    for sid in session_ids:
+        existing = _group_chat_storeable_display_name(current.get(sid), sid)
+        if existing:
+            enriched[sid] = existing
+            if existing != current.get(sid):
+                changed = True
+            continue
+        if sid in current:
+            changed = True
+        resolved = _group_chat_resolve_session_display_name(sid)
+        if resolved:
+            enriched[sid] = resolved
+            changed = True
+
+    for sid, raw in current.items():
+        if sid in session_ids:
+            continue
+        kept = _group_chat_storeable_display_name(raw, sid)
+        if kept:
+            enriched[sid] = kept
+            if kept != raw:
+                changed = True
+        else:
+            changed = True
+
+    if changed:
+        try:
+            _update_group_chat_sidecar(chat_path, name_map=enriched)
+        except Exception:
+            pass
+    return enriched
+
+
+def _group_chat_fallback_agent_name(session_id, session_ids):
+    try:
+        idx = list(session_ids or []).index(session_id) + 1
+    except ValueError:
+        idx = 1
+    return f"Agent-{idx}"
+
+
+def _group_chat_participant_label(session_id, name_map, session_ids=None):
+    name = _group_chat_storeable_display_name((name_map or {}).get(session_id), session_id)
+    return name or _group_chat_fallback_agent_name(session_id, session_ids or [])
+
+
+def _group_chat_nudge_log_by_message(meta, limit=200):
+    entries = (meta or {}).get("nudge_log") or []
+    if not isinstance(entries, list):
+        return {}
+    grouped = {}
+    for entry in entries[-int(limit):]:
+        if not isinstance(entry, dict):
+            continue
+        key = str(entry.get("message_key") or "").strip()
+        if not key:
+            continue
+        grouped.setdefault(key, []).append({
+            "sid": entry.get("sid") or entry.get("session_id") or "",
+            "name": entry.get("name") or "",
+            "ok": bool(entry.get("ok")),
+            "at": entry.get("at") or "",
+        })
+    return grouped
+
+
+def _group_chat_latest_author_matches(content):
+    pat = re.compile(
+        r'^##\s+.+?—\s+(?:([0-9a-fA-F]{8})\b|(Human)\b)',
+        re.MULTILINE,
+    )
+    return pat, list(pat.finditer(content or ""))
+
+
+def _group_chat_addressed_sids(body, session_ids, name_map):
+    addressed = set()
+    lower_body = (body or "").lower()
+    mentioned_hashes = {h.lower() for h in re.findall(r'@([0-9a-fA-F]{8})\b', body or "")}
+    for sid in session_ids or []:
+        if sid[:8].lower() in mentioned_hashes:
+            addressed.add(sid)
+            continue
+        label = _group_chat_participant_label(sid, name_map, session_ids)
+        if label and ("@" + label.lower()) in lower_body:
+            addressed.add(sid)
+    return addressed
+
+
+def _group_chat_auto_nudge_selection(content, session_ids, name_map):
+    """Return auto-nudge targets for the latest real post."""
+    pat, matches = _group_chat_latest_author_matches(content)
+    if not matches:
+        return {"targets": [], "reminder_key": "", "skipped": "no recent author",
+                "last_author_hash": None, "last_author_is_human": False}
+    tail = (content or "")[-12000:]
+    tail_start = max(0, len(content or "") - len(tail))
+    recent_matches = [m for m in matches if m.start() >= tail_start]
+    if not recent_matches:
+        return {"targets": [], "reminder_key": "", "skipped": "no recent author",
+                "last_author_hash": None, "last_author_is_human": False}
+    last_match = matches[-1]
+    if last_match.start() < tail_start:
+        return {"targets": [], "reminder_key": "", "skipped": "no recent author",
+                "last_author_hash": None, "last_author_is_human": False}
+
+    author = last_match.group(1) or last_match.group(2)
+    reminder_key = f"{len(matches)}:{last_match.group(0).strip()}"
+    exclude_sid = None
+    if author != "Human":
+        author_hash = author.lower()
+        for sid in session_ids or []:
+            if sid.lower().startswith(author_hash):
+                exclude_sid = sid
+                break
+        targets = [sid for sid in (session_ids or []) if sid != exclude_sid]
+        return {
+            "targets": targets,
+            "reminder_key": reminder_key,
+            "skipped": "" if targets else "no targets",
+            "last_author_hash": author_hash,
+            "last_author_is_human": False,
+        }
+
+    body_start = last_match.end()
+    next_heading = pat.search(content or "", body_start)
+    body = (content or "")[body_start:next_heading.start() if next_heading else None]
+    body = re.sub(r'^>\s*_[^\n]*system:[^\n]*\n?', '', body, flags=re.MULTILINE)
+    addressed = _group_chat_addressed_sids(body, session_ids, name_map)
+    targets = [sid for sid in (session_ids or []) if not addressed or sid in addressed]
+    return {
+        "targets": targets,
+        "reminder_key": reminder_key,
+        "skipped": "" if targets else "no targets",
+        "last_author_hash": None,
+        "last_author_is_human": True,
+        "addressed_sids": addressed,
+    }
+
+
 def _group_chat_post(path, text, chat_uuid="", session_id="", name="", emoji=""):
     """Append an entry to a group-chat file.
 
@@ -31970,9 +32211,14 @@ def _group_chat_post(path, text, chat_uuid="", session_id="", name="", emoji="")
         # line — no newlines or '#' — so a participant's title can't inject a
         # second heading or break the splitter (the other half of CCC-133).
         hash8 = m.group(1).lower()
-        nm = (_load_group_chat_sidecar(real_path) or {}).get("name_map") or {}
-        disp = str(name or "").strip() or nm.get(sid) or nm.get(hash8) or hash8
-        disp = _shorten_display_name(disp, sid)
+        sidecar = _load_group_chat_sidecar(real_path) or {}
+        nm = _group_chat_enrich_name_map(real_path, sidecar)
+        disp = (
+            _group_chat_storeable_display_name(name, sid)
+            or nm.get(sid)
+            or _group_chat_resolve_session_display_name(sid)
+            or _group_chat_fallback_agent_name(sid, sidecar.get("session_ids") or [])
+        )
         marker = str(emoji or "").strip() or "💬"
         speaker = f"{hash8}: {disp} {marker}"
     else:
@@ -31985,6 +32231,10 @@ def _group_chat_post(path, text, chat_uuid="", session_id="", name="", emoji="")
         # so the file stays lean for the next round of agent reads.
         _group_chat_normalize_whitespace(real_path)
         sidecar = _load_group_chat_sidecar(real_path)
+        if sid:
+            read_state = dict(sidecar.get("read_state") or {})
+            read_state[sid] = datetime.now().astimezone().isoformat()
+            _update_group_chat_sidecar(real_path, read_state=read_state)
         if not sidecar.get("archived"):
             _update_group_chat_sidecar(real_path, closed_at=None)
             _register_coordination(real_path)
@@ -32053,7 +32303,7 @@ def _group_chat_read_uncached(real_path):
         
         meta = _load_group_chat_sidecar(real_path)
         sids = meta.get("session_ids") or []
-        nm = meta.get("name_map") or {}
+        nm = _group_chat_enrich_name_map(real_path, meta)
         
         is_paused = bool(meta.get("paused"))
         with _coord_lock:
@@ -32102,6 +32352,8 @@ def _group_chat_read_uncached(real_path):
             "mode": meta.get("mode", "topic"),
             "session_ids": sids,
             "name_map": nm,
+            "nudge_log": _group_chat_nudge_log_by_message(meta),
+            "read_state": meta.get("read_state") or {},
             "status": status,
             "paused": is_paused,
             "paused_at": meta.get("paused_at"),
@@ -32248,9 +32500,18 @@ def _coordinate_sessions(payload):
     chat_path = os.path.join(group_chats_dir, f"{slug}-{ts}.md")
     chat_uuid = str(uuid.uuid4())
 
-    name_map = {m["session_id"]: _shorten_display_name(m.get("display_name") or m["session_id"], m["session_id"])
-                for m in sessions_meta if isinstance(m, dict) and m.get("session_id")}
-    participant_names = [name_map.get(sid, sid) for sid in session_ids]
+    name_map = {}
+    for m in sessions_meta:
+        if not isinstance(m, dict) or not m.get("session_id"):
+            continue
+        sid = str(m.get("session_id") or "").strip()
+        label = _group_chat_storeable_display_name(m.get("display_name"), sid)
+        if label:
+            name_map[sid] = label
+    participant_names = [
+        name_map.get(sid) or _group_chat_fallback_agent_name(sid, session_ids)
+        for sid in session_ids
+    ]
     if include_human:
         participant_names.append("human")
     participants_str = ", ".join(f"`{n}`" for n in participant_names)
@@ -32307,6 +32568,9 @@ def _coordinate_sessions(payload):
                 "closed_at": None,
                 "lane": lane,
                 "keywords": keywords,
+                "nudge_log": [],
+                "read_state": {},
+                "nudged_at": {},
             }, fh)
     except OSError:
         pass  # sidecar failure is non-fatal
@@ -32315,7 +32579,10 @@ def _coordinate_sessions(payload):
     # participants if there were any so the chat reads as a self-
     # contained timeline.
     if session_ids:
-        added_labels = [f"`{name_map.get(s) or s}` ({s[:8]})" for s in session_ids]
+        added_labels = [
+            f"`{_group_chat_participant_label(s, name_map, session_ids)}` ({s[:8]})"
+            for s in session_ids
+        ]
         _group_chat_log_system(
             chat_path,
             f"created chat with topic `{topic}` and added {', '.join(added_labels)}",
@@ -32419,14 +32686,14 @@ def _group_chat_update_header_if_changed(chat_path, force_write=False):
         return
 
     session_ids = meta.get("session_ids") or []
-    name_map = meta.get("name_map") or {}
+    name_map = _group_chat_enrich_name_map(real_path, meta)
 
     header_part, preserved_part, rest_part = _split_group_chat_header_for_rewrite(content)
 
     # Build the wake status block.
     wake_status_lines = ["**Wake-status:**"]
     for sid in session_ids:
-        label = name_map.get(sid) or sid
+        label = _group_chat_participant_label(sid, name_map, session_ids)
         pmeta = _group_chat_participant_meta(sid)
         if pmeta.get("is_live"):
             status_str = "online"
@@ -32522,31 +32789,10 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
     session_ids = meta.get("session_ids") or []
     topic = meta.get("topic", "")
     mode = meta.get("mode", "topic")
-    name_map = meta.get("name_map") or {}  # session_id → display_name
+    name_map = _group_chat_enrich_name_map(real_path, meta)  # session_id → display_name
     if not session_ids:
         return {"ok": False, "error": "no session_ids in sidecar"}
 
-    # Decide who to nudge based on what the LAST author was:
-    #   • Last author is an agent → exclude that agent (don't nudge them
-    #     to respond to themselves), ping everyone else.
-    #   • Last author is the Human → ping ONLY the agent who wrote
-    #     immediately before the Human, since the Human's message is
-    #     almost always a reply to that specific agent. Pinging everyone
-    #     would have N-1 sessions waste a turn introducing themselves to
-    #     a question that wasn't for them.
-    #   • Last author is the Human and there's no prior agent →
-    #     fall back to pinging everyone (fresh-thread case).
-    # Tag formats supported:
-    #   "## <ts> — <8-hex>: <name> <emoji>" (current)
-    #   "## <ts> — <8-hex> <emoji>" (legacy)
-    #   "## <ts> — Human" (human posts via the reader's input bar)
-    exclude_sid = None
-    only_sid = None
-    # When the Human's last message addresses multiple participants
-    # (by @mention or by short-id reference), we want to ping ALL of
-    # them — not just the most recent prior writer. The single
-    # `only_sid` was wrong for "Maya and Jordan, can you both…" cases.
-    addressed_sids = set()
     reminder_key = ""
     # Targeted nudge from the UI — bypass the last-writer auto-select
     # entirely. The user explicitly picked which participant to wake.
@@ -32554,6 +32800,18 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
         if target_sid not in session_ids:
             return {"ok": False, "error": f"target_sid {target_sid[:8]} not in chat participants"}
         results = []
+        now_iso = datetime.now().astimezone().isoformat()
+        message_key = ""
+        try:
+            with open(real_path, "r", encoding="utf-8") as fh:
+                content = fh.read()
+            message_key = _group_chat_auto_nudge_selection(
+                content, session_ids, name_map
+            ).get("reminder_key") or ""
+        except OSError:
+            pass
+        if not message_key:
+            message_key = f"manual:{time.time():.3f}"
         text = _group_chat_inject_text(real_path, topic, mode, target_sid)
         r = _inject_text_into_session(target_sid, text)
         results.append({"session_id": target_sid, "ok": bool(r.get("ok")), "error": r.get("error", "")})
@@ -32562,7 +32820,20 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
         # debounce) AND the sidecar last_reminder_at + targets so the
         # "Last nudge: X ago" row updates immediately and survives a
         # server restart.
+        label = _group_chat_participant_label(target_sid, name_map, session_ids)
+        latest_meta = _load_group_chat_sidecar(real_path)
+        nudge_log = list(latest_meta.get("nudge_log") or [])
+        nudge_log.append({
+            "message_key": message_key,
+            "sid": target_sid,
+            "name": label,
+            "ok": bool(r.get("ok")),
+            "at": now_iso,
+        })
+        nudge_log = nudge_log[-500:]
+        nudged_at = dict(latest_meta.get("nudged_at") or {})
         if r.get("ok"):
+            nudged_at[target_sid] = now_iso
             with _coord_lock:
                 entry = _active_coordinations.get(real_path)
                 if entry is not None:
@@ -32572,122 +32843,38 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
                     real_path,
                     last_reminder_at=time.time(),
                     last_reminder_targets=[target_sid[:8]],
+                    nudge_log=nudge_log,
+                    nudged_at=nudged_at,
                 )
+            except Exception:
+                pass
+            _group_chat_log_system(real_path, f"pinged `{label}` ({target_sid[:8]})")
+        else:
+            try:
+                _update_group_chat_sidecar(real_path, nudge_log=nudge_log)
             except Exception:
                 pass
         return {"ok": True, "results": results, "targeted": True}
     try:
         with open(real_path, "r", encoding="utf-8") as fh:
             content = fh.read()
-        # Read the LAST 12K of bytes — long enough to span tens of system
-        # `pinged` lines plus the most recent participant post(s). The old
-        # 3K window was too small once the chat got busy: with one nudge
-        # logged per minute, the trailing window quickly becomes 100%
-        # system noise, the author regex finds nothing, exclude_sid
-        # stays None, and the nudge falls through to ping-everyone — a
-        # self-perpetuating loop with no real activity behind it.
-        tail = content[-12000:]
-        author_pat = re.compile(
-            r'^##\s+.+?—\s+(?:([0-9a-fA-F]{8})\b|(Human)\b)',
-            re.MULTILINE,
-        )
-        matches = list(author_pat.finditer(content))
-        if not matches:
-            # No author has posted in the recent window — only system
-            # nudges. Don't fire; there's nothing for participants to
-            # respond to and another ping just feeds the loop. This is
-            # the dominant case when a chat goes quiet for an extended
-            # period; the watcher's idle-timeout will eventually drop it.
+        selection = _group_chat_auto_nudge_selection(content, session_ids, name_map)
+        reminder_key = selection.get("reminder_key") or ""
+        target_sids = list(selection.get("targets") or [])
+        if selection.get("skipped") == "no recent author":
             return {"ok": True, "results": [], "skipped": "no recent author"}
-        tail_start = max(0, len(content) - len(tail))
-        authors = [
-            (m.group(1) or m.group(2))
-            for m in matches
-            if m.start() >= tail_start
-        ]
-        if not authors:
-            return {"ok": True, "results": [], "skipped": "no recent author"}
-        last_match = matches[-1]
-        reminder_key = f"{len(matches)}:{last_match.group(0).strip()}"
-        last = authors[-1]
-        # Always capture the writer's own sid so the nudge loop can
-        # skip them (no-self-nudge). Applies to both Human and agent
-        # last-authors.
-        if last != "Human":
-            last_hash = last.lower()
-            for sid in session_ids:
-                if sid.lower().startswith(last_hash):
-                    exclude_sid = sid
-                    break
-        # Scan the LAST author's body for @mentions / short-id refs —
-        # this is engine-agnostic. Both Human posts AND agent posts can
-        # address specific participants ("Maya and Jordan, can you
-        # both…", "@Maya let's verify that"). When found, ping ONLY
-        # those addressees instead of everyone.
-        try:
-            body_start = last_match.end()
-            next_heading = author_pat.search(content, body_start)
-            body = content[body_start:next_heading.start() if next_heading else None]
-            # Strip system blockquotes so a `> _ts — system: pinged
-            # <agent>` line doesn't get parsed as the author
-            # addressing that agent.
-            body = re.sub(r'^>\s*_[^\n]*system:[^\n]*\n?', '', body, flags=re.MULTILINE)
-            mentioned_hashes = {h.lower() for h in re.findall(r'@?([0-9a-fA-F]{8})\b', body)}
-            lower_body = body.lower()
-            for sid, dname in name_map.items():
-                if not dname:
-                    continue
-                needle = '@' + str(dname).lower()
-                if needle in lower_body:
-                    addressed_sids.add(sid)
-            for sid in session_ids:
-                if sid[:8].lower() in mentioned_hashes:
-                    addressed_sids.add(sid)
-        except Exception:
-            pass
-        # Human-as-author fallback: when the human's message doesn't
-        # explicitly address anyone, pick the most recent prior agent
-        # writer (their reply is almost always for that specific agent).
-        # Agent-as-author with no mentions falls through to the existing
-        # ping-everyone-but-the-writer behavior (exclude_sid was set
-        # above, no addressed_sids → no only_sid → loop pings the rest).
-        if last == "Human" and not addressed_sids:
-            prior = next((a for a in reversed(authors[:-1]) if a != "Human"), None)
-            if prior:
-                last_hash = prior.lower()
-                for sid in session_ids:
-                    if sid.lower().startswith(last_hash):
-                        only_sid = sid
-                        break
-        # Never address the writer themselves — a self-mention is
-        # always a false positive (signature, quoted text, etc.).
-        if exclude_sid:
-            addressed_sids.discard(exclude_sid)
     except OSError:
-        pass
+        target_sids = []
 
     results = []
     pinged_labels = []
-    target_sids = []
+    target_set = set(target_sids)
+    addressed_sids = selection.get("addressed_sids") or set() if 'selection' in locals() else set()
     for sid in session_ids:
-        # addressed_sids wins when populated — Human just replied and
-        # explicitly named one or more participants (by mention or by
-        # implicit "last writer" association). Ping all of them, skip
-        # everyone else.
-        if addressed_sids:
-            if sid not in addressed_sids:
-                results.append({"session_id": sid, "ok": True, "skipped": "not addressed"})
-                continue
-        elif only_sid is not None and sid != only_sid:
-            # Legacy single-target path (only fires when addressed_sids
-            # is empty AND we still found a prior writer). Kept as a
-            # fallback for defensive parity.
-            results.append({"session_id": sid, "ok": True, "skipped": "not addressed"})
+        if sid not in target_set:
+            reason = "not addressed" if addressed_sids else "last writer"
+            results.append({"session_id": sid, "ok": True, "skipped": reason})
             continue
-        if sid == exclude_sid:
-            results.append({"session_id": sid, "ok": True, "skipped": "last writer"})
-            continue
-        target_sids.append(sid)
 
     if reminder_key and target_sids:
         with _coord_lock:
@@ -32704,23 +32891,44 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
             )
 
     failed_labels = []
+    log_entries = []
+    nudged_at = {}
     for sid in target_sids:
+        now_iso = datetime.now().astimezone().isoformat()
+        label = _group_chat_participant_label(sid, name_map, session_ids)
         text = _group_chat_inject_text(real_path, topic, mode, sid)
         r = _inject_text_into_session(sid, text)
         results.append({"session_id": sid, "ok": bool(r.get("ok")), "error": r.get("error", "")})
+        log_entries.append({
+            "message_key": reminder_key or f"auto:{time.time():.3f}",
+            "sid": sid,
+            "name": label,
+            "ok": bool(r.get("ok")),
+            "at": now_iso,
+        })
         if r.get("ok"):
-            label = name_map.get(sid) or sid
             pinged_labels.append(f"`{label}` ({sid[:8]})")
+            nudged_at[sid] = now_iso
         else:
             # Surface the failure in-chat. A silently-dropped nudge (offline
             # Codex routed through resume, a tty-less Claude session, a dead
             # spawn) used to leave NO trace at all — the chat looked idle
             # while CCC quietly failed to wake anyone. Log a short reason so
             # "pinging doesn't work" is observable instead of invisible.
-            label = name_map.get(sid) or sid
             reason = str(r.get("code") or r.get("error") or "delivery failed").strip()
             reason = re.sub(r"\s+", " ", reason)[:120]
             failed_labels.append(f"`{label}` ({sid[:8]}): {reason}")
+    if log_entries:
+        latest_meta = _load_group_chat_sidecar(real_path)
+        existing_log = list(latest_meta.get("nudge_log") or [])
+        existing_nudged_at = dict(latest_meta.get("nudged_at") or {})
+        existing_log.extend(log_entries)
+        existing_nudged_at.update(nudged_at)
+        _update_group_chat_sidecar(
+            real_path,
+            nudge_log=existing_log[-500:],
+            nudged_at=existing_nudged_at,
+        )
     # Log AFTER the inject so the baseline-mtime bump doesn't race
     # with the inject's own potential file changes. The bump prevents
     # the watcher from seeing this admin write as a real activity tick
@@ -32837,7 +33045,8 @@ def _group_chat_include_human(meta: dict, header_part: str = "") -> bool:
 
 def _group_chat_participants_str(meta: dict, header_part: str = "") -> str:
     name_map = (meta or {}).get("name_map") or {}
-    names = [name_map.get(sid) or sid for sid in ((meta or {}).get("session_ids") or [])]
+    session_ids = (meta or {}).get("session_ids") or []
+    names = [_group_chat_participant_label(sid, name_map, session_ids) for sid in session_ids]
     if _group_chat_include_human(meta or {}, header_part):
         names.append("human")
     return ", ".join(f"`{n}`" for n in names) or "`human`"
@@ -33113,33 +33322,15 @@ def _group_chat_compute_waiting(real_path: str, session_ids: list, name_map: dic
     out = {"last_author_hash": None, "last_author_is_human": False, "waiting_on_hashes": []}
     try:
         with open(real_path, "r", encoding="utf-8") as fh:
-            tail = fh.read()[-12000:]
+            content = fh.read()
     except OSError:
         return out
-    pat = re.compile(
-        r'^##\s+.+?—\s+(?:([0-9a-fA-F]{8})\b|(Human)\b)',
-        re.MULTILINE,
-    )
-    authors = [(m.group(1) or m.group(2)) for m in pat.finditer(tail)]
-    if not authors:
+    selection = _group_chat_auto_nudge_selection(content, session_ids, name_map)
+    if selection.get("skipped") == "no recent author":
         return out
-    last = authors[-1]
-    if last == "Human":
-        out["last_author_is_human"] = True
-        prior = next((a for a in reversed(authors[:-1]) if a != "Human"), None)
-        if prior:
-            out["last_author_hash"] = prior.lower()
-            # Waiting on the agent the human likely addressed.
-            out["waiting_on_hashes"] = [prior.lower()]
-    else:
-        out["last_author_hash"] = last.lower()
-        # Waiting on everyone EXCEPT the last writer.
-        last_lower = last.lower()
-        out["waiting_on_hashes"] = [
-            sid[:8].lower()
-            for sid in (session_ids or [])
-            if not sid.lower().startswith(last_lower)
-        ]
+    out["last_author_hash"] = selection.get("last_author_hash")
+    out["last_author_is_human"] = bool(selection.get("last_author_is_human"))
+    out["waiting_on_hashes"] = [sid[:8].lower() for sid in selection.get("targets") or []]
     return out
 
 
@@ -33212,7 +33403,7 @@ def _list_group_chats(include_archived: bool = False, only_archived: bool = Fals
         except (TypeError, ValueError):
             orchestrator_last_trigger_at = last_nudge_at or last_reminder_at or 0
         sids = meta.get("session_ids") or []
-        nm = meta.get("name_map") or {}
+        nm = _group_chat_enrich_name_map(md_path, meta)
         chat_uuid = _ensure_group_chat_uuid(md_path, meta)
         # Archived chats are history: no session is live and nothing is
         # "waiting", so skip the per-participant liveness probes (ps/lsof +
@@ -33592,10 +33783,13 @@ def _group_chat_add_participant(raw_path: str, session_id: str, display_name: st
     already = sid in session_ids
     if not already:
         session_ids.append(sid)
-    if display_name and not name_map.get(sid):
-        name_map[sid] = _shorten_display_name(display_name, sid)
+    clean_display_name = _group_chat_storeable_display_name(display_name, sid)
+    if clean_display_name and not name_map.get(sid):
+        name_map[sid] = clean_display_name
     elif sid not in name_map:
-        name_map[sid] = sid  # fall back to bare sid for the loop-detection map
+        resolved = _group_chat_resolve_session_display_name(sid)
+        if resolved:
+            name_map[sid] = resolved
 
     if not _update_group_chat_sidecar(
         real_path, session_ids=session_ids, name_map=name_map
@@ -33613,7 +33807,7 @@ def _group_chat_add_participant(raw_path: str, session_id: str, display_name: st
     text = _group_chat_inject_text(real_path, topic, mode, sid)
     inject_result = _inject_text_into_session(sid, text)
     if not already:
-        added_label = name_map.get(sid) or display_name or sid
+        added_label = _group_chat_participant_label(sid, name_map, session_ids)
         _group_chat_log_system(real_path, f"added `{added_label}` ({sid[:8]})")
     _group_chat_update_header_if_changed(real_path, force_write=True)
 
@@ -49915,8 +50109,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # If sessions_meta is missing, try to build it with short name mappings from session_ids
             if "session_ids" in payload and "sessions_meta" not in payload:
                 sessions_meta = []
-                for sid in payload["session_ids"]:
-                    sessions_meta.append({"session_id": sid, "display_name": sid[:8]})
+                raw_ids = payload.get("session_ids") or []
+                display_names = payload.get("display_names") if isinstance(payload.get("display_names"), dict) else {}
+                one_display_name = (payload.get("display_name") or "").strip() if len(raw_ids) == 1 else ""
+                for sid in raw_ids:
+                    sid = str(sid or "").strip()
+                    display_name = (
+                        display_names.get(sid)
+                        or one_display_name
+                        or _group_chat_resolve_session_display_name(sid)
+                    )
+                    row = {"session_id": sid}
+                    clean_name = _group_chat_storeable_display_name(display_name, sid)
+                    if clean_name:
+                        row["display_name"] = clean_name
+                    sessions_meta.append(row)
                 payload["sessions_meta"] = sessions_meta
             self.send_json(_coordinate_sessions(payload))
         elif path in ("/api/group-chat/add", "/api/group-chats/add"):
@@ -49931,7 +50138,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             session_id = (payload.get("session_id") or "").strip()
             display_name = (payload.get("display_name") or "").strip()
             if not display_name and session_id:
-                display_name = session_id[:8]
+                display_name = _group_chat_resolve_session_display_name(session_id)
             
             if (not chat_path and not chat_uuid) or not session_id:
                 self.send_json({"ok": False, "error": "missing chat_id/chat_path or session_id"})
