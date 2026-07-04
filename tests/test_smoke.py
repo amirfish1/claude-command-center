@@ -4084,13 +4084,13 @@ class TestServerImports(unittest.TestCase):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
-        
+
         # Empty session id
         self.assertFalse(server._ensure_cursor_session_visible(""))
-        
+
         # Non-UUID session id
         self.assertFalse(server._ensure_cursor_session_visible("not-a-uuid"))
-        
+
         # Valid UUID but no cwd/spawn_entry
         self.assertFalse(server._ensure_cursor_session_visible("00000000-0000-4000-8000-000000000001"))
 
@@ -4098,7 +4098,7 @@ class TestServerImports(unittest.TestCase):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
-        
+
         with tempfile.TemporaryDirectory() as td:
             with mock.patch.object(server.Path, "home", return_value=pathlib.Path(td)):
                 sid = "00000000-0000-4000-8000-000000000001"
@@ -4109,12 +4109,12 @@ class TestServerImports(unittest.TestCase):
                 }
                 res = server._ensure_cursor_session_visible(sid, spawn_entry=spawn_entry)
                 self.assertTrue(res)
-                
+
                 import hashlib
                 project_hash = hashlib.md5(str(pathlib.Path(td).resolve()).encode("utf-8")).hexdigest()
                 db_path = pathlib.Path(td) / ".cursor" / "chats" / project_hash / sid / "store.db"
                 self.assertTrue(db_path.is_file())
-                
+
                 import sqlite3
                 conn = sqlite3.connect(str(db_path))
                 row = conn.execute("SELECT value FROM meta WHERE key = '0'").fetchone()
@@ -4128,24 +4128,24 @@ class TestServerImports(unittest.TestCase):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
-        
+
         with tempfile.TemporaryDirectory() as td:
             with mock.patch.object(server.Path, "home", return_value=pathlib.Path(td)):
                 import urllib.parse
-                
+
                 # Mock platforms to Darwin so it uses standard macOS App Support dir in tests
                 with mock.patch("sys.platform", "darwin"):
                     # Create workspaceStorage and workspace.json
                     ws_dir = pathlib.Path(td) / "Library" / "Application Support" / "Cursor" / "User" / "workspaceStorage" / "test-workspace-id"
                     ws_dir.mkdir(parents=True, exist_ok=True)
-                    
+
                     ws_json = ws_dir / "workspace.json"
                     project_dir = pathlib.Path(td) / "my-project"
                     project_dir.mkdir(parents=True, exist_ok=True)
-                    
+
                     with open(ws_json, "w", encoding="utf-8") as f:
                         json.dump({"folder": project_dir.as_uri()}, f)
-                        
+
                     ws_db = ws_dir / "state.vscdb"
                     import sqlite3
                     conn = sqlite3.connect(str(ws_db))
@@ -4157,7 +4157,7 @@ class TestServerImports(unittest.TestCase):
                     )
                     conn.commit()
                     conn.close()
-                    
+
                     # Create globalStorage and state.vscdb
                     global_dir = pathlib.Path(td) / "Library" / "Application Support" / "Cursor" / "User" / "globalStorage"
                     global_dir.mkdir(parents=True, exist_ok=True)
@@ -4170,7 +4170,7 @@ class TestServerImports(unittest.TestCase):
                     )
                     conn.commit()
                     conn.close()
-                    
+
                     sid = "00000000-0000-4000-8000-000000000001"
                     spawn_entry = {
                         "cwd": str(project_dir),
@@ -4179,7 +4179,7 @@ class TestServerImports(unittest.TestCase):
                     }
                     res = server._ensure_cursor_session_visible(sid, spawn_entry=spawn_entry)
                     self.assertTrue(res)
-                    
+
                     # Assert workspace db updated
                     conn = sqlite3.connect(str(ws_db))
                     row = conn.execute("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").fetchone()
@@ -4189,7 +4189,7 @@ class TestServerImports(unittest.TestCase):
                     self.assertEqual(len(ws_data["allComposers"]), 1)
                     self.assertEqual(ws_data["allComposers"][0]["composerId"], sid)
                     self.assertEqual(ws_data["allComposers"][0]["name"], "Test Cursor Session")
-                    
+
                     # Assert global db updated
                     conn = sqlite3.connect(str(global_db))
                     row = conn.execute("SELECT value FROM ItemTable WHERE key = 'composer.composerHeaders'").fetchone()
@@ -10356,6 +10356,57 @@ class TestGroupChatSidecarHelpers(unittest.TestCase):
         self.assertEqual(server._resolve_group_chat_path(""), "")
         self.assertEqual(server._resolve_group_chat_path("../../../tmp/x.md"), "")
 
+    def test_group_chat_add_participant_preserves_display_name(self):
+        """Adding a participant with an explicit display_name should preserve
+        it in the sidecar name_map and log the added participant."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmp:
+            md = pathlib.Path(tmp) / "chat.md"
+            md.write_text("# Group Chat - Test\n", encoding="utf-8")
+            js_path = pathlib.Path(tmp) / "chat.json"
+            js_path.write_text(json.dumps({
+                "session_ids": [],
+                "name_map": {},
+                "topic": "Test",
+                "mode": "topic"
+            }), encoding="utf-8")
+
+            sid = "cccccccc-3333-4333-8333-cccccccccccc"
+            display_name = "My Awesome Agent"
+
+            with mock.patch.object(server, "_resolve_group_chat_ref", return_value=str(md)), \
+                 mock.patch.object(server, "_inject_text_into_session", return_value={"ok": True}):
+                res = server._group_chat_add_participant(str(md), sid, display_name=display_name)
+
+            self.assertTrue(res["ok"])
+            self.assertEqual(res["session_id"], sid)
+
+            # Load sidecar and verify
+            sidecar = server._load_group_chat_sidecar(str(md))
+            self.assertIn(sid, sidecar.get("session_ids", []))
+            self.assertEqual(sidecar.get("name_map", {}).get(sid), "My Awesome Agent")
+
+    def test_group_chat_reader_poller_primes_redesign_state(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("_gcReaderSessionIds = data.session_ids || [];", app_js)
+        self.assertIn("_gcReaderNameMap = data.name_map || {};", app_js)
+        self.assertIn("buildAgentFallbackNames(data.content, _gcReaderSessionIds);", app_js)
+        self.assertIn("_gcReplayData = data;", app_js)
+        self.assertIn("updateGcInfoBar(data);", app_js)
+
+    def test_group_chat_reader_uses_numbered_agent_fallbacks(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertNotIn("return 'Agent-' + shortSid;", app_js)
+        self.assertIn("looksLikeShortHash", app_js)
+        self.assertIn("_gcAgentFallbackNames[key] = 'Agent-' +", app_js)
+
+    def test_group_chat_reader_panel_controls_keep_chat_ref(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn('data-gc-enable data-gc-path="${escapeAttr(chatPath)}" data-gc-id="${escapeAttr(chatId)}"', app_js)
+        self.assertIn('data-gc-stop data-gc-path="${escapeAttr(chatPath)}" data-gc-id="${escapeAttr(chatId)}"', app_js)
+
 
 class TestTemplateGallery(unittest.TestCase):
     def test_templates_json_parses_and_has_required_shape(self):
@@ -10407,7 +10458,7 @@ class TestPendingInputs(unittest.TestCase):
         self.server = importlib.import_module("server")
         self.tmp_dir = tempfile.mkdtemp(prefix="ccc-pending-inputs-")
         self.server.PENDING_INPUTS_FILE = pathlib.Path(self.tmp_dir) / "pending-inputs.json"
-        
+
         # Clear locks/queues
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue.clear()
@@ -10947,7 +10998,7 @@ class TestCodexEsc(unittest.TestCase):
              mock.patch.object(self.server, "find_live_codex_processes", return_value=[]), \
              mock.patch.object(self.server, "find_live_gemini_processes", return_value=[]), \
              mock.patch.object(self.server, "find_live_cursor_processes", return_value=[]):
-            
+
             self.server._engine_live_sids_cache = {"ts": 0.0, "sids": frozenset()}
             sids = self.server._live_engine_session_ids()
             self.assertIn("dynamic-codex-sid", sids)

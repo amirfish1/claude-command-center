@@ -2766,12 +2766,12 @@
         const target = btn.dataset.target;
         const sidNow = currentSession && currentSession.id;
         if (!sidNow || !target) return;
-        
+
         const isNonClaude = isPkood || isCodex || isGemini || isCursor || isAntigravity;
         const confirmMsg = isNonClaude
           ? 'Pin session to ' + target + '?\n\nThe session will visually display under the new repo.'
           : 'Move session to ' + target + '?\n\nThe JSONL file gets relocated; resume will then run in the new repo.';
-          
+
         if (!confirm(confirmMsg)) return;
         btn.disabled = true;
         btn.textContent = isNonClaude ? 'Pinning…' : 'Moving…';
@@ -2826,7 +2826,7 @@
         $convOverflowMenu.classList.add('open');
         $convOverflowMenu.setAttribute('aria-hidden', 'false');
         $convOverflowBtn.setAttribute('aria-expanded', 'true');
-        
+
         // Escape the status-rail overflow-y container using fixed coords
         const rect = $convOverflowBtn.getBoundingClientRect();
         $convOverflowMenu.style.position = 'fixed';
@@ -6768,8 +6768,8 @@
         let interimText = '';
         for (let i = _sttCommittedIndex; i < event.results.length; ++i) {
           let text = event.results[i][0].transcript;
-          if ((_sttPreText || interimText) && 
-              !/[\s.,!?;:]$/.test(_sttPreText + interimText) && 
+          if ((_sttPreText || interimText) &&
+              !/[\s.,!?;:]$/.test(_sttPreText + interimText) &&
               !/^\s/.test(text)) {
             interimText += ' ';
           }
@@ -6871,7 +6871,7 @@
     const range = new Range();
     let startFound = false;
     let endFound = false;
-    
+
     for (const m of _ttsTextMapping) {
       if (!startFound && charIndex >= m.start && charIndex < m.end) {
         const offset = charIndex - m.start;
@@ -6890,7 +6890,7 @@
         break;
       }
     }
-    
+
     if (startFound) {
       if (!endFound) {
         try {
@@ -6964,7 +6964,7 @@
   function buildTtsDataFromRange(range) {
     let text = "";
     const mapping = [];
-    
+
     const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT, {
       acceptNode: function(node) {
         if (!range.intersectsNode(node)) return NodeFilter.FILTER_REJECT;
@@ -6973,7 +6973,7 @@
         return NodeFilter.FILTER_ACCEPT;
       }
     }, false);
-    
+
     let node;
     let prevBlock = null;
     let firstNode = true;
@@ -7063,7 +7063,7 @@
       } else if (el.classList.contains('assistant-text')) {
         nodesToExtract = [el];
       }
-      
+
       if (nodesToExtract.length > 0) {
         const data = buildTtsDataFromElements(nodesToExtract);
         if (data && data.text.trim()) {
@@ -8667,7 +8667,7 @@
   function renderInline(s) {
     // Escape HTML first
     s = escapeHtml(s);
-    // Expand pasted images before other markdown formatting so their paths 
+    // Expand pasted images before other markdown formatting so their paths
     // don't get wrapped in backticks or a-tags by later rules.
     s = linkifyPastedImages(s);
     // Inline code `x` (also make paths inside code clickable)
@@ -14196,11 +14196,11 @@
       const okBtn = document.getElementById('promptOkBtn');
       const cancelBtn = document.getElementById('promptCancelBtn');
       const closeBtn = document.getElementById('promptCloseBtn');
-      
+
       titleEl.textContent = title;
       input.value = defaultValue || '';
       modal.classList.add('open');
-      
+
       let resolved = false;
       function cleanup() {
         modal.classList.remove('open');
@@ -14229,7 +14229,7 @@
       cancelBtn.addEventListener('click', onCancel);
       closeBtn.addEventListener('click', onCancel);
       input.addEventListener('keydown', onKey);
-      
+
       setTimeout(() => input.focus(), 50);
     });
   }
@@ -16964,6 +16964,664 @@
   // Latest participant name_map from the reader poll — used for @
   // autocomplete in the group-chat input box.
   let _gcReaderNameMap = {};
+  let _gcReaderSessionIds = [];
+  let _gcAgentFallbackNames = {};
+  let _gcReplayData = null;
+  let _gcLastMessageCount = 0;
+
+  let _gcReplayActive = false;
+  let _gcReplaySpeed = 1;
+  let _gcReplayPaused = false;
+  let _gcReplayTimeout = null;
+  let _gcReplayMsgIndex = 0;
+  let _gcReplaySentenceIndex = 0;
+  let _gcReplayMessages = [];
+  let _gcReplayAllNonSys = [];
+  let _gcReplaySpeakersAfter = [];
+  let _onReplayKeyDownRef = null;
+
+  function gcFallbackName(shortSid) {
+    const key = String(shortSid || '').substring(0, 8).toLowerCase();
+    if (!key) return 'Agent-?';
+    if (!_gcAgentFallbackNames[key]) {
+      _gcAgentFallbackNames[key] = 'Agent-' + (Object.keys(_gcAgentFallbackNames).length + 1);
+    }
+    return _gcAgentFallbackNames[key];
+  }
+
+  function gcDisplayName(sid) {
+    if (!sid) return 'Agent-?';
+    const sidStr = String(sid).trim();
+    if (sidStr.toLowerCase() === 'human') return 'Human';
+    if (sidStr.toLowerCase() === 'system') return 'system';
+    if (/^agent-\d+$/i.test(sidStr)) return sidStr;
+
+    let fullSid = (_gcReaderSessionIds || []).find(id => id.toLowerCase() === sidStr.toLowerCase() || id.toLowerCase().startsWith(sidStr.toLowerCase())) || sidStr;
+    const shortSid = fullSid.substring(0, 8).toLowerCase();
+
+    if (_gcReaderNameMap && _gcReaderNameMap[fullSid]) {
+      const name = _gcReaderNameMap[fullSid];
+      const looksLikeShortHash = /^[0-9a-f]{8}$/i.test(String(name).trim());
+      const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(name).trim());
+      const looksLikeHashUuid = /^[0-9a-f]{8}:\s*[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(name).trim());
+      if (!looksLikeShortHash && !looksLikeUuid && !looksLikeHashUuid) {
+        return name;
+      }
+    }
+
+    const conv = (conversationsData || []).find(c => c && (c.session_id === fullSid || c.id === fullSid));
+    if (conv) {
+      if (conv.display_name && !/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(conv.display_name)) {
+        return conv.display_name;
+      }
+      if (conv.ai_title && !/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(conv.ai_title)) {
+        return conv.ai_title;
+      }
+    }
+
+    if (_gcAgentFallbackNames[shortSid]) {
+      return _gcAgentFallbackNames[shortSid];
+    }
+
+    return gcFallbackName(shortSid);
+  }
+
+  function gcInitials(name) {
+    if (!name) return '?';
+    const nameStr = String(name).trim();
+    if (nameStr.toLowerCase() === 'human') return 'H';
+    if (nameStr.toLowerCase() === 'system') return 'SYS';
+    const clean = nameStr.replace(/\(.*?\)/g, '').replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
+    const words = clean.split(/[\s\-_]+/);
+    if (words.length >= 2) {
+      return (words[0][0] + words[1][0]).toUpperCase();
+    }
+    if (words.length === 1 && words[0]) {
+      const w = words[0];
+      if (w.length >= 2) {
+        const m = w.match(/^Agent(\d+)$/i);
+        if (m) return 'A' + m[1];
+        return w.slice(0, 2).toUpperCase();
+      }
+      return w.toUpperCase();
+    }
+    return '?';
+  }
+
+  function extractHash(speakerOrHeading) {
+    if (!speakerOrHeading) return '';
+    const s = String(speakerOrHeading).trim();
+    const parenMatch = s.match(/\(([0-9a-fA-F]{8})\)/);
+    if (parenMatch) return parenMatch[1];
+    const colonMatch = s.match(/^([0-9a-fA-F]{8}):/);
+    if (colonMatch) return colonMatch[1];
+    if (/^[0-9a-fA-F]{8}$/.test(s) || /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-/.test(s)) {
+      return s;
+    }
+    const trailingMatch = s.match(/\b([0-9a-fA-F]{8})\b/);
+    if (trailingMatch) return trailingMatch[1];
+    return s;
+  }
+
+  function buildAgentFallbackNames(content, sessionIds) {
+    const text = String(content || '');
+    const matches = Array.from(text.matchAll(
+      /^#{2,3}[ \t]+(.+?(?:—[ \t]+(?:[0-9a-fA-F]{8}(?::|\b)|Human\b|system(?::|\b)).*|.*\([0-9a-fA-F]{8}\)))[ \t]*$/gm
+    ));
+    const firstSeenHashes = [];
+
+    const extractHashFromHeading = (heading) => {
+      if (/\s+—\s+/.test(heading)) {
+        const parts = heading.split(/\s+—\s+/);
+        const lastPart = parts[parts.length - 1] || '';
+        const clean = lastPart.split(':')[0].trim();
+        return clean;
+      } else {
+        const m = heading.match(/\(([0-9a-fA-F]{8})\)\s*$/);
+        if (m) return m[1];
+      }
+      return '';
+    };
+
+    matches.forEach(m => {
+      const heading = (m[1] || '').trim();
+      const hash = extractHashFromHeading(heading);
+      if (hash && hash.toLowerCase() !== 'human' && hash.toLowerCase() !== 'system') {
+        const short = hash.toLowerCase().substring(0, 8);
+        if (!firstSeenHashes.includes(short)) {
+          firstSeenHashes.push(short);
+        }
+      }
+    });
+
+    (sessionIds || []).forEach(sid => {
+      const short = sid.substring(0, 8).toLowerCase();
+      if (!firstSeenHashes.includes(short)) {
+        firstSeenHashes.push(short);
+      }
+    });
+
+    const fallbackNames = {};
+    firstSeenHashes.forEach((short, idx) => {
+      fallbackNames[short] = 'Agent-' + (idx + 1);
+    });
+
+    _gcAgentFallbackNames = fallbackNames;
+  }
+
+  function getParticipantColor(sid, name) {
+    if (name && name.toLowerCase() === 'human') return 'green';
+    const sids = _gcReaderSessionIds || [];
+    const sidStr = sid ? String(sid).toLowerCase() : '';
+    const idx = sidStr
+      ? sids.findIndex(id => id.toLowerCase() === sidStr || id.toLowerCase().startsWith(sidStr))
+      : sids.findIndex(id => gcDisplayName(id) === name);
+    const colorPalette = ['accent', 'purple', 'orange', 'cyan', 'red', 'yellow'];
+    if (idx === -1) return 'accent';
+    return colorPalette[idx % colorPalette.length];
+  }
+
+  function formatWaitingOn(names) {
+    if (!names || names.length === 0) return 'All participants have replied';
+    if (names.length === 1) return `Waiting on ${names[0]} to reply`;
+    if (names.length === 2) return `Waiting on ${names[0]} and ${names[1]} to reply`;
+    return `Waiting on ${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]} to reply`;
+  }
+
+  function updateGcInfoBar(data) {
+    const infoBar = document.getElementById('gcInfoBar');
+    if (!infoBar) return;
+
+    const now = Date.now();
+    const lastAct = data.orchestrator_last_activity_at || data.mtime || (now / 1000);
+    const isActive = data.status === 'active';
+    const minutesSinceActivity = (now / 1000 - lastAct) / 60;
+
+    let liveHtml = '';
+    if (isActive && minutesSinceActivity < 5) {
+      liveHtml = '<span class="gc-live-indicator is-live" title="Active and updating"><span class="gc-live-dot"></span>LIVE</span>';
+    } else {
+      const relTime = gcRelativeTime(new Date(lastAct * 1000).toISOString());
+      liveHtml = `<span class="gc-live-indicator is-idle" title="Last activity was ${relTime}">Idle · ${relTime}</span>`;
+    }
+
+    let startedHtml = '';
+    const text = String(data.content || '');
+    const match = text.match(/^##\s+(.+?)—\s+(?:[0-9a-fA-F]{8}|Human\b).*$/m);
+    if (match && match[1]) {
+      const startedAt = match[1].trim();
+      const relativeStarted = gcRelativeTime(startedAt);
+      startedHtml = `<span class="gc-started-time" title="${escapeAttr(startedAt)}">Started ${relativeStarted}</span>`;
+    }
+
+    const modeBadge = `<span class="gc-mode-badge">${escapeHtml(data.mode || 'topic')}</span>`;
+
+    const sids = data.session_ids || [];
+    const waiting = data.waiting || {};
+    const waitingOnHashes = waiting.waiting_on_hashes || [];
+
+    const chipsHtml = sids.map(sid => {
+      const name = gcDisplayName(sid);
+      const color = getParticipantColor(sid, name);
+      const isOnline = !waitingOnHashes.some(h => sid.toLowerCase().startsWith(h.toLowerCase()));
+      const onlineDot = `<span class="gc-online-dot ${isOnline ? 'is-online' : 'is-waiting'}" title="${isOnline ? 'Online / Idle' : 'Waiting for reply'}"></span>`;
+      const initials = gcInitials(name);
+
+      return `<button type="button" class="gc-part-chip" data-gc-part-sid="${escapeAttr(sid)}" title="Scroll to participant details / Nudge">`
+        + `<span class="gc-part-dot" style="background-color: var(--${color})"></span>`
+        + `<span class="gc-part-initials">${escapeHtml(initials)}</span>`
+        + `<span class="gc-part-name">${escapeHtml(name)}</span>`
+        + onlineDot
+        + `</button>`;
+    }).join('');
+
+    infoBar.innerHTML = `<div class="gc-info-left">${liveHtml} · ${modeBadge} · ${startedHtml}</div>`
+      + `<div class="gc-info-right"><div class="gc-part-strip">${chipsHtml}</div></div>`;
+
+    infoBar.querySelectorAll('.gc-part-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const sid = btn.getAttribute('data-gc-part-sid');
+        const card = document.querySelector(`.gco-part-card[data-gc-part-sid="${CSS.escape(sid)}"]`);
+        if (card) {
+          card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          card.classList.remove('gco-highlight');
+          void card.offsetWidth;
+          card.classList.add('gco-highlight');
+          setTimeout(() => card.classList.remove('gco-highlight'), 2000);
+        }
+      });
+    });
+  }
+
+  function showUpdatedJustNowTick() {
+    const header = document.querySelector('.gc-reader-header');
+    if (!header) return;
+    let tick = header.querySelector('.gc-updated-tick');
+    if (tick) tick.remove();
+    tick = document.createElement('span');
+    tick.className = 'gc-updated-tick';
+    tick.textContent = 'updated just now';
+    header.appendChild(tick);
+    setTimeout(() => {
+      tick.classList.add('fade-out');
+      setTimeout(() => tick.remove(), 500);
+    }, 2500);
+  }
+
+  function startReplay(data) {
+    if (!data || !data.content) return;
+    _gcReplayActive = true;
+    _gcReplayPaused = false;
+    _gcReplaySpeed = 1;
+    _gcReplayMsgIndex = 0;
+    _gcReplaySentenceIndex = 0;
+    _gcReplayData = data;
+
+    const reader = document.getElementById('gcReader');
+    if (!reader) return;
+
+    let controls = document.getElementById('gcReplayControls');
+    if (!controls) {
+      controls = document.createElement('div');
+      controls.id = 'gcReplayControls';
+      controls.className = 'gc-replay-controls';
+      const infoBar = document.getElementById('gcInfoBar');
+      if (infoBar) infoBar.after(controls);
+      else reader.prepend(controls);
+    }
+
+    renderReplayControls();
+
+    const body = document.getElementById('gcReaderBody');
+    if (body) {
+      body.innerHTML = '';
+      body.classList.add('gc-in-replay');
+    }
+
+    const text = String(data.content || '');
+    const headingMatches = Array.from(text.matchAll(
+      /^#{2,3}[ \t]+(.+?(?:—[ \t]+(?:[0-9a-fA-F]{8}(?::|\b)|Human\b|system(?::|\b)).*|.*\([0-9a-fA-F]{8}\)))[ \t]*$/gm
+    ));
+
+    _gcReplayMessages = [];
+
+    let preamble = '';
+    if (headingMatches.length > 0) {
+      preamble = text.slice(0, headingMatches[0].index).trim();
+    } else {
+      preamble = text.trim();
+    }
+
+    if (preamble) {
+      if (body) {
+        body.innerHTML = '<details class="gc-preamble-disclosure" open><summary class="gc-preamble-summary">Chat details</summary><div class="gc-chat-preamble">' + renderMarkdown(preamble) + '</div></details>';
+      }
+    }
+
+    const speakerToSide = new Map();
+    const speakerToColor = new Map();
+    let nextAgentSlot = 0;
+    const sideForSpeaker = (speakerLabel) => {
+      const isHuman = /\bHuman\b/i.test(speakerLabel);
+      if (isHuman) {
+        speakerToColor.set(speakerLabel, 'green');
+        return 'right';
+      }
+      if (speakerToSide.has(speakerLabel)) return speakerToSide.get(speakerLabel);
+      const side = (nextAgentSlot % 2 === 0) ? 'left' : 'right-agent';
+      const colorPalette = ['accent', 'purple', 'orange', 'cyan', 'red', 'yellow'];
+      speakerToColor.set(speakerLabel, colorPalette[nextAgentSlot % colorPalette.length]);
+      nextAgentSlot += 1;
+      speakerToSide.set(speakerLabel, side);
+      return side;
+    };
+    const colorForSpeaker = (speakerLabel) => speakerToColor.get(speakerLabel) || 'accent';
+
+    for (let i = 0; i < headingMatches.length; i++) {
+      const match = headingMatches[i];
+      const heading = (match[1] || '').trim();
+      const nextIndex = i + 1 < headingMatches.length ? headingMatches[i + 1].index : text.length;
+      const rawBody = text.slice(match.index + match[0].length, nextIndex);
+      const bodyText = rawBody.replace(/^\s*---\s*$/gm, '').trim();
+
+      let when = '';
+      let speaker = heading;
+      if (/\s+—\s+/.test(heading)) {
+        const parts = heading.split(/\s+—\s+/);
+        when = parts.length > 1 ? parts.shift() : '';
+        speaker = parts.length ? parts.join(' — ') : heading;
+      } else {
+        speaker = heading.replace(/\s*\([0-9a-fA-F]{8}\)\s*$/, '').replace(/`/g, '').trim() || heading;
+      }
+      const isSystem = /^\s*system\b/i.test(speaker);
+      const speakerHash = extractHash(speaker);
+      const displayName = gcDisplayName(speakerHash);
+      const side = isSystem ? 'full' : sideForSpeaker(displayName);
+      const color = isSystem ? 'muted' : getParticipantColor(speakerHash, displayName);
+      const isPing = isSystem && /pinged/i.test(bodyText);
+
+      const rawHtml = bodyText ? markSystemBlockquotes(renderMarkdown(bodyText)) : '<em class="gc-message-empty">(no text)</em>';
+      const { html: wrappedHtml, count: sentenceCount } = wrapSentencesInHtml(rawHtml);
+
+      _gcReplayMessages.push({
+        heading,
+        speaker,
+        when,
+        isSystem,
+        side,
+        color,
+        isPing,
+        wrappedHtml,
+        sentenceCount,
+        rawBody,
+        originalIndex: i
+      });
+    }
+
+    const prePass = _gcReplayMessages.map(m => ({ speaker: m.speaker, isSystem: m.isSystem }));
+    const allNonSysSet = new Set();
+    prePass.forEach(p => { if (!p.isSystem) allNonSysSet.add(p.speaker); });
+    _gcReplayAllNonSys = Array.from(allNonSysSet);
+    _gcReplaySpeakersAfter = prePass.map((_, idx) => {
+      const after = new Set();
+      for (let j = idx + 1; j < prePass.length; j++) {
+        if (!prePass[j].isSystem) after.add(prePass[j].speaker);
+      }
+      return after;
+    });
+
+    _onReplayKeyDownRef = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        exitReplayMode();
+      }
+    };
+    document.addEventListener('keydown', _onReplayKeyDownRef, true);
+
+    playNextReplayStep();
+  }
+
+  function renderReplayControls() {
+    const controls = document.getElementById('gcReplayControls');
+    if (!controls) return;
+
+    controls.innerHTML = `
+      <button type="button" id="gcReplayPlayPauseBtn" class="gc-replay-btn" title="Play / Pause">
+        ${_gcReplayPaused ? '▶ Play' : '⏸ Pause'}
+      </button>
+      <div class="gc-replay-speed-group">
+        <button type="button" class="gc-replay-speed-btn ${_gcReplaySpeed === 1 ? 'is-active' : ''}" data-speed="1">1×</button>
+        <button type="button" class="gc-replay-speed-btn ${_gcReplaySpeed === 2 ? 'is-active' : ''}" data-speed="2">2×</button>
+        <button type="button" class="gc-replay-speed-btn ${_gcReplaySpeed === 4 ? 'is-active' : ''}" data-speed="4">4×</button>
+      </div>
+      <button type="button" id="gcReplaySkipBtn" class="gc-replay-btn gc-replay-skip-btn" title="Skip to Live">Skip to Live</button>
+    `;
+
+    const playPauseBtn = controls.querySelector('#gcReplayPlayPauseBtn');
+    playPauseBtn.addEventListener('click', () => {
+      _gcReplayPaused = !_gcReplayPaused;
+      playPauseBtn.textContent = _gcReplayPaused ? '▶ Play' : '⏸ Pause';
+      if (!_gcReplayPaused) {
+        playNextReplayStep();
+      } else {
+        if (_gcReplayTimeout) {
+          clearTimeout(_gcReplayTimeout);
+          _gcReplayTimeout = null;
+        }
+      }
+    });
+
+    controls.querySelectorAll('.gc-replay-speed-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        _gcReplaySpeed = Number(btn.getAttribute('data-speed'));
+        controls.querySelectorAll('.gc-replay-speed-btn').forEach(b => b.classList.remove('is-active'));
+        btn.classList.add('is-active');
+      });
+    });
+
+    const skipBtn = controls.querySelector('#gcReplaySkipBtn');
+    skipBtn.addEventListener('click', () => {
+      exitReplayMode();
+    });
+  }
+
+  function exitReplayMode() {
+    _gcReplayActive = false;
+    _gcReplayPaused = false;
+    if (_gcReplayTimeout) {
+      clearTimeout(_gcReplayTimeout);
+      _gcReplayTimeout = null;
+    }
+    const controls = document.getElementById('gcReplayControls');
+    if (controls) controls.remove();
+
+    if (_onReplayKeyDownRef) {
+      document.removeEventListener('keydown', _onReplayKeyDownRef, true);
+      _onReplayKeyDownRef = null;
+    }
+
+    const body = document.getElementById('gcReaderBody');
+    if (body) {
+      body.classList.remove('gc-in-replay');
+    }
+
+    _gcLastMtime = null;
+    pollGroupChatReader();
+  }
+
+  function playNextReplayStep() {
+    if (!_gcReplayActive || _gcReplayPaused) return;
+
+    const body = document.getElementById('gcReaderBody');
+    if (!body) return;
+
+    if (_gcReplayMsgIndex >= _gcReplayMessages.length) {
+      exitReplayMode();
+      return;
+    }
+
+    const msg = _gcReplayMessages[_gcReplayMsgIndex];
+
+    let msgEl = document.querySelector(`.gc-message[data-replay-idx="${_gcReplayMsgIndex}"]`);
+    if (!msgEl) {
+      const displayName = gcDisplayName(extractHash(msg.speaker));
+
+      msgEl = document.createElement('article');
+      msgEl.className = 'gc-message' + (msg.isSystem ? ' gc-system' : '') + (msg.isPing ? ' gc-system-ping-msg' : '');
+      msgEl.setAttribute('data-speaker-side', msg.side);
+      msgEl.setAttribute('data-speaker-color', msg.color);
+      msgEl.setAttribute('data-replay-idx', _gcReplayMsgIndex);
+
+      msgEl.innerHTML = '<div class="gc-message-meta">'
+          + '<span class="gc-message-speaker" title="' + escapeAttr(extractHash(msg.speaker)) + '">' + escapeHtml(displayName) + '</span>'
+          + (msg.when ? '<span class="gc-message-time">' + gcTimeChip(msg.when) + '</span>' : '')
+        + '</div>'
+        + '<div class="gc-message-body assistant-text">'
+          + msg.wrappedHtml
+        + '</div>'
+        + '<div class="gc-message-footer"></div>';
+
+      body.appendChild(msgEl);
+      _gcReplaySentenceIndex = 0;
+      body.scrollTop = body.scrollHeight;
+    }
+
+    if (_gcReplaySentenceIndex < msg.sentenceCount) {
+      const sentenceSpan = msgEl.querySelector(`.gc-replay-sentence[data-sentence-id="${_gcReplaySentenceIndex}"]`);
+      if (sentenceSpan) {
+        sentenceSpan.style.opacity = '1';
+        sentenceSpan.classList.add('gc-typing-shimmer');
+
+        const charCount = sentenceSpan.textContent.length;
+        let delay = Math.max(400, Math.min(700, charCount * 10));
+        delay = delay / _gcReplaySpeed;
+
+        _gcReplayTimeout = setTimeout(() => {
+          sentenceSpan.classList.remove('gc-typing-shimmer');
+          _gcReplaySentenceIndex++;
+          playNextReplayStep();
+        }, delay);
+      } else {
+        _gcReplaySentenceIndex++;
+        playNextReplayStep();
+      }
+    } else {
+      const footer = msgEl.querySelector('.gc-message-footer');
+      if (footer && !footer.innerHTML) {
+        const alertsHtml = msg.isSystem ? '' : _gcReplayAlertsHtml(msg.rawBody, msg.originalIndex, msg.when);
+        const receiptsHtml = msg.isSystem ? '' : _gcReplayReceiptsHtml(msg.originalIndex, msg.speaker, msg.when);
+        footer.innerHTML = alertsHtml + receiptsHtml;
+      }
+
+      body.scrollTop = body.scrollHeight;
+
+      const totalChars = msg.rawBody ? msg.rawBody.length : 100;
+      let delay = Math.max(1500, Math.min(2500, totalChars * 5));
+      delay = delay / _gcReplaySpeed;
+
+      _gcReplayMsgIndex++;
+      _gcReplayTimeout = setTimeout(() => {
+        playNextReplayStep();
+      }, delay);
+    }
+  }
+
+  function wrapSentencesInHtml(htmlContent) {
+    const doc = new DOMParser().parseFromString(htmlContent, 'text/html');
+    const textNodes = [];
+    let sentenceId = 0;
+
+    function findTextNodes(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (node.textContent.trim()) {
+          textNodes.push(node);
+        }
+      } else {
+        if (node.tagName && (node.tagName.toLowerCase() === 'pre' || node.tagName.toLowerCase() === 'code')) {
+          node.classList.add('gc-replay-sentence');
+          node.dataset.sentenceId = sentenceId++;
+          node.style.opacity = '0';
+          node.style.transition = 'opacity 0.2s ease';
+          return;
+        }
+        for (let child of node.childNodes) {
+          findTextNodes(child);
+        }
+      }
+    }
+
+    findTextNodes(doc.body);
+
+    for (const node of textNodes) {
+      const text = node.textContent;
+      const parts = text.split(/(?<=[.?!])\s+/);
+      const fragment = document.createDocumentFragment();
+      for (const part of parts) {
+        if (part) {
+          const span = document.createElement('span');
+          span.className = 'gc-replay-sentence';
+          span.dataset.sentenceId = sentenceId++;
+          span.textContent = part + ' ';
+          span.style.opacity = '0';
+          span.style.transition = 'opacity 0.2s ease';
+          fragment.appendChild(span);
+        }
+      }
+      node.replaceWith(fragment);
+    }
+
+    return { html: doc.body.innerHTML, count: sentenceId };
+  }
+
+  function _gcReplayReceiptsHtml(idx, curSpeaker, when) {
+    if (_gcReplayAllNonSys.length < 2) return '';
+    const after = _gcReplaySpeakersAfter[idx];
+    const curSpeakerName = gcDisplayName(extractHash(curSpeaker));
+
+    const repliedChips = _gcReplayAllNonSys.map(p => {
+      const pName = gcDisplayName(extractHash(p));
+      if (pName === curSpeakerName) return '';
+
+      const responded = after.has(p);
+      if (!responded) return '';
+
+      const initials = gcInitials(pName);
+      const color = getParticipantColor(null, pName);
+      return `<span class="gc-receipt-avatar" style="background-color: var(--${color}); color: var(--bg);" title="${escapeAttr(pName)} — replied after">${escapeHtml(initials)}</span>`;
+    }).filter(Boolean).join('');
+
+    let seenHtml = '';
+    if (_gcReplayData && _gcReplayData.read_state) {
+      const seenChips = Object.entries(_gcReplayData.read_state).map(([sid, lastReadTs]) => {
+        const name = gcDisplayName(sid);
+        if (name === curSpeakerName) return '';
+
+        const msgDate = gcParseChatTimestamp(when);
+        const readDate = new Date(lastReadTs);
+        if (msgDate && !isNaN(readDate.getTime()) && readDate >= msgDate) {
+          const initials = gcInitials(name);
+          const color = getParticipantColor(sid, name);
+          return `<span class="gc-seen-avatar" style="background-color: var(--${color}); color: var(--bg);" title="${escapeAttr(name)} — seen message">${escapeHtml(initials)}</span>`;
+        }
+        return '';
+      }).filter(Boolean).join('');
+
+      if (seenChips) {
+        seenHtml = `<span class="gc-seen-label">👁 Seen:</span>${seenChips}`;
+      }
+    }
+
+    if (!repliedChips && !seenHtml) return '';
+
+    let html = '<div class="gc-message-receipts-row">';
+    if (repliedChips) {
+      html += `<span class="gc-row-label">✓ Replied after:</span><div class="gc-receipt-chips">${repliedChips}</div>`;
+    }
+    if (seenHtml) {
+      html += seenHtml;
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function _gcReplayAlertsHtml(rawBody, idx, when) {
+    const parsedNudges = [];
+    const re = /^>\s*_(.+?)\s+—\s+system:\s*pinged\s+(.+?)_?\s*$/gm;
+    let m;
+    while ((m = re.exec(rawBody))) {
+      const names = (m[2] || '')
+        .replace(/\s*\([0-9a-fA-F]{8}\)/g, '')
+        .replace(/`/g, '')
+        .replace(/_+\s*$/, '')
+        .trim();
+      if (names) {
+        names.split(/,\s*/).forEach(name => {
+          if (name && !parsedNudges.includes(name)) {
+            parsedNudges.push(name);
+          }
+        });
+      }
+    }
+
+    if (_gcReplayData && _gcReplayData.nudge_log) {
+      const logEntries = _gcReplayData.nudge_log[idx] || _gcReplayData.nudge_log[when] || [];
+      logEntries.forEach(entry => {
+        const name = entry.name || gcDisplayName(entry.sid);
+        if (name && !parsedNudges.includes(name)) {
+          parsedNudges.push(name);
+        }
+      });
+    }
+
+    if (parsedNudges.length === 0) return '';
+    return '<div class="gc-message-nudged-row">'
+      + '<span class="gc-row-label">📨 Nudged:</span>'
+      + parsedNudges.map(name => {
+          const color = getParticipantColor(null, name);
+          return `<span class="gc-nudged-chip" style="border-left: 3px solid var(--${color});" title="${escapeAttr(name)}">${escapeHtml(name)}</span>`;
+        }).join('')
+      + '</div>';
+  }
 
   // ── Group-chat @ autocomplete ─────────────────────────────────────
   // Floating menu of participant names anchored under the input. Opens
@@ -16986,9 +17644,19 @@
     _gcMentionTokenStart = -1;
   }
   function _gcMentionParticipants() {
-    return Object.entries(_gcReaderNameMap || {})
-      .filter(([sid, name]) => sid && name)
-      .map(([sid, name]) => ({ sid, name, short: String(sid).slice(0, 8) }));
+    const seen = new Set();
+    const participants = [];
+    (_gcReaderSessionIds || []).forEach(sid => {
+      if (!sid || seen.has(sid)) return;
+      seen.add(sid);
+      participants.push({ sid, name: gcDisplayName(sid), short: String(sid).slice(0, 8) });
+    });
+    Object.keys(_gcReaderNameMap || {}).forEach(sid => {
+      if (!sid || seen.has(sid)) return;
+      seen.add(sid);
+      participants.push({ sid, name: gcDisplayName(sid), short: String(sid).slice(0, 8) });
+    });
+    return participants;
   }
   function _gcMentionDetectToken(input) {
     if (!input) return null;
@@ -17179,23 +17847,10 @@
 
   function renderGroupChatMarkdown(content) {
     const text = String(content || '');
-    // Speaker headings come in three flavors: participant hash (8 hex),
-    // "Human", or "system" (lifecycle entries the orchestrator appends).
-    // Capturing all three lets us style system lines without scattering
-    // them through the previous participant's message body.
-    // CCC-60: speaker headings come in TWO styles and we must split on both,
-    // or a post in the unrecognised style gets absorbed into the previous
-    // speaker's bubble ("a new response is lumped with a previous response"):
-    //   A) `## <ts> — <8hex>: NAME emoji`  (group-chat-checkin posts, Human)
-    //   B) `### \`NAME\` (<8hex>)`          (CCC-relayed agent posts)
-    // The 8-hex participant hash (after `— ` or inside trailing `(…)`) is the
-    // reliable boundary signal in either case.
     const matches = Array.from(text.matchAll(
       /^#{2,3}[ \t]+(.+?(?:—[ \t]+(?:[0-9a-fA-F]{8}(?::|\b)|Human\b|system(?::|\b)).*|.*\([0-9a-fA-F]{8}\)))[ \t]*$/gm
     ));
 
-    // Pre-pass: extract speaker per match for receipt chips (CCC-62).
-    // Mirrors the speaker-parse logic in the main loop below.
     const _parseSpeaker = (heading) => {
       let s = heading;
       if (/\s+—\s+/.test(s)) {
@@ -17212,7 +17867,7 @@
     const _allNonSysSet = new Set();
     _prePass.forEach(p => { if (!p.isSystem) _allNonSysSet.add(p.speaker); });
     const _allNonSys = Array.from(_allNonSysSet);
-    // For each message index, which non-system speakers have a post AFTER it?
+
     const _speakersAfter = _prePass.map((_, idx) => {
       const after = new Set();
       for (let j = idx + 1; j < _prePass.length; j++) {
@@ -17220,102 +17875,136 @@
       }
       return after;
     });
-    const _gcReceiptHtml = (idx, curSpeaker) => {
+
+    const _gcReceiptHtml = (idx, curSpeaker, when) => {
       if (_allNonSys.length < 2) return '';
       const after = _speakersAfter[idx];
-      return '<div class="gc-message-receipts">'
-        + _allNonSys.map(p => {
-            if (p === curSpeaker) return '';
-            const initials = p.replace(/\(.*?\)/g, '').trim().split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
-            const responded = after.has(p);
-            return `<span class="gc-receipt-avatar${responded ? ' is-responded' : ' is-quiet'}" title="${escapeAttr(p) + (responded ? ' — responded after' : ' — no reply yet')}">${escapeHtml(initials)}</span>`;
-          }).join('')
-        + '</div>';
+      const curSpeakerName = gcDisplayName(extractHash(curSpeaker));
+
+      const repliedChips = _allNonSys.map(p => {
+        const pName = gcDisplayName(extractHash(p));
+        if (pName === curSpeakerName) return '';
+
+        const responded = after.has(p);
+        if (!responded) return '';
+
+        const initials = gcInitials(pName);
+        const color = getParticipantColor(null, pName);
+        return `<span class="gc-receipt-avatar" style="background-color: var(--${color}); color: var(--bg);" title="${escapeAttr(pName)} — replied after">${escapeHtml(initials)}</span>`;
+      }).filter(Boolean).join('');
+
+      let seenHtml = '';
+      if (_gcReplayData && _gcReplayData.read_state) {
+        const seenChips = Object.entries(_gcReplayData.read_state).map(([sid, lastReadTs]) => {
+          const name = gcDisplayName(sid);
+          if (name === curSpeakerName) return '';
+
+          const msgDate = gcParseChatTimestamp(when);
+          const readDate = new Date(lastReadTs);
+          if (msgDate && !isNaN(readDate.getTime()) && readDate >= msgDate) {
+            const initials = gcInitials(name);
+            const color = getParticipantColor(sid, name);
+            return `<span class="gc-seen-avatar" style="background-color: var(--${color}); color: var(--bg);" title="${escapeAttr(name)} — seen message">${escapeHtml(initials)}</span>`;
+          }
+          return '';
+        }).filter(Boolean).join('');
+
+        if (seenChips) {
+          seenHtml = `<span class="gc-seen-label">👁 Seen:</span>${seenChips}`;
+        }
+      }
+
+      if (!repliedChips && !seenHtml) return '';
+
+      let html = '<div class="gc-message-receipts-row">';
+      if (repliedChips) {
+        html += `<span class="gc-row-label">✓ Replied after:</span><div class="gc-receipt-chips">${repliedChips}</div>`;
+      }
+      if (seenHtml) {
+        html += seenHtml;
+      }
+      html += '</div>';
+      return html;
     };
 
-    // CCC-109: explicit "who was alerted and when" per message. The
-    // orchestrator appends `> _<ts> — system: pinged \`NAME\` (8hex)_`
-    // blockquotes into the segment of the message that triggered them, so
-    // parsing the raw segment body attributes each alert to its message.
-    const _gcAlertsHtml = (rawBody) => {
-      const out = [];
+    const _gcAlertsHtml = (rawBody, idx, when) => {
+      const parsedNudges = [];
       const re = /^>\s*_(.+?)\s+—\s+system:\s*pinged\s+(.+?)_?\s*$/gm;
       let m;
       while ((m = re.exec(rawBody))) {
-        const ts = (m[1] || '').trim();
-        const tm = (ts.match(/\b(\d{2}:\d{2}(?::\d{2})?)\b/) || [])[1] || ts;
         const names = (m[2] || '')
           .replace(/\s*\([0-9a-fA-F]{8}\)/g, '')
           .replace(/`/g, '')
           .replace(/_+\s*$/, '')
           .trim();
-        if (names) out.push({ ts, tm, names });
+        if (names) {
+          names.split(/,\s*/).forEach(name => {
+            if (name && !parsedNudges.includes(name)) {
+              parsedNudges.push(name);
+            }
+          });
+        }
       }
-      if (!out.length) return '';
-      return '<div class="gc-message-alerts">'
-        + out.map(a =>
-            '<span class="gc-alert-chip" title="' + escapeAttr('Alerted at ' + a.ts) + '">'
-            + '📨 alerted <strong>' + escapeHtml(a.names) + '</strong> · ' + escapeHtml(a.tm)
-            + '</span>').join('')
+
+      if (_gcReplayData && _gcReplayData.nudge_log) {
+        const logEntries = _gcReplayData.nudge_log[idx] || _gcReplayData.nudge_log[when] || [];
+        logEntries.forEach(entry => {
+          const name = entry.name || gcDisplayName(entry.sid);
+          if (name && !parsedNudges.includes(name)) {
+            parsedNudges.push(name);
+          }
+        });
+      }
+
+      if (parsedNudges.length === 0) return '';
+      return '<div class="gc-message-nudged-row">'
+        + '<span class="gc-row-label">📨 Nudged:</span>'
+        + parsedNudges.map(name => {
+            const color = getParticipantColor(null, name);
+            return `<span class="gc-nudged-chip" style="border-left: 3px solid var(--${color});" title="${escapeAttr(name)}">${escapeHtml(name)}</span>`;
+          }).join('')
         + '</div>';
     };
 
-    let firstSpeaker = '';
-    let lastSpeaker = '';
-
     if (!matches.length) {
-      const origEl = document.getElementById('gcOriginalSpeaker');
-      const lastEl = document.getElementById('gcLastSpeaker');
-      const metaWrap = document.getElementById('gcReaderStickyMeta');
-      if (origEl && lastEl && metaWrap) {
-        metaWrap.style.display = 'none';
-      }
       return '<div class="assistant-text gc-chat-doc" dir="auto">' + renderMarkdown(text) + '</div>';
     }
 
     let html = '';
     const preamble = text.slice(0, matches[0].index).trim();
     if (preamble) {
-      html += '<div class="gc-chat-preamble">' + renderMarkdown(preamble) + '</div>';
+      html += '<details class="gc-preamble-disclosure">'
+        + '<summary class="gc-preamble-summary">Chat details</summary>'
+        + '<div class="gc-chat-preamble">' + renderMarkdown(preamble) + '</div>'
+        + '</details>';
     }
 
-    // Side assignment — chat-style alignment, cards flush to the
-    // transcript edges. Human always lands on the right (iMessage
-    // convention for "me"). Agents alternate left / right by
-    // first-seen order — same column for the lifetime of the chat —
-    // so the visual rhythm is two clear edge-anchored stacks. Per-
-    // agent color (via data-speaker-color) keeps multiple agents on
-    // the same side distinguishable.
-    const _speakerToSide = new Map();
-    const _speakerToColor = new Map();
-    let _nextAgentSlot = 0;
-    const _sideForSpeaker = (speakerLabel) => {
+    const speakerToSide = new Map();
+    const speakerToColor = new Map();
+    let nextAgentSlot = 0;
+    const sideForSpeaker = (speakerLabel) => {
       const isHuman = /\bHuman\b/i.test(speakerLabel);
       if (isHuman) {
-        _speakerToColor.set(speakerLabel, 'green');
+        speakerToColor.set(speakerLabel, 'green');
         return 'right';
       }
-      if (_speakerToSide.has(speakerLabel)) return _speakerToSide.get(speakerLabel);
-      const side = (_nextAgentSlot % 2 === 0) ? 'left' : 'right-agent';
+      if (speakerToSide.has(speakerLabel)) return speakerToSide.get(speakerLabel);
+      const side = (nextAgentSlot % 2 === 0) ? 'left' : 'right-agent';
       const colorPalette = ['accent', 'purple', 'orange', 'cyan', 'red', 'yellow'];
-      _speakerToColor.set(speakerLabel, colorPalette[_nextAgentSlot % colorPalette.length]);
-      _nextAgentSlot += 1;
-      _speakerToSide.set(speakerLabel, side);
+      speakerToColor.set(speakerLabel, colorPalette[nextAgentSlot % colorPalette.length]);
+      nextAgentSlot += 1;
+      speakerToSide.set(speakerLabel, side);
       return side;
     };
-    const _colorForSpeaker = (speakerLabel) => _speakerToColor.get(speakerLabel) || 'accent';
+    const colorForSpeaker = (speakerLabel) => speakerToColor.get(speakerLabel) || 'accent';
 
     for (let i = 0; i < matches.length; i++) {
       const match = matches[i];
       const heading = (match[1] || '').trim();
       const nextIndex = i + 1 < matches.length ? matches[i + 1].index : text.length;
       const rawBody = text.slice(match.index + match[0].length, nextIndex);
-      const body = rawBody
-        .replace(/^\s*---\s*$/gm, '')
-        .trim();
-      // Format A ("<ts> — speaker") splits on the em-dash; format B
-      // ("`name` (hash)") has no dash — derive the speaker by stripping the
-      // trailing (hash) and backticks, and has no timestamp.
+      const body = rawBody.replace(/^\s*---\s*$/gm, '').trim();
+
       let when = '';
       let speaker = heading;
       if (/\s+—\s+/.test(heading)) {
@@ -17326,44 +18015,26 @@
         speaker = heading.replace(/\s*\([0-9a-fA-F]{8}\)\s*$/, '').replace(/`/g, '').trim() || heading;
       }
       const isSystem = /^\s*system\b/i.test(speaker);
+      const speakerHash = extractHash(speaker);
+      const displayName = gcDisplayName(speakerHash);
 
-      if (!isSystem) {
-        if (!firstSpeaker) firstSpeaker = speaker;
-        lastSpeaker = speaker;
-      }
-
-      // System messages stay full-width so the lifecycle log doesn't
-      // get squeezed into one side; participant messages stagger.
-      const side = isSystem ? 'full' : _sideForSpeaker(speaker);
-      const color = isSystem ? 'muted' : _colorForSpeaker(speaker);
-      // A standalone "system: pinged …" message is a ping the user wants to
-      // see — flag it so it isn't muted with the rest of the lifecycle log.
+      const side = isSystem ? 'full' : sideForSpeaker(displayName);
+      const color = isSystem ? 'muted' : getParticipantColor(speakerHash, displayName);
       const isPing = isSystem && /pinged/i.test(body);
 
       html += '<article class="gc-message' + (isSystem ? ' gc-system' : '') + (isPing ? ' gc-system-ping-msg' : '') + '" data-speaker-side="' + side + '" data-speaker-color="' + color + '">'
         + '<div class="gc-message-meta">'
-          + '<span class="gc-message-speaker">' + escapeHtml(speaker) + '</span>'
+          + '<span class="gc-message-speaker" title="' + escapeAttr(speakerHash) + '">' + escapeHtml(displayName) + '</span>'
           + (when ? '<span class="gc-message-time">' + gcTimeChip(when) + '</span>' : '')
         + '</div>'
         + '<div class="gc-message-body assistant-text">'
           + (body ? markSystemBlockquotes(renderMarkdown(body)) : '<em class="gc-message-empty">(no text)</em>')
         + '</div>'
-        + (isSystem ? '' : _gcAlertsHtml(rawBody))
-        + (isSystem ? '' : _gcReceiptHtml(i, speaker))
+        + '<div class="gc-message-footer">'
+          + (isSystem ? '' : _gcAlertsHtml(rawBody, i, when))
+          + (isSystem ? '' : _gcReceiptHtml(i, speaker, when))
+        + '</div>'
       + '</article>';
-    }
-
-    const origEl = document.getElementById('gcOriginalSpeaker');
-    const viewingEl = document.getElementById('gcViewingSpeaker');
-    const metaWrap = document.getElementById('gcReaderStickyMeta');
-    if (origEl && viewingEl && metaWrap) {
-      if (firstSpeaker && lastSpeaker) {
-        origEl.textContent = firstSpeaker;
-        viewingEl.textContent = lastSpeaker; // Default, will be updated by scroll listener
-        metaWrap.style.display = '';
-      } else {
-        metaWrap.style.display = 'none';
-      }
     }
 
     return html;
@@ -17390,12 +18061,13 @@
     const modal = document.createElement('div');
     modal.id = 'gcAddPartModal';
     modal.className = 'gc-addpart-modal';
-    modal.innerHTML =
-      '<div class="gc-addpart-card">'
-      + '<div class="gc-addpart-title">Add participant</div>'
-      + '<input type="text" class="gc-addpart-search" placeholder="Search sessions… (↑↓ + Enter)" autocomplete="off" spellcheck="false">'
-      + '<div class="gc-addpart-list"></div>'
-      + '</div>';
+    modal.innerHTML = '<div class="gc-addpart-dialog">'
+      + '<div class="gc-addpart-header">Add participant</div>'
+      + '<div class="gc-addpart-body">'
+        + '<input type="text" class="gc-addpart-search" placeholder="Search sessions…">'
+        + '<div class="gc-addpart-list"></div>'
+      + '</div>'
+    + '</div>';
     document.body.appendChild(modal);
     const input = modal.querySelector('.gc-addpart-search');
     const list = modal.querySelector('.gc-addpart-list');
@@ -17404,9 +18076,14 @@
     const close = () => { modal.remove(); document.removeEventListener('keydown', onKey, true); };
     const paint = () => {
       const q = (input.value || '').trim().toLowerCase();
-      filtered = (q
-        ? candidates.filter(c => (rowTitle(c) + ' ' + (c.folder_label_chip || '') + ' ' + (c.session_id || '')).toLowerCase().indexOf(q) !== -1)
-        : candidates).slice(0, q ? 25 : 10);
+      if (q) {
+        filtered = candidates.filter(c => (rowTitle(c) + ' ' + (c.folder_label_chip || '') + ' ' + (c.session_id || '')).toLowerCase().indexOf(q) !== -1).slice(0, 25);
+      } else {
+        const nowSec = Date.now() / 1000;
+        const fewHours = 4 * 3600;
+        const recentSessions = candidates.filter(c => c.modified && (nowSec - c.modified) < fewHours);
+        filtered = recentSessions.length > 0 ? recentSessions : candidates.slice(0, 10);
+      }
       sel = Math.max(0, Math.min(sel, filtered.length - 1));
       list.innerHTML = filtered.map((c, i) =>
         '<div class="gc-addpart-row' + (i === sel ? ' is-selected' : '') + '" data-idx="' + i + '">'
@@ -17422,7 +18099,7 @@
       const sid = c.session_id || c.id;
       close();
       try {
-        const body = Object.assign({ session_id: sid }, chatRef);
+        const body = Object.assign({ session_id: sid, display_name: rowTitle(c) }, chatRef);
         const res = await fetch('/api/group-chat/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -17431,7 +18108,7 @@
         const data = await res.json().catch(() => ({}));
         if (res.ok && data.ok) {
           showOpToast('🎉 ' + rowTitle(c).slice(0, 40) + ' joined the chat', 'success');
-          _gcLastMtime = null;  // force the reader (if open) to repaint
+          _gcLastMtime = null;
           if (typeof refreshConversationList === 'function') refreshConversationList();
         } else {
           showOpToast('Add failed: ' + ((data && data.error) || ('HTTP ' + res.status)), 'error');
@@ -17468,16 +18145,7 @@
     _gcLastMtime = null;
     _gcPollFailCount = 0;
     _gcLastNudgeTime = 0;
-    // Persist enough state to restore this exact reader on the next
-    // page load — so a hard refresh while reading a group chat lands
-    // back in the same chat instead of falling back to the last
-    // session row. boot uses `ccc-last-view` to decide which one to
-    // restore (gc OR conv).
-    // Skip the restore-state write inside a popout: this page owns one
-    // chat for its lifetime, and persisting it into the shared
-    // `ccc-last-view` would make the MAIN window reopen on this chat
-    // instead of its own last session/conv (same reason the conversation
-    // popout guards its writes on !CONV_POPOUT_MODE).
+
     if (!GROUPCHAT_POPOUT_MODE && !CONV_POPOUT_MODE) {
       try {
         const payload = {
@@ -17499,20 +18167,8 @@
       renderSidebar(filterConversations($convSearch.value));
     }
 
-    // Stop the conv/spawn SSE streams for the previous conversation. They
-    // append into #conversationsView — the same node the reader mounts into
-    // — so any in-flight event would land below the reader's input row and
-    // look like content "from another conversation" leaking in.
     try { if (typeof stopConvStream === 'function') stopConvStream(); } catch (_) {}
     try { if (typeof stopSpawnStream === 'function') stopSpawnStream(); } catch (_) {}
-    // Clear currentSession too: the 1s liveStatus poller keeps querying
-    // /api/session-status?session_id=<currentSession.id> and the
-    // updateLiveToolStrip tick appends a .conv-live-tool-inline node into
-    // the current $view (which is now the group-chat reader). User saw a
-    // "Bash command /bin/zsh -c source …" pill from their previous Claude
-    // session leak into the group chat view. Drop the id so the poller
-    // bails (refreshLiveStatus short-circuits on !currentSession.id) and
-    // any leftover live-tool node is cleaned up on the next idle tick.
     try { if (typeof setCurrentSession === 'function') setCurrentSession(null, null, null, false, null); } catch (_) {}
     document.querySelectorAll('.conv-live-tool-inline, .conv-live-tool-strip').forEach(n => n.remove());
 
@@ -17524,32 +18180,21 @@
     view.innerHTML = '<div class="gc-reader" id="gcReader">'
       + '<div class="gc-reader-header">'
         + '<span class="gc-topic" title="' + topicSafe + '">' + topicSafe + '</span>'
-        + '<span class="gc-mode-badge">' + modeSafe + '</span>'
+        + '<span class="gc-mode-badge" style="display:none;">' + modeSafe + '</span>'
         + '<button type="button" class="gc-join-link-btn" id="gcAddPartBtn"'
         + ' title="Add a participant — search recent sessions, Enter to add">'
         + '＋ Add participant</button>'
         + '<button type="button" class="gc-join-link-btn" id="gcJoinLinkBtn"'
         + ' title="Copy a join link — paste it into any session\'s composer in CCC and that session joins this chat">'
         + '🔗 Join link</button>'
-        // Pop the reader into its own window. Skipped inside the popout
-        // itself — no point popping a popout. Click handler is delegated
-        // once at boot (see [data-role="ccc-gc-popout"]).
+        + '<button type="button" class="gc-join-link-btn" id="gcReplayBtn" title="Replay conversation">▶ Replay</button>'
         + (GROUPCHAT_POPOUT_MODE ? ''
           : '<button type="button" class="gc-join-link-btn" id="gcPopoutBtn"'
             + ' data-role="ccc-gc-popout"'
             + ' title="Pop this group chat out to its own window" aria-label="Pop out">'
             + '↗ Pop out</button>')
       + '</div>'
-      + '<div class="gc-reader-sticky-meta" id="gcReaderStickyMeta" style="display:none;">'
-        + '<div class="csh-col">'
-          + '<div class="label original-label">Original Poster</div>'
-          + '<div class="speaker-name" id="gcOriginalSpeaker">—</div>'
-        + '</div>'
-        + '<div class="csh-col">'
-          + '<div class="label last-label">Viewing Poster</div>'
-          + '<div class="speaker-name" id="gcViewingSpeaker">—</div>'
-        + '</div>'
-      + '</div>'
+      + '<div class="gc-info-bar" id="gcInfoBar"></div>'
       + '<div class="gc-reader-body" id="gcReaderBody" tabindex="0">Loading…</div>'
       + (includeHuman
         ? '<div class="gc-reader-input-row" id="gcInputRow">'
@@ -17577,9 +18222,7 @@
           + '</div>'
         : '')
       + '</div>';
-    // Hide the standard send-to-terminal input bar while the reader is
-    // mounted — the reader has its own #gcInputRow and the standard one
-    // would be confusing duplicate UI.
+
     const inputBar = document.getElementById('convInputBar');
     const inputCtx = document.getElementById('convInputContext');
     if (inputBar) inputBar.style.display = 'none';
@@ -17606,13 +18249,18 @@
       _gcReaderHiddenRailItems = true;
     }
 
-    // Join link (CCC-98): copies a token any session's composer accepts.
-    // Sending `ccc:join-gc:<id>` from a session joins that session to this
-    // chat (intercepted in the composer send path).
     const gcAddPartBtn = document.getElementById('gcAddPartBtn');
     if (gcAddPartBtn) {
       gcAddPartBtn.addEventListener('click', () => {
         openGcParticipantPicker(_gcReaderId ? { chat_id: _gcReaderId } : { chat_path: _gcReaderPath });
+      });
+    }
+    const gcReplayBtn = document.getElementById('gcReplayBtn');
+    if (gcReplayBtn) {
+      gcReplayBtn.addEventListener('click', () => {
+        if (_gcReplayData) {
+          startReplay(_gcReplayData);
+        }
       });
     }
     const gcJoinBtn = document.getElementById('gcJoinLinkBtn');
@@ -17652,27 +18300,19 @@
         if (typeof window.__cccAttachImagePaste === 'function') {
           window.__cccAttachImagePaste(gcHumanInput);
         }
-        // Mirror the convo input: Enter sends, Shift+Enter inserts a
-        // newline. Same convention as Claude Desktop / Slack / Omnara.
         gcHumanInput.addEventListener('keydown', ev => {
-          // Mention menu intercepts ArrowUp/Down/Enter/Tab/Escape when
-          // open — let it handle navigation before falling through to
-          // the send-on-Enter behavior.
           if (_gcMentionMenuHandleKeydown(ev)) return;
           if (ev.key === 'Enter' && !ev.shiftKey && !isTouchPrimary()) {
             ev.preventDefault();
             sendHumanGcPost();
           }
         });
-        // Textarea autosize — grow as the user types up to a 10-row cap,
-        // then scroll internally. Same shape as the conv input.
         const _autosizeGc = () => {
           gcHumanInput.style.height = 'auto';
           const max = 240;
           gcHumanInput.style.height = Math.min(gcHumanInput.scrollHeight, max) + 'px';
         };
         gcHumanInput.addEventListener('input', _autosizeGc);
-        // Snap back to one row after `value = ''` clears post-send.
         const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
         if (desc && desc.get && desc.set) {
           Object.defineProperty(gcHumanInput, 'value', {
@@ -17688,25 +18328,6 @@
     if (_gcReaderInterval) clearInterval(_gcReaderInterval);
     pollGroupChatReader();
     _gcReaderInterval = setInterval(_gated('gcReader', pollGroupChatReader), 3000);
-
-    // Scroll listener for dynamic "Viewing Poster" update
-    const gcBody = document.getElementById('gcReaderBody');
-    if (gcBody) {
-      gcBody.addEventListener('scroll', () => {
-        const viewingEl = document.getElementById('gcViewingSpeaker');
-        if (!viewingEl) return;
-        const messages = gcBody.querySelectorAll('.gc-message');
-        const bodyTop = gcBody.getBoundingClientRect().top;
-        for (let i = 0; i < messages.length; i++) {
-          const rect = messages[i].getBoundingClientRect();
-          if (rect.bottom > bodyTop) {
-            const speakerEl = messages[i].querySelector('.gc-message-speaker');
-            if (speakerEl) viewingEl.textContent = speakerEl.textContent;
-            break;
-          }
-        }
-      });
-    }
 
     // Space → jump to the top of the next message in the gc reader.
     // Each message starts with `## ts — hash: name` which renders as
@@ -17816,26 +18437,21 @@
   }
 
   function replaceParticipantMentions(container, nameMap) {
-    if (!nameMap) return;
     const shortToName = {};
-    for (const [fullSid, name] of Object.entries(nameMap)) {
+    const sids = _gcReaderSessionIds || [];
+    for (const fullSid of sids) {
       const short = fullSid.substring(0, 8).toLowerCase();
-      // Skip name_map entries whose "name" is just the full session UUID —
-      // those are placeholder names from sessions that never picked up a
-      // friendly label. Falling back to the 8-char hash reads much better
-      // than `@32bf4a17-3d9e-4243-9dc8-c60e2f1495bc`. Same for the
-      // "hash: <uuid>" form some skill messages emit.
-      const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(name).trim());
-      const looksLikeHashUuid = /^[0-9a-f]{8}:\s*[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(name).trim());
-      shortToName[short] = (looksLikeUuid || looksLikeHashUuid) ? short : name;
+      shortToName[short] = gcDisplayName(short);
+    }
+    for (const fullSid of Object.keys(_gcReaderNameMap || {})) {
+      const short = fullSid.substring(0, 8).toLowerCase();
+      if (!shortToName[short]) {
+        shortToName[short] = gcDisplayName(short);
+      }
     }
     const shortIds = Object.keys(shortToName);
     if (!shortIds.length) return;
 
-    // Match either the short 8-char hash or the full UUID form, so a
-    // speaker heading like `— 32bf4a17-3d9e-...` collapses to a single
-    // mention pill instead of `@<name>-3d9e-4243-9dc8-...` with the
-    // trailing hex chunk dangling outside the span.
     const regexStr = '(?:@)?\\b(' + shortIds.join('|') + ')(?:-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\\b';
     const regex = new RegExp(regexStr, 'gi');
 
@@ -17881,10 +18497,6 @@
 
         const span = document.createElement('span');
         span.className = 'gc-mention';
-        // Cap the displayed name so long participant labels (e.g. "Movie
-        // i wanted for video claw") don't make every system note an
-        // unreadable wall. The full name still lives in the title and as
-        // the bare prefix in the system text that precedes the mention.
         const _MENTION_MAX = 20;
         const _displayName = name.length > _MENTION_MAX
           ? name.slice(0, _MENTION_MAX - 1) + '…'
@@ -17914,21 +18526,33 @@
 
     const lastSpoken = {};
     const lastMentioned = {};
-    
+
     const text = String(content || '');
-    const matches = Array.from(text.matchAll(/^##\s+(.+?)—\s+([0-9a-fA-F]{8}(?::[^\n]*)?|Human\b).*$/gm));
-    
+    const matches = Array.from(text.matchAll(
+      /^#{2,3}[ \t]+(.+?(?:—[ \t]+(?:[0-9a-fA-F]{8}(?::|\b)|Human\b|system(?::|\b)).*|.*\([0-9a-fA-F]{8}\)))[ \t]*$/gm
+    ));
+
     for (let i = 0; i < matches.length; i++) {
       const match = matches[i];
-      const when = match[1].trim();
-      let authorHash = match[2];
-      if (authorHash.length > 8 && authorHash !== 'Human') authorHash = authorHash.substring(0, 8);
-      authorHash = authorHash.toLowerCase();
-
+      const heading = (match[1] || '').trim();
       const nextIndex = i + 1 < matches.length ? matches[i + 1].index : text.length;
       const bodyText = text.slice(match.index + match[0].length, nextIndex);
 
-      lastSpoken[authorHash] = when;
+      let when = '';
+      let speaker = heading;
+      if (/\s+—\s+/.test(heading)) {
+        const parts = heading.split(/\s+—\s+/);
+        when = parts.length > 1 ? parts.shift() : '';
+        speaker = parts.length ? parts.join(' — ') : heading;
+      } else {
+        speaker = heading.replace(/\s*\([0-9a-fA-F]{8}\)\s*$/, '').replace(/`/g, '').trim() || heading;
+      }
+
+      const rawHash = extractHash(speaker);
+      const authorHash = rawHash ? rawHash.substring(0, 8).toLowerCase() : '';
+      if (authorHash) {
+        lastSpoken[authorHash] = when;
+      }
 
       for (const [fullSid, name] of Object.entries(nm)) {
         const short = fullSid.substring(0, 8).toLowerCase();
@@ -17938,7 +18562,7 @@
           const idx = mentionMatch.index;
           const start = Math.max(0, idx - 20);
           const end = Math.min(bodyText.length, idx + short.length + 20);
-          let snippet = bodyText.substring(start, end).replace(/\\s+/g, ' ');
+          let snippet = bodyText.substring(start, end).replace(/\s+/g, ' ');
           if (start > 0) snippet = '…' + snippet;
           if (end < bodyText.length) snippet += '…';
           lastMentioned[short] = { when, snippet, by: authorHash };
@@ -17946,127 +18570,103 @@
       }
     }
 
-    // Look up the friendly name for a participant hash. Returns the bare
-    // string (caller is responsible for escaping); use renderNameHtml when
-    // emitting into HTML so the hash gets shown as a secondary chip.
-    const renderName = (hash) => {
-      if (!hash) return 'None';
-      if (hash === true || String(hash).toLowerCase() === 'human') return 'Human';
-      const full = sids.find(s => s.toLowerCase().startsWith(hash)) || hash;
-      return nm[full] || hash;
-    };
-
-    // HTML form: "Name (hash)" with the hash de-emphasized and the full
-    // session id surfaced as a tooltip. Falls back to just the hash when
-    // no name is known. Always returns safe HTML.
-    const renderNameHtml = (hash) => {
-      if (!hash) return 'None';
-      if (hash === true || String(hash).toLowerCase() === 'human') return 'Human';
-      const full = sids.find(s => s.toLowerCase().startsWith(hash)) || hash;
-      const name = nm[full];
-      const short = String(hash).toLowerCase().substring(0, 8);
-      if (name) {
-        return `<span title="${escapeAttr(full)}">${escapeHtml(name)} <span class="gco-part-id">(${escapeHtml(short)})</span></span>`;
-      }
-      return escapeHtml(short);
-    };
-
     let html = '';
 
-    // Chat identity strip — the chat ID and on-disk path. Surfaces what the
-    // reader is currently pointed at so the user (and any debugging me)
-    // can name the chat when reporting an issue (e.g. "loading is slow on
-    // chat XYZ"). Both fields select-all on click so copy/paste is one
-    // keystroke. _gcReaderId / _gcReaderPath are module-level state set
-    // by openGroupChatReader.
-    const chatId = (typeof _gcReaderId !== 'undefined' && _gcReaderId) ? _gcReaderId : '';
-    const chatPath = (typeof _gcReaderPath !== 'undefined' && _gcReaderPath) ? _gcReaderPath : '';
-    if (chatId || chatPath) {
-      html += '<div class="gco-section"><div class="gco-title">Chat</div>';
-      if (chatId) {
-        html += `<div class="gco-row"><span class="gco-label">ID:</span> <span class="gco-val gco-copy" title="Click to select — Cmd+C to copy">${escapeHtml(chatId)}</span></div>`;
-      }
-      if (chatPath) {
-        const file = chatPath.split('/').pop() || chatPath;
-        html += `<div class="gco-row"><span class="gco-label">File:</span> <span class="gco-val gco-copy" title="${escapeAttr(chatPath)}">${escapeHtml(file)}</span></div>`;
-      }
-      html += '</div>';
-    }
+    // A3: Participants TOP section
+    html += '<div class="gco-section"><div class="gco-title">Participants</div>';
+    for (const sid of sids) {
+      const short = sid.substring(0, 8).toLowerCase();
+      const name = gcDisplayName(sid);
+      const color = getParticipantColor(sid, name);
+      const waitingOnHashes = waiting.waiting_on_hashes || [];
+      const isOnline = !waitingOnHashes.some(h => sid.toLowerCase().startsWith(h.toLowerCase()));
 
-    // ── Active work — exactly what is consuming CPU/tokens for this chat, with
-    // a one-click kill switch. The orchestration loop wakes live participant
-    // sessions on a timer; that's the cost the user wants visibility into.
+      const spoken = lastSpoken[short];
+      const lastSpokeText = spoken ? `last spoke ${gcRelativeTime(spoken)}` : 'never spoke';
+
+      const mention = lastMentioned[short];
+      let mentionText = '';
+      if (mention) {
+        mentionText = `<span class="gco-part-mention-link" title="Last mentioned ${gcRelativeTime(mention.when)} by ${gcDisplayName(mention.by)}:\n&quot;${escapeAttr(mention.snippet)}&quot;">Last mentioned</span>`;
+      } else {
+        mentionText = '<span class="gco-part-mention-link is-never">Never mentioned</span>';
+      }
+
+      html += `<div class="gco-part-card" data-gc-part-sid="${escapeAttr(sid)}">`;
+      html += `  <div class="gco-part-header">`;
+      html += `    <span class="gco-part-swatch" style="background-color: var(--${color})"></span>`;
+      html += `    <span class="gco-part-name-title" title="${escapeAttr(sid)}">${escapeHtml(name)}</span>`;
+      html += `    <span class="gc-online-dot ${isOnline ? 'is-online' : 'is-waiting'}" title="${isOnline ? 'Online / Idle' : 'Waiting for reply'}"></span>`;
+      html += `  </div>`;
+      html += `  <div class="gco-part-body">`;
+      html += `    <div class="gco-part-info">`;
+      html += `      <span class="gco-part-spokentime">${escapeHtml(lastSpokeText)}</span>`;
+      html += `      <span class="gco-part-divider">·</span>`;
+      html += `      ${mentionText}`;
+      html += `    </div>`;
+      html += `    <button type="button" class="gco-nudge-btn" data-gc-nudge="${escapeAttr(sid)}" data-gc-nudge-name="${escapeAttr(name)}" title="Re-inject the /group-chat prompt into ${escapeAttr(name)}'s session — wakes this agent specifically.">Nudge</button>`;
+      html += `  </div>`;
+      html += `</div>`;
+    }
+    html += '</div>';
+
+    // A3: Merge/dedupe ORCHESTRATOR block
     const _gcPaused = data.status === 'paused' || !!data.paused;
     const _gcActiveNow = data.status === 'active';
     const _gcLive = data.participant_live_count || 0;
     const _gcParts = data.participant_count || sids.length;
     const _gcPoll = data.orchestrator_poll_interval || 30;
     const _gcNudge = data.orchestrator_nudge_interval || 60;
-    html += '<div class="gco-section gco-active-section"><div class="gco-title">Active work</div>';
+    const waitingNames = (waiting.waiting_on_hashes || []).map(h => {
+      const full = sids.find(s => s.toLowerCase().startsWith(h.toLowerCase())) || h;
+      return gcDisplayName(full);
+    });
+    const waitingOnText = formatWaitingOn(waitingNames);
+
+    html += '<div class="gco-section">';
+    html += '  <div class="gco-title">Orchestration</div>';
+    html += '  <div class="gco-orchestrator-status-row">';
+    html += `    <span class="gco-nudge-pill ${data.orchestrator_timer_active ? 'is-active' : 'is-inactive'}">Auto-nudge ${data.orchestrator_timer_active ? 'ON' : 'OFF'}</span>`;
+    if (_gcActiveNow) {
+      html += `    <span class="gco-live-badge" style="font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); color: var(--text-muted);">${_gcLive} / ${_gcParts} active</span>`;
+    }
+    html += '  </div>';
+    html += '  <div class="gco-waiting-row">';
+    html += `    <span class="gco-waiting-text">${escapeHtml(waitingOnText)}</span>`;
+    html += '  </div>';
+
+    const chatId = (typeof _gcReaderId !== 'undefined' && _gcReaderId) ? _gcReaderId : '';
+    const chatPath = (typeof _gcReaderPath !== 'undefined' && _gcReaderPath) ? _gcReaderPath : '';
+
     if (_gcPaused) {
-      html += '<div class="gco-active-status is-paused">⏸ Disabled — no nudges, no token use.</div>';
       html += `<button type="button" class="gco-power-btn gco-enable" data-gc-enable data-gc-path="${escapeAttr(chatPath)}" data-gc-id="${escapeAttr(chatId)}">▶ Enable orchestration</button>`;
-    } else if (_gcActiveNow) {
-      html += '<div class="gco-active-status is-active"><span class="gco-active-dot"></span> Running — waking participants on a timer.</div>';
-      const _gcLastNudge = data.orchestrator_last_nudge_at
-        ? timeAgo(data.orchestrator_last_nudge_at * 1000)
-        : 'not yet';
-      const _gcLastNudgeAbs = data.orchestrator_last_nudge_at
-        ? new Date(data.orchestrator_last_nudge_at * 1000).toLocaleString()
-        : '';
-      html += `<div class="gco-row"><span class="gco-label">Auto-nudge:</span> <span class="gco-val">checks every ${_gcPoll}s, nudges ≤ every ${_gcNudge}s · <strong>last: ${escapeHtml(_gcLastNudge)}</strong></span></div>`;
-      html += `<div class="gco-row"><span class="gco-label">Last nudge:</span> <span class="gco-val" title="${escapeAttr(_gcLastNudgeAbs)}">${escapeHtml(_gcLastNudge)}</span></div>`;
-      const _gcTargets = (data.orchestrator_last_reminder_targets || []).map(renderNameHtml);
-      if (_gcTargets.length) {
-        html += `<div class="gco-row"><span class="gco-label">Last targets:</span> <span class="gco-val">${_gcTargets.join(', ')}</span></div>`;
-      }
-      html += `<div class="gco-row"><span class="gco-label">Live sessions:</span> <span class="gco-val">${_gcLive} of ${_gcParts} — these run on each nudge</span></div>`;
-      html += `<button type="button" class="gco-power-btn gco-stop" data-gc-stop data-gc-path="${escapeAttr(chatPath)}" data-gc-id="${escapeAttr(chatId)}">■ Stop orchestration</button>`;
     } else {
-      html += '<div class="gco-active-status is-idle">Idle — no active orchestration.</div>';
+      html += `<button type="button" class="gco-power-btn gco-stop" data-gc-stop data-gc-path="${escapeAttr(chatPath)}" data-gc-id="${escapeAttr(chatId)}">■ Stop orchestration</button>`;
     }
     html += '</div>';
 
-    html += '<div class="gco-section"><div class="gco-title">Orchestrator</div>';
-
-    html += `<div class="gco-row"><span class="gco-label">Timer Active:</span> <span class="gco-val">${data.orchestrator_timer_active ? 'Yes' : 'No'}</span></div>`;
-
-    const waitingOnHtml = (waiting.waiting_on_hashes || []).map(renderNameHtml);
-    html += `<div class="gco-row"><span class="gco-label">Waiting on:</span> <span class="gco-val">${waitingOnHtml.length ? waitingOnHtml.join(', ') : 'None'}</span></div>`;
-
-    const lastSpokenHtml = waiting.last_author_is_human ? 'Human' : renderNameHtml(waiting.last_author_hash);
-    html += `<div class="gco-row"><span class="gco-label">Last spoken:</span> <span class="gco-val">${lastSpokenHtml}</span></div>`;
-    
-    html += '</div>';
-
-    html += '<div class="gco-section"><div class="gco-title">Participants</div>';
-    for (const sid of sids) {
-      const short = sid.substring(0, 8).toLowerCase();
-      const name = nm[sid] || short;
-
-      html += `<div class="gco-part-card" data-gc-part-sid="${escapeAttr(sid)}">`;
-      html += `<div class="gco-part-name">${escapeHtml(name)} <span class="gco-part-id">(${short})</span></div>`;
-
-      const spoken = lastSpoken[short];
-      html += `<div class="gco-part-stat"><span class="gco-label">Spoken:</span> <span class="gco-val">${spoken ? gcTimeChip(spoken) : 'Never'}</span></div>`;
-
-      const mention = lastMentioned[short];
-      if (mention) {
-        html += `<div class="gco-part-stat"><span class="gco-label">Last mentioned:</span> <span class="gco-val">${gcTimeChip(mention.when)} by ${renderNameHtml(mention.by)}</span></div>`;
-        html += `<div class="gco-part-snippet">"${escapeHtml(mention.snippet)}"</div>`;
-      } else {
-        html += `<div class="gco-part-stat"><span class="gco-label">Last mentioned:</span> <span class="gco-val">Never</span></div>`;
+    // A3: CHAT ID + File path move into a collapsed "Details" disclosure at the bottom
+    if (chatId || chatPath) {
+      html += `<details class="gco-details-disclosure">`;
+      html += `  <summary class="gco-details-summary">Details</summary>`;
+      html += `  <div class="gco-details-content">`;
+      if (chatId) {
+        html += `    <div class="gco-row"><span class="gco-label">ID:</span> <span class="gco-val gco-copy" title="Click to select — Cmd+C to copy">${escapeHtml(chatId)}</span></div>`;
       }
-
-      // Nudge button: re-inject the /group-chat prompt into just this
-      // participant's session. Useful when one agent has gone quiet
-      // (last spoken 3h ago, last mentioned 2m ago, etc.) and you want
-      // to wake it up specifically without nudging everyone.
-      html += `<button type="button" class="gco-nudge-btn" data-gc-nudge="${escapeAttr(sid)}" data-gc-nudge-name="${escapeAttr(name)}" title="Re-inject the /group-chat prompt into ${escapeAttr(name)}'s session — wakes this agent specifically.">Nudge</button>`;
-
-      html += `</div>`;
+      if (chatPath) {
+        html += `    <div class="gco-row"><span class="gco-label">File:</span> <span class="gco-val gco-copy" title="${escapeAttr(chatPath)}">${escapeHtml(chatPath)}</span></div>`;
+      }
+      if (_gcActiveNow) {
+        const _gcLastNudge = data.orchestrator_last_nudge_at
+          ? timeAgo(data.orchestrator_last_nudge_at * 1000)
+          : 'not yet';
+        html += `    <div class="gco-row"><span class="gco-label">Poll Interval:</span> <span class="gco-val">${_gcPoll}s</span></div>`;
+        html += `    <div class="gco-row"><span class="gco-label">Nudge Max:</span> <span class="gco-val">${_gcNudge}s</span></div>`;
+        html += `    <div class="gco-row"><span class="gco-label">Last Nudge:</span> <span class="gco-val">${_gcLastNudge}</span></div>`;
+      }
+      html += `  </div>`;
+      html += `</details>`;
     }
-    html += '</div>';
 
     panel.innerHTML = html;
 
@@ -18095,8 +18695,8 @@
           const data = await res.json().catch(() => ({}));
           if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
           btn.textContent = 'Nudged ✓';
-          if (typeof showOpToast === 'function') showOpToast('Nudged ' + (sid.slice(0, 8)), 'success');
           const _nudgedName = btn.getAttribute('data-gc-nudge-name') || sid.slice(0, 8);
+          if (typeof showOpToast === 'function') showOpToast('Nudged ' + _nudgedName, 'success');
           const _gcBodyEl = document.getElementById('gcReaderBody');
           if (_gcBodyEl) {
             const _notice = document.createElement('div');
@@ -18201,6 +18801,7 @@
     if (!_gcReaderPath && !_gcReaderId) return;
     const body = document.getElementById('gcReaderBody');
     if (!body) return;
+    if (_gcReplayActive) return;
     try {
       const params = new URLSearchParams();
       if (_gcReaderPath) params.set('path', _gcReaderPath);
@@ -18212,6 +18813,11 @@
       const errBanner = body.querySelector('.gc-poll-error');
       if (errBanner) errBanner.remove();
       if (!data.ok) { body.innerHTML = '<div class="assistant-text gc-chat-doc" dir="auto">' + renderMarkdown(data.error || 'File not found.') + '</div>'; return; }
+      _gcReaderSessionIds = data.session_ids || [];
+      _gcReaderNameMap = data.name_map || {};
+      buildAgentFallbackNames(data.content, _gcReaderSessionIds);
+      _gcReplayData = data;
+      try { updateGcInfoBar(data); } catch (_) {}
       // Backfill topic/mode from the authoritative read. A group-chat
       // popout opened by id alone boots with a placeholder topic; once
       // the real one arrives, sync the header, in-memory state and (in
@@ -18233,7 +18839,8 @@
         const modeEl = document.querySelector('#gcReader .gc-reader-header .gc-mode-badge');
         if (modeEl) modeEl.textContent = data.mode;
       }
-      if (data.mtime !== _gcLastMtime) {
+      const shouldRenderTranscript = data.mtime !== _gcLastMtime;
+      if (shouldRenderTranscript) {
         const isFirstLoad = _gcLastMtime === null;
         const atBottom = body.scrollHeight - body.scrollTop <= body.clientHeight + 40;
 
@@ -18254,17 +18861,20 @@
         }
         _gcLastMtime = data.mtime;
         body.innerHTML = _html;
-        if (data.name_map) {
+        if (data.name_map || _gcReaderSessionIds.length) {
           try { replaceParticipantMentions(body, data.name_map); } catch (_) {}
-          _gcReaderNameMap = data.name_map || {};
         }
         try { updateOrchestratorPanel(data, data.content); } catch (_) {}
 
+        if (!isFirstLoad) {
+          try {
+            showUpdatedJustNowTick();
+            const lastMsg = body.querySelector('.gc-message:last-of-type');
+            if (lastMsg) lastMsg.classList.add('gc-message-new-flash');
+          } catch (_) {}
+        }
         if (atBottom) body.scrollTop = body.scrollHeight;
         else if (!isFirstLoad) _gcShowNewPostsPill(body);
-        
-        // Trigger scroll listener to update Viewing Poster immediately
-        body.dispatchEvent(new CustomEvent('scroll'));
 
         // Nudge all participants when content changes (but not on first load, and debounced to 15s).
         if (!isFirstLoad) {
@@ -18278,6 +18888,8 @@
             }).catch(() => {});
           }
         }
+      } else {
+        try { updateOrchestratorPanel(data, data.content); } catch (_) {}
       }
     } catch (_err) {
       _gcPollFailCount++;
@@ -30153,7 +30765,7 @@
     for (const row of allFiles) {
       $list.appendChild(renderSidebarFileRow(row));
     }
-    
+
     // Apply any active search filter
     const $searchInput = document.getElementById('filesSearchInput');
     if ($searchInput && $searchInput.value) {
@@ -41380,7 +41992,7 @@
     const f = WHATS_NEW_FEATURES.find(item => item.id === id);
     if (!f) return;
 
-    $whatsNewContent.innerHTML = 
+    $whatsNewContent.innerHTML =
       '<div class="whats-new-header-row">' +
         '<span class="whats-new-pill">' + f.tag + '</span>' +
         '<span class="whats-new-feature-date">' + f.date + '</span>' +
@@ -45790,7 +46402,7 @@
     onbCliStatus = statusData.clis;
     currentOnbStep = 0;
     showOnbStep(0);
-    
+
     // Bind event listeners if they haven't been bound yet
     setupOnboardingEvents();
   }
@@ -45817,7 +46429,7 @@
 
     const backBtn = document.getElementById('onbBackBtn');
     const nextBtn = document.getElementById('onbNextBtn');
-    
+
     if (backBtn) {
       backBtn.style.visibility = stepIndex === 0 ? 'hidden' : 'visible';
     }
@@ -45842,7 +46454,7 @@
     if (!listContainer || !onbCliStatus) return;
 
     listContainer.innerHTML = '';
-    
+
     const engines = ['claude', 'antigravity', 'cursor', 'codex'];
     engines.forEach(key => {
       const cli = onbCliStatus[key];
@@ -45947,7 +46559,7 @@
     detectRow.style.display = 'flex';
     detectRow.style.justifyContent = 'center';
     detectRow.style.marginTop = '10px';
-    
+
     const detectBtn = document.createElement('button');
     detectBtn.type = 'button';
     detectBtn.className = 'upd-btn';
@@ -45972,10 +46584,10 @@
     if (!select || !onbCliStatus) return;
 
     select.innerHTML = '';
-    
+
     const engines = ['claude', 'antigravity', 'cursor', 'codex'];
     let addedCount = 0;
-    
+
     engines.forEach(key => {
       const cli = onbCliStatus[key];
       if (!cli) return;
@@ -45984,7 +46596,7 @@
       opt.value = key;
       opt.textContent = cli.name + (cli.available && cli.logged_in ? ' (Active)' : ' (Not configured)');
       select.appendChild(opt);
-      
+
       if (cli.available && cli.logged_in && addedCount === 0) {
         opt.selected = true;
         addedCount++;
@@ -46043,7 +46655,7 @@
           // Launch session!
           const select = document.getElementById('onbEngineSelect');
           const chosenEngine = select ? select.value : 'claude';
-          
+
           let chosenPrompt = 'Explain what this repository does and list its main files.';
           const activeChip = document.querySelector('.onb-prompt-chip.active');
           if (activeChip) {
@@ -46069,7 +46681,7 @@
           if (typeof setSpawnEngine === 'function') {
             setSpawnEngine(chosenEngine);
           }
-          
+
           const modal = document.getElementById('onboardingModal');
           if (modal) modal.classList.remove('open');
 
@@ -46112,7 +46724,7 @@
       chip.onclick = () => {
         chips.forEach(c => c.classList.remove('active'));
         chip.classList.add('active');
-        
+
         if (chip.getAttribute('data-prompt') === 'custom') {
           if (customTextarea) {
             customTextarea.style.display = 'block';
@@ -46129,17 +46741,17 @@
     const target = document.getElementById('convListPanel') || document.getElementById('convList');
     const arrow = document.getElementById('onbArrowHighlight');
     if (!target || !arrow) return;
-    
+
     const rect = target.getBoundingClientRect();
     arrow.style.left = (rect.right + 15) + 'px';
     arrow.style.top = (rect.top + 80) + 'px';
     arrow.removeAttribute('hidden');
-    
+
     // Auto-hide after 12 seconds
     const autoHide = setTimeout(() => {
       arrow.setAttribute('hidden', '');
     }, 12000);
-    
+
     const closeBtn = document.getElementById('onbArrowClose');
     if (closeBtn) {
       closeBtn.onclick = () => {
