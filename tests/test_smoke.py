@@ -10274,9 +10274,15 @@ class TestGroupChatSidecarHelpers(unittest.TestCase):
             self.assertTrue(second["ok"])
             self.assertEqual(second.get("skipped"), "already reminded")
             self.assertTrue(third["ok"])
-            self.assertEqual(inject.call_count, 2)
+            # First turn: everyone except the author (Agent A) -> only B.
+            # Third turn: Human post without an explicit @mention pings all
+            # agents ("Agent A" in prose does not narrow targeting).
+            self.assertEqual(inject.call_count, 3)
             self.assertEqual(inject.call_args_list[0].args[0], sid_b)
-            self.assertEqual(inject.call_args_list[1].args[0], sid_a)
+            self.assertEqual(
+                {call.args[0] for call in inject.call_args_list[1:]},
+                {sid_a, sid_b},
+            )
 
     def test_message_count_counts_h2_lines(self):
         for mod in ("server", "morning", "morning_store"):
