@@ -1240,11 +1240,14 @@
   }
   /* <session-state> block — slightly muted, italic body, with breathing
      room between rows. Each row keeps a small uppercase label
-     (DID / INSIGHT / NEXT STEP USER) so it reads consistently. */
+     (DID / INSIGHT / NEXT STEP USER) so it reads consistently.
+     CCC-471: subtle card fill + slate anchor border + color-coded keys
+     (DID green, INSIGHT purple, NEXT STEP amber) for instant scanning. */
   .session-state-block {
     margin: 12px 0;
-    padding: 12px 14px;
-    border-left: 2px solid var(--border);
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border-left: 3px solid #64748b;
     color: var(--text-muted);
     font-style: italic;
     font-size: 14px;
@@ -1260,6 +1263,9 @@
     text-transform: uppercase; letter-spacing: 0.05em;
     opacity: 0.75;
   }
+  .session-state-block .ssb-did .ssb-key { color: #10b981; opacity: 0.9; }
+  .session-state-block .ssb-insight .ssb-key { color: #8b5cf6; opacity: 0.9; }
+  .session-state-block .ssb-next .ssb-key { color: #f59e0b; opacity: 0.9; }
   .session-state-block .ssb-next {
     margin-top: 10px; padding-top: 10px;
     border-top: 1px dashed var(--border);
