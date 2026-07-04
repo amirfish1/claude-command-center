@@ -28955,6 +28955,28 @@
     }
     return null;
   }
+  async function _uxqOpenItemDetail(ref) {
+    const fallback = _uxqItemForRef(ref);
+    try {
+      const res = await fetch('/api/ux-fixes/item?ref=' + encodeURIComponent(ref), { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok && data.item) {
+        _uxqOpenItemModal(data.item);
+        return;
+      }
+      if (fallback) {
+        _uxqOpenItemModal(fallback);
+      } else {
+        showOpToast('Ticket not found: ' + (data.error || res.status), 'error');
+      }
+    } catch (e) {
+      if (fallback) {
+        _uxqOpenItemModal(fallback);
+      } else {
+        showOpToast('Ticket load failed: ' + e, 'error');
+      }
+    }
+  }
   function _uxqItemPrompt(item) {
     if (!item) return '';
     return String(item.text || item.note || '');
@@ -29031,12 +29053,7 @@
     const promptText = _uxqItemPrompt(item);
     const detailTitle = _uxqItemTitle(item);
     const status = item.needs_input ? 'blocked' : (item.status || 'open');
-    const allNotes = Array.isArray(item.progress_notes) ? item.progress_notes : [];
-    const progNotes = allNotes.filter(n => (n && n.by) !== 'human-reopen' && (n && n.by) !== 'human-comment');
-    const reopenNotes = allNotes.filter(n => n && n.by === 'human-reopen');
-    const commentNotes = allNotes.filter(n => n && n.by === 'human-comment');
-    const answers  = Array.isArray(item.answers) ? item.answers : [];
-    const _noteStr = n => String((n && (n.text || n)) || '');
+    const timeline = Array.isArray(item.timeline) ? item.timeline : [];
 
     // Sidebar property row helpers
     function _propRow(key, valHtml) {
@@ -29112,78 +29129,73 @@
       return '<button type="button" class="uxq-tl-session-btn" data-sid="' + escapeAttr(sid) + '">' + escapeHtml(label) + ' ↗</button>';
     }
 
-    let tlHtml = '';
-
-    // Filed
-    tlHtml += _tlEvt('uxq-tl-filed',
-      '<span class="uxq-tl-verb">Filed</span>' + _tlTime(item.created_at)
-      + (item.source ? ' <span class="uxq-tl-meta">via ' + escapeHtml(item.source) + '</span>' : ''),
-      item.project ? '<span class="uxq-tl-tag">' + escapeHtml(item.project) + '</span>' : '');
-
-    // Claimed
-    if (item.claimed_by || item.claimed_at) {
-      tlHtml += _tlEvt('uxq-tl-claimed',
-        '<span class="uxq-tl-verb">Claimed</span>' + _tlTime(item.claimed_at) + _tlWorker(item.claimed_by),
-        item.claimed_session_id ? _sessionBtn(item.claimed_session_id, 'open session') : '');
+    function _tlActor(ev) {
+      const by = (ev && ev.by && typeof ev.by === 'object') ? ev.by : {};
+      return {
+        worker: by.worker || '',
+        session: by.session_id || '',
+        kind: by.kind || '',
+      };
+    }
+    function _tlHead(label, ev) {
+      const actor = _tlActor(ev);
+      return '<span class="uxq-tl-verb">' + escapeHtml(label) + '</span>'
+        + _tlTime(ev && ev.at)
+        + _tlWorker(actor.worker || actor.kind)
+        + (actor.session ? _sessionBtn(actor.session, 'open session') : '');
+    }
+    function _tlText(text, cls) {
+      return text ? '<div class="' + (cls || 'uxq-tl-block-q') + '">' + escapeHtml(String(text)) + '</div>' : '';
+    }
+    function _tlResolution(resolution) {
+      const res = (resolution && typeof resolution === 'object') ? resolution : {};
+      const summary = res.summary || '';
+      const caveats = res.caveats || res.caveat || [];
+      const followUps = res.follow_ups || res.follow_up || [];
+      const unresolved = res.unresolved || [];
+      if (!(summary || caveats.length || followUps.length || unresolved.length)) return '';
+      return '<div class="uxq-tl-res">'
+        + (summary ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Summary</span><div class="uxq-tl-res-v">' + _fmtRes(summary) + '</div></div>' : '')
+        + (caveats.length ? '<div class="uxq-tl-res-row uxq-tl-res-caveat"><span class="uxq-tl-res-k">Caveat</span><div class="uxq-tl-res-v">' + _fmtRes(caveats) + '</div></div>' : '')
+        + (followUps.length ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Follow-up</span><div class="uxq-tl-res-v">' + _fmtRes(followUps) + '</div></div>' : '')
+        + (unresolved.length ? '<div class="uxq-tl-res-row uxq-tl-res-unresolved"><span class="uxq-tl-res-k">Unresolved</span><div class="uxq-tl-res-v">' + _fmtRes(unresolved) + '</div></div>' : '')
+        + '</div>';
+    }
+    function _tlEditFields(fields) {
+      const obj = (fields && typeof fields === 'object') ? fields : {};
+      const keys = Object.keys(obj).sort();
+      if (!keys.length) return '';
+      return '<div class="uxq-tl-edit-fields">'
+        + keys.map(k => '<div><span>' + escapeHtml(k) + '</span> ' + escapeHtml(String(obj[k])) + '</div>').join('')
+        + '</div>';
+    }
+    function _tlRenderEvent(ev) {
+      const type = String((ev && ev.event) || '');
+      if (type === 'filed') {
+        return _tlEvt('uxq-tl-filed', _tlHead('Filed', ev)
+          + (ev.source ? ' <span class="uxq-tl-meta">via ' + escapeHtml(ev.source) + '</span>' : ''),
+          ev.project ? '<span class="uxq-tl-tag">' + escapeHtml(ev.project) + '</span>' : '');
+      }
+      if (type === 'claim') return _tlEvt('uxq-tl-claimed', _tlHead('Claimed', ev), '');
+      if (type === 'progress') return _tlEvt('uxq-tl-progress', _tlHead('Progress', ev), _tlText(ev.text, 'uxq-tl-sub-note'));
+      if (type === 'block') return _tlEvt('uxq-tl-blocked', _tlHead('Blocked', ev), _tlText(ev.question));
+      if (type === 'answer') return _tlEvt('uxq-tl-answer', _tlHead('Answered', ev), _tlText(ev.text, 'uxq-tl-sub-note uxq-tl-sub-answer'));
+      if (type === 'comment') return _tlEvt('uxq-tl-comment', _tlHead('Comment', ev), _tlText(ev.text));
+      if (type === 'reopen') return _tlEvt('uxq-tl-reopen', _tlHead('Reopened', ev), _tlText(ev.reason));
+      if (type === 'close') return _tlEvt('uxq-tl-closed', _tlHead('Closed', ev), _tlResolution(ev.resolution));
+      if (type === 'move') {
+        const body = [ev.from_ref, ev.to_ref].filter(Boolean).join(' -> ');
+        return _tlEvt('uxq-tl-move', _tlHead('Moved', ev), body ? '<div class="uxq-tl-sub-note">' + escapeHtml(body) + '</div>' : '');
+      }
+      if (type === 'edit') return _tlEvt('uxq-tl-edit', _tlHead('Edited', ev), _tlEditFields(ev.fields));
+      return _tlEvt('uxq-tl-comment', _tlHead(type || 'Event', ev), ev.text ? _tlText(ev.text) : '');
     }
 
-    // Blocked (historical or current)
-    if (item.block_question) {
-      const pNotes = progNotes.length
-        ? '<div class="uxq-tl-sub-label">Progress so far</div>'
-          + progNotes.map(n => '<div class="uxq-tl-sub-note">' + escapeHtml(_noteStr(n)) + '</div>').join('')
-        : '';
-      const aBlock = answers.length
-        ? '<div class="uxq-tl-sub-label">Human answers</div>'
-          + answers.map(a => '<div class="uxq-tl-sub-note uxq-tl-sub-answer">' + escapeHtml(_noteStr(a)) + '</div>').join('')
-        : '';
-      const blockBadge = item.needs_input
-        ? ' <span class="uxq-tl-inline-badge uxq-tl-ib-waiting">awaiting your answer</span>'
-        : ' <span class="uxq-tl-inline-badge uxq-tl-ib-done">unblocked</span>';
-      tlHtml += _tlEvt('uxq-tl-blocked',
-        '<span class="uxq-tl-verb">Blocked</span>' + blockBadge,
-        '<div class="uxq-tl-block-q">' + escapeHtml(item.block_question) + '</div>' + pNotes + aBlock);
-    }
-
-    // Comments — plain status-update notes a human left from the CCC UI
-    // (CCC-436), not tied to a block or a close. Own timeline event per note.
-    commentNotes.forEach(n => {
-      tlHtml += _tlEvt('uxq-tl-comment',
-        '<span class="uxq-tl-verb">Comment</span>' + _tlTime(n.at || null),
-        n.text ? '<div class="uxq-tl-block-q">' + escapeHtml(_noteStr(n)) + '</div>' : '');
-    });
-
-    // Closed / Resolution — a reopen clears item.closed_at (and reassigns
-    // item.claimed_by to whoever re-claims it) but keeps closed_by/resolution
-    // around, so gate on those too or a prior close silently vanishes from
-    // Activity on reopen. Attribute to closed_by (who actually closed it),
-    // not claimed_by (the current claimant, which may be a different worker
-    // after reopen + re-claim).
-    const res = (item.resolution && typeof item.resolution === 'object') ? item.resolution : {};
-    const resSummary   = res.summary   || item.summary;
-    const resCaveat    = res.caveat    || item.caveat;
-    const resFollowUp  = res.follow_up || item.follow_up;
-    const resUnresolved= res.unresolved|| item.unresolved;
-    if (item.closed_at || item.closed_by || resSummary || resCaveat || resFollowUp || resUnresolved) {
-      const resHtml = (resSummary || resCaveat || resFollowUp || resUnresolved)
-        ? '<div class="uxq-tl-res">'
-          + (resSummary    ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Summary</span><div class="uxq-tl-res-v">' + _fmtRes(resSummary) + '</div></div>' : '')
-          + (resCaveat     ? '<div class="uxq-tl-res-row uxq-tl-res-caveat"><span class="uxq-tl-res-k">Caveat</span><div class="uxq-tl-res-v">' + _fmtRes(resCaveat) + '</div></div>' : '')
-          + (resFollowUp   ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Follow-up</span><div class="uxq-tl-res-v">' + _fmtRes(resFollowUp) + '</div></div>' : '')
-          + (resUnresolved ? '<div class="uxq-tl-res-row uxq-tl-res-unresolved"><span class="uxq-tl-res-k">Unresolved</span><div class="uxq-tl-res-v">' + _fmtRes(resUnresolved) + '</div></div>' : '')
-          + '</div>'
-        : '';
-      tlHtml += _tlEvt('uxq-tl-closed',
-        '<span class="uxq-tl-verb">Closed</span>' + _tlTime(item.closed_at) + _tlWorker(item.closed_by || item.claimed_by),
-        resHtml);
-    }
-
-    // Reopened events (from human reopen actions with notes)
-    reopenNotes.forEach(n => {
-      tlHtml += _tlEvt('uxq-tl-reopen',
-        '<span class="uxq-tl-verb">Reopened</span>' + _tlTime(n.at || null),
-        n.text ? '<div class="uxq-tl-block-q">' + escapeHtml(n.text) + '</div>' : '');
-    });
+    const editCount = timeline.filter(ev => ev && ev.event === 'edit').length;
+    let tlHtml = timeline.map(_tlRenderEvent).join('');
+    const editToggleHtml = editCount
+      ? '<label class="uxq-show-edits"><input type="checkbox" class="uxq-show-edits-input"> show edits (' + editCount + ')</label>'
+      : '';
 
     if (!item.closed_at) {
       const verb = status === 'in_progress' ? 'In progress' : status === 'blocked' ? 'Waiting for answer' : 'Open';
@@ -29292,7 +29304,7 @@
       +   '<div class="uxq-td-main">'
       +     promptHtml
       +     imagesHtml
-      +     '<div class="uxq-td-sec"><div class="uxq-td-sec-label">Activity</div>'
+      +     '<div class="uxq-td-sec"><div class="uxq-td-sec-label">Activity' + editToggleHtml + '</div>'
       +       '<div class="uxq-timeline">' + tlHtml + '</div>'
       +     '</div>'
       +     answerSectionHtml
@@ -29321,6 +29333,14 @@
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
 
     modal.querySelectorAll('[data-ux-close]').forEach(btn => btn.addEventListener('click', close));
+
+    const showEditsInput = modal.querySelector('.uxq-show-edits-input');
+    if (showEditsInput) {
+      const timelineEl = modal.querySelector('.uxq-timeline');
+      showEditsInput.addEventListener('change', () => {
+        if (timelineEl) timelineEl.classList.toggle('uxq-show-edits', showEditsInput.checked);
+      });
+    }
 
     const copyBtn = modal.querySelector('[data-ux-copy]');
     if (copyBtn) {
@@ -29400,7 +29420,7 @@
     }
 
     // Add comment (any status) — logs a timestamped status update to the
-    // Activity timeline via progress_notes, without touching item.status.
+    // canonical Activity timeline, without touching item.status.
     const commentInput = modal.querySelector('.uxq-td-comment-input');
     const commentBtn = modal.querySelector('.uxq-td-comment-confirm');
     if (commentBtn) {
@@ -29754,7 +29774,7 @@
           return;
         }
         const row = ev.target && ev.target.closest && ev.target.closest('.fq-row[data-ref]');
-        if (row) _uxqOpenItemModal(_uxqItemForRef(row.getAttribute('data-ref')));
+        if (row) _uxqOpenItemDetail(row.getAttribute('data-ref'));
       });
     }
     // STUCK badge in the health strip — nudge that project's fixer via the same

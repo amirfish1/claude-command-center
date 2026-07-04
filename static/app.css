@@ -15937,10 +15937,21 @@ body:has(.gc-reader) .pwa-install-banner {
 .uxq-tl-filed   .uxq-tl-dot { border-color: var(--text-muted); background: var(--bg); }
 .uxq-tl-claimed .uxq-tl-dot { border-color: var(--accent); background: var(--accent); }
 .uxq-tl-blocked .uxq-tl-dot { border-color: #f59e0b; background: #f59e0b; }
+.uxq-tl-progress .uxq-tl-dot { border-color: #94a3b8; background: #94a3b8; }
+.uxq-tl-answer  .uxq-tl-dot { border-color: #4ade80; background: #4ade80; }
 .uxq-tl-closed  .uxq-tl-dot { border-color: #4ade80; background: #4ade80; }
 .uxq-tl-reopen  .uxq-tl-dot { border-color: #a78bfa; background: #a78bfa; }
 .uxq-tl-comment .uxq-tl-dot { border-color: #38bdf8; background: #38bdf8; }
+.uxq-tl-edit    .uxq-tl-dot { border-color: #64748b; background: var(--surface); }
+.uxq-tl-move    .uxq-tl-dot { border-color: #f97316; background: #f97316; }
 .uxq-tl-open    .uxq-tl-dot { border-color: var(--text-muted); background: var(--surface); }
+.uxq-timeline:not(.uxq-show-edits) .uxq-tl-edit { display: none; }
+.uxq-show-edits {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+  font: 500 11px var(--font-ui); color: var(--text-muted); text-transform: none;
+  letter-spacing: 0; cursor: pointer;
+}
+.uxq-show-edits input { margin: 0; }
 .uxq-tl-body { flex: 1; min-width: 0; padding: 0 0 14px; }
 .uxq-tl-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 18px; }
 .uxq-tl-verb { font: 600 13px var(--font-ui); color: var(--text); }
@@ -15982,6 +15993,12 @@ body:has(.gc-reader) .pwa-install-banner {
   background: rgba(139,148,158,0.06); border-radius: 5px; padding: 4px 8px;
 }
 .uxq-tl-sub-answer { background: rgba(74,222,128,0.06); color: var(--text); }
+.uxq-tl-edit-fields {
+  font: 12px var(--font-mono, ui-monospace, monospace);
+  color: var(--text-muted); background: rgba(100,116,139,0.08);
+  border-radius: 5px; padding: 5px 8px;
+}
+.uxq-tl-edit-fields span { color: var(--text); }
 .uxq-tl-session-btn {
   font: 600 11px var(--font-ui); color: var(--accent); background: rgba(88,166,255,0.10);
   border: 1px solid rgba(88,166,255,0.25); border-radius: 4px;
