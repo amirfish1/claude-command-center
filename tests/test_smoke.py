@@ -3460,12 +3460,33 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('class="uxq-td-title"', app_js)
         self.assertIn('class="uxq-td-ref"', app_js)
         self.assertIn("Click to view ticket details", app_js)
-        self.assertIn("_uxqOpenItemModal(_uxqItemForRef(row.getAttribute('data-ref')))", app_js)
+        self.assertIn("_uxqOpenItemDetail(row.getAttribute('data-ref'))", app_js)
         queue_click = app_js[app_js.index("$queueList.addEventListener('click'"):app_js.index("// STUCK badge", app_js.index("$queueList.addEventListener('click'"))]
         self.assertNotIn("_uxqJumpToRef", queue_click)
         self.assertIn(".uxq-td-title-wrap", app_css)
         self.assertIn(".uxq-td-title", app_css)
         self.assertIn(".uxq-detail-meta", app_css)
+
+    def test_queue_detail_uses_watchtower_timeline_contract(self):
+        """Ticket detail should come from WT timeline, not CCC's old private
+        progress_notes/answers reconstruction."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        modal_js = app_js[
+            app_js.index("function _uxqOpenItemModal(item)"):
+            app_js.index("function _renderQueuePanel", app_js.index("function _uxqOpenItemModal(item)"))
+        ]
+
+        self.assertIn('if path == "/api/ux-fixes/item":', server_py)
+        self.assertIn('"timeline"', server_py)
+        self.assertNotIn("_wt_q._FileLock", server_py)
+        self.assertNotIn("_wt_q._load_unlocked", server_py)
+        self.assertIn("async function _uxqOpenItemDetail(ref)", app_js)
+        self.assertIn("item.timeline", modal_js)
+        self.assertIn("uxq-show-edits", modal_js)
+        self.assertNotIn("progress_notes", modal_js)
+        self.assertNotIn("item.answers", modal_js)
+        self.assertNotIn("item.block_question) {", modal_js)
 
     def test_queue_status_icons_are_large_and_in_progress_glows(self):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
