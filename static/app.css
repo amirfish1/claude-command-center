@@ -4518,6 +4518,17 @@
   .conv-evergreen-queue-header .ceq-state.is-stuck {
     background: rgba(248,81,73,0.18); color: var(--red, #f85149);
   }
+  .conv-evergreen-queue-header .ceq-add-btn {
+    margin-left: auto; flex-shrink: 0;
+    padding: 1px 6px; border-radius: 4px;
+    border: 1px solid var(--border); background: transparent;
+    color: var(--text-muted); font-size: 14px; line-height: 1; cursor: pointer;
+    opacity: 0; transition: opacity 0.12s;
+  }
+  .conv-evergreen-queue-header:hover .ceq-add-btn { opacity: 1; }
+  .conv-evergreen-queue-header .ceq-add-btn:hover {
+    background: rgba(139,148,158,0.15); color: var(--text);
+  }
   /* Fallback worker row — shown when a live worker's cloud session_id isn't in
      the loaded conversation list (ephemeral / cross-project / not yet
      discovered). Minimal: a dot, the worker id, and its queue. */

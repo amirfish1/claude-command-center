@@ -5222,6 +5222,13 @@
 
   function updateInputBar() {
     if (!$convInputBar) return;
+    // In split-pane mode the active pane may not be p1; find its input bar so
+    // we toggle 'visible' on the right element (p1's #convInputBar is always
+    // correct when p1 is active; for other panes it has no id and must be
+    // found by pane selector). Falls back to $convInputBar (p1) when not split.
+    const _activeInputBar = (typeof getConvInputBarForPane === 'function')
+      ? (getConvInputBarForPane(activePaneId()) || $convInputBar)
+      : $convInputBar;
     const isPkood = currentSession.source === 'pkood';
     const isCodex = currentSession.source === 'codex';
     const isGemini = currentSession.source === 'gemini';
@@ -5236,8 +5243,8 @@
     const isConvTab = activeTab === 'sessions';
     const hasSession = !!currentSession.id;
     const isNewSession = currentConversation === '__new__';
-    if ($convInputBar) {
-      $convInputBar.classList.toggle('is-new-session-launch', isNewSession);
+    if (_activeInputBar) {
+      _activeInputBar.classList.toggle('is-new-session-launch', isNewSession);
     }
     renderNewSessionObjectContext();
     // Backlog GH issue: viewing an issue card in the right pane. Submitting
@@ -5256,7 +5263,7 @@
     // Also show in "new session" mode where the input doubles as the
     // prompt for spawning a fresh agent.
     if (showInputBar) {
-      $convInputBar.classList.add('visible');
+      _activeInputBar.classList.add('visible');
       if (isBacklogIssue) {
         const n = (currentBacklogRow && currentBacklogRow.issue_number) || currentConversation.replace('backlog-issue-', '');
         $convTtyLabel.textContent = '#' + n;
@@ -5421,8 +5428,8 @@
         }
       }
     } else {
-      $convInputBar.classList.remove('visible');
-      $convInputBar.classList.remove('is-new-session-launch');
+      _activeInputBar.classList.remove('visible');
+      _activeInputBar.classList.remove('is-new-session-launch');
       if ($convInput) {
         $convInput.readOnly = false;
         $convInput.classList.remove('is-readonly');
@@ -22483,6 +22490,7 @@
           + ' title="' + escapeAttr(tip + ' — click to open queue') + '">'
           + '<span class="ceq-name">' + escapeHtml(label) + '</span>'
           + meta
+          + '<button class="ceq-add-btn" type="button" data-ceq-add-queue="' + escapeAttr(label) + '" title="Add a ticket to ' + escapeAttr(label) + '" aria-label="Add ticket to ' + escapeAttr(label) + '">+</button>'
           + '</div>';
       };
       // Worker sessions live here, not twice — the flat "Current sessions" list
@@ -24442,6 +24450,39 @@
         chev.setAttribute('aria-expanded', nowOpen ? 'true' : 'false');
         const row = chev.closest('.conv-item');
         if (row) row.classList.toggle('is-brief-open', nowOpen);
+      });
+    }
+    // + button on Triggered Workers queue header: add a ticket directly to that queue.
+    if (!$convList._ceqAddBtnWired) {
+      $convList._ceqAddBtnWired = true;
+      $convList.addEventListener('click', async (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('.ceq-add-btn[data-ceq-add-queue]');
+        if (!btn) return;
+        ev.stopImmediatePropagation();
+        ev.preventDefault();
+        const queueName = btn.getAttribute('data-ceq-add-queue') || '';
+        const note = await openQueueTicketComposer();
+        if (!note) return;
+        const targetProj = _UXQ_FAMILY_DEFAULT[_uxqProjectKey(queueName)] || queueName;
+        try {
+          const res = await fetch('/api/ux-fixes/enqueue', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(targetProj ? { note, project: targetProj } : { note }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (data && data.ok) {
+            const ref = (data.item && data.item.ref) || 'ticket';
+            showOpToast('Added ' + ref + ' to ' + queueName);
+            _uxqItemsCache.ts = 0;
+            _uxqHealthCache.ts = 0;
+            _renderQueuePanel();
+          } else {
+            showOpToast('Failed to add ticket', 'error');
+          }
+        } catch (err) {
+          showOpToast('Error: ' + err.message, 'error');
+        }
       });
     }
     // Queue header click: switch status rail to Queue tab, scope to that queue,
@@ -27824,6 +27865,9 @@
     }
     // Update split panel input bar visibility
     updateSplitInputBar();
+    // Update the active pane's own input bar immediately so it shows on restore
+    // without waiting for the first liveStatus poll (fixes second-pane on refresh).
+    updateInputBar();
     // Update split panel toolbar buttons
     updateSplitToolbar();
     restoreComposerDraftForPane(paneId, id);

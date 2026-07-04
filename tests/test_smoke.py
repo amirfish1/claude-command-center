@@ -747,7 +747,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("class=\"ns-new-project-details\"", app_js)
         self.assertIn("Create a fresh folder", app_js)
         self.assertNotIn("class=\"ns-hero-title\">🚀 Start a new session</div>", app_js)
-        self.assertIn("$convInputBar.classList.toggle('is-new-session-launch', isNewSession);", app_js)
+        self.assertIn("_activeInputBar.classList.toggle('is-new-session-launch', isNewSession);", app_js)
         self.assertIn(".conv-input-bar.is-new-session-launch textarea", app_css)
         self.assertIn("min-height: 96px;", app_css)
 
