@@ -2217,6 +2217,13 @@
       svg.innerHTML = `<text x="${width/2}" y="${height/2}" fill="var(--text-muted)" text-anchor="middle" font-size="13px">waiting for weekly context…</text>`;
     }
 
+    function quotaScaleMax(...values) {
+      const finite = values.filter(v => Number.isFinite(v) && v > 0);
+      const visibleMax = Math.max(10, ...finite);
+      const step = visibleMax <= 50 ? 5 : 10;
+      return Math.ceil((visibleMax * 1.08) / step) * step;
+    }
+
     function drawChart(turns, summary, isAggregate = false, bucketMode = 'hourly', showCumulative = false) {
       const svg = document.getElementById('throughput-chart');
       if (!svg) return;
@@ -2677,7 +2684,22 @@
           return cumPrv;
         });
 
-        const maxCum = Math.max(100, Math.ceil(Math.max(projectedEnd, cumPrv, 10) / 10) * 10);
+        const _opusRow = (summary.per_model || []).find(m => (m.model || '').toLowerCase().includes('opus'));
+        const _opusTok = _opusRow ? (_opusRow.effective_input_tokens || 0) + (_opusRow.output_tokens || 0) : 0;
+        const _opusCost = _opusRow ? (_opusRow.cost_usd || 0) : 0;
+        const _opusCPT = (_opusTok > 0 && _opusCost > 0) ? _opusCost / _opusTok : null;
+        const _effTok = (summary.total_effective_input_tokens || 0) + (summary.total_output_tokens || 0);
+        const _blendCPT = (_effTok > 0 && (summary.cost_usd || 0) > 0) ? (summary.cost_usd || 0) / _effTok : null;
+        const _opusRatio = (_opusCPT && _blendCPT) ? _opusCPT / _blendCPT : null;
+        let lastOpusV = null, lastOpusI = -1;
+        const cumOpusVals = _opusRatio ? cumActVals.map((v, i) => {
+          if (v == null) return null;
+          lastOpusV = v * _opusRatio;
+          lastOpusI = i;
+          return lastOpusV;
+        }) : [];
+
+        const maxCum = quotaScaleMax(projectedEnd, cumPrv, lastOpusV, cumAct);
         const yPct = p => height - padding.bottom - (p / maxCum) * (height - padding.top - padding.bottom);
 
         // 3. % gridlines (right axis)
@@ -2789,22 +2811,13 @@
         }
 
         // 7. IF OPUS ONLY — red dashed line showing hypothetical all-Opus cumulative %
-        const _opusRow = (summary.per_model || []).find(m => (m.model || '').toLowerCase().includes('opus'));
-        const _opusTok = _opusRow ? (_opusRow.effective_input_tokens || 0) + (_opusRow.output_tokens || 0) : 0;
-        const _opusCost = _opusRow ? (_opusRow.cost_usd || 0) : 0;
-        const _opusCPT = (_opusTok > 0 && _opusCost > 0) ? _opusCost / _opusTok : null;
-        const _effTok = (summary.total_effective_input_tokens || 0) + (summary.total_output_tokens || 0);
-        const _blendCPT = (_effTok > 0 && (summary.cost_usd || 0) > 0) ? (summary.cost_usd || 0) / _effTok : null;
-        const _opusRatio = (_opusCPT && _blendCPT) ? _opusCPT / _blendCPT : null;
         if (_opusRatio) {
           let op = '', opS = false;
-          let lastOpusV = null, lastOpusI = -1;
-          cumActVals.forEach((v, i) => {
-            if (v == null) return;
-            const ov = v * _opusRatio;
+          cumOpusVals.forEach((ov, i) => {
+            if (ov == null) return;
             const x = xScale(i + 1), y = yPct(ov);
             op += opS ? `L ${x} ${y} ` : `M ${x} ${y} `;
-            opS = true; lastOpusV = ov; lastOpusI = i;
+            opS = true;
           });
           if (op) {
             const opLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');

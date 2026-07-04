@@ -26,3 +26,11 @@ def test_aggregate_chart_waits_for_weekly_context_and_labels_previous_week():
     assert "Last week" in throughput_html
     assert "previousWeekLegend" in throughput_html
     assert "projectedLabelAnchor" in throughput_html
+
+
+def test_weekly_quota_overlay_uses_dynamic_axis_scale():
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+
+    assert "function quotaScaleMax" in throughput_html
+    assert "quotaScaleMax(projectedEnd, cumPrv, lastOpusV" in throughput_html
+    assert "Math.max(100, Math.ceil(Math.max(projectedEnd, cumPrv, 10)" not in throughput_html
