@@ -170,14 +170,15 @@ class TestPayloadShape(TelemetryTestBase):
         expected = {
             "schema_version", "install_id", "version",
             "platform", "engines", "last_active_date", "sessions_today",
+            "active_seconds_today", "total_sessions_managed",
         }
         self.assertEqual(set(payload.keys()), expected,
                          f"payload keys drifted from the public contract: {payload.keys()}")
 
-    def test_payload_schema_version_is_int_two(self):
+    def test_payload_schema_version_is_int_three(self):
         self.server._telemetry_load_or_init_install_id()
         payload = self.server._build_telemetry_payload()
-        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["schema_version"], 3)
 
     def test_payload_install_id_matches_disk(self):
         uid = self.server._telemetry_load_or_init_install_id()

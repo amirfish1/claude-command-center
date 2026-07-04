@@ -12,7 +12,7 @@ class TestSidebarRowLayout(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         row_start = app_js.index("return '<div class=\"conv-item'")
-        row_html = app_js[row_start:app_js.index("+ hoverMetaRowHtml", row_start)]
+        row_html = app_js[row_start:app_js.index("+   hoverMetaRowHtml", row_start)]
         main_row = row_html[row_html.index("+ '<div class=\"conv-main-row\">'"):]
         row_end = row_html[row_html.index("+ '<span class=\"conv-row-end\">'"):]
 

@@ -178,11 +178,13 @@ class TestServerImports(unittest.TestCase):
             old_cal = server._CCC_WEEKLY_CAL_FILE
             old_legacy_cal = server._WEEKLY_CAL_FILE
             old_override = server._WEEK_START_OVERRIDE_FILE
+            old_reset_events = server._RESET_EVENTS_FILE
             old_memo = dict(server._weekly_cal_memo)
             try:
                 server._CCC_WEEKLY_CAL_FILE = usage_dir / "calibration.json"
                 server._WEEKLY_CAL_FILE = usage_dir / "legacy-calibration.json"
                 server._WEEK_START_OVERRIDE_FILE = usage_dir / "week-start-override.json"
+                server._RESET_EVENTS_FILE = usage_dir / "reset-events.jsonl"
                 server._weekly_cal_memo.clear()
                 server._weekly_cal_memo.update({"path": None, "mtime": None, "value": None})
 
@@ -227,6 +229,7 @@ class TestServerImports(unittest.TestCase):
                 server._CCC_WEEKLY_CAL_FILE = old_cal
                 server._WEEKLY_CAL_FILE = old_legacy_cal
                 server._WEEK_START_OVERRIDE_FILE = old_override
+                server._RESET_EVENTS_FILE = old_reset_events
                 server._weekly_cal_memo.clear()
                 server._weekly_cal_memo.update(old_memo)
 

@@ -30,6 +30,10 @@ class CrossRepoFeedTests(unittest.TestCase):
                 (repo / ".git").mkdir()
 
             def fake_run(cmd, **kwargs):
+                if cmd[1:4] == ["api", "user", "--jq"]:
+                    return self.server.subprocess.CompletedProcess(cmd, 0, stdout="testuser", stderr="")
+                if cmd[:3] == ["git", "remote", "get-url"]:
+                    return self.server.subprocess.CompletedProcess(cmd, 0, stdout="https://github.com/testuser/testrepo.git", stderr="")
                 cwd = pathlib.Path(kwargs["cwd"])
                 if cmd[1:3] == ["issue", "list"]:
                     return self.server.subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
@@ -49,9 +53,13 @@ class CrossRepoFeedTests(unittest.TestCase):
                 self.server.fetch_cross_repo_issues()
                 self.server.fetch_cross_repo_prs()
 
-            cwd_calls = [pathlib.Path(call.kwargs["cwd"]) for call in run.call_args_list]
-            self.assertTrue(cwd_calls)
-            self.assertEqual(set(cwd_calls), {known})
+            gh_cwd_calls = [
+                pathlib.Path(call.kwargs["cwd"]).resolve()
+                for call in run.call_args_list
+                if "cwd" in call.kwargs and call.args and call.args[0][:1] == ["gh"]
+            ]
+            self.assertTrue(gh_cwd_calls)
+            self.assertEqual(set(gh_cwd_calls), {known.resolve()})
 
 
 if __name__ == "__main__":
