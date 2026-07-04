@@ -755,6 +755,12 @@
     font-weight: 400;
   }
 
+  .reset-event-field input:disabled {
+    color: var(--text-muted);
+    -webkit-text-fill-color: var(--text-muted);
+    opacity: 1;
+  }
+
   .reset-event-actions {
     display: flex;
     justify-content: flex-end;
@@ -1949,7 +1955,12 @@
       return null;
     }
 
-    function renderResetMarkers(svg, sourceRows, xScale, padding, height) {
+    function shouldRenderResetMarker(event, resetMarkerWindow) {
+      if (!resetMarkerWindow) return true;
+      return (event && event.window) === resetMarkerWindow;
+    }
+
+    function renderResetMarkers(svg, sourceRows, xScale, padding, height, resetMarkerWindow = null) {
       if (!svg || !Array.isArray(resetEvents) || !resetEvents.length || !Array.isArray(sourceRows) || !sourceRows.length) return;
       const rows = sourceRows
         .map((row, i) => ({ i, d: _resetMarkerRowDate(row) }))
@@ -1958,6 +1969,7 @@
       const first = rows[0].d.getTime();
       const last = rows[rows.length - 1].d.getTime();
       resetEvents.forEach(event => {
+        if (!shouldRenderResetMarker(event, resetMarkerWindow)) return;
         const d = new Date(event.detected_at || '');
         const ts = d.getTime();
         if (Number.isNaN(ts) || ts < first || ts > last + 86400000) return;
@@ -2537,7 +2549,8 @@
         });
       }
 
-      renderResetMarkers(svg, sourceRows, xScale, padding, height);
+      const resetMarkerWindow = (showWeeklyOverlay || showCumulative) ? 'seven_day' : null;
+      renderResetMarkers(svg, sourceRows, xScale, padding, height, resetMarkerWindow);
 
       // ── Weekly % overlay: 3-hour view (projection + prev period overlay) ──────
       if (showWeeklyOverlay && sixhourly) {
@@ -3061,6 +3074,8 @@
     function resetEventWindowLabel(value) {
       if (value === 'five_hour') return '5-hour session';
       if (value === 'seven_day') return 'Weekly';
+      if (value === 'codex_five_hour') return 'Codex 5-hour session';
+      if (value === 'codex_weekly') return 'Codex weekly';
       return value || 'unknown';
     }
 

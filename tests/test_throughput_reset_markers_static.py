@@ -13,3 +13,14 @@ def test_throughput_reset_markers_are_clickable_and_editable():
     assert "deleteResetEvent()" in throughput_html
     assert "recordLimitReset()" in throughput_html
     assert "reset-marker-hit" in throughput_html
+
+
+def test_weekly_chart_filters_reset_markers_and_humanizes_codex_windows():
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+
+    assert "shouldRenderResetMarker(event, resetMarkerWindow)" in throughput_html
+    assert "const resetMarkerWindow = (showWeeklyOverlay || showCumulative) ? 'seven_day' : null" in throughput_html
+    assert "Codex 5-hour session" in throughput_html
+    assert "Codex weekly" in throughput_html
+    assert ".reset-event-field input:disabled" in throughput_html
+    assert "-webkit-text-fill-color: var(--text-muted)" in throughput_html
