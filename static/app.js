@@ -2134,6 +2134,17 @@
   function _nyaSaveCollapsedSet(s) {
     try { localStorage.setItem(NYA_COLLAPSED_KEY, JSON.stringify([...s])); } catch (_) {}
   }
+  // Per-chat collapse state for group-chat rows (CCC-489) — a chat id in the
+  // set means its participant list + waiting hint are hidden. Default =
+  // expanded. Read once per render, same pattern as the NYA collapse set.
+  const GC_COLLAPSED_KEY = 'ccc-gc-collapsed';
+  function _gcCollapsedSet() {
+    try { return new Set(JSON.parse(localStorage.getItem(GC_COLLAPSED_KEY) || '[]')); }
+    catch (_) { return new Set(); }
+  }
+  function _gcSaveCollapsedSet(s) {
+    try { localStorage.setItem(GC_COLLAPSED_KEY, JSON.stringify([...s])); } catch (_) {}
+  }
   // Per-row brief disclosure (the chevron on the always-visible meta row). Set
   // of session ids whose brief is expanded inline. Persisted so the 5s poll
   // re-render keeps an opened brief open. Toggled in place — no full re-render.
@@ -23015,10 +23026,12 @@
     // (+ child data-roles) so the click / drag / archive handlers
     // wired further down still find them regardless of where the rows
     // ended up in the DOM.
+    const _gcCollapsedRows = _gcCollapsedSet();
     const _gcItems = _visibleGroupChats.map(chat => {
         const isClosed = chat.status === 'closed';
         const isPaused = chat.status === 'paused' || !!chat.paused;
         const chatId = chat.uuid || chat.id || '';
+        const isChatCollapsed = !!chatId && _gcCollapsedRows.has(chatId);
         const topicLabel = chat.topic ? escapeHtml(chat.topic.slice(0, 80)) : '(untitled)';
         const partSids = chat.session_ids || [];
         const nameMap = chat.name_map || {};
@@ -23124,7 +23137,7 @@
               summary = `${lastTrim} → waiting on ${waitingNames.join(', ')}`;
             }
             if (summary) {
-              chatWaitingHint = '<div class="conv-ingroupchat-row-waiting" title="Last writer → who the orchestrator will nudge next">'
+              chatWaitingHint = '<div class="conv-ingroupchat-row-waiting" title="' + escapeHtml(summary) + '">'
                 + escapeHtml(summary)
                 + '</div>';
             }
@@ -23132,7 +23145,14 @@
         }
         const isActiveChat = _gcReaderPath && (_gcReaderPath === chat.path || _gcReaderPath === chat.path_tilde);
         const isActiveChatById = _gcReaderId && chatId && _gcReaderId === chatId;
-        const _chatHtml = '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + '">'
+        const _gcCollapseBtn = partListHtml
+          ? '<button type="button" class="conv-ingroupchat-collapse-btn"'
+            +     ' data-role="ingroupchat-collapse"'
+            +     ' data-gc-id="' + escapeHtml(chatId) + '"'
+            +     ' title="' + (isChatCollapsed ? 'Expand participant list' : 'Collapse participant list') + '">'
+            +     (isChatCollapsed ? '&#9656;' : '&#9662;') + '</button>'
+          : '<span class="conv-ingroupchat-collapse-btn conv-ingroupchat-collapse-spacer" aria-hidden="true"></span>';
+        const _chatHtml = '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + (isChatCollapsed ? ' is-collapsed' : '') + '">'
           + '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + (isPaused ? ' conv-ingroupchat-row-paused' : '') + (isActiveChat || isActiveChatById ? ' active' : '') + '"'
           +   ' data-role="ingroupchat-row"'
           +   ' data-gc-id="' + escapeHtml(chatId) + '"'
@@ -23140,6 +23160,7 @@
           +   ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
           +   ' data-gc-mode="' + escapeHtml(chat.mode || 'topic') + '"'
           +   ' title="Click to open group chat reader">'
+          +   _gcCollapseBtn
           +   '<span class="conv-ingroupchat-row-icon">💬</span>'
           +   '<span class="conv-ingroupchat-row-topic">' + topicLabel + '</span>'
           +   closedPill
@@ -24793,11 +24814,31 @@
         if (ev.target.closest('[data-role="ingroupchat-clear"]')) return;
         if (ev.target.closest('[data-role="ingroupchat-pause"]')) return;
         if (ev.target.closest('[data-role="ingroupchat-add-participant"]')) return;
+        if (ev.target.closest('[data-role="ingroupchat-collapse"]')) return;
         const path = row.dataset.gcPath;
         const chatId = row.dataset.gcId || null;
         const topic = row.dataset.gcTopic || '';
         const mode = row.dataset.gcMode || 'topic';
         if (path || chatId) openGroupChatReader(path, topic, mode, true, chatId);
+      });
+    });
+    // Per-chat collapse chevron (CCC-489) — hides the participant list +
+    // waiting hint for that chat. Persisted in localStorage so it survives
+    // the poll-driven re-render.
+    $convList.querySelectorAll('[data-role="ingroupchat-collapse"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const chatId = btn.dataset.gcId || '';
+        if (!chatId) return;
+        const set = _gcCollapsedSet();
+        const nowCollapsed = !set.has(chatId);
+        if (nowCollapsed) set.add(chatId); else set.delete(chatId);
+        _gcSaveCollapsedSet(set);
+        btn.innerHTML = nowCollapsed ? '&#9656;' : '&#9662;';
+        btn.title = nowCollapsed ? 'Expand participant list' : 'Collapse participant list';
+        const chatEl = btn.closest('.conv-ingroupchat-chat');
+        if (chatEl) chatEl.classList.toggle('is-collapsed', nowCollapsed);
       });
     });
     $convList.querySelectorAll('[data-role="ingroupchat-archive"]').forEach(btn => {

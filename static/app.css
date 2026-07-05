@@ -12304,6 +12304,20 @@
 }
 #convList .conv-ingroupchat-row:hover { background: var(--row-hover, rgba(255,255,255,0.04)); }
 #convList .conv-ingroupchat-row-icon { font-size: 12px; flex-shrink: 0; opacity: 0.85; }
+/* Collapse chevron (CCC-489) — hides the participant list + waiting hint. */
+#convList .conv-ingroupchat-collapse-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 10px; padding: 2px; opacity: 0.55;
+  color: var(--text-muted); flex-shrink: 0;
+  width: 14px; text-align: center;
+  border-radius: 3px;
+}
+#convList .conv-ingroupchat-collapse-btn:hover { opacity: 1; color: var(--text); }
+#convList .conv-ingroupchat-collapse-spacer { cursor: default; }
+#convList .conv-ingroupchat-chat.is-collapsed .conv-ingroupchat-row-waiting,
+#convList .conv-ingroupchat-chat.is-collapsed .conv-ingroupchat-participants {
+  display: none;
+}
 #convList .conv-ingroupchat-row-topic {
   flex: 1; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -12498,9 +12512,8 @@
   white-space: nowrap;
 }
 #convList .conv-ingroupchat-row-waiting {
-  padding: 0 14px 4px 28px;
-  font-size: 10px; opacity: 0.7;
-  font-style: italic;
+  padding: 1px 14px 5px 28px;
+  font-size: 11px; color: var(--text-muted); opacity: 0.95;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 #convList .conv-ingroupchat-participant-remove {
