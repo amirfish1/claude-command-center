@@ -17452,6 +17452,11 @@ body:has(.gc-reader) .pwa-install-banner {
   font-weight: bold;
 }
 
+/* Remove terminal prompt from subsequent user messages in the session */
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text ~ .event.user_text .user-msg::after {
+  content: '' !important;
+}
+
 /* Assistant Message Block styling (outline border + background) */
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.assistant {
   background: transparent !important;
