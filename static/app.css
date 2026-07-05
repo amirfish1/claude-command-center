@@ -17428,7 +17428,7 @@ body:has(.gc-reader) .pwa-install-banner {
 /* ── Stitch / Cyan Mono Terminal Palette overrides ── */
 
 /* User Message bubble styling (Corner-cut + gradient + white/cyan text) */
-.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text {
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text:not(.is-pinned-in-sticky) {
   clip-path: polygon(0 0, 100% 0, 100% calc(100% - 24px), calc(100% - 24px) 100%, 0 100%) !important;
   border-radius: 0 !important;
   background: linear-gradient(135deg, rgba(67, 56, 202, 0.7) 0%, rgba(13, 148, 136, 0.7) 100%) !important;
@@ -17438,22 +17438,24 @@ body:has(.gc-reader) .pwa-install-banner {
   box-shadow: 0 0 12px rgba(0, 255, 255, 0.05) !important;
 }
 
-.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text .user-msg {
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text:not(.is-pinned-in-sticky) .user-msg {
   color: #e0ffff !important;
   font-family: 'Inter', sans-serif !important;
   font-size: 14px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.05em !important;
   line-height: 1.6 !important;
 }
 
 /* Cyan >_ prompt at the end of the user message */
-.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text .user-msg::after {
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text:not(.is-pinned-in-sticky) .user-msg::after {
   content: ' >_';
   color: #00ffff !important;
   font-weight: bold;
 }
 
 /* Remove terminal prompt from subsequent user messages in the session */
-.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text ~ .event.user_text .user-msg::after {
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text:not(.is-pinned-in-sticky) ~ .event.user_text:not(.is-pinned-in-sticky) .user-msg::after {
   content: '' !important;
 }
 
@@ -17469,6 +17471,8 @@ body:has(.gc-reader) .pwa-install-banner {
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.assistant .assistant-text {
   font-family: 'Inter', sans-serif !important;
   font-size: 14px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.05em !important;
   line-height: 1.6 !important;
   color: var(--conv-text) !important;
   background: var(--conv-surface-2) !important; /* Lighter surface-container #201f20 */
@@ -17478,6 +17482,14 @@ body:has(.gc-reader) .pwa-install-banner {
   padding: 16px !important;
   margin-top: 8px !important;
   box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+}
+
+.conv-pane[data-conv-bg="stitch"] .conversations-view .assistant-text h1,
+.conv-pane[data-conv-bg="stitch"] .conversations-view .assistant-text h2,
+.conv-pane[data-conv-bg="stitch"] .conversations-view .assistant-text h3 {
+  font-family: 'Space Grotesk', sans-serif !important;
+  font-weight: 700 !important;
+  color: var(--text) !important;
 }
 
 /* Blinking cursor / prompt at the end of the assistant greeting */

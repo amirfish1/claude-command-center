@@ -32918,7 +32918,7 @@
           const pane = paneByPaneId(fetchPaneId);
           if (pane) pane.firstLine = data.first_line || pane.firstLine || 0;
           if (_prepended !== false) convLastLine = Math.max(convLastLine, data.last_line || 0);
-        } else if (renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen }) !== false) {
+        } else if (renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen, isTruncated: data.truncated_before }) !== false) {
           convLastLine = data.last_line;
         }
         if (!_loadingEarlier) {
@@ -35730,6 +35730,11 @@
     // lastLine without painting those events, so Codex replies vanished
     // until a full reselect (and could stay missing if blur never fired).
     paneId = paneId || activePaneId();
+    opts = opts || {};
+    const pane = paneByPaneId(paneId);
+    if (pane && opts.isTruncated) {
+      pane.firstUserMsgRendered = true;
+    }
     const $view = getConvViewForPane(paneId) || $conversationsView;
     // Stick-to-bottom only when the user is *already* near the bottom.
     // If they've scrolled up to read, leave the scroll position alone so
