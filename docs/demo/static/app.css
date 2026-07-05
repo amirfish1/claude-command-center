@@ -8844,12 +8844,11 @@ body:has(.gc-reader) .pwa-install-banner {
 
 /* Assistant Message Block styling (outline border + background) */
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.assistant {
-  background: var(--conv-surface) !important;
-  border-left: 1px solid var(--conv-accent) !important;
-  border-radius: 0 4px 4px 0 !important;
-  padding: 16px !important;
-  margin-bottom: 16px !important;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 24px 0 4px !important;
+  margin-bottom: 8px !important;
+  box-shadow: none !important;
 }
 
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.assistant .assistant-text {
@@ -8857,6 +8856,13 @@ body:has(.gc-reader) .pwa-install-banner {
   font-size: 14px !important;
   line-height: 1.6 !important;
   color: var(--conv-text) !important;
+  background: var(--conv-surface-2) !important; /* Lighter surface-container #201f20 */
+  border: 0 !important;
+  border-left: 1px solid var(--conv-accent) !important;
+  border-radius: 0 4px 4px 0 !important;
+  padding: 16px !important;
+  margin-top: 8px !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
 }
 
 /* Blinking cursor / prompt at the end of the assistant greeting */
@@ -8868,7 +8874,7 @@ body:has(.gc-reader) .pwa-install-banner {
 
 /* Streaming bubble during active generation */
 .conv-pane[data-conv-bg="stitch"] .stream-bubble {
-  background: var(--conv-surface) !important;
+  background: var(--conv-surface-2) !important;
   border-left: 1px solid var(--conv-accent) !important;
   border-radius: 0 4px 4px 0 !important;
   padding: 16px !important;
