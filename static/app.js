@@ -17006,7 +17006,7 @@
   let _gcReplayPaused = false;
   let _gcReplayTimeout = null;
   let _gcReplayMsgIndex = 0;
-  let _gcReplaySentenceIndex = 0;
+  let _gcReplayWordIndex = 0;
   let _gcReplayMessages = [];
   let _gcReplayAllNonSys = [];
   let _gcReplaySpeakersAfter = [];
@@ -17246,7 +17246,7 @@
     _gcReplayPaused = false;
     _gcReplaySpeed = 1;
     _gcReplayMsgIndex = 0;
-    _gcReplaySentenceIndex = 0;
+    _gcReplayWordIndex = 0;
     _gcReplayData = data;
 
     const reader = document.getElementById('gcReader');
@@ -17333,7 +17333,7 @@
       const isPing = isSystem && /pinged/i.test(bodyText);
 
       const rawHtml = bodyText ? markSystemBlockquotes(renderMarkdown(bodyText)) : '<em class="gc-message-empty">(no text)</em>';
-      const { html: wrappedHtml, count: sentenceCount } = wrapSentencesInHtml(rawHtml);
+      const { html: wrappedHtml, count: wordCount } = _wrapReplayWordsInHtml(rawHtml, 'gc-replay-word');
 
       _gcReplayMessages.push({
         heading,
@@ -17344,7 +17344,7 @@
         color,
         isPing,
         wrappedHtml,
-        sentenceCount,
+        wordCount,
         rawBody,
         originalIndex: i
       });
@@ -17474,27 +17474,30 @@
         + '<div class="gc-message-footer"></div>';
 
       body.appendChild(msgEl);
-      _gcReplaySentenceIndex = 0;
+      _gcReplayWordIndex = 0;
       body.scrollTop = body.scrollHeight;
     }
 
-    if (_gcReplaySentenceIndex < msg.sentenceCount) {
-      const sentenceSpan = msgEl.querySelector(`.gc-replay-sentence[data-sentence-id="${_gcReplaySentenceIndex}"]`);
-      if (sentenceSpan) {
-        sentenceSpan.style.opacity = '1';
-        sentenceSpan.classList.add('gc-typing-shimmer');
+    if (_gcReplayWordIndex < msg.wordCount) {
+      const wordSpan = msgEl.querySelector(`.gc-replay-word[data-run-id="${_gcReplayWordIndex}"]`);
+      if (wordSpan) {
+        wordSpan.style.display = '';
+        wordSpan.classList.add('gc-typing-shimmer');
 
-        const charCount = sentenceSpan.textContent.length;
-        let delay = Math.max(400, Math.min(700, charCount * 10));
-        delay = delay / _gcReplaySpeed;
+        // Budget the whole message's type-in to roughly its old flat
+        // per-message delay, spread across its words — same tuning as
+        // conv-replay's word reveal (short messages stay readable, long
+        // ones don't crawl one word at a time).
+        const totalMs = Math.max(600, Math.min(3000, (msg.rawBody || '').length * 3));
+        const delay = Math.max(12, Math.min(160, totalMs / Math.max(1, msg.wordCount))) / _gcReplaySpeed;
 
         _gcReplayTimeout = setTimeout(() => {
-          sentenceSpan.classList.remove('gc-typing-shimmer');
-          _gcReplaySentenceIndex++;
+          wordSpan.classList.remove('gc-typing-shimmer');
+          _gcReplayWordIndex++;
           playNextReplayStep();
         }, delay);
       } else {
-        _gcReplaySentenceIndex++;
+        _gcReplayWordIndex++;
         playNextReplayStep();
       }
     } else {
@@ -17518,51 +17521,56 @@
     }
   }
 
-  function wrapSentencesInHtml(htmlContent) {
+  // Shared by group-chat replay (each message bubble) and conv-replay
+  // (single/two-pane transcript replay, see _convReplayWrapWordsInHtml):
+  // splits `htmlContent` into per-word runs, each wrapped in
+  // `<span class="{spanClass}" data-run-id="N">`, hidden via `display:none`
+  // — NOT opacity/visibility. Those still reserve the run's layout space,
+  // which on a paragraph with a bullet list or inline code produces a
+  // broken-looking reveal: bullets and code chips sit at their FINAL
+  // position from the very first frame (the whole block is already laid
+  // out full-size), so partially-revealed text shows as islands of visible
+  // words floating in blank gaps instead of growing naturally left-to-right.
+  // `display:none` collapses a hidden run to zero size, so revealed text
+  // grows the block as it goes. `<pre>`/`<code>` blocks are kept as a
+  // single run — revealing a code block or an inline ref word-by-word
+  // reads as broken, not "typed".
+  function _wrapReplayWordsInHtml(htmlContent, spanClass) {
     const doc = new DOMParser().parseFromString(htmlContent, 'text/html');
     const textNodes = [];
-    let sentenceId = 0;
+    let runId = 0;
 
     function findTextNodes(node) {
       if (node.nodeType === Node.TEXT_NODE) {
-        if (node.textContent.trim()) {
-          textNodes.push(node);
-        }
+        if (node.textContent.trim()) textNodes.push(node);
       } else {
         if (node.tagName && (node.tagName.toLowerCase() === 'pre' || node.tagName.toLowerCase() === 'code')) {
-          node.classList.add('gc-replay-sentence');
-          node.dataset.sentenceId = sentenceId++;
-          node.style.opacity = '0';
-          node.style.transition = 'opacity 0.2s ease';
+          node.classList.add(spanClass);
+          node.dataset.runId = runId++;
+          node.style.display = 'none';
           return;
         }
-        for (let child of node.childNodes) {
-          findTextNodes(child);
-        }
+        for (const child of Array.from(node.childNodes)) findTextNodes(child);
       }
     }
-
     findTextNodes(doc.body);
 
     for (const node of textNodes) {
-      const text = node.textContent;
-      const parts = text.split(/(?<=[.?!])\s+/);
+      const parts = node.textContent.match(/\S+\s*/g) || [node.textContent];
       const fragment = document.createDocumentFragment();
       for (const part of parts) {
-        if (part) {
-          const span = document.createElement('span');
-          span.className = 'gc-replay-sentence';
-          span.dataset.sentenceId = sentenceId++;
-          span.textContent = part + ' ';
-          span.style.opacity = '0';
-          span.style.transition = 'opacity 0.2s ease';
-          fragment.appendChild(span);
-        }
+        if (!part) continue;
+        const span = document.createElement('span');
+        span.className = spanClass;
+        span.dataset.runId = runId++;
+        span.textContent = part;
+        span.style.display = 'none';
+        fragment.appendChild(span);
       }
       node.replaceWith(fragment);
     }
 
-    return { html: doc.body.innerHTML, count: sentenceId };
+    return { html: doc.body.innerHTML, count: runId };
   }
 
   function _gcReplayReceiptsHtml(idx, curSpeaker, when) {
@@ -17701,10 +17709,15 @@
   // direct child, so hiding nested `.event` nodes alone leaves the group's
   // "Ran N commands" header on screen the whole time (the bug this fixes).
   // Same node set `clearPaneScreenForVideo` treats as "the transcript" for
-  // the same reason; sticky/banner/load-earlier chrome is excluded.
+  // the same reason; sticky header/load-earlier chrome is excluded — but
+  // NOT the outcome banner ("This session stopped before finishing" etc):
+  // that renders the session's FINAL derived state, and previously stayed
+  // permanently visible throughout a replay, spoiling the ending from the
+  // very first frame. Collecting it like any other item means it only
+  // reveals once the reel actually reaches the end.
   function _convReplayCollectItems($view) {
     return Array.from($view.children).filter(el => el.classList
-      && !el.matches('.conv-sticky-header, .conv-outcome-banner, .conv-load-earlier')
+      && !el.matches('.conv-sticky-header, .conv-load-earlier')
       && !el.classList.contains('conv-live-tool-inline'));
   }
 
@@ -17724,54 +17737,13 @@
     });
   }
 
-  // Splits `htmlContent` into per-word runs, each wrapped in a
-  // `<span class="conv-replay-word" data-run-id="N" style="opacity:0">`, so
-  // a message can type in word by word instead of popping in whole. Word
-  // granularity (not letter) — a 500-word assistant reply typed one letter
-  // at a time is either glacial or needs a near-invisible per-char delay;
-  // per-word reads as a natural typing cadence at any length. `<pre>`/`<code>`
-  // blocks are kept as a single run — revealing a code block word-by-word
-  // reads as broken, not "typed". Mirrors `wrapSentencesInHtml` (group-chat
-  // replay)'s DOM-walk-and-wrap approach so markdown structure (bold, links,
-  // code) survives untouched; only leaf text nodes get split.
+  // Word granularity (not letter) — a 500-word assistant reply typed one
+  // letter at a time is either glacial or needs a near-invisible per-char
+  // delay; per-word reads as a natural typing cadence at any length. See
+  // `_wrapReplayWordsInHtml` (shared with group-chat replay) for why hiding
+  // uses `display:none`, not opacity.
   function _convReplayWrapWordsInHtml(htmlContent) {
-    const doc = new DOMParser().parseFromString(htmlContent, 'text/html');
-    const textNodes = [];
-    let runId = 0;
-
-    function findTextNodes(node) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        if (node.textContent.trim()) textNodes.push(node);
-      } else {
-        if (node.tagName && (node.tagName.toLowerCase() === 'pre' || node.tagName.toLowerCase() === 'code')) {
-          node.classList.add('conv-replay-word');
-          node.dataset.runId = runId++;
-          node.style.opacity = '0';
-          node.style.transition = 'opacity 0.15s ease';
-          return;
-        }
-        for (const child of Array.from(node.childNodes)) findTextNodes(child);
-      }
-    }
-    findTextNodes(doc.body);
-
-    for (const node of textNodes) {
-      const parts = node.textContent.match(/\S+\s*/g) || [node.textContent];
-      const fragment = document.createDocumentFragment();
-      for (const part of parts) {
-        if (!part) continue;
-        const span = document.createElement('span');
-        span.className = 'conv-replay-word';
-        span.dataset.runId = runId++;
-        span.textContent = part;
-        span.style.opacity = '0';
-        span.style.transition = 'opacity 0.15s ease';
-        fragment.appendChild(span);
-      }
-      node.replaceWith(fragment);
-    }
-
-    return { html: doc.body.innerHTML, count: runId };
+    return _wrapReplayWordsInHtml(htmlContent, 'conv-replay-word');
   }
 
   // Finds the actual message-text element inside a replay item — the rest
@@ -17798,10 +17770,10 @@
 
   // Instantly shows every word span in a container — used when Space-stepping
   // past a message and as a safety net on exit/skip-to-end so a message can
-  // never get stuck with some words still at opacity:0.
+  // never get stuck with some words still hidden.
   function _convReplayRevealAllWordsInstantly(container) {
     if (!container) return;
-    container.querySelectorAll('.conv-replay-word').forEach(span => { span.style.opacity = '1'; });
+    container.querySelectorAll('.conv-replay-word').forEach(span => { span.style.display = ''; });
   }
 
   function _convReplayClearWordReveal() {
@@ -17828,7 +17800,7 @@
     _convReplayWordContainer = container;
     _convReplayWordIdx = wordIdx;
     const span = container.querySelector(`[data-run-id="${wordIdx}"]`);
-    if (span) span.style.opacity = '1';
+    if (span) span.style.display = '';
     _scrollConvReplayToBottom(item.paneId);
     // Budget the whole message's type-in to roughly the old flat per-message
     // delay (charCount * 4, clamped 1.2-3.5s), spread across its words —
