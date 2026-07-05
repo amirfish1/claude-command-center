@@ -17251,6 +17251,36 @@ body:has(.gc-reader) .pwa-install-banner {
 .gc-in-replay .gc-message-nudged-row {
   margin-top: 4px;
 }
+/* Conversation replay */
+.conv-replay-launch-btn {
+  background: var(--surface, #161b22);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  align-items: center;
+  gap: 4px;
+}
+.conv-replay-launch-btn:hover {
+  color: var(--text);
+  background: var(--border);
+}
+.conv-replay-controls {
+  flex-shrink: 0;
+}
+.conv-replay-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 0 4px;
+  opacity: 0.7;
+}
+.event.conv-replay-hidden {
+  display: none !important;
+}
 .gc-updated-tick {
   font-size: 10px;
   color: var(--green);

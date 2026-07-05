@@ -2433,6 +2433,8 @@
   const $convToolbar = document.getElementById('convToolbar');
   const $announceBtnConv = document.getElementById('announceBtnConv');
   const $pkoodKillBtn = document.getElementById('pkoodKillBtn');
+  const $convReplayBtn = document.getElementById('convReplayBtn');
+  if ($convReplayBtn) $convReplayBtn.addEventListener('click', () => startConvReplay());
   let pkoodTailPoller = null; // interval ID for polling pkood tail
   let codexLogPoller = null; // interval ID for tailing a codex spawn log
   const $convRefreshBtn = document.getElementById('convRefreshBtn');
@@ -17623,6 +17625,181 @@
       + '</div>';
   }
 
+  // ── Conversation replay ───────────────────────────────────────────
+  // Reveals conversation events one by one. Meaningful events (user
+  // messages + assistant turns with text) pause for reading; other
+  // events (system, result, tool_result, pure-thinking turns) appear
+  // instantly between them. Space bar advances immediately.
+
+  let _convReplayActive = false;
+  let _convReplayPaused = false;
+  let _convReplaySpeed = 1;
+  let _convReplayMsgIndex = 0;
+  let _convReplayEvents = []; // [{el, meaningful}]
+  let _convReplayTimeout = null;
+  let _onConvReplayKeyRef = null;
+
+  function _isConvReplayMeaningful(el) {
+    if (!el || !el.classList) return false;
+    if (el.classList.contains('is-pinned-in-sticky')) return false;
+    if (el.classList.contains('user_text')) return true;
+    if (el.classList.contains('assistant')) {
+      return !!el.querySelector('.assistant-text');
+    }
+    return false;
+  }
+
+  function startConvReplay() {
+    const $view = getConvViewForPane(activePaneId()) || $conversationsView;
+    if (!$view) return;
+    const allEvents = Array.from($view.querySelectorAll('.event:not(.conv-sticky-header)'));
+    const meaningful = allEvents.filter(_isConvReplayMeaningful);
+    if (!meaningful.length) return;
+
+    if (_convReplayActive) exitConvReplayMode();
+    _convReplayActive = true;
+    _convReplayPaused = false;
+    _convReplaySpeed = 1;
+    _convReplayMsgIndex = 0;
+    _convReplayEvents = allEvents.map(el => ({ el, meaningful: _isConvReplayMeaningful(el) }));
+
+    allEvents.forEach(el => el.classList.add('conv-replay-hidden'));
+
+    let controls = document.getElementById('convReplayControls');
+    if (!controls) {
+      controls = document.createElement('div');
+      controls.id = 'convReplayControls';
+      controls.className = 'gc-replay-controls conv-replay-controls';
+      $view.parentNode.insertBefore(controls, $view);
+    }
+    renderConvReplayControls();
+
+    const btn = document.getElementById('convReplayBtn');
+    if (btn) btn.style.display = 'none';
+
+    _onConvReplayKeyRef = (e) => {
+      if (!_convReplayActive) return;
+      if (e.key === 'Escape') { e.preventDefault(); exitConvReplayMode(); return; }
+      if (e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        if (_convReplayTimeout) { clearTimeout(_convReplayTimeout); _convReplayTimeout = null; }
+        _advanceConvReplayToNextMeaningful();
+      }
+    };
+    document.addEventListener('keydown', _onConvReplayKeyRef, true);
+
+    playNextConvReplayStep();
+  }
+
+  function _advanceConvReplayToNextMeaningful() {
+    while (_convReplayMsgIndex < _convReplayEvents.length) {
+      const item = _convReplayEvents[_convReplayMsgIndex];
+      item.el.classList.remove('conv-replay-hidden');
+      _convReplayMsgIndex++;
+      if (item.meaningful) {
+        _scrollConvReplayToBottom();
+        if (!_convReplayPaused) {
+          _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, 800 / _convReplaySpeed);
+        }
+        return;
+      }
+    }
+    exitConvReplayMode();
+  }
+
+  function renderConvReplayControls() {
+    const controls = document.getElementById('convReplayControls');
+    if (!controls) return;
+    const done = _convReplayMsgIndex >= _convReplayEvents.length;
+    controls.innerHTML = `
+      <button type="button" id="convReplayPlayPauseBtn" class="gc-replay-btn" title="Play / Pause (Space steps one message)">
+        ${_convReplayPaused ? '&#9654; Play' : '&#9646;&#9646; Pause'}
+      </button>
+      <div class="gc-replay-speed-group">
+        <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 1 ? 'is-active' : ''}" data-speed="1">1&#xd7;</button>
+        <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 2 ? 'is-active' : ''}" data-speed="2">2&#xd7;</button>
+        <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 4 ? 'is-active' : ''}" data-speed="4">4&#xd7;</button>
+      </div>
+      <span class="conv-replay-hint">Space: step forward</span>
+      <button type="button" id="convReplaySkipBtn" class="gc-replay-btn gc-replay-skip-btn" title="Show all remaining messages">${done ? 'Done &#10003;' : 'Skip to end'}</button>
+    `;
+
+    const ppBtn = controls.querySelector('#convReplayPlayPauseBtn');
+    ppBtn.addEventListener('click', () => {
+      _convReplayPaused = !_convReplayPaused;
+      ppBtn.innerHTML = _convReplayPaused ? '&#9654; Play' : '&#9646;&#9646; Pause';
+      if (!_convReplayPaused) {
+        if (_convReplayTimeout) { clearTimeout(_convReplayTimeout); _convReplayTimeout = null; }
+        playNextConvReplayStep();
+      } else {
+        if (_convReplayTimeout) { clearTimeout(_convReplayTimeout); _convReplayTimeout = null; }
+      }
+    });
+
+    controls.querySelectorAll('.gc-replay-speed-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        _convReplaySpeed = Number(btn.getAttribute('data-speed'));
+        controls.querySelectorAll('.gc-replay-speed-btn').forEach(b => b.classList.remove('is-active'));
+        btn.classList.add('is-active');
+      });
+    });
+
+    const skipBtn = controls.querySelector('#convReplaySkipBtn');
+    skipBtn.addEventListener('click', () => exitConvReplayMode());
+  }
+
+  function exitConvReplayMode() {
+    _convReplayActive = false;
+    _convReplayPaused = false;
+    if (_convReplayTimeout) { clearTimeout(_convReplayTimeout); _convReplayTimeout = null; }
+    if (_onConvReplayKeyRef) {
+      document.removeEventListener('keydown', _onConvReplayKeyRef, true);
+      _onConvReplayKeyRef = null;
+    }
+    _convReplayEvents.forEach(item => item.el.classList.remove('conv-replay-hidden'));
+    _convReplayEvents = [];
+    const controls = document.getElementById('convReplayControls');
+    if (controls) controls.remove();
+    const btn = document.getElementById('convReplayBtn');
+    if (btn) {
+      const $view = getConvViewForPane(activePaneId()) || $conversationsView;
+      const hasEvents = $view && $view.querySelector('.event:not(.conv-sticky-header)');
+      btn.style.display = hasEvents ? 'inline-flex' : 'none';
+    }
+    _scrollConvReplayToBottom();
+  }
+
+  function _scrollConvReplayToBottom() {
+    const $view = getConvViewForPane(activePaneId()) || $conversationsView;
+    if ($view) $view.scrollTop = $view.scrollHeight;
+  }
+
+  function playNextConvReplayStep() {
+    if (!_convReplayActive || _convReplayPaused) return;
+    if (_convReplayMsgIndex >= _convReplayEvents.length) {
+      renderConvReplayControls();
+      return;
+    }
+
+    const item = _convReplayEvents[_convReplayMsgIndex];
+    item.el.classList.remove('conv-replay-hidden');
+    _convReplayMsgIndex++;
+    _scrollConvReplayToBottom();
+
+    if (!item.meaningful) {
+      _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, 0);
+      return;
+    }
+
+    if (_convReplayMsgIndex >= _convReplayEvents.length) {
+      renderConvReplayControls();
+      return;
+    }
+    const charCount = (item.el.textContent || '').length;
+    const delay = Math.max(1200, Math.min(3500, charCount * 4)) / _convReplaySpeed;
+    _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, delay);
+  }
+
   // ── Group-chat @ autocomplete ─────────────────────────────────────
   // Floating menu of participant names anchored under the input. Opens
   // when the caret is right after an @, filters as the user keeps
@@ -27787,19 +27964,21 @@
     const overlay = document.createElement('div');
     overlay.className = 'conv-pane-drop-overlay';
     overlay.innerHTML = `
-      <div class="drop-zone right"  data-zone="right">Open on the right</div>
-      <div class="drop-zone bottom" data-zone="bottom">Open on the bottom</div>
+      <div class="drop-zone right"   data-zone="right">Open on the right</div>
+      <div class="drop-zone bottom"  data-zone="bottom">Open on the bottom</div>
+      <div class="drop-zone replace" data-zone="replace">Replace this session</div>
     `;
     paneEl.appendChild(overlay);
 
-    // Reject drops outright when a 2-pane split is already filled. The
-    // overlay never activates, the pane shows no drop affordance, and
-    // dragenter/over/leave/drop short-circuit to the pane's children.
     function splitIsFull() {
       return splitState.orientation && splitState.panes.length >= 2;
     }
     function viewportTooNarrow() {
       return window.innerWidth < 900;
+    }
+    function _resetOverlay() {
+      overlay.classList.remove('active', 'is-replace');
+      overlay.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('over'));
     }
 
     // dragenter fires on every child element entry; track depth so the
@@ -27810,26 +27989,20 @@
     // drop, ESC cancel). It's the canonical "drag is over" signal — use
     // it to reset depth defensively so an ESC-cancelled drag (which can
     // leave unbalanced enters) doesn't desync the next drag's overlay.
-    window.addEventListener('dragend', () => {
-      depth = 0;
-      overlay.classList.remove('active');
-      overlay.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('over'));
-    });
+    window.addEventListener('dragend', () => { depth = 0; _resetOverlay(); });
 
     paneEl.addEventListener('dragenter', (ev) => {
       if (!dragHasConversationPayload(ev)) return;
-      if (splitIsFull() || viewportTooNarrow()) return;
+      if (viewportTooNarrow()) return;
       depth += 1;
+      overlay.classList.toggle('is-replace', splitIsFull());
       overlay.classList.add('active');
       ev.preventDefault();
     });
     paneEl.addEventListener('dragleave', (ev) => {
       if (depth === 0) return;
       depth -= 1;
-      if (depth === 0) {
-        overlay.classList.remove('active');
-        overlay.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('over'));
-      }
+      if (depth === 0) _resetOverlay();
     });
     paneEl.addEventListener('dragover', (ev) => {
       if (!overlay.classList.contains('active')) return;
@@ -27848,14 +28021,20 @@
         ev.preventDefault();
         ev.stopPropagation();
         depth = 0;
-        overlay.classList.remove('active');
-        zone.classList.remove('over');
+        _resetOverlay();
         const convId = readConvIdFromDrop(ev);
         const targetPaneId = paneEl.getAttribute('data-pane-id');
-        const orientation = zone.getAttribute('data-zone') === 'right' ? 'vertical' : 'horizontal';
         if (!convId) return;
-        // If split is already full, caller shouldn't have shown the overlay,
-        // but reject defensively.
+        // Replace mode: drop onto a fully-split pane swaps its conversation.
+        if (zone.getAttribute('data-zone') === 'replace') {
+          if (splitState.panes.some(p => p.conversationId === convId)) {
+            showConvToast('Conversation is already open');
+            return;
+          }
+          selectConversation(convId, targetPaneId);
+          return;
+        }
+        // Split-open mode: rejected if full (should never reach here).
         if (splitState.orientation && splitState.panes.length >= 2) return;
         // Same-conv guard: if convId is already open in any pane,
         // show a toast instead of silently returning.
@@ -27863,15 +28042,11 @@
           showConvToast('Conversation is already open');
           return;
         }
-        openConversationInPane(convId, targetPaneId, orientation);
+        openConversationInPane(convId, targetPaneId, zone.getAttribute('data-zone') === 'right' ? 'vertical' : 'horizontal');
       });
     });
     // Also reset on drop outside any zone.
-    paneEl.addEventListener('drop', () => {
-      depth = 0;
-      overlay.classList.remove('active');
-      overlay.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('over'));
-    });
+    paneEl.addEventListener('drop', () => { depth = 0; _resetOverlay(); });
   }
 
   // Wire drop zones on every existing pane after each layout change.
@@ -28458,6 +28633,9 @@
     _dynamicAskState = null;  // sticky-header scroll tracker — repopulated when the new sticky is built
     _currentToolGroup = null;
     _currentToolCount = 0;
+    // Reset replay state and hide the button while the new conv loads.
+    if (_convReplayActive) try { exitConvReplayMode(); } catch (_) {}
+    if ($convReplayBtn) $convReplayBtn.style.display = 'none';
     // Detach in-memory pending echoes for the outgoing conv; they are
     // restored from pendingSendsByConv when this pane re-opens that conv.
     _pendingSends = [];
@@ -36131,6 +36309,13 @@
           if (_arrow) _arrow.textContent = '▼';
         }
       });
+    } catch (_) {}
+    // Show Replay button whenever there are meaningful events and no replay is active.
+    try {
+      if ($convReplayBtn && !_convReplayActive) {
+        const hasMeaningful = !!$view.querySelector('.event.user_text:not(.is-pinned-in-sticky), .event.assistant .assistant-text');
+        $convReplayBtn.style.display = hasMeaningful ? 'inline-flex' : 'none';
+      }
     } catch (_) {}
     return true;
   }
