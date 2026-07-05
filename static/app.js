@@ -33887,11 +33887,10 @@
   // variants are Opus 4.7/4.8; Sonnet remains 200k).
   const MODEL_OPTIONS_BY_ENGINE = {
     claude: [
-      { id: 'fable-5',    label: 'fable-5',    oneM: false },
-      { id: 'sonnet-5',   label: 'sonnet-5',   oneM: false },
-      { id: 'opus-4-8',   label: 'opus-4-8',   oneM: true },
-      { id: 'sonnet-4-6', label: 'sonnet-4-6', oneM: false },
-      { id: 'haiku-4-5',  label: 'haiku-4-5',  oneM: false },
+      { id: 'fable-5',   label: 'fable-5',   oneM: false },
+      { id: 'sonnet-5',  label: 'sonnet-5',  oneM: false },
+      { id: 'opus-4-8',  label: 'opus-4-8',  oneM: true },
+      { id: 'haiku-4-5', label: 'haiku-4-5', oneM: false },
     ],
     codex: [
       { id: 'gpt-5.5',      label: 'gpt-5.5 (default)' },
@@ -34161,12 +34160,10 @@
   // Each row carries the bare alias in `id` plus its 1M / legacy flags. Numbers
   // mirror the native keyboard shortcuts (1-7).
   const CLAUDE_MODEL_MENU = [
-    { id: 'fable-5',    label: 'Fable 5',    num: '1' },
-    { id: 'sonnet-5',   label: 'Sonnet 5',   num: '2' },
-    { id: 'opus-4-8',   label: 'Opus 4.8',   num: '3' },
-    { id: 'opus-4-8',   label: 'Opus 4.8',   num: '4', context_1m: true },
-    { id: 'sonnet-4-6', label: 'Sonnet 4.6', num: '5' },
-    { id: 'haiku-4-5',  label: 'Haiku 4.5',  num: '6' },
+    { id: 'fable-5',   label: 'Fable 5',             num: '1' },
+    { id: 'sonnet-5',  label: 'Sonnet 5',             num: '2' },
+    { id: 'opus-4-8',  label: 'Opus 4.8',             num: '3', context_1m: true },
+    { id: 'haiku-4-5', label: 'Haiku 4.5',            num: '4' },
   ];
   // Claude Code's current shipped default model. Shown in the menu's top
   // "· Default" row.
