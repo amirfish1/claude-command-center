@@ -35842,18 +35842,34 @@
         // data-raw-text preserves the original prose so _dynAskApply can pin
         // the same wording in the "Earlier ask" sticky — reading textContent
         // back would lose any pasted-image path that's been replaced with <img>.
-        const textHtml = notification
-          ? renderTaskNotificationBlock(notification, cleanedText, true)
-          : compactCardHtml
-          ? '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + compactCardHtml + '</div>'
-          : cleanedText
-          ? '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + linkifyPastedImages(escapeHtml(cleanedText)) + '</div>'
-          : '';
+        const _isPinned = div.classList.contains('is-pinned-in-sticky');
+        let textHtml;
+        if (notification) {
+          textHtml = renderTaskNotificationBlock(notification, cleanedText, true);
+        } else if (compactCardHtml) {
+          textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + compactCardHtml + '</div>';
+        } else if (cleanedText) {
+          if (_isPinned) {
+            // For the pinned original-ask bubble: split into first sentence + rest so
+            // CSS can size the opener larger and render the body smaller/quieter.
+            const _parts = splitFirstSentence(cleanedText);
+            const _imagesHtml = renderImageDescriptors(ev.images);
+            textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">'
+              + '<span class="ask-first">' + linkifyPastedImages(escapeHtml(_parts[0])) + '</span>'
+              + (_parts[1] ? '<span class="ask-rest">' + linkifyPastedImages(escapeHtml(_parts[1])) + '</span>' : '')
+              + _imagesHtml
+              + '</div>';
+          } else {
+            textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + linkifyPastedImages(escapeHtml(cleanedText)) + '</div>';
+          }
+        } else {
+          textHtml = '';
+        }
         div.innerHTML = '<span class="label">User</span>'
           + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
           + tsSpan(ev.ts)
           + textHtml
-          + imagesHtml
+          + (_isPinned ? '' : imagesHtml)
           + userSteerHtml;
 
       } else if (ev.type === 'assistant') {

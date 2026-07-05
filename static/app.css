@@ -2379,6 +2379,42 @@
   /* In right-rail mode the original ask moves to the side rail, so there's no
      duplication risk — show the first user message as a regular chat bubble. */
   body.status-pos-right .conversations-view .event.user_text.is-pinned-in-sticky { display: block; }
+  /* Style the shown original-ask bubble differently from regular user messages:
+     full-width, left-aligned, smaller/quieter — it's context, not a chat turn. */
+  body.status-pos-right .conversations-view .event.user_text.is-pinned-in-sticky {
+    max-width: 100%;
+    width: 100%;
+    margin-left: 0;
+    border-radius: 6px;
+    background:
+      linear-gradient(135deg, rgba(88, 166, 255, 0.07), rgba(163, 113, 247, 0.04)) padding-box,
+      linear-gradient(135deg, rgba(88, 166, 255, 0.20), rgba(163, 113, 247, 0.12)) border-box;
+    box-shadow: none;
+    border-color: rgba(88, 166, 255, 0.18);
+  }
+  body.status-pos-right .conversations-view .event.user_text.is-pinned-in-sticky .user-msg {
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    max-height: 180px;
+    overflow-y: auto;
+  }
+  /* First sentence stays at normal size and color; rest is smaller/muted. */
+  body.status-pos-right .conversations-view .event.user_text.is-pinned-in-sticky .user-msg .ask-first {
+    font-size: 14px;
+    color: var(--text);
+    display: block;
+    margin-bottom: 4px;
+    white-space: pre-wrap;
+  }
+  body.status-pos-right .conversations-view .event.user_text.is-pinned-in-sticky .user-msg .ask-rest {
+    display: block;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    opacity: 0.85;
+    white-space: pre-wrap;
+  }
   /* Later user messages mirrored into the sticky header's "Earlier ask" slot
      must keep their layout space. Removing them with display:none changes
      scrollHeight mid-scroll and makes the transcript jump under the cursor. */
