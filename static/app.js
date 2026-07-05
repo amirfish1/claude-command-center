@@ -17663,6 +17663,13 @@
                                   // instead of appearing unhidden ahead of the reveal cursor.
   let _convReplayTimeout = null;
   let _onConvReplayKeyRef = null;
+  // In-flight word-by-word reveal of the CURRENT meaningful item's text, so
+  // Pause/Play can freeze and resume mid-message instead of only between
+  // messages. Null when no item is mid-reveal (between messages, or the
+  // item has no text container to animate).
+  let _convReplayWordItem = null;
+  let _convReplayWordContainer = null;
+  let _convReplayWordIdx = 0;
 
   function _isConvReplayMeaningful(el) {
     if (!el || !el.classList) return false;
@@ -17706,6 +17713,131 @@
     });
   }
 
+  // Splits `htmlContent` into per-word runs, each wrapped in a
+  // `<span class="conv-replay-word" data-run-id="N" style="opacity:0">`, so
+  // a message can type in word by word instead of popping in whole. Word
+  // granularity (not letter) — a 500-word assistant reply typed one letter
+  // at a time is either glacial or needs a near-invisible per-char delay;
+  // per-word reads as a natural typing cadence at any length. `<pre>`/`<code>`
+  // blocks are kept as a single run — revealing a code block word-by-word
+  // reads as broken, not "typed". Mirrors `wrapSentencesInHtml` (group-chat
+  // replay)'s DOM-walk-and-wrap approach so markdown structure (bold, links,
+  // code) survives untouched; only leaf text nodes get split.
+  function _convReplayWrapWordsInHtml(htmlContent) {
+    const doc = new DOMParser().parseFromString(htmlContent, 'text/html');
+    const textNodes = [];
+    let runId = 0;
+
+    function findTextNodes(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (node.textContent.trim()) textNodes.push(node);
+      } else {
+        if (node.tagName && (node.tagName.toLowerCase() === 'pre' || node.tagName.toLowerCase() === 'code')) {
+          node.classList.add('conv-replay-word');
+          node.dataset.runId = runId++;
+          node.style.opacity = '0';
+          node.style.transition = 'opacity 0.15s ease';
+          return;
+        }
+        for (const child of Array.from(node.childNodes)) findTextNodes(child);
+      }
+    }
+    findTextNodes(doc.body);
+
+    for (const node of textNodes) {
+      const parts = node.textContent.match(/\S+\s*/g) || [node.textContent];
+      const fragment = document.createDocumentFragment();
+      for (const part of parts) {
+        if (!part) continue;
+        const span = document.createElement('span');
+        span.className = 'conv-replay-word';
+        span.dataset.runId = runId++;
+        span.textContent = part;
+        span.style.opacity = '0';
+        span.style.transition = 'opacity 0.15s ease';
+        fragment.appendChild(span);
+      }
+      node.replaceWith(fragment);
+    }
+
+    return { html: doc.body.innerHTML, count: runId };
+  }
+
+  // Finds the actual message-text element inside a replay item — the rest
+  // of the .event (avatar, timestamp, tool groups) reveals instantly with
+  // the item itself; only the prose types in.
+  function _convReplayTextContainer(el) {
+    return el.querySelector('.user-msg, .assistant-text');
+  }
+
+  // Wraps an item's text container in per-word spans exactly once (re-running
+  // startConvReplay/sweep on the same el must not double-wrap already-wrapped
+  // content) and returns it, or null if the item has no text to animate.
+  function _convReplayPrepareWordsForItem(item) {
+    const container = _convReplayTextContainer(item.el);
+    if (!container) return null;
+    if (container.dataset.wordsWrapped) return container;
+    const { html, count } = _convReplayWrapWordsInHtml(container.innerHTML);
+    if (!count) return null;
+    container.innerHTML = html;
+    container.dataset.wordsWrapped = '1';
+    container.dataset.wordCount = String(count);
+    return container;
+  }
+
+  // Instantly shows every word span in a container — used when Space-stepping
+  // past a message and as a safety net on exit/skip-to-end so a message can
+  // never get stuck with some words still at opacity:0.
+  function _convReplayRevealAllWordsInstantly(container) {
+    if (!container) return;
+    container.querySelectorAll('.conv-replay-word').forEach(span => { span.style.opacity = '1'; });
+  }
+
+  function _convReplayClearWordReveal() {
+    _convReplayWordItem = null;
+    _convReplayWordContainer = null;
+    _convReplayWordIdx = 0;
+  }
+
+  // Reveals one word at a time from `container`, then falls through to
+  // playNextConvReplayStep() once the message is fully typed. Tracks its own
+  // progress in module state so pause/resume (see the Play/Pause handler in
+  // renderConvReplayControls) can freeze and continue mid-message rather than
+  // only between messages.
+  function _convReplayRevealWords(item, container, wordIdx) {
+    if (!_convReplayActive || _convReplayPaused) return;
+    const count = Number(container.dataset.wordCount || 0);
+    if (wordIdx >= count) {
+      _convReplayClearWordReveal();
+      if (_convReplayMsgIndex >= _convReplayEvents.length) { renderConvReplayControls(); return; }
+      _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, 400 / _convReplaySpeed);
+      return;
+    }
+    _convReplayWordItem = item;
+    _convReplayWordContainer = container;
+    _convReplayWordIdx = wordIdx;
+    const span = container.querySelector(`[data-run-id="${wordIdx}"]`);
+    if (span) span.style.opacity = '1';
+    _scrollConvReplayToBottom(item.paneId);
+    // Budget the whole message's type-in to roughly the old flat per-message
+    // delay (charCount * 4, clamped 1.2-3.5s), spread across its words —
+    // short messages still read comfortably, long ones don't crawl.
+    const totalMs = Math.max(900, Math.min(4500, (container.textContent || '').length * 4));
+    const perWord = Math.max(12, Math.min(220, totalMs / Math.max(1, count))) / _convReplaySpeed;
+    _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; _convReplayRevealWords(item, container, wordIdx + 1); }, perWord);
+  }
+
+  // Unpausing mid-message must resume the in-flight word reveal instead of
+  // jumping to playNextConvReplayStep(), which would abandon the current
+  // message with some words still at opacity:0.
+  function _convReplayResume() {
+    if (_convReplayWordItem) {
+      _convReplayRevealWords(_convReplayWordItem, _convReplayWordContainer, _convReplayWordIdx);
+    } else {
+      playNextConvReplayStep();
+    }
+  }
+
   function startConvReplay(paneId) {
     const targetPaneId = paneId || activePaneId();
     // Two open panes each showing a real conversation → one Replay drives
@@ -17731,6 +17863,7 @@
     _convReplayMsgIndex = 0;
     _convReplaySeenEls = new WeakSet();
     _convReplayEvents = tagged;
+    _convReplayClearWordReveal();
     tagged.forEach(item => { _convReplaySeenEls.add(item.el); item.el.classList.add('conv-replay-hidden'); });
 
     let controls = document.getElementById('convReplayControls');
@@ -17797,11 +17930,19 @@
   }
 
   function _advanceConvReplayToNextMeaningful() {
+    // Space is an explicit manual step — finish whatever message is
+    // mid-type-in instantly rather than leaving it half-revealed while we
+    // jump to the next one.
+    if (_convReplayWordItem) {
+      _convReplayRevealAllWordsInstantly(_convReplayWordContainer);
+      _convReplayClearWordReveal();
+    }
     while (_convReplayMsgIndex < _convReplayEvents.length) {
       const item = _convReplayEvents[_convReplayMsgIndex];
       item.el.classList.remove('conv-replay-hidden');
       _convReplayMsgIndex++;
       if (item.meaningful) {
+        _convReplayRevealAllWordsInstantly(_convReplayPrepareWordsForItem(item));
         _scrollConvReplayToBottom(item.paneId);
         if (!_convReplayPaused) {
           _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, 800 / _convReplaySpeed);
@@ -17835,7 +17976,7 @@
       ppBtn.innerHTML = _convReplayPaused ? '&#9654; Play' : '&#9646;&#9646; Pause';
       if (!_convReplayPaused) {
         if (_convReplayTimeout) { clearTimeout(_convReplayTimeout); _convReplayTimeout = null; }
-        playNextConvReplayStep();
+        _convReplayResume();
       } else {
         if (_convReplayTimeout) { clearTimeout(_convReplayTimeout); _convReplayTimeout = null; }
       }
@@ -17861,7 +18002,14 @@
       document.removeEventListener('keydown', _onConvReplayKeyRef, true);
       _onConvReplayKeyRef = null;
     }
-    _convReplayEvents.forEach(item => item.el.classList.remove('conv-replay-hidden'));
+    // Force every word span visible too — a message can be sitting mid
+    // type-in when Escape/Skip-to-end fires; "show everything" must mean
+    // everything, not just the container it lives in.
+    _convReplayEvents.forEach(item => {
+      item.el.classList.remove('conv-replay-hidden');
+      _convReplayRevealAllWordsInstantly(_convReplayTextContainer(item.el));
+    });
+    _convReplayClearWordReveal();
     _convReplayEvents = [];
     _convReplaySeenEls = null;
     const controls = document.getElementById('convReplayControls');
@@ -17900,13 +18048,18 @@
       return;
     }
 
-    if (_convReplayMsgIndex >= _convReplayEvents.length) {
-      renderConvReplayControls();
+    // Type the message in word by word; the container falls back to an
+    // instant full reveal (old flat per-message delay) when there's no
+    // `.user-msg`/`.assistant-text` to animate.
+    const container = _convReplayPrepareWordsForItem(item);
+    if (!container) {
+      if (_convReplayMsgIndex >= _convReplayEvents.length) { renderConvReplayControls(); return; }
+      const charCount = (item.el.textContent || '').length;
+      const delay = Math.max(1200, Math.min(3500, charCount * 4)) / _convReplaySpeed;
+      _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, delay);
       return;
     }
-    const charCount = (item.el.textContent || '').length;
-    const delay = Math.max(1200, Math.min(3500, charCount * 4)) / _convReplaySpeed;
-    _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, delay);
+    _convReplayRevealWords(item, container, 0);
   }
 
   // ── Group-chat @ autocomplete ─────────────────────────────────────
