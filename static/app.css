@@ -1917,6 +1917,11 @@
   .conv-pane-drop-overlay .drop-zone.right  { right: 0; top: 0; bottom: 0; width: 22%; }
   .conv-pane-drop-overlay .drop-zone.bottom { left: 0; right: 0; bottom: 0; height: 22%; }
   .conv-pane-drop-overlay .drop-zone.over   { background: rgba(78, 161, 255, 0.18); }
+  /* Replace zone: full-pane target, only shown when split is already full (is-replace). */
+  .conv-pane-drop-overlay .drop-zone.replace { inset: 0; width: auto; height: auto; display: none; }
+  .conv-pane-drop-overlay.is-replace .drop-zone.right,
+  .conv-pane-drop-overlay.is-replace .drop-zone.bottom { display: none; }
+  .conv-pane-drop-overlay.is-replace .drop-zone.replace { display: flex; }
   /* Suppress overlay below 900px viewport (split is unsupported there). */
   @media (max-width: 900px) {
     .conv-pane-drop-overlay { display: none !important; }

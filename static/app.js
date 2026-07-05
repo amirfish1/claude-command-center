@@ -28085,6 +28085,12 @@
       // tooltip handled by the caller's UX in Task 8).
       return;
     }
+    // Auto-collapse the status rail when opening a second pane — a side rail
+    // next to two split panes leaves too little horizontal space.
+    if (document.body.classList.contains('status-pos-right') && !document.body.classList.contains('status-rail-collapsed')) {
+      document.body.classList.add('status-rail-collapsed');
+      try { localStorage.setItem('ccc-status-rail-collapsed', '1'); } catch (_) {}
+    }
     const newPane = _newPaneState('p2');
     splitState.orientation = orientation;
     splitState.panes.push(newPane);
