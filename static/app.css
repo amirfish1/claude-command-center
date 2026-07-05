@@ -2371,6 +2371,9 @@
      Hide its in-conversation chat bubble so the same text isn't shown twice
      (sticky + bubble) when no scrolling has occurred yet. */
   .conversations-view .event.user_text.is-pinned-in-sticky { display: none; }
+  /* In right-rail mode the original ask moves to the side rail, so there's no
+     duplication risk — show the first user message as a regular chat bubble. */
+  body.status-pos-right .conversations-view .event.user_text.is-pinned-in-sticky { display: block; }
   /* Later user messages mirrored into the sticky header's "Earlier ask" slot
      must keep their layout space. Removing them with display:none changes
      scrollHeight mid-scroll and makes the transcript jump under the cursor. */
