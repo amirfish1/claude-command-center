@@ -17396,3 +17396,155 @@ body:has(.gc-reader) .pwa-install-banner {
     box-shadow: none;
   }
 }
+
+/* ── Stitch / Cyan Mono Terminal Palette overrides ── */
+
+/* Scope everything under the `.conv-pane[data-conv-bg="stitch"]` container */
+.conv-pane[data-conv-bg="stitch"] {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, Monaco, monospace !important;
+}
+
+/* Base font for all conversation view elements */
+.conv-pane[data-conv-bg="stitch"] .conversations-view,
+.conv-pane[data-conv-bg="stitch"] .conversations-view * {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, Monaco, monospace !important;
+}
+
+/* User Message bubble styling (Corner-cut + gradient + white/cyan text) */
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text {
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 24px), calc(100% - 24px) 100%, 0 100%) !important;
+  border-radius: 0 !important;
+  background: linear-gradient(135deg, rgba(67, 56, 202, 0.7) 0%, rgba(13, 148, 136, 0.7) 100%) !important;
+  color: #e0ffff !important;
+  border: 1px solid rgba(58, 74, 73, 0.3) !important;
+  padding: 16px 20px !important;
+  box-shadow: 0 0 12px rgba(0, 255, 255, 0.05) !important;
+}
+
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text .user-msg {
+  color: #e0ffff !important;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, Monaco, monospace !important;
+  font-size: 14px !important;
+  line-height: 1.6 !important;
+}
+
+/* Cyan >_ prompt at the end of the user message */
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text .user-msg::after {
+  content: ' >_';
+  color: #00ffff !important;
+  font-weight: bold;
+}
+
+/* Assistant Message Block styling (outline border + background) */
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.assistant {
+  background: var(--conv-surface) !important;
+  border-left: 1px solid var(--conv-accent) !important;
+  border-radius: 0 4px 4px 0 !important;
+  padding: 16px !important;
+  margin-bottom: 16px !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+}
+
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.assistant .assistant-text {
+  font-size: 14px !important;
+  line-height: 1.6 !important;
+  color: var(--conv-text) !important;
+}
+
+/* Blinking cursor / prompt at the end of the assistant greeting */
+.conv-pane[data-conv-bg="stitch"] .conversations-view > .event:first-child.assistant .assistant-text::after {
+  content: ' >_';
+  color: var(--conv-accent) !important;
+  font-weight: bold;
+}
+
+/* Streaming bubble during active generation */
+.conv-pane[data-conv-bg="stitch"] .stream-bubble {
+  background: var(--conv-surface) !important;
+  border-left: 1px solid var(--conv-accent) !important;
+  border-radius: 0 4px 4px 0 !important;
+  padding: 16px !important;
+  margin-bottom: 16px !important;
+  font-size: 14px !important;
+}
+
+/* Code block wrapping */
+.conv-pane[data-conv-bg="stitch"] .cb-wrap {
+  border-radius: 0 !important;
+  background: #050505 !important;
+  border-color: var(--conv-border) !important;
+}
+
+.conv-pane[data-conv-bg="stitch"] .cb-head {
+  background: #0d0d0e !important;
+  border-bottom: 1px solid var(--conv-border) !important;
+  color: var(--conv-text-muted) !important;
+}
+
+/* Command input area */
+.conv-pane[data-conv-bg="stitch"] .conv-input-bar.visible {
+  background: var(--conv-bg) !important;
+  border: 1px solid var(--conv-border) !important;
+  border-radius: 0 !important;
+  margin: 12px 16px !important;
+  padding: 12px 16px !important;
+}
+
+.conv-pane[data-conv-bg="stitch"] .conv-input-bar.visible:focus-within {
+  border-color: var(--conv-accent) !important;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--conv-accent) 20%, transparent) !important;
+}
+
+/* Prepend '>' symbol in prompt style inside the input textarea row */
+.conv-pane[data-conv-bg="stitch"] .conv-input-row-top::before {
+  content: '>';
+  color: var(--conv-accent) !important;
+  font-weight: bold;
+  font-size: 16px;
+  margin-right: 12px;
+  align-self: center;
+}
+
+.conv-pane[data-conv-bg="stitch"] .conv-input-bar textarea {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, Monaco, monospace !important;
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  font-size: 14px !important;
+}
+
+/* Input Buttons layout (Hard 0px corners) */
+.conv-pane[data-conv-bg="stitch"] .conv-input-bar button,
+.conv-pane[data-conv-bg="stitch"] .conv-input-bar select {
+  border-radius: 0 !important;
+}
+
+/* Send button styling */
+.conv-pane[data-conv-bg="stitch"] .conv-input-bar .send-btn {
+  background: transparent !important;
+  border: 1px solid var(--conv-accent) !important;
+  color: var(--conv-accent) !important;
+}
+
+.conv-pane[data-conv-bg="stitch"] .conv-input-bar .send-btn:hover {
+  background: var(--conv-accent) !important;
+  color: #000000 !important;
+}
+
+/* Scrollbars overrides */
+.conv-pane[data-conv-bg="stitch"] .conversations-view::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.conv-pane[data-conv-bg="stitch"] .conversations-view::-webkit-scrollbar-track {
+  background: #131314;
+}
+.conv-pane[data-conv-bg="stitch"] .conversations-view::-webkit-scrollbar-thumb {
+  background: #3a4a49;
+  border-radius: 3px;
+}
+.conv-pane[data-conv-bg="stitch"] .conversations-view::-webkit-scrollbar-thumb:hover {
+  background: #839493;
+}
+

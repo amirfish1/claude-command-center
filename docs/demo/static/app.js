@@ -23384,7 +23384,7 @@
   const CONV_BG_STORAGE_KEY = 'ccc-conv-bg-by-conversation';
   const CONV_BG_DEFAULT = 'charcoal';
   const CONV_BG_PALETTE = [
-    { id: 'stitch', label: 'Stitch', bg: '#131314' },
+    { id: 'stitch', label: 'Stitch', bg: '#0a0a0b' },
     { id: 'charcoal', label: 'Charcoal', bg: '#0d1117' },
     { id: 'midnight', label: 'Midnight', bg: '#101827' },
     { id: 'slate', label: 'Slate', bg: '#1b263b' },
@@ -23454,9 +23454,9 @@
   function conversationPaletteVars(bgHex, id) {
     if (id === 'stitch') {
       return {
-        bg: '#131314',
-        surface: '#1c1b1c',
-        surface2: '#2a2a2b',
+        bg: '#0a0a0b',
+        surface: '#131314',
+        surface2: '#201f20',
         border: '#3a4a49',
         text: '#e5e2e3',
         muted: '#839493',
