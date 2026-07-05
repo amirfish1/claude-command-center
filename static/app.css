@@ -2480,6 +2480,20 @@
   .conversations-view .tool-call-group-header .tcg-arrow {
     display: inline-block; transition: transform 0.15s; font-size: 10px; color: var(--orange);
   }
+  .conversations-view .tool-call-group-header .tcg-label {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Real time + line number, right-aligned — a run of collapsed "▶ Completed
+     X" rows previously carried neither (only a hidden debug-mode ::before),
+     reading as anonymous noise with no way to tell when/where each happened. */
+  .conversations-view .tool-call-group-header .tcg-meta {
+    margin-left: auto; flex-shrink: 0;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .conversations-view .tool-call-group-header .tcg-meta .msg-ts,
+  .conversations-view .tool-call-group-header .tcg-meta .line-num {
+    float: none; position: static; opacity: 0.5; font-size: 11px;
+  }
   .conversations-view .tool-call-group:not(.collapsed) .tool-call-group-header .tcg-arrow { transform: rotate(90deg); }
   .conversations-view .tool-call-group.collapsed .tool-call-group-body { display: none; }
   .conversations-view .tool-call-group-body { padding: 3px 10px 6px; border-top: 1px solid var(--border); }
@@ -17359,6 +17373,23 @@ body:has(.gc-reader) .pwa-install-banner {
   color: var(--text-muted);
   padding: 0 4px;
   opacity: 0.7;
+}
+.conv-replay-jump {
+  display: flex; align-items: center; gap: 4px;
+}
+.conv-replay-jump-input {
+  width: 52px;
+  background: var(--surface, #161b22);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+}
+.conv-replay-jump-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 /* Applied to whichever direct child of the view is being held back —
    .event rows AND .tool-call-group wrappers (the latter's "Ran N commands"

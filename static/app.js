@@ -17890,6 +17890,11 @@
 
     _onConvReplayKeyRef = (e) => {
       if (!_convReplayActive) return;
+      // Typing a line number into the jump-to-line input: this listener is
+      // capture-phase on `document`, so it fires before the input's own
+      // keydown handler — without this guard, Space/Escape while typing "172"
+      // would step the replay or exit it instead of reaching the input.
+      if (e.target && e.target.classList && e.target.classList.contains('conv-replay-jump-input')) return;
       if (e.key === 'Escape') { e.preventDefault(); exitConvReplayMode(); return; }
       if (e.key === ' ' || e.key === 'Spacebar') {
         e.preventDefault();
@@ -17959,6 +17964,11 @@
     const controls = document.getElementById('convReplayControls');
     if (!controls) return;
     const done = _convReplayMsgIndex >= _convReplayEvents.length;
+    // Rebuilding innerHTML wipes a value the user is mid-typing into the
+    // jump input — this fires on every sweep of newly-streamed content, not
+    // just on user actions. Carry it across the rebuild.
+    const _jumpDraft = controls.querySelector('.conv-replay-jump-input');
+    const _jumpDraftVal = _jumpDraft ? _jumpDraft.value : '';
     controls.innerHTML = `
       <button type="button" id="convReplayPlayPauseBtn" class="gc-replay-btn" title="Play / Pause (Space steps one message)">
         ${_convReplayPaused ? '&#9654; Play' : '&#9646;&#9646; Pause'}
@@ -17968,6 +17978,11 @@
         <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 2 ? 'is-active' : ''}" data-speed="2">2&#xd7;</button>
         <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 4 ? 'is-active' : ''}" data-speed="4">4&#xd7;</button>
       </div>
+      <span class="conv-replay-jump">
+        <input type="text" class="conv-replay-jump-input" placeholder="L#" inputmode="numeric" autocomplete="off"
+               title="Jump replay to a specific turn's line number (e.g. 172 or L172)" value="${escapeAttr(_jumpDraftVal)}">
+        <button type="button" class="gc-replay-btn conv-replay-jump-btn" title="Jump replay to this line">Go</button>
+      </span>
       <span class="conv-replay-hint">${_convReplayPaneIds.length > 1 ? 'Syncing both sessions &middot; ' : ''}Space: step forward</span>
       <button type="button" id="convReplaySkipBtn" class="gc-replay-btn gc-replay-skip-btn" title="Show all remaining messages">${done ? 'Done &#10003;' : 'Skip to end'}</button>
     `;
@@ -17992,8 +18007,43 @@
       });
     });
 
+    const jumpInput = controls.querySelector('.conv-replay-jump-input');
+    const jumpBtn = controls.querySelector('.conv-replay-jump-btn');
+    const doJump = () => { _convReplayJumpToLine(jumpInput.value); jumpInput.value = ''; };
+    jumpBtn.addEventListener('click', doJump);
+    jumpInput.addEventListener('keydown', (e) => {
+      e.stopPropagation(); // don't let Space/Esc fall through to the global replay hotkeys while typing
+      if (e.key === 'Enter') { e.preventDefault(); doJump(); }
+    });
+
     const skipBtn = controls.querySelector('#convReplaySkipBtn');
     skipBtn.addEventListener('click', () => exitConvReplayMode());
+  }
+
+  // Jumps the replay cursor to the turn at `rawLine` (accepts "172" or
+  // "L172"). Everything before it is revealed instantly (no gap left behind
+  // — CCC-488 follow-up: "let me start the replay from a specific turn"),
+  // then playback resumes from there in whatever play/pause state it was in.
+  function _convReplayJumpToLine(rawLine) {
+    const line = parseInt(String(rawLine || '').replace(/^L/i, '').trim(), 10);
+    if (!Number.isFinite(line)) return;
+    const idx = _convReplayEvents.findIndex(item => Number(item.el.dataset.jsonlLine) === line);
+    if (idx < 0) return;
+    if (_convReplayWordItem) {
+      _convReplayRevealAllWordsInstantly(_convReplayWordContainer);
+      _convReplayClearWordReveal();
+    }
+    if (_convReplayTimeout) { clearTimeout(_convReplayTimeout); _convReplayTimeout = null; }
+    for (let i = 0; i < idx; i++) {
+      const it = _convReplayEvents[i];
+      it.el.classList.remove('conv-replay-hidden');
+      _convReplayRevealAllWordsInstantly(_convReplayTextContainer(it.el));
+    }
+    _convReplayMsgIndex = idx;
+    const paneIds = _convReplayPaneIds.length ? _convReplayPaneIds : [_convReplayPaneId];
+    paneIds.forEach(pid => _scrollConvReplayToBottom(pid));
+    renderConvReplayControls();
+    if (!_convReplayPaused) playNextConvReplayStep();
   }
 
   function exitConvReplayMode() {
@@ -36292,7 +36342,17 @@
               // thinking occurred — with a hint explaining why there's no body
               // (CCC-454: a bare "thought" read as a rendering bug).
               blockParts.push('<div class="thinking-block thinking-block-silent" title="The model thought here, but the reasoning text was not saved to the transcript (only an encrypted signature) — there are no details to show."><span class="thinking-toggle">💭 thought</span> <span class="thinking-silent-note">(reasoning not saved to transcript)</span></div>');
-              hasNonTool = true;
+              // Deliberately NOT hasNonTool = true here: a silent-thought
+              // marker carries zero real information (no reasoning text, no
+              // tool, no answer) — it should NOT block a turn that also has
+              // a tool call from being classified `tool-only` and fused into
+              // the compact "Ran N commands" group like a normal tool-only
+              // turn. Before this, EVERY silent-thought+single-tool turn
+              // rendered as its own full-height block (header + silent
+              // marker + standalone token line + raw tool-call line) instead
+              // of collapsing into the group's one-line "Completed X"
+              // summary — the "lots of wasted space" a whole run of these
+              // produces back-to-back.
             } else {
               // Text present: visible block with an expandable body (collapsed
               // unless Verbose transcript mode is on — CCC-454).
@@ -36474,6 +36534,7 @@
           grp.innerHTML =
               '<div class="tool-call-group-header" data-render-ts="' + _grpTs + '">'
             + '<span class="tcg-arrow">▶</span> <span class="tcg-label">Ran 1 command</span>'
+            + '<span class="tcg-meta"></span>'
             + '</div>'
             + '<div class="tool-call-group-body"></div>';
           $view.appendChild(grp);
@@ -36496,7 +36557,16 @@
         // own data-render-ts is what the CSS ::before reads.
         const _ts = eventStamp(ev.ts) || nowStamp();
         _currentToolGroup.dataset.renderTs = _ts;
-        _currentToolGroup.querySelector('.tool-call-group-header').dataset.renderTs = _ts;
+        const _tcgHeader = _currentToolGroup.querySelector('.tool-call-group-header');
+        _tcgHeader.dataset.renderTs = _ts;
+        // Real user-facing time + line number on the far right — collapsed
+        // groups previously showed neither (only a debug-mode ::before), so
+        // a whole run of "▶ Completed X" rows read as anonymous, unlabeled
+        // noise with no way to tell when/where each one happened.
+        const _tcgMeta = _tcgHeader.querySelector('.tcg-meta');
+        if (_tcgMeta) {
+          _tcgMeta.innerHTML = tsSpan(ev.ts) + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '');
+        }
         _currentToolCount += 1;
         _currentToolGroup.dataset.toolCount = String(_currentToolCount);
         const prevCodeReads = Number(_currentToolGroup.dataset.codeReadCount || 0);
