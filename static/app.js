@@ -17652,10 +17652,12 @@
 
   let _convReplayActive = false;
   let _convReplayPaneId = null;
+  let _convReplayPaneIds = []; // all panes participating — 2 in a synced split
+                                // replay (CCC-488), 1 otherwise.
   let _convReplayPaused = false;
   let _convReplaySpeed = 1;
   let _convReplayMsgIndex = 0;
-  let _convReplayEvents = []; // [{el, meaningful}]
+  let _convReplayEvents = []; // [{el, meaningful, paneId, ts}]
   let _convReplaySeenEls = null; // WeakSet — tracks every el already queued, so live-streamed
                                   // nodes appended mid-replay get caught by the JSONL-line sweep
                                   // instead of appearing unhidden ahead of the reveal cursor.
@@ -17672,8 +17674,8 @@
     return false;
   }
 
-  function _convReplayView() {
-    return getConvViewForPane(_convReplayPaneId) || $conversationsView;
+  function _convReplayViewForPane(paneId) {
+    return getConvViewForPane(paneId) || $conversationsView;
   }
 
   // Only direct children of the view are real timeline entries — tool calls
@@ -17688,34 +17690,63 @@
       && !el.classList.contains('conv-live-tool-inline'));
   }
 
+  // Tags each element with the real JSONL timestamp renderConversationEvents
+  // stamped onto it (data-ts-epoch) so a synced two-pane replay can merge
+  // both transcripts into one true chronological order (CCC-488). Rows
+  // without their own timestamp (rare — synthetic/system rows) inherit the
+  // previous row's time so they stay adjacent to their neighbor instead of
+  // sorting to an arbitrary end.
+  function _convReplayTagWithTs(els, paneId) {
+    let lastTs = 0;
+    return els.map(el => {
+      const parsed = Number(el.dataset.tsEpoch);
+      const ts = Number.isFinite(parsed) ? parsed : lastTs;
+      lastTs = ts;
+      return { el, paneId, ts, meaningful: _isConvReplayMeaningful(el) };
+    });
+  }
+
   function startConvReplay(paneId) {
     const targetPaneId = paneId || activePaneId();
-    const $view = getConvViewForPane(targetPaneId) || $conversationsView;
-    if (!$view) return;
-    const allItems = _convReplayCollectItems($view);
-    const meaningful = allItems.filter(_isConvReplayMeaningful);
+    // Two open panes each showing a real conversation → one Replay drives
+    // both, merged into actual chronological order. A single pane (or a
+    // split where the other pane is still an empty/new-session slot) just
+    // replays the pane that was clicked, as before.
+    const paneIds = (splitState.orientation && splitState.panes.length >= 2
+      && splitState.panes.every(p => p.conversationId))
+      ? splitState.panes.map(p => p.id)
+      : [targetPaneId];
+
+    const tagged = paneIds.flatMap(pid => _convReplayTagWithTs(_convReplayCollectItems(_convReplayViewForPane(pid)), pid));
+    const meaningful = tagged.filter(item => item.meaningful);
     if (!meaningful.length) return;
+    tagged.sort((a, b) => a.ts - b.ts); // stable: ties keep same-pane order
 
     if (_convReplayActive) exitConvReplayMode();
     _convReplayActive = true;
     _convReplayPaneId = targetPaneId;
+    _convReplayPaneIds = paneIds;
     _convReplayPaused = false;
     _convReplaySpeed = 1;
     _convReplayMsgIndex = 0;
     _convReplaySeenEls = new WeakSet();
-    _convReplayEvents = allItems.map(el => {
-      _convReplaySeenEls.add(el);
-      return { el, meaningful: _isConvReplayMeaningful(el) };
-    });
-
-    allItems.forEach(el => el.classList.add('conv-replay-hidden'));
+    _convReplayEvents = tagged;
+    tagged.forEach(item => { _convReplaySeenEls.add(item.el); item.el.classList.add('conv-replay-hidden'); });
 
     let controls = document.getElementById('convReplayControls');
     if (!controls) {
       controls = document.createElement('div');
       controls.id = 'convReplayControls';
       controls.className = 'gc-replay-controls conv-replay-controls';
-      $view.parentNode.insertBefore(controls, $view);
+      if (paneIds.length > 1) {
+        // Synced two-pane replay: mount above the whole split, not inside
+        // either pane, so one control visibly drives both transcripts.
+        const $split = document.getElementById('convSplit');
+        $split.parentNode.insertBefore(controls, $split);
+      } else {
+        const $view = _convReplayViewForPane(targetPaneId);
+        $view.parentNode.insertBefore(controls, $view);
+      }
     }
     renderConvReplayControls();
 
@@ -17737,23 +17768,29 @@
   }
 
   // Called at the tail of renderConversationEvents whenever new nodes just
-  // landed (SSE/poll) in the pane currently under replay. A live agent keeps
-  // appending unhidden nodes straight to $view — left alone those show up
-  // ahead of the reveal cursor and also grow scrollHeight, which yanks the
-  // scroll position forward every time a batch lands (the "jumps every few
-  // seconds" bug). Sweep, hide, and enqueue anything not already tracked,
-  // then resnap scroll to the still-hidden-truncated bottom.
-  function _convReplaySweepNewItems($view) {
-    if (!_convReplayActive || !_convReplaySeenEls || $view !== _convReplayView()) return;
+  // landed (SSE/poll) in a pane under replay (either pane, in a synced
+  // two-pane replay). A live agent keeps appending unhidden nodes straight
+  // to $view — left alone those show up ahead of the reveal cursor and also
+  // grow scrollHeight, which yanks the scroll position forward every time a
+  // batch lands (the "jumps every few seconds" bug). Sweep, hide, and
+  // enqueue anything not already tracked, then resnap scroll to the
+  // still-hidden-truncated bottom.
+  function _convReplaySweepNewItems($view, paneId) {
+    if (!_convReplayActive || !_convReplaySeenEls || !_convReplayPaneIds.includes(paneId)) return;
     const fresh = _convReplayCollectItems($view).filter(el => !_convReplaySeenEls.has(el));
     if (!fresh.length) return;
-    fresh.forEach(el => {
-      _convReplaySeenEls.add(el);
-      el.classList.add('conv-replay-hidden');
-      _convReplayEvents.push({ el, meaningful: _isConvReplayMeaningful(el) });
+    // Freshly streamed-in rows are the newest thing either pane has —
+    // clamp to at least the last-known ts so they land at the tail of the
+    // merged queue instead of possibly sorting ahead of it.
+    const lastTs = _convReplayEvents.length ? _convReplayEvents[_convReplayEvents.length - 1].ts : 0;
+    const tagged = _convReplayTagWithTs(fresh, paneId).map(item => ({ ...item, ts: Math.max(item.ts, lastTs) }));
+    tagged.forEach(item => {
+      _convReplaySeenEls.add(item.el);
+      item.el.classList.add('conv-replay-hidden');
+      _convReplayEvents.push(item);
     });
     renderConvReplayControls();
-    _scrollConvReplayToBottom();
+    _scrollConvReplayToBottom(paneId);
     // A finished ("Done") replay that just received fresh tail content should
     // pick the reveal back up rather than sit on a stale "Done" state.
     if (!_convReplayPaused && !_convReplayTimeout) playNextConvReplayStep();
@@ -17765,7 +17802,7 @@
       item.el.classList.remove('conv-replay-hidden');
       _convReplayMsgIndex++;
       if (item.meaningful) {
-        _scrollConvReplayToBottom();
+        _scrollConvReplayToBottom(item.paneId);
         if (!_convReplayPaused) {
           _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, 800 / _convReplaySpeed);
         }
@@ -17788,7 +17825,7 @@
         <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 2 ? 'is-active' : ''}" data-speed="2">2&#xd7;</button>
         <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 4 ? 'is-active' : ''}" data-speed="4">4&#xd7;</button>
       </div>
-      <span class="conv-replay-hint">Space: step forward</span>
+      <span class="conv-replay-hint">${_convReplayPaneIds.length > 1 ? 'Syncing both sessions &middot; ' : ''}Space: step forward</span>
       <button type="button" id="convReplaySkipBtn" class="gc-replay-btn gc-replay-skip-btn" title="Show all remaining messages">${done ? 'Done &#10003;' : 'Skip to end'}</button>
     `;
 
@@ -17836,12 +17873,13 @@
       const hasEvents = $view && $view.querySelector('.event:not(.conv-sticky-header)');
       btn.style.display = (isActivePane && hasEvents) ? 'inline-flex' : 'none';
     }
-    _scrollConvReplayToBottom();
+    (_convReplayPaneIds.length ? _convReplayPaneIds : [_convReplayPaneId || activePaneId()]).forEach(pid => _scrollConvReplayToBottom(pid));
     _convReplayPaneId = null;
+    _convReplayPaneIds = [];
   }
 
-  function _scrollConvReplayToBottom() {
-    const $view = _convReplayView();
+  function _scrollConvReplayToBottom(paneId) {
+    const $view = _convReplayViewForPane(paneId || _convReplayPaneId || activePaneId());
     if ($view) $view.scrollTop = $view.scrollHeight;
   }
 
@@ -17855,7 +17893,7 @@
     const item = _convReplayEvents[_convReplayMsgIndex];
     item.el.classList.remove('conv-replay-hidden');
     _convReplayMsgIndex++;
-    _scrollConvReplayToBottom();
+    _scrollConvReplayToBottom(item.paneId);
 
     if (!item.meaningful) {
       _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, 0);
@@ -28716,9 +28754,10 @@
     _currentToolGroup = null;
     _currentToolCount = 0;
     // Reset replay state and hide the button while the new conv loads. Only
-    // tear down a replay that's actually running on THIS pane — switching
-    // conversations in the other split pane shouldn't interrupt it.
-    if (_convReplayActive && _convReplayPaneId === paneId) try { exitConvReplayMode(); } catch (_) {}
+    // tear down a replay that's actually running on THIS pane (or synced to
+    // it, in a two-pane replay) — switching conversations in an unrelated
+    // split pane shouldn't interrupt it.
+    if (_convReplayActive && _convReplayPaneIds.includes(paneId)) try { exitConvReplayMode(); } catch (_) {}
     if ($convReplayBtn && paneId === activePaneId()) $convReplayBtn.style.display = 'none';
     // Detach in-memory pending echoes for the outgoing conv; they are
     // restored from pendingSendsByConv when this pane re-opens that conv.
@@ -36417,10 +36456,11 @@
         const hasMeaningful = !!$view.querySelector('.event.user_text:not(.is-pinned-in-sticky), .event.assistant .assistant-text');
         $convReplayBtn.style.display = hasMeaningful ? 'inline-flex' : 'none';
       }
-      // A replay in progress on THIS pane may just have received new
-      // live-streamed content (SSE/poll) — sweep it into the hidden queue
-      // instead of letting it show up ahead of the reveal cursor.
-      _convReplaySweepNewItems($view);
+      // A replay in progress on THIS pane (or its synced partner pane) may
+      // just have received new live-streamed content (SSE/poll) — sweep it
+      // into the hidden queue instead of letting it show up ahead of the
+      // reveal cursor.
+      _convReplaySweepNewItems($view, paneId);
     } catch (_) {}
     return true;
   }
