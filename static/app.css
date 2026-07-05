@@ -17412,7 +17412,7 @@ body:has(.gc-reader) .pwa-install-banner {
 
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text .user-msg {
   color: #e0ffff !important;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif !important;
+  font-family: 'Inter', sans-serif !important;
   font-size: 14px !important;
   line-height: 1.6 !important;
 }
@@ -17434,7 +17434,7 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.assistant .assistant-text {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif !important;
+  font-family: 'Inter', sans-serif !important;
   font-size: 14px !important;
   line-height: 1.6 !important;
   color: var(--conv-text) !important;
