@@ -6069,7 +6069,7 @@
   }
   .conv-bg-palette {
     display: grid;
-    grid-template-columns: repeat(12, 14px);
+    grid-template-columns: repeat(13, 14px);
     grid-auto-rows: 14px;
     gap: 3px;
     align-items: center;

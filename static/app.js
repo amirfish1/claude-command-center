@@ -45863,6 +45863,7 @@
     return document.documentElement.getAttribute('data-theme') === 'light';
   }
   const CONV_BG_PALETTE = [
+    { id: 'stitch', label: 'Stitch', bg: '#131314' },
     { id: 'charcoal', label: 'Charcoal', bg: '#0d1117' },
     { id: 'midnight', label: 'Midnight', bg: '#101827' },
     { id: 'slate', label: 'Slate', bg: '#1b263b' },
@@ -45929,7 +45930,21 @@
     const dark = { r: 25, g: 29, b: 36 };
     return contrastRatio(bg, light) >= contrastRatio(bg, dark) ? light : dark;
   }
-  function conversationPaletteVars(bgHex) {
+  function conversationPaletteVars(bgHex, id) {
+    if (id === 'stitch') {
+      return {
+        bg: '#131314',
+        surface: '#1c1b1c',
+        surface2: '#2a2a2b',
+        border: '#3a4a49',
+        text: '#e5e2e3',
+        muted: '#839493',
+        accent: '#00dddd',
+        userBg: '#3626ce',
+        userText: '#ffffff',
+        shadow: 'rgba(0,0,0,0.42)',
+      };
+    }
     const bg = hexToRgb(bgHex);
     const text = readableTextRgb(bg);
     const isDarkText = relLuminance(text) < 0.5;
@@ -46056,7 +46071,7 @@
     const key = conversationBgPrimaryKeyForPane(paneId);
     pane.setAttribute('data-conv-bg', item.id);
     pane.setAttribute('data-conv-bg-key', key);
-    setConversationPanePaletteVars(pane, conversationPaletteVars(item.bg));
+    setConversationPanePaletteVars(pane, conversationPaletteVars(item.bg, item.id));
     updateConversationBackgroundPaletteState(pane, item.id);
     if (opts.persist) persistConversationBgForPane(paneId, item.id);
   }
