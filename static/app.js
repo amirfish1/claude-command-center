@@ -4569,6 +4569,20 @@
     showOpToast('Copied assistant message', 'ok');
   });
 
+  // Cancel a queued (server-parked) outbound message via the × button in the note.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.send-queued-cancel');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const div = btn.closest('.event.user_text.send-queued');
+    if (div && div._pendingRef) {
+      removePendingSendEcho(div._pendingRef);
+    } else if (div) {
+      div.remove(); // fallback: just remove the echo
+    }
+  });
+
   document.addEventListener('click', (ev) => {
     const btn = ev.target.closest('[data-read-assistant-message]');
     if (!btn) return;
@@ -5898,13 +5912,18 @@
     if (!div) return;
     div.classList.remove('pending');
     div.classList.add('send-queued');
+    // Store reference so the cancel button can reach removePendingSendEcho.
+    div._pendingRef = pending;
     let note = div.querySelector('.send-queued-note');
     if (!note) {
       note = document.createElement('div');
       note.className = 'send-queued-note';
       div.appendChild(note);
     }
-    note.textContent = '⏳ ' + (label || 'Queued — will send when the session finishes its current step.');
+    const msg = label || 'Will send when the session finishes its current step.';
+    note.innerHTML = '<span class="send-queued-icon">⏳</span>'
+      + '<span class="send-queued-text">' + escapeHtml(msg) + '</span>'
+      + '<button type="button" class="send-queued-cancel" title="Cancel — discard this queued message">✕ Cancel</button>';
   }
 
   // State 2 of the echo lifecycle: the server confirmed the inject reached the
