@@ -44106,7 +44106,9 @@
     if (!$spawnDefaultsModal) return;
     spawnDefaultsModalError('');
     if ($spawnDefaultsSaveBtn) { $spawnDefaultsSaveBtn.disabled = false; $spawnDefaultsSaveBtn.textContent = 'Save'; }
-    try { await spawnDefaultsReady; } catch (_) {}
+    // Always re-fetch from server on open so the modal reflects any changes
+    // made by other sessions or orchestration scripts since startup.
+    try { await loadSpawnDefaults(); } catch (_) {}
     spawnDefaultsDraft = cloneSpawnDefaults();
     renderSpawnDefaultsDraft();
     $spawnDefaultsModal.classList.add('open');

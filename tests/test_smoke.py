@@ -9443,9 +9443,8 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("return n === 'opus-4-8' || n === 'opus-4-7';", js)
         self.assertIn("const modelSupportsOneM = engine === 'claude' && claudeModelSupportsOneM(displayModel);", js)
         self.assertIn("const isOneM = modelSupportsOneM && (", js)
-        self.assertIn("{ id: 'sonnet-5',   label: 'sonnet-5',   oneM: false }", js)
-        self.assertIn("{ id: 'sonnet-4-6', label: 'sonnet-4-6', oneM: false }", js)
-        self.assertNotIn("{ id: 'sonnet-4-6', label: 'sonnet-4-6', oneM: true }", js)
+        self.assertIn("{ id: 'sonnet-5',  label: 'sonnet-5',  oneM: false }", js)
+        self.assertNotIn("{ id: 'sonnet-4-6'", js)  # removed in CCC-484
 
     def test_pinned_conversations_roundtrip_and_sort_first(self):
         for mod in ("server",):
