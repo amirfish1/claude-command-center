@@ -1,0 +1,1 @@
+Fixed a bug where a mid-session message loaded as the first message of a truncated transcript tail was incorrectly treated as the original ask (pinned/prompts added), and loaded Google Fonts (Space Grotesk & JetBrains Mono) to fix Stitch typography.
