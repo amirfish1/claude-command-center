@@ -22896,13 +22896,18 @@
             +     ' title="Remove this session from the chat">×</button>'
             + '</div>';
         }).join('');
-        // Chat-row meta line: file mtime + who-wrote-last + waiting-on
+        // Chat-row meta line: last real message + who-wrote-last + waiting-on
         // hint. Lets the user see at a glance whether the chat is
         // moving and whose turn the orchestrator considers it.
-        // last_mtime from the API is unix SECONDS — convert to ms.
-        const chatAge = chat.last_mtime
-          ? '<span class="conv-ingroupchat-row-when" title="Last update to chat file">'
-              + escapeHtml(timeAgo(chat.last_mtime * 1000))
+        // last_message_at (falls back to last_mtime for older chats) is unix
+        // SECONDS — convert to ms. Deliberately NOT last_mtime alone: pause/
+        // resume/nudge-log writes also touch the .md file, which made this
+        // label show time-since-last-admin-touch instead of the last actual
+        // message (CCC-487).
+        const chatLastMsgAt = chat.last_message_at || chat.last_mtime;
+        const chatAge = chatLastMsgAt
+          ? '<span class="conv-ingroupchat-row-when" title="Last message in chat">'
+              + escapeHtml(timeAgo(chatLastMsgAt * 1000))
             + '</span>'
           : '';
         let chatWaitingHint = '';

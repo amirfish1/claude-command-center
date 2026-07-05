@@ -32269,6 +32269,12 @@ def _group_chat_post(path, text, chat_uuid="", session_id="", name="", emoji="")
         # Strip trailing blank lines that prior agent posts left behind
         # so the file stays lean for the next round of agent reads.
         _group_chat_normalize_whitespace(real_path)
+        # Track the real-message timestamp separately from the .md mtime —
+        # system writes (pause/resume/nudge-log lines via _group_chat_log_system)
+        # also bump the file mtime, which made the sidebar's "Xm ago" row label
+        # reflect the last administrative touch instead of the last actual
+        # message (CCC-487).
+        _update_group_chat_sidecar(real_path, last_message_at=time.time())
         sidecar = _load_group_chat_sidecar(real_path)
         if sid:
             read_state = dict(sidecar.get("read_state") or {})
@@ -33481,6 +33487,11 @@ def _list_group_chats(include_archived: bool = False, only_archived: bool = Fals
             "closed_at": closed_at,
             "archived_at": meta.get("archived_at"),
             "last_mtime": stat.st_mtime,
+            # Distinct from last_mtime: the last time a real message (human
+            # or agent post) landed, not counting administrative writes like
+            # pause/resume/nudge-log system lines. Falls back to last_mtime
+            # for chats that predate this field.
+            "last_message_at": meta.get("last_message_at") or stat.st_mtime,
             "last_activity": last_activity,
             "orchestrator_timer_active": status == "active",
             "orchestrator_last_nudge_at": last_nudge_at,
