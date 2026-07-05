@@ -8212,6 +8212,26 @@
       'width=900,height=800');
   });
 
+  // Renders a flat array of {indent, text} bullet items as a properly
+  // nested <ul> tree based on leading-whitespace depth, so a bold "header"
+  // bullet followed by indented sub-bullets (a common LLM output shape)
+  // keeps its hierarchy instead of collapsing onto one flat list.
+  function renderNestedBulletList(items, pos) {
+    const baseIndent = items[pos.i].indent;
+    let html = '<ul>';
+    while (pos.i < items.length && items[pos.i].indent >= baseIndent) {
+      if (items[pos.i].indent > baseIndent) break;
+      html += '<li>' + renderInline(items[pos.i].text);
+      pos.i++;
+      if (pos.i < items.length && items[pos.i].indent > baseIndent) {
+        html += renderNestedBulletList(items, pos);
+      }
+      html += '</li>';
+    }
+    html += '</ul>';
+    return html;
+  }
+
   function renderMarkdown(text) {
     const lines = text.split('\n');
     const out = [];
@@ -8364,14 +8384,13 @@
       // after the marker is what distinguishes a bullet from inline `*bold*`
       // (bold has no space) or a `---` rule (no space, multiple chars).
       if (/^\s*[-*]\s+/.test(line)) {
-        let html = '<ul>';
+        const items = [];
         while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
-          const item = lines[i].replace(/^\s*[-*]\s+/, '');
-          html += '<li>' + renderInline(item) + '</li>';
+          const m = lines[i].match(/^(\s*)[-*]\s+(.*)$/);
+          items.push({ indent: m[1].length, text: m[2] });
           i++;
         }
-        html += '</ul>';
-        out.push(html);
+        out.push(renderNestedBulletList(items, { i: 0 }));
         continue;
       }
       // Regular text line (preserve as-is with <br>)
