@@ -710,6 +710,11 @@
                  session-click auto-collapses it), so split mode gets its own
                  always-reachable toggle. Same global mode as #verboseToggleBtn. -->
             <button type="button" class="conv-pane-action" data-role="pane-verbose" aria-pressed="false" title="Verbose transcript: keep tool calls, command details, and thinking expanded in conversation views.">&#8801; Verbose</button>
+            <!-- Replay's other home (topbar #convReplayBtn) only exists in
+                 single-pane mode with the right rail closed — split mode
+                 hides the topbar entirely, so it needs its own reachable
+                 copy here, same pattern as Verbose above (CCC-475). -->
+            <button type="button" class="conv-pane-action" data-role="pane-replay" title="Replay this conversation message by message">&#9654; Replay</button>
             <button type="button" class="conv-pane-action" data-role="pane-annotate" title="Annotate the visible page and save a local note for agent context">&#9998; Annotate</button>
             <button type="button" class="conv-pane-action" data-role="pane-clear" title="Clear the screen visually (transcript history is untouched)">Clear</button>
           </span>

@@ -17651,10 +17651,14 @@
   // instantly between them. Space bar advances immediately.
 
   let _convReplayActive = false;
+  let _convReplayPaneId = null;
   let _convReplayPaused = false;
   let _convReplaySpeed = 1;
   let _convReplayMsgIndex = 0;
   let _convReplayEvents = []; // [{el, meaningful}]
+  let _convReplaySeenEls = null; // WeakSet — tracks every el already queued, so live-streamed
+                                  // nodes appended mid-replay get caught by the JSONL-line sweep
+                                  // instead of appearing unhidden ahead of the reveal cursor.
   let _convReplayTimeout = null;
   let _onConvReplayKeyRef = null;
 
@@ -17668,21 +17672,43 @@
     return false;
   }
 
-  function startConvReplay() {
-    const $view = getConvViewForPane(activePaneId()) || $conversationsView;
+  function _convReplayView() {
+    return getConvViewForPane(_convReplayPaneId) || $conversationsView;
+  }
+
+  // Only direct children of the view are real timeline entries — tool calls
+  // fuse into a `.tool-call-group` wrapper (header + body) that is itself a
+  // direct child, so hiding nested `.event` nodes alone leaves the group's
+  // "Ran N commands" header on screen the whole time (the bug this fixes).
+  // Same node set `clearPaneScreenForVideo` treats as "the transcript" for
+  // the same reason; sticky/banner/load-earlier chrome is excluded.
+  function _convReplayCollectItems($view) {
+    return Array.from($view.children).filter(el => el.classList
+      && !el.matches('.conv-sticky-header, .conv-outcome-banner, .conv-load-earlier')
+      && !el.classList.contains('conv-live-tool-inline'));
+  }
+
+  function startConvReplay(paneId) {
+    const targetPaneId = paneId || activePaneId();
+    const $view = getConvViewForPane(targetPaneId) || $conversationsView;
     if (!$view) return;
-    const allEvents = Array.from($view.querySelectorAll('.event:not(.conv-sticky-header)'));
-    const meaningful = allEvents.filter(_isConvReplayMeaningful);
+    const allItems = _convReplayCollectItems($view);
+    const meaningful = allItems.filter(_isConvReplayMeaningful);
     if (!meaningful.length) return;
 
     if (_convReplayActive) exitConvReplayMode();
     _convReplayActive = true;
+    _convReplayPaneId = targetPaneId;
     _convReplayPaused = false;
     _convReplaySpeed = 1;
     _convReplayMsgIndex = 0;
-    _convReplayEvents = allEvents.map(el => ({ el, meaningful: _isConvReplayMeaningful(el) }));
+    _convReplaySeenEls = new WeakSet();
+    _convReplayEvents = allItems.map(el => {
+      _convReplaySeenEls.add(el);
+      return { el, meaningful: _isConvReplayMeaningful(el) };
+    });
 
-    allEvents.forEach(el => el.classList.add('conv-replay-hidden'));
+    allItems.forEach(el => el.classList.add('conv-replay-hidden'));
 
     let controls = document.getElementById('convReplayControls');
     if (!controls) {
@@ -17708,6 +17734,29 @@
     document.addEventListener('keydown', _onConvReplayKeyRef, true);
 
     playNextConvReplayStep();
+  }
+
+  // Called at the tail of renderConversationEvents whenever new nodes just
+  // landed (SSE/poll) in the pane currently under replay. A live agent keeps
+  // appending unhidden nodes straight to $view — left alone those show up
+  // ahead of the reveal cursor and also grow scrollHeight, which yanks the
+  // scroll position forward every time a batch lands (the "jumps every few
+  // seconds" bug). Sweep, hide, and enqueue anything not already tracked,
+  // then resnap scroll to the still-hidden-truncated bottom.
+  function _convReplaySweepNewItems($view) {
+    if (!_convReplayActive || !_convReplaySeenEls || $view !== _convReplayView()) return;
+    const fresh = _convReplayCollectItems($view).filter(el => !_convReplaySeenEls.has(el));
+    if (!fresh.length) return;
+    fresh.forEach(el => {
+      _convReplaySeenEls.add(el);
+      el.classList.add('conv-replay-hidden');
+      _convReplayEvents.push({ el, meaningful: _isConvReplayMeaningful(el) });
+    });
+    renderConvReplayControls();
+    _scrollConvReplayToBottom();
+    // A finished ("Done") replay that just received fresh tail content should
+    // pick the reveal back up rather than sit on a stale "Done" state.
+    if (!_convReplayPaused && !_convReplayTimeout) playNextConvReplayStep();
   }
 
   function _advanceConvReplayToNextMeaningful() {
@@ -17777,19 +17826,22 @@
     }
     _convReplayEvents.forEach(item => item.el.classList.remove('conv-replay-hidden'));
     _convReplayEvents = [];
+    _convReplaySeenEls = null;
     const controls = document.getElementById('convReplayControls');
     if (controls) controls.remove();
     const btn = document.getElementById('convReplayBtn');
     if (btn) {
-      const $view = getConvViewForPane(activePaneId()) || $conversationsView;
+      const $view = getConvViewForPane(_convReplayPaneId || activePaneId()) || $conversationsView;
+      const isActivePane = (_convReplayPaneId || activePaneId()) === activePaneId();
       const hasEvents = $view && $view.querySelector('.event:not(.conv-sticky-header)');
-      btn.style.display = hasEvents ? 'inline-flex' : 'none';
+      btn.style.display = (isActivePane && hasEvents) ? 'inline-flex' : 'none';
     }
     _scrollConvReplayToBottom();
+    _convReplayPaneId = null;
   }
 
   function _scrollConvReplayToBottom() {
-    const $view = getConvViewForPane(activePaneId()) || $conversationsView;
+    const $view = _convReplayView();
     if ($view) $view.scrollTop = $view.scrollHeight;
   }
 
@@ -28658,9 +28710,11 @@
     _dynamicAskState = null;  // sticky-header scroll tracker — repopulated when the new sticky is built
     _currentToolGroup = null;
     _currentToolCount = 0;
-    // Reset replay state and hide the button while the new conv loads.
-    if (_convReplayActive) try { exitConvReplayMode(); } catch (_) {}
-    if ($convReplayBtn) $convReplayBtn.style.display = 'none';
+    // Reset replay state and hide the button while the new conv loads. Only
+    // tear down a replay that's actually running on THIS pane — switching
+    // conversations in the other split pane shouldn't interrupt it.
+    if (_convReplayActive && _convReplayPaneId === paneId) try { exitConvReplayMode(); } catch (_) {}
+    if ($convReplayBtn && paneId === activePaneId()) $convReplayBtn.style.display = 'none';
     // Detach in-memory pending echoes for the outgoing conv; they are
     // restored from pendingSendsByConv when this pane re-opens that conv.
     _pendingSends = [];
@@ -36348,12 +36402,20 @@
         }
       });
     } catch (_) {}
-    // Show Replay button whenever there are meaningful events and no replay is active.
+    // Show Replay button whenever there are meaningful events and no replay is
+    // active. The topbar button represents "the active pane" (it's hidden
+    // outright in split mode via CSS, migrated into the rail in right-rail
+    // mode) — gate on paneId === activePaneId() so a background render for
+    // the OTHER split pane can't toggle it based on the wrong pane's content.
     try {
-      if ($convReplayBtn && !_convReplayActive) {
+      if ($convReplayBtn && !_convReplayActive && paneId === activePaneId()) {
         const hasMeaningful = !!$view.querySelector('.event.user_text:not(.is-pinned-in-sticky), .event.assistant .assistant-text');
         $convReplayBtn.style.display = hasMeaningful ? 'inline-flex' : 'none';
       }
+      // A replay in progress on THIS pane may just have received new
+      // live-streamed content (SSE/poll) — sweep it into the hidden queue
+      // instead of letting it show up ahead of the reveal cursor.
+      _convReplaySweepNewItems($view);
     } catch (_) {}
     return true;
   }
@@ -37469,6 +37531,10 @@
     _captureRailEl(document.getElementById('announceBtnConv'));
     _captureRailEl(document.getElementById('jumpBtnConv'));
     _captureRailEl(document.getElementById('pkoodKillBtn'));
+    // Replay's topbar home is otherwise entirely hidden in right-rail mode
+    // (the whole #convToolbar is display:none there) — migrate the same
+    // button node into the rail instead of leaving it unreachable.
+    _captureRailEl(document.getElementById('convReplayBtn'));
     if ($toolbar) {
       _captureRailEl(document.getElementById('convSessionId'));
       _captureRailEl($toolbar.querySelector('.conv-overflow-wrap'));
@@ -43772,13 +43838,14 @@
   }
   document.addEventListener('click', (ev) => {
     const btn = ev.target && ev.target.closest
-      ? ev.target.closest('[data-role="pane-annotate"], [data-role="pane-clear"], [data-role="pane-verbose"]') : null;
+      ? ev.target.closest('[data-role="pane-annotate"], [data-role="pane-clear"], [data-role="pane-verbose"], [data-role="pane-replay"]') : null;
     if (!btn) return;
     ev.stopPropagation();
     const pane = btn.closest('.conv-pane[data-pane-id]');
     const paneId = (pane && pane.dataset.paneId) || activePaneId();
     if (btn.dataset.role === 'pane-annotate') { annStart(); return; }
     if (btn.dataset.role === 'pane-verbose') { toggleConvVerbose(); return; }
+    if (btn.dataset.role === 'pane-replay') { startConvReplay(paneId); return; }
     clearPaneScreenForVideo(paneId);
   });
 

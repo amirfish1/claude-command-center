@@ -17350,7 +17350,10 @@ body:has(.gc-reader) .pwa-install-banner {
   padding: 0 4px;
   opacity: 0.7;
 }
-.event.conv-replay-hidden {
+/* Applied to whichever direct child of the view is being held back —
+   .event rows AND .tool-call-group wrappers (the latter's "Ran N commands"
+   header is not itself an .event and was being left visible). */
+.conv-replay-hidden {
   display: none !important;
 }
 .gc-updated-tick {
