@@ -24891,7 +24891,7 @@
         const archivedRepoPath = cards[0].folder_path || '';
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
           + _folderGroupHeaderHtml('archived', folder, cards.length, hue, orphan, collapseKey, '', archivedRepoPath)
-          + cards.map(c => _renderRow(c, { suppressFolderChip: true })).join('')
+          + _renderRowsWithRepeatGroups(cards, { suppressFolderChip: true })
           + '</div>';
       }).join('');
       // Archived group chats live in the Trash section (CCC-468), so the
@@ -24903,9 +24903,10 @@
       const _archivedItems = [];
       for (const c of _allTabConvs) {
         _archivedItems.push({
+          type: 'session',
+          card: c,
           pinRank: c.pinned ? _pinRankValue(c) : Infinity,
           mtime: c.modified || c.last_interacted || 0,
-          html: _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter }),
         });
       }
       // Archived group chats live in the Trash section (CCC-468).
@@ -24918,7 +24919,36 @@
         if (a.pinRank !== b.pinRank) return a.pinRank - b.pinRank;
         return (b.mtime || 0) - (a.mtime || 0);
       });
-      _arcRows = _archivedItems.map(it => it.html).join('');
+      const _arcChunks = [];
+      let _arcCurCards = [];
+      let _arcCurKey = null;
+      const _arcFlushCards = () => {
+        if (!_arcCurCards.length) return;
+        _arcChunks.push(_renderRowsWithRepeatGroups(
+          _arcCurCards,
+          { suppressFolderChip: _isSpecificFolderFilter }
+        ));
+        _arcCurCards = [];
+        _arcCurKey = null;
+      };
+      for (const it of _archivedItems) {
+        if (it.type !== 'session') {
+          _arcFlushCards();
+          _arcChunks.push(it.html || '');
+          continue;
+        }
+        const key = _repeatGroupKey(it.card);
+        if (!key) {
+          _arcFlushCards();
+          _arcChunks.push(_renderRow(it.card, { suppressFolderChip: _isSpecificFolderFilter }));
+          continue;
+        }
+        if (_arcCurKey && _arcCurKey !== key) _arcFlushCards();
+        _arcCurKey = key;
+        _arcCurCards.push(it.card);
+      }
+      _arcFlushCards();
+      _arcRows = _arcChunks.join('');
       _arcCount = _archivedItems.length + _archivedGroupChatsForRender.length + _trashConvs.length;
     }
 
