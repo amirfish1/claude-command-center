@@ -31579,6 +31579,20 @@ def _headless_spawn_is_stale(entry, session_id=None):
         return False
     # Tail advanced with no new headless result → an external writer is ahead
     # of the headless's in-memory state.
+    # DIAGNOSTIC (premature-death hunt): stash WHY we judged stale so the
+    # retire call site can log the discriminator. uuid_changed=False with a
+    # positive size_delta means only a uuid-less trailer event (last-prompt /
+    # mode / title) grew the file — a benign write that would be a FALSE
+    # staleness positive, needlessly killing a warm process.
+    try:
+        entry["_last_stale_diag"] = {
+            "uuid_changed": cur_uuid != prev_uuid,
+            "size_delta": (cur_size - prev_size) if (cur_size is not None and prev_size is not None) else None,
+            "cur_results": cur_results,
+            "prev_results": prev_results,
+        }
+    except Exception:
+        pass
     return True
 
 
@@ -35567,6 +35581,14 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
                 and not _spawn_entry_active_tool_child(spawn)
                 and _headless_spawn_is_stale(spawn, session_id)
             ):
+                _diag = spawn.get("_last_stale_diag") or {}
+                _resume_ledger_append(
+                    "stale_retire", sid=session_id, pid=spawn.get("pid"),
+                    uuid_changed=_diag.get("uuid_changed"),
+                    size_delta=_diag.get("size_delta"),
+                    cur_results=_diag.get("cur_results"),
+                    prev_results=_diag.get("prev_results"),
+                )
                 _retire_unresponsive_spawn_entry(spawn, terminate=True, reason="stale_transcript")
                 return resume_session_headless(session_id, text)
             ok = _write_stream_json_user_message(spawn, text)
