@@ -22897,10 +22897,15 @@
       // CCC-182: blinking in-row "needs you" marker. Replaces the old "Needs
       // you" section — a waiting session now stays in its project group and
       // just blinks here, so rows no longer jump categories as turns pause /
-      // resume. Gated purely on the server's state==='waiting', so it covers
-      // both formal asks (question / permission) AND soft blocks — a superset
-      // of the formal-only activity-waiting chip.
-      const _needsYouRow = (c.state === 'waiting');
+      // resume. Gated on the server's state==='waiting', so it covers both
+      // formal asks (question / permission) AND soft blocks — a superset of
+      // the formal-only activity-waiting chip. CCC-499: archived/verified
+      // rows never surface in the Active tab (classifyKanbanColumn routes
+      // them to their terminal column regardless of a stale waiting signal,
+      // same reasoning as the stale_tool_call/needs_approval gates above) —
+      // showing the dot on a row the user will never find in Active reads as
+      // a UI lie, so suppress it there too.
+      const _needsYouRow = (c.state === 'waiting') && !c.archived && !c.verified;
       const needsYouHtml = _needsYouRow
         ? '<span class="conv-needs-you" title="Needs you — the agent is blocked on your input" aria-label="Needs you">&#9679;</span>'
         : '';
