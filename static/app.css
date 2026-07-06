@@ -3839,6 +3839,22 @@
   /* CCC-46: relayed answer confirmation — a success, shown green not red. */
   .tool-result-output.is-answer-confirm { border-left-color: var(--green); color: var(--green); }
   .tool-result-output.is-answer-confirm::before { color: var(--green); }
+  /* CCC-500: long results get clipped by the fixed max-height with only a
+     faint scrollbar as a hint — an explicit toggle to see everything. */
+  .tool-result-output.is-expanded { max-height: none; }
+  .tool-result-expand-toggle {
+    display: block;
+    margin: 4px 0 0 18px;
+    padding: 3px 8px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    font-size: 11px;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .tool-result-expand-toggle:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
   .tool-result-code-preview {
     margin: 6px 0 4px 18px;
     max-width: min(100%, 980px);

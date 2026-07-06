@@ -4596,6 +4596,17 @@
     showOpToast('Copied agent answer', 'ok');
   });
 
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-toggle-tool-result]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const out = btn.previousElementSibling;
+    if (!out || !out.classList.contains('tool-result-output')) return;
+    const expanded = out.classList.toggle('is-expanded');
+    btn.textContent = expanded ? 'Show less' : 'Show full result';
+  });
+
   document.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-copy-assistant-message]');
     if (!btn) return;
@@ -36816,6 +36827,17 @@
             // node needs the attribute set, not just the parent group.
             stampCurrentToolGroup(_toolTs);
             last.appendChild(out);
+            // CCC-500: plain-text results are capped at max-height:200px with
+            // only a scrollbar as a hint they're clipped — add an explicit
+            // toggle when the content actually overflows that box.
+            if (!codePreview && out.scrollHeight > out.clientHeight + 1) {
+              const expandBtn = document.createElement('button');
+              expandBtn.type = 'button';
+              expandBtn.className = 'tool-result-expand-toggle';
+              expandBtn.setAttribute('data-toggle-tool-result', '');
+              expandBtn.textContent = 'Show full result';
+              last.appendChild(expandBtn);
+            }
             if (commandSucceeded) updateToolGroupLabel(_currentToolGroup);
           }
         }
