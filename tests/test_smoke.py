@@ -5959,7 +5959,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["pid"], 67890)
-        retire.assert_called_once_with(spawn, terminate=True)
+        retire.assert_called_once_with(spawn, terminate=True, reason="write_failed")
         resume.assert_called_once_with(sid, "follow up")
 
     def test_fifo_writer_open_does_not_block_without_reader(self):

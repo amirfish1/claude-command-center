@@ -3560,6 +3560,152 @@ _live_activity_snapshot_lock = threading.Lock()
 # Everything here is O(1) per update and reads nothing off disk on the hot path.
 _SERVER_START_TS = time.time()
 
+# ── Headless-resume lifecycle ledger (diagnostic only) ──────────────────────
+# Append-only JSONL trace of the warm `claude -p` resume lifecycle so we can
+# root-cause why warm processes die between messages and measure cache
+# efficiency per resume. Pure observation — nothing here changes spawn/retire
+# behavior. Off the hot path: the ledger is written only at lifecycle
+# transitions (reuse/spawn/exit/retire/server_start), never per row or per poll
+# iteration (the exit write is guarded to fire once via `_cleanup_done`).
+_RESUME_LEDGER_FILE = COMMAND_CENTER_STATE_DIR / "resume-ledger.jsonl"
+_RESUME_LEDGER_BACKUP = COMMAND_CENTER_STATE_DIR / "resume-ledger.1.jsonl"
+_RESUME_LEDGER_MAX_BYTES = 5 * 1024 * 1024
+_RESUME_LEDGER_LOCK = threading.Lock()
+# Bounded in-memory window feeding /api/health rolling stats — so the health
+# poll never reparses the file (perf gate).
+_RESUME_LEDGER_WINDOW = collections.deque(maxlen=50)
+# sid -> epoch of that sid's most recent exit/cold_resume, for gap computation
+# without reparsing the file.
+_RESUME_LAST_EPOCH = {}
+
+
+def _resume_ledger_append(event, sid=None, pid=None, **fields):
+    """Append one lifecycle event to the resume ledger. Never raises."""
+    try:
+        now = time.time()
+        rec = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "epoch": round(now, 3),
+            "event": event,
+            "sid": sid,
+            "pid": pid,
+        }
+        rec.update(fields)
+        line = json.dumps(rec, default=str)
+        with _RESUME_LEDGER_LOCK:
+            _RESUME_LEDGER_WINDOW.append(rec)
+            if event in ("exit", "cold_resume") and sid is not None:
+                _RESUME_LAST_EPOCH[sid] = now
+            try:
+                COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+                try:
+                    if (_RESUME_LEDGER_FILE.exists()
+                            and _RESUME_LEDGER_FILE.stat().st_size > _RESUME_LEDGER_MAX_BYTES):
+                        _RESUME_LEDGER_FILE.replace(_RESUME_LEDGER_BACKUP)
+                except OSError:
+                    pass
+                with open(_RESUME_LEDGER_FILE, "a", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
+def _resume_ledger_stats():
+    """Rolling stats over the in-memory window for the /api/health `resume`
+    object. Reads nothing off disk. Every field tolerates an empty window."""
+    empty = {
+        "warm_reuse_pct": None,
+        "avg_cache_efficiency_pct": None,
+        "cold_resumes_window": 0,
+        "worst_cache_efficiency_pct": None,
+        "avg_lifetime_s": None,
+    }
+    try:
+        with _RESUME_LEDGER_LOCK:
+            window = list(_RESUME_LEDGER_WINDOW)
+        if not window:
+            return empty
+        reuse_hit = sum(1 for e in window if e.get("event") == "reuse_hit")
+        reuse_miss = sum(1 for e in window if e.get("event") == "reuse_miss")
+        cold = sum(1 for e in window if e.get("event") == "cold_resume")
+        denom = reuse_hit + reuse_miss + cold
+        warm = int(round(100 * reuse_hit / denom)) if denom else None
+        effs = [e.get("cache_efficiency_pct") for e in window
+                if e.get("event") == "exit"
+                and isinstance(e.get("cache_efficiency_pct"), (int, float))]
+        avg_eff = round(sum(effs) / len(effs), 1) if effs else None
+        worst_eff = min(effs) if effs else None
+        lifetimes = [e.get("lifetime_s") for e in window
+                     if e.get("event") == "exit"
+                     and isinstance(e.get("lifetime_s"), (int, float))]
+        avg_life = round(sum(lifetimes) / len(lifetimes), 1) if lifetimes else None
+        return {
+            "warm_reuse_pct": warm,
+            "avg_cache_efficiency_pct": avg_eff,
+            "cold_resumes_window": cold,
+            "worst_cache_efficiency_pct": worst_eff,
+            "avg_lifetime_s": avg_life,
+        }
+    except Exception:
+        return empty
+
+
+def _resume_parse_result_usage(log_path):
+    """Read the tail of a stream-json resume log and pull usage/cost from the
+    final `"type":"result"` event. Guarded — a missing/malformed log yields {}."""
+    out = {}
+    try:
+        with open(log_path, "rb") as fh:
+            try:
+                fh.seek(0, 2)
+                size = fh.tell()
+                fh.seek(max(0, size - 8192))
+            except OSError:
+                pass
+            tail = fh.read()
+        text = tail.decode("utf-8", "replace")
+        result_line = None
+        for ln in reversed(re.split(r"[\r\n]+", text)):
+            if '"type":"result"' in ln or '"type": "result"' in ln:
+                result_line = ln
+                break
+        if not result_line:
+            return out
+        obj = json.loads(result_line)
+        usage = obj.get("usage") or {}
+        cache_read = int(usage.get("cache_read_input_tokens") or 0)
+        cache_creation = int(usage.get("cache_creation_input_tokens") or 0)
+        uncached = int(usage.get("input_tokens") or 0)
+        out["cache_read"] = cache_read
+        out["cache_creation"] = cache_creation
+        out["uncached_input"] = uncached
+        out["output_tokens"] = int(usage.get("output_tokens") or 0)
+        out["num_turns"] = obj.get("num_turns")
+        out["cost_usd"] = obj.get("total_cost_usd")
+        out["terminal_reason"] = obj.get("subtype") or obj.get("result")
+        out["cache_efficiency_pct"] = round(
+            100 * cache_read / max(1, cache_read + cache_creation + uncached), 1)
+    except Exception:
+        return out
+    return out
+
+
+def _resume_entry_started_epoch(entry):
+    """Best-effort epoch a spawn entry started at: prefer the stored epoch,
+    fall back to parsing the `%Y%m%dT%H%M%S` `started` string."""
+    try:
+        se = entry.get("started_epoch")
+        if se:
+            return float(se)
+        started = entry.get("started")
+        if started:
+            return time.mktime(time.strptime(started, "%Y%m%dT%H%M%S"))
+    except Exception:
+        return None
+    return None
+
 # Rolling wall-clock duration (ms) of the REAL (uncached) live-activity build.
 # Cache hits aren't recorded — we only want the cost of actual work, which is the
 # truest signal for the hottest endpoint. Bounded deque so memory is constant.
@@ -3651,6 +3797,7 @@ def build_ccc_health():
         "error_window_min": _RECENT_ERROR_WINDOW_S // 60,
         "uptime_s": round(time.time() - _SERVER_START_TS),
         "pid": os.getpid(),
+        "resume": _resume_ledger_stats(),
     }
 
 
@@ -30639,7 +30786,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     if not prompt_written:
         message = "Claude Code started, but CCC could not write the initial prompt to stdin."
         _write_spawn_error_event(log_fh, "spawn_stdin_unavailable", message)
-        _retire_unresponsive_spawn_entry(entry, terminate=True)
+        _retire_unresponsive_spawn_entry(entry, terminate=True, reason="write_failed")
         return {
             "ok": False,
             "error": message,
@@ -31042,11 +31189,24 @@ def _cleanup_finished_entry(entry):
         entry["log_fh"] = None
 
 
-def _retire_unresponsive_spawn_entry(entry, *, terminate=False):
+def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None):
     """Stop tracking a CCC-owned spawn whose stdin can no longer accept input."""
     if not isinstance(entry, dict):
         return
     pid = entry.get("pid")
+    # Diagnostic: record whether the child was still alive at retire time so we
+    # can distinguish "we killed a live process" from "cleaned up a dead one".
+    alive = None
+    _proc = entry.get("proc")
+    try:
+        if _proc is not None:
+            alive = _proc.poll() is None
+    except Exception:
+        alive = None
+    _resume_ledger_append(
+        "retire", sid=entry.get("resumed_sid"), pid=pid,
+        terminate=bool(terminate), reason=reason or "unspecified", alive=alive,
+    )
     if terminate and pid is not None:
         try:
             os.killpg(int(pid), signal.SIGTERM)
@@ -31074,6 +31234,19 @@ def _poll_spawn_entry(entry):
     except Exception:
         poll = -1
     if poll is not None and isinstance(entry, dict) and not entry.get("_cleanup_done"):
+        # Diagnostic: a tracked child just EXITED. Log lifetime + cache/cost
+        # from the resume log's final result event before we drop its handles.
+        # Guarded by `_cleanup_done` so this fires exactly once per child.
+        try:
+            started_epoch = _resume_entry_started_epoch(entry)
+            lifetime = round(time.time() - started_epoch, 1) if started_epoch else None
+            usage = _resume_parse_result_usage(entry.get("log")) if entry.get("log") else {}
+            _resume_ledger_append(
+                "exit", sid=entry.get("resumed_sid"), pid=entry.get("pid"),
+                exit_code=poll, lifetime_s=lifetime, **usage,
+            )
+        except Exception:
+            pass
         _cleanup_finished_entry(entry)
         pid = entry.get("pid")
         if pid is not None:
@@ -31658,9 +31831,14 @@ def resume_session_headless(session_id, text, cwd=None):
         if s.get("resumed_sid") == session_id and _poll_spawn_entry(s) is None:
             ok = _write_stream_json_user_message(s, text)
             if ok:
+                _se = _resume_entry_started_epoch(s)
+                _resume_ledger_append(
+                    "reuse_hit", sid=session_id, pid=s.get("pid"),
+                    lifetime_s=(round(time.time() - _se, 1) if _se else None),
+                )
                 return {"ok": True, "pid": s["pid"], "resumed": True, "reused": True}
             if not _spawn_entry_active_tool_child(s):
-                _retire_unresponsive_spawn_entry(s, terminate=True)
+                _retire_unresponsive_spawn_entry(s, terminate=True, reason="write_failed")
                 break
             return {
                 "ok": False,
@@ -31729,6 +31907,11 @@ def resume_session_headless(session_id, text, cwd=None):
         if override.get("context_1m"):
             cmd.extend(["--betas", "context-1m-2025-08-07"])
 
+    # Diagnostic: we reached the fresh-spawn path, so no live warm process was
+    # reused for this sid. Log the miss and stamp the spawn epoch for lifetime.
+    _resume_ledger_append("reuse_miss", sid=session_id, reason="no_live_entry")
+    _spawn_started_epoch = time.time()
+
     log_fh = open(log_path, "w")
     fifo_path, child_stdin_fd = _make_stdin_fifo(log_path)
     popen_kwargs = dict(
@@ -31763,6 +31946,7 @@ def resume_session_headless(session_id, text, cwd=None):
         "log": str(log_path),
         "prompt": text[:200],
         "started": timestamp,
+        "started_epoch": _spawn_started_epoch,
         "proc": proc,
         "log_fh": log_fh,
         "resumed_sid": session_id,
@@ -31776,7 +31960,7 @@ def resume_session_headless(session_id, text, cwd=None):
     if not ok:
         message = "Claude Code started, but CCC could not write the resume prompt to stdin."
         _write_spawn_error_event(log_fh, "spawn_stdin_unavailable", message)
-        _retire_unresponsive_spawn_entry(entry, terminate=True)
+        _retire_unresponsive_spawn_entry(entry, terminate=True, reason="write_failed")
         return {
             "ok": False,
             "error": message,
@@ -31803,6 +31987,15 @@ def resume_session_headless(session_id, text, cwd=None):
         engine="claude",
         session_id=session_id,
         repo_path=ctx["repo_path"],
+    )
+    # Diagnostic: a fresh warm process is now live. Record the gap since this
+    # sid's last exit/cold_resume — a short gap right after `server_start`
+    # implicates a restart-EOF killing the previous warm process.
+    _prev_epoch = _RESUME_LAST_EPOCH.get(session_id)
+    _resume_ledger_append(
+        "cold_resume", sid=session_id, pid=proc.pid,
+        repo=str(ctx["repo_path"]), log_path=str(log_path),
+        gap_since_last_exit_s=(round(time.time() - _prev_epoch, 1) if _prev_epoch else None),
     )
     return {
         "ok": True,
@@ -35374,7 +35567,7 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
                 and not _spawn_entry_active_tool_child(spawn)
                 and _headless_spawn_is_stale(spawn, session_id)
             ):
-                _retire_unresponsive_spawn_entry(spawn, terminate=True)
+                _retire_unresponsive_spawn_entry(spawn, terminate=True, reason="stale_transcript")
                 return resume_session_headless(session_id, text)
             ok = _write_stream_json_user_message(spawn, text)
             if ok:
@@ -35385,7 +35578,7 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
                     _update_spawn_transcript_watermark(spawn, session_id)
                 return {"ok": True, "pid": spawn["pid"], "via": "spawn-fifo"}
             if not _spawn_entry_active_tool_child(spawn):
-                _retire_unresponsive_spawn_entry(spawn, terminate=True)
+                _retire_unresponsive_spawn_entry(spawn, terminate=True, reason="write_failed")
                 return _maybe_queue_on_invalid_cwd(
                     session_id, text, status, resume_session_headless(session_id, text),
                 )
@@ -54557,6 +54750,10 @@ def main():
         daemon_threads = True
     _raise_open_file_limit()
     migrate_state_dir()
+    # Diagnostic: mark every server start in the resume ledger so a burst of
+    # cold_resume events right after this line implicates restart-EOF as the
+    # cause of warm processes dying.
+    _resume_ledger_append("server_start", pid=os.getpid())
     ensure_hooks_installed()
     install_orchestration_skill()
     _reattach_spawned_orphans()
