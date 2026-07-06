@@ -31179,10 +31179,11 @@ def _start_headless_staleness_watcher() -> None:
     ).start()
 
 
-def resume_session_headless(session_id, text):
+def resume_session_headless(session_id, text, cwd=None):
     """Resume a dormant session headlessly (`claude --resume`) and send text.
 
     If we already resumed this session and the process is still alive, reuse it.
+    Optional `cwd` parameter allows bypassing session lookup (useful in remote envs).
     """
     text = _strip_ccc_session_state_instruction(text)
     if not text:
@@ -31204,10 +31205,16 @@ def resume_session_headless(session_id, text):
                 "error": "session input pipe is busy",
             }
 
-    try:
-        ctx = repo_from_session(session_id)
-    except RepoContextError as e:
-        return e.as_payload()
+    if cwd:
+        try:
+            ctx = _resolve_cwd_context(cwd)
+        except RepoContextError as e:
+            return e.as_payload()
+    else:
+        try:
+            ctx = repo_from_session(session_id)
+        except RepoContextError as e:
+            return e.as_payload()
     cwd = ctx["cwd"]
     rebucket = _ensure_session_jsonl_for_cwd(session_id, cwd)
     if not rebucket.get("ok"):
@@ -35598,7 +35605,7 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
                 pass
 
 
-def ask_session_and_wait(session_id, text, timeout_ms=30000):
+def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
     """Synchronously inject `text` into a session and wait for its reply.
 
     Two paths, picked from the session's live status:
@@ -35628,8 +35635,8 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000):
     # Live-tail short-circuit: if the target session has a running `claude`
     # process with a usable tty, drive it via keystroke + jsonl tail. This
     # skips the ~1M-token cache re-read a fresh `claude --resume` would do.
-    cwd = find_session_cwd(session_id)
-    status = session_live_status(session_id, cwd)
+    resolved_cwd = cwd or find_session_cwd(session_id)
+    status = session_live_status(session_id, resolved_cwd)
     if status.get("live") and status.get("tty"):
         return ask_session_via_live_tail(session_id, text, timeout_ms, status)
 
@@ -35654,7 +35661,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000):
                 return wt_result
         # No live subprocess — spawn one. resume_session_headless writes
         # the user message itself and appends the entry to _spawned_sessions.
-        spawn_result = resume_session_headless(session_id, text)
+        spawn_result = resume_session_headless(session_id, text, cwd=cwd)
         if not spawn_result.get("ok"):
             spawn_result.setdefault("source", "resume-headless")
             return spawn_result
@@ -50660,6 +50667,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = {}
             sid = payload.get("session_id", "")
             text = payload.get("text", "")
+            cwd = payload.get("cwd", "")
             try:
                 timeout_ms = int(payload.get("timeout_ms") or 30000)
             except (TypeError, ValueError):
@@ -50670,7 +50678,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not sid or not text:
                 self.send_json({"ok": False, "error": "missing session_id or text"})
             else:
-                result = ask_session_and_wait(sid, text, timeout_ms=timeout_ms)
+                result = ask_session_and_wait(sid, text, timeout_ms=timeout_ms, cwd=cwd or None)
                 self.send_json(result)
         elif path == "/api/launch-terminal":
             length = int(self.headers.get("Content-Length", "0"))
