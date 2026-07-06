@@ -35650,7 +35650,7 @@
       return '';
     }
     const kind = String((block && block.command_kind) || '').trim();
-    const label = /script/i.test(kind) ? 'View script' : 'View command';
+    const label = /argument/i.test(kind) ? 'View arguments' : (/script/i.test(kind) ? 'View script' : 'View command');
     const kindHtml = kind
       ? '<span class="tool-command-kind">' + escapeHtml(kind) + '</span>'
       : '';

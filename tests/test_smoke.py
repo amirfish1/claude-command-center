@@ -9206,6 +9206,35 @@ class TestRepoContextHelpers(unittest.TestCase):
                 server._HERMES_GATEWAY_CACHE["key"] = None
                 server._HERMES_GATEWAY_CACHE["by_session"] = {}
 
+    def test_hermes_kanban_tool_arguments_are_not_truncated(self):
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        body = (
+            "Blocker details for Ask #19: FlexMLS returned a Client Challenge "
+            "CAPTCHA instead of listing HTML/data, so the worker needs a CSV, "
+            "export, screenshot text, or pasted address list before it can run "
+            "the skip trace. This sentence makes the payload long enough to "
+            "hit the generic prompt-fragment truncation path that used to hide "
+            "the important blocker details in the transcript."
+        )
+        block = server._hermes_tool_block({
+            "id": "call_1",
+            "name": "kanban_comment",
+            "args": {
+                "board": "example-board",
+                "task_id": "t_5ca440b4",
+                "body": body,
+            },
+        })
+
+        self.assertEqual(block["command_kind"], "Kanban arguments")
+        self.assertEqual(block["detail"], block["command"])
+        self.assertIn('"body":', block["detail"])
+        self.assertIn(body, block["detail"])
+        self.assertNotIn("...", block["detail"])
+
     def test_hermes_rows_are_not_repo_scoped(self):
         """Hermes is a non-repo-scoped source: a session whose cwd is outside
         the requested repo (or empty) must still surface under repo_only=True,

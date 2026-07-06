@@ -25972,11 +25972,26 @@ def _hermes_tool_command(name, args):
     return ""
 
 
+def _hermes_structured_tool_arguments(name, args):
+    if not isinstance(args, dict) or not args:
+        return ""
+    low = str(name or "").lower()
+    if not low.startswith("kanban_"):
+        return ""
+    try:
+        return json.dumps(args, ensure_ascii=False, indent=2, sort_keys=True)
+    except (TypeError, ValueError):
+        return ""
+
+
 def _hermes_tool_detail(name, args):
     display = _hermes_tool_display_name(name)
     command = _hermes_tool_command(display, args)
     if command:
         return _shell_command_activity_label(command, max_len=1200)
+    structured = _hermes_structured_tool_arguments(display, args)
+    if structured:
+        return structured
     detail = _tool_use_detail(display, args, max_len=240)
     if detail:
         return detail
@@ -26009,6 +26024,11 @@ def _hermes_tool_block(call):
             block["command"] = redacted
             here = _extract_shell_heredoc(command)
             block["command_kind"] = _shell_script_label(here.get("head", "")) if here else "Shell command"
+    else:
+        structured = _hermes_structured_tool_arguments(name, args)
+        if structured:
+            block["command"] = structured
+            block["command_kind"] = "Kanban arguments"
     return block
 
 
