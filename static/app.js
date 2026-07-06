@@ -177,6 +177,26 @@
       errs >= 5 ? 'ccchealth-crit' : (errs > 0 ? 'ccchealth-warn' : 'ccchealth-ok'),
       errs + ' server error(s) in the last ' + win + ' min' +
       (h.uptime_s != null ? ' · uptime ' + _agoStr(h.uptime_s * 1000) : ''));
+    // Cache efficiency: avg cache-read share of warm `claude -p` resumes over
+    // the rolling ledger window. >=90 healthy, 70-90 warn, <70 crit. The
+    // tooltip carries the diagnostic headline (warm-reuse %, cold resumes,
+    // worst efficiency) for root-causing warm-process churn.
+    const rz = (h && h.resume) || {};
+    const eff = (typeof rz.avg_cache_efficiency_pct === 'number') ? rz.avg_cache_efficiency_pct : null;
+    const warmPct = (typeof rz.warm_reuse_pct === 'number') ? rz.warm_reuse_pct : null;
+    const cold = (typeof rz.cold_resumes_window === 'number') ? rz.cold_resumes_window : 0;
+    const worst = (typeof rz.worst_cache_efficiency_pct === 'number') ? rz.worst_cache_efficiency_pct : null;
+    const life = (typeof rz.avg_lifetime_s === 'number') ? rz.avg_lifetime_s : null;
+    const cacheTitle =
+      'headless resume cache efficiency (rolling window)' +
+      ' · warm reuse ' + (warmPct == null ? '—' : warmPct + '%') +
+      ' · cold resumes ' + cold +
+      ' · worst ' + (worst == null ? '—' : worst + '%') +
+      ' · avg lifetime ' + (life == null ? '—' : life + 's');
+    if (eff == null) _set('cache', 'cache —', '', cacheTitle);
+    else _set('cache', 'cache ' + eff.toFixed(0) + '%',
+      eff < 70 ? 'ccchealth-crit' : (eff < 90 ? 'ccchealth-warn' : 'ccchealth-ok'),
+      cacheTitle);
   }
   function _startHealthPoll(host) {
     const tick = _gated('cccHealth', function () {
@@ -978,7 +998,8 @@
     health.innerHTML =
       '<span class="ccchealth-metric" data-k="cpu"><span class="ccchealth-dot"></span><span class="ccchealth-val">cpu —</span></span>' +
       '<span class="ccchealth-metric" data-k="build"><span class="ccchealth-dot"></span><span class="ccchealth-val">build —</span></span>' +
-      '<span class="ccchealth-metric" data-k="err"><span class="ccchealth-dot"></span><span class="ccchealth-val">err —</span></span>';
+      '<span class="ccchealth-metric" data-k="err"><span class="ccchealth-dot"></span><span class="ccchealth-val">err —</span></span>' +
+      '<span class="ccchealth-metric" data-k="cache"><span class="ccchealth-dot"></span><span class="ccchealth-val">cache —</span></span>';
     const toggle = document.createElement('div');
     toggle.id = 'pollerToggle';
     const _triggerCount = Object.keys(_POLLER_META).length;
