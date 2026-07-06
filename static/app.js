@@ -39411,9 +39411,20 @@
     const _freshAt = Math.max(_nudgeMs, _triggerMs, _activityMs);
     let _reason = '';
     if (_freshAt > 0) {
+      // orchestrator_last_reminder_targets only carries short (8-char) hash
+      // fragments off the sidecar — resolve them to a friendly name via this
+      // chat's own name_map so "who got pinged" is legible instead of hex
+      // (annotation: "let's include ... the session who was pinged").
+      const _nm = chat.name_map || {};
+      const _sids = chat.session_ids || [];
       const targets = (chat.orchestrator_last_reminder_targets || [])
         .filter(t => t && String(t).trim())
-        .map(t => String(t));
+        .map(t => {
+          const shortId = String(t);
+          const fullSid = _sids.find(id => id && id.toLowerCase().startsWith(shortId.toLowerCase()));
+          const name = fullSid ? _nm[fullSid] : '';
+          return (name && !/^[0-9a-f]{8}$/i.test(String(name).trim())) ? name : shortId;
+        });
       const targetStr = targets.length
         ? (targets.length <= 3
             ? targets.join(', ')
@@ -39428,9 +39439,13 @@
       }
     }
     const _ageMin = _freshAt > 0 ? Math.max(0, Math.round((now - _freshAt) / 60000)) : null;
+    // Pair the relative age with a wall-clock time right on the pill —
+    // "just now" alone isn't verifiable (annotation: "i don't believe it,
+    // let's include the timestamp"); the tooltip already had this but only
+    // on hover.
     const _ageHint = _ageMin == null
       ? ''
-      : (_ageMin === 0 ? 'just now' : _ageMin + 'm ago');
+      : (_ageMin === 0 ? 'just now' : _ageMin + 'm ago') + ' (' + new Date(_freshAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) + ')';
     // Build label: "<topic> · <reason> · <age>" (single) or
     // "N chats — <topic> · <reason> · <age>" (multiple). Reason/age
     // get filtered out cleanly if either is missing.
